@@ -61,6 +61,11 @@ scratch initialization, personal memory tools, messaging, and MCP—from writing
 to or becoming visible in a source checkout before P0.4 defines the exact
 trusted-local coding profile.
 
+Isolated tool bootstrap also makes deferred MCP initialization a no-op across
+startup, direct turns, commands, and reload. Isolated skill bootstrap retains
+the execution root only for skill discovery while prompt memory continues to
+use the external state owner.
+
 P0.4 replaces this temporary empty catalogue with an explicit tested coding
 tool profile. It does not mutate persisted personal configuration.
 
@@ -99,4 +104,7 @@ Focused tests prove that:
 - a coding profile using Seahorse is rejected before either root is created;
   and
 - provider/config reload reconstructs the registry with the same owner and
-  roots without adding coding tools or creating the execution root.
+  roots without adding coding tools or creating the execution root;
+- enabled configured MCP cannot start or register tools before or after reload;
+  and
+- isolated skill bootstrap and reload preserve external prompt-memory ownership.

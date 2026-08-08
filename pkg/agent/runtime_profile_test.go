@@ -232,6 +232,101 @@ func TestRuntimeProfileSurvivesReload(t *testing.T) {
 	}
 }
 
+func TestCodingRuntimeProfileKeepsMCPIsolatedAcrossReload(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-mcp"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Tools.MCP.Enabled = true
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"must-not-start": {Enabled: true, Command: filepath.Join(root, "missing-mcp-server")},
+	}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	assertIsolated := func(stage string) {
+		t.Helper()
+		if err := loop.ensureMCPInitialized(context.Background()); err != nil {
+			t.Fatalf("%s ensureMCPInitialized() error = %v", stage, err)
+		}
+		if loop.mcp.hasManager() {
+			t.Fatalf("%s initialized MCP manager", stage)
+		}
+		agent := loop.GetRegistry().GetDefaultAgent()
+		if got := agent.Tools.List(); len(got) != 0 {
+			t.Fatalf("%s coding tools = %v, want empty registry", stage, got)
+		}
+	}
+	assertIsolated("startup")
+	reloaded := *cfg
+	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err != nil {
+		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
+	}
+	assertIsolated("reload")
+}
+
+func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-skills"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewAgentLoopWithRuntimeProfile(
+		cfg,
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+		WithIsolatedSkillBootstrap(),
+	)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("isolated skill construction created execution root: %v", statErr)
+	}
+	if _, statErr := os.Stat(layout.StatePaths().MemoryRoot); statErr != nil {
+		t.Fatalf("external memory root was not created: %v", statErr)
+	}
+
+	reloaded := *cfg
+	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err != nil {
+		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("isolated skill reload created execution root: %v", statErr)
+	}
+}
+
 func TestNewRuntimeProfileValidatesBindings(t *testing.T) {
 	root := t.TempDir()
 	personal, err := NewRuntimeLayout(

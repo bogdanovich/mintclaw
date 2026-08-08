@@ -53,7 +53,16 @@ func (al *AgentLoop) isolateSkillRegistry(registry *AgentRegistry, cfg *config.C
 		if !ok || instance == nil {
 			continue
 		}
-		instance.ContextBuilder = newContextBuilder(instance.Workspace, "", "").
+		memoryOwnerRoot := instance.Workspace
+		if instance.Layout.StateRoot() != "" {
+			memoryOwnerRoot = instance.Layout.StateRoot()
+		}
+		instance.ContextBuilder = newContextBuilderWithMemoryOwnerAndSkills(
+			instance.Workspace,
+			memoryOwnerRoot,
+			"",
+			"",
+		).
 			WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
 			WithPromptMemoryConfig(cfg.Agents.Defaults.PromptMemory).
 			WithAgentDiscovery(instance.ID, registry.ListSpawnableAgents)
