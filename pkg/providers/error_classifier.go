@@ -319,7 +319,7 @@ func classifyByErrorType(err error) FailoverReason {
 		syscall.EPIPE,
 	} {
 		if errors.Is(err, transportErr) {
-			if transportErr == syscall.ETIMEDOUT {
+			if errors.Is(transportErr, syscall.ETIMEDOUT) {
 				return FailoverTimeout
 			}
 			return FailoverNetwork

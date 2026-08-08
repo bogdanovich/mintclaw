@@ -59,7 +59,7 @@ func Decode(data []byte) (Envelope, error) {
 	}
 	wireValue, err := jsonstrict.Decode(data)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("%w: %v", ErrInvalidFrame, err)
+		return Envelope{}, fmt.Errorf("%w: %w", ErrInvalidFrame, err)
 	}
 	if err := validateWireShape(wireValue); err != nil {
 		return Envelope{}, err
@@ -67,7 +67,7 @@ func Decode(data []byte) (Envelope, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var envelope Envelope
 	if err := decoder.Decode(&envelope); err != nil {
-		return Envelope{}, fmt.Errorf("%w: %v", ErrInvalidFrame, err)
+		return Envelope{}, fmt.Errorf("%w: %w", ErrInvalidFrame, err)
 	}
 	if err := ensureEOF(decoder); err != nil {
 		return Envelope{}, err
@@ -243,7 +243,7 @@ func validateJSONObject(label string, raw json.RawMessage, required bool) error 
 	}
 	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return fmt.Errorf("%w: malformed %s: %v", ErrInvalidFrame, label, err)
+		return fmt.Errorf("%w: malformed %s: %w", ErrInvalidFrame, label, err)
 	}
 	if _, ok := value.(map[string]any); !ok {
 		return fmt.Errorf("%w: %s must be an object", ErrInvalidFrame, label)
@@ -262,7 +262,7 @@ func validateJSONValue(label string, raw json.RawMessage, optional bool) error {
 		return fmt.Errorf("%w: %s must be omitted instead of null", ErrInvalidFrame, label)
 	}
 	if _, err := jsonstrict.Decode(raw); err != nil {
-		return fmt.Errorf("%w: malformed %s: %v", ErrInvalidFrame, label, err)
+		return fmt.Errorf("%w: malformed %s: %w", ErrInvalidFrame, label, err)
 	}
 	return nil
 }

@@ -126,7 +126,8 @@ func (pc *mintclawConn) write(ctx context.Context, writeFn func() error) error {
 	}
 	<-watcherDone
 	if err != nil {
-		if timeoutErr, ok := err.(net.Error); ok && timeoutErr.Timeout() {
+		var timeoutErr net.Error
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 			pc.close()
 			return context.DeadlineExceeded
 		}

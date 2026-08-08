@@ -964,7 +964,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 				"error": err.Error(),
 			})
 			cause := fmt.Errorf(
-				"telegram resolve media ref %q: %v: %w",
+				"telegram resolve media ref %q: %w: %w",
 				part.Ref, err, channels.ErrSendFailed,
 			)
 			return telegramMediaPartsFailure(messageIDs, msg, partIndex, cause)
@@ -977,7 +977,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 				"error": err.Error(),
 			})
 			cause := fmt.Errorf(
-				"telegram open media file %q: %v: %w",
+				"telegram open media file %q: %w: %w",
 				localPath, err, channels.ErrSendFailed,
 			)
 			return telegramMediaPartsFailure(messageIDs, msg, partIndex, cause)
@@ -1274,7 +1274,7 @@ func (c *TelegramChannel) sendSingleImageMediaGroup(
 
 	inputMedia, err := buildInputMedia(true)
 	if err != nil {
-		return nil, fmt.Errorf("telegram prepare media group: %v: %w", err, channels.ErrSendFailed)
+		return nil, fmt.Errorf("telegram prepare media group: %w: %w", err, channels.ErrSendFailed)
 	}
 
 	results, err := c.bot.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
@@ -1286,7 +1286,7 @@ func (c *TelegramChannel) sendSingleImageMediaGroup(
 		inputMedia, rebuildErr := buildInputMedia(false)
 		if rebuildErr != nil {
 			return nil, fmt.Errorf(
-				"telegram prepare media group fallback: %v: %w",
+				"telegram prepare media group fallback: %w: %w",
 				rebuildErr,
 				channels.ErrSendFailed,
 			)
@@ -2228,7 +2228,7 @@ func telegramMediaRewindFailure(
 	after string,
 	err error,
 ) channels.DeliveryResult[bus.OutboundMediaMessage] {
-	cause := fmt.Errorf("telegram rewind media after %s: %v: %w", after, err, channels.ErrSendFailed)
+	cause := fmt.Errorf("telegram rewind media after %s: %w: %w", after, err, channels.ErrSendFailed)
 	return telegramMediaPartsFailure(messageIDs, msg, partIndex, cause)
 }
 

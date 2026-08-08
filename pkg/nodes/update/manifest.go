@@ -241,7 +241,7 @@ func (artifact Artifact) Validate() error {
 func ParseManifest(data []byte) (Manifest, error) {
 	var manifest Manifest
 	if err := decodeStrict(data, MaxManifestBytes, &manifest); err != nil {
-		return Manifest{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+		return Manifest{}, fmt.Errorf("%w: %w", ErrInvalidManifest, err)
 	}
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err

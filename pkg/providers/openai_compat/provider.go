@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -738,7 +739,7 @@ func parseStreamResponse(
 		line := scanner.Text()
 		if line == "" {
 			err := processEvent(eventData.String())
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -767,7 +768,7 @@ func parseStreamResponse(
 	}
 	if eventData.Len() > 0 {
 		err := processEvent(eventData.String())
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}
 	}

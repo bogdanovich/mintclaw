@@ -2,6 +2,7 @@ package fstools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -290,7 +291,7 @@ func (t *SearchFilesTool) searchFileNames(
 			return nil
 		},
 	)
-	if err != nil && err != errSearchLimitReached {
+	if err != nil && !errors.Is(err, errSearchLimitReached) {
 		return ErrorResult(err.Error())
 	}
 	sort.Strings(matches)
@@ -400,7 +401,7 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 			return nil
 		},
 	)
-	if walkErr != nil && walkErr != errSearchLimitReached && walkErr != errSearchFileSkipped {
+	if walkErr != nil && !errors.Is(walkErr, errSearchLimitReached) && !errors.Is(walkErr, errSearchFileSkipped) {
 		return ErrorResult(walkErr.Error())
 	}
 
@@ -843,7 +844,7 @@ func walkSearchFilesWithIgnore(
 			continue
 		}
 		if err := fn(path, entry); err != nil {
-			if err == errSearchFileSkipped {
+			if errors.Is(err, errSearchFileSkipped) {
 				continue
 			}
 			return err
@@ -1031,7 +1032,7 @@ func matchFilePattern(pattern string, path string, name string) (bool, error) {
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return false, fmt.Errorf("invalid file search pattern: %v", err)
+		return false, fmt.Errorf("invalid file search pattern: %w", err)
 	}
 	return re.MatchString(path) || re.MatchString(name), nil
 }

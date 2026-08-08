@@ -9,6 +9,7 @@ linters:
     - asasalint
     - canonicalheader
     - durationcheck
+    - errorlint
     - fatcontext
     - gocheckcompilerdirectives
     - gochecksumtype
@@ -42,10 +43,10 @@ linters:
     - gomoddirectives
 
   # Valuable checks that currently have a substantial existing backlog:
-  # errcheck (50+), errorlint (12), and staticcheck (50+). Enable each after
-  # its findings are fixed or narrowly baselined. Gosec is better maintained
-  # as a separately tuned security job because its default rules are noisy for
-  # this CLI/server codebase.
+  # errcheck (50+) and staticcheck (50+). Enable each after its findings are
+  # fixed or narrowly baselined. Gosec is better maintained as a separately
+  # tuned security job because its default rules are noisy for this
+  # CLI/server codebase.
   settings:
     gomoddirectives:
       replace-allow-list:

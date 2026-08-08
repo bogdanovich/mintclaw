@@ -114,7 +114,7 @@ func (record InvocationRecord) Validate() error {
 		return fmt.Errorf("%w: malformed identity or command", ErrInvalidInvocationRecord)
 	}
 	if err := record.NodeID.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidInvocationRecord, err)
+		return fmt.Errorf("%w: %w", ErrInvalidInvocationRecord, err)
 	}
 	if record.AcceptedAt <= 0 || record.UpdatedAt < record.AcceptedAt ||
 		record.ExpiresAt <= record.AcceptedAt/int64(time.Second) {

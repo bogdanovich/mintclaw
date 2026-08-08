@@ -817,13 +817,13 @@ func validateObjectSchema(label string, raw json.RawMessage) error {
 	}
 	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return fmt.Errorf("%w: invalid %s schema: %v", ErrInvalidCapability, label, err)
+		return fmt.Errorf("%w: invalid %s schema: %w", ErrInvalidCapability, label, err)
 	}
 	if _, ok := value.(map[string]any); !ok {
 		return fmt.Errorf("%w: %s schema must be an object", ErrInvalidCapability, label)
 	}
 	if err := validateJSONSchema(raw); err != nil {
-		return fmt.Errorf("%w: invalid %s schema: %v", ErrInvalidCapability, label, err)
+		return fmt.Errorf("%w: invalid %s schema: %w", ErrInvalidCapability, label, err)
 	}
 	return nil
 }
