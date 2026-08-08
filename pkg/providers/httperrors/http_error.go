@@ -8,16 +8,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
+const (
+	maxErrorResponseBodyBytes    = 1 << 20
+	errorResponseReadIdleTimeout = 30 * time.Second
+)
+
+var (
+	errErrorResponseBodyTooLarge = errors.New("provider error response body exceeds limit")
+	errErrorResponseReadTimeout  = errors.New("provider error response body read timed out")
+)
+
 // HandleResponse reads and normalizes a non-OK provider response.
 func HandleResponse(resp *http.Response, apiBase string) error {
-	// Keep the complete JSON available for structured classification. The
-	// normalizer bounds every retained/displayed field after decoding.
-	body, readErr := io.ReadAll(resp.Body)
+	return handleResponse(resp, apiBase, maxErrorResponseBodyBytes, errorResponseReadIdleTimeout)
+}
+
+func handleResponse(resp *http.Response, apiBase string, maxBytes int64, idleTimeout time.Duration) error {
+	body, readErr := readErrorResponseBody(resp.Body, maxBytes, idleTimeout)
 	return newResponse(resp, body, apiBase, readErr)
 }
 
@@ -29,14 +42,53 @@ func NewResponse(resp *http.Response, body []byte, apiBase string) error {
 // ReadResponseBody reads a response expected to return HTTP 200. A non-OK
 // response is normalized even when reading its body also fails.
 func ReadResponseBody(resp *http.Response, apiBase string) ([]byte, error) {
-	body, readErr := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		body, readErr := readErrorResponseBody(
+			resp.Body,
+			maxErrorResponseBodyBytes,
+			errorResponseReadIdleTimeout,
+		)
 		return nil, newResponse(resp, body, apiBase, readErr)
 	}
+	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return nil, fmt.Errorf("reading response body: %w", readErr)
 	}
 	return body, nil
+}
+
+func readErrorResponseBody(body io.ReadCloser, maxBytes int64, idleTimeout time.Duration) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	reader := &errorResponseIdleTimeoutBody{body: body, timeout: idleTimeout}
+	data, readErr := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if int64(len(data)) <= maxBytes {
+		return data, readErr
+	}
+	return data[:maxBytes], errors.Join(readErr, errErrorResponseBodyTooLarge)
+}
+
+type errorResponseIdleTimeoutBody struct {
+	body    io.ReadCloser
+	timeout time.Duration
+}
+
+func (body *errorResponseIdleTimeoutBody) Read(buffer []byte) (int, error) {
+	if body.timeout <= 0 {
+		return body.body.Read(buffer)
+	}
+	timedOut := make(chan struct{})
+	timer := time.AfterFunc(body.timeout, func() {
+		_ = body.body.Close()
+		close(timedOut)
+	})
+	count, readErr := body.body.Read(buffer)
+	if timer.Stop() {
+		return count, readErr
+	}
+	<-timedOut
+	return count, errors.Join(errErrorResponseReadTimeout, readErr)
 }
 
 func newResponse(resp *http.Response, body []byte, apiBase string, readErr error) error {

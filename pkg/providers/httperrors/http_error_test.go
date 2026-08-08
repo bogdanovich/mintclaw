@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +92,72 @@ func TestOversizedStructuredErrorPreservesClassification(t *testing.T) {
 	}
 	if len([]rune(providerErr.SafeMessage)) > 243 {
 		t.Fatalf("SafeMessage was not bounded after classification: %d runes", len([]rune(providerErr.SafeMessage)))
+	}
+}
+
+func TestErrorBodyReadHasResourceLimits(t *testing.T) {
+	t.Run("size", func(t *testing.T) {
+		resp := &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", 65))),
+		}
+
+		err := handleResponse(resp, "https://api.example.com", 64, time.Second)
+		if !errors.Is(err, errErrorResponseBodyTooLarge) {
+			t.Fatalf("error = %v, want body-too-large cause", err)
+		}
+		var providerErr *providererrors.ProviderError
+		if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindTransient {
+			t.Fatalf("error = %#v, want transient ProviderError", err)
+		}
+	})
+
+	t.Run("idle timeout", func(t *testing.T) {
+		body := newBlockingReadCloser()
+		resp := &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     make(http.Header),
+			Body:       body,
+		}
+
+		err := handleResponse(resp, "https://api.example.com", 64, 10*time.Millisecond)
+		if !errors.Is(err, errErrorResponseReadTimeout) {
+			t.Fatalf("error = %v, want read-timeout cause", err)
+		}
+		if !body.isClosed() {
+			t.Fatal("idle timeout did not close the stalled response body")
+		}
+	})
+}
+
+type blockingReadCloser struct {
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newBlockingReadCloser() *blockingReadCloser {
+	return &blockingReadCloser{closed: make(chan struct{})}
+}
+
+func (body *blockingReadCloser) Read([]byte) (int, error) {
+	<-body.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (body *blockingReadCloser) Close() error {
+	body.closeOnce.Do(func() {
+		close(body.closed)
+	})
+	return nil
+}
+
+func (body *blockingReadCloser) isClosed() bool {
+	select {
+	case <-body.closed:
+		return true
+	default:
+		return false
 	}
 }
 
