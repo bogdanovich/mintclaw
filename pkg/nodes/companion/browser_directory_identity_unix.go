@@ -18,3 +18,14 @@ func validateBrowserProfileDirectory(info os.FileInfo) error {
 	}
 	return nil
 }
+
+func validateBrowserDriverDirectory(info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || (stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0) {
+		return errors.New("driver directory must be owned by the companion account or root")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return errors.New("driver directory must not be group or world writable")
+	}
+	return nil
+}
