@@ -76,6 +76,26 @@ func TestClassifyAuthError(t *testing.T) {
 	}
 }
 
+func TestClassifyAuthError_ProviderErrorPrecedence(t *testing.T) {
+	if kind, ok := ClassifyAuthError(&ProviderError{
+		Kind: ProviderErrorBilling, HTTPStatus: 401, SafeMessage: "unauthorized",
+	}); ok {
+		t.Fatalf("billing ProviderError classified as auth: %q", kind)
+	}
+
+	kind, ok := ClassifyAuthError(&ProviderError{
+		Kind: ProviderErrorAuthentication, HTTPStatus: 429, SafeMessage: "invalid api key",
+	})
+	if !ok || kind != AuthErrorInvalidAPIKey {
+		t.Fatalf("auth ProviderError = (%q, %v), want invalid_api_key", kind, ok)
+	}
+
+	kind, ok = ClassifyAuthError(&ProviderError{HTTPStatus: 401})
+	if !ok || kind != AuthErrorGeneric {
+		t.Fatalf("zero-kind auth ProviderError = (%q, %v), want generic auth", kind, ok)
+	}
+}
+
 func TestClassifyAuthError_FallbackExhaustedAllAuth(t *testing.T) {
 	err := &FallbackExhaustedError{
 		Attempts: []FallbackAttempt{
@@ -127,6 +147,35 @@ func TestClassifyAuthError_FallbackExhaustedMixedFailures(t *testing.T) {
 
 	if got, ok := ClassifyAuthError(err); ok {
 		t.Fatalf("kind = %q, want no auth classification for mixed failures", got)
+	}
+}
+
+func TestClassifyAuthError_FallbackAttemptProviderErrorPrecedence(t *testing.T) {
+	err := &FallbackExhaustedError{Attempts: []FallbackAttempt{{
+		Reason: FailoverAuth,
+		Error: &ProviderError{
+			Kind: ProviderErrorBilling, HTTPStatus: 401, SafeMessage: "unauthorized",
+		},
+	}}}
+	if kind, ok := ClassifyAuthError(err); ok {
+		t.Fatalf("billing ProviderError classified as auth from stale attempt reason: %q", kind)
+	}
+}
+
+func TestClassifyAuthError_OuterProviderErrorPrecedesNestedFallback(t *testing.T) {
+	nested := &FallbackExhaustedError{Attempts: []FallbackAttempt{{
+		Reason: FailoverAuth,
+		Error:  &ProviderError{Kind: ProviderErrorAuthentication},
+	}}}
+	err := &ProviderError{Kind: ProviderErrorBilling, Cause: nested}
+	if kind, ok := ClassifyAuthError(err); ok {
+		t.Fatalf("outer billing ProviderError classified from nested auth aggregate: %q", kind)
+	}
+}
+
+func TestAttemptIsAuthFailure_ZeroKindUsesStructuredStatus(t *testing.T) {
+	if !attemptIsAuthFailure(FallbackAttempt{Error: &ProviderError{HTTPStatus: 401}}) {
+		t.Fatal("zero-kind ProviderError with 401 status was not classified as auth")
 	}
 }
 

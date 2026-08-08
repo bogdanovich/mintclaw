@@ -168,13 +168,20 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		return nil
 	}
 
+	// Adapter-owned classifications are authoritative. Check them before
+	// context sentinels because ProviderError exposes its underlying cause.
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil {
+		return classifyProviderError(providerErr, err, provider, model)
+	}
+
 	// Context cancellation: user abort, never fallback.
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return nil
 	}
 
 	// Context deadline exceeded: treat as timeout, always fallback.
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
 			Provider: provider,
@@ -248,6 +255,51 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	return nil
+}
+
+func classifyProviderError(
+	providerErr *ProviderError,
+	wrapped error,
+	provider string,
+	model string,
+) *FailoverError {
+	if providerErr == nil {
+		return nil
+	}
+
+	var reason FailoverReason
+	switch providerErr.Kind.Canonical() {
+	case ProviderErrorAuthentication:
+		reason = FailoverAuth
+	case ProviderErrorBilling:
+		reason = FailoverBilling
+	case ProviderErrorRateLimit:
+		reason = FailoverRateLimit
+	case ProviderErrorContextOverflow:
+		reason = FailoverContextOverflow
+	case ProviderErrorTimeout, ProviderErrorTransient:
+		reason = FailoverTimeout
+	case ProviderErrorNetwork:
+		reason = FailoverNetwork
+	case ProviderErrorInvalidRequest:
+		reason = FailoverFormat
+	case ProviderErrorCanceled:
+		return nil
+	case ProviderErrorUnknown:
+		reason = classifyByStatus(providerErr.HTTPStatus)
+	default:
+		return nil
+	}
+	if reason == "" {
+		return nil
+	}
+	return &FailoverError{
+		Reason:   reason,
+		Provider: provider,
+		Model:    model,
+		Status:   providerErr.HTTPStatus,
+		Wrapped:  wrapped,
+	}
 }
 
 // classifyByErrorType maps concrete transport-layer error types to a retryable
