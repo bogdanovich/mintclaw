@@ -209,7 +209,8 @@ func (transaction Transaction) Validate() error {
 		!isDigest(transaction.ArtifactSHA256, sha256.Size) {
 		return errors.New("invalid update transaction authority")
 	}
-	if !validPhase(transaction.Phase) || transaction.AcceptedAt <= 0 || transaction.ExpiresAt <= transaction.AcceptedAt ||
+	if !validPhase(transaction.Phase) || transaction.AcceptedAt <= 0 ||
+		transaction.ExpiresAt <= transaction.AcceptedAt ||
 		transaction.UpdatedAt < transaction.AcceptedAt ||
 		transaction.UpdatedAt > transaction.ExpiresAt ||
 		transaction.LaunchAttempts < 0 ||
