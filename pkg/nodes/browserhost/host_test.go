@@ -543,6 +543,7 @@ func TestBrowserHostExpiresAndClosesIdleWorker(t *testing.T) {
 }
 
 func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
 	profile := browserHostProfileFixture()
 	profile.DriverExecutable = "/usr/local/bin/npx"
 	profile.ProfileDirectory = "/Users/operator/.mintclaw/browser/managed"
@@ -555,6 +556,7 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	joined := strings.Join(server.Args, "\x00")
 	if server.Command != profile.DriverExecutable ||
 		server.SessionLossReplay != "never" || server.ExclusiveLockFile != profile.LockFile ||
+		server.Env["PATH"] != "/usr/local/bin:/usr/bin:/bin" || len(server.Env) != 1 ||
 		!strings.Contains(joined, "--user-data-dir\x00"+profile.ProfileDirectory) ||
 		!strings.Contains(joined, "--output-mode\x00stdout") ||
 		strings.Contains(joined, "--headless") {

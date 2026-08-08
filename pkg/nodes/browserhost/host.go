@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -151,8 +153,13 @@ func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.M
 	if !profile.Headed {
 		args = append(args, "--headless")
 	}
+	driverPath := filepath.Dir(profile.DriverExecutable)
+	if inherited := os.Getenv("PATH"); inherited != "" {
+		driverPath += string(os.PathListSeparator) + inherited
+	}
 	return config.MCPServerConfig{
 		Enabled: false, Command: profile.DriverExecutable, Args: args, Type: "stdio",
+		Env:               map[string]string{"PATH": driverPath},
 		SessionLossReplay: config.MCPSessionLossReplayNever,
 		ExclusiveLockFile: profile.LockFile,
 	}, nil
