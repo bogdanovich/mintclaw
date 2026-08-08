@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 )
 
@@ -266,6 +267,52 @@ type BrowserSessionResult struct {
 	Features      BrowserHostFeatures `json:"features,omitempty"`
 	ExpiresAt     int64               `json:"expires_at,omitempty"`
 	IdleExpiresAt int64               `json:"idle_expires_at,omitempty"`
+}
+
+func (result *BrowserSessionResult) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID     string              `json:"session_id"`
+		State         string              `json:"state"`
+		Reason        string              `json:"reason,omitempty"`
+		Recovery      string              `json:"recovery,omitempty"`
+		TabID         string              `json:"tab_id,omitempty"`
+		Controller    string              `json:"controller,omitempty"`
+		Features      BrowserHostFeatures `json:"features,omitempty"`
+		ExpiresAt     json.RawMessage     `json:"expires_at,omitempty"`
+		IdleExpiresAt json.RawMessage     `json:"idle_expires_at,omitempty"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	expiresAt, err := decodeCanonicalBrowserTimestamp(value.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("decode browser session expiry: %w", err)
+	}
+	idleExpiresAt, err := decodeCanonicalBrowserTimestamp(value.IdleExpiresAt)
+	if err != nil {
+		return fmt.Errorf("decode browser session idle expiry: %w", err)
+	}
+	*result = BrowserSessionResult{
+		SessionID: value.SessionID, State: value.State,
+		Reason: value.Reason, Recovery: value.Recovery,
+		TabID: value.TabID, Controller: value.Controller, Features: value.Features,
+		ExpiresAt: expiresAt, IdleExpiresAt: idleExpiresAt,
+	}
+	return nil
+}
+
+// decodeCanonicalBrowserTimestamp accepts exponent notation emitted by the
+// invocation canonicalizer without rounding values or weakening the integer
+// wire contract. Status and close results omit these fields and decode as zero.
+func decodeCanonicalBrowserTimestamp(data json.RawMessage) (int64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	value, ok := new(big.Rat).SetString(string(data))
+	if !ok || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
+		return 0, fmt.Errorf("%w: browser timestamp must be a nonnegative integer", ErrInvalidCapability)
+	}
+	return value.Num().Int64(), nil
 }
 
 func (result BrowserSessionResult) MarshalJSON() ([]byte, error) {

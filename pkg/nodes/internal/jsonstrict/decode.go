@@ -93,7 +93,7 @@ func decodeObject(decoder *json.Decoder) (map[string]any, error) {
 }
 
 func decodeArray(decoder *json.Decoder) ([]any, error) {
-	var values []any
+	values := make([]any, 0)
 	for decoder.More() {
 		value, err := decodeValue(decoder)
 		if err != nil {

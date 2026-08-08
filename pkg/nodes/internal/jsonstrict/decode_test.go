@@ -50,3 +50,13 @@ func TestCanonicalHandlesLargeExponentsWithoutExpansion(t *testing.T) {
 		t.Fatalf("Canonical() = %s", canonical)
 	}
 }
+
+func TestCanonicalPreservesEmptyArrays(t *testing.T) {
+	canonical, err := Canonical([]byte(`{"values":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(canonical) != `{"values":[]}` {
+		t.Fatalf("Canonical() = %s", canonical)
+	}
+}

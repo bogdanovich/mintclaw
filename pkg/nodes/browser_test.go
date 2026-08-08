@@ -42,6 +42,34 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
+	var result BrowserSessionResult
+	if err := json.Unmarshal([]byte(`{
+		"session_id":"session_1",
+		"state":"ready",
+		"tab_id":"tab_primary",
+		"controller":"agent",
+		"features":{"observe":true,"navigate":true,"screenshot":false,"download":false},
+		"expires_at":1.786223585e9,
+		"idle_expires_at":1.786220045e9
+	}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiresAt != 1786223585 || result.IdleExpiresAt != 1786220045 {
+		t.Fatalf("decoded browser session timestamps = %#v", result)
+	}
+
+	for _, invalid := range []string{
+		`{"session_id":"session_1","state":"ready","expires_at":1.5}`,
+		`{"session_id":"session_1","state":"ready","expires_at":-1}`,
+		`{"session_id":"session_1","state":"ready","expires_at":1e100}`,
+	} {
+		if err := json.Unmarshal([]byte(invalid), &result); err == nil {
+			t.Fatalf("BrowserSessionResult accepted invalid timestamp %s", invalid)
+		}
+	}
+}
+
 func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate"}
