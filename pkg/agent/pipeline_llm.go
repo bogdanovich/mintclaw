@@ -643,7 +643,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			"iteration": iteration,
 		})
 
-	llm.allResponsesHandled = len(llm.normalizedToolCalls) > 0
+	llm.toolResponseDisposition = toolResponseHandled
 	assistantMsg := providers.Message{
 		Role:             "assistant",
 		Content:          llm.response.Content,

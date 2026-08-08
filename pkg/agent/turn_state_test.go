@@ -8,11 +8,24 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+func TestToolResponseDispositionLabelsAndZeroValue(t *testing.T) {
+	var zero toolResponseDisposition
+	if zero != toolResponseNeedsModel || zero.String() != "needs_model" {
+		t.Fatalf("zero disposition = %d (%q), want needs_model", zero, zero.String())
+	}
+	if toolResponseHandled.String() != "handled" {
+		t.Fatalf("handled disposition label = %q", toolResponseHandled.String())
+	}
+	if toolResponseDisposition(255).String() != "unknown" {
+		t.Fatalf("invalid disposition label = %q", toolResponseDisposition(255).String())
+	}
+}
+
 func TestNewLLMIterationStateDoesNotRetainPriorCallState(t *testing.T) {
 	first := newLLMIterationState(1)
 	first.response = &providers.LLMResponse{Content: "stale response"}
 	first.normalizedToolCalls = []providers.ToolCall{{ID: "stale-tool"}}
-	first.allResponsesHandled = true
+	first.toolResponseDisposition = toolResponseHandled
 	first.streamingPublisher = &streamingChunkPublisher{}
 	first.streamingFallback = true
 	first.suppressReasoning = true
@@ -30,7 +43,8 @@ func TestNewLLMIterationStateDoesNotRetainPriorCallState(t *testing.T) {
 	if second.iteration != 2 {
 		t.Fatalf("iteration = %d, want 2", second.iteration)
 	}
-	if second.response != nil || len(second.normalizedToolCalls) != 0 || second.allResponsesHandled {
+	if second.response != nil || len(second.normalizedToolCalls) != 0 ||
+		second.toolResponseDisposition != toolResponseNeedsModel {
 		t.Fatalf("response state leaked into next iteration: %+v", second)
 	}
 	if second.streamingPublisher != nil || second.streamingFallback || second.suppressReasoning {

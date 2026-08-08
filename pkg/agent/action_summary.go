@@ -413,7 +413,7 @@ func shouldFinalizeAfterToolLoopWithRenderConfig(
 	if llm == nil {
 		return false
 	}
-	return !llm.allResponsesHandled
+	return llm.toolResponseDisposition == toolResponseNeedsModel
 }
 
 func minInt(a, b int) int {
