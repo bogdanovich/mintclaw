@@ -448,6 +448,9 @@ func projectDescriptorForTarget(
 	serviceProfile string,
 	updateProfiles ...string,
 ) (nodes.CommandDescriptor, bool) {
+	if nodes.IsBrowserCommand(descriptor.Name) {
+		return nodes.CommandDescriptor{}, false
+	}
 	updateProfile := ""
 	if len(updateProfiles) > 0 {
 		updateProfile = updateProfiles[0]
