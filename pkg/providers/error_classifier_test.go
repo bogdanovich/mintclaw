@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 )
@@ -31,9 +32,11 @@ func TestClassifyError_Nil(t *testing.T) {
 }
 
 func TestClassifyError_ContextCanceled(t *testing.T) {
-	result := ClassifyError(context.Canceled, "openai", "gpt-4")
-	if result != nil {
-		t.Errorf("expected nil for context.Canceled (user abort), got %+v", result)
+	for _, err := range []error{context.Canceled, fmt.Errorf("provider call: %w", context.Canceled)} {
+		result := ClassifyError(err, "openai", "gpt-4")
+		if result != nil {
+			t.Errorf("expected nil for context.Canceled (user abort), got %+v", result)
+		}
 	}
 }
 
@@ -44,6 +47,92 @@ func TestClassifyError_ContextDeadlineExceeded(t *testing.T) {
 	}
 	if result.Reason != FailoverTimeout {
 		t.Errorf("reason = %q, want timeout", result.Reason)
+	}
+}
+
+func TestClassifyError_ProviderErrorPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        *ProviderError
+		wantReason FailoverReason
+		wantNil    bool
+	}{
+		{
+			name: "explicit kind precedes conflicting status and message",
+			err: &ProviderError{
+				Kind: ProviderErrorBilling, HTTPStatus: 401, SafeMessage: "rate limit exceeded",
+			},
+			wantReason: FailoverBilling,
+		},
+		{
+			name: "status precedes compatibility message",
+			err: &ProviderError{
+				Kind: ProviderErrorUnknown, HTTPStatus: 401, SafeMessage: "billing balance exhausted",
+			},
+			wantReason: FailoverAuth,
+		},
+		{
+			name: "structured unknown does not use text fallback",
+			err: &ProviderError{
+				Kind: ProviderErrorUnknown, SafeMessage: "rate limit exceeded",
+			},
+			wantNil: true,
+		},
+		{
+			name: "structured cancellation never falls back",
+			err: &ProviderError{
+				Kind: ProviderErrorCanceled, HTTPStatus: 503, SafeMessage: "server unavailable",
+			},
+			wantNil: true,
+		},
+		{
+			name: "explicit billing precedes wrapped cancellation",
+			err: &ProviderError{
+				Kind: ProviderErrorBilling, Cause: context.Canceled,
+			},
+			wantReason: FailoverBilling,
+		},
+		{
+			name: "explicit cancellation precedes wrapped deadline",
+			err: &ProviderError{
+				Kind: ProviderErrorCanceled, Cause: context.DeadlineExceeded,
+			},
+			wantNil: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := ClassifyError(test.err, "provider", "model")
+			if test.wantNil {
+				if got != nil {
+					t.Fatalf("ClassifyError() = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Reason != test.wantReason || got.Status != test.err.HTTPStatus {
+				t.Fatalf("ClassifyError() = %+v, want reason %q status %d", got, test.wantReason, test.err.HTTPStatus)
+			}
+		})
+	}
+}
+
+func TestClassifyError_PreservesProviderErrorMetadata(t *testing.T) {
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		HTTPStatus:  429,
+		RetryAfter:  2 * time.Second,
+		RequestID:   "req-provider-1",
+		SafeMessage: "request rate limited",
+		Cause:       errors.New("sdk cause"),
+	}
+	classified := ClassifyError(fmt.Errorf("chat failed: %w", providerErr), "openai", "gpt-5")
+	if classified == nil {
+		t.Fatal("ClassifyError() returned nil")
+	}
+	var got *ProviderError
+	if !errors.As(classified, &got) || got != providerErr {
+		t.Fatalf("classified error lost ProviderError metadata: %+v", classified)
 	}
 }
 
