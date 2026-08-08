@@ -143,7 +143,15 @@ func NewAgentLoopWithRuntimeProfile(
 	profile RuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	registry, err := NewAgentRegistryWithRuntimeProfile(cfg, provider, profile)
+	if !profile.hasCodingOwner() {
+		return nil, fmt.Errorf("personal runtime profiles require the P0.3 storage cutover")
+	}
+	if contextManagerConfigName(cfg) != "none" {
+		return nil, fmt.Errorf(
+			"coding runtime profile requires context manager none until P0.3 routes derived state externally",
+		)
+	}
+	registry, err := newAgentRegistryWithRuntimeProfile(cfg, provider, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +161,7 @@ func NewAgentLoopWithRuntimeProfile(
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	al.runtimeProfile = &profile
 	if al.contextManagerInitErr != nil {
 		err := al.contextManagerInitErr
 		al.Close()

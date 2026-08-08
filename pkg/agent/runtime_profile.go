@@ -27,6 +27,7 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 	profile := RuntimeProfile{
 		agentLayouts: make(map[string]RuntimeLayout, len(bindings)),
 	}
+	var profileOwnerKind RuntimeOwnerKind
 	for index, binding := range bindings {
 		layout := binding.Layout
 		if err := layout.Validate(); err != nil {
@@ -48,6 +49,15 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 				owner.Kind,
 			)
 		}
+		if profileOwnerKind == "" {
+			profileOwnerKind = owner.Kind
+		} else if owner.Kind != profileOwnerKind {
+			return RuntimeProfile{}, fmt.Errorf(
+				"runtime profile: mixed owner kinds %q and %q are not supported",
+				profileOwnerKind,
+				owner.Kind,
+			)
+		}
 		if _, exists := profile.agentLayouts[agentID]; exists {
 			return RuntimeProfile{}, fmt.Errorf("runtime profile: duplicate agent binding %q", agentID)
 		}
@@ -66,10 +76,22 @@ func (p RuntimeProfile) AgentLayout(agentID string) (RuntimeLayout, bool) {
 }
 
 func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
+	configured := make(map[string]struct{}, len(agentIDs))
 	for _, agentID := range agentIDs {
 		canonicalID := routing.NormalizeAgentID(agentID)
+		if _, duplicate := configured[canonicalID]; duplicate {
+			return fmt.Errorf("runtime profile: duplicate configured agent ID %q", canonicalID)
+		}
+		configured[canonicalID] = struct{}{}
 		if _, ok := p.agentLayouts[canonicalID]; !ok {
 			return fmt.Errorf("runtime profile: no layout for agent %q", canonicalID)
+		}
+	}
+	if len(configured) != len(p.agentLayouts) {
+		for agentID := range p.agentLayouts {
+			if _, ok := configured[agentID]; !ok {
+				return fmt.Errorf("runtime profile: layout for unconfigured agent %q", agentID)
+			}
 		}
 	}
 	return nil

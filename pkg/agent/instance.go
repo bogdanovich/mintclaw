@@ -115,10 +115,10 @@ func NewAgentInstance(
 	return instance
 }
 
-// NewAgentInstanceWithRuntimeLayout constructs an agent from a layout that was
+// newAgentInstanceWithRuntimeLayout constructs an agent from a layout that was
 // resolved before registry construction. MintClaw-owned session state is opened
 // under StateRoot; ExecutionRoot is never created by construction.
-func NewAgentInstanceWithRuntimeLayout(
+func newAgentInstanceWithRuntimeLayout(
 	agentCfg *config.AgentConfig,
 	defaults *config.AgentDefaults,
 	cfg *config.Config,

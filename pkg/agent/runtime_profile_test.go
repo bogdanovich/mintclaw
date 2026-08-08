@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,6 +116,122 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 	}
 }
 
+func TestNewAgentLoopWithRuntimeProfileRejectsCodingSeahorseBeforeConstruction(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	if contextManagerConfigName(cfg) != "seahorse" {
+		t.Fatalf("default context manager = %q, want seahorse", contextManagerConfigName(cfg))
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want context-manager rejection")
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected construction created execution root: %v", statErr)
+	}
+	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected construction created state root: %v", statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "personal-project")
+	stateRoot := filepath.Join(root, "personal-state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want deferred personal cutover")
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected personal cutover created execution root: %v", statErr)
+	}
+	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected personal cutover created state root: %v", statErr)
+	}
+}
+
+func TestRuntimeProfileSurvivesReload(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-reload"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	reloaded := *cfg
+	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err != nil {
+		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
+	}
+	agent := loop.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("reloaded default agent is nil")
+	}
+	if agent.Layout.Owner() != layout.Owner() || agent.Layout.StateRoot() != layout.StateRoot() {
+		t.Fatalf("reloaded layout = %#v, want owner/state from %#v", agent.Layout, layout)
+	}
+	if got := agent.Tools.List(); len(got) != 0 {
+		t.Fatalf("reloaded coding tools = %v, want empty P0.2 registry", got)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("reload created execution root: %v", statErr)
+	}
+}
+
 func TestNewRuntimeProfileValidatesBindings(t *testing.T) {
 	root := t.TempDir()
 	personal, err := NewRuntimeLayout(
@@ -145,5 +262,44 @@ func TestNewRuntimeProfileValidatesBindings(t *testing.T) {
 	}
 	if _, err = NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: coding}); err != nil {
 		t.Fatalf("NewRuntimeProfile(coding) error = %v", err)
+	}
+	if _, err = NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: personal},
+		RuntimeProfileBinding{AgentID: "coding", Layout: coding},
+	); err == nil {
+		t.Fatal("NewRuntimeProfile(mixed owners) error = nil")
+	}
+}
+
+func TestRuntimeProfileRequiresExactConfiguredAgentSet(t *testing.T) {
+	root := t.TempDir()
+	newPersonalLayout := func(id string) RuntimeLayout {
+		t.Helper()
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: id},
+			filepath.Join(root, id+"-project"),
+			filepath.Join(root, id+"-state"),
+			[]string{filepath.Join(root, id+"-project")},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+		}
+		return layout
+	}
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: newPersonalLayout("main")},
+		RuntimeProfileBinding{AgentID: "support", Layout: newPersonalLayout("support")},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
+		t.Fatal("newAgentRegistryWithRuntimeProfile(extra binding) error = nil")
+	}
+	cfg.Agents.List = []config.AgentConfig{{ID: "main"}, {ID: " MAIN "}}
+	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
+		t.Fatal("newAgentRegistryWithRuntimeProfile(duplicate configured ID) error = nil")
 	}
 }

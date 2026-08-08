@@ -21,6 +21,14 @@ different identity rules:
 Every configured agent binding is preflighted before the first session store,
 context builder, registry member, or tool is created. Missing and duplicate
 bindings therefore fail without a split registry or filesystem side effects.
+The binding set must exactly equal the configured registry: extra bindings and
+duplicate canonical configured IDs are rejected.
+
+P0.2 admits homogeneous loops only. Mixing personal-agent and coding-thread
+owners in one `AgentLoop` is rejected instead of applying coding isolation to
+personal agents. The product architecture already uses separate personal and
+local coding frontends; an owner-specific mixed bootstrap can be admitted later
+if a concrete use case requires one.
 
 ## Construction Boundary
 
@@ -34,11 +42,15 @@ bindings therefore fail without a split registry or filesystem side effects.
    `StatePaths().SessionsRoot`;
 5. places prompt-memory construction under `StatePaths().MemoryRoot`;
 6. closes already opened agent resources if a later instance fails; and
-7. closes the registry and context manager when loop construction fails.
+7. closes the registry and context manager when loop construction fails; and
+8. retains the same profile-aware registry strategy across supported config and
+   provider reloads.
 
 The existing `NewAgentLoop` and `NewAgentLoopChecked` gateway entry points are
 unchanged in P0.2. The deployed personal runtime switches to the new entry
-point only with the P0.3 storage migration.
+point only with the P0.3 storage migration. The public profile-aware loop entry
+therefore rejects personal-only profiles during P0.2; internal instance and
+registry construction helpers are not exposed as partially safe APIs.
 
 ## Fail-closed Coding Bootstrap
 
@@ -51,6 +63,12 @@ trusted-local coding profile.
 
 P0.4 replaces this temporary empty catalogue with an explicit tested coding
 tool profile. It does not mutate persisted personal configuration.
+
+Coding profiles must select the `none` context manager during P0.2. The
+constructor rejects the default Seahorse manager before registry construction,
+because its legacy database path still points below `AgentInstance.Workspace`
+and it registers retrieval tools. P0.3 removes this temporary restriction by
+routing derived context through the external context root.
 
 ## P0.3 Handoff
 
@@ -76,5 +94,9 @@ Focused tests prove that:
 - coding tools fail closed to an empty registry until P0.4;
 - a missing later-agent binding fails before the first owner's roots are
   created; and
-- duplicate bindings and mismatched personal identities are rejected.
-
+- duplicate bindings, duplicate configured IDs, extra bindings, mixed owner
+  kinds, and mismatched personal identities are rejected;
+- a coding profile using Seahorse is rejected before either root is created;
+  and
+- provider/config reload reconstructs the registry with the same owner and
+  roots without adding coding tools or creating the execution root.

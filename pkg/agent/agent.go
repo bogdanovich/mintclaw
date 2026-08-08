@@ -38,7 +38,10 @@ type AgentLoop struct {
 	bus      interfaces.MessageBus
 	cfg      *config.Config
 	registry *AgentRegistry
-	state    *state.Manager
+	// runtimeProfile retains the pre-construction strategy across config reloads.
+	// Nil selects the legacy config-only registry constructor.
+	runtimeProfile *RuntimeProfile
+	state          *state.Manager
 
 	// Runtime event system
 	runtimeEvents      runtimeevents.Bus
@@ -320,20 +323,24 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Create new registry with updated config and provider
 	// Wrap in defer/recover to handle any panics gracefully
 	var registry *AgentRegistry
-	var panicErr error
+	var constructionErr error
 	done := make(chan struct{}, 1)
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.RecoverPanicNoExit(r)
-				panicErr = fmt.Errorf("panic during registry creation: %v", r)
+				constructionErr = fmt.Errorf("panic during registry creation: %v", r)
 				logger.ErrorCF("agent", "Panic during registry creation",
 					map[string]any{"panic": r})
 			}
 			close(done)
 		}()
 
+		if al.runtimeProfile != nil {
+			registry, constructionErr = newAgentRegistryWithRuntimeProfile(cfg, provider, *al.runtimeProfile)
+			return
+		}
 		registry = NewAgentRegistry(cfg, provider)
 	}()
 
@@ -341,8 +348,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	select {
 	case <-done:
 		if registry == nil {
-			if panicErr != nil {
-				return fmt.Errorf("registry creation failed: %w", panicErr)
+			if constructionErr != nil {
+				return fmt.Errorf("registry creation failed: %w", constructionErr)
 			}
 			return fmt.Errorf("registry creation failed (nil result)")
 		}
@@ -363,6 +370,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		registerSharedTools(al, cfg, al.bus, registry, provider)
 	}
 	if err := al.registerRuntimeToolsForRegistry(cfg, registry); err != nil {
+		registry.Close()
 		return err
 	}
 
