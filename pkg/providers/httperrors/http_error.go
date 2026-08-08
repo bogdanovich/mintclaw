@@ -15,7 +15,9 @@ import (
 
 // HandleResponse reads and normalizes a non-OK provider response.
 func HandleResponse(resp *http.Response, apiBase string) error {
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	// Keep the complete JSON available for structured classification. The
+	// normalizer bounds every retained/displayed field after decoding.
+	body, readErr := io.ReadAll(resp.Body)
 	return newResponse(resp, body, apiBase, readErr)
 }
 

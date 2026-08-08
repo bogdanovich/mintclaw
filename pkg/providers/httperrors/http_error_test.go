@@ -71,6 +71,29 @@ func TestInterruptedErrorBodyPreservesHTTPMetadata(t *testing.T) {
 	}
 }
 
+func TestOversizedStructuredErrorPreservesClassification(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"message":"` + strings.Repeat("x", 70<<10) +
+				`","type":"insufficient_quota","code":"insufficient_quota"}}`,
+		)),
+	}
+
+	err := HandleResponse(resp, "https://api.example.com")
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindBilling {
+		t.Fatalf("ProviderError kind = %q, want %q", providerErr.Kind, providererrors.KindBilling)
+	}
+	if len([]rune(providerErr.SafeMessage)) > 243 {
+		t.Fatalf("SafeMessage was not bounded after classification: %d runes", len([]rune(providerErr.SafeMessage)))
+	}
+}
+
 type partialErrorReadCloser struct {
 	data []byte
 	err  error
