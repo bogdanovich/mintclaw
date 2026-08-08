@@ -31,25 +31,27 @@ Until those packets merge, current production code continues to use
 
 ## Required Invariants
 
-1. A personal agent has owner kind `personal_agent` and its normalized agent ID
-   is the owner ID.
+1. A personal agent has owner kind `personal_agent`; construction normalizes
+   its owner ID with the same canonical agent-ID rules used by routing.
 2. A coding thread has owner kind `coding_thread` and its stable thread ID is
    the owner ID.
 3. `ExecutionRoot` is the cwd/project authority for filesystem tools,
    subprocesses, and intentional user-requested outputs.
 4. `StateRoot` owns sessions, derived context, memory, operational state,
    diagnostics, media, locks, and other MintClaw-managed files.
-5. `StateRoot` cannot equal or descend from `ExecutionRoot` for any runtime
-   owner. Path comparison resolves symlinks through the nearest existing
-   ancestor so a not-yet-created state directory cannot be hidden below a
-   linked workspace or source checkout.
-6. Layout construction and validation are read-only. They do not create the
+5. Construction stores the same trimmed, absolute, symlink-resolved execution,
+   state, and instruction paths that passed validation. Later cwd changes
+   cannot reinterpret a layout.
+6. `StateRoot` cannot equal or descend from `ExecutionRoot` for any runtime
+   owner. Path resolution uses the nearest existing ancestor and fails closed
+   on dangling symlinks, permission errors, or other ambiguous ancestors.
+7. Layout construction and validation are read-only. They do not create the
    execution root, state root, or any derived directory.
-7. Instruction roots are explicit and ordered. Discovering instructions never
+8. Instruction roots are explicit and ordered. Discovering instructions never
    makes their parent an implicit state root.
-8. A deployment migration is copy/verify/switch/rollback capable. Runtime code
+9. A deployment migration is copy/verify/switch/rollback capable. Runtime code
    does not indefinitely support both the old and new locations.
-9. Personal behavior—sessions, memory content, routing, tools, and approvals—is
+10. Personal behavior—sessions, memory content, routing, tools, and approvals—is
    preserved across migration even though path compatibility is not.
 
 ## Target State-Path Ownership
@@ -139,8 +141,9 @@ This packet may:
 
 - add layout, owner, validation, and derived-path types;
 - document the complete consumer and migration inventory;
-- test exact path ownership, input copying, validation, symlink handling, and
-  the absence of filesystem side effects; and
+- test exact path ownership, owner/path canonicalization, immutable instruction
+  roots, fail-closed symlink handling, and the absence of filesystem side
+  effects; and
 - update the roadmap from path compatibility to explicit cutover semantics.
 
 This packet must not:
@@ -156,8 +159,8 @@ This packet must not:
 
 P0.1 is complete when:
 
-- tests prove owner, execution root, state root, ordered instruction roots, and
-  every derived state path;
+- tests prove canonical owner, execution root, state root, ordered immutable
+  instruction roots, and every derived state path;
 - all owner kinds reject equal, nested, and symlink-hidden state roots;
 - an external state root validates without creating either root;
 - the Workspace consumer inventory is accurate for the merged baseline;

@@ -758,6 +758,8 @@ Scope:
 - Document the current personal path inventory and one-time deployment mapping.
 - Add focused contract tests proving explicit owner identity, distinct roots,
   state-path ownership, and source-pollution rejection.
+- Store canonical resolved paths and fail closed when a symlink ancestor cannot
+  be resolved unambiguously.
 
 Done when:
 

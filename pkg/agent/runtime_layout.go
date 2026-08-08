@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
 // RuntimeOwnerKind identifies the domain that owns a runtime layout.
@@ -55,11 +57,48 @@ func NewRuntimeLayout(
 	stateRoot string,
 	instructionRoots []string,
 ) (RuntimeLayout, error) {
+	ownerID := strings.TrimSpace(owner.ID)
+	if ownerID == "" {
+		return RuntimeLayout{}, fmt.Errorf("runtime layout: owner ID is required")
+	}
+	switch owner.Kind {
+	case RuntimeOwnerPersonalAgent:
+		owner.ID = routing.NormalizeAgentID(ownerID)
+	case RuntimeOwnerCodingThread:
+		owner.ID = ownerID
+	default:
+		return RuntimeLayout{}, fmt.Errorf("runtime layout: unsupported owner kind %q", owner.Kind)
+	}
+
+	resolvedExecutionRoot, err := resolveRuntimeLayoutPath(executionRoot)
+	if err != nil {
+		return RuntimeLayout{}, fmt.Errorf("runtime layout: resolve execution root: %w", err)
+	}
+	resolvedStateRoot, err := resolveRuntimeLayoutPath(stateRoot)
+	if err != nil {
+		return RuntimeLayout{}, fmt.Errorf("runtime layout: resolve state root: %w", err)
+	}
+	if len(instructionRoots) == 0 {
+		return RuntimeLayout{}, fmt.Errorf("runtime layout: at least one instruction root is required")
+	}
+	resolvedInstructionRoots := make([]string, len(instructionRoots))
+	for index, root := range instructionRoots {
+		resolved, resolveErr := resolveRuntimeLayoutPath(root)
+		if resolveErr != nil {
+			return RuntimeLayout{}, fmt.Errorf(
+				"runtime layout: resolve instruction root %d: %w",
+				index,
+				resolveErr,
+			)
+		}
+		resolvedInstructionRoots[index] = resolved
+	}
+
 	layout := RuntimeLayout{
 		owner:            owner,
-		executionRoot:    executionRoot,
-		stateRoot:        stateRoot,
-		instructionRoots: append([]string(nil), instructionRoots...),
+		executionRoot:    resolvedExecutionRoot,
+		stateRoot:        resolvedStateRoot,
+		instructionRoots: resolvedInstructionRoots,
 	}
 	if err := layout.Validate(); err != nil {
 		return RuntimeLayout{}, err
@@ -110,7 +149,14 @@ func (l RuntimeLayout) Validate() error {
 		return fmt.Errorf("runtime layout: owner ID is required")
 	}
 	switch l.owner.Kind {
-	case RuntimeOwnerPersonalAgent, RuntimeOwnerCodingThread:
+	case RuntimeOwnerPersonalAgent:
+		if l.owner.ID != routing.NormalizeAgentID(l.owner.ID) {
+			return fmt.Errorf("runtime layout: personal owner ID must be canonical")
+		}
+	case RuntimeOwnerCodingThread:
+		if l.owner.ID != strings.TrimSpace(l.owner.ID) {
+			return fmt.Errorf("runtime layout: coding owner ID must be trimmed")
+		}
 	default:
 		return fmt.Errorf("runtime layout: unsupported owner kind %q", l.owner.Kind)
 	}
@@ -142,8 +188,6 @@ func runtimeLayoutJoin(root string, elements ...string) string {
 }
 
 func runtimeLayoutPathWithin(candidate, root string) bool {
-	candidate = resolveRuntimeLayoutPath(candidate)
-	root = resolveRuntimeLayoutPath(root)
 	if candidate == "" || root == "" {
 		return false
 	}
@@ -151,32 +195,39 @@ func runtimeLayoutPathWithin(candidate, root string) bool {
 	return err == nil && (relative == "." || filepath.IsLocal(relative))
 }
 
-// resolveRuntimeLayoutPath resolves symlinks through the nearest existing
-// ancestor so a not-yet-created state directory cannot hide under a linked
-// source-checkout path.
-func resolveRuntimeLayoutPath(path string) string {
+// resolveRuntimeLayoutPath returns an absolute path resolved through its nearest
+// existing ancestor. An existing but unresolvable ancestor fails closed.
+func resolveRuntimeLayoutPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return ""
+		return "", fmt.Errorf("path is required")
 	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("make path absolute: %w", err)
 	}
-	cleaned := filepath.Clean(path)
+	cleaned := filepath.Clean(absolute)
 	for current := cleaned; ; current = filepath.Dir(current) {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			relative, relErr := filepath.Rel(current, cleaned)
-			if relErr != nil || relative == "." {
-				return filepath.Clean(resolved)
+		_, lstatErr := os.Lstat(current)
+		if lstatErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return "", fmt.Errorf("resolve existing ancestor %q: %w", current, resolveErr)
 			}
-			return filepath.Clean(filepath.Join(resolved, relative))
+			relative, relErr := filepath.Rel(current, cleaned)
+			if relErr != nil {
+				return "", fmt.Errorf("resolve path relative to ancestor %q: %w", current, relErr)
+			}
+			if relative == "." {
+				return filepath.Clean(resolved), nil
+			}
+			return filepath.Clean(filepath.Join(resolved, relative)), nil
 		}
-		if !os.IsNotExist(err) {
-			return cleaned
+		if !os.IsNotExist(lstatErr) {
+			return "", fmt.Errorf("inspect path ancestor %q: %w", current, lstatErr)
 		}
 		if filepath.Dir(current) == current {
-			return cleaned
+			return "", fmt.Errorf("path has no resolvable ancestor: %q", cleaned)
 		}
 	}
 }
