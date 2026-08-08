@@ -177,11 +177,29 @@ type turnExecution struct {
 
 // LLMIterationState owns data that is valid only for one model call and its
 // immediately following tool or finalization phase.
+type toolResponseDisposition uint8
+
+const (
+	toolResponseNeedsModel toolResponseDisposition = iota
+	toolResponseHandled
+)
+
+func (d toolResponseDisposition) String() string {
+	switch d {
+	case toolResponseNeedsModel:
+		return "needs_model"
+	case toolResponseHandled:
+		return "handled"
+	default:
+		return "unknown"
+	}
+}
+
 type LLMIterationState struct {
 	iteration                   int
 	response                    *providers.LLMResponse
 	normalizedToolCalls         []providers.ToolCall
-	allResponsesHandled         bool
+	toolResponseDisposition     toolResponseDisposition
 	streamingPublisher          *streamingChunkPublisher
 	streamingFallback           bool
 	suppressReasoning           bool

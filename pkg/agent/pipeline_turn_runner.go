@@ -281,13 +281,12 @@ func (p *Pipeline) runTurnLoop(
 					turnStatus = TurnEndStatusError
 					return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 				}
-				// ExecuteTools returned ControlBreak:
-				// - allResponsesHandled=true: finalize without DefaultResponse
-				// - allResponsesHandled=false: finalize with outcome content when present
+				// ExecuteTools returned ControlBreak. A handled tool response suppresses
+				// DefaultResponse; otherwise use outcome content when present.
 				if strings.TrimSpace(toolOutcome.FinalContent) != "" {
 					finalContent = toolOutcome.FinalContent
 				}
-				if llm.allResponsesHandled {
+				if llm.toolResponseDisposition == toolResponseHandled {
 					finalContent = ""
 				}
 				if p.continueWithPendingSubTurnResults(ts, exec) {

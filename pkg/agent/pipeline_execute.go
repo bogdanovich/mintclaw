@@ -402,7 +402,7 @@ func (runner *toolLoopRunner) admitToolCall(
 		if turnProfileToolAllowed(ts.profile, toolName) {
 			return false
 		}
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 		denyContent := fmt.Sprintf("Tool %q is not allowed by the active turn profile.", toolName)
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
@@ -519,7 +519,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				}
 
 				if !hookResult.ResponseHandled {
-					llm.allResponsesHandled = false
+					llm.toolResponseDisposition = toolResponseNeedsModel
 				}
 
 				p.emitEvent(
@@ -569,7 +569,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					"action":   "respond",
 				})
 		case HookActionDenyTool:
-			llm.allResponsesHandled = false
+			llm.toolResponseDisposition = toolResponseNeedsModel
 			denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
@@ -614,7 +614,7 @@ func (runner *toolLoopRunner) admitToolCall(
 		runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: blockedContent, ToolCallID: tc.ID,
 		}, toolMessagePersistAndIngest)
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 		runner.captureAfterToolSteering(false)
 		if loopDecision.Action == loopguard.ActionHalt {
 			runner.appendSkippedToolMessages(
@@ -718,7 +718,7 @@ func (runner *toolLoopRunner) approveToolCall(
 		}
 		if denial, safe := tools.SafeApprovalDenialResult(approvalArgsErr); safe {
 			ts.opts.ApprovalGrant = nil
-			llm.allResponsesHandled = false
+			llm.toolResponseDisposition = toolResponseNeedsModel
 			denyContent := denial.ContentForLLM()
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
@@ -821,7 +821,7 @@ func (runner *toolLoopRunner) approveToolCall(
 					}
 				}
 			}
-			llm.allResponsesHandled = false
+			llm.toolResponseDisposition = toolResponseNeedsModel
 			denyContent := hookDeniedToolContent(
 				"Tool execution denied because human approval could not be requested",
 				errString(hashErr),
@@ -837,7 +837,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			return skipToolCall()
 		}
 		if !approval.Approved {
-			llm.allResponsesHandled = false
+			llm.toolResponseDisposition = toolResponseNeedsModel
 			denyContent := hookDeniedToolContent("Tool execution denied by approval hook", approval.Reason)
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
@@ -1142,7 +1142,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	runner.handledAttachments = append(runner.handledAttachments, attachments...)
 
 	if !toolResult.ResponseHandled {
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 	}
 
 	shouldSendForUser := !toolResult.ResponseHandled &&
@@ -1195,7 +1195,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 						"error":      errSummary,
 						"session_id": ts.sessionKey,
 					})
-				llm.allResponsesHandled = false
+				llm.toolResponseDisposition = toolResponseNeedsModel
 				exec.messages = runner.messages
 				return stopToolBatch(ToolLoopOutcome{
 					Control:      ToolControlBreak,
@@ -1215,7 +1215,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 						"streak":     streak,
 						"session_id": ts.sessionKey,
 					})
-				llm.allResponsesHandled = false
+				llm.toolResponseDisposition = toolResponseNeedsModel
 				exec.messages = runner.messages
 				return stopToolBatch(ToolLoopOutcome{
 					Control:      ToolControlBreak,
@@ -1251,18 +1251,18 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 	exec.messages = runner.messages
 
-	// Continue if pending steering exists (regardless of allResponsesHandled).
+	// Continue if pending steering exists regardless of the tool response disposition.
 	// This covers the case where tools were partially executed and skipped due to steering,
-	// but one tool had ResponseHandled=false (so allResponsesHandled=false).
+	// but one tool still requires a model response.
 	if len(exec.pendingMessages) > 0 {
 		exec.markAdditionalUserInputObserved()
 		logger.InfoCF("agent", "Pending steering after partial tool execution; continuing turn",
 			map[string]any{
-				"agent_id":            ts.agent.ID,
-				"pending_count":       len(exec.pendingMessages),
-				"allResponsesHandled": llm.allResponsesHandled,
+				"agent_id":                  ts.agent.ID,
+				"pending_count":             len(exec.pendingMessages),
+				"tool_response_disposition": llm.toolResponseDisposition.String(),
 			})
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolLoopOutcome{Control: ToolControlContinue}
 	}
 
@@ -1277,11 +1277,11 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"steering_count": len(steerMsgs),
 			})
 		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolLoopOutcome{Control: ToolControlContinue}
 	}
 
-	// No pending steering: finalize or break depending on allResponsesHandled
+	// No pending steering: finalize or continue according to the typed response disposition.
 	if p.shouldFinalizeAfterToolLoop(exec, llm) {
 		logger.InfoCF(
 			"agent",
@@ -1295,7 +1295,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 		return ToolLoopOutcome{Control: ToolControlFinalize}
 	}
 
-	if llm.allResponsesHandled {
+	if llm.toolResponseDisposition == toolResponseHandled {
 		summaryMsg := providers.Message{
 			Role:        "assistant",
 			Content:     handledToolResponseSummary,
@@ -1341,9 +1341,8 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 		return ToolLoopOutcome{Control: ToolControlBreak}
 	}
 
-	// allResponsesHandled=false and no pending steering: continue so coordinator
-	// makes another LLM call. The tool result is in messages and the LLM will
-	// return it as finalContent in the next iteration.
+	// A model response is still required and no steering is pending, so continue and let the coordinator
+	// make another LLM call. The tool result is in messages and the LLM will return it as finalContent.
 	ts.agent.Tools.TickTTL()
 	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 		"agent_id": ts.agent.ID, "iteration": iteration,
@@ -1579,7 +1578,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			queuedSteeringDeferredToolResult,
 		)
 		r.exec.messages = r.messages
-		r.llm.allResponsesHandled = false
+		r.llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolControlContinue, true, nil
 	}
 

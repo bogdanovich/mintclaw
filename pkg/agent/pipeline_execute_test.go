@@ -252,7 +252,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
-	llm.allResponsesHandled = true
+	llm.toolResponseDisposition = toolResponseHandled
 	runner := &toolLoopRunner{
 		p:       &Pipeline{},
 		turnCtx: t.Context(),
@@ -303,7 +303,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	if len(runner.messages) != 1 || runner.messages[0].Role != "tool" || runner.messages[0].Content != "stage result" {
 		t.Fatalf("persisted messages = %+v", runner.messages)
 	}
-	if llm.allResponsesHandled {
+	if llm.toolResponseDisposition != toolResponseNeedsModel {
 		t.Fatal("unhandled tool result did not require another model response")
 	}
 }
@@ -1310,7 +1310,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 				messages: []providers.Message{{Role: "user", Content: "change course"}},
 			}
 		}
-		llm.allResponsesHandled = true
+		llm.toolResponseDisposition = toolResponseHandled
 		if got := pipeline.ExecuteTools(
 			context.Background(),
 			context.Background(),
@@ -1416,7 +1416,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 		llm.normalizedToolCalls = []providers.ToolCall{{
 			ID: fmt.Sprintf("call-%d", i), Name: tool.Name(), Arguments: map[string]any{},
 		}}
-		llm.allResponsesHandled = false
+		llm.toolResponseDisposition = toolResponseNeedsModel
 		outcome := pipeline.ExecuteTools(context.Background(), context.Background(), ts, exec, llm)
 		if i < config.IdenticalCallHalt {
 			if outcome.Control != ToolControlContinue {
@@ -1530,7 +1530,7 @@ func TestPipelineLoopGuardUsesHookModifiedArgumentsAndResults(t *testing.T) {
 		llm.normalizedToolCalls = []providers.ToolCall{{
 			ID: fmt.Sprintf("hook-%d", i), Name: tool.Name(), Arguments: map[string]any{"text": value},
 		}}
-		llm.allResponsesHandled = true
+		llm.toolResponseDisposition = toolResponseHandled
 		pipeline.ExecuteTools(context.Background(), context.Background(), ts, exec, llm)
 	}
 	if tool.executions != 2 {

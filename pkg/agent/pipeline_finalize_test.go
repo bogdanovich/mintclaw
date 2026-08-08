@@ -85,7 +85,7 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 			defaultModelName: "default-model",
 		},
 	}
-	llm := &LLMIterationState{allResponsesHandled: true}
+	llm := &LLMIterationState{toolResponseDisposition: toolResponseHandled}
 	finalization := newFinalizationContext(ts, exec, llm, TurnEndStatusCompleted, "")
 	if finalization.disposition != finalResponseAlreadyHandled {
 		t.Fatalf("disposition = %v, want already handled", finalization.disposition)

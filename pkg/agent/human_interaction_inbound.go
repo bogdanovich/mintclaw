@@ -1089,7 +1089,7 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	llm := newLLMIterationState(1)
 	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall}}
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
-	llm.allResponsesHandled = true
+	llm.toolResponseDisposition = toolResponseHandled
 	llm.assistantToolCallsPersisted = true
 	outcome := pipeline.ExecuteTools(ctx, ctx, ts, exec, llm)
 	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
