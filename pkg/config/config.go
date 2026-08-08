@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -591,7 +591,7 @@ func (p *PlaceholderConfig) GetRandomText() string {
 	if len(p.Text) == 1 {
 		return p.Text[0]
 	}
-	idx := rand.Intn(len(p.Text))
+	idx := rand.IntN(len(p.Text))
 	return p.Text[idx]
 }
 
