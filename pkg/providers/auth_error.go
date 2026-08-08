@@ -42,7 +42,22 @@ func ClassifyAuthError(err error) (AuthErrorKind, bool) {
 		return classifyFallbackExhaustedAuthError(exhausted)
 	}
 
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil {
+		isAuth := providerErr.Kind == ProviderErrorAuthentication ||
+			(providerErr.Kind == ProviderErrorUnknown &&
+				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
+		if !isAuth {
+			return "", false
+		}
+		return classifyAuthMessage(providerErr.SafeMessage, true)
+	}
+
 	msg := authErrorText(err)
+	return classifyAuthMessage(msg, hasStructuredAuthError(err))
+}
+
+func classifyAuthMessage(msg string, defaultAuth bool) (AuthErrorKind, bool) {
 	if missingAPIKeyPattern.MatchString(msg) {
 		return AuthErrorMissingAPIKey, true
 	}
@@ -52,8 +67,7 @@ func ClassifyAuthError(err error) (AuthErrorKind, bool) {
 	if invalidAPIKeyPattern.MatchString(msg) {
 		return AuthErrorInvalidAPIKey, true
 	}
-
-	if hasStructuredAuthError(err) || genericAuthPattern.MatchString(msg) {
+	if defaultAuth || genericAuthPattern.MatchString(msg) {
 		return AuthErrorGeneric, true
 	}
 	return "", false
@@ -70,10 +84,22 @@ func authErrorText(err error) string {
 		parts = append(parts, httpErr.BodyPreview)
 	}
 
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil {
+		parts = append(parts, providerErr.SafeMessage)
+	}
+
 	return strings.Join(parts, "\n")
 }
 
 func hasStructuredAuthError(err error) bool {
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil {
+		return providerErr.Kind == ProviderErrorAuthentication ||
+			(providerErr.Kind == ProviderErrorUnknown &&
+				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
+	}
+
 	var failErr *FailoverError
 	if errors.As(err, &failErr) && failErr != nil && failErr.Reason == FailoverAuth {
 		return true
@@ -124,11 +150,17 @@ func classifyFallbackExhaustedAuthError(err *FallbackExhaustedError) (AuthErrorK
 }
 
 func attemptIsAuthFailure(attempt FallbackAttempt) bool {
+	if attempt.Error == nil {
+		return attempt.Reason == FailoverAuth
+	}
+	var providerErr *ProviderError
+	if errors.As(attempt.Error, &providerErr) && providerErr != nil {
+		return providerErr.Kind == ProviderErrorAuthentication ||
+			(providerErr.Kind == ProviderErrorUnknown &&
+				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
+	}
 	if attempt.Reason == FailoverAuth {
 		return true
-	}
-	if attempt.Error == nil {
-		return false
 	}
 	var failErr *FailoverError
 	if errors.As(attempt.Error, &failErr) && failErr != nil && failErr.Reason == FailoverAuth {

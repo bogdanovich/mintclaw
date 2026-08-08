@@ -76,6 +76,21 @@ func TestClassifyAuthError(t *testing.T) {
 	}
 }
 
+func TestClassifyAuthError_ProviderErrorPrecedence(t *testing.T) {
+	if kind, ok := ClassifyAuthError(&ProviderError{
+		Kind: ProviderErrorBilling, HTTPStatus: 401, SafeMessage: "unauthorized",
+	}); ok {
+		t.Fatalf("billing ProviderError classified as auth: %q", kind)
+	}
+
+	kind, ok := ClassifyAuthError(&ProviderError{
+		Kind: ProviderErrorAuthentication, HTTPStatus: 429, SafeMessage: "invalid api key",
+	})
+	if !ok || kind != AuthErrorInvalidAPIKey {
+		t.Fatalf("auth ProviderError = (%q, %v), want invalid_api_key", kind, ok)
+	}
+}
+
 func TestClassifyAuthError_FallbackExhaustedAllAuth(t *testing.T) {
 	err := &FallbackExhaustedError{
 		Attempts: []FallbackAttempt{
@@ -127,6 +142,18 @@ func TestClassifyAuthError_FallbackExhaustedMixedFailures(t *testing.T) {
 
 	if got, ok := ClassifyAuthError(err); ok {
 		t.Fatalf("kind = %q, want no auth classification for mixed failures", got)
+	}
+}
+
+func TestClassifyAuthError_FallbackAttemptProviderErrorPrecedence(t *testing.T) {
+	err := &FallbackExhaustedError{Attempts: []FallbackAttempt{{
+		Reason: FailoverAuth,
+		Error: &ProviderError{
+			Kind: ProviderErrorBilling, HTTPStatus: 401, SafeMessage: "unauthorized",
+		},
+	}}}
+	if kind, ok := ClassifyAuthError(err); ok {
+		t.Fatalf("billing ProviderError classified as auth from stale attempt reason: %q", kind)
 	}
 }
 
