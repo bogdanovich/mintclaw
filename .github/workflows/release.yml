@@ -109,6 +109,15 @@ jobs:
           GOVERSION: ${{ steps.setup-go.outputs.go-version }}
           INCLUDE_ANDROID_BUNDLE: "true"
 
+      - name: Validate slim node archives
+        shell: bash
+        run: |
+          scripts/validate-node-release-archives.sh \
+            dist/mintclaw-node_Linux_x86_64.tar.gz \
+            dist/mintclaw-node_Linux_arm64.tar.gz \
+            dist/mintclaw-node_Darwin_x86_64.tar.gz \
+            dist/mintclaw-node_Darwin_arm64.tar.gz
+
       - name: Preserve unsigned node archives
         uses: actions/upload-artifact@v7
         with:

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +16,64 @@ import (
 
 	nodeupdate "github.com/bogdanovich/mintclaw/pkg/nodes/update"
 )
+
+func TestValidateNodeReleaseArchivesRequiresOneExecutable(t *testing.T) {
+	directory := t.TempDir()
+	archives := make([]string, 4)
+	for index := range archives {
+		archives[index] = filepath.Join(directory, fmt.Sprintf("node-%d.tar.gz", index))
+		writeNodeReleaseArchive(t, archives[index], false)
+	}
+
+	script := filepath.Join("..", "..", "scripts", "validate-node-release-archives.sh")
+	if output, err := exec.Command(script, archives...).CombinedOutput(); err != nil {
+		t.Fatalf("validate good archives: %v: %s", err, output)
+	}
+
+	writeNodeReleaseArchive(t, archives[0], true)
+	if err := exec.Command(script, archives...).Run(); err == nil {
+		t.Fatal("validator accepted an archive with release metadata")
+	}
+}
+
+func writeNodeReleaseArchive(t *testing.T, path string, extraEntry bool) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzip.NewWriter(file)
+	archive := tar.NewWriter(compressed)
+	entries := []struct {
+		name string
+		mode int64
+	}{
+		{name: "mintclaw-node", mode: 0o755},
+	}
+	if extraEntry {
+		entries = append(entries, struct {
+			name string
+			mode int64
+		}{name: "README.md", mode: 0o644})
+	}
+	for _, entry := range entries {
+		if err = archive.WriteHeader(&tar.Header{Name: entry.name, Mode: entry.mode, Size: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = archive.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRunSignsExactFourReleaseArtifacts(t *testing.T) {
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
