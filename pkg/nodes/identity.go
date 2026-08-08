@@ -144,7 +144,7 @@ func (proof IdentityProof) validateClaims() error {
 		return fmt.Errorf("%w: malformed nonce", ErrInvalidIdentityProof)
 	}
 	if err := proof.NodeID.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidIdentityProof, err)
+		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	if proof.MinProtocol <= 0 || proof.MaxProtocol < proof.MinProtocol ||
 		proof.MinProtocol > ProtocolV1 || proof.MaxProtocol < ProtocolV1 {
@@ -157,10 +157,10 @@ func (proof IdentityProof) validateClaims() error {
 		return fmt.Errorf("%w: malformed client claims", ErrInvalidIdentityProof)
 	}
 	if err := proof.Catalog.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidIdentityProof, err)
+		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	if err := validateCompanionCatalog(proof.Catalog); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidIdentityProof, err)
+		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	catalogHash, err := proof.Catalog.Hash()
 	if err != nil || catalogHash != proof.CatalogHash {
@@ -170,7 +170,7 @@ func (proof IdentityProof) validateClaims() error {
 		Executor:       proof.Executor,
 		PolicyRevision: proof.PolicyRevision,
 	}).ValidateOptional(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidIdentityProof, err)
+		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ func (proof IdentityProof) transcript() ([]byte, error) {
 		PolicyRevision: proof.PolicyRevision,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode signature transcript: %v", ErrInvalidIdentityProof, err)
+		return nil, fmt.Errorf("%w: encode signature transcript: %w", ErrInvalidIdentityProof, err)
 	}
 	return append([]byte("mintclaw-node-auth-v1\x00"), data...), nil
 }

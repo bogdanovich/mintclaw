@@ -549,7 +549,7 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	}
 	if err := s.finishHistoryMutation(sessionKey, &canonicalMeta); err != nil {
 		if rollbackErr := s.restoreRawJSONL(sessionKey, previousJSONL, hadPreviousJSONL); rollbackErr != nil {
-			return false, fmt.Errorf("memory: write promoted meta: %w (rollback jsonl: %v)", err, rollbackErr)
+			return false, fmt.Errorf("memory: write promoted meta: %w (rollback jsonl: %w)", err, rollbackErr)
 		}
 		return false, err
 	}

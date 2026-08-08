@@ -205,7 +205,7 @@ func readPidFileUnlocked(pidPath string) (*PidFileData, error) {
 
 	var data PidFileData
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("%w: %v", errInvalidPidFile, err)
+		return nil, fmt.Errorf("%w: %w", errInvalidPidFile, err)
 	}
 
 	// Validate PID is a positive integer.

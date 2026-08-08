@@ -652,7 +652,7 @@ func commitStagedSkillInstall(stagedWorkspaceRoot, stagedTargetDir, targetDir st
 
 	if err := os.Rename(stagedTargetDir, targetDir); err != nil {
 		if rollbackErr := os.Rename(backupDir, targetDir); rollbackErr != nil {
-			return fmt.Errorf("failed to activate replacement: %w (rollback failed: %v)", err, rollbackErr)
+			return fmt.Errorf("failed to activate replacement: %w (rollback failed: %w)", err, rollbackErr)
 		}
 		return fmt.Errorf("failed to activate replacement: %w", err)
 	}
@@ -861,11 +861,11 @@ func importUploadedMarkdownSkill(cfg *config.Config, filename string, content []
 		return nil, statusCodeForImportedSkillWriteError(err), err
 	}
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to create skill directory: %v", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to create skill directory: %w", err)
 	}
 	if err := fileutil.WriteFileAtomic(skillFile, normalizedContent, 0o644); err != nil {
 		_ = os.RemoveAll(skillDir)
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to save skill: %v", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to save skill: %w", err)
 	}
 
 	return finalizeImportedSkill(cfg, skillDir, skillName, false)
@@ -874,13 +874,13 @@ func importUploadedMarkdownSkill(cfg *config.Config, filename string, content []
 func importUploadedSkillArchive(cfg *config.Config, filename string, content []byte) (*skillSupportItem, int, error) {
 	tmpDir, tempDirErr := os.MkdirTemp("", "mintclaw-skill-import-*")
 	if tempDirErr != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to create temp directory: %v", tempDirErr)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to create temp directory: %w", tempDirErr)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, "import.zip")
 	if writeErr := fileutil.WriteFileAtomic(archivePath, content, 0o600); writeErr != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to stage uploaded archive: %v", writeErr)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to stage uploaded archive: %w", writeErr)
 	}
 
 	extractDir := filepath.Join(tmpDir, "extract")
@@ -915,13 +915,13 @@ func importUploadedSkillArchive(cfg *config.Config, filename string, content []b
 	}
 	if err := copyImportedSkillTree(skillRoot, skillDir); err != nil {
 		_ = os.RemoveAll(skillDir)
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to save skill: %v", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to save skill: %w", err)
 	}
 
 	normalizedContent := normalizeImportedSkillContent(skillContent, skillName)
 	if err := fileutil.WriteFileAtomic(filepath.Join(skillDir, "SKILL.md"), normalizedContent, 0o644); err != nil {
 		_ = os.RemoveAll(skillDir)
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to normalize skill: %v", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to normalize skill: %w", err)
 	}
 
 	return finalizeImportedSkill(cfg, skillDir, skillName, true)
@@ -965,7 +965,7 @@ func finalizeImportedSkill(
 		InstalledAt: time.Now().UnixMilli(),
 	}); err != nil {
 		_ = os.RemoveAll(skillDir)
-		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to persist skill metadata: %v", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("Failed to persist skill metadata: %w", err)
 	}
 
 	if importedSkill := findWorkspaceSkillByDirectory(cfg, skillName); importedSkill != nil {

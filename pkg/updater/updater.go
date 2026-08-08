@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -688,7 +689,7 @@ func findBinaryInDir(dir, programName string) (string, error) {
 			}
 		}
 		return nil
-	}); err != nil && err != io.EOF {
+	}); err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	if found == "" {

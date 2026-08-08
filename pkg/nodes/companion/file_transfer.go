@@ -864,7 +864,8 @@ func (runtime *FileTransferRuntime) commitUploadLocked(
 	}
 	active.record = record
 	if publishErr := active.stage.publish(active.record.Publication); publishErr != nil {
-		if _, committed := publishErr.(*committedFileMutationError); committed {
+		var committed *committedFileMutationError
+		if errors.As(publishErr, &committed) {
 			runtime.markUnknownLocked(active, "PUBLICATION_UNCERTAIN")
 			return runtime.sendFailure(frame, send, "PUBLICATION_UNCERTAIN")
 		}

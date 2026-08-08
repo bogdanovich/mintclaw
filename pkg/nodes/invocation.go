@@ -85,7 +85,7 @@ func (request InvocationRequest) Validate() error {
 		return fmt.Errorf("%w: malformed identity field", ErrInvalidInvocation)
 	}
 	if err := request.NodeID.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidInvocation, err)
+		return fmt.Errorf("%w: %w", ErrInvalidInvocation, err)
 	}
 	if !validSHA256Digest(request.CatalogHash) {
 		return fmt.Errorf("%w: malformed catalog hash", ErrInvalidInvocation)
@@ -240,11 +240,11 @@ func (plan ExecutionPlan) computeHash() (string, error) {
 	plan.PlanHash = ""
 	data, err := json.Marshal(plan)
 	if err != nil {
-		return "", fmt.Errorf("%w: encode plan: %v", ErrInvalidInvocation, err)
+		return "", fmt.Errorf("%w: encode plan: %w", ErrInvalidInvocation, err)
 	}
 	canonical, err := jsonstrict.Canonical(data)
 	if err != nil {
-		return "", fmt.Errorf("%w: canonicalize plan: %v", ErrInvalidInvocation, err)
+		return "", fmt.Errorf("%w: canonicalize plan: %w", ErrInvalidInvocation, err)
 	}
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
@@ -431,14 +431,14 @@ func canonicalInvocationInputValue(raw json.RawMessage) (json.RawMessage, map[st
 	}
 	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: invalid input: %v", ErrInvalidInvocation, err)
+		return nil, nil, fmt.Errorf("%w: invalid input: %w", ErrInvalidInvocation, err)
 	}
 	if _, ok := value.(map[string]any); !ok {
 		return nil, nil, fmt.Errorf("%w: input must be an object", ErrInvalidInvocation)
 	}
 	canonical, err := jsonstrict.Canonical(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: canonicalize input: %v", ErrInvalidInvocation, err)
+		return nil, nil, fmt.Errorf("%w: canonicalize input: %w", ErrInvalidInvocation, err)
 	}
 	if len(canonical) > MaxInvocationInputBytes {
 		return nil, nil, fmt.Errorf("%w: canonical input is outside bounds", ErrInvalidInvocation)
@@ -475,7 +475,7 @@ func ValidateInvocationOutput(
 	}
 	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid output: %v", ErrInvalidInvocation, err)
+		return nil, fmt.Errorf("%w: invalid output: %w", ErrInvalidInvocation, err)
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -495,7 +495,7 @@ func ValidateInvocationOutput(
 	}
 	canonical, err := jsonstrict.Canonical(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: canonicalize output: %v", ErrInvalidInvocation, err)
+		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
 	}
 	if len(canonical) > limit {
 		return nil, fmt.Errorf("%w: canonical output is outside bounds", ErrInvalidInvocation)
@@ -509,17 +509,17 @@ func validateInvocationValue(rawSchema json.RawMessage, value map[string]any, la
 	schemaURL := "urn:mintclaw:node-command-" + label
 	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema))
 	if err != nil {
-		return fmt.Errorf("%w: decode %s schema: %v", ErrInvalidInvocation, label, err)
+		return fmt.Errorf("%w: decode %s schema: %w", ErrInvalidInvocation, label, err)
 	}
 	if err = compiler.AddResource(schemaURL, document); err != nil {
-		return fmt.Errorf("%w: register %s schema: %v", ErrInvalidInvocation, label, err)
+		return fmt.Errorf("%w: register %s schema: %w", ErrInvalidInvocation, label, err)
 	}
 	resolved, err := compiler.Compile(schemaURL)
 	if err != nil {
-		return fmt.Errorf("%w: resolve %s schema: %v", ErrInvalidInvocation, label, err)
+		return fmt.Errorf("%w: resolve %s schema: %w", ErrInvalidInvocation, label, err)
 	}
 	if err := resolved.Validate(value); err != nil {
-		return fmt.Errorf("%w: %s violates command schema: %v", ErrInvalidInvocation, label, err)
+		return fmt.Errorf("%w: %s violates command schema: %w", ErrInvalidInvocation, label, err)
 	}
 	return nil
 }

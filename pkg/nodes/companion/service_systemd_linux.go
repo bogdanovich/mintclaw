@@ -206,7 +206,7 @@ func (manager *systemdServiceManager) Status(
 	}
 	result, runErr := manager.runner.run(ctx, manager.runner.systemctl, args, maxSystemdStatusOutputBytes)
 	if contextErr := ctx.Err(); contextErr != nil {
-		return ServiceStatus{}, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, contextErr)
+		return ServiceStatus{}, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, contextErr)
 	}
 	observedAt := manager.now().Unix()
 	if observedAt <= 0 {
@@ -282,7 +282,7 @@ func (manager *systemdServiceManager) Logs(
 	captureLimit = min(captureLimit, maxSystemdLogCaptureBytes)
 	result, runErr := manager.runner.run(ctx, manager.runner.journal, args, captureLimit)
 	if contextErr := ctx.Err(); contextErr != nil {
-		return ServiceLogs{}, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, contextErr)
+		return ServiceLogs{}, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, contextErr)
 	}
 	if runErr != nil || result.exitCode != 0 {
 		return ServiceLogs{}, &ServiceManagerError{Code: "logs_unavailable"}

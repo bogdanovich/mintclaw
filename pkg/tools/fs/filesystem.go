@@ -509,7 +509,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// FIX: io.ReadFull returns io.ErrUnexpectedEOF for partial reads (0 < n < len),
 	// and io.EOF only when n == 0. Both are normal terminal conditions — only
 	// other errors are genuine failures.
-	if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
 	}
 
@@ -608,7 +608,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 	sample := make([]byte, 512)
 	sampleN, readErr := file.Read(sample)
-	if readErr != nil && readErr != io.EOF {
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
 	}
 	sample = sample[:sampleN]

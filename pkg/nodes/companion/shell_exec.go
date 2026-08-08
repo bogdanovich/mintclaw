@@ -266,10 +266,10 @@ func (handler *shellExecHandler) execute(
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, newCommandFailure("TIMEOUT", "shell.exec timed out", err)
 			}
-			return nil, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, err)
+			return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
 		}
 		if errors.Is(err, ErrShellBrokerOutcomeUnknown) {
-			return nil, fmt.Errorf("%w: %v", ErrInvocationOutcomeUnknown, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, err)
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, newCommandFailure("TIMEOUT", "shell.exec timed out", err)

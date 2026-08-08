@@ -231,7 +231,8 @@ func (r *DeployRunner) run(
 	code := 0
 	if err != nil {
 		code = -1
-		if exit, ok := err.(*exec.ExitError); ok {
+		exit := &exec.ExitError{}
+		if errors.As(err, &exit) {
 			code = exit.ExitCode()
 		}
 	}

@@ -149,7 +149,7 @@ func (client *AuthorityBrokerClient) OpenTerminal(
 			return nil, TerminalBrokerEvent{}, ctxErr
 		}
 		return nil, TerminalBrokerEvent{}, fmt.Errorf(
-			"%w: write terminal open request: %v",
+			"%w: write terminal open request: %w",
 			ErrTerminalOutcomeUnknown,
 			err,
 		)
@@ -161,7 +161,7 @@ func (client *AuthorityBrokerClient) OpenTerminal(
 			return nil, TerminalBrokerEvent{}, ctxErr
 		}
 		return nil, TerminalBrokerEvent{}, fmt.Errorf(
-			"%w: read terminal open response: %v",
+			"%w: read terminal open response: %w",
 			ErrTerminalOutcomeUnknown,
 			err,
 		)
@@ -241,7 +241,7 @@ func (terminal *AuthorityBrokerTerminal) Send(
 			_ = terminal.Close()
 			return ctx.Err()
 		}
-		return fmt.Errorf("%w: write terminal control: %v", ErrTerminalOutcomeUnknown, writeErr)
+		return fmt.Errorf("%w: write terminal control: %w", ErrTerminalOutcomeUnknown, writeErr)
 	}
 	return nil
 }
@@ -274,7 +274,7 @@ func (terminal *AuthorityBrokerTerminal) Receive(ctx context.Context) (TerminalB
 			return TerminalBrokerEvent{}, ctx.Err()
 		}
 		return TerminalBrokerEvent{}, fmt.Errorf(
-			"%w: read terminal event: %v",
+			"%w: read terminal event: %w",
 			ErrTerminalOutcomeUnknown,
 			readErr,
 		)
@@ -380,7 +380,7 @@ func (client *AuthorityBrokerClient) call(
 	if err := writeAuthorityBrokerFrame(connection, request); err != nil {
 		if request.Action == authorityBrokerActionExecute {
 			return authorityBrokerResponseFrame{}, fmt.Errorf(
-				"%w: write authority broker request: %v",
+				"%w: write authority broker request: %w",
 				ErrShellBrokerOutcomeUnknown,
 				err,
 			)
@@ -406,7 +406,7 @@ func (client *AuthorityBrokerClient) call(
 		}
 		if request.Action == authorityBrokerActionExecute {
 			return authorityBrokerResponseFrame{}, fmt.Errorf(
-				"%w: read authority broker response: %v",
+				"%w: read authority broker response: %w",
 				ErrShellBrokerOutcomeUnknown,
 				err,
 			)

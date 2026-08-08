@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -62,69 +63,66 @@ func formatDiagnosticLogMessage(prefix string, err error) string {
 }
 
 func wrapJSONError(data []byte, err error, label string) error {
-	switch e := err.(type) {
-	case *json.SyntaxError:
-		line, column := lineAndColumnForOffset(data, e.Offset)
-		preview := diagnosticPreviewForOffset(data, e.Offset)
-		if preview != "" {
-			return fmt.Errorf(
-				"%s syntax error at line %d, column %d: %w\n%s",
-				label,
-				line,
-				column,
-				err,
-				preview,
-			)
-		}
-		return fmt.Errorf("%s syntax error at line %d, column %d: %w", label, line, column, err)
-	case *json.UnmarshalTypeError:
-		line, column := lineAndColumnForOffset(data, e.Offset)
-		preview := diagnosticPreviewForOffset(data, e.Offset)
-		field := strings.TrimSpace(e.Field)
-		if field != "" {
+	{
+		var e *json.SyntaxError
+		var e1 *json.UnmarshalTypeError
+		switch {
+		case errors.As(err, &e):
+			line, column := lineAndColumnForOffset(data, e.Offset)
+			preview := diagnosticPreviewForOffset(data, e.Offset)
 			if preview != "" {
+				return fmt.Errorf("%s syntax error at line %d, column %d: %w\n%s", label, line, column, err, preview)
+			}
+			return fmt.Errorf("%s syntax error at line %d, column %d: %w", label, line, column, err)
+		case errors.As(err, &e1):
+			line, column := lineAndColumnForOffset(data, e1.Offset)
+			preview := diagnosticPreviewForOffset(data, e1.Offset)
+			field := strings.TrimSpace(e1.Field)
+			if field != "" {
+				if preview != "" {
+					return fmt.Errorf(
+						"%s type error at line %d, column %d for field %q: expected %s but got %s\n%s",
+						label,
+						line,
+						column,
+						field,
+						e1.Type.String(),
+						e1.Value,
+						preview,
+					)
+				}
 				return fmt.Errorf(
-					"%s type error at line %d, column %d for field %q: expected %s but got %s\n%s",
+					"%s type error at line %d, column %d for field %q: expected %s but got %s",
 					label,
 					line,
 					column,
 					field,
-					e.Type.String(),
-					e.Value,
+					e1.Type.String(),
+					e1.Value,
+				)
+			}
+			if preview != "" {
+				return fmt.Errorf(
+					"%s type error at line %d, column %d: expected %s but got %s\n%s",
+					label,
+					line,
+					column,
+					e1.Type.String(),
+					e1.Value,
 					preview,
 				)
 			}
 			return fmt.Errorf(
-				"%s type error at line %d, column %d for field %q: expected %s but got %s",
+				"%s type error at line %d, column %d: expected %s but got %s",
 				label,
 				line,
 				column,
-				field,
-				e.Type.String(),
-				e.Value,
+				e1.Type.String(),
+				e1.Value,
 			)
+		default:
+			return fmt.Errorf("failed to parse %s: %w", label, err)
 		}
-		if preview != "" {
-			return fmt.Errorf(
-				"%s type error at line %d, column %d: expected %s but got %s\n%s",
-				label,
-				line,
-				column,
-				e.Type.String(),
-				e.Value,
-				preview,
-			)
-		}
-		return fmt.Errorf(
-			"%s type error at line %d, column %d: expected %s but got %s",
-			label,
-			line,
-			column,
-			e.Type.String(),
-			e.Value,
-		)
-	default:
-		return fmt.Errorf("failed to parse %s: %w", label, err)
 	}
 }
 

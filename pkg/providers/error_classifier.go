@@ -169,12 +169,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	// Context cancellation: user abort, never fallback.
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return nil
 	}
 
 	// Context deadline exceeded: treat as timeout, always fallback.
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
 			Provider: provider,
@@ -267,7 +267,7 @@ func classifyByErrorType(err error) FailoverReason {
 		syscall.EPIPE,
 	} {
 		if errors.Is(err, transportErr) {
-			if transportErr == syscall.ETIMEDOUT {
+			if errors.Is(transportErr, syscall.ETIMEDOUT) {
 				return FailoverTimeout
 			}
 			return FailoverNetwork

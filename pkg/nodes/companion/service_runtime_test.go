@@ -227,11 +227,16 @@ func TestRuntimePreservesUnknownAfterAcceptedActionOutputFailure(t *testing.T) {
 		time.Minute,
 		len(minimum),
 	)
-	if _, err := runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrInvocationOutcomeUnknown) {
-		t.Fatalf("accepted action output error = %v", err)
+	_, invokeErr := runtime.Invoke(t.Context(), plan)
+	if !errors.Is(invokeErr, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("accepted action output error = %v", invokeErr)
 	}
-	if _, err := runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrInvocationOutcomeUnknown) {
-		t.Fatalf("duplicate accepted action output error = %v", err)
+	if errors.Is(invokeErr, nodes.ErrInvalidInvocation) {
+		t.Fatalf("accepted action output error must not classify as an invalid invocation: %v", invokeErr)
+	}
+	_, duplicateErr := runtime.Invoke(t.Context(), plan)
+	if !errors.Is(duplicateErr, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("duplicate accepted action output error = %v", duplicateErr)
 	}
 	record, found, err := runtime.Invocation(plan.InvocationID)
 	if err != nil || !found || record.State != nodes.InvocationUnknown {

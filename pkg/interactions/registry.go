@@ -1103,7 +1103,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 
 func (r *Registry) availableLocked() error {
 	if r.loadErr != nil {
-		return fmt.Errorf("%w: %v", ErrStoreUnavailable, r.loadErr)
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, r.loadErr)
 	}
 	return nil
 }
@@ -1126,7 +1126,7 @@ func (r *Registry) lockAndReloadLocked() (func(), error) {
 	if err := r.load(); err != nil {
 		r.restoreSnapshotLocked(before)
 		release()
-		return nil, fmt.Errorf("%w: reload under lock: %v", ErrStoreUnavailable, err)
+		return nil, fmt.Errorf("%w: reload under lock: %w", ErrStoreUnavailable, err)
 	}
 	return release, nil
 }
@@ -1723,7 +1723,7 @@ func validateStoredApprovalMetadata(
 func validateExecutionContext(ctx *bus.InboundContext) error {
 	data, err := json.Marshal(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: encode execution context: %v", ErrInvalidInteraction, err)
+		return fmt.Errorf("%w: encode execution context: %w", ErrInvalidInteraction, err)
 	}
 	if len(data) > MaxExecutionContext {
 		return fmt.Errorf("%w: execution context exceeds %d bytes", ErrInvalidInteraction, MaxExecutionContext)

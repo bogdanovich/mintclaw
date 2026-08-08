@@ -418,7 +418,7 @@ func (runtime *Runtime) executeAccepted(
 		if lookupErr == nil && found && record.State.Terminal() {
 			return invocationRecordResult(record)
 		}
-		return nil, fmt.Errorf("%w: persist running state: %v", ErrInvocationOutcomeUnknown, err)
+		return nil, fmt.Errorf("%w: persist running state: %w", ErrInvocationOutcomeUnknown, err)
 	}
 	result, executeErr := handler.execute(invokeCtx, commandInvocation{
 		Plan:             plan,
@@ -431,7 +431,7 @@ func (runtime *Runtime) executeAccepted(
 		if errors.Is(executeErr, ErrInvocationOutcomeUnknown) {
 			if _, err := runtime.ledger.MarkUnknown(plan.InvocationID); err != nil {
 				return nil, fmt.Errorf(
-					"%w: persist unknown result: %v",
+					"%w: persist unknown result: %w",
 					ErrInvocationOutcomeUnknown,
 					err,
 				)
@@ -441,12 +441,12 @@ func (runtime *Runtime) executeAccepted(
 		if cancellationDelivered && errors.Is(executeErr, errCommandCancellationConfirmed) {
 			if _, err := runtime.ledger.CompleteCancellation(plan.InvocationID); err != nil {
 				return nil, fmt.Errorf(
-					"%w: persist canceled result: %v",
+					"%w: persist canceled result: %w",
 					ErrInvocationOutcomeUnknown,
 					err,
 				)
 			}
-			return nil, fmt.Errorf("%w: %v", ErrInvocationCanceled, executeErr)
+			return nil, fmt.Errorf("%w: %w", ErrInvocationCanceled, executeErr)
 		}
 		failure := nodes.InvocationFailure{
 			Code:    "EXECUTION_FAILED",
@@ -468,7 +468,7 @@ func (runtime *Runtime) executeAccepted(
 		return nil, runtime.completeInvalidOutput(plan, err)
 	}
 	if _, err := runtime.ledger.CompleteSuccess(plan.InvocationID, raw); err != nil {
-		return nil, fmt.Errorf("%w: persist successful result: %v", ErrInvocationOutcomeUnknown, err)
+		return nil, fmt.Errorf("%w: persist successful result: %w", ErrInvocationOutcomeUnknown, err)
 	}
 	return raw, nil
 }
@@ -480,15 +480,15 @@ func (runtime *Runtime) completeInvalidOutput(
 	if plan.Command == "service.action.v1" {
 		if _, markErr := runtime.ledger.MarkUnknown(plan.InvocationID); markErr != nil {
 			return fmt.Errorf(
-				"%w: persist uncertain service action output: %v",
+				"%w: persist uncertain service action output: %w",
 				ErrInvocationOutcomeUnknown,
 				markErr,
 			)
 		}
 		return fmt.Errorf(
-			"%w: service action completed with invalid output: %v",
+			"%w: service action completed with invalid output: %s",
 			ErrInvocationOutcomeUnknown,
-			err,
+			err.Error(),
 		)
 	}
 	return runtime.completeInvocationFailure(plan.InvocationID, nodes.InvocationFailure{
@@ -591,7 +591,7 @@ func (runtime *Runtime) completeInvocationFailure(
 	cause error,
 ) error {
 	if _, err := runtime.ledger.CompleteFailure(invocationID, failure); err != nil {
-		return fmt.Errorf("%w: persist failed result: %v", ErrInvocationOutcomeUnknown, err)
+		return fmt.Errorf("%w: persist failed result: %w", ErrInvocationOutcomeUnknown, err)
 	}
 	return cause
 }

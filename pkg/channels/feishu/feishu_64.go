@@ -226,7 +226,7 @@ func (c *FeishuChannel) sendMessage(ctx context.Context, msg bus.OutboundMessage
 func (c *FeishuChannel) EditMessage(ctx context.Context, chatID, messageID, content string) error {
 	cardContent, err := buildMarkdownCard(content)
 	if err != nil {
-		return fmt.Errorf("feishu edit: card build failed: %v: %w", err, channels.ErrSendFailed)
+		return fmt.Errorf("feishu edit: card build failed: %w: %w", err, channels.ErrSendFailed)
 	}
 
 	req := larkim.NewPatchMessageReqBuilder().
@@ -236,7 +236,7 @@ func (c *FeishuChannel) EditMessage(ctx context.Context, chatID, messageID, cont
 
 	resp, err := c.client.Im.V1.Message.Patch(ctx, req)
 	if err != nil {
-		return fmt.Errorf("feishu edit: %v: %w", err, channels.ErrTemporary)
+		return fmt.Errorf("feishu edit: %w: %w", err, channels.ErrTemporary)
 	}
 	if !resp.Success() {
 		c.invalidateTokenOnAuthError(resp.Code)

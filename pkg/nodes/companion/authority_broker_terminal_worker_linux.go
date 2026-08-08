@@ -203,7 +203,7 @@ func (runner *authorityBrokerProcessRunner) Terminal(
 			if ctx.Err() != nil && waitErr == nil {
 				return nil
 			}
-			return fmt.Errorf("%w: read terminal worker event: %v", ErrTerminalOutcomeUnknown, err)
+			return fmt.Errorf("%w: read terminal worker event: %w", ErrTerminalOutcomeUnknown, err)
 		}
 		if err := event.validate(); err != nil || event.TerminalID != terminalID {
 			close(workerDone)
@@ -229,7 +229,7 @@ func (runner *authorityBrokerProcessRunner) Terminal(
 	_ = controlWrite.Close()
 	_ = stdin.Close()
 	if err := waitAuthorityBrokerTerminalWorker(command, stdout, false); err != nil {
-		return fmt.Errorf("%w: terminal worker failed: %v", ErrTerminalOutcomeUnknown, err)
+		return fmt.Errorf("%w: terminal worker failed: %w", ErrTerminalOutcomeUnknown, err)
 	}
 	return nil
 }
@@ -557,7 +557,7 @@ func runAuthorityBrokerTerminalWorker(
 			Type: TerminalEventUnknown, TerminalID: request.TerminalID,
 			State: "unknown", Reason: closeReason, StartedAt: startedAt,
 		})
-		return fmt.Errorf("%w: %v", ErrTerminalOutcomeUnknown, cleanupErr)
+		return fmt.Errorf("%w: %w", ErrTerminalOutcomeUnknown, cleanupErr)
 	}
 	if eventSinkFailed {
 		return ErrTerminalOutcomeUnknown
