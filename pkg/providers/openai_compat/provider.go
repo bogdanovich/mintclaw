@@ -16,6 +16,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -497,10 +498,10 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		return nil, httperrors.HandleResponse(resp, p.apiBase)
 	}
 
-	return common.ReadAndParseResponse(resp, p.apiBase)
+	return httperrors.ReadAndParseResponse(resp, p.apiBase)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -573,7 +574,7 @@ func (p *Provider) ChatStreamEvents(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		return nil, httperrors.HandleResponse(resp, p.apiBase)
 	}
 
 	return parseStreamResponse(ctx, withStreamingReadIdleTimeout(resp.Body, defaultStreamingReadIdleTimeout), onChunk)

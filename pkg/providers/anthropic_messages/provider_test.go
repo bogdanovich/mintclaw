@@ -8,10 +8,47 @@ package anthropicmessages
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
+
+func TestProviderChatNormalizesHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(
+			`{"type":"error","error":{"type":"rate_limit_error","message":"Request rate limited"},"request_id":"req-anthropic"}`,
+		))
+	}))
+	defer server.Close()
+
+	provider := NewProvider("test-key", server.URL, "")
+	_, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hello"}},
+		nil,
+		"claude-test",
+		map[string]any{"max_tokens": 64},
+	)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Chat() error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindRateLimit || providerErr.RetryAfter != 5*time.Second {
+		t.Fatalf("ProviderError = %#v, want rate limit with retry metadata", providerErr)
+	}
+	if providerErr.RequestID != "req-anthropic" {
+		t.Fatalf("RequestID = %q, want req-anthropic", providerErr.RequestID)
+	}
+}
 
 func TestBuildRequestBody(t *testing.T) {
 	tests := []struct {

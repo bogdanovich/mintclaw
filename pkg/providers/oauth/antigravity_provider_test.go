@@ -1,8 +1,55 @@
 package oauthprovider
 
 import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
+
+type antigravityRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn antigravityRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestAntigravityProviderNormalizesHTTPError(t *testing.T) {
+	provider := &AntigravityProvider{
+		tokenSource: func() (string, string, error) { return "token", "project", nil },
+		httpClient: &http.Client{
+			Transport: antigravityRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header: http.Header{
+						"Content-Type":      {"application/json"},
+						"X-Goog-Request-Id": {"req-antigravity"},
+					},
+					Body: io.NopCloser(strings.NewReader(
+						`{"error":{"code":429,"message":"Quota exhausted","status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetDelay":"11s"}}]}}`,
+					)),
+					Request: request,
+				}, nil
+			}),
+		},
+	}
+
+	_, err := provider.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, nil, "gemini-test", nil)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Chat() error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindRateLimit || providerErr.RetryAfter != 11*time.Second {
+		t.Fatalf("ProviderError = %#v, want rate limit with reset delay", providerErr)
+	}
+	if providerErr.RequestID != "req-antigravity" {
+		t.Fatalf("RequestID = %q, want req-antigravity", providerErr.RequestID)
+	}
+}
 
 func TestBuildRequestUsesFunctionFieldsWhenToolCallNameMissing(t *testing.T) {
 	p := &AntigravityProvider{}

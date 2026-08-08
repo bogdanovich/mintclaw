@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 )
 
 const (
@@ -97,7 +98,7 @@ func (p *GeminiProvider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		return nil, httperrors.HandleResponse(resp, p.apiBase)
 	}
 
 	var apiResp geminiGenerateContentResponse
@@ -167,7 +168,7 @@ func (p *GeminiProvider) ChatStreamEvents(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		return nil, httperrors.HandleResponse(resp, p.apiBase)
 	}
 
 	return parseGeminiStreamResponse(ctx,
