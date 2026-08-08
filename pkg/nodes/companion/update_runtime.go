@@ -198,15 +198,16 @@ func (handler *updateCommandHandler) cancelAfterSignal(
 	return nil, fmt.Errorf("%w: update cancellation was too late", ErrInvocationOutcomeUnknown)
 }
 
-func (handler *updateCommandHandler) status(
+func queryUpdateStatus(
 	ctx context.Context,
+	coordinator UpdateCoordinator,
 	record nodes.InvocationRecord,
 ) (nodeUpdateResult, bool, bool, error) {
 	identity, ok := updateControlIdentityFromRecord(record)
 	if !ok {
 		return nodeUpdateResult{}, false, false, errors.New("update recovery authority is unavailable")
 	}
-	response, err := handler.coordinator.Call(ctx, control.Request{
+	response, err := coordinator.Call(ctx, control.Request{
 		Kind: control.KindStatus, Identity: &identity,
 	})
 	if err != nil {
@@ -217,15 +218,16 @@ func (handler *updateCommandHandler) status(
 	return result, terminal, result.State == "canceled", nil
 }
 
-func (handler *updateCommandHandler) cancel(
+func cancelUpdate(
 	ctx context.Context,
+	coordinator UpdateCoordinator,
 	record nodes.InvocationRecord,
 ) (nodeUpdateResult, error) {
 	identity, ok := updateControlIdentityFromRecord(record)
 	if !ok {
 		return nodeUpdateResult{}, errors.New("update cancellation authority is unavailable")
 	}
-	response, err := handler.coordinator.Call(ctx, control.Request{
+	response, err := coordinator.Call(ctx, control.Request{
 		Kind: control.KindCancel, Identity: &identity,
 	})
 	if err != nil {

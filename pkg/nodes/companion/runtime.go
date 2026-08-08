@@ -103,6 +103,7 @@ type runtimeOptions struct {
 	fileDescriptors []nodes.CommandDescriptor
 	serviceManager  ServiceManager
 	update          *updateCommandHandler
+	updateRecovery  UpdateCoordinator
 }
 
 type RuntimeOption func(*runtimeOptions) error
@@ -165,6 +166,19 @@ func withUpdateHandler(handler *updateCommandHandler) RuntimeOption {
 			return errors.New("node update handler is required")
 		}
 		options.update = handler
+		options.updateRecovery = handler.coordinator
+		return nil
+	}
+}
+
+// WithUpdateRecovery retains status and cancellation access to an exact
+// coordinator transaction without advertising or dispatching update work.
+func WithUpdateRecovery(coordinator UpdateCoordinator) RuntimeOption {
+	return func(options *runtimeOptions) error {
+		if coordinator == nil {
+			return errors.New("node update recovery coordinator is required")
+		}
+		options.updateRecovery = coordinator
 		return nil
 	}
 }
@@ -194,6 +208,7 @@ type Runtime struct {
 	activeMu  sync.Mutex
 	active    map[string]*activeInvocation
 	terminals *TerminalCoordinator
+	updates   UpdateCoordinator
 }
 
 func NewRuntime(
@@ -290,6 +305,7 @@ func NewRuntime(
 		handlers: byName,
 		ledger:   ledger,
 		active:   make(map[string]*activeInvocation),
+		updates:  settings.updateRecovery,
 	}
 	if settings.shellExec != nil && settings.terminalBroker != nil &&
 		settings.shellExec.handler.contract != nil &&
@@ -600,11 +616,10 @@ func (runtime *Runtime) cancelRecoveredUpdate(
 	ctx context.Context,
 	record nodes.InvocationRecord,
 ) (nodes.InvocationRecord, error) {
-	handler, ok := runtime.handlers[record.Command].(*updateCommandHandler)
-	if !ok {
+	if runtime.updates == nil {
 		return nodes.InvocationRecord{}, ErrCancellationUnsupported
 	}
-	result, err := handler.cancel(ctx, record)
+	result, err := cancelUpdate(ctx, runtime.updates, record)
 	if err != nil {
 		return nodes.InvocationRecord{}, ErrInvocationOutcomeUnknown
 	}
@@ -690,11 +705,10 @@ func (runtime *Runtime) RecoverInvocation(
 	if err != nil || !found || record.Command != "node.update.v1" || record.State.Terminal() {
 		return record, found, err
 	}
-	handler, ok := runtime.handlers[record.Command].(*updateCommandHandler)
-	if !ok {
+	if runtime.updates == nil {
 		return record, found, nil
 	}
-	result, terminal, canceled, err := handler.status(ctx, record)
+	result, terminal, canceled, err := queryUpdateStatus(ctx, runtime.updates, record)
 	if err != nil || !terminal {
 		return record, true, err
 	}
@@ -706,9 +720,8 @@ func (runtime *Runtime) RecoverInvocation(
 	if err != nil {
 		return record, true, err
 	}
-	raw, err = nodes.ValidateInvocationOutput(handler.descriptor(), raw, nodes.MaxInvocationOutput)
-	if err != nil {
-		return record, true, err
+	if len(raw) == 0 || len(raw) > nodes.MaxInvocationOutput {
+		return record, true, errors.New("recovered node update result exceeds its bound")
 	}
 	recovered, recoverErr := runtime.ledger.RecoverSuccess(invocationID, raw)
 	return recovered, true, recoverErr

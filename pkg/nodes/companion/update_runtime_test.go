@@ -111,6 +111,49 @@ func TestUpdateRuntimeRecoversTerminalCoordinatorResultWithoutReplay(t *testing.
 	}
 }
 
+func TestUpdateRuntimeRecoveryDoesNotRequireLiveCatalog(t *testing.T) {
+	coordinator := &recordingUpdateCoordinator{
+		errors: map[control.Kind]error{control.KindUpdate: context.DeadlineExceeded},
+		responses: map[control.Kind]control.Response{
+			control.KindStatus: {Observation: control.Observation{
+				Phase: "healthy", RequestedRelease: "v1.1.0", PreviousRelease: "v1.0.0",
+				ActivationAttempted: true, SuccessorVerified: true, InstalledVersion: "v1.1.0",
+			}},
+		},
+	}
+	runtimeValue, plan := updateRuntimeFixture(t, coordinator)
+	if _, err := runtimeValue.Invoke(t.Context(), plan); !errorsIs(err, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("Invoke() error = %v, want unknown", err)
+	}
+	ledger := runtimeValue.ledger.(*InvocationLedger)
+	successorPolicy := nodes.LocalCommandPolicy{
+		Revision: "policy-v2", AllowedCommands: []string{"node.info.v1"},
+		MaximumRisk: nodes.RiskRead, MaxTimeoutSeconds: 30, MaxOutputBytes: 4096,
+	}
+	successor, err := NewRuntime(
+		plan.NodeID,
+		"v1.1.0",
+		successorPolicy,
+		ledger,
+		WithUpdateRecovery(coordinator),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, descriptor := range successor.Catalog().Commands {
+		if descriptor.Name == "node.update.v1" {
+			t.Fatal("recovery-only successor advertised update dispatch authority")
+		}
+	}
+	record, found, err := successor.RecoverInvocation(t.Context(), plan.InvocationID)
+	if err != nil || !found || record.State != nodes.InvocationSucceeded {
+		t.Fatalf("recovery-only status = %#v, %v, %v", record, found, err)
+	}
+	if coordinator.count(control.KindUpdate) != 1 || coordinator.count(control.KindStatus) != 1 {
+		t.Fatalf("coordinator calls = %#v", coordinator.kinds())
+	}
+}
+
 func TestUpdateRuntimeCancelsRecoveredPreactivationTransaction(t *testing.T) {
 	coordinator := &recordingUpdateCoordinator{
 		errors: map[control.Kind]error{control.KindUpdate: context.DeadlineExceeded},
@@ -122,7 +165,21 @@ func TestUpdateRuntimeCancelsRecoveredPreactivationTransaction(t *testing.T) {
 	if _, err := runtimeValue.Invoke(t.Context(), plan); !errorsIs(err, ErrInvocationOutcomeUnknown) {
 		t.Fatalf("Invoke() error = %v, want unknown", err)
 	}
-	record, err := runtimeValue.CancelContext(
+	successorPolicy := nodes.LocalCommandPolicy{
+		Revision: "policy-v2", AllowedCommands: []string{"node.info.v1"},
+		MaximumRisk: nodes.RiskRead, MaxTimeoutSeconds: 30, MaxOutputBytes: 4096,
+	}
+	successor, err := NewRuntime(
+		plan.NodeID,
+		"v1.0.0",
+		successorPolicy,
+		runtimeValue.ledger.(*InvocationLedger),
+		WithUpdateRecovery(coordinator),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := successor.CancelContext(
 		t.Context(),
 		nodes.InvocationCancelRequest{InvocationID: plan.InvocationID},
 	)

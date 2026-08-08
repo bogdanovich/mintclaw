@@ -215,6 +215,9 @@ func PrepareExecutionPlan(
 	if validationErr := validateDescriptorInvocationInput(descriptor, value); validationErr != nil {
 		return ExecutionPlan{}, validationErr
 	}
+	if selectorErr := validateNodeUpdateSelector(value, request.Update); selectorErr != nil {
+		return ExecutionPlan{}, selectorErr
+	}
 	request.Input = input
 	plan := ExecutionPlan{
 		InvocationRequest: request,
@@ -450,11 +453,28 @@ func (policy LocalCommandPolicy) authorize(
 	if err := validateDescriptorInvocationInput(descriptor, input); err != nil {
 		return err
 	}
+	if err := validateNodeUpdateSelector(input, plan.Update); err != nil {
+		return err
+	}
 	if !slices.Contains(policy.AllowedCommands, plan.Command) ||
 		riskRank(plan.Risk) > riskRank(policy.MaximumRisk) ||
 		plan.TimeoutSeconds > policy.MaxTimeoutSeconds ||
 		plan.OutputLimitBytes > policy.MaxOutputBytes {
 		return fmt.Errorf("%w: plan exceeds local policy", ErrCommandDenied)
+	}
+	return nil
+}
+
+func validateNodeUpdateSelector(
+	input map[string]any,
+	authority *NodeUpdatePlanAuthority,
+) error {
+	if authority == nil {
+		return nil
+	}
+	release, ok := input["release"].(string)
+	if !ok || release != authority.ReleaseAlias {
+		return fmt.Errorf("%w: update input conflicts with retained authority", ErrCommandDenied)
 	}
 	return nil
 }
