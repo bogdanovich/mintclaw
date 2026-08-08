@@ -179,7 +179,7 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 		result = append(result, CommandDescriptor{
 			Name:            command.name,
 			InputSchema:     BrowserCommandInputSchema(command.name, profiles),
-			OutputSchema:    BrowserCommandOutputSchema(command.name),
+			OutputSchema:    BrowserCommandOutputSchema(command.name, profiles),
 			Risk:            command.risk,
 			BrowserProfiles: CloneBrowserProfileDescriptors(profiles),
 		})
@@ -224,8 +224,10 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	actionBranches := make([]any, 0, len(profiles))
+	profileRevisions := make([]string, 0, len(profiles))
 	allActions := make(map[string]struct{})
 	for _, profile := range profiles {
+		profileRevisions = append(profileRevisions, profile.Revision)
 		profileBranches = append(profileBranches, map[string]any{
 			"required": []string{"profile", "profile_revision"},
 			"properties": map[string]any{
@@ -281,7 +283,7 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 		add("limits", browserLimitsSchema(BrowserLimits{}.Effective()))
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		add("session_id", identifier)
-		add("profile_revision", identifier)
+		add("profile_revision", map[string]any{"enum": profileRevisions})
 	case BrowserCommandObserve:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -312,7 +314,14 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 	return mustJSON(schema)
 }
 
-func BrowserCommandOutputSchema(command string) json.RawMessage {
+func BrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	if len(profiles) == 0 {
+		return json.RawMessage("false")
+	}
+	limits := strictestBrowserLimits(profiles)
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	state := map[string]any{
 		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
@@ -358,7 +367,7 @@ func BrowserCommandOutputSchema(command string) json.RawMessage {
 			},
 		})
 	case BrowserCommandObserve:
-		return browserObservationSchema()
+		return browserObservationSchema(limits)
 	case BrowserCommandAct:
 		return mustJSON(map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -367,8 +376,8 @@ func BrowserCommandOutputSchema(command string) json.RawMessage {
 				"action_invocation_id": identifier,
 				"state":                map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
 				"reason":               safeReason,
-				"observation":          rawSchema(browserObservationSchema()),
-				"artifact":             browserArtifactSchema(MaxBrowserDownloadBytes),
+				"observation":          rawSchema(browserObservationSchema(limits)),
+				"artifact":             browserArtifactSchema(limits.DownloadBytes),
 			},
 		})
 	default:
@@ -446,7 +455,7 @@ func browserActionSchema(actions []string) map[string]any {
 	return map[string]any{"oneOf": branches}
 }
 
-func browserObservationSchema() json.RawMessage {
+func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 	return mustJSON(map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -467,10 +476,10 @@ func browserObservationSchema() json.RawMessage {
 			"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 			"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 			"title":               map[string]any{"type": "string", "maxLength": MaxBrowserTitleBytes},
-			"snapshot":            map[string]any{"type": "string", "maxLength": MaxBrowserSnapshotBytes},
+			"snapshot":            map[string]any{"type": "string", "maxLength": limits.SnapshotBytes},
 			"truncated":           map[string]any{"type": "boolean"},
 			"elements": map[string]any{
-				"type": "array", "maxItems": 500,
+				"type": "array", "maxItems": limits.SnapshotRefs,
 				"items": map[string]any{
 					"type": "object", "additionalProperties": false,
 					"required": []string{"ref", "role", "name"},
@@ -481,7 +490,7 @@ func browserObservationSchema() json.RawMessage {
 					},
 				},
 			},
-			"screenshot": browserArtifactSchema(MaxBrowserScreenshotBytes),
+			"screenshot": browserArtifactSchema(limits.ScreenshotBytes),
 		},
 	})
 }
@@ -499,24 +508,45 @@ func browserArtifactSchema(maximumBytes int) map[string]any {
 	}
 }
 
-func validateBrowserInvocationInputBytes(command string, input map[string]any) error {
-	if command != BrowserCommandAct {
-		return nil
+func validateBrowserInvocationInput(command string, input map[string]any) error {
+	switch command {
+	case BrowserCommandSessionOpen:
+		return validateBrowserSessionOpenLimits(input)
+	case BrowserCommandAct:
+		action, ok := input["action"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: malformed browser action", ErrInvalidInvocation)
+		}
+		if action["kind"] == "navigate" {
+			return validateBrowserStringBytes(action, "url", MaxBrowserURLBytes, true)
+		}
 	}
-	action, ok := input["action"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("%w: malformed browser action", ErrInvalidInvocation)
-	}
-	if action["kind"] != "navigate" {
-		return nil
-	}
-	return validateBrowserStringBytes(action, "url", MaxBrowserURLBytes, true)
+	return nil
 }
 
-func validateBrowserInvocationOutputBytes(command string, output map[string]any) error {
+func validateBrowserSessionOpenLimits(input map[string]any) error {
+	encoded, err := json.Marshal(input["limits"])
+	if err != nil {
+		return fmt.Errorf("%w: encode browser session limits", ErrInvalidInvocation)
+	}
+	var limits BrowserLimits
+	if err = json.Unmarshal(encoded, &limits); err != nil {
+		return fmt.Errorf("%w: decode browser session limits", ErrInvalidInvocation)
+	}
+	if err = limits.Validate(); err != nil {
+		return fmt.Errorf("%w: malformed browser session limits", ErrInvalidInvocation)
+	}
+	return nil
+}
+
+func validateBrowserInvocationOutput(
+	command string,
+	limits BrowserLimits,
+	output map[string]any,
+) error {
 	switch command {
 	case BrowserCommandObserve:
-		return validateBrowserObservationBytes(output)
+		return validateBrowserObservationBytes(output, limits)
 	case BrowserCommandAct:
 		observation, present := output["observation"]
 		if !present {
@@ -526,13 +556,16 @@ func validateBrowserInvocationOutputBytes(command string, output map[string]any)
 		if !ok {
 			return fmt.Errorf("%w: malformed browser observation", ErrInvalidInvocation)
 		}
-		return validateBrowserObservationBytes(value)
+		return validateBrowserObservationBytes(value, limits)
 	default:
 		return nil
 	}
 }
 
-func validateBrowserObservationBytes(observation map[string]any) error {
+func validateBrowserObservationBytes(
+	observation map[string]any,
+	limits BrowserLimits,
+) error {
 	for _, field := range []struct {
 		name     string
 		maximum  int
@@ -541,7 +574,7 @@ func validateBrowserObservationBytes(observation map[string]any) error {
 		{"url", MaxBrowserURLBytes, true},
 		{"origin", MaxBrowserURLBytes, true},
 		{"title", MaxBrowserTitleBytes, false},
-		{"snapshot", MaxBrowserSnapshotBytes, true},
+		{"snapshot", limits.SnapshotBytes, true},
 	} {
 		if err := validateBrowserStringBytes(
 			observation,
@@ -553,6 +586,31 @@ func validateBrowserObservationBytes(observation map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func strictestBrowserLimits(profiles []BrowserProfileDescriptor) BrowserLimits {
+	if len(profiles) == 0 {
+		return BrowserLimits{}
+	}
+	limits := profiles[0].Limits
+	for _, profile := range profiles[1:] {
+		candidate := profile.Limits
+		limits.Sessions = min(limits.Sessions, candidate.Sessions)
+		limits.Tabs = min(limits.Tabs, candidate.Tabs)
+		limits.SessionSeconds = min(limits.SessionSeconds, candidate.SessionSeconds)
+		limits.IdleSeconds = min(limits.IdleSeconds, candidate.IdleSeconds)
+		limits.PreparedSeconds = min(limits.PreparedSeconds, candidate.PreparedSeconds)
+		limits.ActionSeconds = min(limits.ActionSeconds, candidate.ActionSeconds)
+		limits.SnapshotBytes = min(limits.SnapshotBytes, candidate.SnapshotBytes)
+		limits.ScreenshotBytes = min(limits.ScreenshotBytes, candidate.ScreenshotBytes)
+		limits.UploadBytes = min(limits.UploadBytes, candidate.UploadBytes)
+		limits.DownloadBytes = min(limits.DownloadBytes, candidate.DownloadBytes)
+		limits.SnapshotRefs = min(limits.SnapshotRefs, candidate.SnapshotRefs)
+		limits.TextInputBytes = min(limits.TextInputBytes, candidate.TextInputBytes)
+		limits.ToolResultBytes = min(limits.ToolResultBytes, candidate.ToolResultBytes)
+		limits.RetentionSecs = min(limits.RetentionSecs, candidate.RetentionSecs)
+	}
+	return limits
 }
 
 func validateBrowserStringBytes(

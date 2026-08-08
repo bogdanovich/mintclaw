@@ -455,7 +455,7 @@ func validateDescriptorInvocationInput(descriptor CommandDescriptor, input map[s
 		return err
 	}
 	if IsBrowserCommand(descriptor.Name) {
-		return validateBrowserInvocationInputBytes(descriptor.Name, input)
+		return validateBrowserInvocationInput(descriptor.Name, input)
 	}
 	return nil
 }
@@ -485,7 +485,11 @@ func ValidateInvocationOutput(
 		return nil, validationErr
 	}
 	if IsBrowserCommand(descriptor.Name) {
-		if validationErr := validateBrowserInvocationOutputBytes(descriptor.Name, object); validationErr != nil {
+		if validationErr := validateBrowserInvocationOutput(
+			descriptor.Name,
+			strictestBrowserLimits(descriptor.BrowserProfiles),
+			object,
+		); validationErr != nil {
 			return nil, validationErr
 		}
 	}

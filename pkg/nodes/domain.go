@@ -444,7 +444,10 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	if err != nil || !bytes.Equal(actualInput, expectedInput) {
 		return fmt.Errorf("%w: browser input schema does not match typed contract", ErrInvalidCapability)
 	}
-	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(descriptor.Name))
+	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
 	if err != nil {
 		return err
 	}

@@ -109,17 +109,53 @@ func TestBrowserSessionOpenSchemaBindsProfileLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := map[string]any{
-		"session_id": "session_1", "profile": "managed", "profile_revision": "managed-v1",
-		"browser_policy_revision": strings.Repeat("a", 64), "dry_run": true,
-		"limits": browserLimitsValue(profile.Limits),
-	}
+	input := browserSessionOpenInputFixture(profile.Limits)
 	if err = validateInvocationInput(descriptors[0].InputSchema, input); err != nil {
 		t.Fatalf("profile-bounded open input rejected: %v", err)
 	}
 	input["limits"].(map[string]any)["download_bytes"] = 1025
 	if err = validateInvocationInput(descriptors[0].InputSchema, input); err == nil {
 		t.Fatal("open input above the selected profile's download ceiling was accepted")
+	}
+}
+
+func TestBrowserStatusAndCloseSchemasBindProfileRevision(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, descriptor := range []CommandDescriptor{descriptors[1], descriptors[4]} {
+		input := map[string]any{"session_id": "session_1", "profile_revision": "managed-v1"}
+		if err = validateInvocationInput(descriptor.InputSchema, input); err != nil {
+			t.Fatalf("%s advertised revision rejected: %v", descriptor.Name, err)
+		}
+		input["profile_revision"] = "stale-v1"
+		if err = validateInvocationInput(descriptor.InputSchema, input); err == nil {
+			t.Fatalf("%s accepted an unadvertised profile revision", descriptor.Name)
+		}
+	}
+}
+
+func TestBrowserSessionOpenSemanticValidationRejectsInconsistentLifetimes(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := browserSessionOpenInputFixture(profile.Limits)
+	limits := input["limits"].(map[string]any)
+	limits["session_seconds"] = 1
+	limits["idle_seconds"] = 2
+	limits["prepared_seconds"] = 1
+	if err = validateDescriptorInvocationInput(descriptors[0], input); err == nil {
+		t.Fatal("open input with idle_seconds above session_seconds was accepted")
+	}
+	limits["idle_seconds"] = 1
+	limits["prepared_seconds"] = 2
+	if err = validateDescriptorInvocationInput(descriptors[0], input); err == nil {
+		t.Fatal("open input with prepared_seconds above session_seconds was accepted")
 	}
 }
 
@@ -230,6 +266,41 @@ func TestBrowserArtifactSchemasUseCapabilitySpecificCeilings(t *testing.T) {
 	assertBrowserOutputInvalid(t, descriptors[3], action)
 }
 
+func TestBrowserOutputSchemasUseStrictestAdvertisedProfileCeilings(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Limits.SnapshotBytes = 1024
+	profile.Limits.ScreenshotBytes = 2048
+	profile.Limits.DownloadBytes = 4096
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := func(size int) map[string]any {
+		return map[string]any{
+			"transfer_id": "transfer_1", "sha256": strings.Repeat("a", 64),
+			"size": size, "content_type": "image/png",
+		}
+	}
+	observation := map[string]any{
+		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 1,
+		"url": "", "origin": "", "snapshot": strings.Repeat("🙂", 256),
+		"elements": []any{}, "truncated": false, "screenshot": artifact(2048),
+	}
+	assertBrowserOutputValid(t, descriptors[2], observation)
+	observation["snapshot"] = strings.Repeat("🙂", 257)
+	assertBrowserOutputInvalid(t, descriptors[2], observation)
+	observation["snapshot"] = ""
+	observation["screenshot"] = artifact(2049)
+	assertBrowserOutputInvalid(t, descriptors[2], observation)
+
+	action := map[string]any{
+		"action_invocation_id": "action_1", "state": "succeeded", "artifact": artifact(4096),
+	}
+	assertBrowserOutputValid(t, descriptors[3], action)
+	action["artifact"] = artifact(4097)
+	assertBrowserOutputInvalid(t, descriptors[3], action)
+}
+
 func assertBrowserOutputValid(t *testing.T, descriptor CommandDescriptor, value map[string]any) {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -275,6 +346,14 @@ func browserActInputFixture() map[string]any {
 		"prepared_action_hash":    strings.Repeat("a", 64),
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",
+	}
+}
+
+func browserSessionOpenInputFixture(limits BrowserLimits) map[string]any {
+	return map[string]any{
+		"session_id": "session_1", "profile": "managed", "profile_revision": "managed-v1",
+		"browser_policy_revision": strings.Repeat("a", 64), "dry_run": true,
+		"limits": browserLimitsValue(limits),
 	}
 }
 
