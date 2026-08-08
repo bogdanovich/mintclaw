@@ -2,7 +2,8 @@
 
 ## Status And Decision
 
-Status: admitted for implementation after this contract merges
+Status: admitted for implementation with the trusted-local-principal boundary
+defined below
 
 P4 admits one remotely requested, lifecycle-managed companion update at a
 time on Linux and macOS. It is a single-node operational capability, not fleet
@@ -95,10 +96,21 @@ Protected assets include:
   state; and
 - unrelated shell, file, service, terminal, browser, and helper authority.
 
-P4 assumes the model, prompt content, release metadata endpoint, network,
-unprivileged companion, and downloaded bytes may be malicious. It also assumes
-disconnects, crashes, power loss, response loss, concurrent requests, stale
-discovery, full disks, and service-manager delays at every boundary.
+P4 assumes the model, prompt content, release metadata endpoint, network, and
+downloaded bytes may be malicious. It also assumes disconnects, crashes, power
+loss, response loss, concurrent requests, stale discovery, full disks, and
+service-manager delays at every boundary.
+
+P4 trusts the local OS principal that runs the companion and coordinator. This
+is an explicit boundary, not an accidental reliance on file modes: arbitrary
+code execution, unrestricted shell access, or full compromise under that UID
+can modify any companion-owned update state or rollback material. P4 therefore
+does not claim to resist a malicious process with the companion's own OS
+authority, including a companion running as root or an administrator. Private
+files, pinned identities, atomic publication, verification, and rollback still
+protect integrity and recovery from untrusted remote requests, substituted or
+malformed releases, races, crashes, and partial writes; they are not a
+same-UID security boundary.
 
 The design must prevent:
 
@@ -121,7 +133,9 @@ Compromise of a companion can already exercise its configured OS identity.
 P4 must not turn that identity into root or another user. A system-scoped
 instance is admitted only through the exact narrow update authority installed
 for that managed instance; it does not expose a general privileged service
-manager or filesystem writer.
+manager or filesystem writer. Isolating a fully compromised companion from
+coordinator state requires a separate principal and is deferred to a future
+product-hardening admission.
 
 ## Sources Of Truth And Authority
 
@@ -315,6 +329,12 @@ migration is incompatible and refused. Coordinator upgrades remain an
 operator lifecycle action until a later admission proves safe two-component
 rotation.
 
+The coordinator remains a separate, narrow component so a future design can
+place it and its update store behind a different OS principal without replacing
+the P4 protocol or lifecycle state machine. P4 does not implement that
+privilege boundary: it adds no privileged helper or broker, extra daemon,
+setuid path, separate service-account architecture, or sandbox framework.
+
 ### Linux
 
 Linux activation supports MintClaw-owned systemd user and system units. The
@@ -419,7 +439,9 @@ P4 does not include:
 - bootstrap, pairing, key rotation, re-pairing, backup, or disaster recovery;
 - Windows, BSD, containers, or architectures other than admitted tuples;
 - delta patches, binary transfer through chat, or user-provided artifacts;
-- unattended broad approval or global `approve_all`; or
+- unattended broad approval or global `approve_all`;
+- same-UID malicious-process resistance, a privileged update helper or broker,
+  setuid execution, a separate-account coordinator, or a sandbox framework; or
 - a generic updater, durable job, supervisor, or fleet abstraction.
 
 ## Focused PR Sequence
@@ -481,6 +503,11 @@ Focused tests must cover:
   binary bytes, and unrestricted output; and
 - unchanged behavior for non-update commands and update-disabled targets.
 
+Ownership, mode, link, path-pinning, and atomic-publication tests prove the
+coordinator's behavior inside the trusted-local-principal boundary. They must
+not be presented as evidence that update state resists arbitrary writes by a
+process already holding the same OS identity.
+
 Each implementation PR runs focused race tests, lint with repository build
 tags, and the relevant repository tests. CI remains the broad-suite authority
 when a full local suite is prohibitively slow. Timing-only assertions are not
@@ -515,7 +542,10 @@ P4 is complete only when all of the following are true:
 - all focused PRs are merged, merged-main validation passes, architecture and
   operations docs match behavior, and deployment evidence is recorded; and
 - existing non-update node, gateway, approval, and lifecycle behavior remains
-  healthy.
+  healthy; and
+- documentation and implementation do not claim that companion-owned update
+  files resist arbitrary modification by a process with the same trusted OS
+  identity.
 
 **Mandatory stop:** once every item above is evidenced, mark the P4 goal
 complete and stop. Do not begin fleet status, batch updates, key rotation,
