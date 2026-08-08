@@ -1,9 +1,10 @@
-package companion
+package browserhost
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
 const (
@@ -25,6 +27,7 @@ var (
 	ErrBrowserHostNotFound = errors.New("companion browser session not found")
 	ErrBrowserHostStale    = errors.New("companion browser state is stale")
 	ErrBrowserHostLost     = errors.New("companion browser session is lost")
+	browserHostIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
 type BrowserHostFeatures struct {
@@ -113,7 +116,7 @@ type browserHostFactory interface {
 type browserHostSession struct {
 	mu                    sync.Mutex
 	sessionID             string
-	profile               BrowserProfilePolicy
+	profile               companion.BrowserProfilePolicy
 	browserPolicyRevision string
 	agentID               string
 	actorID               string
@@ -132,16 +135,16 @@ type browserHostSession struct {
 // The gateway remains responsible for model-visible authorization, prepared
 // actions, approvals, and artifacts.
 type BrowserHost struct {
-	profiles      map[string]BrowserProfilePolicy
+	profiles      map[string]companion.BrowserProfilePolicy
 	factories     map[string]browserHostFactory
 	now           func() time.Time
-	verifyProfile func(BrowserProfilePolicy) error
+	verifyProfile func(companion.BrowserProfilePolicy) error
 
 	mu       sync.Mutex
 	sessions map[string]*browserHostSession
 }
 
-func NewBrowserHost(profiles map[string]BrowserProfilePolicy) (*BrowserHost, error) {
+func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
 	factories := make(map[string]browserHostFactory)
 	for alias, profile := range profiles {
 		if !profile.Enabled {
@@ -171,17 +174,17 @@ func NewBrowserHost(profiles map[string]BrowserProfilePolicy) (*BrowserHost, err
 }
 
 func newBrowserHost(
-	profiles map[string]BrowserProfilePolicy,
+	profiles map[string]companion.BrowserProfilePolicy,
 	factories map[string]browserHostFactory,
 ) (*BrowserHost, error) {
-	descriptors, err := browserProfileDescriptors(profiles)
+	descriptors, err := companion.BrowserProfileDescriptors(profiles)
 	if err != nil {
 		return nil, err
 	}
 	if len(descriptors) == 0 {
 		return nil, errors.New("companion browser host requires an enabled profile")
 	}
-	clonedProfiles := make(map[string]BrowserProfilePolicy, len(profiles))
+	clonedProfiles := make(map[string]companion.BrowserProfilePolicy, len(profiles))
 	for alias, profile := range profiles {
 		if !profile.Enabled {
 			continue
@@ -193,15 +196,15 @@ func newBrowserHost(
 	}
 	return &BrowserHost{
 		profiles: clonedProfiles, factories: factories, now: time.Now,
-		verifyProfile: verifyBrowserProfileRuntimeIdentity,
+		verifyProfile: companion.VerifyBrowserProfileRuntimeIdentity,
 		sessions:      make(map[string]*browserHostSession),
 	}, nil
 }
 
-func companionPlaywrightServer(profile BrowserProfilePolicy) (config.MCPServerConfig, error) {
+func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.MCPServerConfig, error) {
 	args := append([]string(nil), profile.DriverArguments...)
 	for _, argument := range args {
-		if companionManagedDriverArgument(argument) {
+		if managedDriverArgument(argument) {
 			return config.MCPServerConfig{}, errors.New("driver arguments contain a host-managed option")
 		}
 	}
@@ -219,7 +222,7 @@ func companionPlaywrightServer(profile BrowserProfilePolicy) (config.MCPServerCo
 	}, nil
 }
 
-func companionManagedDriverArgument(argument string) bool {
+func managedDriverArgument(argument string) bool {
 	for _, managed := range []string{
 		"--allowed-origins", "--blocked-origins", "--caps", "--config",
 		"--proxy-server", "--proxy-bypass", "--cdp-endpoint", "--endpoint",
@@ -233,7 +236,9 @@ func companionManagedDriverArgument(argument string) bool {
 	return false
 }
 
-func cloneBrowserProfilePolicy(profile BrowserProfilePolicy) BrowserProfilePolicy {
+func cloneBrowserProfilePolicy(
+	profile companion.BrowserProfilePolicy,
+) companion.BrowserProfilePolicy {
 	profile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
 	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
@@ -622,7 +627,7 @@ func browserHostObservation(
 }
 
 func authorizeBrowserProfile(
-	profile BrowserProfilePolicy,
+	profile companion.BrowserProfilePolicy,
 	revision, agentID, actorID string,
 ) bool {
 	return profile.Enabled && profile.Revision == revision &&
@@ -659,7 +664,7 @@ func browserConfigLimits(limits nodes.BrowserLimits) config.BrowserLimitsConfig 
 }
 
 func browserHostIdentifier(value string) bool {
-	return browserPrincipalPattern.MatchString(value)
+	return browserHostIDPattern.MatchString(value)
 }
 
 func browserHostDigest(value string) bool {

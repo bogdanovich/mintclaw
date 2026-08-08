@@ -1,14 +1,20 @@
-package companion
+package browserhost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
 type fakeBrowserHostFactory struct {
@@ -202,7 +208,7 @@ func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
 func TestBrowserHostRechecksExecutableIdentityBeforeEveryOpen(t *testing.T) {
 	factory := &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{}}
 	host := newTestBrowserHost(t, factory)
-	host.verifyProfile = func(BrowserProfilePolicy) error {
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error {
 		return errors.New("digest changed")
 	}
 	if _, err := host.Open(
@@ -314,39 +320,6 @@ func TestBrowserHostExpiresAndClosesIdleWorker(t *testing.T) {
 	}
 }
 
-func TestBrowserHostConstructionDoesNotExposeCommandsBeforeTypedRouting(t *testing.T) {
-	requireBrowserProfileIdentitySupport(t)
-	baseDir := t.TempDir()
-	cfg, err := (Config{
-		GatewayURL: "wss://gateway.example",
-		BrowserProfiles: map[string]BrowserProfilePolicy{
-			"managed": companionBrowserProfileFixture(t, baseDir),
-		},
-	}).Normalize(baseDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	host, err := NewBrowserHost(cfg.BrowserProfiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := NewRuntime(
-		nodes.ID("node_test"),
-		"test",
-		testRuntimePolicy([]string{}),
-		newMemoryInvocationLedger(),
-		WithBrowserHost(host),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, descriptor := range runtime.Catalog().Commands {
-		if nodes.IsBrowserCommand(descriptor.Name) || descriptor.ModelContract == nil {
-			t.Fatalf("browser host leaked command before typed routing: %#v", descriptor)
-		}
-	}
-}
-
 func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	profile := browserHostProfileFixture()
 	profile.DriverExecutable = "/usr/local/bin/npx"
@@ -372,22 +345,68 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	}
 }
 
+func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("browser profile identity validation is admitted on Darwin and Linux")
+	}
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	profileDir := filepath.Join(root, "profile")
+	lockDir := filepath.Join(root, "locks")
+	if err = os.Mkdir(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := (companion.Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]companion.BrowserProfilePolicy{
+			"managed": {
+				Enabled: true, Revision: "managed-v1",
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"owner"},
+				Driver:           nodes.BrowserDriverPlaywrightMCP,
+				DriverExecutable: executable, DriverExecutableSHA256: hex.EncodeToString(digest[:]),
+				DriverArguments:  []string{"--browser=chrome"},
+				ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
+				Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+				DryRun: true, AllowedActions: []string{"navigate"}, Headed: true,
+			},
+		},
+	}).Normalize(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := NewBrowserHost(cfg.BrowserProfiles)
+	if err != nil || host == nil || len(host.factories) != 1 || len(host.sessions) != 0 {
+		t.Fatalf("NewBrowserHost() = %#v, %v", host, err)
+	}
+}
+
 func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	t.Helper()
 	host, err := newBrowserHost(
-		map[string]BrowserProfilePolicy{"managed": browserHostProfileFixture()},
+		map[string]companion.BrowserProfilePolicy{"managed": browserHostProfileFixture()},
 		map[string]browserHostFactory{"managed": factory},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
-	host.verifyProfile = func(BrowserProfilePolicy) error { return nil }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
 	return host
 }
 
-func browserHostProfileFixture() BrowserProfilePolicy {
-	return BrowserProfilePolicy{
+func browserHostProfileFixture() companion.BrowserProfilePolicy {
+	return companion.BrowserProfilePolicy{
 		Enabled: true, Revision: "managed-v1",
 		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 		Driver: nodes.BrowserDriverPlaywrightMCP, Mode: nodes.BrowserProfileManaged,

@@ -24,6 +24,20 @@ const (
 
 var browserPrincipalPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
+func companionManagedDriverArgument(argument string) bool {
+	for _, managed := range []string{
+		"--allowed-origins", "--blocked-origins", "--caps", "--config",
+		"--proxy-server", "--proxy-bypass", "--cdp-endpoint", "--endpoint",
+		"--extension", "--user-data-dir", "--storage-state", "--isolated",
+		"--output-dir", "--output-mode", "--headless",
+	} {
+		if argument == managed || strings.HasPrefix(argument, managed+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // BrowserProfilePolicy is companion-local authority. Fields that identify the
 // executable or host filesystem are never projected into capability catalogs.
 type BrowserProfilePolicy struct {
@@ -383,6 +397,20 @@ func browserProfileDescriptors(
 		return nil, err
 	}
 	return descriptors, nil
+}
+
+// BrowserProfileDescriptors returns the safe typed projection consumed by a
+// dedicated capability host without exposing companion-local driver details.
+func BrowserProfileDescriptors(
+	profiles map[string]BrowserProfilePolicy,
+) ([]nodes.BrowserProfileDescriptor, error) {
+	return browserProfileDescriptors(profiles)
+}
+
+// VerifyBrowserProfileRuntimeIdentity rechecks executable, profile, and lock
+// identity immediately before a host starts a browser process.
+func VerifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
+	return verifyBrowserProfileRuntimeIdentity(profile)
 }
 
 // HasEnabledBrowserProfile reports whether local browser authority requires a

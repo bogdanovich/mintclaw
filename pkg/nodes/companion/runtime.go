@@ -102,7 +102,6 @@ type runtimeOptions struct {
 	terminalBroker  terminalBrokerOpener
 	fileDescriptors []nodes.CommandDescriptor
 	serviceManager  ServiceManager
-	browserHost     *BrowserHost
 }
 
 type RuntimeOption func(*runtimeOptions) error
@@ -159,19 +158,6 @@ func WithServiceManager(manager ServiceManager) RuntimeOption {
 	}
 }
 
-// WithBrowserHost retains the companion-local lifecycle owner. Browser
-// command registration is added separately with the typed routing slice, so
-// constructing a host alone cannot make raw or generic browser calls visible.
-func WithBrowserHost(host *BrowserHost) RuntimeOption {
-	return func(options *runtimeOptions) error {
-		if host == nil {
-			return errors.New("node browser host is required")
-		}
-		options.browserHost = host
-		return nil
-	}
-}
-
 type invocationStore interface {
 	Existing(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
 	Accept(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
@@ -195,7 +181,6 @@ type Runtime struct {
 	activeMu  sync.Mutex
 	active    map[string]*activeInvocation
 	terminals *TerminalCoordinator
-	browser   *BrowserHost
 }
 
 func NewRuntime(
@@ -282,7 +267,6 @@ func NewRuntime(
 		handlers: byName,
 		ledger:   ledger,
 		active:   make(map[string]*activeInvocation),
-		browser:  settings.browserHost,
 	}
 	if settings.shellExec != nil && settings.terminalBroker != nil &&
 		settings.shellExec.handler.contract != nil &&
