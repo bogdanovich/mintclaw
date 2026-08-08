@@ -214,6 +214,13 @@ func PlaywrightDownloadAvailable(root *config.Config) bool {
 	if !ok {
 		return false
 	}
+	return playwrightServerDownloadAvailable(server)
+}
+
+func playwrightServerDownloadAvailable(server config.MCPServerConfig) bool {
+	if !playwrightDownloadBoundaryAvailable() {
+		return false
+	}
 	browserName := "chromium"
 	for index := 0; index < len(server.Args); index++ {
 		argument := server.Args[index]

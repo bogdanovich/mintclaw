@@ -91,6 +91,16 @@ func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 			want: "unsupported action",
 		},
 		{
+			name: "raw driver endpoint",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.DriverArguments = append(
+					profile.DriverArguments,
+					"--cdp-endpoint=http://127.0.0.1:9222",
+				)
+			},
+			want: "option reserved for the companion browser host",
+		},
+		{
 			name:   "missing actor ceiling",
 			mutate: func(profile *BrowserProfilePolicy, _ string) { profile.AllowedActors = nil },
 			want:   "must be non-empty",
@@ -164,6 +174,24 @@ func TestConfigRejectsPermissiveCompanionBrowserProfileDirectory(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsPermissiveCompanionBrowserLockDirectory(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	lockDir := filepath.Join(baseDir, "shared-locks")
+	if err := os.Mkdir(lockDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.LockFile = filepath.Join(lockDir, "browser.lock")
+	_, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err == nil || !strings.Contains(err.Error(), "lock_file parent must be private") {
+		t.Fatalf("Normalize() permissive lock directory error = %v", err)
+	}
+}
+
 func TestConfigKeepsCompanionBrowserProfilesDisabledByDefault(t *testing.T) {
 	cfg, err := (Config{GatewayURL: "wss://gateway.example"}).Normalize(t.TempDir())
 	if err != nil {
@@ -183,6 +211,31 @@ func TestConfigKeepsCompanionBrowserProfilesDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileRuntimeIdentityFailsClosedAfterConfiguration(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	cfg, err := (Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{
+			"managed": companionBrowserProfileFixture(t, baseDir),
+		},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.BrowserProfiles["managed"]
+	if err = verifyBrowserProfileRuntimeIdentity(profile); err != nil {
+		t.Fatalf("initial runtime identity error = %v", err)
+	}
+	if err = os.Chmod(profile.ProfileDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyBrowserProfileRuntimeIdentity(profile); err == nil ||
+		!strings.Contains(err.Error(), "profile identity changed") {
+		t.Fatalf("changed runtime identity error = %v", err)
+	}
+}
+
 func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfilePolicy {
 	t.Helper()
 	executable, err := os.Executable()
@@ -198,14 +251,18 @@ func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfile
 	if err = os.Mkdir(profileDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	lockDir := filepath.Join(baseDir, "locks")
+	if err = os.Mkdir(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	return BrowserProfilePolicy{
 		Enabled: true, Revision: "managed-v1",
 		AllowedAgents:    []string{"marketplace", "browser"},
 		AllowedActors:    []string{"telegram:owner"},
 		Driver:           nodes.BrowserDriverPlaywrightMCP,
 		DriverExecutable: executable, DriverExecutableSHA256: hex.EncodeToString(digest[:]),
-		DriverArguments:  []string{"--isolated"},
-		ProfileDirectory: profileDir, LockFile: filepath.Join(baseDir, "browser.lock"),
+		DriverArguments:  []string{"--browser=chrome"},
+		ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		DryRun: true, AllowedActions: []string{"navigate", "download"}, Headed: true,
 	}
