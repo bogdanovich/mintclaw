@@ -174,7 +174,11 @@ func (l RuntimeLayout) Validate() error {
 			return fmt.Errorf("runtime layout: instruction root %d is empty", index)
 		}
 	}
-	if runtimeLayoutPathWithin(l.stateRoot, l.executionRoot) {
+	stateInsideExecution, err := runtimeLayoutPathWithin(l.stateRoot, l.executionRoot)
+	if err != nil {
+		return fmt.Errorf("runtime layout: check state root containment: %w", err)
+	}
+	if stateInsideExecution {
 		return fmt.Errorf("runtime layout: state root must be outside the execution root")
 	}
 	return nil
@@ -187,12 +191,35 @@ func runtimeLayoutJoin(root string, elements ...string) string {
 	return filepath.Join(append([]string{root}, elements...)...)
 }
 
-func runtimeLayoutPathWithin(candidate, root string) bool {
+func runtimeLayoutPathWithin(candidate, root string) (bool, error) {
 	if candidate == "" || root == "" {
-		return false
+		return false, nil
 	}
 	relative, err := filepath.Rel(root, candidate)
-	return err == nil && (relative == "." || filepath.IsLocal(relative))
+	if err == nil && (relative == "." || filepath.IsLocal(relative)) {
+		return true, nil
+	}
+
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect execution root %q: %w", root, err)
+	}
+	for current := candidate; ; current = filepath.Dir(current) {
+		candidateInfo, statErr := os.Stat(current)
+		if statErr == nil {
+			if os.SameFile(candidateInfo, rootInfo) {
+				return true, nil
+			}
+		} else if !os.IsNotExist(statErr) {
+			return false, fmt.Errorf("inspect state root ancestor %q: %w", current, statErr)
+		}
+		if filepath.Dir(current) == current {
+			return false, nil
+		}
+	}
 }
 
 // resolveRuntimeLayoutPath returns an absolute path resolved through its nearest

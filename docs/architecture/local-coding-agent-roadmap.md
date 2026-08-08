@@ -760,6 +760,8 @@ Scope:
   state-path ownership, and source-pollution rejection.
 - Store canonical resolved paths and fail closed when a symlink ancestor cannot
   be resolved unambiguously.
+- Compare filesystem identity when checking containment so case-only aliases on
+  case-insensitive volumes cannot place state under the execution root.
 
 Done when:
 

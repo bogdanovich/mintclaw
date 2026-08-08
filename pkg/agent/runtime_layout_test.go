@@ -221,6 +221,39 @@ func TestRuntimeLayoutRejectsStateInsideExecutionRoot(t *testing.T) {
 	}
 }
 
+func TestRuntimeLayoutRejectsCaseAliasOnCaseInsensitiveFilesystem(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "Project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caseAlias := filepath.Join(root, "pROJECT")
+	projectInfo, err := os.Stat(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, err := os.Stat(caseAlias)
+	if os.IsNotExist(err) {
+		t.Skip("test filesystem is case-sensitive")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(projectInfo, aliasInfo) {
+		t.Skip("case alias resolves to a different directory")
+	}
+
+	_, err = NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+		project,
+		filepath.Join(caseAlias, ".mintclaw", "thread-1"),
+		[]string{project},
+	)
+	if err == nil || !strings.Contains(err.Error(), "outside the execution root") {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+}
+
 func TestRuntimeLayoutRejectsStateThroughSymlinkedAncestor(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")

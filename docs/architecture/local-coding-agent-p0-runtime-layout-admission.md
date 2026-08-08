@@ -45,6 +45,8 @@ Until those packets merge, current production code continues to use
 6. `StateRoot` cannot equal or descend from `ExecutionRoot` for any runtime
    owner. Path resolution uses the nearest existing ancestor and fails closed
    on dangling symlinks, permission errors, or other ambiguous ancestors.
+   Containment also compares filesystem identities so case-only aliases on a
+   case-insensitive volume cannot bypass the rule.
 7. Layout construction and validation are read-only. They do not create the
    execution root, state root, or any derived directory.
 8. Instruction roots are explicit and ordered. Discovering instructions never
@@ -161,7 +163,8 @@ P0.1 is complete when:
 
 - tests prove canonical owner, execution root, state root, ordered immutable
   instruction roots, and every derived state path;
-- all owner kinds reject equal, nested, and symlink-hidden state roots;
+- all owner kinds reject equal, nested, symlink-hidden, and case-aliased state
+  roots where the filesystem treats the alias as the same directory;
 - an external state root validates without creating either root;
 - the Workspace consumer inventory is accurate for the merged baseline;
 - the roadmap and this admission require a one-time verified deployment
