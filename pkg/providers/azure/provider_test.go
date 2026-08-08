@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 // writeValidResponse writes a minimal valid Responses API response.
@@ -173,6 +174,8 @@ func TestProviderChat_AzureHTTPError(t *testing.T) {
 func TestProviderChat_AzureRateLimitError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "9")
+		w.Header().Set("X-Request-Id", "req-azure")
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"error":{"message":"Rate limit exceeded","type":"rate_limit_error"}}`))
 	}))
@@ -183,8 +186,15 @@ func TestProviderChat_AzureRateLimitError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 429, got nil")
 	}
-	if !strings.Contains(err.Error(), "429") {
-		t.Errorf("error should contain status code 429, got: %v", err)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindRateLimit || providerErr.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("ProviderError = %#v, want rate limit status 429", providerErr)
+	}
+	if providerErr.RetryAfter != 9*time.Second || providerErr.RequestID != "req-azure" {
+		t.Fatalf("ProviderError metadata = retry %s request %q", providerErr.RetryAfter, providerErr.RequestID)
 	}
 }
 

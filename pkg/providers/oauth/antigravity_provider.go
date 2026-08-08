@@ -128,7 +128,7 @@ func (p *AntigravityProvider) Chat(
 			"model":       model,
 		})
 
-		return nil, p.parseAntigravityError(resp.StatusCode, respBody)
+		return nil, common.NewHTTPResponseError(resp, respBody, antigravityBaseURL)
 	}
 
 	// Response is always SSE from streamGenerateContent — each line is "data: {...}"
@@ -533,7 +533,7 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		return "", fmt.Errorf("reading loadCodeAssist response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("loadCodeAssist failed: %s", string(body))
+		return "", common.NewHTTPResponseError(resp, body, antigravityBaseURL)
 	}
 
 	var result struct {
@@ -577,11 +577,7 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		return nil, fmt.Errorf("reading fetchAvailableModels response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(
-			"fetchAvailableModels failed (HTTP %d): %s",
-			resp.StatusCode,
-			truncateString(string(body), 200),
-		)
+		return nil, common.NewHTTPResponseError(resp, body, antigravityBaseURL)
 	}
 
 	var result struct {
@@ -642,20 +638,6 @@ type AntigravityModelInfo struct {
 
 // --- Helpers ---
 
-// truncateString returns s truncated to at most maxLen runes with a trailing
-// "...". It is rune-safe (unlike byte slicing) and reserved 3 runes for the
-// ellipsis so the result never exceeds maxLen.
-func truncateString(s string, maxLen int) string {
-	if maxLen <= 3 {
-		return s
-	}
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen-3]) + "..."
-}
-
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
@@ -663,36 +645,4 @@ func randomString(n int) string {
 		b[i] = letters[rand.IntN(len(letters))]
 	}
 	return string(b)
-}
-
-func (p *AntigravityProvider) parseAntigravityError(statusCode int, body []byte) error {
-	var errResp struct {
-		Error struct {
-			Code    int              `json:"code"`
-			Message string           `json:"message"`
-			Status  string           `json:"status"`
-			Details []map[string]any `json:"details"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(body, &errResp); err != nil {
-		return fmt.Errorf("antigravity API error (HTTP %d): %s", statusCode, truncateString(string(body), 500))
-	}
-
-	msg := errResp.Error.Message
-	if statusCode == 429 {
-		// Try to extract quota reset info
-		for _, detail := range errResp.Error.Details {
-			if typeVal, ok := detail["@type"].(string); ok && strings.HasSuffix(typeVal, "ErrorInfo") {
-				if metadata, ok := detail["metadata"].(map[string]any); ok {
-					if delay, ok := metadata["quotaResetDelay"].(string); ok {
-						return fmt.Errorf("antigravity rate limit exceeded: %s (reset in %s)", msg, delay)
-					}
-				}
-			}
-		}
-		return fmt.Errorf("antigravity rate limit exceeded: %s", msg)
-	}
-
-	return fmt.Errorf("antigravity API error (%s): %s", errResp.Error.Status, msg)
 }

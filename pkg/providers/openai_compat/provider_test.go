@@ -3,6 +3,7 @@ package openai_compat
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {
@@ -921,8 +923,12 @@ func TestProviderChat_JSONHTTPErrorDoesNotReportHTML(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Status: 400") {
-		t.Fatalf("expected status code in error, got %v", err)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindInvalidRequest || providerErr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("ProviderError = %#v, want invalid request status 400", providerErr)
 	}
 	if strings.Contains(err.Error(), "returned HTML instead of JSON") {
 		t.Fatalf("expected non-HTML http error, got %v", err)
@@ -970,7 +976,7 @@ func TestProviderChat_HTMLResponsesReturnHelpfulError(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if !strings.Contains(err.Error(), fmt.Sprintf("Status: %d", tt.statusCode)) {
+			if !strings.Contains(err.Error(), fmt.Sprintf("status=%d", tt.statusCode)) {
 				t.Fatalf("expected status code in error, got %v", err)
 			}
 			if !strings.Contains(err.Error(), "returned HTML instead of JSON") {
@@ -1026,11 +1032,16 @@ func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Body:   <!DOCTYPE html><html><body>") {
-		t.Fatalf("expected html preview in error, got %v", err)
+	var httpErr *common.HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error = %T, want wrapped HTTPError", err)
 	}
-	if !strings.Contains(err.Error(), "...") {
-		t.Fatalf("expected truncated preview, got %v", err)
+	if !strings.Contains(httpErr.BodyPreview, "<!DOCTYPE html><html><body>") ||
+		!strings.HasSuffix(httpErr.BodyPreview, "...") {
+		t.Fatalf("expected truncated internal HTML preview, got %q", httpErr.BodyPreview)
+	}
+	if strings.Contains(err.Error(), "<!DOCTYPE") {
+		t.Fatalf("safe outer error exposed HTML body: %v", err)
 	}
 }
 

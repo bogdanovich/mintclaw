@@ -42,8 +42,8 @@ func (e *ProviderError) Error() string {
 		e.Kind.Canonical(),
 		e.HTTPStatus,
 		e.RetryAfter,
-		boundedText(e.RequestID, 128),
-		boundedText(e.SafeMessage, 240),
+		normalizeSafeText(e.RequestID, 128),
+		normalizeSafeText(e.SafeMessage, 240),
 	)
 }
 
@@ -75,10 +75,11 @@ func (e *ProviderError) Unwrap() error {
 	return e.Cause
 }
 
-func boundedText(value string, limit int) string {
+func normalizeSafeText(value string, limit int) string {
 	value = strings.Join(strings.Fields(value), " ")
-	if len(value) <= limit {
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
-	return value[:limit] + "..."
+	return string(runes[:limit]) + "..."
 }

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,7 +11,31 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
+
+func TestGeminiProvider_NormalizesHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Goog-Request-Id", "req-gemini")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(
+			`{"error":{"code":400,"message":"Prompt rejected","status":"INVALID_ARGUMENT","details":[{"reason":"context_length_exceeded"}]}}`,
+		))
+	}))
+	defer server.Close()
+
+	provider := NewGeminiProvider("test-key", server.URL, "", "", 0, nil, nil)
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "hello"}}, nil, "gemini-test", nil)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Chat() error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindContextOverflow || providerErr.RequestID != "req-gemini" {
+		t.Fatalf("ProviderError = %#v, want context overflow with request ID", providerErr)
+	}
+}
 
 func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 	var capturedBody map[string]any
