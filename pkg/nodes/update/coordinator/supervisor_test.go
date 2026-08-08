@@ -1,0 +1,278 @@
+//go:build linux || darwin
+
+package coordinator
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
+)
+
+func TestSupervisorRecoversDurableActivationAndCommitsAuthenticatedHealth(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	defer fixture.server.Close()
+	updateCoordinator, _ := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	request := fixture.stageRequest(now)
+	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateCoordinator.Activate(request.Identity); err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched := make(chan State, 1)
+	supervisor.launch = func(_ context.Context, state State) (supervisedChild, error) {
+		child := newFakeSupervisedChild()
+		launched <- state
+		child.incoming <- control.Incoming{Health: controlHealth(state, request.Identity.CatalogHash)}
+		return child, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	started := <-launched
+	if started.Transaction.LaunchAttempts != 1 || started.Transaction.Phase != PhaseActivating {
+		t.Fatalf("launched activation state = %#v", started)
+	}
+	healthy := waitForTransactionPhase(t, updateCoordinator.store, PhaseHealthy)
+	if !healthy.Transaction.SuccessorVerified || healthy.Transaction.LaunchAttempts != 1 {
+		t.Fatalf("healthy state = %#v", healthy)
+	}
+	cancel()
+	if err = <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+}
+
+func TestSupervisorDoesNotActivateDurablyStagedRequestAfterRestart(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	defer fixture.server.Close()
+	updateCoordinator, _ := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	request := fixture.stageRequest(now)
+	staged, err := updateCoordinator.Stage(t.Context(), request)
+	if err != nil || staged.Transaction.Phase != PhaseStaged || staged.Transaction.ActivationAttempted {
+		t.Fatalf("staged state = %#v, %v", staged, err)
+	}
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched := make(chan State, 1)
+	supervisor.launch = func(_ context.Context, state State) (supervisedChild, error) {
+		child := newFakeSupervisedChild()
+		launched <- state
+		return child, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	started := <-launched
+	if started.Transaction.Phase != PhaseStaged || started.Transaction.ActivationAttempted ||
+		started.Transaction.LaunchAttempts != 0 || started.Active != staged.Active {
+		t.Fatalf("restarted staged state = %#v", started)
+	}
+	observed, err := updateCoordinator.store.Load()
+	if err != nil || observed.Generation != staged.Generation || observed.Transaction.Phase != PhaseStaged {
+		t.Fatalf("durable staged state changed = %#v, %v", observed, err)
+	}
+	cancel()
+	if err = <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+}
+
+func TestSupervisorTerminalizesExpiredPreactivationAfterRestart(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	defer fixture.server.Close()
+	updateCoordinator, _ := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	request := fixture.stageRequest(now)
+	staged, err := updateCoordinator.Stage(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := staged
+	interrupted.Generation++
+	interrupted.Transaction.Phase = PhaseDownloading
+	interrupted.Transaction.Candidate = nil
+	if err = updateCoordinator.store.Commit(staged.Generation, interrupted); err != nil {
+		t.Fatal(err)
+	}
+	updateCoordinator.now = func() time.Time { return request.ExpiresAt }
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched := make(chan State, 1)
+	supervisor.launch = func(_ context.Context, state State) (supervisedChild, error) {
+		child := newFakeSupervisedChild()
+		launched <- state
+		return child, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	started := <-launched
+	if started.Transaction.Phase != PhaseOperatorActionRequired ||
+		started.Transaction.FailureCode != "request_expired" || started.Transaction.ActivationAttempted ||
+		started.Active != staged.Active {
+		t.Fatalf("expired restart state = %#v", started)
+	}
+	cancel()
+	if err = <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+}
+
+func TestSupervisorBoundsCandidateAttemptsThenProvesRollback(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	defer fixture.server.Close()
+	updateCoordinator, _ := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	request := fixture.stageRequest(now)
+	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateCoordinator.Activate(request.Identity); err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	candidateLaunches := 0
+	rollbackLaunches := 0
+	supervisor.launch = func(_ context.Context, state State) (supervisedChild, error) {
+		child := newFakeSupervisedChild()
+		mu.Lock()
+		defer mu.Unlock()
+		if state.Transaction.Phase == PhaseActivating {
+			candidateLaunches++
+			child.done <- errors.New("candidate exited")
+			return child, nil
+		}
+		rollbackLaunches++
+		child.incoming <- control.Incoming{Health: controlHealth(state, request.Identity.CatalogHash)}
+		return child, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	rolledBack := waitForTransactionPhase(t, updateCoordinator.store, PhaseRolledBack)
+	cancel()
+	if err = <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if candidateLaunches != MaxLaunchAttempts || rollbackLaunches != 1 ||
+		!rolledBack.Transaction.RollbackVerified || rolledBack.Transaction.LaunchAttempts != 1 {
+		t.Fatalf(
+			"launches candidate=%d rollback=%d, state=%#v",
+			candidateLaunches,
+			rollbackLaunches,
+			rolledBack,
+		)
+	}
+}
+
+func TestSupervisorKeepsVerifiedActivePayloadAfterPreActivationFailure(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	fixture.server.Close()
+	updateCoordinator, _ := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	if _, err := updateCoordinator.Stage(t.Context(), fixture.stageRequest(now)); err == nil {
+		t.Fatal("Stage() unexpectedly succeeded with an unavailable release source")
+	}
+	failed := waitForTransactionPhase(t, updateCoordinator.store, PhaseOperatorActionRequired)
+	if failed.Transaction.ActivationAttempted {
+		t.Fatalf("pre-activation failure recorded activation: %#v", failed.Transaction)
+	}
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched := make(chan State, 1)
+	supervisor.launch = func(_ context.Context, state State) (supervisedChild, error) {
+		launched <- state
+		return newFakeSupervisedChild(), nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	select {
+	case state := <-launched:
+		if state.Active != failed.Active {
+			t.Fatalf("launched payload = %#v, want %#v", state.Active, failed.Active)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("supervisor did not keep the verified active payload running")
+	}
+	cancel()
+	if err = <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+}
+
+type fakeSupervisedChild struct {
+	incoming chan control.Incoming
+	done     chan error
+	stopOnce sync.Once
+}
+
+func newFakeSupervisedChild() *fakeSupervisedChild {
+	return &fakeSupervisedChild{incoming: make(chan control.Incoming, 4), done: make(chan error, 1)}
+}
+
+func (child *fakeSupervisedChild) incomingFrames() <-chan control.Incoming { return child.incoming }
+func (child *fakeSupervisedChild) completion() <-chan error                { return child.done }
+func (child *fakeSupervisedChild) respond(control.Response) error          { return nil }
+func (child *fakeSupervisedChild) stop() {
+	child.stopOnce.Do(func() {
+		select {
+		case child.done <- nil:
+		default:
+		}
+	})
+}
+
+func controlHealth(state State, catalogHash string) *control.Health {
+	return &control.Health{
+		SchemaVersion: control.SchemaVersion, Kind: control.KindHealth,
+		NodeID: string(state.Installation.NodeID), Version: state.Active.Version,
+		Platform: state.Installation.Platform, Architecture: state.Installation.Architecture,
+		CatalogHash: catalogHash,
+	}
+}
+
+func waitForTransactionPhase(t *testing.T, store *Store, phase Phase) State {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Transaction != nil && state.Transaction.Phase == phase {
+			return state
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("transaction did not reach %s", phase)
+	return State{}
+}

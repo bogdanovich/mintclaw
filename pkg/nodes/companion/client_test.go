@@ -969,6 +969,47 @@ func TestDuplicateCompanionsBackOffInsteadOfRapidlyFlapping(t *testing.T) {
 	}
 }
 
+func TestClientReportsOnlyAuthenticatedStableConnection(t *testing.T) {
+	registry, admission := testGatewayAdmission(t)
+	server := httptest.NewTLSServer(admission)
+	defer server.Close()
+	identity := testIdentity(t)
+	bootstrap := testClientForServer(t, server, identity, ReconnectConfig{})
+	result, err := bootstrap.Authenticate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.Approve(result.NodeID, nodes.PairingApproval{At: time.Now().Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	client := testClientForServer(t, server, identity, ReconnectConfig{})
+	client.stableWindow = 10 * time.Millisecond
+	observed := make(chan struct{}, 1)
+	if err = client.SetStableObserver(func(context.Context) error {
+		observed <- struct{}{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	select {
+	case <-observed:
+	case <-time.After(time.Second):
+		t.Fatal("stable authenticated connection was not reported")
+	}
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case <-observed:
+		t.Fatal("one connection produced duplicate stable observations")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestClientRejectsWrongCertificatePin(t *testing.T) {
 	_, handler := testGatewayAdmission(t)
 	server := httptest.NewTLSServer(handler)

@@ -27,6 +27,27 @@ func TestSystemdReadinessWindowExceedsRestartDelay(t *testing.T) {
 	}
 }
 
+func TestRenderSystemdUnitUsesStableCoordinatorForManagedUpdate(t *testing.T) {
+	for _, system := range []bool{false, true} {
+		request := lifecycleRequest{
+			Instance: "main", ConfigPath: "/etc/mintclaw/node.json",
+			ExecutablePath: "/opt/mintclaw/mintclaw-node", ServiceUser: "mintclaw-node",
+			ManagedUpdate: true, CoordinatorPath: "/opt/mintclaw/mintclaw-node-coordinator",
+			StateDirectory: "/var/lib/mintclaw-node",
+		}
+		unit, err := renderSystemdUnit(request, system, "00112233445566778899aabbccddeeff")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `ExecStart="/opt/mintclaw/mintclaw-node-coordinator" run --state-dir ` +
+			`"/var/lib/mintclaw-node/update"`
+		if !strings.Contains(unit, want) || strings.Contains(unit, "run --config") ||
+			(system != strings.Contains(unit, "User=mintclaw-node")) {
+			t.Fatalf("managed systemd unit (system=%t) = %s", system, unit)
+		}
+	}
+}
+
 func TestSystemdLifecycleInstall(t *testing.T) {
 	var calls []systemdCall
 	showChecks := 0

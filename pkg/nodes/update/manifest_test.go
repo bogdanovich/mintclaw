@@ -151,6 +151,40 @@ func TestParseManifestRejectsUnknownDuplicateTrailingAndOversizedInput(t *testin
 	}
 }
 
+func TestReleaseVersionValidationAndOrdering(t *testing.T) {
+	for _, value := range []string{"v0.0.0", "v1.2.3", "v1.2.3-rc.1", "v999999999999999999999.0.1"} {
+		if !ValidReleaseVersion(value) {
+			t.Fatalf("ValidReleaseVersion(%q) = false", value)
+		}
+	}
+	for _, value := range []string{
+		"1.2.3", "v01.2.3", "v1.2.3-01", "v1.2.3+build", "v1.2",
+		"v1.2.3-" + strings.Repeat("a", 122),
+	} {
+		if ValidReleaseVersion(value) {
+			t.Fatalf("ValidReleaseVersion(%q) = true", value)
+		}
+	}
+	comparisons := []struct {
+		left  string
+		right string
+		want  int
+	}{
+		{left: "v1.0.0", right: "v1.0.0", want: 0},
+		{left: "v1.0.1", right: "v1.0.0", want: 1},
+		{left: "v2.0.0", right: "v10.0.0", want: -1},
+		{left: "v1.0.0-rc.2", right: "v1.0.0-rc.10", want: -1},
+		{left: "v1.0.0-rc.1", right: "v1.0.0", want: -1},
+		{left: "v1.0.0-beta", right: "v1.0.0-1", want: 1},
+	}
+	for _, test := range comparisons {
+		got := CompareReleaseVersions(test.left, test.right)
+		if (got < 0 && test.want >= 0) || (got > 0 && test.want <= 0) || (got == 0 && test.want != 0) {
+			t.Fatalf("CompareReleaseVersions(%q, %q) = %d, want sign %d", test.left, test.right, got, test.want)
+		}
+	}
+}
+
 func validManifest() Manifest {
 	digest := strings.Repeat("a", 64)
 	return Manifest{
