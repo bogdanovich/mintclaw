@@ -181,6 +181,9 @@ func loadArtifactFlags(raw string) ([]nodeupdate.Artifact, error) {
 }
 
 func inspectArtifact(platform, architecture, path string) (nodeupdate.Artifact, error) {
+	if err := validateReleaseArchive(path, platform, architecture); err != nil {
+		return nodeupdate.Artifact{}, fmt.Errorf("validate artifact archive: %w", err)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nodeupdate.Artifact{}, fmt.Errorf("open artifact: %w", err)

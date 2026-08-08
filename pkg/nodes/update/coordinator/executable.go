@@ -4,14 +4,14 @@ package coordinator
 
 import (
 	"crypto/sha256"
-	"debug/elf"
-	"debug/macho"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+
+	nodeupdate "github.com/bogdanovich/mintclaw/pkg/nodes/update"
 )
 
 func InspectExecutable(path string, platform string, architecture string) (string, int64, error) {
@@ -83,42 +83,5 @@ func openExecutable(path string) (*os.File, os.FileInfo, error) {
 }
 
 func validateExecutableFile(file *os.File, platform string, architecture string) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	switch platform {
-	case "linux":
-		binary, err := elf.NewFile(file)
-		if err != nil {
-			return errors.New("candidate is not a valid ELF executable")
-		}
-		defer binary.Close()
-		expected := elf.EM_X86_64
-		if architecture == "arm64" {
-			expected = elf.EM_AARCH64
-		} else if architecture != "amd64" {
-			return errors.New("unsupported Linux companion architecture")
-		}
-		if binary.Machine != expected || (binary.Type != elf.ET_EXEC && binary.Type != elf.ET_DYN) {
-			return errors.New("ELF executable does not match the admitted platform tuple")
-		}
-	case "darwin":
-		binary, err := macho.NewFile(file)
-		if err != nil {
-			return errors.New("candidate is not a valid Mach-O executable")
-		}
-		defer binary.Close()
-		expected := macho.CpuAmd64
-		if architecture == "arm64" {
-			expected = macho.CpuArm64
-		} else if architecture != "amd64" {
-			return errors.New("unsupported macOS companion architecture")
-		}
-		if binary.Cpu != expected || binary.Type != macho.TypeExec {
-			return errors.New("Mach-O executable does not match the admitted platform tuple")
-		}
-	default:
-		return errors.New("unsupported companion executable platform")
-	}
-	return nil
+	return nodeupdate.ValidateExecutable(file, platform, architecture)
 }

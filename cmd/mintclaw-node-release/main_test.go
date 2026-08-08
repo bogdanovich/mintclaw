@@ -7,9 +7,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,47 +19,72 @@ import (
 	nodeupdate "github.com/bogdanovich/mintclaw/pkg/nodes/update"
 )
 
-func TestValidateNodeReleaseArchivesRequiresOneExecutable(t *testing.T) {
+func TestValidateReleaseArchiveEnforcesCoordinatorContract(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("host test executable is not an admitted node platform")
+	}
 	directory := t.TempDir()
-	archives := make([]string, 4)
-	for index := range archives {
-		archives[index] = filepath.Join(directory, fmt.Sprintf("node-%d.tar.gz", index))
-		writeNodeReleaseArchive(t, archives[index], false)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	script := filepath.Join("..", "..", "scripts", "validate-node-release-archives.sh")
-	if output, err := exec.Command(script, archives...).CombinedOutput(); err != nil {
-		t.Fatalf("validate good archives: %v: %s", err, output)
+	archivePath := filepath.Join(directory, "node.tar.gz")
+	writeNodeReleaseArchive(t, archivePath, executable, 0o755, false)
+	if err = validateReleaseArchive(archivePath, runtime.GOOS, runtime.GOARCH); err != nil {
+		t.Fatalf("validate good archive: %v", err)
 	}
 
-	writeNodeReleaseArchive(t, archives[0], true)
-	if err := exec.Command(script, archives...).Run(); err == nil {
-		t.Fatal("validator accepted an archive with release metadata")
+	writeNodeReleaseArchive(t, archivePath, executable, 0o644, false)
+	if err = validateReleaseArchive(archivePath, runtime.GOOS, runtime.GOARCH); err == nil {
+		t.Fatal("validator accepted a non-executable payload")
+	}
+	writeNodeReleaseArchive(t, archivePath, executable, 0o755, true)
+	if err = validateReleaseArchive(archivePath, runtime.GOOS, runtime.GOARCH); err == nil {
+		t.Fatal("validator accepted an archive with an additional entry")
+	}
+
+	wrongArchitecture := "arm64"
+	if runtime.GOARCH == "arm64" {
+		wrongArchitecture = "amd64"
+	}
+	writeNodeReleaseArchive(t, archivePath, executable, 0o755, false)
+	if err = validateReleaseArchive(archivePath, runtime.GOOS, wrongArchitecture); err == nil {
+		t.Fatal("validator accepted the wrong architecture")
 	}
 }
 
-func writeNodeReleaseArchive(t *testing.T, path string, extraEntry bool) {
+func writeNodeReleaseArchive(
+	t *testing.T,
+	path string,
+	executablePath string,
+	mode int64,
+	extraEntry bool,
+) {
 	t.Helper()
+	executable, err := os.Open(executablePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer executable.Close()
+	info, err := executable.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
 	file, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	compressed := gzip.NewWriter(file)
 	archive := tar.NewWriter(compressed)
-	entries := []struct {
-		name string
-		mode int64
-	}{
-		{name: "mintclaw-node", mode: 0o755},
+	if err = archive.WriteHeader(&tar.Header{Name: "mintclaw-node", Mode: mode, Size: info.Size()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.Copy(archive, executable); err != nil {
+		t.Fatal(err)
 	}
 	if extraEntry {
-		entries = append(entries, struct {
-			name string
-			mode int64
-		}{name: "README.md", mode: 0o644})
-	}
-	for _, entry := range entries {
-		if err = archive.WriteHeader(&tar.Header{Name: entry.name, Mode: entry.mode, Size: 1}); err != nil {
+		if err = archive.WriteHeader(&tar.Header{Name: "README.md", Mode: 0o644, Size: 1}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = archive.Write([]byte("x")); err != nil {
@@ -81,6 +108,10 @@ func TestRunSignsExactFourReleaseArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "fixture.go")
+	if err = os.WriteFile(sourcePath, []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	manifestPath := filepath.Join(directory, "manifest.json")
 	signaturePath := filepath.Join(directory, "manifest.sig")
 	artifacts := ""
@@ -95,9 +126,8 @@ func TestRunSignsExactFourReleaseArtifacts(t *testing.T) {
 		{platform: "darwin", architecture: "arm64", name: "mintclaw-node_Darwin_arm64.tar.gz"},
 	} {
 		path := filepath.Join(directory, fixture.name)
-		if err = os.WriteFile(path, []byte("fixture "+fixture.name), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		executablePath := buildReleaseFixture(t, directory, sourcePath, fixture.platform, fixture.architecture)
+		writeNodeReleaseArchive(t, path, executablePath, 0o755, false)
 		if artifacts != "" {
 			artifacts += " "
 		}
@@ -141,6 +171,23 @@ func TestRunSignsExactFourReleaseArtifacts(t *testing.T) {
 	if err = run([]string{"verify"}); err != nil {
 		t.Fatalf("verify run() error = %v", err)
 	}
+}
+
+func buildReleaseFixture(
+	t *testing.T,
+	directory string,
+	sourcePath string,
+	platform string,
+	architecture string,
+) string {
+	t.Helper()
+	path := filepath.Join(directory, fmt.Sprintf("fixture-%s-%s", platform, architecture))
+	command := exec.Command("go", "build", "-trimpath", "-o", path, sourcePath)
+	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+platform, "GOARCH="+architecture)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build %s/%s fixture: %v: %s", platform, architecture, err, output)
+	}
+	return path
 }
 
 func mustManifestTime(t *testing.T, value string) time.Time {
