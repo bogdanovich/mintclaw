@@ -266,6 +266,47 @@ func (source *nodeInvocationSource) DispatchInvocation(
 	)
 }
 
+// RedispatchInvocation sends the exact already-dispatched plan again only
+// after an authenticated companion ledger query has proved that invocation
+// absent. The caller must never use this for an ambiguous or unavailable
+// query result.
+func (source *nodeInvocationSource) RedispatchInvocation(
+	ctx context.Context,
+	principal nodes.GatewayInvocationPrincipal,
+	target string,
+	nodeID nodes.ID,
+	invocationID string,
+) (json.RawMessage, bool, error) {
+	if source == nil || source.store == nil || source.runtime == nil {
+		return nil, false, errNodeDiscoveryAuthorityUnavailable
+	}
+	var (
+		handler nodeAdmissionHandler
+		record  nodes.GatewayInvocationRecord
+		found   bool
+	)
+	err := source.runtime.withInvocationHandler(
+		source.registryPath,
+		source.generation,
+		func(current nodeAdmissionHandler) error {
+			var lookupErr error
+			record, found, lookupErr = source.store.Lookup(principal, invocationID)
+			if lookupErr == nil {
+				handler = current
+			}
+			return lookupErr
+		},
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found || record.Target != target || record.Plan.NodeID != nodeID ||
+		record.State != nodes.GatewayInvocationDispatched {
+		return nil, false, nodes.ErrGatewayInvocationConflict
+	}
+	return handler.Invoke(ctx, nodeID, record.Plan, nil)
+}
+
 func gatewayInvocationMatchesOwner(
 	record nodes.GatewayInvocationRecord,
 	owner nodes.GatewayInvocationOwner,

@@ -2,8 +2,17 @@ package nodes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+)
+
+var (
+	ErrBrowserHostDenied   = errors.New("companion browser authority denied")
+	ErrBrowserHostBusy     = errors.New("companion browser profile is busy")
+	ErrBrowserHostNotFound = errors.New("companion browser session not found")
+	ErrBrowserHostStale    = errors.New("companion browser state is stale")
+	ErrBrowserHostLost     = errors.New("companion browser session is lost")
 )
 
 const (
@@ -57,6 +66,55 @@ type BrowserLimits struct {
 	TextInputBytes  int `json:"text_input_bytes"`
 	ToolResultBytes int `json:"tool_result_bytes"`
 	RetentionSecs   int `json:"retention_seconds"`
+}
+
+// decodeCanonicalBrowserLimits accepts canonical JSON numbers such as 6e1
+// while preserving the integer-only limits contract. Node invocation
+// canonicalization may use exponent notation for an original integer literal.
+func decodeCanonicalBrowserLimits(data []byte) (BrowserLimits, error) {
+	var values struct {
+		Sessions        float64 `json:"sessions"`
+		Tabs            float64 `json:"tabs"`
+		SessionSeconds  float64 `json:"session_seconds"`
+		IdleSeconds     float64 `json:"idle_seconds"`
+		PreparedSeconds float64 `json:"prepared_seconds"`
+		ActionSeconds   float64 `json:"action_seconds"`
+		SnapshotBytes   float64 `json:"snapshot_bytes"`
+		ScreenshotBytes float64 `json:"screenshot_bytes"`
+		UploadBytes     float64 `json:"upload_bytes"`
+		DownloadBytes   float64 `json:"download_bytes"`
+		SnapshotRefs    float64 `json:"snapshot_refs"`
+		TextInputBytes  float64 `json:"text_input_bytes"`
+		ToolResultBytes float64 `json:"tool_result_bytes"`
+		RetentionSecs   float64 `json:"retention_seconds"`
+	}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return BrowserLimits{}, err
+	}
+	numbers := []float64{
+		values.Sessions, values.Tabs, values.SessionSeconds, values.IdleSeconds,
+		values.PreparedSeconds, values.ActionSeconds, values.SnapshotBytes,
+		values.ScreenshotBytes, values.UploadBytes, values.DownloadBytes,
+		values.SnapshotRefs, values.TextInputBytes, values.ToolResultBytes,
+		values.RetentionSecs,
+	}
+	for _, value := range numbers {
+		if value < 0 || value > MaxBrowserUploadBytes || value != float64(int(value)) {
+			return BrowserLimits{}, fmt.Errorf(
+				"%w: browser limits must be bounded integers",
+				ErrInvalidCapability,
+			)
+		}
+	}
+	return BrowserLimits{
+		Sessions: int(values.Sessions), Tabs: int(values.Tabs),
+		SessionSeconds: int(values.SessionSeconds), IdleSeconds: int(values.IdleSeconds),
+		PreparedSeconds: int(values.PreparedSeconds), ActionSeconds: int(values.ActionSeconds),
+		SnapshotBytes: int(values.SnapshotBytes), ScreenshotBytes: int(values.ScreenshotBytes),
+		UploadBytes: int(values.UploadBytes), DownloadBytes: int(values.DownloadBytes),
+		SnapshotRefs: int(values.SnapshotRefs), TextInputBytes: int(values.TextInputBytes),
+		ToolResultBytes: int(values.ToolResultBytes), RetentionSecs: int(values.RetentionSecs),
+	}, nil
 }
 
 func (limits BrowserLimits) Validate() error {
@@ -120,6 +178,180 @@ type BrowserProfileDescriptor struct {
 	Headed      bool          `json:"headed"`
 	Actions     []string      `json:"actions"`
 	Limits      BrowserLimits `json:"limits"`
+}
+
+// Browser command payloads are the typed internal gateway-to-companion
+// contract. They intentionally contain no transport endpoints, driver
+// commands, profile paths, credentials, or model-selected node identity.
+type BrowserSessionOpenInput struct {
+	SessionID             string        `json:"session_id"`
+	Profile               string        `json:"profile"`
+	ProfileRevision       string        `json:"profile_revision"`
+	BrowserPolicyRevision string        `json:"browser_policy_revision"`
+	DryRun                bool          `json:"dry_run"`
+	Limits                BrowserLimits `json:"limits"`
+}
+
+func (input *BrowserSessionOpenInput) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID             string          `json:"session_id"`
+		Profile               string          `json:"profile"`
+		ProfileRevision       string          `json:"profile_revision"`
+		BrowserPolicyRevision string          `json:"browser_policy_revision"`
+		DryRun                bool            `json:"dry_run"`
+		Limits                json.RawMessage `json:"limits"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	limits, err := decodeCanonicalBrowserLimits(value.Limits)
+	if err != nil {
+		return err
+	}
+	*input = BrowserSessionOpenInput{
+		SessionID: value.SessionID, Profile: value.Profile,
+		ProfileRevision:       value.ProfileRevision,
+		BrowserPolicyRevision: value.BrowserPolicyRevision,
+		DryRun:                value.DryRun, Limits: limits,
+	}
+	return nil
+}
+
+type BrowserSessionStatusInput struct {
+	SessionID       string `json:"session_id"`
+	ProfileRevision string `json:"profile_revision"`
+}
+
+type BrowserObserveInput struct {
+	SessionID          string `json:"session_id"`
+	TabID              string `json:"tab_id"`
+	SnapshotGeneration uint64 `json:"snapshot_generation"`
+	Screenshot         bool   `json:"screenshot"`
+}
+
+type BrowserAction struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+}
+
+type BrowserActInput struct {
+	SessionID             string        `json:"session_id"`
+	TabID                 string        `json:"tab_id"`
+	SnapshotGeneration    uint64        `json:"snapshot_generation"`
+	ActionInvocationID    string        `json:"action_invocation_id"`
+	Action                BrowserAction `json:"action"`
+	Effect                string        `json:"effect"`
+	CurrentOrigin         string        `json:"current_origin"`
+	PreparedActionHash    string        `json:"prepared_action_hash"`
+	BrowserPolicyRevision string        `json:"browser_policy_revision"`
+	ProfileRevision       string        `json:"profile_revision"`
+	ApprovalDigest        string        `json:"approval_digest,omitempty"`
+}
+
+type BrowserHostFeatures struct {
+	Observe    bool `json:"observe"`
+	Navigate   bool `json:"navigate"`
+	Screenshot bool `json:"screenshot"`
+	Download   bool `json:"download"`
+}
+
+type BrowserSessionResult struct {
+	SessionID     string              `json:"session_id"`
+	State         string              `json:"state"`
+	Reason        string              `json:"reason,omitempty"`
+	Recovery      string              `json:"recovery,omitempty"`
+	TabID         string              `json:"tab_id,omitempty"`
+	Controller    string              `json:"controller,omitempty"`
+	Features      BrowserHostFeatures `json:"features,omitempty"`
+	ExpiresAt     int64               `json:"expires_at,omitempty"`
+	IdleExpiresAt int64               `json:"idle_expires_at,omitempty"`
+}
+
+func (result BrowserSessionResult) MarshalJSON() ([]byte, error) {
+	value := map[string]any{"session_id": result.SessionID, "state": result.State}
+	if result.Reason != "" {
+		value["reason"] = result.Reason
+	}
+	if result.Recovery != "" {
+		value["recovery"] = result.Recovery
+	}
+	if result.TabID != "" {
+		value["tab_id"] = result.TabID
+		value["controller"] = result.Controller
+		value["features"] = result.Features
+		value["expires_at"] = result.ExpiresAt
+		value["idle_expires_at"] = result.IdleExpiresAt
+	}
+	return json.Marshal(value)
+}
+
+type BrowserElement struct {
+	Ref  string `json:"ref"`
+	Role string `json:"role"`
+	Name string `json:"name"`
+}
+
+type BrowserObservationResult struct {
+	SessionID          string           `json:"session_id"`
+	TabID              string           `json:"tab_id"`
+	SnapshotGeneration uint64           `json:"snapshot_generation"`
+	URL                string           `json:"url"`
+	Origin             string           `json:"origin"`
+	Title              string           `json:"title,omitempty"`
+	Snapshot           string           `json:"snapshot"`
+	Elements           []BrowserElement `json:"elements"`
+	Truncated          bool             `json:"truncated"`
+}
+
+type BrowserActResult struct {
+	ActionInvocationID string                    `json:"action_invocation_id"`
+	State              string                    `json:"state"`
+	Reason             string                    `json:"reason,omitempty"`
+	Observation        *BrowserObservationResult `json:"observation,omitempty"`
+}
+
+type BrowserHostOpenRequest struct {
+	SessionID             string
+	Profile               string
+	ProfileRevision       string
+	BrowserPolicyRevision string
+	AgentID               string
+	ActorID               string
+	DryRun                bool
+	Limits                BrowserLimits
+}
+
+type BrowserHostStatusRequest struct {
+	SessionID       string
+	ProfileRevision string
+	AgentID         string
+	ActorID         string
+}
+
+type BrowserHostObserveRequest struct {
+	SessionID          string
+	TabID              string
+	SnapshotGeneration uint64
+	Screenshot         bool
+	AgentID            string
+	ActorID            string
+}
+
+type BrowserHostActRequest struct {
+	SessionID             string
+	TabID                 string
+	SnapshotGeneration    uint64
+	ActionInvocationID    string
+	Action                BrowserAction
+	Effect                string
+	CurrentOrigin         string
+	PreparedActionHash    string
+	BrowserPolicyRevision string
+	ProfileRevision       string
+	ApprovalDigest        string
+	AgentID               string
+	ActorID               string
 }
 
 func (profile BrowserProfileDescriptor) Validate() error {
@@ -296,6 +528,9 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 		add("action_invocation_id", identifier)
 		add("action", browserActionSchema(actions))
 		add("effect", map[string]any{"enum": []string{"navigation", "download"}})
+		add("current_origin", map[string]any{
+			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
+		})
 		add("prepared_action_hash", digest)
 		add("browser_policy_revision", digest)
 		add("profile_revision", identifier)
@@ -518,7 +753,10 @@ func validateBrowserInvocationInput(command string, input map[string]any) error 
 			return fmt.Errorf("%w: malformed browser action", ErrInvalidInvocation)
 		}
 		if action["kind"] == "navigate" {
-			return validateBrowserStringBytes(action, "url", MaxBrowserURLBytes, true)
+			if err := validateBrowserStringBytes(action, "url", MaxBrowserURLBytes, true); err != nil {
+				return err
+			}
+			return validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true)
 		}
 	}
 	return nil
@@ -529,8 +767,8 @@ func validateBrowserSessionOpenLimits(input map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("%w: encode browser session limits", ErrInvalidInvocation)
 	}
-	var limits BrowserLimits
-	if err = json.Unmarshal(encoded, &limits); err != nil {
+	limits, err := decodeCanonicalBrowserLimits(encoded)
+	if err != nil {
 		return fmt.Errorf("%w: decode browser session limits", ErrInvalidInvocation)
 	}
 	if err = limits.Validate(); err != nil {

@@ -104,6 +104,17 @@ type runtimeOptions struct {
 	serviceManager  ServiceManager
 	update          *updateCommandHandler
 	updateRecovery  UpdateCoordinator
+	browserHost     BrowserCommandHost
+}
+
+func WithBrowserHost(host BrowserCommandHost) RuntimeOption {
+	return func(options *runtimeOptions) error {
+		if host == nil {
+			return errors.New("node browser command host is required")
+		}
+		options.browserHost = host
+		return nil
+	}
 }
 
 type RuntimeOption func(*runtimeOptions) error
@@ -244,6 +255,13 @@ func NewRuntime(
 		}
 		handlers = append(handlers, serviceHandlers...)
 	}
+	if settings.browserHost != nil {
+		browserHandlers, err := newBrowserCommandHandlers(settings.browserHost)
+		if err != nil {
+			return nil, fmt.Errorf("configure node browser runtime: %w", err)
+		}
+		handlers = append(handlers, browserHandlers...)
+	}
 	if settings.update != nil {
 		handlers = append(handlers, settings.update)
 	}
@@ -277,7 +295,7 @@ func NewRuntime(
 			modelContract.OutputBytesMax = min(modelContract.OutputBytesMax, 4096)
 			descriptor.ModelContract = modelContract
 			update.descriptorValue.ModelContract = cloneModelContract(modelContract)
-		} else if !nodes.IsServiceCommand(descriptor.Name) {
+		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)
 		}
 		catalog.Commands = append(catalog.Commands, descriptor)
@@ -516,18 +534,24 @@ func (runtime *Runtime) completeInvalidOutput(
 	plan nodes.ExecutionPlan,
 	err error,
 ) error {
-	if plan.Command == "service.action.v1" {
+	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct {
+		label := "service action"
+		if plan.Command == nodes.BrowserCommandAct {
+			label = "browser action"
+		}
 		if _, markErr := runtime.ledger.MarkUnknown(plan.InvocationID); markErr != nil {
 			return fmt.Errorf(
-				"%w: persist uncertain service action output: %w",
+				"%w: persist uncertain %s output: %w",
 				ErrInvocationOutcomeUnknown,
+				label,
 				markErr,
 			)
 		}
 		return fmt.Errorf(
-			"%w: service action completed with invalid output: %s",
+			"%w: %s completed with invalid output: %w",
 			ErrInvocationOutcomeUnknown,
-			err.Error(),
+			label,
+			err,
 		)
 	}
 	return runtime.completeInvocationFailure(plan.InvocationID, nodes.InvocationFailure{

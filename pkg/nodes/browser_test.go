@@ -53,6 +53,7 @@ func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 	base := map[string]any{
 		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 1,
 		"action_invocation_id": "action_1", "effect": "navigation",
+		"current_origin":          "about:blank",
 		"prepared_action_hash":    strings.Repeat("a", 64),
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",
@@ -343,6 +344,7 @@ func browserActInputFixture() map[string]any {
 	return map[string]any{
 		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 1,
 		"action_invocation_id": "action_1", "effect": "navigation",
+		"current_origin":          "about:blank",
 		"prepared_action_hash":    strings.Repeat("a", 64),
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",

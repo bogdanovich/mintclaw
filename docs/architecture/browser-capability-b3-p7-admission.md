@@ -205,7 +205,10 @@ Risk: `write`.
 
 Input contains the browser session, tab, snapshot generation, one stable
 action invocation ID, one typed action, the gateway effect classification,
-the prepared-action hash, policy revisions, and approval digest when required.
+the currently bound origin, the prepared-action hash, policy revisions, and
+approval digest when required. The companion re-observes that origin before
+crossing the driver dispatch boundary; this check does not advance gateway
+snapshot authority.
 The first implementation enables only `navigate` and the separately approved
 typed `download` action. It does not accept a generic tool name, method, JSON-
 RPC payload, JavaScript source, coordinate, or nested action sequence.

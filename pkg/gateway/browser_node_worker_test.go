@@ -1,0 +1,322 @@
+package gateway
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
+)
+
+type browserNodeTestHandler struct {
+	mu           sync.Mutex
+	registration nodes.Registration
+	commands     []string
+	invocations  map[string]nodes.InvocationRecord
+}
+
+func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func (*browserNodeTestHandler) Close(context.Context) error { return nil }
+
+func (handler *browserNodeTestHandler) WithPreparationAuthority(
+	_ nodes.ID,
+	_ string,
+	command string,
+	operation func(nodes.Registration, nodes.CommandApproval) error,
+) (nodes.CommandApproval, error) {
+	for _, descriptor := range handler.registration.Snapshot.Catalog.Commands {
+		if descriptor.Name == command {
+			approval := nodes.CommandApproval{Descriptor: descriptor}
+			return approval, operation(handler.registration, approval)
+		}
+	}
+	return nodes.CommandApproval{}, nodes.ErrCommandDenied
+}
+
+func (handler *browserNodeTestHandler) Invoke(
+	_ context.Context,
+	_ nodes.ID,
+	plan nodes.ExecutionPlan,
+	commit func() error,
+) (json.RawMessage, bool, error) {
+	if err := commit(); err != nil {
+		return nil, false, err
+	}
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	handler.commands = append(handler.commands, plan.Command)
+	var result any
+	switch plan.Command {
+	case nodes.BrowserCommandSessionOpen:
+		var input nodes.BrowserSessionOpenInput
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return nil, true, err
+		}
+		result = nodes.BrowserSessionResult{
+			SessionID: input.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
+			Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
+			ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
+		}
+	case nodes.BrowserCommandSessionStatus:
+		var input nodes.BrowserSessionStatusInput
+		_ = json.Unmarshal(plan.Input, &input)
+		result = nodes.BrowserSessionResult{SessionID: input.SessionID, State: "ready"}
+	case nodes.BrowserCommandObserve:
+		var input nodes.BrowserObserveInput
+		_ = json.Unmarshal(plan.Input, &input)
+		result = browserNodeTestObservation(
+			input.SessionID, input.TabID, input.SnapshotGeneration, "about:blank", "about:blank",
+		)
+	case nodes.BrowserCommandAct:
+		var input nodes.BrowserActInput
+		_ = json.Unmarshal(plan.Input, &input)
+		observation := browserNodeTestObservation(
+			input.SessionID, input.TabID, input.SnapshotGeneration+1,
+			"https://example.com/", "https://example.com",
+		)
+		result = nodes.BrowserActResult{
+			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
+		}
+	case nodes.BrowserCommandSessionClose:
+		var input nodes.BrowserSessionStatusInput
+		_ = json.Unmarshal(plan.Input, &input)
+		result = nodes.BrowserSessionResult{SessionID: input.SessionID, State: "closed"}
+	default:
+		return nil, true, errors.New("unexpected command")
+	}
+	raw, err := json.Marshal(result)
+	return raw, true, err
+}
+
+func (handler *browserNodeTestHandler) Invocation(
+	_ context.Context,
+	_ nodes.ID,
+	invocationID string,
+) (nodes.InvocationRecord, error) {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	record, ok := handler.invocations[invocationID]
+	if !ok {
+		return nodes.InvocationRecord{}, nodes.NewInvocationQueryError(nodes.InvocationQueryNotFound, nil)
+	}
+	return record, nil
+}
+
+func (*browserNodeTestHandler) CancelInvocation(
+	context.Context,
+	nodes.ID,
+	string,
+) (nodes.InvocationRecord, error) {
+	return nodes.InvocationRecord{}, errors.New("cancellation unsupported")
+}
+
+func browserNodeTestObservation(
+	sessionID, tabID string,
+	generation uint64,
+	url, origin string,
+) nodes.BrowserObservationResult {
+	title, snapshot := "Fixture", "fixture"
+	if url == "about:blank" {
+		title, snapshot = "", ""
+	}
+	return nodes.BrowserObservationResult{
+		SessionID: sessionID, TabID: tabID, SnapshotGeneration: generation,
+		URL: url, Origin: origin, Title: title, Snapshot: snapshot, Elements: []nodes.BrowserElement{},
+	}
+}
+
+func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || initial.URL != "about:blank" || initial.SnapshotGeneration != 1 {
+		t.Fatalf("initial observation = %#v, %v", initial, err)
+	}
+	preparation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_1", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("ExecuteAction() = %#v, %v", invocation, err)
+	}
+	final, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
+		t.Fatalf("final observation = %#v, %v", final, err)
+	}
+	closed, err := broker.Close(t.Context(), owner, session.ID)
+	if err != nil || closed.State != browser.SessionClosed {
+		t.Fatalf("Close() = %#v, %v", closed, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandAct,
+		nodes.BrowserCommandSessionClose,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("companion commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := factory.(*gatewayBrowserWorkerFactory).PassiveTargetReadiness(
+		t.Context(), "companion", "managed",
+	)
+	if readiness.Status != browser.ReadinessReady {
+		t.Fatalf("ready diagnostics = %#v", readiness)
+	}
+	handler.registration.AllowedCommands = handler.registration.AllowedCommands[1:]
+	if _, err = runtime.registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases:         []nodes.Alias{"ab-local-test"},
+		AllowedCommands: handler.registration.AllowedCommands,
+		At:              time.Now().Add(time.Second).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readiness = factory.(*gatewayBrowserWorkerFactory).PassiveTargetReadiness(
+		t.Context(), "companion", "managed",
+	)
+	if readiness.Status != browser.ReadinessUnavailable || readiness.Code != "command_unapproved" {
+		t.Fatalf("unapproved diagnostics = %#v", readiness)
+	}
+}
+
+func browserNodeTestRuntime(
+	t *testing.T,
+) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
+	t.Helper()
+	workspace := t.TempDir()
+	profiles := []nodes.BrowserProfileDescriptor{{
+		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		DryRun: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}}
+	descriptors, err := nodes.BrowserCommandDescriptors(profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := nodes.CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := nodes.DeriveID(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryPath := nodes.RegistryPath(workspace)
+	registry, err := nodes.NewFileRegistry(registryPath, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := nodes.Snapshot{
+		ID: nodeID, State: nodes.StatePendingPairing, ProtocolVersion: nodes.ProtocolV1,
+		Platform: "darwin", Architecture: "amd64", SoftwareVersion: "test",
+		CatalogHash: catalogHash, Catalog: catalog, Executor: "local", PolicyRevision: "policy-v1",
+		LastSeenAt: time.Now().Unix(),
+	}
+	if err = registry.UpsertPending(nodes.PendingPairing{
+		Node: snapshot, PublicKey: publicKey, RequestedRole: "companion", RequestedAt: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	commands := make([]string, len(descriptors))
+	for index, descriptor := range descriptors {
+		commands[index] = descriptor.Name
+	}
+	if _, err = registry.Approve(nodeID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.State = nodes.StateConnected
+	if err = registry.Upsert(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := registry.Registration(nodeID)
+	if err != nil || !found {
+		t.Fatalf("registration = %#v, %v, %v", registration, found, err)
+	}
+	sessions := nodews.NewSessionHub()
+	release, err := sessions.Claim(nodeID, &testNodeConnection{}, nil, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = release() })
+	handler := &browserNodeTestHandler{
+		registration: registration, invocations: make(map[string]nodes.InvocationRecord),
+	}
+	runtime := &nodeAdmissionRuntime{
+		registry: registry, registryPath: registryPath, handler: handler,
+		sessions: sessions, generation: 1, mounted: true,
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"ab-local-test": {Type: "node", Node: "ab-local-test", Executor: "local"},
+	}
+	cfg.Tools.Browser = config.BrowserToolsConfig{
+		Enabled: true, Agents: []string{"browser"},
+		Targets: map[string]config.BrowserTargetConfig{
+			"companion": {
+				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "ab-local-test",
+				Profiles: map[string]config.BrowserProfileConfig{
+					"managed": {
+						Enabled: true, Mode: config.BrowserProfileManaged,
+						NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+					},
+				},
+			},
+		},
+	}
+	if err = cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg, runtime, handler
+}

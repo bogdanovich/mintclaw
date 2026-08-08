@@ -24,6 +24,7 @@ const (
 
 type WorkerOpenRequest struct {
 	SessionID string
+	Owner     Owner
 	Target    string
 	Profile   string
 	DryRun    bool
@@ -47,6 +48,22 @@ type ActionWorker interface {
 	Resolve(context.Context, string) (DriverElement, string, error)
 	Execute(context.Context, DriverAction) error
 	CatalogRevision() string
+}
+
+// PreparedActionWorker receives the gateway-owned durable authority for one
+// accepted action and must revalidate live driver state before dispatch.
+// Remote workers use it to bind a typed node invocation; local driver workers
+// continue to implement ActionWorker only.
+type PreparedActionWorker interface {
+	ActionWorker
+	SupportsPreparedAction(ActionKind) bool
+	ExecutePrepared(context.Context, WorkerPreparedAction) error
+}
+
+type WorkerPreparedAction struct {
+	InvocationID string
+	Prepared     PreparedAction
+	DriverAction DriverAction
 }
 
 type ScreenshotWorker interface {
@@ -278,7 +295,7 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 		return Session{}, err
 	}
 	opened, openErr := broker.factory.Open(ctx, WorkerOpenRequest{
-		SessionID: session.ID, Target: session.Target, Profile: session.Profile,
+		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
 		DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
@@ -379,7 +396,11 @@ func (broker *Broker) PassiveReadiness(
 		return PassiveReadiness{}, err
 	}
 	driver := configuredDriverReadiness()
-	if factory, ok := broker.factory.(readinessFactory); ok {
+	if factory, ok := broker.factory.(interface {
+		PassiveTargetReadiness(context.Context, string, string) DriverReadiness
+	}); ok {
+		driver = factory.PassiveTargetReadiness(ctx, targetName, profileName)
+	} else if factory, ok := broker.factory.(readinessFactory); ok {
 		driver = factory.PassiveReadiness()
 	}
 	result := PassiveReadiness{

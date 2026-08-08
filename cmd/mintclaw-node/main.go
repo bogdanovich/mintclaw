@@ -86,6 +86,7 @@ func run(args []string) error {
 		if browserHostErr != nil {
 			return fmt.Errorf("configure companion browser host: %w", browserHostErr)
 		}
+		runtimeOptions = append(runtimeOptions, companion.WithBrowserHost(browserHost))
 		defer func() {
 			shutdownContext, cancelShutdown := context.WithTimeout(
 				context.Background(),
