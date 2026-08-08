@@ -71,6 +71,7 @@ func TestJSONLStoreCanceledTurnJournalWaitDoesNotMutate(t *testing.T) {
 
 func TestJSONLStoreLegacyNilContextStillAppends(t *testing.T) {
 	store := newTestStore(t)
+	//nolint:staticcheck // intentional: proves the legacy nil-context contract still appends
 	if err := store.AddFullMessage(nil, "turn", providers.Message{Role: "user", Content: "legacy"}); err != nil {
 		t.Fatalf("AddFullMessage(nil) error = %v", err)
 	}
