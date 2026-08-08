@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
@@ -32,11 +33,19 @@ var (
 )
 
 type lifecycleRequest struct {
-	Instance       string
-	ConfigPath     string
-	ExecutablePath string
-	ServiceUser    string
-	System         bool
+	Instance          string
+	ConfigPath        string
+	ExecutablePath    string
+	ServiceUser       string
+	System            bool
+	ManagedUpdate     bool
+	CoordinatorPath   string
+	CoordinatorSHA256 string
+	StateDirectory    string
+	NodeID            nodes.ID
+	ActiveRelease     string
+	OwnerUID          int
+	OwnerGID          int
 }
 
 type lifecycleStatus struct {
@@ -66,9 +75,13 @@ func runServiceLifecycle(action string, args []string) error {
 	jsonOutput := flags.Bool("json", false, "emit stable JSON output")
 	configPath := ""
 	serviceUser := ""
+	managedUpdate := false
+	coordinatorPath := ""
 	if action == "install" {
 		flags.StringVar(&configPath, "config", defaultNodeConfigPath, "path to node configuration")
 		flags.StringVar(&serviceUser, "service-user", "", "unprivileged account for a system service")
+		flags.BoolVar(&managedUpdate, "managed-update", false, "install the deny-by-default stable update coordinator")
+		flags.StringVar(&coordinatorPath, "coordinator", "", "path to the stable node update coordinator")
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -111,13 +124,22 @@ func runServiceLifecycle(action string, args []string) error {
 				return err
 			}
 		}
-		if _, err = companion.LoadConfig(resolved); err != nil {
-			return fmt.Errorf("validate node config: %w", err)
+		cfg, configErr := companion.LoadConfig(resolved)
+		if configErr != nil {
+			return fmt.Errorf("validate node config: %w", configErr)
 		}
 		request.ConfigPath = resolved
 		request.ExecutablePath, err = currentExecutablePath()
 		if err != nil {
 			return err
+		}
+		if !managedUpdate && strings.TrimSpace(coordinatorPath) != "" {
+			return errors.New("--coordinator requires --managed-update")
+		}
+		if managedUpdate {
+			if err = configureManagedUpdateRequest(&request, cfg, coordinatorPath); err != nil {
+				return err
+			}
 		}
 	}
 	lifecycle, err := newPlatformServiceLifecycle(request.System)

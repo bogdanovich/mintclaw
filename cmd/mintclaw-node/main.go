@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"syscall"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
 )
 
 var version = "dev"
@@ -57,6 +59,13 @@ func run(args []string) error {
 	}
 	if privilegeErr := validateFileHelperProcessIdentity(cfg); privilegeErr != nil {
 		return privilegeErr
+	}
+	coordinatorClient, managed, err := control.ClientFromEnvironment()
+	if err != nil {
+		return err
+	}
+	if managed {
+		defer coordinatorClient.Close()
 	}
 	identity, err := companion.LoadOrCreateIdentity(cfg.StateDir)
 	if err != nil {
@@ -197,8 +206,34 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if managed {
+		catalogHash, hashErr := commandRuntime.Catalog().Hash()
+		if hashErr != nil {
+			return hashErr
+		}
+		if err = client.SetStableObserver(func(context.Context) error {
+			return coordinatorClient.ReportHealth(control.Health{
+				NodeID: string(identity.ID), Version: clientVersion(), Platform: runtime.GOOS,
+				Architecture: runtime.GOARCH, CatalogHash: catalogHash,
+			})
+		}); err != nil {
+			return err
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if managed {
+		managedContext, cancelManaged := context.WithCancel(ctx)
+		defer cancelManaged()
+		go func() {
+			select {
+			case <-managedContext.Done():
+			case <-coordinatorClient.ParentDone():
+				cancelManaged()
+			}
+		}()
+		ctx = managedContext
+	}
 	slog.Info("starting node companion", "node_id", identity.ID, "gateway", cfg.GatewayURL)
 	return client.Run(ctx)
 }

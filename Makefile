@@ -205,6 +205,13 @@ else
 endif
 	@echo "Build complete: $(BUILD_DIR)/mintclaw-node$(EXT)"
 
+## build-node-coordinator: Build the stable node update coordinator for current platform
+build-node-coordinator:
+	@mkdir -p $(BUILD_DIR)
+	@GOOS=$(PLATFORM) GOARCH=$(ARCH) $(GO) build $(GOFLAGS) -ldflags "$(NODE_LDFLAGS)" \
+		-o $(BUILD_DIR)/mintclaw-node-coordinator$(EXT) ./cmd/mintclaw-node-coordinator
+	@echo "Build complete: $(BUILD_DIR)/mintclaw-node-coordinator$(EXT)"
+
 ## build-node-broker: Build the Linux node authority broker
 build-node-broker:
 	@mkdir -p $(BUILD_DIR)

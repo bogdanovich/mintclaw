@@ -17,6 +17,8 @@ import (
 	"unicode"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/bogdanovich/mintclaw/pkg/nodes/update/coordinator"
 )
 
 const (
@@ -51,7 +53,7 @@ type systemdUnitLock = unixLifecycleLock
 func (lifecycle *systemdLifecycle) Install(
 	ctx context.Context,
 	request lifecycleRequest,
-) (lifecycleStatus, error) {
+) (result lifecycleStatus, resultErr error) {
 	status := lifecycle.baseStatus(request.Instance)
 	directory, err := openSystemdUnitDirectory(lifecycle.unitDir, !lifecycle.system)
 	if err != nil {
@@ -85,6 +87,18 @@ func (lifecycle *systemdLifecycle) Install(
 	if err != nil {
 		return lifecycleStatus{}, err
 	}
+	adoption, err := beginManagedUpdateAdoption(request, "systemd", status.Service, transactionID)
+	if err != nil {
+		return lifecycleStatus{}, err
+	}
+	adoptionCommitted := false
+	defer func() {
+		if adoption != nil && !adoptionCommitted {
+			if rollbackErr := adoption.Rollback(); rollbackErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("rollback managed update adoption: %w", rollbackErr))
+			}
+		}
+	}()
 	unit, err := renderSystemdUnit(request, lifecycle.system, transactionID)
 	if err != nil {
 		return lifecycleStatus{}, err
@@ -110,6 +124,11 @@ func (lifecycle *systemdLifecycle) Install(
 	if err = requirePublishedSystemdUnit(publication); err != nil {
 		return lifecycleStatus{}, lifecycle.rollbackInstall(publication, status, false, false, err)
 	}
+	if adoption != nil {
+		if err = adoption.ReleaseCoordinatorLock(); err != nil {
+			return lifecycleStatus{}, lifecycle.rollbackInstall(publication, status, false, false, err)
+		}
+	}
 	if err = lifecycle.requireSuccess(ctx, "start", status.Service); err != nil {
 		return lifecycleStatus{}, lifecycle.rollbackInstall(publication, status, true, false, err)
 	}
@@ -122,6 +141,12 @@ func (lifecycle *systemdLifecycle) Install(
 	}
 	if err = lifecycle.requireSuccess(ctx, "enable", status.Service); err != nil {
 		return lifecycleStatus{}, lifecycle.rollbackInstall(publication, status, true, true, err)
+	}
+	if adoption != nil {
+		if err = adoption.Commit(); err != nil {
+			return lifecycleStatus{}, lifecycle.rollbackInstall(publication, status, true, true, err)
+		}
+		adoptionCommitted = true
 	}
 	return current, nil
 }
@@ -638,17 +663,28 @@ func renderSystemdUnit(request lifecycleRequest, system bool, transactionID stri
 	if !filepath.IsAbs(request.ExecutablePath) || !filepath.IsAbs(request.ConfigPath) {
 		return "", errors.New("systemd executable and config paths must be absolute")
 	}
+	if request.ManagedUpdate && (!filepath.IsAbs(request.CoordinatorPath) || !filepath.IsAbs(request.StateDirectory)) {
+		return "", errors.New("managed systemd update paths must be absolute")
+	}
 	if len(transactionID) != 32 {
 		return "", errors.New("systemd unit requires an install transaction identity")
 	}
 	if _, err := hex.DecodeString(transactionID); err != nil {
 		return "", errors.New("systemd unit requires a valid install transaction identity")
 	}
-	executable, err := quoteSystemdArgument(request.ExecutablePath)
+	executablePath := request.ExecutablePath
+	arguments := " run --config "
+	argumentPath := request.ConfigPath
+	if request.ManagedUpdate {
+		executablePath = request.CoordinatorPath
+		arguments = " run --state-dir "
+		argumentPath = filepath.Join(request.StateDirectory, coordinator.StoreDirectoryName)
+	}
+	executable, err := quoteSystemdArgument(executablePath)
 	if err != nil {
 		return "", fmt.Errorf("quote executable path: %w", err)
 	}
-	configPath, err := quoteSystemdArgument(request.ConfigPath)
+	configPath, err := quoteSystemdArgument(argumentPath)
 	if err != nil {
 		return "", fmt.Errorf("quote config path: %w", err)
 	}
@@ -670,7 +706,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-%sExecStart=%s run --config %s
+%sExecStart=%s%s%s
 Restart=on-failure
 RestartSec=%s
 NoNewPrivileges=true
@@ -678,7 +714,7 @@ NoNewPrivileges=true
 [Install]
 WantedBy=%s
 `, managedSystemdUnitMarker, installTransactionMarker, transactionID, request.Instance,
-		serviceUser, executable, configPath, systemdRestartDelay, target), nil
+		serviceUser, executable, arguments, configPath, systemdRestartDelay, target), nil
 }
 
 func quoteSystemdArgument(value string) (string, error) {

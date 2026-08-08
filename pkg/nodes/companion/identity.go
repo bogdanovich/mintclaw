@@ -67,6 +67,13 @@ func LoadOrCreateIdentity(stateDir string) (Identity, error) {
 	return identity, nil
 }
 
+func LoadIdentity(stateDir string) (Identity, error) {
+	if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
+		return Identity{}, errors.New("node state directory must be a clean absolute path")
+	}
+	return loadIdentity(filepath.Join(stateDir, "identity.json"))
+}
+
 func publishIdentityFile(
 	path string,
 	data []byte,

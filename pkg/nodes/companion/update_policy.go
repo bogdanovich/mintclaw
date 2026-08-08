@@ -20,9 +20,11 @@ const MaxUpdateSources = 8
 var updateReleaseTagPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type UpdateSourceConfig struct {
-	BaseURL   string `json:"base_url"`
-	PublicKey string `json:"public_key"`
-	Revoked   bool   `json:"revoked,omitempty"`
+	BaseURL                  string   `json:"base_url"`
+	RedirectHosts            []string `json:"redirect_hosts,omitempty"`
+	PublicKey                string   `json:"public_key"`
+	Revoked                  bool     `json:"revoked,omitempty"`
+	RequirePlatformSignature bool     `json:"require_platform_signature,omitempty"`
 
 	trustedKey nodeupdate.TrustedKey
 }
@@ -99,6 +101,17 @@ func normalizeUpdateSources(sources UpdateSources) (UpdateSources, error) {
 			return nil, fmt.Errorf("node update source %q public key: %w", alias, err)
 		}
 		source.BaseURL = parsed.String()
+		if len(source.RedirectHosts) > 8 {
+			return nil, fmt.Errorf("node update source %q has too many redirect_hosts", alias)
+		}
+		redirects := append([]string(nil), source.RedirectHosts...)
+		sort.Strings(redirects)
+		for index, host := range redirects {
+			if !validUpdateRedirectHost(host) || (index > 0 && host == redirects[index-1]) {
+				return nil, fmt.Errorf("node update source %q has an invalid redirect host", alias)
+			}
+		}
+		source.RedirectHosts = redirects
 		source.trustedKey = trustedKey
 		normalized[alias] = source
 	}
@@ -187,8 +200,9 @@ func normalizeUpdatePolicyProfile(
 		if err = descriptor.Validate(string(profile.Channel)); err != nil {
 			return UpdatePolicyProfile{}, err
 		}
-		if !updateReleaseTagPattern.MatchString(release.Tag) || release.Tag != strings.TrimSpace(release.Tag) {
-			return UpdatePolicyProfile{}, errors.New("release tag is malformed")
+		if !updateReleaseTagPattern.MatchString(release.Tag) || release.Tag != strings.TrimSpace(release.Tag) ||
+			release.Tag != release.Version {
+			return UpdatePolicyProfile{}, errors.New("release tag must exactly match its version")
 		}
 		if prior, duplicate := versions[release.Version]; duplicate {
 			return UpdatePolicyProfile{}, fmt.Errorf(
@@ -203,6 +217,14 @@ func normalizeUpdatePolicyProfile(
 	profile.Releases = releases
 	profile.normalizedAlias = alias
 	return profile, nil
+}
+
+func validUpdateRedirectHost(host string) bool {
+	if host == "" || host != strings.ToLower(host) || strings.ContainsAny(host, "/:@[]") {
+		return false
+	}
+	parsed, err := url.Parse("https://" + host)
+	return err == nil && parsed.Hostname() == host && parsed.Port() == ""
 }
 
 func updateProfileDescriptors(policies UpdatePolicies) ([]nodes.UpdateProfileDescriptor, error) {
