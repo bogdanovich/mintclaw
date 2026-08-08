@@ -54,11 +54,19 @@ func TestFromHTTPResponse(t *testing.T) {
 			wantMessage: "billing balance exhausted",
 		},
 		{
-			name:           "google quota reset metadata",
+			name:           "antigravity quota reset metadata",
 			status:         http.StatusTooManyRequests,
 			body:           `{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetDelay":"7s"}}]}}`,
 			wantKind:       KindRateLimit,
 			wantRetryAfter: 7 * time.Second,
+			wantMessage:    "Too Many Requests",
+		},
+		{
+			name:           "gemini standard retry info",
+			status:         http.StatusTooManyRequests,
+			body:           `{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"13s"}]}}`,
+			wantKind:       KindRateLimit,
+			wantRetryAfter: 13 * time.Second,
 			wantMessage:    "Too Many Requests",
 		},
 		{

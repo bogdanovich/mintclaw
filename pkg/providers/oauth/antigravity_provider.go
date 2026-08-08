@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -117,19 +116,9 @@ func (p *AntigravityProvider) Chat(
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		logger.ErrorCF("provider.antigravity", "API call failed", map[string]any{
-			"status_code": resp.StatusCode,
-			"response":    string(respBody),
-			"model":       model,
-		})
-
-		return nil, httperrors.NewResponse(resp, respBody, antigravityBaseURL)
+		return nil, err
 	}
 
 	// Response is always SSE from streamGenerateContent — each line is "data: {...}"
@@ -529,12 +518,9 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
-		return "", fmt.Errorf("reading loadCodeAssist response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", httperrors.NewResponse(resp, body, antigravityBaseURL)
+		return "", err
 	}
 
 	var result struct {
@@ -573,12 +559,9 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("reading fetchAvailableModels response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, httperrors.NewResponse(resp, body, antigravityBaseURL)
+		return nil, err
 	}
 
 	var result struct {

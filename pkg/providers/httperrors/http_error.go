@@ -15,25 +15,40 @@ import (
 
 // HandleResponse reads and normalizes a non-OK provider response.
 func HandleResponse(resp *http.Response, apiBase string) error {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-	return NewResponse(resp, body, apiBase)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return newResponse(resp, body, apiBase, readErr)
 }
 
 // NewResponse normalizes an already-buffered non-OK provider response.
 func NewResponse(resp *http.Response, body []byte, apiBase string) error {
+	return newResponse(resp, body, apiBase, nil)
+}
+
+// ReadResponseBody reads a response expected to return HTTP 200. A non-OK
+// response is normalized even when reading its body also fails.
+func ReadResponseBody(resp *http.Response, apiBase string) ([]byte, error) {
+	body, readErr := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, newResponse(resp, body, apiBase, readErr)
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("reading response body: %w", readErr)
+	}
+	return body, nil
+}
+
+func newResponse(resp *http.Response, body []byte, apiBase string, readErr error) error {
 	contentType := resp.Header.Get("Content-Type")
 	if common.LooksLikeHTML(body, contentType) {
-		return wrapHTMLResponse(resp.StatusCode, resp.Header, body, contentType, apiBase)
+		return wrapHTMLResponse(resp.StatusCode, resp.Header, body, contentType, apiBase, readErr)
 	}
-	cause := &common.HTTPError{
+	httpCause := &common.HTTPError{
 		StatusCode:  resp.StatusCode,
 		BodyPreview: common.ResponsePreview(body, 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}
+	cause := withReadError(httpCause, readErr)
 	return providererrors.FromHTTPResponse(resp.StatusCode, resp.Header, body, cause)
 }
 
@@ -46,7 +61,7 @@ func ReadAndParseResponse(resp *http.Response, apiBase string) (*common.LLMRespo
 		return nil, fmt.Errorf("failed to inspect response: %w", err)
 	}
 	if common.LooksLikeHTML(prefix, contentType) {
-		return nil, wrapHTMLResponse(resp.StatusCode, resp.Header, prefix, contentType, apiBase)
+		return nil, wrapHTMLResponse(resp.StatusCode, resp.Header, prefix, contentType, apiBase, nil)
 	}
 	out, err := common.ParseResponse(reader)
 	if err != nil {
@@ -61,15 +76,24 @@ func wrapHTMLResponse(
 	body []byte,
 	contentType string,
 	apiBase string,
+	readErr error,
 ) error {
-	cause := &common.HTTPError{
+	httpCause := &common.HTTPError{
 		StatusCode:  statusCode,
 		BodyPreview: common.ResponsePreview(body, 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 		IsHTML:      true,
 	}
+	cause := withReadError(httpCause, readErr)
 	providerErr := providererrors.FromHTTPResponse(statusCode, header, nil, cause)
 	providerErr.SafeMessage = "provider returned HTML instead of JSON; check api_base or proxy configuration"
 	return providerErr
+}
+
+func withReadError(httpCause *common.HTTPError, readErr error) error {
+	if readErr == nil {
+		return httpCause
+	}
+	return errors.Join(httpCause, fmt.Errorf("reading response body: %w", readErr))
 }

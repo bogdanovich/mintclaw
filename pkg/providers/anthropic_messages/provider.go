@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -120,14 +119,9 @@ func (p *Provider) Chat(
 	}
 	defer resp.Body.Close()
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	body, err := httperrors.ReadResponseBody(resp, p.apiBase)
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, httperrors.NewResponse(resp, body, p.apiBase)
+		return nil, err
 	}
 
 	// Parse response

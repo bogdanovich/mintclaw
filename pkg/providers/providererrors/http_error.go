@@ -75,7 +75,7 @@ func collectHTTPErrorFields(value any, metadata *httpErrorMetadata) {
 			metadata.requestID = scalarString(object[key])
 		}
 	}
-	for _, key := range []string{"quotaResetDelay", "retry_after", "retryAfter"} {
+	for _, key := range []string{"quotaResetDelay", "retryDelay", "retry_after", "retryAfter"} {
 		if metadata.retryAfter == 0 {
 			metadata.retryAfter = parseDurationValue(object[key])
 		}
