@@ -82,7 +82,7 @@ func (p *Provider) Chat(
 	if p.tokenSource != nil {
 		tok, err := p.tokenSource()
 		if err != nil {
-			return nil, fmt.Errorf("refreshing token: %w", err)
+			return nil, normalizeAnthropicCredentialError(err)
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
@@ -102,7 +102,7 @@ func (p *Provider) Chat(
 
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, normalizeAnthropicError(err)
 	}
 
 	return parseResponse(resp), nil
@@ -124,7 +124,7 @@ func (p *Provider) chatStreaming(
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, normalizeAnthropicError(err)
 	}
 
 	return parseResponse(&msg), nil

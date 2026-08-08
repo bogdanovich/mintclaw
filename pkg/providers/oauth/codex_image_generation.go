@@ -10,6 +10,8 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 const (
@@ -41,7 +43,10 @@ func (p *CodexProvider) GenerateImage(
 		return nil, err
 	}
 	if accountID == "" {
-		return nil, fmt.Errorf("no account id found for Codex image generation")
+		return nil, &providererrors.ProviderError{
+			Kind:        providererrors.KindAuthentication,
+			SafeMessage: "Codex account ID is unavailable",
+		}
 	}
 
 	if strings.TrimSpace(req.Model) == "" {
@@ -61,10 +66,10 @@ func (p *CodexProvider) GenerateImage(
 		eventImages, readErr := parseCodexImageSSE(stream, req.OutputFormat)
 		closeErr := stream.Close()
 		if readErr != nil {
-			return nil, readErr
+			return nil, normalizeCodexError(readErr)
 		}
 		if closeErr != nil {
-			return nil, closeErr
+			return nil, normalizeCodexError(closeErr)
 		}
 		images = append(images, eventImages...)
 	}
@@ -80,7 +85,7 @@ func (p *CodexProvider) requestOptions() ([]option.RequestOption, string, error)
 	if p.tokenSource != nil {
 		tok, accID, err := p.tokenSource()
 		if err != nil {
-			return nil, "", fmt.Errorf("refreshing token: %w", err)
+			return nil, "", normalizeCodexCredentialError(err)
 		}
 		opts = append(opts, option.WithAPIKey(tok))
 		if accID != "" {
@@ -144,6 +149,7 @@ func parseCodexImageSSE(stream codexImageStream, outputFormat string) ([]Generat
 	var events int
 	var images []GeneratedImage
 	var completedImages []GeneratedImage
+	completed := false
 
 	for stream.Next() {
 		evt := stream.Current()
@@ -164,9 +170,15 @@ func parseCodexImageSSE(stream codexImageStream, outputFormat string) ([]Generat
 		}
 		images = append(images, eventImages...)
 		completedImages = append(completedImages, eventCompletedImages...)
+		if evt.Type == "response.completed" {
+			completed = true
+		}
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
+	}
+	if !completed {
+		return nil, codexIncompleteStreamError()
 	}
 	if len(images) > 0 {
 		return images, nil
@@ -195,8 +207,18 @@ func parseCodexImageEventUnion(
 			}
 		}
 		return nil, images, nil
-	case "response.failed", "error":
-		return nil, nil, fmt.Errorf("codex image generation failed")
+	case "response.failed":
+		if evt.Response.Status == responses.ResponseStatusCancelled {
+			return nil, nil, codexCanceledResponseError()
+		}
+		return nil, nil, normalizeCodexResponseFailure(
+			string(evt.Response.Error.Code),
+			evt.Response.Error.Message,
+		)
+	case "error":
+		return nil, nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
+	case "response.incomplete":
+		return nil, nil, codexIncompleteResponseError(evt.Response.IncompleteDetails.Reason)
 	}
 	return nil, nil, nil
 }
