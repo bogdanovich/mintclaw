@@ -356,9 +356,11 @@ these values before an agent instance or stateful service is created:
 | Output profile | Channel delivery or terminal-facing stream/event projection |
 | Trust profile | Existing gateway approvals or trusted-local no-prompt execution |
 
-The default personal profile maps execution and state roots to the current
-workspace so existing behavior is preserved. Coding mode supplies distinct
-execution and state roots.
+Personal and coding profiles both use owner-scoped state roots outside their
+execution roots. The current personal workspace state is moved once during a
+backed-up deployment cutover; runtime code does not retain permanent dual-read
+or fallback paths. Behavioral data and semantics are preserved, not the old
+directory layout.
 
 ### Coding thread domain
 
@@ -753,15 +755,16 @@ Scope:
 - Define explicit runtime owner, execution root, state root, instruction roots,
   and state-path ownership.
 - Classify current `AgentInstance.Workspace` consumers by responsibility.
-- Document compatibility mapping for personal agents.
-- Add focused contract tests proving the default profile resolves to the same
-  paths and identity as before.
+- Document the current personal path inventory and one-time deployment mapping.
+- Add focused contract tests proving explicit owner identity, distinct roots,
+  state-path ownership, and source-pollution rejection.
 
 Done when:
 
 - No new coding code needs to guess which meaning of `Workspace` applies.
 - Every state-producing subsystem relevant to coding has an assigned root.
-- The personal default mapping is behaviorally unchanged.
+- Personal session, memory, task, interaction, and media semantics have an
+  explicit migration owner without requiring old path compatibility.
 - The contract explicitly prohibits source-checkout state pollution.
 
 Out of scope:
@@ -777,7 +780,8 @@ Scope:
 
 - Replace or extend the current post-registry option timing with a builder or
   resolved profile applied before `AgentRegistry` and `AgentInstance` creation.
-- Keep existing constructors as compatibility wrappers where practical.
+- Replace obsolete construction entry points rather than retaining wrappers
+  solely for internal path compatibility.
 - Make construction return errors for invalid roots before partial state is
   created.
 - Add cleanup for partially constructed session/context resources.
@@ -800,7 +804,8 @@ Scope:
 - Route Seahorse database construction through the resolved state root.
 - Remove direct assumptions that the canonical session directory is always
   `<execution workspace>/sessions`.
-- Preserve the current JSONL migration/fallback behavior for personal agents.
+- Preserve canonical personal JSONL data through the one-time deployment
+  migration; do not add indefinite old-location fallback reads.
 
 Done when:
 
@@ -1844,7 +1849,7 @@ Every production packet should select relevant rows from this matrix:
 
 | Area | Required evidence |
 | --- | --- |
-| Runtime layout | Personal compatibility, distinct roots, no project pollution, construction rollback |
+| Runtime layout | Owner-scoped roots, personal data migration, no project pollution, construction rollback |
 | Thread storage | Atomic metadata, JSONL durability, corrupt entry isolation, schema migration |
 | Concurrency | Two-process lease contention, stale recovery, active-turn serialization, race tests |
 | Tools | Exact catalogue, cwd, cancellation, durable start/result, crash recovery, write audit, tool pairing, bounded results, harness quality fixtures |
@@ -1983,8 +1988,8 @@ Before starting a packet:
    records invariants, not frozen implementation details.
 3. Declare the exact packet ID in the PR body.
 4. Keep unrelated cleanup out of the PR.
-5. Preserve canonical history, personal-runtime compatibility, and project
-   cleanliness even when a smaller local implementation appears easier.
+5. Preserve canonical history, personal-runtime behavioral semantics, and
+   project cleanliness even when disk paths intentionally change.
 6. Add the packet's focused tests and the relevant validation-matrix evidence.
 7. Record deferred observations under the later packet that owns them rather
    than expanding current scope.
