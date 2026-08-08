@@ -53,7 +53,7 @@ func TestRealProcessUpdateCanaries(t *testing.T) {
 			now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 			fixture := newReleaseFixture(t, now, "mintclaw-node")
 			defer fixture.server.Close()
-			updateCoordinator, configPath := realProcessCoordinator(t, fixture, now, test.scope, test.behavior)
+			updateCoordinator, configPath, _ := realProcessCoordinator(t, fixture, now, test.scope, test.behavior)
 			defer updateCoordinator.Close()
 			request := fixture.stageRequest(now)
 			if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
@@ -87,8 +87,7 @@ func TestRealProcessDisconnectRecoversWithoutSecondActivation(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
-	updateCoordinator, configPath := realProcessCoordinator(t, fixture, now, "user", realProcessHold)
-	defer updateCoordinator.Close()
+	updateCoordinator, configPath, stateRoot := realProcessCoordinator(t, fixture, now, "user", realProcessHold)
 	request := fixture.stageRequest(now)
 	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -110,6 +109,15 @@ func TestRealProcessDisconnectRecoversWithoutSecondActivation(t *testing.T) {
 	cancel()
 	if err = <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("first Supervisor.Run() error = %v", err)
+	}
+	if err = updateCoordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	updateCoordinator = reopenRealProcessCoordinator(t, stateRoot, fixture, now)
+	defer updateCoordinator.Close()
+	supervisor, err = NewSupervisor(updateCoordinator, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	unknown, err := supervisor.status(request.Identity)
@@ -152,7 +160,7 @@ func realProcessCoordinator(
 	now time.Time,
 	scope string,
 	behavior string,
-) (*Coordinator, string) {
+) (*Coordinator, string, string) {
 	t.Helper()
 	stateDirectory := privateRoot(t)
 	installation := testState(t).Installation
@@ -198,7 +206,32 @@ func realProcessCoordinator(
 		_ = store.Close()
 		t.Fatal(err)
 	}
-	return updateCoordinator, configPath
+	return updateCoordinator, configPath, filepath.Join(stateDirectory, StoreDirectoryName)
+}
+
+func reopenRealProcessCoordinator(
+	t *testing.T,
+	stateRoot string,
+	fixture *releaseFixture,
+	now time.Time,
+) *Coordinator {
+	t.Helper()
+	store, err := OpenStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateCoordinator, err := New(
+		store,
+		staticResolver{authority: fixture.authority},
+		"v1.0.0",
+		WithHTTPClient(fixture.client),
+		WithClock(func() time.Time { return now }),
+	)
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	return updateCoordinator
 }
 
 func runRealProcessSupervisorUntil(t *testing.T, updateCoordinator *Coordinator, phase Phase) State {

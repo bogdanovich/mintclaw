@@ -34,7 +34,7 @@ events, and no-replay path.
 | One target and one release alias | #535, #555; companion policy, target profile, invocation plan | disabled/missing/colliding/revoked policies; exact descriptor selector and changed-argument tests | Deny-all until final canary profile is configured |
 | No caller-selected authority | #535, #555; descriptor projection and retained update authority | URL/key/digest/tag/tuple/version/path/service/downgrade/approval omission and replay-authorization tests | No update target enabled by default |
 | Exact durable approval and identity | #555; existing interaction and gateway invocation stores | actor, agent, route, session, tool call, execution ID, plan/catalog/profile revision, expiry, and continuation tests | Pending routed canary approval |
-| Stable activation and health | #546; coordinator store/lifecycle/supervisor | native `TestRealProcessUpdateCanaries/user_scope_healthy_activation` plus authenticated wrong-version/node/catalog tests | macOS native proof passed; Linux native CI pending current PR |
+| Stable activation and health | #546; coordinator store/lifecycle/supervisor | native `TestRealProcessUpdateCanaries/user_scope_healthy_activation` plus authenticated wrong-version/node/tuple and malformed-catalog-digest tests | macOS native proof passed; Linux native CI pending current PR |
 | Verified rollback | #546; bounded supervisor and one previous payload | native `TestRealProcessUpdateCanaries/system_scope_verified_rollback`; three failed candidate processes and one healthy previous process | macOS native proof passed; Linux native CI pending current PR |
 | Crash, power loss, and cleanup | #546; atomic store and transaction fault points | store, stage, lifecycle, supervisor, and transaction fault-injection tests at publication boundaries | No live destructive fault injection required |
 | Disconnect, status, restart, no replay | #546, #555 | native `TestRealProcessDisconnectRecoversWithoutSecondActivation`; invocation unknown/status/cancel/no-replay tests | macOS native proof passed; Linux native CI pending current PR |
@@ -56,10 +56,11 @@ verification, coordinator codec, and authenticated health path.
   previous slot A once, and committed `rolled_back` only after authenticated
   health for `v1.0.0`.
 - Disconnect proof stopped the supervisor after one real candidate launch,
-  queried durable status twice without changing generation, attempts, payload,
-  or release-download count, then restarted the supervisor and committed
-  healthy on the second process attempt. Staging and activation were not
-  repeated.
+  closed the coordinator and store, reopened the same durable directory into
+  new coordinator and supervisor objects, and queried status twice without
+  changing generation, attempts, payload, or release-download count. The
+  reopened supervisor then committed healthy on the second process attempt.
+  Staging and activation were not repeated.
 - The ordinary package tests and focused real-process race tests passed. Linux
   `amd64` and `arm64` test binaries cross-compiled as native ELF executables;
   native Linux execution remains an exact-head CI gate.
@@ -69,6 +70,13 @@ copied through the same archive, executable inspection, slot publication, and
 launch path as a companion payload. In child mode it emits only a bounded
 authenticated health frame, deliberately exits, or holds the control channel
 according to a private deterministic test fixture.
+
+The successor health boundary checks exact node identity, release version,
+platform, and architecture plus a well-formed catalog digest. It does not
+require that digest to equal the pre-update catalog: a successor can
+legitimately advertise a different catalog. Signed manifest compatibility is
+the pre-staging protocol/config gate; semantic catalog equality is not claimed
+as P4 coordinator evidence.
 
 ## Residual completion work
 

@@ -136,8 +136,13 @@ The expected model-facing sequence is:
    recover an uncertain outcome; and
 6. obtain fresh `node.info.v1` to independently observe the installed version.
 
-Success requires authenticated same-node health with the expected version and
-catalog. Service-manager acceptance or process existence is insufficient.
+Success requires authenticated same-node health with the expected version,
+platform, and architecture after the companion reports a bounded catalog
+digest. The coordinator validates that the catalog digest is well formed; it
+does not compare it with the pre-update catalog because a versioned successor
+may legitimately advertise a different catalog. Signed manifest protocol and
+config compatibility are checked before staging. Service-manager acceptance
+or process existence is insufficient.
 Rollback is successful only when the previous verified payload reconnects and
 passes the same health contract. Otherwise report `unknown` or
 `operator_action_required`; do not retry automatically.
