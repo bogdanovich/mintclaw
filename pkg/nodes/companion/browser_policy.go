@@ -125,6 +125,11 @@ func normalizeBrowserProfile(
 		if argument == "" || len(argument) > maxBrowserDriverArgBytes || strings.ContainsRune(argument, 0) {
 			return BrowserProfilePolicy{}, errors.New("driver_arguments contains an invalid value")
 		}
+		if companionManagedDriverArgument(argument) {
+			return BrowserProfilePolicy{}, errors.New(
+				"driver_arguments contains an option reserved for the companion browser host",
+			)
+		}
 	}
 	profileDirectory, err := resolveExistingBrowserDirectory(baseDir, profile.ProfileDirectory)
 	if err != nil {
@@ -132,8 +137,10 @@ func normalizeBrowserProfile(
 	}
 	profile.ProfileDirectory = profileDirectory
 	lockFile, err := resolveBrowserLockFile(baseDir, profile.LockFile)
-	if err != nil || lockFile == profileDirectory ||
-		pathWithin(lockFile, profileDirectory) {
+	if err != nil {
+		return BrowserProfilePolicy{}, fmt.Errorf("resolve lock_file: %w", err)
+	}
+	if lockFile == profileDirectory || pathWithin(lockFile, profileDirectory) {
 		return BrowserProfilePolicy{}, errors.New("lock_file must be a non-empty path outside profile_directory")
 	}
 	if info, statErr := os.Stat(lockFile); statErr == nil && info.IsDir() {
@@ -258,6 +265,39 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 	return nil
 }
 
+func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
+	if err := verifyBrowserExecutableDigest(
+		profile.DriverExecutable,
+		profile.DriverExecutableSHA256,
+	); err != nil {
+		return errors.New("browser executable identity changed")
+	}
+	realProfile, err := filepath.EvalSymlinks(profile.ProfileDirectory)
+	if err != nil || filepath.Clean(realProfile) != profile.ProfileDirectory {
+		return errors.New("browser profile identity changed")
+	}
+	profileInfo, err := os.Stat(realProfile)
+	if err != nil || !profileInfo.IsDir() || validateBrowserProfileDirectory(profileInfo) != nil {
+		return errors.New("browser profile identity changed")
+	}
+	realLockParent, err := filepath.EvalSymlinks(filepath.Dir(profile.LockFile))
+	if err != nil || filepath.Join(realLockParent, filepath.Base(profile.LockFile)) != profile.LockFile {
+		return errors.New("browser lock identity changed")
+	}
+	parentInfo, err := os.Stat(realLockParent)
+	if err != nil || !parentInfo.IsDir() || validateBrowserProfileDirectory(parentInfo) != nil {
+		return errors.New("browser lock identity changed")
+	}
+	lockInfo, err := os.Lstat(profile.LockFile)
+	if err == nil && (!lockInfo.Mode().IsRegular() || lockInfo.Mode()&os.ModeSymlink != 0) {
+		return errors.New("browser lock identity changed")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("browser lock identity changed")
+	}
+	return nil
+}
+
 func resolveExistingBrowserDirectory(baseDir, configured string) (string, error) {
 	path, err := resolveConfigPath(baseDir, configured)
 	if err != nil || strings.TrimSpace(configured) == "" {
@@ -289,6 +329,9 @@ func resolveBrowserLockFile(baseDir, configured string) (string, error) {
 	info, err := os.Stat(parent)
 	if err != nil || !info.IsDir() {
 		return "", errors.New("lock_file parent must be an existing directory")
+	}
+	if err = validateBrowserProfileDirectory(info); err != nil {
+		return "", errors.New("lock_file parent must be private to the companion account")
 	}
 	path = filepath.Join(parent, filepath.Base(path))
 	if info, err = os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -340,4 +383,15 @@ func browserProfileDescriptors(
 		return nil, err
 	}
 	return descriptors, nil
+}
+
+// HasEnabledBrowserProfile reports whether local browser authority requires a
+// companion host. Disabled profiles never cause driver initialization.
+func HasEnabledBrowserProfile(profiles map[string]BrowserProfilePolicy) bool {
+	for _, profile := range profiles {
+		if profile.Enabled {
+			return true
+		}
+	}
+	return false
 }

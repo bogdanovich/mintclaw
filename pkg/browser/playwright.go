@@ -181,6 +181,16 @@ type PlaywrightWorkerFactory struct {
 	proxyDial     browserProxyDial
 }
 
+// PlaywrightManagedHostConfig binds the existing private Playwright adapter to
+// an execution host. It is intentionally driver-facing rather than
+// model-facing: callers must derive every field from trusted local policy.
+type PlaywrightManagedHostConfig struct {
+	Target        string
+	Profile       string
+	ProfileConfig config.BrowserProfileConfig
+	ServerConfig  config.MCPServerConfig
+}
+
 // PlaywrightHandoffAvailable reports whether the managed driver owns a headed
 // local browser window. Handoff does not expose a remote endpoint or admit a
 // headless/browser-extension configuration.
@@ -251,10 +261,66 @@ func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFac
 	if err := validatePlaywrightManagedPolicy(server); err != nil {
 		return nil, err
 	}
+	return newPlaywrightManagedHostFactory(PlaywrightManagedHostConfig{
+		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+		ProfileConfig: profile, ServerConfig: server,
+	}, PlaywrightDownloadAvailable(rootConfig))
+}
+
+// NewPlaywrightManagedHostFactory reuses the B1 Playwright worker on another
+// trusted host. Its driver configuration is companion-local and must never be
+// projected into a capability catalog or model-visible result.
+func NewPlaywrightManagedHostFactory(
+	host PlaywrightManagedHostConfig,
+) (*PlaywrightWorkerFactory, error) {
+	if err := config.ValidateMCPExclusiveLockFile(host.ServerConfig); err != nil {
+		return nil, ErrDenied
+	}
+	return newPlaywrightManagedHostFactory(
+		host,
+		playwrightServerDownloadAvailable(host.ServerConfig),
+	)
+}
+
+func newPlaywrightManagedHostFactory(
+	host PlaywrightManagedHostConfig,
+	downloadReady bool,
+) (*PlaywrightWorkerFactory, error) {
+	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
+		!host.ProfileConfig.Enabled ||
+		host.ProfileConfig.Mode != config.BrowserProfileManaged ||
+		!host.ProfileConfig.DryRun {
+		return nil, ErrDenied
+	}
+	networkMode := host.ProfileConfig.EffectiveNetworkMode()
+	if networkMode != config.BrowserNetworkExactOrigins &&
+		networkMode != config.BrowserNetworkPublicWeb &&
+		networkMode != config.BrowserNetworkAnyHTTP {
+		return nil, ErrDenied
+	}
+	if networkMode == config.BrowserNetworkExactOrigins &&
+		len(host.ProfileConfig.AllowedOrigins) == 0 {
+		return nil, ErrDenied
+	}
+	if networkMode != config.BrowserNetworkExactOrigins &&
+		len(host.ProfileConfig.AllowedOrigins) != 0 {
+		return nil, ErrDenied
+	}
+	if config.EffectiveMCPTransportType(host.ServerConfig) != "stdio" ||
+		strings.TrimSpace(host.ServerConfig.Command) == "" ||
+		config.EffectiveMCPSessionLossReplay(host.ServerConfig) !=
+			config.MCPSessionLossReplayNever ||
+		strings.TrimSpace(host.ServerConfig.ExclusiveLockFile) == "" {
+		return nil, ErrDenied
+	}
+	if err := validatePlaywrightManagedPolicy(host.ServerConfig); err != nil {
+		return nil, err
+	}
 	return &PlaywrightWorkerFactory{
-		target: config.BrowserDefaultTarget, profileName: config.BrowserDefaultProfile,
-		profileConfig: profile, serverConfig: cloneMCPServerConfig(server),
-		downloadReady: PlaywrightDownloadAvailable(rootConfig),
+		target: host.Target, profileName: host.Profile,
+		profileConfig: host.ProfileConfig,
+		serverConfig:  cloneMCPServerConfig(host.ServerConfig),
+		downloadReady: downloadReady,
 		clientFactory: newManagerPlaywrightClient, lookPath: exec.LookPath,
 	}, nil
 }

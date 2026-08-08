@@ -70,7 +70,24 @@ func run(args []string) error {
 		return err
 	}
 	defer ledger.Close()
-	runtimeOptions := make([]companion.RuntimeOption, 0, 4)
+	runtimeOptions := make([]companion.RuntimeOption, 0, 5)
+	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
+		browserHost, browserHostErr := companion.NewBrowserHost(cfg.BrowserProfiles)
+		if browserHostErr != nil {
+			return fmt.Errorf("configure companion browser host: %w", browserHostErr)
+		}
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(
+				context.Background(),
+				15*time.Second,
+			)
+			defer cancelShutdown()
+			if shutdownErr := browserHost.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion browser cleanup failed", "error", shutdownErr)
+			}
+		}()
+		runtimeOptions = append(runtimeOptions, companion.WithBrowserHost(browserHost))
+	}
 	fileCapabilities := make([]companion.FileTransferCapability, 0, 2)
 	if companion.HasEnabledFilePolicy(cfg.FilePolicies) {
 		transferLedger, transferLedgerErr := companion.NewFileTransferLedger(
