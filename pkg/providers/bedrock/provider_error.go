@@ -14,16 +14,37 @@ import (
 )
 
 func normalizeProviderError(err error) error {
+	return normalizeProviderErrorWithRequestID(err, "")
+}
+
+func normalizeProviderErrorWithRequestID(err error, fallbackRequestID string) error {
 	if err == nil {
 		return nil
 	}
+	var existing *providererrors.ProviderError
+	if errors.As(err, &existing) && existing != nil {
+		return withRequestIDFallback(existing, err, fallbackRequestID)
+	}
+	if isSSOTokenError(err) {
+		return providererrors.FromStructuredError(
+			providererrors.KindAuthentication,
+			0,
+			nil,
+			fallbackRequestID,
+			"AWS credentials expired; refresh the configured SSO session",
+			err,
+		)
+	}
 	if normalized, ok := providererrors.FromTransportError(err); ok {
-		return normalized
+		return withRequestIDFallback(normalized, err, fallbackRequestID)
 	}
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		status, header, requestID := bedrockHTTPMetadata(err)
+		if requestID == "" {
+			requestID = fallbackRequestID
+		}
 		kind := bedrockErrorKind(apiErr.ErrorCode())
 		if kind == providererrors.KindInvalidRequest &&
 			isBedrockContextOverflow(apiErr.ErrorCode(), apiErr.ErrorMessage()) {
@@ -39,25 +60,30 @@ func normalizeProviderError(err error) error {
 		)
 	}
 
-	if isSSOTokenError(err) {
-		return providererrors.FromStructuredError(
-			providererrors.KindAuthentication,
-			0,
-			nil,
-			"",
-			"AWS credentials expired; refresh the configured SSO session",
-			err,
-		)
-	}
-
 	return providererrors.FromStructuredError(
 		providererrors.KindUnknown,
 		0,
 		nil,
-		"",
+		fallbackRequestID,
 		"Bedrock request failed",
 		err,
 	)
+}
+
+func withRequestIDFallback(normalized *providererrors.ProviderError, cause error, requestID string) error {
+	if normalized.RequestID != "" || requestID == "" {
+		return normalized
+	}
+	enriched := providererrors.FromStructuredError(
+		normalized.Kind,
+		normalized.HTTPStatus,
+		nil,
+		requestID,
+		normalized.SafeMessage,
+		cause,
+	)
+	enriched.RetryAfter = normalized.RetryAfter
+	return enriched
 }
 
 func bedrockHTTPMetadata(err error) (int, http.Header, string) {

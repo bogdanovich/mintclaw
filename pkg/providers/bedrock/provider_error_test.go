@@ -5,6 +5,8 @@ package bedrock
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -98,11 +100,61 @@ func TestNormalizeProviderErrorSSOCompatibilityFallback(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderErrorWrappedSSOPrecedesGenericClassifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "smithy invalid grant",
+			err: bedrockResponseError(
+				"InvalidGrantException",
+				"operation error SSO OIDC: CreateToken, InvalidGrantException",
+				http.StatusBadRequest,
+			),
+		},
+		{
+			name: "cache file wraps network error",
+			err: fmt.Errorf(
+				"failed to read cached SSO token file: %w",
+				&net.DNSError{Err: "no such host", Name: "sso.amazonaws.com"},
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := normalizeProviderError(tt.err)
+			var providerErr *providererrors.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindAuthentication {
+				t.Fatalf("error = %#v, want authentication ProviderError", err)
+			}
+			if !errors.Is(err, tt.err) {
+				t.Fatal("normalized error does not preserve its cause")
+			}
+		})
+	}
+}
+
 func TestNormalizeProviderErrorStructuredCodePrecedesStatus(t *testing.T) {
 	err := normalizeProviderError(bedrockResponseError("AccountProblem", "throttled", http.StatusTooManyRequests))
 	var providerErr *providererrors.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindBilling {
 		t.Fatalf("error = %#v, want billing ProviderError", err)
+	}
+}
+
+func TestNormalizeProviderErrorExistingStructuredErrorPrecedesSSOFallback(t *testing.T) {
+	existing := providererrors.FromStructuredError(
+		providererrors.KindBilling,
+		http.StatusPaymentRequired,
+		nil,
+		"",
+		"refresh cached SSO token failed",
+		errors.New("refresh cached SSO token failed"),
+	)
+	if got := normalizeProviderError(existing); got != existing {
+		t.Fatalf("normalizeProviderError() = %#v, want existing structured error", got)
 	}
 }
 

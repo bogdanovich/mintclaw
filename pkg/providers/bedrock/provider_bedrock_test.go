@@ -9,6 +9,7 @@ package bedrock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 func TestConvertMessages_SystemPrompts(t *testing.T) {
@@ -609,12 +611,13 @@ func TestIsSSOTokenError(t *testing.T) {
 
 // mockStreamReader implements bedrockruntime.ConverseStreamOutputReader for testing.
 type mockStreamReader struct {
-	ch  chan types.ConverseStreamOutput
-	err error
+	ch       chan types.ConverseStreamOutput
+	err      error
+	closeErr error
 }
 
 func (r *mockStreamReader) Events() <-chan types.ConverseStreamOutput { return r.ch }
-func (r *mockStreamReader) Close() error                              { return nil }
+func (r *mockStreamReader) Close() error                              { return r.closeErr }
 func (r *mockStreamReader) Err() error                                { return r.err }
 
 func newMockStream(events []types.ConverseStreamOutput) *bedrockruntime.ConverseStreamEventStream {
@@ -660,7 +663,7 @@ func TestParseStreamResponse_TextOnly(t *testing.T) {
 	stream := newMockStream(events)
 	resp, err := parseStreamResponse(context.Background(), stream, func(accumulated string) {
 		chunks = append(chunks, accumulated)
-	})
+	}, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "Hello World", resp.Content)
@@ -711,7 +714,7 @@ func TestParseStreamResponse_ToolCall(t *testing.T) {
 	}
 
 	stream := newMockStream(events)
-	resp, err := parseStreamResponse(context.Background(), stream, nil)
+	resp, err := parseStreamResponse(context.Background(), stream, nil, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "tool_calls", resp.FinishReason)
@@ -763,7 +766,7 @@ func TestParseStreamResponse_TextAndToolCall(t *testing.T) {
 	stream := newMockStream(events)
 	resp, err := parseStreamResponse(context.Background(), stream, func(accumulated string) {
 		chunks = append(chunks, accumulated)
-	})
+	}, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "Let me search that.", resp.Content)
@@ -784,8 +787,32 @@ func TestParseStreamResponse_ContextCancelled(t *testing.T) {
 		es.Reader = &mockStreamReader{ch: ch}
 	})
 
-	_, err := parseStreamResponse(ctx, stream, nil)
+	_, err := parseStreamResponse(ctx, stream, nil, "")
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestParseStreamResponse_PreservesHandshakeRequestID(t *testing.T) {
+	tests := []struct {
+		name      string
+		streamErr error
+		closeErr  error
+	}{
+		{name: "event stream", streamErr: errors.New("event stream failed")},
+		{name: "close", closeErr: errors.New("event stream close failed")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := make(chan types.ConverseStreamOutput)
+			close(ch)
+			stream := &mockStreamReader{ch: ch, err: tt.streamErr, closeErr: tt.closeErr}
+
+			_, err := parseStreamResponse(context.Background(), stream, nil, "request-handshake")
+			var providerErr *providererrors.ProviderError
+			require.ErrorAs(t, err, &providerErr)
+			assert.Equal(t, "request-handshake", providerErr.RequestID)
+		})
+	}
 }
 
 func TestParseStreamResponse_InvalidToolJSON(t *testing.T) {
@@ -818,7 +845,7 @@ func TestParseStreamResponse_InvalidToolJSON(t *testing.T) {
 	}
 
 	stream := newMockStream(events)
-	resp, err := parseStreamResponse(context.Background(), stream, nil)
+	resp, err := parseStreamResponse(context.Background(), stream, nil, "")
 
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)
@@ -837,14 +864,14 @@ func TestParseStreamResponse_DefaultFinishReason(t *testing.T) {
 	}
 
 	stream := newMockStream(events)
-	resp, err := parseStreamResponse(context.Background(), stream, nil)
+	resp, err := parseStreamResponse(context.Background(), stream, nil, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 
 func TestParseStreamResponse_NilStream(t *testing.T) {
-	_, err := parseStreamResponse(context.Background(), nil, nil)
+	_, err := parseStreamResponse(context.Background(), nil, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil event stream")
 }
@@ -869,7 +896,7 @@ func TestParseStreamResponse_StopReasons(t *testing.T) {
 				},
 			}
 			stream := newMockStream(events)
-			resp, err := parseStreamResponse(context.Background(), stream, nil)
+			resp, err := parseStreamResponse(context.Background(), stream, nil, "")
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, resp.FinishReason)
 		})
