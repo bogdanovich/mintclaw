@@ -6,6 +6,12 @@ MintClaw audit baseline: `origin/main` at `7b886f1a`, 2026-08-08
 
 OpenAI Codex comparison baseline: `openai/codex` at `936f5eb3`, 2026-08-08
 
+Pi comparison baseline: `earendil-works/pi` at `025957c2`, 2026-08-08
+
+Oh My Pi comparison baseline: `can1357/oh-my-pi` at `08819b27`, 2026-08-08
+
+OpenCode comparison baseline: `anomalyco/opencode` at `fe82a1b6`, 2026-08-08
+
 ## Purpose
 
 This roadmap defines how MintClaw can become both:
@@ -51,6 +57,14 @@ The following decisions are part of the admitted scope:
 10. The first implementation should reuse MintClaw's providers, tool loop,
     runtime events, steering, session journal, and Seahorse. It should not port
     Codex's Rust crates, SQLite thread store, sandbox stack, or app server.
+11. The terminal frontend uses authoritative, revisioned thread snapshots plus
+    bounded progress deltas. Deltas improve latency but are never the only way
+    to reconstruct UI state after a dropped event, slow consumer, or reconnect.
+12. Repository instruction files are declarative context, not permission to
+    execute repository-provided plugins, extensions, hooks, or dynamic config
+    during startup. Any future executable project resource needs a separate
+    admitted trust policy even though model-initiated coding tools are local
+    no-prompt by default.
 
 ## Intended User Experience
 
@@ -83,6 +97,42 @@ Expected behavior:
   channel behavior remain unchanged.
 
 ## Current Architecture Assessment
+
+### What the additional reference audit changes
+
+Codex remains the strongest primary reference for thread lifecycle, model/tool
+execution, compaction checkpoints, and deterministic context re-anchoring. It
+is not sufficient as the only reference for MintClaw's terminal and
+always-on/local dual use case.
+
+The three additional codebases contribute complementary evidence:
+
+- **Pi:** cwd-bound runtime services, tree-shaped JSONL sessions, explicit
+  fork/clone operations, authoritative snapshots plus progress deltas, and a
+  transport-neutral client/server boundary. MintClaw should not copy its
+  TypeScript packages, exact session tree, project package system, or
+  experimental daemon protocol.
+- **Oh My Pi:** durable interrupted-tool diagnostics, append-only history,
+  tool-output protection, coding-tool quality as a first-class product concern,
+  LSP/DAP integration, and demanding terminal fidelity tests. Its large
+  Rust/TypeScript tool surface, renderer, debugger stack, and discovery
+  ecosystem are not MVP dependencies.
+- **OpenCode:** project-instance separation, lazy scoped instruction loading,
+  local server/multiple-client architecture, session diffs, and filesystem
+  snapshot/revert semantics. MintClaw should not copy its database schema, HTTP
+  server, permission engine, UI framework, or hidden Git snapshot repository.
+
+This audit strengthens the existing roadmap rather than replacing it. The P0
+runtime-root refactor is still the correct prerequisite. New requirements are
+limited to recoverable frontend state, durable interrupted-tool recovery,
+scope-correct instruction loading, a coding-harness quality gate, stronger TUI
+fidelity criteria, optional LSP, and a later checkpoint/rewind investigation.
+
+Filesystem rollback is deliberately not moved into the MVP. Both Oh My Pi and
+OpenCode demonstrate that useful undo requires an independent snapshot model,
+careful treatment of untracked and ignored files, coordination with user edits,
+and explicit preview/recovery semantics. A conversational fork alone must not
+pretend to rewind the working tree.
 
 ### Foundations that should be reused
 
@@ -295,6 +345,14 @@ Implementation PRs must preserve these system-level guarantees:
     tool catalogue beyond the coding profile.
 15. Resuming a thread in a moved, deleted, or mismatched project is explicit
     and never silently targets a different directory.
+16. A side-effecting tool has a durable started marker before execution and a
+    terminal result afterward. Resume classifies a dangling marker as
+    interrupted or unknown and never automatically repeats the side effect.
+17. Frontend progress events may be dropped or coalesced without changing the
+    canonical thread. A revision gap causes snapshot resynchronization.
+18. Discovering `AGENTS.md` or another declarative instruction file does not
+    implicitly load executable repository extensions, hooks, or dynamic
+    configuration.
 
 ## Compaction and Long-Session Continuity
 
@@ -373,6 +431,24 @@ or a test still passes without a contemporaneous deterministic observation.
 It must not copy secrets, unlimited command output, binary data, or historical
 image payloads into the prompt.
 
+### Tiered context reduction
+
+Coding context should become smaller in stages before asking a model to
+summarize everything:
+
+1. Project a bounded provider-safe view of old tool results, replacing bulky
+   observational output with explicit omission metadata while retaining tool
+   identity, arguments needed for interpretation, outcome, and durable artifact
+   references.
+2. Protect recent turns and semantically important evidence such as failed or
+   passing validation, file mutations, plans, and user decisions.
+3. Generate leaf summaries for older complete turns.
+4. Condense summaries recursively only when the hard budget requires it.
+
+This projection never edits or truncates canonical JSONL. Tool classes whose
+results may be reduced must be explicit and tested; a generic size threshold
+must not discard the only evidence that an edit, test, or migration occurred.
+
 ### Compaction lifecycle
 
 Coding mode should support four triggers:
@@ -446,6 +522,10 @@ styles. P0 includes a bounded framework spike to confirm:
 - multiline editing and bracketed paste;
 - viewport performance with long transcripts;
 - terminal resize and narrow-width behavior;
+- IME composition, grapheme clusters, and consistent terminal-cell width;
+- behavior under SSH and common terminal multiplexers;
+- an explicit native-scrollback versus alternate-screen model, including what
+  remains visible after exit;
 - deterministic state-transition testing;
 - clean signal and panic restoration; and
 - acceptable binary size and supported-platform behavior.
@@ -460,6 +540,7 @@ The TUI should consume a coding-specific projection such as:
 ```text
 ThreadOpened
 ThreadResumed
+ThreadSnapshot
 TurnStarted
 AssistantDelta
 ReasoningDelta
@@ -477,9 +558,19 @@ TurnFailed
 TurnInterrupted
 ```
 
+Each authoritative `ThreadSnapshot` carries a monotonic revision. Progress
+events carry the revision or entity identity they extend. The frontend applies
+deltas only when their predecessor is known; a gap, bounded-buffer overflow, or
+reconnect requests a fresh snapshot. Snapshots remain compact enough for
+routine resynchronization, while old transcript pages and large tool output are
+hydrated lazily.
+
 These events are a UI protocol, not a second source of truth. The projector may
 consume runtime events, stream callbacks, tool audits, and thread metadata, but
-the TUI does not depend on their internal representations.
+the TUI does not depend on their internal representations. The initial adapter
+is in-process, yet the protocol types should not assume shared pointers or
+direct access to runtime state. This preserves a clean path to a later local
+daemon without requiring one for the MVP.
 
 The controller side should expose typed commands such as submit, interrupt,
 hard-cancel, manual compact, rename thread, start new thread, and close. It
@@ -601,12 +692,15 @@ Scope:
 - Personal/channel-only tools and MCP profiles are excluded unless explicitly
   admitted for coding.
 - Coding trust selects allow-all execution without changing gateway approvals.
+- Repository-provided executable extensions, hooks, and dynamic tool
+  configuration remain disabled unless a later trust design admits them.
 
 Done when:
 
 - A coding-profile test enumerates the exact visible tools.
 - No messaging, deploy, restart, channel, node, personal browser, or personal
   MCP tool appears by default.
+- Merely opening a repository cannot execute project-local extension code.
 - Shell and filesystem operations use the execution root.
 - Gateway tool catalogues remain unchanged.
 
@@ -621,13 +715,19 @@ Scope:
   model without changing turn behavior.
 - Exercise answer streaming, tool start/end, resize, multiline paste, and
   cancellation.
+- Compare alternate-screen and native-scrollback behavior, including long
+  history, tmux/SSH, IME input, resize, and final transcript visibility.
+- Specify an authoritative revisioned snapshot plus bounded delta contract and
+  demonstrate recovery after intentionally dropping a delta.
 - Record any missing engine event needed for P3; do not add speculative event
   types in the spike.
 
 Done when:
 
 - The framework choice is recorded with evidence.
+- The screen/scrollback model and supported fallback are recorded with evidence.
 - A typed frontend protocol and controller boundary are admitted.
+- Snapshot resynchronization works without direct runtime-state access.
 - Missing core observations are listed as bounded follow-up work.
 - The spike is either converted into testable foundation code or removed.
 
@@ -754,15 +854,21 @@ Dependencies: P2.1
 
 Scope:
 
-- Discover `AGENTS.md` from project root toward the invocation cwd.
+- Discover `AGENTS.md` from project root toward the invocation cwd for initial
+  context.
 - Define precedence for global coding instructions, repository instructions,
   and nested directory instructions.
+- When a tool first accesses a path below a more deeply nested instruction
+  file, attach that scoped instruction before the path content is used for
+  reasoning; deduplicate it within the active turn/context window.
 - Bound total bytes and report truncation or unreadable files.
 - Cache by path identity and invalidate on change.
 
 Done when:
 
 - Nested instructions apply only within their directory scope.
+- Work that moves from one subtree to another receives the applicable nested
+  instructions without globally applying either subtree's rules.
 - Precedence, byte limits, symlinks, and cache invalidation are tested.
 - Personal `AGENT.md` and coding `AGENTS.md` semantics are not conflated.
 
@@ -803,9 +909,32 @@ Done when:
 - Interrupted commands cannot be reported as success.
 - The gateway's tool restrictions are unchanged.
 
-#### P2.5 — Native end-to-end coding turn
+#### P2.5 — Durable turn and tool lifecycle
 
-Dependencies: P2.2, P2.4
+Dependencies: P2.4
+
+Scope:
+
+- Persist the accepted user turn before provider or tool execution.
+- Persist a bounded tool-start marker before invoking a side-effecting tool and
+  a correlated terminal result after it settles.
+- Record graceful interruption and best-effort abnormal-exit evidence without
+  relying on terminal UI state.
+- On resume, repair dangling assistant/tool lifecycle state to
+  interrupted/unknown and never automatically replay the call.
+
+Done when:
+
+- Crash fixtures stop the process before tool start, after tool start, during
+  mutation, and before result persistence with an unambiguous resumed state.
+- No crash point produces a false successful tool card or duplicate side
+  effect.
+- Tool-start metadata is bounded and redacted but sufficient for diagnostics.
+- Personal session recovery remains compatible.
+
+#### P2.6 — Native end-to-end coding turn
+
+Dependencies: P2.2, P2.5
 
 Scope:
 
@@ -822,11 +951,39 @@ Done when:
 - No Codex subprocess is required for the native path.
 - Failures preserve an inspectable thread.
 
+#### P2.7 — Coding harness quality gate
+
+Dependencies: P2.6
+
+Scope:
+
+- Evaluate the actual read, search, patch/edit, write, and command contracts on
+  representative small and large repository fixtures.
+- Measure first-attempt edit correctness, stale-patch behavior, search
+  precision, token/output volume, cancellation, and recovery across at least
+  two materially different model/tool-call families.
+- Exercise awkward inputs: long lines, Unicode, generated files, binary paths,
+  deleted/renamed files, large command output, and concurrent external edits.
+- Record whether the existing tools are sufficient or a bounded tool-contract
+  change is required before freezing P3 tool presentation.
+
+Done when:
+
+- Deterministic fixtures and metrics make tool regressions visible without a
+  live provider.
+- At least one opt-in live smoke scenario validates that fixture behavior is
+  representative.
+- Any proposed edit/search protocol change has measured evidence and remains a
+  focused follow-up rather than an unbounded tool rewrite.
+- Tool result truncation preserves actionable diagnostics and durable artifact
+  references.
+
 #### P2 exit gate
 
-MintClaw is a functional native coding agent with plain output. It is not yet a
-release candidate because the required terminal UI and long-session compaction
-experience are incomplete.
+MintClaw is a functional native coding agent with plain output, crash-safe turn
+semantics, and evidence that its core tool contracts are usable. It is not yet
+a release candidate because the required terminal UI and long-session
+compaction experience are incomplete.
 
 ### P3 — Terminal event and control plane
 
@@ -834,12 +991,14 @@ Goal: expose the engine to a TUI without coupling UI state to runtime internals.
 
 #### P3.1 — Coding event projector
 
-Dependencies: P0.5, P2.5
+Dependencies: P0.5, P2.7
 
 Scope:
 
 - Translate runtime events, stream callbacks, write audits, and thread metadata
   into the admitted frontend event protocol.
+- Emit an authoritative bounded thread snapshot with a monotonic revision, and
+  make progress deltas reference the revision or entity they extend.
 - Preserve ordering and thread/turn/tool correlation.
 - Bound arguments, output, errors, and diff previews.
 - Redact secrets using existing diagnostic/tool redaction boundaries.
@@ -848,6 +1007,8 @@ Done when:
 
 - Projected event sequences are deterministic for success, tool error,
   provider retry, fallback, interruption, and compaction.
+- A consumer can discard arbitrary progress events, request a snapshot, and
+  converge to the same visible terminal state.
 - The TUI never needs `Payload any` type assertions.
 - Slow UI consumers cannot block the agent indefinitely.
 
@@ -861,6 +1022,8 @@ Scope:
 - Avoid duplicate final content when a stream is finalized.
 - Support providers without streaming through the same event sequence.
 - Define backpressure and bounded buffering.
+- Detect revision gaps or dropped/coalesced deltas and request an authoritative
+  snapshot instead of guessing at missing state.
 
 Done when:
 
@@ -869,6 +1032,8 @@ Done when:
 - Fallback before visible output can retry; failure after visible output is
   represented without duplicating text.
 - Unicode chunk boundaries are safe.
+- Buffer overflow degrades to resynchronization rather than unbounded memory or
+  a permanently inconsistent transcript.
 
 #### P3.3 — Controller and interruption
 
@@ -880,6 +1045,8 @@ Scope:
 - Expose submit, graceful interrupt, hard cancel, compact, and close commands.
 - Reuse existing steering and abort ownership where behavior matches.
 - Serialize actions against the thread lease and active turn.
+- Keep one mutation coordinator even if future adapters allow multiple
+  read-only observers.
 
 Done when:
 
@@ -921,13 +1088,16 @@ Dependencies: P3.2, P3.3
 Scope:
 
 - Add the TUI model/update/view shell.
-- Own alternate-screen entry, resize, focus, signal, panic, and restoration.
+- Implement the screen/scrollback model admitted by P0.5 and own resize, focus,
+  signal, panic, and restoration.
 - Integrate existing no-color and terminal capability detection.
 - Keep TUI dependencies outside core agent packages.
 
 Done when:
 
 - Start, normal exit, `Ctrl+C`, SIGTERM, and induced panic restore the terminal.
+- Exit leaves the documented final transcript/scrollback behavior on every
+  supported screen mode.
 - Tiny and resized terminals remain usable.
 - Non-TTY invocation falls back or fails with an actionable suggestion.
 
@@ -938,14 +1108,20 @@ Dependencies: P4.1
 Scope:
 
 - Render user, assistant, reasoning, tool, warning, and error entries.
-- Add multiline composition, history, bracketed paste, and scroll behavior.
+- Add multiline composition, history, bracketed paste, IME-aware cursor
+  placement, Unicode cell-width handling, and scroll behavior.
 - Keep live streaming stable while the user scrolls away from the bottom.
-- Bound retained rendered state independently of the canonical transcript.
+- Page or hydrate old transcript state lazily and bound retained rendered state
+  independently of the canonical transcript.
 
 Done when:
 
 - Large paste and Unicode input round-trip correctly.
+- CJK, combining-mark, emoji, RTL-adjacent, and IME scenarios keep cursor and
+  clipping behavior within terminal-cell bounds.
 - Streaming does not steal scroll position after manual scroll.
+- A snapshot resync preserves composer and scroll state where their referenced
+  entities still exist.
 - View-state tests use semantic assertions rather than fragile full-screen
   snapshots where possible.
 
@@ -1022,12 +1198,17 @@ Scope:
 - Add the coding summary contract without changing personal-summary behavior.
 - Version the policy so derived summaries can be invalidated and rebuilt.
 - Preserve tool-result projection and recent complete-turn guarantees.
+- Add deterministic, tool-aware output elision before model-generated
+  summarization while leaving canonical JSONL untouched.
+- Protect mutation and validation evidence from generic size-based elision.
 
 Done when:
 
 - Personal and coding summaries use their intended policies.
 - A policy version change causes safe derived-state reconciliation.
 - Coding summaries preserve explicit validation status and next action.
+- Large historical tool output becomes bounded without losing tool outcome,
+  failure evidence, or artifact references.
 
 #### P5.2 — Workspace re-anchoring after compaction
 
@@ -1068,7 +1249,7 @@ Done when:
 
 #### P5.4 — Rebuild and resume recovery
 
-Dependencies: P5.2, P5.3
+Dependencies: P2.5, P5.2, P5.3
 
 Scope:
 
@@ -1141,7 +1322,11 @@ Dependencies: P4.4, P5.4
 Scope:
 
 - Add explicit lifecycle operations with atomic metadata updates.
-- Fork from a stable transcript revision and derived context checkpoint.
+- Fork from the latest state or a selected stable user-turn boundary, recording
+  source thread, source revision, and source message identity.
+- Keep conversational fork semantics separate from workspace rollback; a fork
+  starts from the live filesystem unless an explicit future checkpoint feature
+  says otherwise.
 - Make deletion recoverable where the platform supports trash.
 - Never delete a repository or project file.
 
@@ -1149,6 +1334,8 @@ Done when:
 
 - Picker state reflects lifecycle changes immediately.
 - Forked threads have independent writers and future history.
+- A historical fork cannot imply that files were reverted to that historical
+  message.
 - Delete confirmation identifies only MintClaw-owned files.
 
 #### P6.2 — Historical thread search
@@ -1176,7 +1363,10 @@ Scope:
 
 - Add file references, pasted logs, and supported image attachments without
   embedding historical base64 in every future prompt.
-- Retain durable file/media references with explicit availability.
+- Store copied durable attachments in a content-addressed MintClaw blob area,
+  while recording explicit availability for external path references.
+- Define ownership, deduplication, retention, redaction, and garbage collection
+  for blobs shared by multiple threads.
 - Define missing attachment behavior after restart.
 
 Done when:
@@ -1184,6 +1374,7 @@ Done when:
 - Old images or logs are loaded only when selected or contextually required.
 - Missing attachments do not corrupt the thread.
 - Prompt-size accounting includes selected media.
+- Deleting one thread cannot remove a blob still referenced by another thread.
 
 #### P6.4 — Git review and change summaries
 
@@ -1202,10 +1393,37 @@ Done when:
 - Review output links findings to current paths and line positions where stable.
 - Large diffs remain bounded and navigable.
 
+#### P6.5 — Structured code intelligence
+
+Dependencies: P2.7, P6.4
+
+Scope:
+
+- Add an optional LSP-backed tool for diagnostics, definitions, references,
+  symbols, hover, and previewable rename operations.
+- Detect applicable servers without installing or executing repository-provided
+  binaries implicitly.
+- Bound startup, request, idle, output, and shutdown lifecycles per project.
+- Route LSP workspace edits through the same write audit, repository refresh,
+  cancellation, and frontend event paths as ordinary coding tools.
+- Treat LSP as an enhancement: projects without a supported server remain fully
+  usable through read/search/edit/exec.
+
+Done when:
+
+- Diagnostics and navigation work on deterministic fixtures for at least two
+  language-server families.
+- Rename preview and apply handle multi-file edits, stale documents, and partial
+  failure without bypassing write audit.
+- Missing, crashing, or slow servers degrade cleanly and do not block startup.
+- Structured code intelligence demonstrates measurable benefit over baseline
+  search/edit fixtures before being enabled by default.
+
 #### P6 exit gate
 
 The beta UX supports normal thread lifecycle, historical discovery, rich input,
-and trustworthy repository review without expanding into remote execution.
+trustworthy repository review, and optional evidence-backed code intelligence
+without expanding into remote execution.
 
 ### P7 — Non-interactive and always-on extensions
 
@@ -1282,6 +1500,30 @@ Done when:
 - Worktree cleanup cannot delete user work.
 - Conflicts surface to the user rather than being silently resolved.
 
+#### P7.5 — Workspace checkpoint and rewind investigation
+
+Dependencies: P6.1, P6.4
+
+Scope:
+
+- Evaluate whether message-level undo should also offer an explicit filesystem
+  checkpoint and rewind operation.
+- Compare patch journals, content-addressed blobs, and an isolated Git object
+  store without changing the user's branch, index, commits, or ignore rules.
+- Define behavior for pre-existing changes, external edits after a checkpoint,
+  untracked/ignored files, renames, large files, symlinks, and partial failure.
+- Require preview, conflict reporting, and a recoverable inverse operation.
+
+Done when:
+
+- A design decision and measured large-repository cost are recorded.
+- No implementation is admitted that can silently discard user or externally
+  created changes.
+- Conversational fork/revert remains truthful when filesystem rewind is
+  unavailable or declined.
+- Any implementation work is split into separately reviewed packets after the
+  storage and conflict contracts are admitted.
+
 ### P8 — Hardening and release
 
 Goal: make the coding surface supportable as a stable MintClaw feature.
@@ -1293,7 +1535,8 @@ Dependencies: P5.6
 Scope:
 
 - Measure cold start, warm start, catalogue listing, TUI first paint, first
-  token, compaction, reconciliation, and memory use.
+  token, compaction, reconciliation, snapshot resync, historical hydration, and
+  memory use.
 - Defer coding MCP startup and expensive discovery where safe.
 - Bound transcript rendering and catalogue scans.
 
@@ -1311,6 +1554,8 @@ Scope:
 
 - Verify macOS, Linux, Windows, SSH, tmux, narrow terminals, no-color, and
   common shells.
+- Verify IME input, grapheme/cell-width behavior, bracketed paste, native
+  scrollback or alternate-screen semantics, and long streaming output.
 - Exercise path canonicalization, leases, process cancellation, and terminal
   restoration.
 - Document unsupported combinations.
@@ -1374,7 +1619,7 @@ P0.5 ------------+
                  v
 P1.1 -> P1.2 -> P1.3 -> P1.4
                  v
-P2.1 -> P2.2 -> P2.3 -> P2.4 -> P2.5
+P2.1 -> P2.2 -> P2.3 -> P2.4 -> P2.5 -> P2.6 -> P2.7
                  v
 P3.1 -> P3.2 -> P3.3 -> P3.4
                  v
@@ -1400,12 +1645,13 @@ Every production packet should select relevant rows from this matrix:
 | Runtime layout | Personal compatibility, distinct roots, no project pollution, construction rollback |
 | Thread storage | Atomic metadata, JSONL durability, corrupt entry isolation, schema migration |
 | Concurrency | Two-process lease contention, stale recovery, active-turn serialization, race tests |
-| Tools | Exact catalogue, cwd, cancellation, write audit, tool pairing, bounded results |
-| Instructions | Precedence, nesting, cache invalidation, byte limits, symlinks |
+| Tools | Exact catalogue, cwd, cancellation, durable start/result, crash recovery, write audit, tool pairing, bounded results, harness quality fixtures |
+| Instructions | Precedence, nesting, lazy path-scoped attachment, cache invalidation, byte limits, symlinks, executable-resource isolation |
 | Git | Non-Git, dirty, worktree, detached, unborn branch, external mutation |
-| Frontend events | Ordering, correlation, backpressure, redaction, streaming equivalence |
-| TUI | Resize, paste, scroll, interruption, restoration, no-color, non-TTY |
-| Compaction | Budgets, recent turns, tool pairs, multiple levels, failure, rebuild, resume |
+| Frontend events | Authoritative snapshot revision, ordering, correlation, dropped-delta resync, backpressure, redaction, streaming equivalence |
+| TUI | Screen/scrollback contract, resize, IME, Unicode width, paste, scroll, interruption, restoration, tmux/SSH, no-color, non-TTY |
+| Compaction | Tiered tool-output projection, protected evidence, budgets, recent turns, tool pairs, multiple levels, failure, rebuild, resume |
+| Code intelligence | Optional-server startup, diagnostics, navigation, audited workspace edits, timeout/crash fallback |
 | Privacy | Cross-project isolation, preview redaction, summary redaction, diagnostics |
 | Cross-platform | Build, paths, locks, process groups, signals, terminal lifecycle |
 
@@ -1421,12 +1667,14 @@ Coding mode should expose privacy-safe measurements for:
 - cold and warm startup duration;
 - first paint and first model token;
 - tool start/end, duration, outcome, and bounded output size;
+- interrupted tool-start recovery and unknown-outcome classification;
 - context window, mandatory reserve, selected history, selected summaries, and
   recent-tail degradation;
 - compaction trigger, start, completion, no-progress, failure, tokens saved,
   summaries created, and duration;
 - derived-state reconciliation and rebuild duration;
-- TUI dropped/coalesced events; and
+- frontend revision gaps, dropped/coalesced events, snapshot resync, and lazy
+  hydration; and
 - terminal restoration failures.
 
 Raw prompts, source code, diffs, command output, user text, and summary content
@@ -1437,10 +1685,15 @@ must not be included in metrics by default.
 - Full feature parity with OpenAI Codex.
 - A port of Codex's Rust TUI, app server, rollout store, or sandbox.
 - A complex approval selector or approve-once UI.
+- Automatic execution of repository-provided extensions, hooks, or dynamic
+  agent configuration merely because a project was opened.
 - Remote editing through the deployed gateway.
 - Multi-agent concurrent writes to one working tree.
 - Automatic commit, push, reset, rebase, or merge without an explicit user
   request.
+- Automatic workspace rewind coupled to conversational fork or message undo.
+- A debugger/DAP stack before the native coding runtime, TUI, compaction, and
+  optional LSP path are stable.
 - A project-local `.mintclaw` state directory.
 - Replacing canonical JSONL with Seahorse or another derived database.
 - Making generic personal memory part of coding context by default.
@@ -1453,10 +1706,15 @@ must not be included in metrics by default.
 | P0 grows into a general runtime rewrite | Admit only root, construction, store, and tool-profile changes required by coding invariants |
 | Coding mode changes gateway behavior | Compatibility mapping and full personal regression tests in every P0 packet |
 | Trusted-local exposes unrelated capabilities | Exact coding tool allowlist independent of approval mode |
+| Trusted-local is confused with project startup trust | Keep declarative instructions separate from executable repository resources |
 | Two processes corrupt a thread | Cross-process single-writer lease before append |
+| Crash leaves a tool looking successful or causes replay | Durable tool-start/result markers and interrupted/unknown resume repair |
 | Summary hallucinates current repo state | Fresh deterministic workspace snapshot always wins |
 | Compaction loses an important decision | Versioned coding policy, canonical transcript, deterministic continuity evaluation |
-| TUI blocks the agent or loses events | Typed projection, bounded buffers, backpressure policy, headless event tests |
+| TUI blocks the agent or loses events | Revisioned authoritative snapshots, bounded deltas, resync, backpressure policy, headless event tests |
+| TUI corrupts terminal history or Unicode input | Admit one screen model and test IME, width, resize, tmux, SSH, and restoration |
+| LSP adds slow or fragile startup | Optional lazy per-project lifecycle with timeouts and baseline-tool fallback |
+| Workspace rewind discards user changes | Keep it post-MVP until checkpoint ownership, preview, conflict, and inverse semantics are admitted |
 | Derived state slows resume | Revision watermarks, lazy/bounded rebuild, visible degraded mode |
 | Remote gateway edits the wrong filesystem | Keep MVP local; require an explicit daemon/node authority boundary later |
 | Existing Codex CLI provider becomes a nested agent | Do not use it as the native coding runtime; keep it optional as a provider or spike tool |
@@ -1486,6 +1744,10 @@ This roadmap is complete when:
 11. Non-interactive execution has stable output and exit semantics.
 12. Supported platforms meet documented terminal, path, process, privacy,
     performance, recovery, and migration requirements.
+13. A crash between side-effecting tool start and result persistence resumes as
+    interrupted/unknown without automatic replay.
+14. Dropped frontend deltas recover from an authoritative revisioned snapshot
+    without corrupting the transcript or composer.
 
 ## Handoff Rules for Implementing Agents
 
@@ -1513,5 +1775,7 @@ Stop and request an architecture decision when:
 - canonical JSONL would cease to be reconstructive authority;
 - the TUI would need direct access to mutable `AgentLoop` internals;
 - coding trusted-local mode would alter gateway approval behavior; or
+- opening a repository would execute project-provided extension or hook code
+  without an admitted trust decision; or
 - a remote component would gain filesystem authority not admitted by this
   roadmap.
