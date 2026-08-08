@@ -137,14 +137,12 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
 			return unavailableNodeBrowserReadiness("command_unapproved", "approve_browser_commands")
 		}
 		candidate, available := browserDescriptorProfile(descriptor, profileName)
-		if !available || (remoteProfile.Revision != "" && candidate.Revision != remoteProfile.Revision) {
+		if !available || !browserProfileIntersects(localProfile,
+			factory.config.Tools.Browser.Limits, candidate) ||
+			(remoteProfile.Revision != "" && !browserProfilesEqual(remoteProfile, candidate)) {
 			return unavailableNodeBrowserReadiness("profile_policy_mismatch", "reconcile_profile")
 		}
 		remoteProfile = candidate
-	}
-	if !browserProfileIntersects(factory.config.Tools.Browser.Targets[targetName].Profiles[profileName],
-		factory.config.Tools.Browser.Limits, remoteProfile) {
-		return unavailableNodeBrowserReadiness("profile_policy_mismatch", "reconcile_profile")
 	}
 	return browser.DriverReadiness{
 		Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
@@ -222,6 +220,9 @@ type nodeBrowserWorker struct {
 	profile         string
 	profileRevision string
 	limits          config.BrowserLimitsConfig
+	nodeID          nodes.ID
+	executor        string
+	policyRevision  string
 	catalogHash     string
 	catalogRevision string
 	tabID           string
@@ -442,14 +443,19 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 	if !ok {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
-	if worker.catalogHash != "" && worker.catalogHash != record.Snapshot.CatalogHash {
+	if worker.catalogHash == "" {
+		worker.nodeID = record.Snapshot.ID
+		worker.executor = record.Snapshot.Executor
+		worker.policyRevision = record.Snapshot.PolicyRevision
+		worker.catalogHash = record.Snapshot.CatalogHash
+	} else if worker.nodeID != record.Snapshot.ID ||
+		worker.executor != record.Snapshot.Executor ||
+		worker.policyRevision != record.Snapshot.PolicyRevision ||
+		worker.catalogHash != record.Snapshot.CatalogHash {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
 	if worker.profileRevision != "" && worker.profileRevision != profile.Revision {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
-	}
-	if worker.catalogHash == "" {
-		worker.catalogHash = record.Snapshot.CatalogHash
 	}
 	return descriptor, profile, nil
 }
@@ -610,6 +616,9 @@ func (worker *nodeBrowserWorker) validateAuthority(
 	expected nodes.CommandDescriptor,
 ) error {
 	if !current.Connected || current.Registration == nil ||
+		current.Snapshot.ID != worker.nodeID ||
+		current.Snapshot.Executor != worker.executor ||
+		current.Snapshot.PolicyRevision != worker.policyRevision ||
 		current.Snapshot.CatalogHash != worker.catalogHash {
 		return browser.ErrDenied
 	}
@@ -692,6 +701,14 @@ func browserProfileIntersects(
 		requested.TextInputBytes <= remote.Limits.TextInputBytes &&
 		requested.ToolResultBytes <= remote.Limits.ToolResultBytes &&
 		requested.RetentionSecs <= remote.Limits.RetentionSecs
+}
+
+func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
+	return left.Alias == right.Alias && left.Revision == right.Revision &&
+		left.Driver == right.Driver && left.Mode == right.Mode &&
+		left.NetworkMode == right.NetworkMode && left.DryRun == right.DryRun &&
+		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
+		left.Limits == right.Limits
 }
 
 func browserNodeLimits(limits config.BrowserLimitsConfig) nodes.BrowserLimits {

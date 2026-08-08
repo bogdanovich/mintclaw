@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -220,6 +221,160 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	if readiness.Status != browser.ReadinessUnavailable || readiness.Code != "command_unapproved" {
 		t.Fatalf("unapproved diagnostics = %#v", readiness)
 	}
+}
+
+func TestGatewayBrowserWorkerReadinessRejectsMismatchedCommandProfile(t *testing.T) {
+	cfg, runtime, _ := browserNodeTestRuntime(t)
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		catalog.Commands[0].BrowserProfiles[0].Limits.SnapshotRefs--
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases:         []nodes.Alias{"ab-local-test"},
+		AllowedCommands: registration.AllowedCommands,
+		At:              registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := factory.(*gatewayBrowserWorkerFactory).PassiveTargetReadiness(
+		t.Context(), "companion", "managed",
+	)
+	if readiness.Status != browser.ReadinessUnavailable ||
+		readiness.Code != "profile_policy_mismatch" {
+		t.Fatalf("mismatched profile diagnostics = %#v", readiness)
+	}
+}
+
+func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: owner, SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, ok := opened.Owner.(*nodeBrowserWorker)
+	if !ok {
+		t.Fatalf("worker = %T", opened.Owner)
+	}
+	first, found, err := runtime.registry.Resolve("ab-local-test")
+	if err != nil || !found {
+		t.Fatalf("resolve first node = %#v, %v, %v", first, found, err)
+	}
+	registration, found, err := runtime.registry.Registration(first.ID)
+	if err != nil || !found {
+		t.Fatalf("first registration = %#v, %v, %v", registration, found, err)
+	}
+	if _, err = runtime.registry.Approve(first.ID, nodes.PairingApproval{
+		AllowedCommands: registration.AllowedCommands, At: registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondID := browserNodeTestRegisterReplacement(t, runtime, registration)
+	if _, err = worker.Observe(t.Context()); !errors.Is(err, browser.ErrDenied) {
+		t.Fatalf("Observe() after alias rebound to %s error = %v, want denied", secondID, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
+		t.Fatalf("companion commands after alias rebound = %#v, want %#v", commands, want)
+	}
+}
+
+func browserNodeTestMutateCatalog(
+	t *testing.T,
+	runtime *nodeAdmissionRuntime,
+	mutate func(*nodes.CapabilityCatalog),
+) (nodes.Registration, error) {
+	t.Helper()
+	snapshot, found, err := runtime.registry.Resolve("ab-local-test")
+	if err != nil || !found {
+		return nodes.Registration{}, fmt.Errorf("resolve fixture node: found=%v: %w", found, err)
+	}
+	registration, found, err := runtime.registry.Registration(snapshot.ID)
+	if err != nil || !found {
+		return nodes.Registration{}, fmt.Errorf("load fixture registration: found=%v: %w", found, err)
+	}
+	mutate(&snapshot.Catalog)
+	for index, command := range snapshot.Catalog.Commands {
+		descriptors, descriptorErr := nodes.BrowserCommandDescriptors(command.BrowserProfiles)
+		if descriptorErr != nil {
+			return nodes.Registration{}, descriptorErr
+		}
+		for _, descriptor := range descriptors {
+			if descriptor.Name == command.Name {
+				snapshot.Catalog.Commands[index] = descriptor
+				break
+			}
+		}
+	}
+	snapshot.CatalogHash, err = snapshot.Catalog.Hash()
+	if err != nil {
+		return nodes.Registration{}, err
+	}
+	if err = runtime.registry.Upsert(snapshot); err != nil {
+		return nodes.Registration{}, err
+	}
+	return registration, nil
+}
+
+func browserNodeTestRegisterReplacement(
+	t *testing.T,
+	runtime *nodeAdmissionRuntime,
+	registration nodes.Registration,
+) nodes.ID {
+	t.Helper()
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := nodes.DeriveID(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := registration.Snapshot
+	snapshot.ID = nodeID
+	snapshot.State = nodes.StatePendingPairing
+	snapshot.Aliases = nil
+	snapshot.LastSeenAt = time.Now().Unix()
+	if err = runtime.registry.UpsertPending(nodes.PendingPairing{
+		Node: snapshot, PublicKey: publicKey, RequestedRole: "companion",
+		RequestedAt: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(nodeID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: registration.AllowedCommands,
+		At: time.Now().Add(time.Second).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.State = nodes.StateConnected
+	if err = runtime.registry.Upsert(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	release, err := runtime.sessions.Claim(nodeID, &testNodeConnection{}, nil, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = release() })
+	return nodeID
 }
 
 func browserNodeTestRuntime(
