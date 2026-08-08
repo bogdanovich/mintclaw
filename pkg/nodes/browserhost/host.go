@@ -1,0 +1,739 @@
+package browserhost
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+)
+
+const (
+	companionBrowserTarget    = "companion"
+	browserHostCleanupTimeout = 15 * time.Second
+)
+
+var (
+	ErrBrowserHostDenied   = errors.New("companion browser authority denied")
+	ErrBrowserHostBusy     = errors.New("companion browser profile is busy")
+	ErrBrowserHostNotFound = errors.New("companion browser session not found")
+	ErrBrowserHostStale    = errors.New("companion browser state is stale")
+	ErrBrowserHostLost     = errors.New("companion browser session is lost")
+	browserHostIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+)
+
+type BrowserHostFeatures struct {
+	Observe    bool
+	Navigate   bool
+	Screenshot bool
+	Download   bool
+}
+
+type BrowserHostSession struct {
+	SessionID     string
+	State         string
+	Reason        string
+	Recovery      string
+	TabID         string
+	Controller    string
+	Features      BrowserHostFeatures
+	ExpiresAt     int64
+	IdleExpiresAt int64
+}
+
+type BrowserHostOpenRequest struct {
+	SessionID             string
+	Profile               string
+	ProfileRevision       string
+	BrowserPolicyRevision string
+	AgentID               string
+	ActorID               string
+	DryRun                bool
+	Limits                nodes.BrowserLimits
+}
+
+type BrowserHostStatusRequest struct {
+	SessionID       string
+	ProfileRevision string
+	AgentID         string
+	ActorID         string
+}
+
+type BrowserHostObserveRequest struct {
+	SessionID          string
+	TabID              string
+	SnapshotGeneration uint64
+	AgentID            string
+	ActorID            string
+}
+
+type BrowserHostNavigateRequest struct {
+	SessionID             string
+	TabID                 string
+	SnapshotGeneration    uint64
+	ActionInvocationID    string
+	URL                   string
+	Effect                string
+	PreparedActionHash    string
+	BrowserPolicyRevision string
+	ProfileRevision       string
+	AgentID               string
+	ActorID               string
+}
+
+type BrowserHostElement struct {
+	Ref  string
+	Role string
+	Name string
+}
+
+type BrowserHostObservation struct {
+	SessionID          string
+	TabID              string
+	SnapshotGeneration uint64
+	URL                string
+	Origin             string
+	Title              string
+	Snapshot           string
+	Elements           []BrowserHostElement
+	Truncated          bool
+}
+
+type BrowserHostCloseRequest = BrowserHostStatusRequest
+
+type browserHostFactory interface {
+	Open(context.Context, browserworker.WorkerOpenRequest) (browserworker.WorkerOpenResult, error)
+}
+
+type browserHostSession struct {
+	mu                    sync.Mutex
+	sessionID             string
+	profile               companion.BrowserProfilePolicy
+	browserPolicyRevision string
+	agentID               string
+	actorID               string
+	state                 string
+	safeFailure           string
+	limits                nodes.BrowserLimits
+	worker                browserworker.ActionWorker
+	cleanupOwner          browserworker.Worker
+	tabID                 string
+	snapshotGeneration    uint64
+	actionInvocations     map[string]string
+	expiresAt             time.Time
+	idleExpiresAt         time.Time
+}
+
+// BrowserHost owns companion-local browser processes and profile leases. It
+// deliberately exposes typed lifecycle operations rather than raw MCP/CDP.
+// The gateway remains responsible for model-visible authorization, prepared
+// actions, approvals, and artifacts.
+type BrowserHost struct {
+	profiles      map[string]companion.BrowserProfilePolicy
+	factories     map[string]browserHostFactory
+	now           func() time.Time
+	verifyProfile func(companion.BrowserProfilePolicy) error
+
+	mu       sync.Mutex
+	sessions map[string]*browserHostSession
+}
+
+func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
+	factories := make(map[string]browserHostFactory)
+	for alias, profile := range profiles {
+		if !profile.Enabled {
+			continue
+		}
+		server, err := companionPlaywrightServer(profile)
+		if err != nil {
+			return nil, fmt.Errorf("configure browser profile %q: %w", alias, err)
+		}
+		factory, err := browserworker.NewPlaywrightManagedHostFactory(
+			browserworker.PlaywrightManagedHostConfig{
+				Target: companionBrowserTarget, Profile: alias,
+				ProfileConfig: config.BrowserProfileConfig{
+					Enabled: true, Mode: config.BrowserProfileManaged,
+					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
+					AllowedOrigins: append([]string(nil), profile.AllowedOrigins...),
+				},
+				ServerConfig: server,
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure browser profile %q worker: %w", alias, err)
+		}
+		factories[alias] = factory
+	}
+	return newBrowserHost(profiles, factories)
+}
+
+func newBrowserHost(
+	profiles map[string]companion.BrowserProfilePolicy,
+	factories map[string]browserHostFactory,
+) (*BrowserHost, error) {
+	descriptors, err := companion.BrowserProfileDescriptors(profiles)
+	if err != nil {
+		return nil, err
+	}
+	if len(descriptors) == 0 {
+		return nil, errors.New("companion browser host requires an enabled profile")
+	}
+	clonedProfiles := make(map[string]companion.BrowserProfilePolicy, len(profiles))
+	for alias, profile := range profiles {
+		if !profile.Enabled {
+			continue
+		}
+		if factories[alias] == nil {
+			return nil, fmt.Errorf("browser profile %q requires a worker factory", alias)
+		}
+		clonedProfiles[alias] = cloneBrowserProfilePolicy(profile)
+	}
+	return &BrowserHost{
+		profiles: clonedProfiles, factories: factories, now: time.Now,
+		verifyProfile: companion.VerifyBrowserProfileRuntimeIdentity,
+		sessions:      make(map[string]*browserHostSession),
+	}, nil
+}
+
+func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.MCPServerConfig, error) {
+	args := append([]string(nil), profile.DriverArguments...)
+	for _, argument := range args {
+		if managedDriverArgument(argument) {
+			return config.MCPServerConfig{}, errors.New("driver arguments contain a host-managed option")
+		}
+	}
+	args = append(args,
+		"--user-data-dir", profile.ProfileDirectory,
+		"--output-mode", "stdout",
+	)
+	if !profile.Headed {
+		args = append(args, "--headless")
+	}
+	return config.MCPServerConfig{
+		Enabled: false, Command: profile.DriverExecutable, Args: args, Type: "stdio",
+		SessionLossReplay: config.MCPSessionLossReplayNever,
+		ExclusiveLockFile: profile.LockFile,
+	}, nil
+}
+
+func managedDriverArgument(argument string) bool {
+	for _, managed := range []string{
+		"--allowed-origins", "--blocked-origins", "--caps", "--config",
+		"--proxy-server", "--proxy-bypass", "--cdp-endpoint", "--endpoint",
+		"--extension", "--user-data-dir", "--storage-state", "--isolated",
+		"--output-dir", "--output-mode", "--headless",
+	} {
+		if argument == managed || strings.HasPrefix(argument, managed+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneBrowserProfilePolicy(
+	profile companion.BrowserProfilePolicy,
+) companion.BrowserProfilePolicy {
+	profile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
+	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
+	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
+	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
+	return profile
+}
+
+func (host *BrowserHost) Open(
+	ctx context.Context,
+	request BrowserHostOpenRequest,
+) (BrowserHostSession, error) {
+	if host == nil || !browserHostIdentifier(request.SessionID) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || !request.DryRun ||
+		request.Limits.Validate() != nil {
+		return BrowserHostSession{}, ErrBrowserHostDenied
+	}
+	profile, ok := host.profiles[request.Profile]
+	if !ok || !authorizeBrowserProfile(profile, request.ProfileRevision, request.AgentID, request.ActorID) ||
+		!browserLimitsWithin(request.Limits, profile.Limits) {
+		return BrowserHostSession{}, ErrBrowserHostDenied
+	}
+	if host.verifyProfile == nil || host.verifyProfile(profile) != nil {
+		return BrowserHostSession{}, ErrBrowserHostDenied
+	}
+
+	host.mu.Lock()
+	if existing := host.sessions[request.SessionID]; existing != nil {
+		host.mu.Unlock()
+		existing.mu.Lock()
+		authorized := existing.profile.Revision == request.ProfileRevision &&
+			existing.agentID == request.AgentID && existing.actorID == request.ActorID &&
+			existing.browserPolicyRevision == request.BrowserPolicyRevision
+		existing.mu.Unlock()
+		if !authorized {
+			return BrowserHostSession{}, ErrBrowserHostDenied
+		}
+		return BrowserHostSession{}, ErrBrowserHostBusy
+	}
+	for _, session := range host.sessions {
+		session.mu.Lock()
+		occupied := session.state == "opening" || session.state == "ready" || session.state == "closing" ||
+			session.worker != nil || session.cleanupOwner != nil || session.safeFailure == "cleanup_required"
+		session.mu.Unlock()
+		if occupied {
+			host.mu.Unlock()
+			return BrowserHostSession{}, ErrBrowserHostBusy
+		}
+	}
+	now := host.now().UTC()
+	session := &browserHostSession{
+		sessionID: request.SessionID,
+		profile:   profile, browserPolicyRevision: request.BrowserPolicyRevision,
+		agentID: request.AgentID, actorID: request.ActorID, state: "opening",
+		limits:            request.Limits,
+		tabID:             "tab_primary",
+		actionInvocations: make(map[string]string),
+		expiresAt:         now.Add(time.Duration(request.Limits.SessionSeconds) * time.Second),
+		idleExpiresAt:     now.Add(time.Duration(request.Limits.IdleSeconds) * time.Second),
+	}
+	host.sessions[request.SessionID] = session
+	host.mu.Unlock()
+
+	opened, openErr := host.factories[request.Profile].Open(ctx, browserworker.WorkerOpenRequest{
+		SessionID: request.SessionID, Target: companionBrowserTarget,
+		Profile: request.Profile, DryRun: request.DryRun,
+		Limits: browserConfigLimits(request.Limits),
+	})
+	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
+	if openErr != nil || !workerOK || actionWorker == nil {
+		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
+		session.mu.Lock()
+		session.state = "lost"
+		if cleanupErr != nil {
+			session.safeFailure = "cleanup_required"
+			session.cleanupOwner = opened.Owner
+		} else if errors.Is(openErr, browserworker.ErrDriverIncompatible) {
+			session.safeFailure = "driver_incompatible"
+		} else {
+			session.safeFailure = "worker_unavailable"
+		}
+		session.mu.Unlock()
+		if openErr != nil {
+			return host.sessionView(session), openErr
+		}
+		return host.sessionView(session), browserworker.ErrWorkerUnavailable
+	}
+	session.mu.Lock()
+	if session.state != "opening" {
+		session.mu.Unlock()
+		cleanupErr := closeBrowserHostOwner(ctx, actionWorker)
+		session.mu.Lock()
+		if cleanupErr != nil {
+			session.state = "lost"
+			session.safeFailure = "cleanup_required"
+			session.cleanupOwner = actionWorker
+		}
+		session.mu.Unlock()
+		return host.sessionView(session), ErrBrowserHostLost
+	}
+	session.worker = actionWorker
+	session.state = "ready"
+	session.mu.Unlock()
+	return host.sessionView(session), nil
+}
+
+func (host *BrowserHost) Status(
+	ctx context.Context,
+	request BrowserHostStatusRequest,
+) (BrowserHostSession, error) {
+	session, err := host.authorizedSession(request)
+	if err != nil {
+		return BrowserHostSession{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.worker == nil {
+		return browserHostSessionView(session), nil
+	}
+	if host.expireSessionLocked(ctx, session) {
+		return browserHostSessionView(session), nil
+	}
+	status, statusErr := session.worker.Status(ctx)
+	if statusErr != nil {
+		return BrowserHostSession{}, statusErr
+	}
+	if status == browserworker.WorkerLost {
+		session.state = "lost"
+		session.safeFailure = "worker_unavailable"
+	}
+	return browserHostSessionView(session), nil
+}
+
+func (host *BrowserHost) Observe(
+	ctx context.Context,
+	request BrowserHostObserveRequest,
+) (BrowserHostObservation, error) {
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: request.SessionID, ProfileRevision: host.sessionProfileRevision(request.SessionID),
+		AgentID: request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return BrowserHostObservation{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.worker == nil {
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	if host.expireSessionLocked(ctx, session) {
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	if request.TabID != session.tabID || request.SnapshotGeneration != session.snapshotGeneration+1 {
+		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	observation, observeErr := session.worker.Observe(actionCtx)
+	actionContextErr := actionCtx.Err()
+	cancelAction()
+	if observeErr != nil {
+		return BrowserHostObservation{}, observeErr
+	}
+	if actionContextErr != nil {
+		return BrowserHostObservation{}, actionContextErr
+	}
+	if !host.now().UTC().Before(actionDeadline) {
+		return BrowserHostObservation{}, context.DeadlineExceeded
+	}
+	session.snapshotGeneration = request.SnapshotGeneration
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	return browserHostObservation(request.SessionID, session, observation), nil
+}
+
+func (host *BrowserHost) Navigate(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
+		AgentID: request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return BrowserHostObservation{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.worker == nil {
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	if host.expireSessionLocked(ctx, session) {
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	if request.TabID != session.tabID || request.SnapshotGeneration != session.snapshotGeneration ||
+		request.BrowserPolicyRevision != session.browserPolicyRevision ||
+		!slices.Contains(session.profile.AllowedActions, "navigate") {
+		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	if existingHash, reserved := session.actionInvocations[request.ActionInvocationID]; reserved {
+		if existingHash != request.PreparedActionHash {
+			return BrowserHostObservation{}, ErrBrowserHostDenied
+		}
+		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	if ctx.Err() != nil {
+		return BrowserHostObservation{}, ctx.Err()
+	}
+	// Bind the gateway invocation before dispatch. Once reserved, an invocation
+	// can never execute again even if the driver outcome is ambiguous.
+	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	if executeErr := session.worker.Execute(actionCtx, browserworker.DriverAction{
+		Kind: browserworker.DriverNavigate, URL: request.URL,
+	}); executeErr != nil {
+		cancelAction()
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	if actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
+		cancelAction()
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	observation, observeErr := session.worker.Observe(actionCtx)
+	actionContextErr := actionCtx.Err()
+	cancelAction()
+	if observeErr != nil || actionContextErr != nil || !host.now().UTC().Before(actionDeadline) {
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	session.snapshotGeneration++
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	return browserHostObservation(request.SessionID, session, observation), nil
+}
+
+func (host *BrowserHost) actionContextLocked(
+	ctx context.Context,
+	session *browserHostSession,
+) (context.Context, context.CancelFunc, time.Time) {
+	now := host.now().UTC()
+	deadline := now.Add(time.Duration(session.limits.ActionSeconds) * time.Second)
+	if session.expiresAt.Before(deadline) {
+		deadline = session.expiresAt
+	}
+	if session.idleExpiresAt.Before(deadline) {
+		deadline = session.idleExpiresAt
+	}
+	actionCtx, cancelAction := context.WithTimeout(ctx, max(deadline.Sub(now), 0))
+	return actionCtx, cancelAction, deadline
+}
+
+func (host *BrowserHost) quarantineActionLocked(session *browserHostSession) {
+	session.state = "lost"
+	session.safeFailure = "outcome_unknown"
+}
+
+func (host *BrowserHost) Close(
+	ctx context.Context,
+	request BrowserHostCloseRequest,
+) (BrowserHostSession, error) {
+	session, err := host.authorizedSession(request)
+	if err != nil {
+		return BrowserHostSession{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state == "closed" {
+		return browserHostSessionView(session), nil
+	}
+	if session.worker == nil {
+		if session.cleanupOwner != nil {
+			if closeErr := session.cleanupOwner.Close(ctx); closeErr != nil {
+				session.state = "lost"
+				session.safeFailure = "cleanup_required"
+				return browserHostSessionView(session), ErrBrowserHostLost
+			}
+			session.cleanupOwner = nil
+		}
+		session.state = "closed"
+		session.safeFailure = ""
+		return browserHostSessionView(session), nil
+	}
+	session.state = "closing"
+	if closeErr := session.worker.Close(ctx); closeErr != nil {
+		session.state = "lost"
+		session.safeFailure = "cleanup_required"
+		return browserHostSessionView(session), ErrBrowserHostLost
+	}
+	session.worker = nil
+	session.state = "closed"
+	session.safeFailure = ""
+	return browserHostSessionView(session), nil
+}
+
+func closeBrowserHostOwner(ctx context.Context, owner browserworker.Worker) error {
+	if owner == nil {
+		return nil
+	}
+	cleanupContext, cancelCleanup := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		browserHostCleanupTimeout,
+	)
+	defer cancelCleanup()
+	return owner.Close(cleanupContext)
+}
+
+func (host *BrowserHost) Shutdown(ctx context.Context) error {
+	if host == nil {
+		return nil
+	}
+	host.mu.Lock()
+	sessions := make(map[string]*browserHostSession, len(host.sessions))
+	for id, session := range host.sessions {
+		sessions[id] = session
+	}
+	host.mu.Unlock()
+	var shutdownErr error
+	for id, session := range sessions {
+		session.mu.Lock()
+		request := BrowserHostCloseRequest{
+			SessionID: id, ProfileRevision: session.profile.Revision,
+			AgentID: session.agentID, ActorID: session.actorID,
+		}
+		session.mu.Unlock()
+		if _, err := host.Close(ctx, request); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
+	return shutdownErr
+}
+
+// expireSessionLocked applies both node-local absolute and idle ceilings. It
+// never starts replacement work; an unsuccessful close requires operator
+// cleanup and leaves the profile unavailable.
+func (host *BrowserHost) expireSessionLocked(
+	ctx context.Context,
+	session *browserHostSession,
+) bool {
+	now := host.now().UTC()
+	if now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) {
+		return false
+	}
+	session.state = "closing"
+	if session.worker != nil {
+		if err := session.worker.Close(ctx); err != nil {
+			session.state = "lost"
+			session.safeFailure = "cleanup_required"
+			return true
+		}
+		session.worker = nil
+	}
+	session.state = "closed"
+	session.safeFailure = "session_expired"
+	return true
+}
+
+func (host *BrowserHost) authorizedSession(
+	request BrowserHostStatusRequest,
+) (*browserHostSession, error) {
+	if host == nil || !browserHostIdentifier(request.SessionID) {
+		return nil, ErrBrowserHostDenied
+	}
+	host.mu.Lock()
+	session := host.sessions[request.SessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return nil, ErrBrowserHostNotFound
+	}
+	session.mu.Lock()
+	authorized := request.ProfileRevision == session.profile.Revision &&
+		request.AgentID == session.agentID && request.ActorID == session.actorID &&
+		authorizeBrowserProfile(session.profile, request.ProfileRevision, request.AgentID, request.ActorID)
+	session.mu.Unlock()
+	if !authorized {
+		return nil, ErrBrowserHostDenied
+	}
+	return session, nil
+}
+
+func (host *BrowserHost) sessionProfileRevision(sessionID string) string {
+	if host == nil {
+		return ""
+	}
+	host.mu.Lock()
+	session := host.sessions[sessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return ""
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.profile.Revision
+}
+
+func (host *BrowserHost) sessionView(session *browserHostSession) BrowserHostSession {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return browserHostSessionView(session)
+}
+
+func browserHostSessionView(session *browserHostSession) BrowserHostSession {
+	recovery := "none"
+	if session.state == "lost" {
+		recovery = "close"
+		if session.safeFailure == "cleanup_required" {
+			recovery = "operator"
+		}
+	}
+	return BrowserHostSession{
+		SessionID: session.sessionID,
+		State:     session.state, Reason: session.safeFailure, Recovery: recovery,
+		TabID: session.tabID, Controller: "agent",
+		Features: BrowserHostFeatures{
+			Observe:    true,
+			Navigate:   slices.Contains(session.profile.AllowedActions, "navigate"),
+			Screenshot: false, Download: false,
+		},
+		ExpiresAt: session.expiresAt.Unix(), IdleExpiresAt: session.idleExpiresAt.Unix(),
+	}
+}
+
+func browserHostObservation(
+	sessionID string,
+	session *browserHostSession,
+	observation browserworker.DriverObservation,
+) BrowserHostObservation {
+	elements := make([]BrowserHostElement, len(observation.Elements))
+	for index, element := range observation.Elements {
+		elements[index] = BrowserHostElement{
+			Ref: element.Target, Role: element.Role, Name: element.Name,
+		}
+	}
+	return BrowserHostObservation{
+		SessionID: sessionID, TabID: session.tabID,
+		SnapshotGeneration: session.snapshotGeneration,
+		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
+		Snapshot: observation.Snapshot, Elements: elements, Truncated: observation.Truncated,
+	}
+}
+
+func authorizeBrowserProfile(
+	profile companion.BrowserProfilePolicy,
+	revision, agentID, actorID string,
+) bool {
+	return profile.Enabled && profile.Revision == revision &&
+		slices.Contains(profile.AllowedAgents, agentID) &&
+		slices.Contains(profile.AllowedActors, actorID)
+}
+
+func browserLimitsWithin(requested, ceiling nodes.BrowserLimits) bool {
+	return requested.Sessions == 1 && requested.Sessions <= ceiling.Sessions &&
+		requested.Tabs <= ceiling.Tabs && requested.SessionSeconds <= ceiling.SessionSeconds &&
+		requested.IdleSeconds <= ceiling.IdleSeconds &&
+		requested.PreparedSeconds <= ceiling.PreparedSeconds &&
+		requested.ActionSeconds <= ceiling.ActionSeconds &&
+		requested.SnapshotBytes <= ceiling.SnapshotBytes &&
+		requested.ScreenshotBytes <= ceiling.ScreenshotBytes &&
+		requested.UploadBytes <= ceiling.UploadBytes &&
+		requested.DownloadBytes <= ceiling.DownloadBytes &&
+		requested.SnapshotRefs <= ceiling.SnapshotRefs &&
+		requested.TextInputBytes <= ceiling.TextInputBytes &&
+		requested.ToolResultBytes <= ceiling.ToolResultBytes &&
+		requested.RetentionSecs <= ceiling.RetentionSecs
+}
+
+func browserConfigLimits(limits nodes.BrowserLimits) config.BrowserLimitsConfig {
+	return config.BrowserLimitsConfig{
+		Sessions: limits.Sessions, Tabs: limits.Tabs,
+		SessionSeconds: limits.SessionSeconds, IdleSeconds: limits.IdleSeconds,
+		PreparedSeconds: limits.PreparedSeconds, ActionSeconds: limits.ActionSeconds,
+		SnapshotBytes: limits.SnapshotBytes, ScreenshotBytes: limits.ScreenshotBytes,
+		UploadBytes: limits.UploadBytes, DownloadBytes: limits.DownloadBytes,
+		SnapshotRefs: limits.SnapshotRefs, TextInputBytes: limits.TextInputBytes,
+		ToolResultBytes: limits.ToolResultBytes, RetentionSecs: limits.RetentionSecs,
+	}
+}
+
+func browserHostIdentifier(value string) bool {
+	return browserHostIDPattern.MatchString(value)
+}
+
+func browserHostDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}

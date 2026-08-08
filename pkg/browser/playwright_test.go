@@ -1879,6 +1879,40 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	}
 }
 
+func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
+	lockFile := filepath.Join(t.TempDir(), "browser.lock")
+	host := PlaywrightManagedHostConfig{
+		Target: "companion", Profile: "managed",
+		ProfileConfig: config.BrowserProfileConfig{
+			Enabled: true, Mode: config.BrowserProfileManaged,
+			NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+		},
+		ServerConfig: config.MCPServerConfig{
+			Command: "npx", Args: []string{"@playwright/mcp@0.0.78"}, Type: "stdio",
+			SessionLossReplay: config.MCPSessionLossReplayNever,
+			ExclusiveLockFile: lockFile,
+		},
+	}
+	factory, err := NewPlaywrightManagedHostFactory(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factory.target != "companion" || factory.profileName != "managed" ||
+		factory.serverConfig.Command != "npx" ||
+		factory.downloadReady != playwrightServerDownloadAvailable(host.ServerConfig) {
+		t.Fatalf("managed host factory = %#v", factory)
+	}
+	host.ServerConfig.Args[0] = "mutated"
+	if factory.serverConfig.Args[0] != "@playwright/mcp@0.0.78" {
+		t.Fatal("managed host factory retained caller-owned server arguments")
+	}
+
+	host.ServerConfig.SessionLossReplay = config.MCPSessionLossReplayOnce
+	if _, err = NewPlaywrightManagedHostFactory(host); !errors.Is(err, ErrDenied) {
+		t.Fatalf("replay-enabled managed host error = %v", err)
+	}
+}
+
 func mustSnapshotRef(t *testing.T, snapshot, pattern string) string {
 	t.Helper()
 	matches := regexp.MustCompile(pattern).FindStringSubmatch(snapshot)

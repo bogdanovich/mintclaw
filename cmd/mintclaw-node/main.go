@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
 )
@@ -80,6 +81,22 @@ func run(args []string) error {
 	}
 	defer ledger.Close()
 	runtimeOptions := make([]companion.RuntimeOption, 0, 4)
+	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
+		browserHost, browserHostErr := browserhost.NewBrowserHost(cfg.BrowserProfiles)
+		if browserHostErr != nil {
+			return fmt.Errorf("configure companion browser host: %w", browserHostErr)
+		}
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(
+				context.Background(),
+				15*time.Second,
+			)
+			defer cancelShutdown()
+			if shutdownErr := browserHost.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion browser cleanup failed", "error", shutdownErr)
+			}
+		}()
+	}
 	fileCapabilities := make([]companion.FileTransferCapability, 0, 2)
 	if companion.HasEnabledFilePolicy(cfg.FilePolicies) {
 		transferLedger, transferLedgerErr := companion.NewFileTransferLedger(
