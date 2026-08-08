@@ -620,10 +620,21 @@ func TestCompanionPlaywrightServerUsesNormalizedSymlinkLauncherDirectory(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := brewBin + string(os.PathListSeparator) + "/usr/bin:/bin"
+	brewBinReal, err := filepath.EvalSymlinks(brewBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := brewBinReal + string(os.PathListSeparator) + "/usr/bin:/bin"
 	if profile.DriverExecutable != canonicalReal ||
 		server.Command != canonicalReal || server.Env["PATH"] != wantPath || len(server.Env) != 1 {
 		t.Fatalf("normalized profile = %#v, server = %#v", profile, server)
+	}
+	if err = os.Chmod(brewBin, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err = companion.VerifyBrowserProfileRuntimeIdentity(profile); err == nil ||
+		!strings.Contains(err.Error(), "executable identity changed") {
+		t.Fatalf("unsafe launcher directory runtime identity error = %v", err)
 	}
 }
 

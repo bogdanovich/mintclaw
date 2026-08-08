@@ -263,7 +263,16 @@ func resolveBrowserExecutable(baseDir, configured string) (string, string, error
 	if err != nil || strings.TrimSpace(configured) == "" {
 		return "", "", errors.New("driver_executable is required")
 	}
-	realPath, err := filepath.EvalSymlinks(path)
+	launcherDirectory, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve driver_executable directory: %w", err)
+	}
+	launcherInfo, err := os.Stat(launcherDirectory)
+	if err != nil || !launcherInfo.IsDir() || validateBrowserDriverDirectory(launcherInfo) != nil {
+		return "", "", errors.New("driver_executable directory is not trusted")
+	}
+	launcherPath := filepath.Join(filepath.Clean(launcherDirectory), filepath.Base(path))
+	realPath, err := filepath.EvalSymlinks(launcherPath)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve driver_executable: %w", err)
 	}
@@ -271,7 +280,7 @@ func resolveBrowserExecutable(baseDir, configured string) (string, string, error
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", "", errors.New("driver_executable must be an executable regular file")
 	}
-	return filepath.Clean(realPath), filepath.Clean(path), nil
+	return filepath.Clean(realPath), launcherPath, nil
 }
 
 func verifyBrowserExecutableDigest(path, expected string) error {
@@ -295,6 +304,15 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 }
 
 func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
+	launcherDirectory := profile.DriverLauncherDirectory()
+	realLauncherDirectory, err := filepath.EvalSymlinks(launcherDirectory)
+	if err != nil || filepath.Clean(realLauncherDirectory) != launcherDirectory {
+		return errors.New("browser executable identity changed")
+	}
+	launcherInfo, err := os.Stat(launcherDirectory)
+	if err != nil || !launcherInfo.IsDir() || validateBrowserDriverDirectory(launcherInfo) != nil {
+		return errors.New("browser executable identity changed")
+	}
 	launcherTarget, err := filepath.EvalSymlinks(profile.driverLauncherPath)
 	if err != nil || filepath.Clean(launcherTarget) != profile.DriverExecutable {
 		return errors.New("browser executable identity changed")
