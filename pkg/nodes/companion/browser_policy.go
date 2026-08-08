@@ -58,6 +58,20 @@ type BrowserProfilePolicy struct {
 	AllowedActions         []string            `json:"allowed_actions,omitempty"`
 	Headed                 bool                `json:"headed"`
 	Limits                 nodes.BrowserLimits `json:"limits,omitempty"`
+
+	// driverLauncherPath preserves the validated configured path before symlink
+	// canonicalization. It is runtime-only authority used to derive the child
+	// PATH without exposing host filesystem details in config or catalogs.
+	driverLauncherPath string
+}
+
+// DriverLauncherDirectory returns the normalized launcher's directory for the
+// private browser-driver child environment. It is not serialized or cataloged.
+func (profile BrowserProfilePolicy) DriverLauncherDirectory() string {
+	if profile.driverLauncherPath == "" {
+		return filepath.Dir(profile.DriverExecutable)
+	}
+	return filepath.Dir(profile.driverLauncherPath)
 }
 
 func normalizeBrowserProfiles(
@@ -124,11 +138,12 @@ func normalizeBrowserProfile(
 	if profile.Driver != nodes.BrowserDriverPlaywrightMCP {
 		return BrowserProfilePolicy{}, errors.New("driver must be playwright_mcp")
 	}
-	executable, err := resolveBrowserExecutable(baseDir, profile.DriverExecutable)
+	executable, launcher, err := resolveBrowserExecutable(baseDir, profile.DriverExecutable)
 	if err != nil {
 		return BrowserProfilePolicy{}, err
 	}
 	profile.DriverExecutable = executable
+	profile.driverLauncherPath = launcher
 	if err = verifyBrowserExecutableDigest(executable, profile.DriverExecutableSHA256); err != nil {
 		return BrowserProfilePolicy{}, err
 	}
@@ -243,20 +258,20 @@ func normalizeBrowserActions(actions *[]string) error {
 	return nil
 }
 
-func resolveBrowserExecutable(baseDir, configured string) (string, error) {
+func resolveBrowserExecutable(baseDir, configured string) (string, string, error) {
 	path, err := resolveConfigPath(baseDir, configured)
 	if err != nil || strings.TrimSpace(configured) == "" {
-		return "", errors.New("driver_executable is required")
+		return "", "", errors.New("driver_executable is required")
 	}
 	realPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve driver_executable: %w", err)
+		return "", "", fmt.Errorf("resolve driver_executable: %w", err)
 	}
 	info, err := os.Stat(realPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", errors.New("driver_executable must be an executable regular file")
+		return "", "", errors.New("driver_executable must be an executable regular file")
 	}
-	return filepath.Clean(realPath), nil
+	return filepath.Clean(realPath), filepath.Clean(path), nil
 }
 
 func verifyBrowserExecutableDigest(path, expected string) error {
@@ -280,7 +295,11 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 }
 
 func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
-	if err := verifyBrowserExecutableDigest(
+	launcherTarget, err := filepath.EvalSymlinks(profile.driverLauncherPath)
+	if err != nil || filepath.Clean(launcherTarget) != profile.DriverExecutable {
+		return errors.New("browser executable identity changed")
+	}
+	if err = verifyBrowserExecutableDigest(
 		profile.DriverExecutable,
 		profile.DriverExecutableSHA256,
 	); err != nil {

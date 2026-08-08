@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -153,7 +152,7 @@ func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.M
 	if !profile.Headed {
 		args = append(args, "--headless")
 	}
-	driverPath := filepath.Dir(profile.DriverExecutable)
+	driverPath := profile.DriverLauncherDirectory()
 	if inherited := os.Getenv("PATH"); inherited != "" {
 		driverPath += string(os.PathListSeparator) + inherited
 	}
