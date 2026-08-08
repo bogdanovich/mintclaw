@@ -98,3 +98,12 @@ func codexIncompleteStreamError() error {
 		Cause:       errors.New("Codex stream ended without completed response event"),
 	}
 }
+
+func codexIncompleteResponseError(reason string) error {
+	cause := fmt.Errorf("Codex response incomplete: reason=%s", reason)
+	return &providererrors.ProviderError{
+		Kind:        providererrors.KindInvalidRequest,
+		SafeMessage: "Codex response was incomplete",
+		Cause:       cause,
+	}
+}

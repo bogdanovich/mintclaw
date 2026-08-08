@@ -149,6 +149,7 @@ func parseCodexImageSSE(stream codexImageStream, outputFormat string) ([]Generat
 	var events int
 	var images []GeneratedImage
 	var completedImages []GeneratedImage
+	completed := false
 
 	for stream.Next() {
 		evt := stream.Current()
@@ -169,9 +170,15 @@ func parseCodexImageSSE(stream codexImageStream, outputFormat string) ([]Generat
 		}
 		images = append(images, eventImages...)
 		completedImages = append(completedImages, eventCompletedImages...)
+		if evt.Type == "response.completed" {
+			completed = true
+		}
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
+	}
+	if !completed {
+		return nil, codexIncompleteStreamError()
 	}
 	if len(images) > 0 {
 		return images, nil
@@ -201,12 +208,17 @@ func parseCodexImageEventUnion(
 		}
 		return nil, images, nil
 	case "response.failed":
+		if evt.Response.Status == responses.ResponseStatusCancelled {
+			return nil, nil, codexCanceledResponseError()
+		}
 		return nil, nil, normalizeCodexResponseFailure(
 			string(evt.Response.Error.Code),
 			evt.Response.Error.Message,
 		)
 	case "error":
 		return nil, nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
+	case "response.incomplete":
+		return nil, nil, codexIncompleteResponseError(evt.Response.IncompleteDetails.Reason)
 	}
 	return nil, nil, nil
 }

@@ -2,6 +2,7 @@ package oauthprovider
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -160,6 +161,71 @@ func TestCodexFailedResponseEventContract(t *testing.T) {
 	}
 }
 
+func TestCodexIncompleteResponseDoesNotReturnPartialText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(
+			w,
+			"event: response.output_text.delta\n"+
+				`data: {"type":"response.output_text.delta","sequence_number":1,"delta":"partial"}`+"\n\n",
+		)
+		_, _ = fmt.Fprint(w, "event: response.incomplete\n")
+		_, _ = fmt.Fprint(
+			w,
+			`data: {"type":"response.incomplete","sequence_number":2,"response":{"id":"resp-incomplete","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`+"\n\n",
+		)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	resp, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hello"}},
+		nil,
+		"gpt-5.3-codex",
+		map[string]any{},
+	)
+	if resp != nil {
+		t.Fatalf("response = %#v, want nil for incomplete terminal", resp)
+	}
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindInvalidRequest {
+		t.Fatalf("error = %#v, want invalid-request ProviderError", err)
+	}
+}
+
+func TestCodexTopLevelErrorEventPreservesClassification(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: error\n")
+		_, _ = fmt.Fprint(
+			w,
+			`data: {"type":"error","sequence_number":1,"code":"rate_limit_exceeded","message":"request rate limited","param":null}`+"\n\n",
+		)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	_, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hello"}},
+		nil,
+		"gpt-5.3-codex",
+		map[string]any{},
+	)
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindRateLimit {
+		t.Fatalf("error = %#v, want rate-limit ProviderError", err)
+	}
+	if providerErr.SafeMessage != "request rate limited" {
+		t.Fatalf("SafeMessage = %q, want provider event message", providerErr.SafeMessage)
+	}
+}
+
 func TestCodexImageFailureEventContract(t *testing.T) {
 	evt := responses.ResponseStreamEventUnion{
 		Type: "response.failed",
@@ -175,6 +241,73 @@ func TestCodexImageFailureEventContract(t *testing.T) {
 	var providerErr *providererrors.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindRateLimit {
 		t.Fatalf("error = %#v, want rate-limit ProviderError", err)
+	}
+}
+
+func TestCodexImageIncompleteStreamDoesNotReturnPartialImage(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte("partial-image"))
+	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{
+		{
+			Type: "response.output_item.done",
+			Item: responses.ResponseOutputItemUnion{
+				Type:   "image_generation_call",
+				Result: payload,
+			},
+		},
+		{
+			Type: "response.incomplete",
+			Response: responses.Response{
+				Status:            responses.ResponseStatusIncomplete,
+				IncompleteDetails: responses.ResponseIncompleteDetails{Reason: "max_output_tokens"},
+			},
+		},
+	}}
+
+	images, err := parseCodexImageSSE(stream, "png")
+	if images != nil {
+		t.Fatalf("images = %#v, want nil for incomplete terminal", images)
+	}
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindInvalidRequest {
+		t.Fatalf("error = %#v, want invalid-request ProviderError", err)
+	}
+}
+
+func TestCodexImageMissingTerminalDoesNotReturnPartialImage(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte("partial-image"))
+	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{{
+		Type: "response.output_item.done",
+		Item: responses.ResponseOutputItemUnion{
+			Type:   "image_generation_call",
+			Result: payload,
+		},
+	}}}
+
+	images, err := parseCodexImageSSE(stream, "png")
+	if images != nil {
+		t.Fatalf("images = %#v, want nil without completed terminal", images)
+	}
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindTransient {
+		t.Fatalf("error = %#v, want transient ProviderError", err)
+	}
+}
+
+func TestCodexImageCanceledTerminalContract(t *testing.T) {
+	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{{
+		Type: "response.failed",
+		Response: responses.Response{
+			Status: responses.ResponseStatusCancelled,
+		},
+	}}}
+
+	images, err := parseCodexImageSSE(stream, "png")
+	if images != nil {
+		t.Fatalf("images = %#v, want nil for canceled terminal", images)
+	}
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindCanceled {
+		t.Fatalf("error = %#v, want canceled ProviderError", err)
 	}
 }
 

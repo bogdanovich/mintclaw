@@ -102,6 +102,9 @@ func (p *CodexProvider) Chat(
 	streamedOutputItems := make([]responses.ResponseOutputItemUnion, 0)
 	for stream.Next() {
 		evt := stream.Current()
+		if evt.Type == "error" {
+			return nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
+		}
 		if evt.Type == "response.output_text.delta" {
 			streamedText.WriteString(evt.Delta)
 		}
@@ -160,11 +163,16 @@ func (p *CodexProvider) Chat(
 		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
 		return nil, codexIncompleteStreamError()
 	}
-	if resp.Status == responses.ResponseStatusFailed {
+	switch resp.Status {
+	case responses.ResponseStatusCompleted:
+	case responses.ResponseStatusFailed:
 		return nil, normalizeCodexResponseFailure(string(resp.Error.Code), resp.Error.Message)
-	}
-	if resp.Status == responses.ResponseStatusCancelled {
+	case responses.ResponseStatusCancelled:
 		return nil, codexCanceledResponseError()
+	case responses.ResponseStatusIncomplete:
+		return nil, codexIncompleteResponseError(resp.IncompleteDetails.Reason)
+	default:
+		return nil, codexIncompleteStreamError()
 	}
 	if len(resp.Output) == 0 && len(streamedOutputItems) > 0 {
 		resp.Output = streamedOutputItems
