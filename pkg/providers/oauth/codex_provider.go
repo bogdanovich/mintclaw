@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -15,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/auth"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 const (
@@ -131,30 +131,23 @@ func (p *CodexProvider) Chat(
 	}
 	err = stream.Err()
 	if err != nil {
+		normalizedErr := normalizeCodexError(err)
 		fields := map[string]any{
 			"requested_model":    model,
 			"resolved_model":     resolvedModel,
 			"messages_count":     len(messages),
 			"tools_count":        len(tools),
 			"account_id_present": accountID != "",
-			"error":              err.Error(),
 		}
-		var apiErr *openai.Error
-		if errors.As(err, &apiErr) {
-			fields["status_code"] = apiErr.StatusCode
-			fields["api_type"] = apiErr.Type
-			fields["api_code"] = apiErr.Code
-			fields["api_param"] = apiErr.Param
-			fields["api_message"] = apiErr.Message
-			if apiErr.StatusCode == 400 {
-				fields["hint"] = "verify account id header and model compatibility for codex backend"
-			}
-			if apiErr.Response != nil {
-				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
-			}
+		var providerErr *providererrors.ProviderError
+		if errors.As(normalizedErr, &providerErr) && providerErr != nil {
+			fields["error_kind"] = providerErr.Kind.Canonical()
+			fields["status_code"] = providerErr.HTTPStatus
+			fields["request_id"] = providerErr.RequestID
+			fields["safe_message"] = providerErr.SafeMessage
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
-		return nil, fmt.Errorf("codex API call: %w", err)
+		return nil, normalizedErr
 	}
 	if resp == nil {
 		fields := map[string]any{
@@ -165,7 +158,13 @@ func (p *CodexProvider) Chat(
 			"account_id_present": accountID != "",
 		}
 		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
-		return nil, fmt.Errorf("codex API call: stream ended without completed response")
+		return nil, codexIncompleteStreamError()
+	}
+	if resp.Status == responses.ResponseStatusFailed {
+		return nil, normalizeCodexResponseFailure(string(resp.Error.Code), resp.Error.Message)
+	}
+	if resp.Status == responses.ResponseStatusCancelled {
+		return nil, codexCanceledResponseError()
 	}
 	if len(resp.Output) == 0 && len(streamedOutputItems) > 0 {
 		resp.Output = streamedOutputItems

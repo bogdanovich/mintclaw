@@ -444,6 +444,7 @@ func createAnthropicTestClient(baseURL, token string) *anthropic.Client {
 	c := anthropic.NewClient(
 		anthropicoption.WithAuthToken(token),
 		anthropicoption.WithBaseURL(baseURL),
+		anthropicoption.WithMaxRetries(0),
 	)
 	return &c
 }
