@@ -230,6 +230,27 @@ type BrowserObserveInput struct {
 	Screenshot         bool   `json:"screenshot"`
 }
 
+func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID          string          `json:"session_id"`
+		TabID              string          `json:"tab_id"`
+		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
+		Screenshot         bool            `json:"screenshot"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return fmt.Errorf("decode browser observe generation: %w", err)
+	}
+	*input = BrowserObserveInput{
+		SessionID: value.SessionID, TabID: value.TabID,
+		SnapshotGeneration: generation, Screenshot: value.Screenshot,
+	}
+	return nil
+}
+
 type BrowserAction struct {
 	Kind string `json:"kind"`
 	URL  string `json:"url,omitempty"`
@@ -248,6 +269,38 @@ type BrowserActInput struct {
 	BrowserPolicyRevision string        `json:"browser_policy_revision"`
 	ProfileRevision       string        `json:"profile_revision"`
 	ApprovalDigest        string        `json:"approval_digest,omitempty"`
+}
+
+func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID             string          `json:"session_id"`
+		TabID                 string          `json:"tab_id"`
+		SnapshotGeneration    json.RawMessage `json:"snapshot_generation"`
+		ActionInvocationID    string          `json:"action_invocation_id"`
+		Action                BrowserAction   `json:"action"`
+		Effect                string          `json:"effect"`
+		CurrentOrigin         string          `json:"current_origin"`
+		PreparedActionHash    string          `json:"prepared_action_hash"`
+		BrowserPolicyRevision string          `json:"browser_policy_revision"`
+		ProfileRevision       string          `json:"profile_revision"`
+		ApprovalDigest        string          `json:"approval_digest,omitempty"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return fmt.Errorf("decode browser action generation: %w", err)
+	}
+	*input = BrowserActInput{
+		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
+		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
+		Effect: value.Effect, CurrentOrigin: value.CurrentOrigin,
+		PreparedActionHash:    value.PreparedActionHash,
+		BrowserPolicyRevision: value.BrowserPolicyRevision,
+		ProfileRevision:       value.ProfileRevision, ApprovalDigest: value.ApprovalDigest,
+	}
+	return nil
 }
 
 type BrowserHostFeatures struct {
@@ -315,6 +368,22 @@ func decodeCanonicalBrowserTimestamp(data json.RawMessage) (int64, error) {
 	return value.Num().Int64(), nil
 }
 
+// decodeCanonicalBrowserGeneration accepts exponent notation emitted by the
+// invocation canonicalizer while retaining the exact uint64 wire contract.
+func decodeCanonicalBrowserGeneration(data json.RawMessage) (uint64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	value, ok := new(big.Rat).SetString(string(data))
+	if !ok || !value.IsInt() || value.Sign() < 0 || !value.Num().IsUint64() {
+		return 0, fmt.Errorf(
+			"%w: browser snapshot generation must be a nonnegative integer",
+			ErrInvalidCapability,
+		)
+	}
+	return value.Num().Uint64(), nil
+}
+
 func (result BrowserSessionResult) MarshalJSON() ([]byte, error) {
 	value := map[string]any{"session_id": result.SessionID, "state": result.State}
 	if result.Reason != "" {
@@ -351,6 +420,33 @@ type BrowserObservationResult struct {
 	Truncated          bool             `json:"truncated"`
 }
 
+func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID          string           `json:"session_id"`
+		TabID              string           `json:"tab_id"`
+		SnapshotGeneration json.RawMessage  `json:"snapshot_generation"`
+		URL                string           `json:"url"`
+		Origin             string           `json:"origin"`
+		Title              string           `json:"title,omitempty"`
+		Snapshot           string           `json:"snapshot"`
+		Elements           []BrowserElement `json:"elements"`
+		Truncated          bool             `json:"truncated"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return fmt.Errorf("decode browser observation generation: %w", err)
+	}
+	*result = BrowserObservationResult{
+		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
+		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
+		Elements: value.Elements, Truncated: value.Truncated,
+	}
+	return nil
+}
+
 type BrowserActResult struct {
 	ActionInvocationID string                    `json:"action_invocation_id"`
 	State              string                    `json:"state"`
@@ -360,6 +456,7 @@ type BrowserActResult struct {
 
 type BrowserHostOpenRequest struct {
 	SessionID             string
+	RoutedSessionID       string
 	Profile               string
 	ProfileRevision       string
 	BrowserPolicyRevision string
@@ -371,6 +468,7 @@ type BrowserHostOpenRequest struct {
 
 type BrowserHostStatusRequest struct {
 	SessionID       string
+	RoutedSessionID string
 	ProfileRevision string
 	AgentID         string
 	ActorID         string
@@ -378,6 +476,7 @@ type BrowserHostStatusRequest struct {
 
 type BrowserHostObserveRequest struct {
 	SessionID          string
+	RoutedSessionID    string
 	TabID              string
 	SnapshotGeneration uint64
 	Screenshot         bool
@@ -387,6 +486,7 @@ type BrowserHostObserveRequest struct {
 
 type BrowserHostActRequest struct {
 	SessionID             string
+	RoutedSessionID       string
 	TabID                 string
 	SnapshotGeneration    uint64
 	ActionInvocationID    string

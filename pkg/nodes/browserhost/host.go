@@ -53,6 +53,7 @@ type browserHostSession struct {
 	browserPolicyRevision string
 	agentID               string
 	actorID               string
+	routedSessionID       string
 	state                 string
 	safeFailure           string
 	limits                nodes.BrowserLimits
@@ -187,6 +188,7 @@ func (host *BrowserHost) Open(
 	request BrowserHostOpenRequest,
 ) (BrowserHostSession, error) {
 	if host == nil || !browserHostIdentifier(request.SessionID) ||
+		!browserHostIdentifier(request.RoutedSessionID) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || !request.DryRun ||
 		request.Limits.Validate() != nil {
 		return BrowserHostSession{}, ErrBrowserHostDenied
@@ -206,6 +208,7 @@ func (host *BrowserHost) Open(
 		existing.mu.Lock()
 		authorized := existing.profile.Revision == request.ProfileRevision &&
 			existing.agentID == request.AgentID && existing.actorID == request.ActorID &&
+			existing.routedSessionID == request.RoutedSessionID &&
 			existing.browserPolicyRevision == request.BrowserPolicyRevision
 		existing.mu.Unlock()
 		if !authorized {
@@ -227,7 +230,8 @@ func (host *BrowserHost) Open(
 	session := &browserHostSession{
 		sessionID: request.SessionID,
 		profile:   profile, browserPolicyRevision: request.BrowserPolicyRevision,
-		agentID: request.AgentID, actorID: request.ActorID, state: "opening",
+		agentID: request.AgentID, actorID: request.ActorID,
+		routedSessionID: request.RoutedSessionID, state: "opening",
 		limits:            request.Limits,
 		tabID:             "tab_primary",
 		actionInvocations: make(map[string]string),
@@ -318,7 +322,8 @@ func (host *BrowserHost) Observe(
 ) (BrowserHostObservation, error) {
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: host.sessionProfileRevision(request.SessionID),
-		AgentID: request.AgentID, ActorID: request.ActorID,
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
 	})
 	if err != nil {
 		return BrowserHostObservation{}, err
@@ -364,7 +369,8 @@ func (host *BrowserHost) Navigate(
 	}
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
-		AgentID: request.AgentID, ActorID: request.ActorID,
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
 	})
 	if err != nil {
 		return BrowserHostObservation{}, err
@@ -514,7 +520,8 @@ func (host *BrowserHost) Shutdown(ctx context.Context) error {
 		session.mu.Lock()
 		request := BrowserHostCloseRequest{
 			SessionID: id, ProfileRevision: session.profile.Revision,
-			AgentID: session.agentID, ActorID: session.actorID,
+			RoutedSessionID: session.routedSessionID,
+			AgentID:         session.agentID, ActorID: session.actorID,
 		}
 		session.mu.Unlock()
 		if _, err := host.Close(ctx, request); err != nil {
@@ -563,6 +570,7 @@ func (host *BrowserHost) authorizedSession(
 	}
 	session.mu.Lock()
 	authorized := request.ProfileRevision == session.profile.Revision &&
+		request.RoutedSessionID == session.routedSessionID &&
 		request.AgentID == session.agentID && request.ActorID == session.actorID &&
 		authorizeBrowserProfile(session.profile, request.ProfileRevision, request.AgentID, request.ActorID)
 	session.mu.Unlock()

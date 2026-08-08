@@ -11,13 +11,14 @@ import (
 )
 
 type fakeBrowserCommandHost struct {
-	profiles      []nodes.BrowserProfileDescriptor
-	opened        int
-	observed      int
-	navigated     int
-	closed        int
-	navigateError error
-	invalidAction bool
+	profiles       []nodes.BrowserProfileDescriptor
+	opened         int
+	observed       int
+	navigated      int
+	closed         int
+	navigateError  error
+	invalidAction  bool
+	routedSessions []string
 }
 
 func (host *fakeBrowserCommandHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -29,6 +30,7 @@ func (host *fakeBrowserCommandHost) Open(
 	request nodes.BrowserHostOpenRequest,
 ) (nodes.BrowserSessionResult, error) {
 	host.opened++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	return nodes.BrowserSessionResult{
 		SessionID: request.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
 		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
@@ -36,10 +38,11 @@ func (host *fakeBrowserCommandHost) Open(
 	}, nil
 }
 
-func (*fakeBrowserCommandHost) Status(
+func (host *fakeBrowserCommandHost) Status(
 	_ context.Context,
 	request nodes.BrowserHostStatusRequest,
 ) (nodes.BrowserSessionResult, error) {
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	return nodes.BrowserSessionResult{
 		SessionID: request.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
 		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
@@ -52,6 +55,7 @@ func (host *fakeBrowserCommandHost) Observe(
 	request nodes.BrowserHostObserveRequest,
 ) (nodes.BrowserObservationResult, error) {
 	host.observed++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration), nil
 }
 
@@ -60,6 +64,7 @@ func (host *fakeBrowserCommandHost) Navigate(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
 	host.navigated++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	if host.navigateError != nil {
 		return nodes.BrowserObservationResult{}, host.navigateError
 	}
@@ -75,6 +80,7 @@ func (host *fakeBrowserCommandHost) Close(
 	request nodes.BrowserHostStatusRequest,
 ) (nodes.BrowserSessionResult, error) {
 	host.closed++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	return nodes.BrowserSessionResult{
 		SessionID: request.SessionID, State: "closed", TabID: "tab_primary", Controller: "agent",
 		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
@@ -147,6 +153,14 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 			"browser host calls = open %d observe %d navigate %d close %d",
 			host.opened, host.observed, host.navigated, host.closed,
 		)
+	}
+	if len(host.routedSessions) != 5 {
+		t.Fatalf("routed session calls = %#v", host.routedSessions)
+	}
+	for _, routedSession := range host.routedSessions {
+		if routedSession != "session_test" {
+			t.Fatalf("routed session calls = %#v", host.routedSessions)
+		}
 	}
 }
 

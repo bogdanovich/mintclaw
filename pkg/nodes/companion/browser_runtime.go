@@ -59,6 +59,7 @@ func (handler *browserCommandHandler) execute(
 		}
 		result, err := handler.host.Open(ctx, nodes.BrowserHostOpenRequest{
 			SessionID: input.SessionID, Profile: input.Profile,
+			RoutedSessionID: invocation.Plan.SessionID,
 			ProfileRevision: input.ProfileRevision, BrowserPolicyRevision: input.BrowserPolicyRevision,
 			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 			DryRun: input.DryRun, Limits: input.Limits,
@@ -83,6 +84,7 @@ func (handler *browserCommandHandler) execute(
 		}
 		result, err := handler.host.Observe(ctx, nodes.BrowserHostObserveRequest{
 			SessionID: input.SessionID, TabID: input.TabID,
+			RoutedSessionID:    invocation.Plan.SessionID,
 			SnapshotGeneration: input.SnapshotGeneration,
 			AgentID:            invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
@@ -123,6 +125,7 @@ func (handler *browserCommandHandler) executeAct(
 	}
 	observation, err := handler.host.Navigate(ctx, nodes.BrowserHostActRequest{
 		SessionID: input.SessionID, TabID: input.TabID,
+		RoutedSessionID:    invocation.Plan.SessionID,
 		SnapshotGeneration: input.SnapshotGeneration,
 		ActionInvocationID: input.ActionInvocationID, Action: input.Action,
 		Effect: input.Effect, CurrentOrigin: input.CurrentOrigin,
@@ -149,7 +152,8 @@ func browserStatusRequest(
 ) nodes.BrowserHostStatusRequest {
 	return nodes.BrowserHostStatusRequest{
 		SessionID: input.SessionID, ProfileRevision: input.ProfileRevision,
-		AgentID: plan.AgentID, ActorID: plan.ActorID,
+		RoutedSessionID: plan.SessionID,
+		AgentID:         plan.AgentID, ActorID: plan.ActorID,
 	}
 }
 
