@@ -392,6 +392,12 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		len(binding.Execution.Candidates) == 0 {
 		binding.Execution = effectiveExecutionStateForAgent(agent)
 	}
+	agentID := ""
+	workspace := ""
+	if agent != nil {
+		agentID = agent.ID
+		workspace = agent.Workspace
+	}
 	ts := &turnState{
 		agent:        agent,
 		opts:         opts,
@@ -400,13 +406,13 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		scope:        scope,
 		turnID:       scope.turnID,
 		executionID:  "execution_" + uuid.NewString(),
-		agentID:      agent.ID,
+		agentID:      agentID,
 		sessionKey:   opts.Dispatch.SessionKey,
 		activeSkills: activeSkillNames(agent, opts),
 		turnCtx:      cloneTurnContext(scope.context),
 		channel:      opts.Dispatch.Channel(),
 		chatID:       opts.Dispatch.ChatID(),
-		workspace:    agent.Workspace,
+		workspace:    workspace,
 		userMessage:  opts.Dispatch.UserMessage,
 		media:        append([]string(nil), opts.Dispatch.Media...),
 		phase:        TurnPhaseSetup,

@@ -163,3 +163,25 @@ func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *t
 		t.Fatalf("messages[0].Content = %q, want protected current turn", messages[0].Content)
 	}
 }
+
+func TestNewTurnState_NilAgent(t *testing.T) {
+	ts := newTurnState(nil, makeTestProcessOpts("nil-agent"), turnEventScope{
+		turnID:  "turn-nil-agent",
+		context: newTurnContext(nil, nil, nil),
+	})
+	if ts == nil {
+		t.Fatal("newTurnState(nil) = nil")
+	}
+	if ts.agent != nil {
+		t.Fatalf("agent = %#v, want nil", ts.agent)
+	}
+	if ts.agentID != "" {
+		t.Fatalf("agentID = %q, want empty", ts.agentID)
+	}
+	if ts.workspace != "" {
+		t.Fatalf("workspace = %q, want empty", ts.workspace)
+	}
+	if ts.session != nil {
+		t.Fatalf("session = %#v, want nil", ts.session)
+	}
+}
