@@ -548,10 +548,10 @@ func (runtime *Runtime) completeInvalidOutput(
 			)
 		}
 		return fmt.Errorf(
-			"%w: %s completed with invalid output: %w",
+			"%w: %s completed with invalid output: %s",
 			ErrInvocationOutcomeUnknown,
 			label,
-			err,
+			err.Error(),
 		)
 	}
 	return runtime.completeInvocationFailure(plan.InvocationID, nodes.InvocationFailure{
