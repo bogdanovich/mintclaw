@@ -702,8 +702,8 @@ func TestWrapHTMLResponseError(t *testing.T) {
 	if !strings.Contains(msg, "502") {
 		t.Errorf("expected status code in error, got %v", msg)
 	}
-	if strings.Contains(msg, "https://api.example.com") {
-		t.Errorf("safe outer error exposed api base: %v", msg)
+	if !strings.Contains(msg, "https://api.example.com") {
+		t.Errorf("expected api base in error, got %v", msg)
 	}
 	if !strings.Contains(msg, "HTML instead of JSON") {
 		t.Errorf("expected HTML mention in error, got %v", msg)

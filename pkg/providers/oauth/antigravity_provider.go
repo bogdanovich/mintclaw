@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/auth"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 )
 
 const (
@@ -128,7 +129,7 @@ func (p *AntigravityProvider) Chat(
 			"model":       model,
 		})
 
-		return nil, common.NewHTTPResponseError(resp, respBody, antigravityBaseURL)
+		return nil, httperrors.NewResponse(resp, respBody, antigravityBaseURL)
 	}
 
 	// Response is always SSE from streamGenerateContent — each line is "data: {...}"
@@ -533,7 +534,7 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		return "", fmt.Errorf("reading loadCodeAssist response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", common.NewHTTPResponseError(resp, body, antigravityBaseURL)
+		return "", httperrors.NewResponse(resp, body, antigravityBaseURL)
 	}
 
 	var result struct {
@@ -577,7 +578,7 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		return nil, fmt.Errorf("reading fetchAvailableModels response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.NewHTTPResponseError(resp, body, antigravityBaseURL)
+		return nil, httperrors.NewResponse(resp, body, antigravityBaseURL)
 	}
 
 	var result struct {

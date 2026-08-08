@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
-	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 // Re-export protocol types used across providers.
@@ -405,27 +404,20 @@ func (e *HTTPError) Error() string {
 
 // HandleErrorResponse reads a non-200 response body and returns an appropriate error.
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	contentType := resp.Header.Get("Content-Type")
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
 	if readErr != nil {
 		return fmt.Errorf("failed to read response: %w", readErr)
 	}
-	return NewHTTPResponseError(resp, body, apiBase)
-}
-
-// NewHTTPResponseError normalizes a buffered non-OK HTTP response while
-// preserving HTTPError as a compatibility cause for existing callers.
-func NewHTTPResponseError(resp *http.Response, body []byte, apiBase string) error {
-	contentType := resp.Header.Get("Content-Type")
 	if LooksLikeHTML(body, contentType) {
-		return wrapHTMLResponseError(resp.StatusCode, resp.Header, body, contentType, apiBase)
+		return WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
 	}
-	cause := &HTTPError{
+	return &HTTPError{
 		StatusCode:  resp.StatusCode,
 		BodyPreview: ResponsePreview(body, 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}
-	return providererrors.FromHTTPResponse(resp.StatusCode, resp.Header, body, cause)
 }
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,
@@ -462,20 +454,13 @@ func LooksLikeHTML(body []byte, contentType string) bool {
 
 // WrapHTMLResponseError creates a descriptive error for HTML responses.
 func WrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase string) error {
-	return wrapHTMLResponseError(statusCode, nil, body, contentType, apiBase)
-}
-
-func wrapHTMLResponseError(statusCode int, header http.Header, body []byte, contentType, apiBase string) error {
-	cause := &HTTPError{
+	return &HTTPError{
 		StatusCode:  statusCode,
 		BodyPreview: ResponsePreview(body, 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 		IsHTML:      true,
 	}
-	providerErr := providererrors.FromHTTPResponse(statusCode, header, nil, cause)
-	providerErr.SafeMessage = "provider returned HTML instead of JSON; check api_base or proxy configuration"
-	return providerErr
 }
 
 // ResponsePreview returns a truncated preview of response body for error messages.

@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -201,7 +202,7 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		return nil, httperrors.HandleResponse(resp, p.apiBase)
 	}
 
 	return orc.ParseResponseBody(resp.Body)

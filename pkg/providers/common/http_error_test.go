@@ -33,8 +33,8 @@ func TestHandleErrorResponse_ReturnsHTTPError(t *testing.T) {
 	if httpErr.BodyPreview != `{"error":"unauthorized"}` {
 		t.Fatalf("BodyPreview = %q", httpErr.BodyPreview)
 	}
-	if !strings.Contains(err.Error(), "status=401") {
-		t.Fatalf("Error() should expose safe structured status, got %q", err.Error())
+	if !strings.Contains(err.Error(), "Status: 401") {
+		t.Fatalf("Error() should preserve status text, got %q", err.Error())
 	}
 }
 

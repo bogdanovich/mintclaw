@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
@@ -126,7 +127,7 @@ func (p *Provider) Chat(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.NewHTTPResponseError(resp, body, p.apiBase)
+		return nil, httperrors.NewResponse(resp, body, p.apiBase)
 	}
 
 	// Parse response
