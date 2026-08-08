@@ -107,6 +107,22 @@ func TestResolveSubagentModelPlan_UsesConfiguredSubagentModel(t *testing.T) {
 	}
 }
 
+func TestResolveSubagentModelPlan_NilTarget(t *testing.T) {
+	got := resolveSubagentModelPlan(nil, "gemini-flash-lite")
+	if got.Primary != "" {
+		t.Fatalf("Primary = %q, want empty", got.Primary)
+	}
+	if len(got.Fallbacks) != 0 {
+		t.Fatalf("Fallbacks = %#v, want empty", got.Fallbacks)
+	}
+	if got.Mode != subagentSessionModelOverrideIgnore {
+		t.Fatalf("Mode = %q, want ignore", got.Mode)
+	}
+	if got.ParentOverride != "gemini-flash-lite" {
+		t.Fatalf("ParentOverride = %q, want gemini-flash-lite", got.ParentOverride)
+	}
+}
+
 func TestInheritedSubagentOverride_ReadsParentBinding(t *testing.T) {
 	parent := &turnState{
 		model: effectiveModelBinding{

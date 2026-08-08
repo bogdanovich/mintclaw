@@ -104,20 +104,22 @@ func resolveSubagentModelPlan(
 	parentOverride string,
 ) subagentModelPlan {
 	plan := subagentModelPlan{
-		Primary:        strings.TrimSpace(targetAgent.Model),
-		Fallbacks:      append([]string(nil), targetAgent.Fallbacks...),
 		Mode:           subagentSessionModelOverrideIgnore,
 		ParentOverride: strings.TrimSpace(parentOverride),
 	}
-	if targetAgent != nil && targetAgent.Subagents != nil {
-		if targetAgent.Subagents.Model != nil && strings.TrimSpace(targetAgent.Subagents.Model.Primary) != "" {
-			plan.Primary = strings.TrimSpace(targetAgent.Subagents.Model.Primary)
-			plan.Fallbacks = append([]string(nil), targetAgent.Subagents.Model.Fallbacks...)
-		}
-		if mode := normalizeSubagentSessionModelOverrideMode(
-			targetAgent.Subagents.SessionModelOverrideMode,
-		); mode != "" {
-			plan.Mode = mode
+	if targetAgent != nil {
+		plan.Primary = strings.TrimSpace(targetAgent.Model)
+		plan.Fallbacks = append([]string(nil), targetAgent.Fallbacks...)
+		if targetAgent.Subagents != nil {
+			if targetAgent.Subagents.Model != nil && strings.TrimSpace(targetAgent.Subagents.Model.Primary) != "" {
+				plan.Primary = strings.TrimSpace(targetAgent.Subagents.Model.Primary)
+				plan.Fallbacks = append([]string(nil), targetAgent.Subagents.Model.Fallbacks...)
+			}
+			if mode := normalizeSubagentSessionModelOverrideMode(
+				targetAgent.Subagents.SessionModelOverrideMode,
+			); mode != "" {
+				plan.Mode = mode
+			}
 		}
 	}
 	if plan.ParentOverride == "" {
