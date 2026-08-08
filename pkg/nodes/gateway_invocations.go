@@ -792,5 +792,9 @@ func sameCommandDescriptor(left, right CommandDescriptor) bool {
 
 func cloneExecutionPlan(plan ExecutionPlan) ExecutionPlan {
 	plan.Input = bytes.Clone(plan.Input)
+	if plan.Update != nil {
+		update := *plan.Update
+		plan.Update = &update
+	}
 	return plan
 }

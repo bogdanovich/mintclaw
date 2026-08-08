@@ -52,6 +52,15 @@ type (
 	UpdatePolicies map[string]UpdatePolicyProfile
 )
 
+func HasEnabledUpdatePolicy(policies UpdatePolicies) bool {
+	for _, policy := range policies {
+		if policy.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeUpdateConfiguration(
 	sources UpdateSources,
 	policies UpdatePolicies,

@@ -469,11 +469,24 @@ func (descriptor CommandDescriptor) validateUpdateProfiles() error {
 		len(descriptor.UpdateProfiles) > MaxUpdateProfiles {
 		return fmt.Errorf("%w: malformed node update descriptor", ErrInvalidCapability)
 	}
+	if descriptor.ModelContract != nil && descriptor.ModelContract.ApprovalMode != "each_command" {
+		return fmt.Errorf("%w: node update requires per-command approval", ErrInvalidCapability)
+	}
 	priorAlias := ""
 	revisions := make(map[string]struct{}, len(descriptor.UpdateProfiles))
-	for _, profile := range descriptor.UpdateProfiles {
+	for index, profile := range descriptor.UpdateProfiles {
 		if err := profile.Validate(); err != nil {
 			return err
+		}
+		if err := profile.validateRuntimeAuthority(); err != nil {
+			return err
+		}
+		if index > 0 {
+			first := descriptor.UpdateProfiles[0]
+			if profile.CurrentVersion != first.CurrentVersion ||
+				profile.Platform != first.Platform || profile.Architecture != first.Architecture {
+				return fmt.Errorf("%w: update profiles disagree on managed runtime facts", ErrInvalidCapability)
+			}
 		}
 		if priorAlias != "" && profile.Alias <= priorAlias {
 			return fmt.Errorf("%w: update profiles are not sorted", ErrInvalidCapability)

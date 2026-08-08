@@ -87,21 +87,22 @@ func (failure InvocationFailure) Validate() error {
 // InvocationRecord is the durable companion-owned proof of one accepted
 // logical invocation. Result bytes remain bounded by the execution plan.
 type InvocationRecord struct {
-	InvocationID   string                  `json:"invocation_id"`
-	IdempotencyKey string                  `json:"idempotency_key"`
-	PlanHash       string                  `json:"plan_hash"`
-	NodeID         ID                      `json:"node_id"`
-	CatalogHash    string                  `json:"catalog_hash"`
-	Command        string                  `json:"command"`
-	Risk           Risk                    `json:"risk"`
-	State          InvocationState         `json:"state"`
-	AcceptedAt     int64                   `json:"accepted_at"`
-	UpdatedAt      int64                   `json:"updated_at"`
-	ExpiresAt      int64                   `json:"expires_at"`
-	CompletedAt    int64                   `json:"completed_at,omitempty"`
-	Result         json.RawMessage         `json:"result,omitempty"`
-	Failure        *InvocationFailure      `json:"failure,omitempty"`
-	Cancellation   *InvocationCancellation `json:"cancellation,omitempty"`
+	InvocationID   string                   `json:"invocation_id"`
+	IdempotencyKey string                   `json:"idempotency_key"`
+	PlanHash       string                   `json:"plan_hash"`
+	NodeID         ID                       `json:"node_id"`
+	CatalogHash    string                   `json:"catalog_hash"`
+	Command        string                   `json:"command"`
+	Risk           Risk                     `json:"risk"`
+	Update         *NodeUpdatePlanAuthority `json:"update,omitempty"`
+	State          InvocationState          `json:"state"`
+	AcceptedAt     int64                    `json:"accepted_at"`
+	UpdatedAt      int64                    `json:"updated_at"`
+	ExpiresAt      int64                    `json:"expires_at"`
+	CompletedAt    int64                    `json:"completed_at,omitempty"`
+	Result         json.RawMessage          `json:"result,omitempty"`
+	Failure        *InvocationFailure       `json:"failure,omitempty"`
+	Cancellation   *InvocationCancellation  `json:"cancellation,omitempty"`
 }
 
 func (record InvocationRecord) Validate() error {
@@ -115,6 +116,13 @@ func (record InvocationRecord) Validate() error {
 	}
 	if err := record.NodeID.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidInvocationRecord, err)
+	}
+	if record.Command == "node.update.v1" {
+		if record.Update == nil || record.Update.Validate() != nil {
+			return fmt.Errorf("%w: update invocation lacks recovery authority", ErrInvalidInvocationRecord)
+		}
+	} else if record.Update != nil {
+		return fmt.Errorf("%w: non-update invocation retains update authority", ErrInvalidInvocationRecord)
 	}
 	if record.AcceptedAt <= 0 || record.UpdatedAt < record.AcceptedAt ||
 		record.ExpiresAt <= record.AcceptedAt/int64(time.Second) {

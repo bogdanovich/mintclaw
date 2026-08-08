@@ -70,6 +70,35 @@ func TestCommandDescriptorSchemaAcceptsInternalBrowserProfiles(t *testing.T) {
 	}
 }
 
+func TestCommandDescriptorSchemaAcceptsAuthenticatedUpdateProfiles(t *testing.T) {
+	profile := nodes.UpdateProfileDescriptor{
+		Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
+		CurrentVersion: "v1.0.0", Platform: "linux", Architecture: "amd64",
+		Releases: []nodes.UpdateReleaseDescriptor{{
+			Alias: "current", Version: "v1.1.0", ManifestSHA256: strings.Repeat("a", 64),
+			ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 1024,
+			AuthorityHash: strings.Repeat("c", 64),
+		}},
+	}
+	descriptor := nodes.CommandDescriptor{
+		Name: "node.update.v1", InputSchema: nodes.NodeUpdateInputSchema([]nodes.UpdateProfileDescriptor{profile}),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Risk:         nodes.RiskPrivileged, SupportsCancel: true,
+		UpdateProfiles: []nodes.UpdateProfileDescriptor{profile},
+	}
+	encoded, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var instance any
+	if err = json.Unmarshal(encoded, &instance); err != nil {
+		t.Fatal(err)
+	}
+	if err = resolveSchema(t, "command-descriptor.v1").Validate(instance); err != nil {
+		t.Fatalf("schema rejected update descriptor %s: %v", encoded, err)
+	}
+}
+
 func TestExecutionPlanSchemaMatchesDomain(t *testing.T) {
 	descriptor := nodes.CommandDescriptor{
 		Name:         "node.info.v1",
@@ -154,6 +183,45 @@ func TestExecutionPlanSchemaMatchesDomain(t *testing.T) {
 	}
 	if validationErr := resolveSchema(t, "execution-plan.v1").Validate(instance); validationErr != nil {
 		t.Fatalf("schema rejected service execution plan %s: %v", data, validationErr)
+	}
+	updateProfile := nodes.UpdateProfileDescriptor{
+		Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
+		CurrentVersion: "v1.0.0", Platform: "linux", Architecture: "amd64",
+		Releases: []nodes.UpdateReleaseDescriptor{{
+			Alias: "current", Version: "v1.1.0", ManifestSHA256: strings.Repeat("c", 64),
+			ArtifactSHA256: strings.Repeat("d", 64), ArtifactSize: 1024,
+			AuthorityHash: strings.Repeat("e", 64),
+		}},
+	}
+	updateDescriptor := nodes.CommandDescriptor{
+		Name:         "node.update.v1",
+		InputSchema:  nodes.NodeUpdateInputSchema([]nodes.UpdateProfileDescriptor{updateProfile}),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Risk:         nodes.RiskPrivileged, SupportsCancel: true,
+		UpdateProfiles: []nodes.UpdateProfileDescriptor{updateProfile},
+	}
+	updateAuthority, err := nodes.NewNodeUpdatePlanAuthority("execution-1", updateProfile, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatePlan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+		InvocationID: "inv_update", IdempotencyKey: "idem_update", NodeID: nodes.ID("node_test"),
+		CatalogHash: strings.Repeat("a", 64), Command: updateDescriptor.Name, Update: updateAuthority,
+		Input: json.RawMessage(`{"release":"current"}`), AgentID: "main",
+		SessionID: "telegram:chat-1", ActorID: "user-1", TimeoutSeconds: 300, OutputLimitBytes: 4096,
+	}, updateDescriptor, "local", "policy-1", time.Unix(1, 0), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(updatePlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unmarshalErr := json.Unmarshal(data, &instance); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if validationErr := resolveSchema(t, "execution-plan.v1").Validate(instance); validationErr != nil {
+		t.Fatalf("schema rejected update execution plan %s: %v", data, validationErr)
 	}
 
 	plan.Command = "system." + strings.Repeat("x", 120) + ".v1"

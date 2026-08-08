@@ -344,7 +344,7 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	approval := map[string]any{
 		"target":          record.Target,
 		"invocation_id":   record.Plan.InvocationID,
 		"node_id":         string(record.Plan.NodeID),
@@ -353,7 +353,14 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 		"plan_hash":       record.ExpectedPlanHash,
 		"policy_revision": record.Plan.PolicyRevision,
 		"expires_at":      record.Plan.ExpiresAt,
-	}, nil
+	}
+	if record.Plan.Update != nil {
+		approval["current_version"] = record.Plan.Update.CurrentVersion
+		approval["requested_release"] = record.Plan.Update.ReleaseVersion
+		approval["platform"] = record.Plan.Update.Platform
+		approval["architecture"] = record.Plan.Update.Architecture
+	}
+	return approval, nil
 }
 
 func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -1032,6 +1039,21 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			)
 		}
 	}
+	if len(descriptor.UpdateProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectUpdateDescriptorForTarget(
+			descriptor,
+			resolved.binding.UpdateProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialCommandUnavailable,
+				nodeConstraintCommandPolicy,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
+	}
 	currentRevision, err := runtime.access.discoveryRevision(
 		agentID,
 		resolved.name,
@@ -1096,6 +1118,16 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
 		}
 	}
+	if len(descriptor.UpdateProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectUpdateDescriptorForTarget(
+			descriptor,
+			resolved.binding.UpdateProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
+		}
+	}
 	profile := nodes.ExecutionProfile{
 		Executor:       resolved.snapshot.Executor,
 		PolicyRevision: resolved.snapshot.PolicyRevision,
@@ -1143,10 +1175,14 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 		timeoutMaximum = descriptor.ModelContract.TimeoutSecondsMax
 		outputMaximum = descriptor.ModelContract.OutputBytesMax
 	}
+	timeoutDefault := min(defaultNodeInvocationTimeout, timeoutMaximum)
+	if descriptor.Name == "node.update.v1" {
+		timeoutDefault = timeoutMaximum
+	}
 	timeout, err := boundedNodeInteger(
 		args,
 		"timeout_seconds",
-		min(defaultNodeInvocationTimeout, timeoutMaximum),
+		timeoutDefault,
 		timeoutMaximum,
 	)
 	if err != nil {
@@ -1183,6 +1219,22 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 		executionCallID,
 	)
 	storedToolCallID := stableNodeInvocationID("call", executionCallID)
+	var updateAuthority *nodes.NodeUpdatePlanAuthority
+	if len(descriptor.UpdateProfiles) == 1 {
+		updateAuthority, err = nodes.NewNodeUpdatePlanAuthority(
+			executionCallID,
+			descriptor.UpdateProfiles[0],
+			strings.TrimSpace(stringArgument(input, "release")),
+		)
+		if err != nil {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialConstraintViolation,
+				nodeConstraintProfile,
+				nodeActionRefreshDiscovery,
+				err,
+			)
+		}
+	}
 	request := nodes.InvocationRequest{
 		InvocationID:     invocationID,
 		IdempotencyKey:   stableNodeInvocationID("idem", invocationID),
@@ -1190,6 +1242,7 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 		CatalogHash:      resolved.snapshot.CatalogHash,
 		Command:          command,
 		ServiceProfile:   serviceProfileForInvocation(descriptor),
+		Update:           updateAuthority,
 		Input:            inputJSON,
 		AgentID:          principal.AgentID,
 		SessionID:        principal.SessionID,
@@ -1298,6 +1351,20 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 		descriptor, projected = nodes.ProjectServiceDescriptorForProfile(
 			descriptor,
 			binding.ServiceProfile,
+		)
+		if !projected {
+			return errDiscoveryStale
+		}
+	}
+	if len(descriptor.UpdateProfiles) > 0 {
+		binding, exists := runtime.access.targets[target]
+		if !exists {
+			return errDiscoveryStale
+		}
+		var projected bool
+		descriptor, projected = projectUpdateDescriptorForTarget(
+			descriptor,
+			binding.UpdateProfile,
 		)
 		if !projected {
 			return errDiscoveryStale

@@ -62,18 +62,19 @@ func (profile ExecutionProfile) Validate() error {
 // InvocationRequest is the transport-neutral command request prepared by the
 // gateway. It contains no connection details or shell-specific authority.
 type InvocationRequest struct {
-	InvocationID     string          `json:"invocation_id"`
-	IdempotencyKey   string          `json:"idempotency_key"`
-	NodeID           ID              `json:"node_id"`
-	CatalogHash      string          `json:"catalog_hash"`
-	Command          string          `json:"command"`
-	ServiceProfile   string          `json:"service_profile,omitempty"`
-	Input            json.RawMessage `json:"input"`
-	AgentID          string          `json:"agent_id"`
-	SessionID        string          `json:"session_id"`
-	ActorID          string          `json:"actor_id"`
-	TimeoutSeconds   int             `json:"timeout_seconds"`
-	OutputLimitBytes int             `json:"output_limit_bytes"`
+	InvocationID     string                   `json:"invocation_id"`
+	IdempotencyKey   string                   `json:"idempotency_key"`
+	NodeID           ID                       `json:"node_id"`
+	CatalogHash      string                   `json:"catalog_hash"`
+	Command          string                   `json:"command"`
+	ServiceProfile   string                   `json:"service_profile,omitempty"`
+	Update           *NodeUpdatePlanAuthority `json:"update,omitempty"`
+	Input            json.RawMessage          `json:"input"`
+	AgentID          string                   `json:"agent_id"`
+	SessionID        string                   `json:"session_id"`
+	ActorID          string                   `json:"actor_id"`
+	TimeoutSeconds   int                      `json:"timeout_seconds"`
+	OutputLimitBytes int                      `json:"output_limit_bytes"`
 }
 
 func (request InvocationRequest) Validate() error {
@@ -97,6 +98,11 @@ func (request InvocationRequest) Validate() error {
 	if request.ServiceProfile != "" {
 		if err := (Alias(request.ServiceProfile)).Validate(); err != nil {
 			return fmt.Errorf("%w: malformed service profile", ErrInvalidInvocation)
+		}
+	}
+	if request.Update != nil {
+		if err := request.Update.Validate(); err != nil {
+			return err
 		}
 	}
 	if request.TimeoutSeconds <= 0 || request.TimeoutSeconds > MaxInvocationTimeout {
@@ -159,6 +165,35 @@ func PrepareExecutionPlan(
 			ErrInvalidInvocation,
 		)
 	}
+	if len(descriptor.UpdateProfiles) == 0 {
+		if request.Update != nil {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: update authority supplied for non-update command",
+				ErrInvalidInvocation,
+			)
+		}
+	} else {
+		if request.Update == nil || len(descriptor.UpdateProfiles) != 1 {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: descriptor does not match update authority",
+				ErrInvalidInvocation,
+			)
+		}
+		profile := descriptor.UpdateProfiles[0]
+		matched := false
+		for _, release := range profile.Releases {
+			if request.Update.matchesDescriptor(profile, release) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: descriptor does not match update authority",
+				ErrInvalidInvocation,
+			)
+		}
+	}
 	descriptorHash, err := descriptor.Hash()
 	if err != nil {
 		return ExecutionPlan{}, err
@@ -179,6 +214,9 @@ func PrepareExecutionPlan(
 	}
 	if validationErr := validateDescriptorInvocationInput(descriptor, value); validationErr != nil {
 		return ExecutionPlan{}, validationErr
+	}
+	if selectorErr := validateNodeUpdateSelector(value, request.Update); selectorErr != nil {
+		return ExecutionPlan{}, selectorErr
 	}
 	request.Input = input
 	plan := ExecutionPlan{
@@ -380,6 +418,19 @@ func (policy LocalCommandPolicy) authorize(
 		}
 		descriptor = projected
 	}
+	if plan.Update != nil || len(descriptor.UpdateProfiles) > 0 {
+		if plan.Update == nil {
+			return fmt.Errorf("%w: update authority is missing", ErrCommandDenied)
+		}
+		projected, available := ProjectUpdateDescriptorForProfile(descriptor, plan.Update.Profile)
+		if !available {
+			return fmt.Errorf(
+				"%w: update profile is not advertised by local runtime",
+				ErrCommandDenied,
+			)
+		}
+		descriptor = projected
+	}
 	descriptorHash, hashErr := descriptor.Hash()
 	if hashErr != nil ||
 		descriptor.Name != plan.Command || descriptor.Risk != plan.Risk ||
@@ -402,11 +453,28 @@ func (policy LocalCommandPolicy) authorize(
 	if err := validateDescriptorInvocationInput(descriptor, input); err != nil {
 		return err
 	}
+	if err := validateNodeUpdateSelector(input, plan.Update); err != nil {
+		return err
+	}
 	if !slices.Contains(policy.AllowedCommands, plan.Command) ||
 		riskRank(plan.Risk) > riskRank(policy.MaximumRisk) ||
 		plan.TimeoutSeconds > policy.MaxTimeoutSeconds ||
 		plan.OutputLimitBytes > policy.MaxOutputBytes {
 		return fmt.Errorf("%w: plan exceeds local policy", ErrCommandDenied)
+	}
+	return nil
+}
+
+func validateNodeUpdateSelector(
+	input map[string]any,
+	authority *NodeUpdatePlanAuthority,
+) error {
+	if authority == nil {
+		return nil
+	}
+	release, ok := input["release"].(string)
+	if !ok || release != authority.ReleaseAlias {
+		return fmt.Errorf("%w: update input conflicts with retained authority", ErrCommandDenied)
 	}
 	return nil
 }

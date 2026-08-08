@@ -154,7 +154,11 @@ func TestNormalizeUpdateSourcesRejectsUntrustedEndpointsAndKeys(t *testing.T) {
 func TestUpdateDescriptorBindsEnumeratedReleaseSchema(t *testing.T) {
 	profile := nodes.UpdateProfileDescriptor{
 		Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
-		Releases: []nodes.UpdateReleaseDescriptor{{Alias: "current", Version: "v1.2.3"}},
+		CurrentVersion: "v1.1.0", Platform: "linux", Architecture: "amd64",
+		Releases: []nodes.UpdateReleaseDescriptor{{
+			Alias: "current", Version: "v1.2.3", ManifestSHA256: strings.Repeat("a", 64),
+			ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 1024, AuthorityHash: strings.Repeat("c", 64),
+		}},
 	}
 	descriptor := nodes.CommandDescriptor{
 		Name:           "node.update.v1",
