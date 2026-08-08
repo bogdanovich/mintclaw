@@ -22,92 +22,25 @@ const (
 )
 
 var (
-	ErrBrowserHostDenied   = errors.New("companion browser authority denied")
-	ErrBrowserHostBusy     = errors.New("companion browser profile is busy")
-	ErrBrowserHostNotFound = errors.New("companion browser session not found")
-	ErrBrowserHostStale    = errors.New("companion browser state is stale")
-	ErrBrowserHostLost     = errors.New("companion browser session is lost")
+	ErrBrowserHostDenied   = nodes.ErrBrowserHostDenied
+	ErrBrowserHostBusy     = nodes.ErrBrowserHostBusy
+	ErrBrowserHostNotFound = nodes.ErrBrowserHostNotFound
+	ErrBrowserHostStale    = nodes.ErrBrowserHostStale
+	ErrBrowserHostLost     = nodes.ErrBrowserHostLost
 	browserHostIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
-type BrowserHostFeatures struct {
-	Observe    bool
-	Navigate   bool
-	Screenshot bool
-	Download   bool
-}
-
-type BrowserHostSession struct {
-	SessionID     string
-	State         string
-	Reason        string
-	Recovery      string
-	TabID         string
-	Controller    string
-	Features      BrowserHostFeatures
-	ExpiresAt     int64
-	IdleExpiresAt int64
-}
-
-type BrowserHostOpenRequest struct {
-	SessionID             string
-	Profile               string
-	ProfileRevision       string
-	BrowserPolicyRevision string
-	AgentID               string
-	ActorID               string
-	DryRun                bool
-	Limits                nodes.BrowserLimits
-}
-
-type BrowserHostStatusRequest struct {
-	SessionID       string
-	ProfileRevision string
-	AgentID         string
-	ActorID         string
-}
-
-type BrowserHostObserveRequest struct {
-	SessionID          string
-	TabID              string
-	SnapshotGeneration uint64
-	AgentID            string
-	ActorID            string
-}
-
-type BrowserHostNavigateRequest struct {
-	SessionID             string
-	TabID                 string
-	SnapshotGeneration    uint64
-	ActionInvocationID    string
-	URL                   string
-	Effect                string
-	PreparedActionHash    string
-	BrowserPolicyRevision string
-	ProfileRevision       string
-	AgentID               string
-	ActorID               string
-}
-
-type BrowserHostElement struct {
-	Ref  string
-	Role string
-	Name string
-}
-
-type BrowserHostObservation struct {
-	SessionID          string
-	TabID              string
-	SnapshotGeneration uint64
-	URL                string
-	Origin             string
-	Title              string
-	Snapshot           string
-	Elements           []BrowserHostElement
-	Truncated          bool
-}
-
-type BrowserHostCloseRequest = BrowserHostStatusRequest
+type (
+	BrowserHostFeatures        = nodes.BrowserHostFeatures
+	BrowserHostSession         = nodes.BrowserSessionResult
+	BrowserHostOpenRequest     = nodes.BrowserHostOpenRequest
+	BrowserHostStatusRequest   = nodes.BrowserHostStatusRequest
+	BrowserHostObserveRequest  = nodes.BrowserHostObserveRequest
+	BrowserHostNavigateRequest = nodes.BrowserHostActRequest
+	BrowserHostElement         = nodes.BrowserElement
+	BrowserHostObservation     = nodes.BrowserObservationResult
+	BrowserHostCloseRequest    = nodes.BrowserHostStatusRequest
+)
 
 type browserHostFactory interface {
 	Open(context.Context, browserworker.WorkerOpenRequest) (browserworker.WorkerOpenResult, error)
@@ -120,6 +53,7 @@ type browserHostSession struct {
 	browserPolicyRevision string
 	agentID               string
 	actorID               string
+	routedSessionID       string
 	state                 string
 	safeFailure           string
 	limits                nodes.BrowserLimits
@@ -254,6 +188,7 @@ func (host *BrowserHost) Open(
 	request BrowserHostOpenRequest,
 ) (BrowserHostSession, error) {
 	if host == nil || !browserHostIdentifier(request.SessionID) ||
+		!browserHostIdentifier(request.RoutedSessionID) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || !request.DryRun ||
 		request.Limits.Validate() != nil {
 		return BrowserHostSession{}, ErrBrowserHostDenied
@@ -273,6 +208,7 @@ func (host *BrowserHost) Open(
 		existing.mu.Lock()
 		authorized := existing.profile.Revision == request.ProfileRevision &&
 			existing.agentID == request.AgentID && existing.actorID == request.ActorID &&
+			existing.routedSessionID == request.RoutedSessionID &&
 			existing.browserPolicyRevision == request.BrowserPolicyRevision
 		existing.mu.Unlock()
 		if !authorized {
@@ -294,7 +230,8 @@ func (host *BrowserHost) Open(
 	session := &browserHostSession{
 		sessionID: request.SessionID,
 		profile:   profile, browserPolicyRevision: request.BrowserPolicyRevision,
-		agentID: request.AgentID, actorID: request.ActorID, state: "opening",
+		agentID: request.AgentID, actorID: request.ActorID,
+		routedSessionID: request.RoutedSessionID, state: "opening",
 		limits:            request.Limits,
 		tabID:             "tab_primary",
 		actionInvocations: make(map[string]string),
@@ -347,6 +284,11 @@ func (host *BrowserHost) Open(
 	return host.sessionView(session), nil
 }
 
+func (host *BrowserHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
+	descriptors, _ := companion.BrowserProfileDescriptors(host.profiles)
+	return nodes.CloneBrowserProfileDescriptors(descriptors)
+}
+
 func (host *BrowserHost) Status(
 	ctx context.Context,
 	request BrowserHostStatusRequest,
@@ -380,7 +322,8 @@ func (host *BrowserHost) Observe(
 ) (BrowserHostObservation, error) {
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: host.sessionProfileRevision(request.SessionID),
-		AgentID: request.AgentID, ActorID: request.ActorID,
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
 	})
 	if err != nil {
 		return BrowserHostObservation{}, err
@@ -420,12 +363,14 @@ func (host *BrowserHost) Navigate(
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
-		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" {
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
-		AgentID: request.AgentID, ActorID: request.ActorID,
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
 	})
 	if err != nil {
 		return BrowserHostObservation{}, err
@@ -452,12 +397,21 @@ func (host *BrowserHost) Navigate(
 	if ctx.Err() != nil {
 		return BrowserHostObservation{}, ctx.Err()
 	}
-	// Bind the gateway invocation before dispatch. Once reserved, an invocation
-	// can never execute again even if the driver outcome is ambiguous.
-	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	current, observeErr := session.worker.Observe(actionCtx)
+	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin {
+		actionContextErr := actionCtx.Err()
+		cancelAction()
+		if observeErr != nil || actionContextErr != nil {
+			return BrowserHostObservation{}, ErrBrowserHostLost
+		}
+		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	// Bind the gateway invocation immediately before driver dispatch. Once
+	// reserved, it can never execute again even if the outcome is ambiguous.
+	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
 	if executeErr := session.worker.Execute(actionCtx, browserworker.DriverAction{
-		Kind: browserworker.DriverNavigate, URL: request.URL,
+		Kind: browserworker.DriverNavigate, URL: request.Action.URL,
 	}); executeErr != nil {
 		cancelAction()
 		host.quarantineActionLocked(session)
@@ -566,7 +520,8 @@ func (host *BrowserHost) Shutdown(ctx context.Context) error {
 		session.mu.Lock()
 		request := BrowserHostCloseRequest{
 			SessionID: id, ProfileRevision: session.profile.Revision,
-			AgentID: session.agentID, ActorID: session.actorID,
+			RoutedSessionID: session.routedSessionID,
+			AgentID:         session.agentID, ActorID: session.actorID,
 		}
 		session.mu.Unlock()
 		if _, err := host.Close(ctx, request); err != nil {
@@ -615,6 +570,7 @@ func (host *BrowserHost) authorizedSession(
 	}
 	session.mu.Lock()
 	authorized := request.ProfileRevision == session.profile.Revision &&
+		request.RoutedSessionID == session.routedSessionID &&
 		request.AgentID == session.agentID && request.ActorID == session.actorID &&
 		authorizeBrowserProfile(session.profile, request.ProfileRevision, request.AgentID, request.ActorID)
 	session.mu.Unlock()

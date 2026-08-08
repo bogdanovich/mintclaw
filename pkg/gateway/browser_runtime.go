@@ -41,6 +41,15 @@ func newBrowserRuntime(
 	cfg *config.Config,
 	recovery ...browser.DownloadRecoveryVerifier,
 ) (*browserRuntime, error) {
+	return newBrowserRuntimeWithNodes(ctx, cfg, nil, recovery...)
+}
+
+func newBrowserRuntimeWithNodes(
+	ctx context.Context,
+	cfg *config.Config,
+	nodeRuntime *nodeAdmissionRuntime,
+	recovery ...browser.DownloadRecoveryVerifier,
+) (*browserRuntime, error) {
 	if cfg == nil || !cfg.Tools.Browser.Enabled {
 		return nil, nil
 	}
@@ -59,7 +68,7 @@ func newBrowserRuntime(
 		}
 		return nil, errors.New("browser state unavailable")
 	}
-	factory, err := browser.NewPlaywrightWorkerFactory(cfg)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, nodeRuntime)
 	if err != nil {
 		store.Close()
 		return nil, errors.New("browser driver unavailable")
@@ -188,7 +197,9 @@ func setupBrowserRuntime(ctx context.Context, cfg *config.Config, runningService
 		services: runningServices, policyRevision: policyRevision, workspace: cfg.WorkspacePath(),
 		limits: cfg.Tools.Browser.Limits.Effective(),
 	}
-	runtime, err := newBrowserRuntime(ctx, cfg, recoverySource.committedBrowserDownload)
+	runtime, err := newBrowserRuntimeWithNodes(
+		ctx, cfg, runningServices.NodeAdmission, recoverySource.committedBrowserDownload,
+	)
 	if err != nil {
 		return err
 	}
@@ -198,6 +209,7 @@ func setupBrowserRuntime(ctx context.Context, cfg *config.Config, runningService
 
 type gatewayBrowserToolSource struct {
 	services            *services
+	config              *config.Config
 	policyRevision      string
 	workspace           string
 	screenshotRetention time.Duration
@@ -245,13 +257,25 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 		source,
 		func(ctx context.Context, broker *browser.Broker) (tools.BrowserTargetDiagnostics, error) {
 			uploadAvailable := source.ArtifactTransferAvailable()
+			screenshotAvailable := source.ScreenshotAvailable()
+			downloadAvailable := uploadAvailable && source.DownloadAvailable()
+			handoffAvailable := source.HandoffAvailable()
+			if source.config != nil {
+				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
+					configured.EffectivePlacement() == config.BrowserPlacementNode {
+					screenshotAvailable = false
+					uploadAvailable = false
+					downloadAvailable = false
+					handoffAvailable = false
+				}
+			}
 			result := tools.BrowserTargetDiagnostics{
 				Profiles:   make(map[string]browser.PassiveReadiness, len(profiles)),
-				Screenshot: source.ScreenshotAvailable(),
+				Screenshot: screenshotAvailable,
 				Upload:     uploadAvailable,
-				Download:   uploadAvailable && source.DownloadAvailable(),
-				HeadedView: source.HandoffAvailable(),
-				Handoff:    source.HandoffAvailable(),
+				Download:   downloadAvailable,
+				HeadedView: handoffAvailable,
+				Handoff:    handoffAvailable,
 			}
 			for _, profile := range profiles {
 				readiness, err := broker.PassiveReadiness(ctx, target, profile)
@@ -509,6 +533,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		}
 		return &gatewayBrowserToolSource{
 			services: runningServices, policyRevision: policyRevision,
+			config:    reloadCfg,
 			workspace: reloadCfg.WorkspacePath(),
 			screenshotRetention: browserScreenshotRetention(
 				reloadCfg.Tools.Browser.Limits.Effective().RetentionSecs,

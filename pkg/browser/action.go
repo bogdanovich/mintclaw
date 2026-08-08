@@ -301,6 +301,14 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				}
 				return sink(executeCtx, prepared, download)
 			}
+			if preparedWorker, ok := worker.(PreparedActionWorker); ok {
+				if executeErr := preparedWorker.ExecutePrepared(executeCtx, WorkerPreparedAction{
+					InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
+				}); executeErr != nil {
+					return nil, executeErr
+				}
+				return json.RawMessage(`{"status":"completed"}`), nil
+			}
 			if executeErr := worker.Execute(executeCtx, driverAction); executeErr != nil {
 				return nil, executeErr
 			}
@@ -336,6 +344,9 @@ func (broker *Broker) resolvePreparedActionLocked(
 		CreatedAt: now.UnixNano(),
 		ExpiresAt: now.Add(time.Duration(broker.config.Limits.Effective().PreparedSeconds) * time.Second).UnixNano(),
 	}
+	if remote, ok := worker.(PreparedActionWorker); ok && !remote.SupportsPreparedAction(request.Action.Kind) {
+		return PreparedAction{}, ErrDenied
+	}
 	if prepared.CurrentOrigin == initialBlankOrigin && request.Action.Kind != ActionNavigate {
 		return PreparedAction{}, ErrDenied
 	}
@@ -347,15 +358,17 @@ func (broker *Broker) resolvePreparedActionLocked(
 	}
 	switch request.Action.Kind {
 	case ActionNavigate:
-		observation, observeErr := worker.Observe(ctx)
-		if observeErr != nil {
-			return PreparedAction{}, observeErr
-		}
-		if blankErr := validateBlankObservation(observation, session.SnapshotOrigin); blankErr != nil {
-			return PreparedAction{}, blankErr
-		}
-		if observation.Origin != session.SnapshotOrigin {
-			return PreparedAction{}, ErrStale
+		if remote, ok := worker.(PreparedActionWorker); !ok || !remote.SupportsPreparedAction(ActionNavigate) {
+			observation, observeErr := worker.Observe(ctx)
+			if observeErr != nil {
+				return PreparedAction{}, observeErr
+			}
+			if blankErr := validateBlankObservation(observation, session.SnapshotOrigin); blankErr != nil {
+				return PreparedAction{}, blankErr
+			}
+			if observation.Origin != session.SnapshotOrigin {
+				return PreparedAction{}, ErrStale
+			}
 		}
 		normalized, err := normalizeDriverNavigationURL(request.Action.URL)
 		if err != nil {
@@ -476,6 +489,9 @@ func (broker *Broker) revalidatePreparedLocked(
 	}
 	if prepared.Action.Kind == ActionNavigate || prepared.Action.Kind == ActionPress ||
 		prepared.Action.Kind == ActionScroll {
+		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(prepared.Action.Kind) {
+			return nil
+		}
 		observation, err := worker.Observe(ctx)
 		if err != nil {
 			return err

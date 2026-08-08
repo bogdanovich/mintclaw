@@ -106,18 +106,6 @@ func TestBrowserConfigRejectsInvalidCompanionPlacement(t *testing.T) {
 			},
 			wantErr: "requires nodes.enabled",
 		},
-		{
-			name: "enabled before host",
-			mutate: func(cfg *Config, target *BrowserTargetConfig) {
-				cfg.Nodes.Enabled = true
-				target.Enabled = true
-				target.Profiles[BrowserDefaultProfile] = BrowserProfileConfig{
-					Enabled: true, Mode: BrowserProfileManaged,
-					NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
-				}
-			},
-			wantErr: "unavailable until the companion browser host is installed",
-		},
 	}
 
 	for _, test := range tests {
@@ -142,6 +130,26 @@ func TestBrowserConfigRejectsInvalidCompanionPlacement(t *testing.T) {
 				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestBrowserConfigAdmitsEnabledCompanionPlacement(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]ExecutionTarget{
+		"ab-local-test": {Type: "node", Node: "darwin-companion"},
+	}
+	cfg.Tools.Browser.Targets["companion"] = BrowserTargetConfig{
+		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
+		Profiles: map[string]BrowserProfileConfig{
+			BrowserDefaultProfile: {
+				Enabled: true, Mode: BrowserProfileManaged,
+				NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
+			},
+		},
+	}
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() enabled companion error = %v", err)
 	}
 }
 

@@ -239,10 +239,10 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if !cfg.Nodes.Enabled {
 			return fmt.Errorf("enabled node browser target %q requires nodes.enabled", name)
 		}
-		return fmt.Errorf(
-			"enabled node browser target %q is unavailable until the companion browser host is installed",
-			name,
-		)
+		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
+			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
+		}
+		return nil
 	}
 	if name != BrowserDefaultTarget {
 		return fmt.Errorf("B1 supports only the %q browser target", BrowserDefaultTarget)

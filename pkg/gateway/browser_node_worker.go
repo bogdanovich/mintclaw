@@ -1,0 +1,734 @@
+package gateway
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+)
+
+type gatewayBrowserWorkerFactory struct {
+	config *config.Config
+	local  browser.WorkerFactory
+	node   *nodeBrowserWorkerFactory
+}
+
+func newGatewayBrowserWorkerFactory(
+	cfg *config.Config,
+	runtime *nodeAdmissionRuntime,
+) (browser.WorkerFactory, error) {
+	if cfg == nil {
+		return nil, browser.ErrDenied
+	}
+	factory := &gatewayBrowserWorkerFactory{config: cfg}
+	for _, target := range cfg.Tools.Browser.Targets {
+		if !target.Enabled {
+			continue
+		}
+		switch target.EffectivePlacement() {
+		case config.BrowserPlacementGateway:
+			local, err := browser.NewPlaywrightWorkerFactory(cfg)
+			if err != nil {
+				return nil, err
+			}
+			factory.local = local
+		case config.BrowserPlacementNode:
+			if factory.node != nil {
+				continue
+			}
+			source, err := newNodeInvocationSource(cfg, runtime)
+			if err != nil {
+				return nil, err
+			}
+			policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+			if err != nil {
+				return nil, err
+			}
+			factory.node = &nodeBrowserWorkerFactory{
+				config: cfg, source: source, policyRevision: policyRevision,
+				workspaceID: browserNodeStableID("workspace", cfg.WorkspacePath()),
+			}
+		}
+	}
+	if factory.local == nil && factory.node == nil {
+		return nil, browser.ErrDenied
+	}
+	return factory, nil
+}
+
+func (factory *gatewayBrowserWorkerFactory) Open(
+	ctx context.Context,
+	request browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	if factory == nil || factory.config == nil {
+		return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+	}
+	target, ok := factory.config.Tools.Browser.Targets[request.Target]
+	if !ok || !target.Enabled {
+		return browser.WorkerOpenResult{}, browser.ErrDenied
+	}
+	if target.EffectivePlacement() == config.BrowserPlacementNode {
+		if factory.node == nil {
+			return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+		}
+		return factory.node.Open(ctx, request)
+	}
+	if factory.local == nil {
+		return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+	}
+	return factory.local.Open(ctx, request)
+}
+
+func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
+	_ context.Context,
+	targetName string,
+	profileName string,
+) browser.DriverReadiness {
+	if factory == nil || factory.config == nil {
+		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
+	}
+	target, ok := factory.config.Tools.Browser.Targets[targetName]
+	if !ok || !target.Enabled {
+		return unavailableNodeBrowserReadiness("target_unavailable", "configure_target")
+	}
+	if target.EffectivePlacement() != config.BrowserPlacementNode {
+		if local, available := factory.local.(interface {
+			PassiveReadiness() browser.DriverReadiness
+		}); available {
+			return local.PassiveReadiness()
+		}
+		return unavailableNodeBrowserReadiness("driver_unavailable", "contact_operator")
+	}
+	if factory.node == nil || factory.node.source == nil {
+		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
+	}
+	executionTarget, ok := factory.config.Execution.Targets[target.NodeTarget]
+	if !ok || executionTarget.Type != "node" {
+		return unavailableNodeBrowserReadiness("target_unavailable", "configure_target")
+	}
+	record, found, err := factory.node.source.Lookup(executionTarget.Node)
+	if err != nil || !found || !record.Connected || record.Registration == nil ||
+		record.Snapshot.State != nodes.StateConnected {
+		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
+	}
+	localProfile, ok := target.Profiles[profileName]
+	if !ok || !localProfile.Enabled {
+		return unavailableNodeBrowserReadiness("profile_unavailable", "configure_profile")
+	}
+	var remoteProfile nodes.BrowserProfileDescriptor
+	for _, command := range []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandSessionStatus,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandAct,
+		nodes.BrowserCommandSessionClose,
+	} {
+		descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
+		if !approved {
+			return unavailableNodeBrowserReadiness("command_unapproved", "approve_browser_commands")
+		}
+		candidate, available := browserDescriptorProfile(descriptor, profileName)
+		if !available || !browserProfileIntersects(localProfile,
+			factory.config.Tools.Browser.Limits, candidate) ||
+			(remoteProfile.Revision != "" && !browserProfilesEqual(remoteProfile, candidate)) {
+			return unavailableNodeBrowserReadiness("profile_policy_mismatch", "reconcile_profile")
+		}
+		remoteProfile = candidate
+	}
+	return browser.DriverReadiness{
+		Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
+		Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+		Compatibility: browser.CompatibilityCompatible,
+	}
+}
+
+func unavailableNodeBrowserReadiness(code, action string) browser.DriverReadiness {
+	return browser.DriverReadiness{
+		Status: browser.ReadinessUnavailable, Driver: browser.ReadinessUnavailable,
+		Browser: browser.ReadinessUnavailable, Proxy: browser.ReadinessUnavailable,
+		Compatibility: browser.CompatibilityUnchecked, Code: code, Action: action,
+	}
+}
+
+type nodeBrowserWorkerFactory struct {
+	config         *config.Config
+	source         *nodeInvocationSource
+	policyRevision string
+	workspaceID    string
+}
+
+func (factory *nodeBrowserWorkerFactory) Open(
+	ctx context.Context,
+	request browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	if factory == nil || factory.config == nil || factory.source == nil || request.Owner.Validate() != nil {
+		return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+	}
+	target, ok := factory.config.Tools.Browser.Targets[request.Target]
+	if !ok || !target.Enabled || target.EffectivePlacement() != config.BrowserPlacementNode {
+		return browser.WorkerOpenResult{}, browser.ErrDenied
+	}
+	profile, ok := target.Profiles[request.Profile]
+	if !ok || !profile.Enabled || !profile.DryRun {
+		return browser.WorkerOpenResult{}, browser.ErrDenied
+	}
+	worker := &nodeBrowserWorker{
+		factory: factory, owner: request.Owner, browserTarget: request.Target,
+		nodeTarget: target.NodeTarget, sessionID: request.SessionID,
+		profile: request.Profile, limits: request.Limits,
+		elements: make(map[string]browser.DriverElement),
+	}
+	descriptor, remoteProfile, err := worker.resolveAuthority(nodes.BrowserCommandSessionOpen)
+	if err != nil || !browserProfileIntersects(profile, request.Limits, remoteProfile) {
+		return browser.WorkerOpenResult{}, browser.ErrDenied
+	}
+	worker.profileRevision = remoteProfile.Revision
+	worker.catalogRevision = worker.catalogHash
+	input := nodes.BrowserSessionOpenInput{
+		SessionID: request.SessionID, Profile: request.Profile,
+		ProfileRevision: remoteProfile.Revision, BrowserPolicyRevision: factory.policyRevision,
+		DryRun: request.DryRun, Limits: browserNodeLimits(request.Limits),
+	}
+	var result nodes.BrowserSessionResult
+	if err = worker.invoke(ctx, descriptor, "open", input, &result); err != nil {
+		return browser.WorkerOpenResult{Owner: worker}, err
+	}
+	if result.SessionID != request.SessionID || result.State != "ready" ||
+		result.TabID == "" || result.Controller != "agent" ||
+		!result.Features.Observe || !result.Features.Navigate {
+		return browser.WorkerOpenResult{Owner: worker}, browser.ErrDriverIncompatible
+	}
+	worker.tabID = result.TabID
+	return browser.WorkerOpenResult{Owner: worker}, nil
+}
+
+type nodeBrowserWorker struct {
+	factory         *nodeBrowserWorkerFactory
+	owner           browser.Owner
+	browserTarget   string
+	nodeTarget      string
+	sessionID       string
+	profile         string
+	profileRevision string
+	limits          config.BrowserLimitsConfig
+	nodeID          nodes.ID
+	executor        string
+	policyRevision  string
+	catalogHash     string
+	catalogRevision string
+	tabID           string
+
+	mu                 sync.Mutex
+	snapshotGeneration uint64
+	cachedObservation  *browser.DriverObservation
+	elements           map[string]browser.DriverElement
+	statusSequence     uint64
+	closed             bool
+}
+
+func (worker *nodeBrowserWorker) Status(ctx context.Context) (browser.WorkerStatus, error) {
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return browser.WorkerLost, nil
+	}
+	worker.statusSequence++
+	requestKey := fmt.Sprintf("status_%d", worker.statusSequence)
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandSessionStatus)
+	if err != nil {
+		return browser.WorkerLost, err
+	}
+	var result nodes.BrowserSessionResult
+	err = worker.invoke(ctx, descriptor, requestKey, nodes.BrowserSessionStatusInput{
+		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
+	}, &result)
+	if err != nil {
+		return browser.WorkerLost, err
+	}
+	if result.State != "ready" {
+		return browser.WorkerLost, nil
+	}
+	return browser.WorkerReady, nil
+}
+
+func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return nil
+	}
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandSessionClose)
+	if err != nil {
+		return err
+	}
+	var result nodes.BrowserSessionResult
+	if err = worker.invoke(ctx, descriptor, "close", nodes.BrowserSessionStatusInput{
+		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
+	}, &result); err != nil {
+		return err
+	}
+	if result.State != "closed" {
+		return browser.ErrWorkerUnavailable
+	}
+	worker.mu.Lock()
+	worker.closed = true
+	worker.cachedObservation = nil
+	worker.elements = make(map[string]browser.DriverElement)
+	worker.mu.Unlock()
+	return nil
+}
+
+func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObservation, error) {
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return browser.DriverObservation{}, browser.ErrWorkerUnavailable
+	}
+	if worker.cachedObservation != nil {
+		result := *worker.cachedObservation
+		worker.cachedObservation = nil
+		worker.rememberElementsLocked(result)
+		worker.mu.Unlock()
+		return result, nil
+	}
+	nextGeneration := worker.snapshotGeneration + 1
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandObserve)
+	if err != nil {
+		return browser.DriverObservation{}, err
+	}
+	var result nodes.BrowserObservationResult
+	err = worker.invoke(ctx, descriptor, fmt.Sprintf("observe_%d", nextGeneration), nodes.BrowserObserveInput{
+		SessionID: worker.sessionID, TabID: worker.tabID,
+		SnapshotGeneration: nextGeneration, Screenshot: false,
+	}, &result)
+	if err != nil {
+		return browser.DriverObservation{}, err
+	}
+	observation, err := worker.acceptObservation(result, nextGeneration)
+	if err != nil {
+		return browser.DriverObservation{}, err
+	}
+	return observation, nil
+}
+
+func (worker *nodeBrowserWorker) Resolve(
+	_ context.Context,
+	target string,
+) (browser.DriverElement, string, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	element, ok := worker.elements[target]
+	if !ok {
+		return browser.DriverElement{}, "", browser.ErrStale
+	}
+	return element, target, nil
+}
+
+func (*nodeBrowserWorker) Execute(context.Context, browser.DriverAction) error {
+	return browser.ErrDriverIncompatible
+}
+
+func (*nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind) bool {
+	return kind == browser.ActionNavigate
+}
+
+func (worker *nodeBrowserWorker) ExecutePrepared(
+	ctx context.Context,
+	request browser.WorkerPreparedAction,
+) error {
+	if request.Prepared.Action.Kind != browser.ActionNavigate ||
+		request.DriverAction.Kind != browser.DriverNavigate {
+		return browser.ErrDenied
+	}
+	worker.mu.Lock()
+	generation := worker.snapshotGeneration
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandAct)
+	if err != nil {
+		return err
+	}
+	var result nodes.BrowserActResult
+	err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, nodes.BrowserActInput{
+		SessionID: worker.sessionID, TabID: worker.tabID,
+		SnapshotGeneration: generation, ActionInvocationID: request.InvocationID,
+		Action: nodes.BrowserAction{Kind: "navigate", URL: request.DriverAction.URL},
+		Effect: "navigation", CurrentOrigin: request.Prepared.CurrentOrigin,
+		PreparedActionHash:    request.Prepared.ActionHash,
+		BrowserPolicyRevision: worker.factory.policyRevision,
+		ProfileRevision:       worker.profileRevision,
+	}, &result)
+	if err != nil {
+		return err
+	}
+	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" ||
+		result.Observation == nil {
+		return browser.ErrWorkerUnavailable
+	}
+	observation, err := worker.acceptObservation(*result.Observation, generation+1)
+	if err != nil {
+		return err
+	}
+	worker.mu.Lock()
+	worker.cachedObservation = &observation
+	worker.mu.Unlock()
+	return nil
+}
+
+func (worker *nodeBrowserWorker) CatalogRevision() string {
+	return worker.catalogRevision
+}
+
+func (worker *nodeBrowserWorker) acceptObservation(
+	result nodes.BrowserObservationResult,
+	expectedGeneration uint64,
+) (browser.DriverObservation, error) {
+	if result.SessionID != worker.sessionID || result.TabID != worker.tabID ||
+		result.SnapshotGeneration != expectedGeneration {
+		return browser.DriverObservation{}, browser.ErrDriverIncompatible
+	}
+	elements := make([]browser.DriverElement, len(result.Elements))
+	for index, element := range result.Elements {
+		elements[index] = browser.DriverElement{
+			Target: element.Ref, Role: element.Role, Name: element.Name,
+		}
+	}
+	observation := browser.DriverObservation{
+		URL: result.URL, Origin: result.Origin, Title: result.Title,
+		Snapshot: result.Snapshot, Elements: elements, Truncated: result.Truncated,
+	}
+	worker.mu.Lock()
+	worker.snapshotGeneration = result.SnapshotGeneration
+	worker.rememberElementsLocked(observation)
+	worker.mu.Unlock()
+	return observation, nil
+}
+
+func (worker *nodeBrowserWorker) rememberElementsLocked(observation browser.DriverObservation) {
+	worker.elements = make(map[string]browser.DriverElement, len(observation.Elements))
+	for _, element := range observation.Elements {
+		worker.elements[element.Target] = element
+	}
+}
+
+func (worker *nodeBrowserWorker) resolveAuthority(
+	command string,
+) (nodes.CommandDescriptor, nodes.BrowserProfileDescriptor, error) {
+	executionTarget, ok := worker.factory.config.Execution.Targets[worker.nodeTarget]
+	if !ok || executionTarget.Type != "node" {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	record, found, err := worker.factory.source.Lookup(executionTarget.Node)
+	if err != nil || !found || !record.Connected || record.Registration == nil ||
+		record.Snapshot.State != nodes.StateConnected || record.Snapshot.Executor == "" ||
+		record.Snapshot.PolicyRevision == "" {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrWorkerUnavailable
+	}
+	descriptor, ok := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
+	if !ok {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	profile, ok := browserDescriptorProfile(descriptor, worker.profile)
+	if !ok {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	if worker.catalogHash == "" {
+		worker.nodeID = record.Snapshot.ID
+		worker.executor = record.Snapshot.Executor
+		worker.policyRevision = record.Snapshot.PolicyRevision
+		worker.catalogHash = record.Snapshot.CatalogHash
+	} else if worker.nodeID != record.Snapshot.ID ||
+		worker.executor != record.Snapshot.Executor ||
+		worker.policyRevision != record.Snapshot.PolicyRevision ||
+		worker.catalogHash != record.Snapshot.CatalogHash {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	if worker.profileRevision != "" && worker.profileRevision != profile.Revision {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	return descriptor, profile, nil
+}
+
+func (worker *nodeBrowserWorker) invoke(
+	ctx context.Context,
+	descriptor nodes.CommandDescriptor,
+	requestKey string,
+	input any,
+	output any,
+) error {
+	executionTarget := worker.factory.config.Execution.Targets[worker.nodeTarget]
+	record, found, err := worker.factory.source.Lookup(executionTarget.Node)
+	if err != nil || !found || record.Registration == nil {
+		return browser.ErrWorkerUnavailable
+	}
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return browser.ErrInvalid
+	}
+	principal := worker.principal()
+	invocationID := browserNodeStableID(
+		"browser", worker.sessionID, descriptor.Name, requestKey,
+	)
+	toolCallID := browserNodeStableID("call", invocationID)
+	request := nodes.InvocationRequest{
+		InvocationID: invocationID, IdempotencyKey: browserNodeStableID("idem", invocationID),
+		NodeID: record.Snapshot.ID, CatalogHash: record.Snapshot.CatalogHash,
+		Command: descriptor.Name, Input: inputJSON,
+		AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
+		TimeoutSeconds:   min(worker.limits.ActionSeconds, nodes.MaxBrowserActionSeconds),
+		OutputLimitBytes: min(worker.limits.ToolResultBytes, nodes.MaxBrowserToolResultBytes),
+	}
+	plan, err := nodes.PrepareExecutionPlan(
+		request, descriptor, record.Snapshot.Executor, record.Snapshot.PolicyRevision,
+		time.Now(), nodes.MaxExecutionPlanTTL,
+	)
+	if err != nil {
+		return browser.ErrDenied
+	}
+	gatewayRecord, _, err := worker.factory.source.PrepareInvocation(
+		executionTarget.Node, worker.nodeTarget, toolCallID, principal, plan, descriptor, true,
+		func(current tools.NodeDiscoveryRecord) error {
+			return worker.validateAuthority(current, descriptor)
+		},
+	)
+	if err != nil {
+		return browser.ErrDenied
+	}
+	if !browserRetainedInvocationMatches(gatewayRecord, plan, descriptor) {
+		return browser.ErrDenied
+	}
+	owner := nodes.GatewayInvocationOwner{
+		Target: worker.nodeTarget, AgentID: principal.AgentID,
+		SessionID: principal.SessionID, ActorID: principal.ActorID,
+		ToolCallID: toolCallID, WorkspaceID: principal.WorkspaceID,
+		ExecutionID: principal.ExecutionID,
+	}
+	var raw json.RawMessage
+	if gatewayRecord.State == nodes.GatewayInvocationPrepared {
+		var dispatched bool
+		raw, dispatched, err = worker.factory.source.DispatchInvocation(
+			ctx, owner, gatewayRecord.Plan.InvocationID, gatewayRecord.ExpectedPlanHash,
+		)
+		if err == nil {
+			return json.Unmarshal(raw, output)
+		}
+		if !dispatched {
+			raw, dispatched, err = worker.factory.source.DispatchInvocation(
+				ctx, owner, gatewayRecord.Plan.InvocationID, gatewayRecord.ExpectedPlanHash,
+			)
+			if err == nil {
+				return json.Unmarshal(raw, output)
+			}
+			if !dispatched {
+				return browser.ErrWorkerUnavailable
+			}
+		}
+	}
+	if gatewayRecord.State != nodes.GatewayInvocationDispatched &&
+		gatewayRecord.State != nodes.GatewayInvocationPrepared {
+		return browser.ErrWorkerUnavailable
+	}
+	return worker.reconcileInvocation(ctx, gatewayRecord, principal, output)
+}
+
+func browserRetainedInvocationMatches(
+	record nodes.GatewayInvocationRecord,
+	plan nodes.ExecutionPlan,
+	descriptor nodes.CommandDescriptor,
+) bool {
+	descriptorHash, err := descriptor.Hash()
+	if err != nil {
+		return false
+	}
+	return record.Plan.InvocationID == plan.InvocationID &&
+		record.Plan.IdempotencyKey == plan.IdempotencyKey &&
+		record.Plan.NodeID == plan.NodeID && record.Plan.CatalogHash == plan.CatalogHash &&
+		record.Plan.Command == plan.Command && record.Plan.DescriptorHash == descriptorHash &&
+		record.Plan.AgentID == plan.AgentID && record.Plan.SessionID == plan.SessionID &&
+		record.Plan.ActorID == plan.ActorID && record.Plan.Executor == plan.Executor &&
+		record.Plan.PolicyRevision == plan.PolicyRevision &&
+		record.Plan.Input != nil && string(record.Plan.Input) == string(plan.Input) &&
+		record.Plan.TimeoutSeconds == plan.TimeoutSeconds &&
+		record.Plan.OutputLimitBytes == plan.OutputLimitBytes
+}
+
+func (worker *nodeBrowserWorker) reconcileInvocation(
+	ctx context.Context,
+	record nodes.GatewayInvocationRecord,
+	principal nodes.GatewayInvocationPrincipal,
+	output any,
+) error {
+	redispatched := false
+	for attempt := 0; attempt < 10; attempt++ {
+		remote, err := worker.factory.source.QueryInvocation(
+			ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
+		)
+		if err == nil {
+			switch remote.State {
+			case nodes.InvocationSucceeded:
+				return json.Unmarshal(remote.Result, output)
+			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				return browser.ErrWorkerUnavailable
+			case nodes.InvocationUnknown:
+				return browser.ErrWorkerUnavailable
+			}
+		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified &&
+			code == nodes.InvocationQueryNotFound && !redispatched {
+			raw, dispatched, dispatchErr := worker.factory.source.RedispatchInvocation(
+				ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
+			)
+			redispatched = true
+			if dispatchErr == nil {
+				return json.Unmarshal(raw, output)
+			}
+			if !dispatched {
+				return browser.ErrWorkerUnavailable
+			}
+		} else if classified && code != nodes.InvocationQueryNodeUnavailable &&
+			code != nodes.InvocationQueryTransportUnavailable {
+			return browser.ErrWorkerUnavailable
+		}
+		delay := min(100*time.Millisecond*time.Duration(1<<min(attempt, 3)), time.Second)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return browser.ErrWorkerUnavailable
+		case <-timer.C:
+		}
+	}
+	return browser.ErrWorkerUnavailable
+}
+
+func (worker *nodeBrowserWorker) validateAuthority(
+	current tools.NodeDiscoveryRecord,
+	expected nodes.CommandDescriptor,
+) error {
+	if !current.Connected || current.Registration == nil ||
+		current.Snapshot.ID != worker.nodeID ||
+		current.Snapshot.Executor != worker.executor ||
+		current.Snapshot.PolicyRevision != worker.policyRevision ||
+		current.Snapshot.CatalogHash != worker.catalogHash {
+		return browser.ErrDenied
+	}
+	descriptor, ok := browserApprovedDescriptor(
+		current.Snapshot, current.Registration, expected.Name,
+	)
+	if !ok {
+		return browser.ErrDenied
+	}
+	expectedHash, expectedErr := expected.Hash()
+	currentHash, currentErr := descriptor.Hash()
+	if expectedErr != nil || currentErr != nil || expectedHash != currentHash {
+		return browser.ErrDenied
+	}
+	profile, ok := browserDescriptorProfile(descriptor, worker.profile)
+	if !ok || profile.Revision != worker.profileRevision && worker.profileRevision != "" {
+		return browser.ErrDenied
+	}
+	return nil
+}
+
+func (worker *nodeBrowserWorker) principal() nodes.GatewayInvocationPrincipal {
+	return nodes.GatewayInvocationPrincipal{
+		AgentID: worker.owner.AgentID, SessionID: worker.owner.SessionKey,
+		ActorID: worker.owner.ActorID, WorkspaceID: worker.factory.workspaceID,
+		ExecutionID: worker.owner.ExecutionID,
+	}
+}
+
+func browserApprovedDescriptor(
+	snapshot nodes.Snapshot,
+	registration *nodes.Registration,
+	command string,
+) (nodes.CommandDescriptor, bool) {
+	if registration == nil || registration.ApprovedAt <= 0 ||
+		registration.ApprovedCatalogHash == "" ||
+		registration.ApprovedCatalogHash != snapshot.CatalogHash ||
+		!slices.Contains(registration.AllowedCommands, command) {
+		return nodes.CommandDescriptor{}, false
+	}
+	for _, descriptor := range snapshot.Catalog.Commands {
+		if descriptor.Name == command && nodes.IsBrowserCommand(command) && descriptor.ModelContract == nil {
+			return descriptor, true
+		}
+	}
+	return nodes.CommandDescriptor{}, false
+}
+
+func browserDescriptorProfile(
+	descriptor nodes.CommandDescriptor,
+	alias string,
+) (nodes.BrowserProfileDescriptor, bool) {
+	for _, profile := range descriptor.BrowserProfiles {
+		if profile.Alias == alias {
+			return profile, true
+		}
+	}
+	return nodes.BrowserProfileDescriptor{}, false
+}
+
+func browserProfileIntersects(
+	local config.BrowserProfileConfig,
+	limits config.BrowserLimitsConfig,
+	remote nodes.BrowserProfileDescriptor,
+) bool {
+	requested := browserNodeLimits(limits)
+	return remote.DryRun && local.DryRun &&
+		remote.NetworkMode == local.EffectiveNetworkMode() &&
+		slices.Contains(remote.Actions, "navigate") &&
+		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
+		requested.SessionSeconds <= remote.Limits.SessionSeconds &&
+		requested.IdleSeconds <= remote.Limits.IdleSeconds &&
+		requested.PreparedSeconds <= remote.Limits.PreparedSeconds &&
+		requested.ActionSeconds <= remote.Limits.ActionSeconds &&
+		requested.SnapshotBytes <= remote.Limits.SnapshotBytes &&
+		requested.ScreenshotBytes <= remote.Limits.ScreenshotBytes &&
+		requested.UploadBytes <= remote.Limits.UploadBytes &&
+		requested.DownloadBytes <= remote.Limits.DownloadBytes &&
+		requested.SnapshotRefs <= remote.Limits.SnapshotRefs &&
+		requested.TextInputBytes <= remote.Limits.TextInputBytes &&
+		requested.ToolResultBytes <= remote.Limits.ToolResultBytes &&
+		requested.RetentionSecs <= remote.Limits.RetentionSecs
+}
+
+func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
+	return left.Alias == right.Alias && left.Revision == right.Revision &&
+		left.Driver == right.Driver && left.Mode == right.Mode &&
+		left.NetworkMode == right.NetworkMode && left.DryRun == right.DryRun &&
+		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
+		left.Limits == right.Limits
+}
+
+func browserNodeLimits(limits config.BrowserLimitsConfig) nodes.BrowserLimits {
+	effective := limits.Effective()
+	return nodes.BrowserLimits{
+		Sessions: effective.Sessions, Tabs: effective.Tabs,
+		SessionSeconds: effective.SessionSeconds, IdleSeconds: effective.IdleSeconds,
+		PreparedSeconds: effective.PreparedSeconds, ActionSeconds: effective.ActionSeconds,
+		SnapshotBytes: effective.SnapshotBytes, ScreenshotBytes: effective.ScreenshotBytes,
+		UploadBytes: effective.UploadBytes, DownloadBytes: effective.DownloadBytes,
+		SnapshotRefs: effective.SnapshotRefs, TextInputBytes: effective.TextInputBytes,
+		ToolResultBytes: effective.ToolResultBytes, RetentionSecs: effective.RetentionSecs,
+	}
+}
+
+func browserNodeStableID(prefix string, values ...string) string {
+	hash := sha256.New()
+	for _, value := range values {
+		_, _ = fmt.Fprintf(hash, "%d:", len(value))
+		_, _ = hash.Write([]byte(value))
+	}
+	return prefix + "_" + hex.EncodeToString(hash.Sum(nil))
+}

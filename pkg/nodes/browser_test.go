@@ -42,6 +42,79 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
+	var result BrowserSessionResult
+	if err := json.Unmarshal([]byte(`{
+		"session_id":"session_1",
+		"state":"ready",
+		"tab_id":"tab_primary",
+		"controller":"agent",
+		"features":{"observe":true,"navigate":true,"screenshot":false,"download":false},
+		"expires_at":1.786223585e9,
+		"idle_expires_at":1.786220045e9
+	}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiresAt != 1786223585 || result.IdleExpiresAt != 1786220045 {
+		t.Fatalf("decoded browser session timestamps = %#v", result)
+	}
+
+	for _, invalid := range []string{
+		`{"session_id":"session_1","state":"ready","expires_at":1.5}`,
+		`{"session_id":"session_1","state":"ready","expires_at":-1}`,
+		`{"session_id":"session_1","state":"ready","expires_at":1e100}`,
+	} {
+		if err := json.Unmarshal([]byte(invalid), &result); err == nil {
+			t.Fatalf("BrowserSessionResult accepted invalid timestamp %s", invalid)
+		}
+	}
+}
+
+func TestBrowserPayloadsDecodeCanonicalSnapshotGenerationsExactly(t *testing.T) {
+	var observe BrowserObserveInput
+	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
+		`"snapshot_generation":1e1,"screenshot":false}`), &observe); err != nil {
+		t.Fatal(err)
+	}
+	var action BrowserActInput
+	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
+		`"snapshot_generation":1e2,"action_invocation_id":"action_1",`+
+		`"action":{"kind":"navigate","url":"https://example.com"},`+
+		`"effect":"navigation","current_origin":"about:blank",`+
+		`"prepared_action_hash":"`+strings.Repeat("a", 64)+`",`+
+		`"browser_policy_revision":"`+strings.Repeat("b", 64)+`",`+
+		`"profile_revision":"managed-v1"}`), &action); err != nil {
+		t.Fatal(err)
+	}
+	var observation BrowserObservationResult
+	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
+		`"snapshot_generation":1e2,"url":"about:blank","origin":"about:blank",`+
+		`"snapshot":"","elements":[],"truncated":false}`), &observation); err != nil {
+		t.Fatal(err)
+	}
+	var actionResult BrowserActResult
+	if err := json.Unmarshal([]byte(`{"action_invocation_id":"action_1","state":"succeeded",`+
+		`"observation":{"session_id":"session_1","tab_id":"tab_primary",`+
+		`"snapshot_generation":1e1,"url":"about:blank","origin":"about:blank",`+
+		`"snapshot":"","elements":[],"truncated":false}}`), &actionResult); err != nil {
+		t.Fatal(err)
+	}
+	if observe.SnapshotGeneration != 10 || action.SnapshotGeneration != 100 ||
+		observation.SnapshotGeneration != 100 || observation.Elements == nil ||
+		actionResult.Observation == nil || actionResult.Observation.SnapshotGeneration != 10 {
+		t.Fatalf("decoded generations = observe %d, action %d, observation %#v",
+			observe.SnapshotGeneration, action.SnapshotGeneration, observation)
+	}
+
+	for _, invalid := range []string{"1.5", "-1", "1e100"} {
+		data := []byte(`{"session_id":"session_1","tab_id":"tab_primary",` +
+			`"snapshot_generation":` + invalid + `,"screenshot":false}`)
+		if err := json.Unmarshal(data, &observe); err == nil {
+			t.Fatalf("BrowserObserveInput accepted invalid generation %s", invalid)
+		}
+	}
+}
+
 func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate"}
@@ -53,6 +126,7 @@ func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 	base := map[string]any{
 		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 1,
 		"action_invocation_id": "action_1", "effect": "navigation",
+		"current_origin":          "about:blank",
 		"prepared_action_hash":    strings.Repeat("a", 64),
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",
@@ -343,6 +417,7 @@ func browserActInputFixture() map[string]any {
 	return map[string]any{
 		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 1,
 		"action_invocation_id": "action_1", "effect": "navigation",
+		"current_origin":          "about:blank",
 		"prepared_action_hash":    strings.Repeat("a", 64),
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",
