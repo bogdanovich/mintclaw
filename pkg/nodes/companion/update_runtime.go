@@ -153,7 +153,7 @@ func (handler *updateCommandHandler) execute(
 		return nil, fmt.Errorf("%w: coordinator update response unavailable", ErrInvocationOutcomeUnknown)
 	}
 	result := updateResult(response)
-	if definitiveUpdatePreacceptError(response.ErrorCode) {
+	if result.RequestedRelease == "" && definitiveUpdatePreacceptError(response.ErrorCode) {
 		return nil, newCommandFailure(
 			"UPDATE_DENIED",
 			"node update was denied before durable acceptance",
@@ -195,6 +195,9 @@ func (handler *updateCommandHandler) cancelAfterSignal(
 		return nil, fmt.Errorf("%w: update cancellation outcome is unknown", ErrInvocationOutcomeUnknown)
 	}
 	result := updateResult(response)
+	if !updateObservationBound(response, authority.ReleaseVersion) {
+		return nil, fmt.Errorf("%w: update cancellation response is not transaction-bound", ErrInvocationOutcomeUnknown)
+	}
 	if result.State == "canceled" {
 		return nil, fmt.Errorf("%w: coordinator confirmed cancellation", errCommandCancellationConfirmed)
 	}

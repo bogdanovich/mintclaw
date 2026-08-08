@@ -219,6 +219,17 @@ func TestUpdateRuntimeDistinguishesPreacceptDenialFromAcceptedFailure(t *testing
 			wantState: nodes.InvocationSucceeded,
 		},
 		{
+			name: "accepted activation denial",
+			response: control.Response{
+				Observation: control.Observation{
+					Phase: "operator_action_required", RequestedRelease: "v1.1.0",
+					FailureCode: "request_expired",
+				},
+				ErrorCode: "update_denied",
+			},
+			wantState: nodes.InvocationUnknown,
+		},
+		{
 			name: "request error after acceptance",
 			response: control.Response{
 				Observation: control.Observation{
@@ -238,6 +249,54 @@ func TestUpdateRuntimeDistinguishesPreacceptDenialFromAcceptedFailure(t *testing
 			record, found, err := runtimeValue.Invocation(plan.InvocationID)
 			if err != nil || !found || record.State != test.wantState {
 				t.Fatalf("invocation = %#v, %v, %v; want %s", record, found, err, test.wantState)
+			}
+		})
+	}
+}
+
+func TestUpdateRuntimeBindsSignalDrivenCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		response      control.Response
+		wantConfirmed bool
+	}{
+		{
+			name: "bound cancellation",
+			response: control.Response{Observation: control.Observation{
+				Phase: "canceled", RequestedRelease: "v1.1.0",
+			}},
+			wantConfirmed: true,
+		},
+		{
+			name: "request error",
+			response: control.Response{
+				Observation: control.Observation{Phase: "canceled", RequestedRelease: "v1.1.0"},
+				ErrorCode:   "identity_conflict",
+			},
+		},
+		{
+			name: "different transaction",
+			response: control.Response{Observation: control.Observation{
+				Phase: "canceled", RequestedRelease: "v2.0.0",
+			}},
+		},
+		{
+			name:     "empty observation",
+			response: control.Response{Observation: control.Observation{Phase: "canceled"}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator := &recordingUpdateCoordinator{responses: map[control.Kind]control.Response{
+				control.KindCancel: test.response,
+			}}
+			_, plan := updateRuntimeFixture(t, coordinator)
+			handler := &updateCommandHandler{coordinator: coordinator}
+			_, err := handler.cancelAfterSignal(plan, *plan.Update)
+			if errorsIs(err, errCommandCancellationConfirmed) != test.wantConfirmed {
+				t.Fatalf("cancelAfterSignal() error = %v, confirmed = %v", err, test.wantConfirmed)
+			}
+			if !test.wantConfirmed && !errorsIs(err, ErrInvocationOutcomeUnknown) {
+				t.Fatalf("cancelAfterSignal() error = %v, want unknown", err)
 			}
 		})
 	}
