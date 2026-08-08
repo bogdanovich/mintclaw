@@ -69,6 +69,11 @@ The following decisions are part of the admitted scope:
     project-bound local coding worker through a typed paired-node capability.
     The gateway, Telegram agent, and generic Codex provider never own or infer
     the development machine's filesystem path.
+14. A local coding session may explicitly use operator-granted capabilities on
+    paired companions. It reaches the existing node control plane through a
+    narrow authenticated local client, not by asking the live agent's model to
+    proxy a second agent turn. Remote capability access never changes the local
+    thread's cwd or silently grants every paired node to the coding profile.
 
 ## Intended User Experience
 
@@ -157,6 +162,57 @@ or patch reference, artifacts, unresolved issues, and the coding thread ID.
 That thread can later appear in `mintclaw resume` on the development machine;
 the TUI may observe a running thread and acquire its writer lease only after
 the remote task releases it.
+
+### Future coding-to-companion capability use
+
+A local `mintclaw code` session should also be able to use explicitly granted
+capabilities on paired companions. When a gateway or live-agent process on the
+same machine already owns the companion connections, the coding runtime should
+reuse that control plane rather than create a second pairing or route the
+request through the live agent's LLM:
+
+```text
+local coding TUI and CodingThread
+              |
+              v
+   CodingRemoteCapabilityBroker
+              |
+      authenticated local IPC
+              |
+              v
+gateway node registry + invocation coordinator
+              |
+       authenticated WSS
+              |
+              v
+       paired companion
+```
+
+This supports two deliberately different operations:
+
+- A local coding thread may invoke a typed remote capability such as bounded
+  command execution, build status, browser automation, service inspection, or
+  artifact retrieval. The local thread remains the reasoning and transcript
+  owner and records the durable remote invocation ID and bounded result.
+- If the repository itself lives on the companion, the local thread delegates
+  a `CodingTask` to a project-bound coding worker there and observes, steers,
+  or cancels it. It must not approximate remote editing with a long sequence of
+  shell reads and writes or pretend that a remote path is its local cwd.
+
+The first slice should require an already-running local gateway/control-plane
+endpoint. A Unix-domain socket or equivalent same-user local transport exposes
+only node discovery and invocation operations; it does not expose personal
+sessions, channel history, provider credentials, or arbitrary gateway state.
+If the control plane is unavailable, local coding continues normally and the
+remote tools report unavailable rather than spawning a hidden second gateway.
+
+Coding mode remains no-prompt inside an explicitly configured remote grant,
+but this does not turn `--yolo` into global fleet authority. Configuration
+binds exact target aliases, command families, project aliases, and task modes;
+gateway policy may narrow that grant, and node-local policy remains the final
+enforcement boundary. Privileged commands are absent by default. The TUI must
+make remote placement visible and show offline, denied, cancelled, truncated,
+or uncertain outcomes without blindly retrying a mutation.
 
 ## Current Architecture Assessment
 
@@ -419,6 +475,15 @@ Implementation PRs must preserve these system-level guarantees:
     the local worker resolves that alias to a path and owns the coding thread.
 20. Retrying Telegram delivery, gateway dispatch, or a node connection cannot
     create a second coding task for the same idempotency identity.
+21. A local coding session reaches companions through the durable node
+    invocation coordinator, not through a model-to-model live-agent relay or a
+    second competing companion connection.
+22. A remote capability invocation cannot change the coding thread's canonical
+    project root. Remote target, command, invocation ID, and outcome are
+    explicit transcript evidence.
+23. A coding profile sees only explicitly granted target and command aliases.
+    Trusted-local execution cannot broaden gateway or node-local policy, and an
+    uncertain remote mutation is never automatically replayed.
 
 ## Compaction and Long-Session Continuity
 
@@ -1594,7 +1659,50 @@ Done when:
 - Per-tool prompts are unnecessary inside an admitted task, while sender,
   target, project, and task-mode policy remain enforced at dispatch.
 
-#### P7.5 — Workspace checkpoint and rewind investigation
+#### P7.5 — Coding-session access to paired companions
+
+Dependencies: P7.1, P7.4
+
+Scope:
+
+- Define a `CodingRemoteCapabilityBroker` boundary for bounded discovery,
+  invoke, status, progress, cancellation, and artifact references.
+- Add an authenticated same-user local IPC client to the existing gateway node
+  registry and invocation coordinator. Do not expose private agent sessions,
+  channel state, provider credentials, or a generic internal RPC surface.
+- Add coding-profile configuration for exact target aliases, command families,
+  project aliases, and task modes. Keep all remote access disabled by default.
+- Project bounded, fresh remote capability descriptors into the model tool
+  snapshot and make remote placement visible in the TUI.
+- Use direct typed invocation for remote build, test, browser, service, and
+  artifact operations. Use the P7.4 coding-task protocol when the remote
+  machine must own repository reasoning or edits.
+- Record remote invocation and coding-task references in the canonical coding
+  transcript while retaining the gateway invocation store, companion ledger,
+  and remote coding thread as their respective authorities.
+- Define disconnect, cancellation, output truncation, policy change, stale
+  catalog, and uncertain mutation behavior without blind replay.
+
+Done when:
+
+- A local coding thread can list only its allowed companion capabilities and
+  invoke one read operation and one bounded mutating operation through the
+  production gateway-to-companion path.
+- A repository-owning remote coding task can be started, observed, steered,
+  cancelled, and linked from the local thread without the local process
+  claiming the remote cwd or becoming a second transcript writer.
+- Same-user local IPC authentication, target policy, approved catalog, gateway
+  invocation identity, and node-local policy are enforced end to end.
+- The no-prompt coding UX applies only within the configured remote grant;
+  privileged commands remain absent unless separately admitted.
+- Gateway absence, node disconnect, denial, stale policy, cancellation, and
+  uncertain outcome are explicit in both headless events and the TUI.
+- Reconnect and UI retry observe the original invocation or task and never
+  duplicate an accepted mutation.
+- Local-only coding behavior and personal live-agent behavior remain unchanged
+  when no coding remote grant is configured.
+
+#### P7.6 — Workspace checkpoint and rewind investigation
 
 Dependencies: P6.1, P6.4
 
@@ -1747,6 +1855,7 @@ Every production packet should select relevant rows from this matrix:
 | Compaction | Tiered tool-output projection, protected evidence, budgets, recent turns, tool pairs, multiple levels, failure, rebuild, resume |
 | Code intelligence | Optional-server startup, diagnostics, navigation, audited workspace edits, timeout/crash fallback |
 | Chat handoff | Allowed sender/target/project, idempotent dispatch, progress, question/answer, cancel, offline recovery, deduplicated delivery, local resume |
+| Coding remote capabilities | Local IPC identity, exact grants, discovery freshness, typed invoke, task delegation, cancel, disconnect, uncertainty, no replay |
 | Privacy | Cross-project isolation, preview redaction, summary redaction, diagnostics |
 | Cross-platform | Build, paths, locks, process groups, signals, terminal lifecycle |
 
@@ -1761,6 +1870,8 @@ Coding mode should expose privacy-safe measurements for:
 - thread create, open, resume, mismatch, lock contention, archive, and delete;
 - remote coding task create, dispatch, target/project resolution, progress,
   question, steer, cancel, completion, uncertainty, and delivery;
+- coding-session remote discovery, grant denial, invoke, task delegation,
+  disconnect, cancellation, uncertainty, and reconciliation;
 - cold and warm startup duration;
 - first paint and first model token;
 - tool start/end, duration, outcome, and bounded output size;
@@ -1786,6 +1897,8 @@ must not be included in metrics by default.
   agent configuration merely because a project was opened.
 - Direct remote editing by the deployed gateway during the initial release;
   P7.4 delegates to a project-bound worker on a paired machine instead.
+- An unrestricted remote shell, automatic access to every paired companion, or
+  using the live agent's model as a proxy for coding-session node invocations.
 - Multi-agent concurrent writes to one working tree.
 - Automatic commit, push, reset, rebase, or merge without an explicit user
   request.
@@ -1817,6 +1930,9 @@ must not be included in metrics by default.
 | Remote gateway edits the wrong filesystem | Gateway sends only allowed target/project aliases; the node-local worker owns path, thread, and execution |
 | Chat retry starts duplicate coding work | Create durable parent task and idempotency identity before dispatch; reconcile through node and coding-task ledgers |
 | Telegram receives noisy or duplicate progress | Deliver semantic milestones and one structured final report through the existing durable delivery coordinator |
+| Local coding silently gains fleet authority | Require exact coding-profile target/command grants and retain gateway plus node-local policy intersection |
+| Local and live processes compete for a companion | Reuse the running gateway's node control plane through authenticated local IPC; never create a second pairing |
+| Remote mutation is repeated after disconnect | Persist and reconcile the original invocation identity; surface uncertain instead of replaying |
 | Existing Codex CLI provider becomes a nested agent | Do not use it as the native coding runtime; keep it optional as a provider or spike tool |
 
 ## Global Definition of Done
@@ -1852,6 +1968,10 @@ This roadmap is complete when:
     paired project, receive a deduplicated structured result, and later resume
     the same coding thread locally without giving the gateway filesystem
     ownership.
+16. A local coding session can use explicitly granted typed capabilities on a
+    paired companion through the existing durable node control plane, or
+    delegate repository-owning work to a remote coding worker, without routing
+    through the live agent's LLM or gaining implicit fleet authority.
 
 ## Handoff Rules for Implementing Agents
 
@@ -1883,5 +2003,8 @@ Stop and request an architecture decision when:
   without an admitted trust decision; or
 - a channel-to-coding design would accept a model-authored remote path, bypass
   sender/target/project policy, or make the gateway own the coding thread; or
+- a local coding session would open a competing companion connection, inherit
+  all live-agent node access, or use a model-to-model relay for typed remote
+  invocation; or
 - a remote component would gain filesystem authority not admitted by this
   roadmap.
