@@ -269,7 +269,8 @@ func (supervisor *Supervisor) handleRequest(
 		}
 		response.Observation = observationFromState(state)
 		response.ErrorCode = safeCoordinatorError(err)
-		activated = err == nil && state.Transaction != nil && state.Transaction.Phase == PhaseActivating
+		activated = errors.Is(err, ErrActivationOutcomeUnknown) ||
+			(err == nil && state.Transaction != nil && state.Transaction.Phase == PhaseActivating)
 	case control.KindStatus:
 		state, err := supervisor.status(fromControlIdentity(*request.Identity))
 		response.Observation = observationFromState(state)

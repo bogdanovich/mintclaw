@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestCoordinatorActivationCommitsIntentBeforeBoundedLaunchAndHealth(t *testing.T) {
@@ -54,6 +56,41 @@ func TestCoordinatorActivationCommitsIntentBeforeBoundedLaunchAndHealth(t *testi
 	}
 	if healthy.Transaction.Phase != PhaseHealthy || !healthy.Transaction.SuccessorVerified {
 		t.Fatalf("healthy state = %#v", healthy)
+	}
+}
+
+func TestCoordinatorReconcilesActivationCommitPublicationBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		fault     string
+		wantPhase Phase
+		wantError error
+	}{
+		{name: "before publication", fault: "state_before_publish", wantPhase: PhaseStaged, wantError: unix.ENOSPC},
+		{name: "after publication", fault: "state_after_publish", wantPhase: PhaseActivating},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 8, 8, 0, 0, 0, time.UTC)
+			fixture := newReleaseFixture(t, now, "mintclaw-node")
+			defer fixture.server.Close()
+			coordinator, _ := testCoordinator(t, fixture, now)
+			defer coordinator.Close()
+			request := fixture.stageRequest(now)
+			if _, err := coordinator.Stage(t.Context(), request); err != nil {
+				t.Fatal(err)
+			}
+			coordinator.store.fault = func(point string) error {
+				if point == test.fault {
+					return unix.ENOSPC
+				}
+				return nil
+			}
+			observed, err := coordinator.Activate(request.Identity)
+			if !errors.Is(err, test.wantError) || observed.Transaction.Phase != test.wantPhase ||
+				(observed.Transaction.ActivationAttempted != (test.wantPhase == PhaseActivating)) {
+				t.Fatalf("Activate() at %s = %#v, %v", test.fault, observed.Transaction, err)
+			}
+		})
 	}
 }
 

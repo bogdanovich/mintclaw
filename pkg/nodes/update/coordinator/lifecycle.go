@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	ErrNotStaged         = errors.New("node update candidate is not staged")
-	ErrActivationTooLate = errors.New("node update activation has already begun")
-	ErrLaunchLimit       = errors.New("node update launch attempt limit reached")
+	ErrNotStaged                = errors.New("node update candidate is not staged")
+	ErrActivationTooLate        = errors.New("node update activation has already begun")
+	ErrActivationOutcomeUnknown = errors.New("node update activation outcome is unknown")
+	ErrLaunchLimit              = errors.New("node update launch attempt limit reached")
 )
 
 // Activate durably selects the verified candidate before a supervisor may
@@ -66,7 +67,7 @@ func (coordinator *Coordinator) Activate(identity ExecutionIdentity) (State, err
 		state.Transaction.ActivationAttempted = true
 		state.Transaction.UpdatedAt = coordinator.transitionTime(*state.Transaction)
 		if err = coordinator.store.Commit(state.Generation-1, state); err != nil {
-			return State{}, err
+			return coordinator.reconcileActivationCommit(state, err)
 		}
 		return state, nil
 	case PhaseActivating, PhaseHealthy, PhaseRollingBack, PhaseRolledBack,
@@ -75,6 +76,35 @@ func (coordinator *Coordinator) Activate(identity ExecutionIdentity) (State, err
 	default:
 		return State{}, ErrNotStaged
 	}
+}
+
+func (coordinator *Coordinator) reconcileActivationCommit(expected State, commitErr error) (State, error) {
+	observed, loadErr := coordinator.store.Load()
+	if loadErr != nil || observed.Transaction == nil || expected.Transaction == nil ||
+		!sameExecution(observed.Transaction.Identity, expected.Transaction.Identity) ||
+		observed.Transaction.RequestHash != expected.Transaction.RequestHash {
+		return State{}, errors.Join(ErrActivationOutcomeUnknown, commitErr, loadErr)
+	}
+	if observed.Generation == expected.Generation && observed.Transaction.Phase == PhaseActivating &&
+		observed.Transaction.ActivationAttempted && observed.Active == expected.Active &&
+		samePayload(observed.Transaction.Candidate, expected.Transaction.Candidate) &&
+		samePayload(observed.Transaction.Previous, expected.Transaction.Previous) {
+		return observed, nil
+	}
+	if observed.Generation+1 == expected.Generation && observed.Transaction.Phase == PhaseStaged &&
+		!observed.Transaction.ActivationAttempted && expected.Transaction.Previous != nil &&
+		observed.Active == *expected.Transaction.Previous &&
+		samePayload(observed.Transaction.Candidate, expected.Transaction.Candidate) {
+		return observed, commitErr
+	}
+	return State{}, errors.Join(ErrActivationOutcomeUnknown, commitErr)
+}
+
+func samePayload(left *Payload, right *Payload) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func (coordinator *Coordinator) denyActivation(state State, code string) (State, error) {

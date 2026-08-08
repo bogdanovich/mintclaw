@@ -5,9 +5,13 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
 )
@@ -89,6 +93,59 @@ func TestSupervisorDoesNotActivateDurablyStagedRequestAfterRestart(t *testing.T)
 	cancel()
 	if err = <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Supervisor.Run() error = %v", err)
+	}
+}
+
+func TestSupervisorStopsOldChildWhenActivationPublicationCannotBeRead(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	fixture := newReleaseFixture(t, now, "mintclaw-node")
+	defer fixture.server.Close()
+	updateCoordinator, root := testCoordinator(t, fixture, now)
+	defer updateCoordinator.Close()
+	request := fixture.stageRequest(now)
+	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, stateFileName)
+	defer func() { _ = os.Chmod(statePath, 0o600) }()
+	updateCoordinator.store.fault = func(point string) error {
+		if point != "state_after_publish" {
+			return nil
+		}
+		if err := os.Chmod(statePath, 0); err != nil {
+			t.Fatal(err)
+		}
+		return unix.EIO
+	}
+	supervisor, err := NewSupervisor(updateCoordinator, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched := make(chan *fakeSupervisedChild, 1)
+	supervisor.launch = func(_ context.Context, _ State) (supervisedChild, error) {
+		child := newFakeSupervisedChild()
+		launched <- child
+		child.incoming <- control.Incoming{Request: controlUpdateRequest(request)}
+		return child, nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(t.Context()) }()
+	child := <-launched
+	if err = <-done; err == nil {
+		t.Fatal("Supervisor.Run() accepted an unreadable activation outcome")
+	}
+	select {
+	case <-child.done:
+	default:
+		t.Fatal("supervisor kept the old child running after an unknown activation outcome")
+	}
+	if err = os.Chmod(statePath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updateCoordinator.store.fault = nil
+	observed, err := updateCoordinator.store.Load()
+	if err != nil || observed.Transaction.Phase != PhaseActivating || !observed.Transaction.ActivationAttempted {
+		t.Fatalf("published activation state = %#v, %v", observed, err)
 	}
 }
 
@@ -257,6 +314,22 @@ func controlHealth(state State, catalogHash string) *control.Health {
 		NodeID: string(state.Installation.NodeID), Version: state.Active.Version,
 		Platform: state.Installation.Platform, Architecture: state.Installation.Architecture,
 		CatalogHash: catalogHash,
+	}
+}
+
+func controlUpdateRequest(request StageRequest) *control.Request {
+	return &control.Request{
+		SchemaVersion: control.SchemaVersion, Kind: control.KindUpdate, RequestID: "request_update",
+		Update: &control.UpdateRequest{
+			Identity: control.ExecutionIdentity{
+				InvocationID: request.Identity.InvocationID, ExecutionID: request.Identity.ExecutionID,
+				PlanHash: request.Identity.PlanHash, CatalogHash: request.Identity.CatalogHash,
+				AuthorityHash: request.Identity.AuthorityHash,
+			},
+			Profile: request.Profile, ReleaseAlias: request.ReleaseAlias,
+			ExpectedManifestSHA256: request.ExpectedManifestSHA256,
+			ExpectedArtifactSHA256: request.ExpectedArtifactSHA256, ExpiresAt: request.ExpiresAt.Unix(),
+		},
 	}
 }
 
