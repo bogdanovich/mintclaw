@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/bogdanovich/mintclaw/pkg/nodes/update/coordinator"
 )
 
 const (
@@ -46,7 +48,7 @@ type publishedLaunchdPlist struct {
 func (lifecycle *launchdLifecycle) Install(
 	ctx context.Context,
 	request lifecycleRequest,
-) (lifecycleStatus, error) {
+) (result lifecycleStatus, resultErr error) {
 	status := lifecycle.baseStatus(request.Instance)
 	directory, err := openLaunchdPlistDirectory(lifecycle.plistDir, lifecycle.system)
 	if err != nil {
@@ -82,6 +84,18 @@ func (lifecycle *launchdLifecycle) Install(
 	if err != nil {
 		return lifecycleStatus{}, err
 	}
+	adoption, err := beginManagedUpdateAdoption(request, "launchd", status.Service, transactionID)
+	if err != nil {
+		return lifecycleStatus{}, err
+	}
+	adoptionCommitted := false
+	defer func() {
+		if adoption != nil && !adoptionCommitted {
+			if rollbackErr := adoption.Rollback(); rollbackErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("rollback managed update adoption: %w", rollbackErr))
+			}
+		}
+	}()
 	plist, err := renderLaunchdPlist(request, lifecycle.system, status.Service, transactionID)
 	if err != nil {
 		return lifecycleStatus{}, err
@@ -113,6 +127,11 @@ func (lifecycle *launchdLifecycle) Install(
 			fmt.Errorf("launchd service %s appeared during install", status.Service),
 		)
 	}
+	if adoption != nil {
+		if err = adoption.ReleaseCoordinatorLock(); err != nil {
+			return lifecycleStatus{}, lifecycle.rollbackInstall(publication, domain, status, false, err)
+		}
+	}
 	if err = lifecycle.requireSuccess(ctx, "bootstrap", domain, status.UnitPath); err != nil {
 		return lifecycleStatus{}, lifecycle.rollbackInstall(publication, domain, status, true, err)
 	}
@@ -122,6 +141,12 @@ func (lifecycle *launchdLifecycle) Install(
 	}
 	if err = requirePublishedLaunchdPlist(publication); err != nil {
 		return lifecycleStatus{}, lifecycle.rollbackInstall(publication, domain, status, true, err)
+	}
+	if adoption != nil {
+		if err = adoption.Commit(); err != nil {
+			return lifecycleStatus{}, lifecycle.rollbackInstall(publication, domain, status, true, err)
+		}
+		adoptionCommitted = true
 	}
 	return current, nil
 }
@@ -658,6 +683,9 @@ func renderLaunchdPlist(
 	if !filepath.IsAbs(request.ExecutablePath) || !filepath.IsAbs(request.ConfigPath) {
 		return "", errors.New("launchd executable and config paths must be absolute")
 	}
+	if request.ManagedUpdate && (!filepath.IsAbs(request.CoordinatorPath) || !filepath.IsAbs(request.StateDirectory)) {
+		return "", errors.New("managed launchd update paths must be absolute")
+	}
 	if len(transactionID) != 32 {
 		return "", errors.New("launchd plist requires an install transaction identity")
 	}
@@ -677,7 +705,15 @@ func renderLaunchdPlist(
 	body.WriteString("<plist version=\"1.0\">\n<dict>\n")
 	writeLaunchdString(&body, "Label", service)
 	body.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
-	for _, argument := range []string{request.ExecutablePath, "run", "--config", request.ConfigPath} {
+	executablePath := request.ExecutablePath
+	argumentName := "--config"
+	argumentPath := request.ConfigPath
+	if request.ManagedUpdate {
+		executablePath = request.CoordinatorPath
+		argumentName = "--state-dir"
+		argumentPath = filepath.Join(request.StateDirectory, coordinator.StoreDirectoryName)
+	}
+	for _, argument := range []string{executablePath, "run", argumentName, argumentPath} {
 		body.WriteString("\t\t<string>")
 		if err := xml.EscapeText(&body, []byte(argument)); err != nil {
 			return "", err

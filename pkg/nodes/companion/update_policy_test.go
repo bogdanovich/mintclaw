@@ -97,6 +97,14 @@ func TestNormalizeUpdateConfigurationFailsClosed(t *testing.T) {
 				},
 			},
 		}},
+		{name: "tag differs from version", sources: validSources, policies: UpdatePolicies{
+			"stable": {
+				Enabled: true, Revision: "stable-v1", Source: "production", Channel: nodeupdate.ChannelStable,
+				Releases: map[string]UpdateReleaseConfig{
+					"current": {Tag: "v1.2.4", Version: "v1.2.3"},
+				},
+			},
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -126,6 +134,14 @@ func TestNormalizeUpdateSourcesRejectsUntrustedEndpointsAndKeys(t *testing.T) {
 			BaseURL: "https://example.com/releases/../other", PublicKey: testUpdatePublicKey(t),
 		},
 		"bad key": {BaseURL: "https://example.com/releases", PublicKey: "not-a-key"},
+		"redirect port": {
+			BaseURL: "https://example.com/releases", PublicKey: testUpdatePublicKey(t),
+			RedirectHosts: []string{"objects.example.com:443"},
+		},
+		"duplicate redirect": {
+			BaseURL: "https://example.com/releases", PublicKey: testUpdatePublicKey(t),
+			RedirectHosts: []string{"objects.example.com", "objects.example.com"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := normalizeUpdateSources(UpdateSources{"production": source}); err == nil {

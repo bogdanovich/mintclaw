@@ -390,6 +390,40 @@ func TestRenderLaunchdPlistIncludesBoundedServiceDefinition(t *testing.T) {
 	}
 }
 
+func TestRenderLaunchdPlistUsesStableCoordinatorForManagedUpdate(t *testing.T) {
+	for _, system := range []bool{false, true} {
+		request := launchdInstallRequest()
+		request.ManagedUpdate = true
+		request.CoordinatorPath = "/opt/mintclaw/mintclaw-node-coordinator"
+		request.StateDirectory = "/Users/test/.mintclaw-node"
+		request.ServiceUser = "mintclaw-node"
+		plist, err := renderLaunchdPlist(
+			request,
+			system,
+			defaultLaunchdLabel,
+			"00112233445566778899aabbccddeeff",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"<string>/opt/mintclaw/mintclaw-node-coordinator</string>",
+			"<string>--state-dir</string>",
+			"<string>/Users/test/.mintclaw-node/update</string>",
+		} {
+			if !strings.Contains(plist, want) {
+				t.Fatalf("managed launchd plist omitted %q: %s", want, plist)
+			}
+		}
+		if system != strings.Contains(plist, "<key>UserName</key>") {
+			t.Fatalf("managed launchd plist has wrong user scope (system=%t): %s", system, plist)
+		}
+		if strings.Contains(plist, "<string>--config</string>") {
+			t.Fatalf("managed launchd plist retained direct companion arguments: %s", plist)
+		}
+	}
+}
+
 func launchdInstallRequest() lifecycleRequest {
 	return lifecycleRequest{
 		Instance:       "default",

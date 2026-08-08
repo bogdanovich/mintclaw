@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -84,7 +85,7 @@ type TrustedKey struct {
 }
 
 func (manifest Manifest) Validate() error {
-	if manifest.SchemaVersion != ManifestSchemaV1 || !releasePattern.MatchString(manifest.Release) {
+	if manifest.SchemaVersion != ManifestSchemaV1 || !ValidReleaseVersion(manifest.Release) {
 		return fmt.Errorf("%w: unsupported schema or malformed release", ErrInvalidManifest)
 	}
 	if manifest.Channel != ChannelStable && manifest.Channel != ChannelNightly {
@@ -104,7 +105,7 @@ func (manifest Manifest) Validate() error {
 		return fmt.Errorf("%w: expires_at is outside the admitted window", ErrInvalidManifest)
 	}
 	if len(manifest.MinimumCoordinatorVersion) > minimumVersionMaxBytes ||
-		!releasePattern.MatchString(manifest.MinimumCoordinatorVersion) ||
+		!ValidReleaseVersion(manifest.MinimumCoordinatorVersion) ||
 		manifest.CoordinatorAPI != CurrentCoordinatorAPI ||
 		manifest.NodeProtocol != CurrentNodeProtocol ||
 		manifest.NodeConfig != CurrentNodeConfig {
@@ -132,6 +133,87 @@ func (manifest Manifest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func ValidReleaseVersion(value string) bool {
+	if len(value) == 0 || len(value) > 128 || !releasePattern.MatchString(value) {
+		return false
+	}
+	_, prerelease, hasPrerelease := strings.Cut(value, "-")
+	if !hasPrerelease {
+		return true
+	}
+	for _, identifier := range strings.Split(prerelease, ".") {
+		if len(identifier) > 1 && identifier[0] == '0' && allDecimal(identifier) {
+			return false
+		}
+	}
+	return true
+}
+
+func CompareReleaseVersions(left string, right string) int {
+	if !ValidReleaseVersion(left) || !ValidReleaseVersion(right) {
+		return 0
+	}
+	leftCore, leftPrerelease, leftHasPrerelease := strings.Cut(strings.TrimPrefix(left, "v"), "-")
+	rightCore, rightPrerelease, rightHasPrerelease := strings.Cut(strings.TrimPrefix(right, "v"), "-")
+	leftParts := strings.Split(leftCore, ".")
+	rightParts := strings.Split(rightCore, ".")
+	for index := range leftParts {
+		comparison := compareDecimal(leftParts[index], rightParts[index])
+		if comparison != 0 {
+			return comparison
+		}
+	}
+	if !leftHasPrerelease && !rightHasPrerelease {
+		return 0
+	}
+	if !leftHasPrerelease {
+		return 1
+	}
+	if !rightHasPrerelease {
+		return -1
+	}
+	leftParts = strings.Split(leftPrerelease, ".")
+	rightParts = strings.Split(rightPrerelease, ".")
+	for index := 0; index < len(leftParts) && index < len(rightParts); index++ {
+		leftNumeric := allDecimal(leftParts[index])
+		rightNumeric := allDecimal(rightParts[index])
+		if leftNumeric && rightNumeric {
+			if comparison := compareDecimal(leftParts[index], rightParts[index]); comparison != 0 {
+				return comparison
+			}
+			continue
+		}
+		if leftNumeric != rightNumeric {
+			if leftNumeric {
+				return -1
+			}
+			return 1
+		}
+		if comparison := strings.Compare(leftParts[index], rightParts[index]); comparison != 0 {
+			return comparison
+		}
+	}
+	return len(leftParts) - len(rightParts)
+}
+
+func compareDecimal(left string, right string) int {
+	leftNumber, _ := new(big.Int).SetString(left, 10)
+	rightNumber, _ := new(big.Int).SetString(right, 10)
+	return leftNumber.Cmp(rightNumber)
+}
+
+func allDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (artifact Artifact) Validate() error {

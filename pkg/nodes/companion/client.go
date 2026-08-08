@@ -41,6 +41,7 @@ type Client struct {
 	transferHandler TransferFrameHandler
 	attachmentsMu   sync.Mutex
 	attachments     map[string]*TerminalAttachment
+	stableObserver  func(context.Context) error
 }
 
 type TransferFrameHandler interface {
@@ -239,7 +240,7 @@ func (client *Client) Run(ctx context.Context) error {
 				continue
 			}
 			connectedAt := time.Now()
-			err = client.serveConnected(ctx, connection)
+			err = client.serveAuthenticated(ctx, connection)
 			if time.Since(connectedAt) >= client.stableWindow {
 				backoff = client.config.minReconnectDelay
 			}
@@ -253,6 +254,42 @@ func (client *Client) Run(ctx context.Context) error {
 		}
 		backoff = min(backoff*2, client.config.maxReconnectDelay)
 	}
+}
+
+func (client *Client) SetStableObserver(observer func(context.Context) error) error {
+	if client == nil || observer == nil {
+		return errors.New("stable node observer is required")
+	}
+	if client.stableObserver != nil {
+		return errors.New("stable node observer is already configured")
+	}
+	client.stableObserver = observer
+	return nil
+}
+
+func (client *Client) serveAuthenticated(ctx context.Context, connection *websocket.Conn) error {
+	if client.stableObserver == nil {
+		return client.serveConnected(ctx, connection)
+	}
+	observerContext, cancelObserver := context.WithCancel(ctx)
+	observerDone := make(chan struct{})
+	go func() {
+		defer close(observerDone)
+		timer := time.NewTimer(client.stableWindow)
+		defer timer.Stop()
+		select {
+		case <-observerContext.Done():
+			return
+		case <-timer.C:
+			if err := client.stableObserver(observerContext); err != nil {
+				client.logger.Warn("node stable observation delivery failed")
+			}
+		}
+	}()
+	err := client.serveConnected(ctx, connection)
+	cancelObserver()
+	<-observerDone
+	return err
 }
 
 func (client *Client) Authenticate(ctx context.Context) (nodes.AdmissionResult, error) {
