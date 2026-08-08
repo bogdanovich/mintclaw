@@ -37,20 +37,17 @@ func ClassifyAuthError(err error) (AuthErrorKind, bool) {
 		return "", false
 	}
 
-	var exhausted *FallbackExhaustedError
-	if errors.As(err, &exhausted) && exhausted != nil {
-		return classifyFallbackExhaustedAuthError(exhausted)
-	}
-
 	var providerErr *ProviderError
 	if errors.As(err, &providerErr) && providerErr != nil {
-		isAuth := providerErr.Kind == ProviderErrorAuthentication ||
-			(providerErr.Kind == ProviderErrorUnknown &&
-				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
-		if !isAuth {
+		if !providerErrorIsAuth(providerErr) {
 			return "", false
 		}
 		return classifyAuthMessage(providerErr.SafeMessage, true)
+	}
+
+	var exhausted *FallbackExhaustedError
+	if errors.As(err, &exhausted) && exhausted != nil {
+		return classifyFallbackExhaustedAuthError(exhausted)
 	}
 
 	msg := authErrorText(err)
@@ -95,9 +92,7 @@ func authErrorText(err error) string {
 func hasStructuredAuthError(err error) bool {
 	var providerErr *ProviderError
 	if errors.As(err, &providerErr) && providerErr != nil {
-		return providerErr.Kind == ProviderErrorAuthentication ||
-			(providerErr.Kind == ProviderErrorUnknown &&
-				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
+		return providerErrorIsAuth(providerErr)
 	}
 
 	var failErr *FailoverError
@@ -155,9 +150,7 @@ func attemptIsAuthFailure(attempt FallbackAttempt) bool {
 	}
 	var providerErr *ProviderError
 	if errors.As(attempt.Error, &providerErr) && providerErr != nil {
-		return providerErr.Kind == ProviderErrorAuthentication ||
-			(providerErr.Kind == ProviderErrorUnknown &&
-				(providerErr.HTTPStatus == 401 || providerErr.HTTPStatus == 403))
+		return providerErrorIsAuth(providerErr)
 	}
 	if attempt.Reason == FailoverAuth {
 		return true
@@ -171,4 +164,13 @@ func attemptIsAuthFailure(attempt FallbackAttempt) bool {
 		return httpErr.StatusCode == 401 || httpErr.StatusCode == 403
 	}
 	return false
+}
+
+func providerErrorIsAuth(err *ProviderError) bool {
+	if err == nil {
+		return false
+	}
+	kind := err.Kind.Canonical()
+	return kind == ProviderErrorAuthentication ||
+		(kind == ProviderErrorUnknown && (err.HTTPStatus == 401 || err.HTTPStatus == 403))
 }

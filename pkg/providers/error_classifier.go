@@ -269,7 +269,7 @@ func classifyProviderError(
 	}
 
 	var reason FailoverReason
-	switch providerErr.Kind {
+	switch providerErr.Kind.Canonical() {
 	case ProviderErrorAuthentication:
 		reason = FailoverAuth
 	case ProviderErrorBilling:
@@ -286,7 +286,7 @@ func classifyProviderError(
 		reason = FailoverFormat
 	case ProviderErrorCanceled:
 		return nil
-	case ProviderErrorUnknown, "":
+	case ProviderErrorUnknown:
 		reason = classifyByStatus(providerErr.HTTPStatus)
 	default:
 		return nil

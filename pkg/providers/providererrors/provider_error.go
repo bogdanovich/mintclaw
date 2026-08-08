@@ -39,7 +39,7 @@ func (e *ProviderError) Error() string {
 	}
 	return fmt.Sprintf(
 		"provider request failed: kind=%s status=%d retry_after=%s request_id=%q message=%q",
-		effectiveKind(e.Kind),
+		e.Kind.Canonical(),
 		e.HTTPStatus,
 		e.RetryAfter,
 		boundedText(e.RequestID, 128),
@@ -47,18 +47,32 @@ func (e *ProviderError) Error() string {
 	)
 }
 
+// Canonical maps zero and unrecognized kinds to KindUnknown so an adapter
+// cannot create an unbounded or ambiguous classification value.
+func (kind Kind) Canonical() Kind {
+	switch kind {
+	case KindAuthentication,
+		KindBilling,
+		KindRateLimit,
+		KindContextOverflow,
+		KindTimeout,
+		KindCanceled,
+		KindTransient,
+		KindInvalidRequest,
+		KindNetwork:
+		return kind
+	case KindUnknown, "":
+		return KindUnknown
+	default:
+		return KindUnknown
+	}
+}
+
 func (e *ProviderError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.Cause
-}
-
-func effectiveKind(kind Kind) Kind {
-	if kind == "" {
-		return KindUnknown
-	}
-	return kind
 }
 
 func boundedText(value string, limit int) string {

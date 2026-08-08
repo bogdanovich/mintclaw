@@ -33,10 +33,29 @@ func TestProviderErrorPreservesMetadataAndCause(t *testing.T) {
 
 func TestProviderErrorBoundsUserFacingFields(t *testing.T) {
 	err := &ProviderError{
+		Kind:        Kind("custom\n" + strings.Repeat("k", 300)),
 		RequestID:   strings.Repeat("r", 200),
 		SafeMessage: strings.Repeat("m", 300),
 	}
-	if got := err.Error(); len(got) > 470 || !strings.Contains(got, "kind=unknown") {
+	got := err.Error()
+	if len(got) > 470 || !strings.Contains(got, "kind=unknown") || strings.Contains(got, "custom") ||
+		strings.Contains(got, "\n") {
 		t.Fatalf("Error() = %q", got)
+	}
+}
+
+func TestKindCanonical(t *testing.T) {
+	for _, test := range []struct {
+		kind Kind
+		want Kind
+	}{
+		{kind: "", want: KindUnknown},
+		{kind: KindUnknown, want: KindUnknown},
+		{kind: KindBilling, want: KindBilling},
+		{kind: Kind("custom"), want: KindUnknown},
+	} {
+		if got := test.kind.Canonical(); got != test.want {
+			t.Fatalf("Canonical(%q) = %q, want %q", test.kind, got, test.want)
+		}
 	}
 }
