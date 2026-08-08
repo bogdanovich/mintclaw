@@ -188,12 +188,18 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["alias", "revision", "channel", "approval", "releases"],
+        "required": [
+          "alias", "revision", "channel", "approval", "current_version",
+          "platform", "architecture", "releases"
+        ],
         "properties": {
           "alias": {"type": "string", "minLength": 1, "maxLength": 64},
           "revision": {"type": "string", "minLength": 1, "maxLength": 128},
           "channel": {"enum": ["stable", "nightly"]},
           "approval": {"const": "required"},
+          "current_version": {"type": "string", "minLength": 1, "maxLength": 64},
+          "platform": {"enum": ["linux", "darwin"]},
+          "architecture": {"enum": ["amd64", "arm64"]},
           "downgrade": {"type": "boolean"},
           "releases": {
             "type": "array",
@@ -202,11 +208,18 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["alias", "version"],
+              "required": [
+                "alias", "version", "manifest_sha256", "artifact_sha256",
+                "artifact_size", "authority_hash"
+              ],
               "properties": {
                 "alias": {"type": "string", "minLength": 1, "maxLength": 64},
                 "version": {"type": "string", "minLength": 1, "maxLength": 64},
-                "description": {"type": "string", "maxLength": 256}
+                "description": {"type": "string", "maxLength": 256},
+                "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "artifact_size": {"type": "integer", "minimum": 1, "maximum": 134217728},
+                "authority_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
               }
             }
           }

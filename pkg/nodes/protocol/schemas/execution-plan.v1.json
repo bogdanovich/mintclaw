@@ -39,6 +39,29 @@
 	  "maxLength": 64,
 	  "pattern": "^[a-z][a-z0-9_-]*$"
 	},
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_id", "profile", "profile_revision", "release_alias",
+        "release_version", "current_version", "platform", "architecture",
+        "manifest_sha256", "artifact_sha256", "artifact_size", "authority_hash"
+      ],
+      "properties": {
+        "execution_id": {"$ref": "#/$defs/identifier"},
+        "profile": {"type": "string", "minLength": 1, "maxLength": 64},
+        "profile_revision": {"$ref": "#/$defs/identifier"},
+        "release_alias": {"type": "string", "minLength": 1, "maxLength": 64},
+        "release_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "current_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "platform": {"enum": ["linux", "darwin"]},
+        "architecture": {"enum": ["amd64", "arm64"]},
+        "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "artifact_size": {"type": "integer", "minimum": 1, "maximum": 134217728},
+        "authority_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
     "input": {"type": "object"},
     "agent_id": {"$ref": "#/$defs/identifier"},
     "session_id": {"$ref": "#/$defs/identifier"},

@@ -281,6 +281,118 @@ func TestNodeInvokeToolReusesPreparedAuthorityAndDispatches(t *testing.T) {
 	}
 }
 
+func TestNodeUpdateInvocationBindsReleaseAuthorityAcrossApproval(t *testing.T) {
+	source := newFakeNodeInvocationSource(t)
+	command := nodeUpdateInvocationTestDescriptor()
+	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
+	catalogHash := mustCatalogHash(t, catalog)
+	snapshot := source.byRef["builder-node"]
+	snapshot.Catalog = catalog
+	snapshot.CatalogHash = catalogHash
+	source.byRef["builder-node"] = snapshot
+	source.registrations[snapshot.ID] = nodes.Registration{
+		Snapshot: snapshot, AllowedCommands: []string{command.Name},
+		ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+	}
+	cfg := nodeDiscoveryTestConfig()
+	binding := cfg.Execution.Targets["build"]
+	binding.UpdateProfile = "stable"
+	cfg.Execution.Targets["build"] = binding
+	ctx := nodeInvocationTestContext("actor-1", "call-update")
+	discovery := NewNodeDiscoveryTool(cfg, source).Execute(ctx, map[string]any{
+		"action": "describe", "target": "build", "command": command.Name,
+	})
+	if discovery.IsError {
+		t.Fatalf("update discovery failed: %s", discovery.ForLLM)
+	}
+	for _, protected := range []string{
+		strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64),
+	} {
+		if strings.Contains(discovery.ForLLM, protected) {
+			t.Fatalf("update discovery leaked retained authority: %s", discovery.ForLLM)
+		}
+	}
+	revision := decodeNodeResult(t, discovery)["discovery_revision"]
+	args := map[string]any{
+		"target": "build", "command": command.Name,
+		"input": map[string]any{"release": "current"}, "discovery_revision": revision,
+	}
+	tool := NewNodeInvokeTool(cfg, source)
+	eventBus := &recordingNodeEventBus{}
+	tool.SetEventPublisher(eventBus)
+	approval, err := tool.ApprovalArguments(ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval["current_version"] != "v1.0.0" ||
+		approval["requested_release"] != "v1.1.0" ||
+		approval["platform"] != "linux" || approval["architecture"] != "amd64" {
+		t.Fatalf("approval facts = %#v", approval)
+	}
+	prepared := mustFakeGatewayInvocation(t, source, ctx, approval["invocation_id"].(string))
+	if prepared.Plan.Update == nil ||
+		prepared.Plan.Update.ManifestSHA256 != strings.Repeat("a", 64) ||
+		prepared.Plan.Update.AuthorityHash != strings.Repeat("c", 64) {
+		t.Fatalf("prepared update authority = %#v", prepared.Plan.Update)
+	}
+	events, err := json.Marshal(eventBus.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protected := range []string{
+		prepared.Plan.Update.ManifestSHA256,
+		prepared.Plan.Update.ArtifactSHA256,
+		prepared.Plan.Update.AuthorityHash,
+	} {
+		if strings.Contains(string(events), protected) {
+			t.Fatalf("update event leaked retained authority: %s", events)
+		}
+	}
+	changed := maps.Clone(args)
+	changed["input"] = map[string]any{"release": "next"}
+	result := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), changed)
+	assertNodeDenialResult(
+		t,
+		result,
+		nodeDenialDiscoveryStale,
+		nodeConstraintCommandPolicy,
+		nodeActionRefreshDiscovery,
+	)
+	if source.dispatchCalls != 0 {
+		t.Fatalf("changed approved update dispatched %d times", source.dispatchCalls)
+	}
+}
+
+func nodeUpdateInvocationTestDescriptor() nodes.CommandDescriptor {
+	profile := nodes.UpdateProfileDescriptor{
+		Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
+		CurrentVersion: "v1.0.0", Platform: "linux", Architecture: "amd64",
+		Releases: []nodes.UpdateReleaseDescriptor{
+			{
+				Alias: "current", Version: "v1.1.0", ManifestSHA256: strings.Repeat("a", 64),
+				ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 1024,
+				AuthorityHash: strings.Repeat("c", 64),
+			},
+			{
+				Alias: "next", Version: "v1.2.0", ManifestSHA256: strings.Repeat("d", 64),
+				ArtifactSHA256: strings.Repeat("e", 64), ArtifactSize: 2048,
+				AuthorityHash: strings.Repeat("f", 64),
+			},
+		},
+	}
+	return nodes.CommandDescriptor{
+		Name: "node.update.v1", InputSchema: nodes.NodeUpdateInputSchema([]nodes.UpdateProfileDescriptor{profile}),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":true}`),
+		Risk:         nodes.RiskPrivileged, SupportsCancel: true,
+		ModelContract: &nodes.CommandModelContract{
+			Availability: nodes.ModelAvailable, TimeoutSecondsMax: 300, OutputBytesMax: 4096,
+			ResultKind: "json", ApprovalMode: "each_command", Guidance: []string{},
+			Examples: []json.RawMessage{},
+		},
+		UpdateProfiles: []nodes.UpdateProfileDescriptor{profile},
+	}
+}
+
 func TestNodeInvokeToolRequiresHumanApprovalContinuationForShellExec(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	command := shellNodeInvocationTestDescriptor()

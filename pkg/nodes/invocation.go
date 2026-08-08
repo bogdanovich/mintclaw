@@ -62,18 +62,19 @@ func (profile ExecutionProfile) Validate() error {
 // InvocationRequest is the transport-neutral command request prepared by the
 // gateway. It contains no connection details or shell-specific authority.
 type InvocationRequest struct {
-	InvocationID     string          `json:"invocation_id"`
-	IdempotencyKey   string          `json:"idempotency_key"`
-	NodeID           ID              `json:"node_id"`
-	CatalogHash      string          `json:"catalog_hash"`
-	Command          string          `json:"command"`
-	ServiceProfile   string          `json:"service_profile,omitempty"`
-	Input            json.RawMessage `json:"input"`
-	AgentID          string          `json:"agent_id"`
-	SessionID        string          `json:"session_id"`
-	ActorID          string          `json:"actor_id"`
-	TimeoutSeconds   int             `json:"timeout_seconds"`
-	OutputLimitBytes int             `json:"output_limit_bytes"`
+	InvocationID     string                   `json:"invocation_id"`
+	IdempotencyKey   string                   `json:"idempotency_key"`
+	NodeID           ID                       `json:"node_id"`
+	CatalogHash      string                   `json:"catalog_hash"`
+	Command          string                   `json:"command"`
+	ServiceProfile   string                   `json:"service_profile,omitempty"`
+	Update           *NodeUpdatePlanAuthority `json:"update,omitempty"`
+	Input            json.RawMessage          `json:"input"`
+	AgentID          string                   `json:"agent_id"`
+	SessionID        string                   `json:"session_id"`
+	ActorID          string                   `json:"actor_id"`
+	TimeoutSeconds   int                      `json:"timeout_seconds"`
+	OutputLimitBytes int                      `json:"output_limit_bytes"`
 }
 
 func (request InvocationRequest) Validate() error {
@@ -97,6 +98,11 @@ func (request InvocationRequest) Validate() error {
 	if request.ServiceProfile != "" {
 		if err := (Alias(request.ServiceProfile)).Validate(); err != nil {
 			return fmt.Errorf("%w: malformed service profile", ErrInvalidInvocation)
+		}
+	}
+	if request.Update != nil {
+		if err := request.Update.Validate(); err != nil {
+			return err
 		}
 	}
 	if request.TimeoutSeconds <= 0 || request.TimeoutSeconds > MaxInvocationTimeout {
@@ -158,6 +164,35 @@ func PrepareExecutionPlan(
 			"%w: descriptor does not match service profile",
 			ErrInvalidInvocation,
 		)
+	}
+	if len(descriptor.UpdateProfiles) == 0 {
+		if request.Update != nil {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: update authority supplied for non-update command",
+				ErrInvalidInvocation,
+			)
+		}
+	} else {
+		if request.Update == nil || len(descriptor.UpdateProfiles) != 1 {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: descriptor does not match update authority",
+				ErrInvalidInvocation,
+			)
+		}
+		profile := descriptor.UpdateProfiles[0]
+		matched := false
+		for _, release := range profile.Releases {
+			if request.Update.matchesDescriptor(profile, release) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: descriptor does not match update authority",
+				ErrInvalidInvocation,
+			)
+		}
 	}
 	descriptorHash, err := descriptor.Hash()
 	if err != nil {
@@ -375,6 +410,19 @@ func (policy LocalCommandPolicy) authorize(
 		if !available {
 			return fmt.Errorf(
 				"%w: service profile is not advertised by local runtime",
+				ErrCommandDenied,
+			)
+		}
+		descriptor = projected
+	}
+	if plan.Update != nil || len(descriptor.UpdateProfiles) > 0 {
+		if plan.Update == nil {
+			return fmt.Errorf("%w: update authority is missing", ErrCommandDenied)
+		}
+		projected, available := ProjectUpdateDescriptorForProfile(descriptor, plan.Update.Profile)
+		if !available {
+			return fmt.Errorf(
+				"%w: update profile is not advertised by local runtime",
 				ErrCommandDenied,
 			)
 		}

@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -35,6 +36,11 @@ func TestProjectUpdateDescriptorRequiresExactTargetProfile(t *testing.T) {
 	if bytes.Contains(encoded, []byte("nightly-current")) || bytes.Contains(encoded, []byte("v1.3.0-nightly.1")) {
 		t.Fatalf("projection leaked another profile: %s", encoded)
 	}
+	descriptor.ModelContract.Availability = nodes.ModelUnavailable
+	projected, available = projectDescriptorForTarget(descriptor, "", "", "stable")
+	if !available || projected.ModelContract.Availability != nodes.ModelUnavailable {
+		t.Fatalf("target projection broadened local update policy: %#v, %v", projected.ModelContract, available)
+	}
 }
 
 func updateProjectionDescriptor(t *testing.T) nodes.CommandDescriptor {
@@ -42,13 +48,19 @@ func updateProjectionDescriptor(t *testing.T) nodes.CommandDescriptor {
 	profiles := []nodes.UpdateProfileDescriptor{
 		{
 			Alias: "nightly", Revision: "nightly-v1", Channel: "nightly", Approval: "required",
+			CurrentVersion: "v1.1.0", Platform: "linux", Architecture: "amd64",
 			Releases: []nodes.UpdateReleaseDescriptor{{
-				Alias: "nightly-current", Version: "v1.3.0-nightly.1",
+				Alias: "nightly-current", Version: "v1.3.0-nightly.1", ManifestSHA256: strings.Repeat("a", 64),
+				ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 1024, AuthorityHash: strings.Repeat("c", 64),
 			}},
 		},
 		{
 			Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
-			Releases: []nodes.UpdateReleaseDescriptor{{Alias: "stable-current", Version: "v1.2.3"}},
+			CurrentVersion: "v1.1.0", Platform: "linux", Architecture: "amd64",
+			Releases: []nodes.UpdateReleaseDescriptor{{
+				Alias: "stable-current", Version: "v1.2.3", ManifestSHA256: strings.Repeat("d", 64),
+				ArtifactSHA256: strings.Repeat("e", 64), ArtifactSize: 1024, AuthorityHash: strings.Repeat("f", 64),
+			}},
 		},
 	}
 	descriptor := nodes.CommandDescriptor{

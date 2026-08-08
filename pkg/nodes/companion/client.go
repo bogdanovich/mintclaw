@@ -574,9 +574,9 @@ func (client *Client) handleRequest(
 	case "node.invoke":
 		return client.handleInvoke(ctx, writer, envelope)
 	case "node.invoke.get":
-		return client.handleInvocationQuery(writer, envelope)
+		return client.handleInvocationQuery(ctx, writer, envelope)
 	case "node.invoke.cancel":
-		return client.handleInvocationCancel(writer, envelope)
+		return client.handleInvocationCancel(ctx, writer, envelope)
 	case "node.terminal.open":
 		return client.handleTerminalOpen(ctx, writer, envelope)
 	case "node.terminal.attach":
@@ -1040,6 +1040,7 @@ func invocationRejectionReason(err error) string {
 }
 
 func (client *Client) handleInvocationQuery(
+	ctx context.Context,
 	writer *connectedWriter,
 	envelope protocol.Envelope,
 ) error {
@@ -1068,7 +1069,10 @@ func (client *Client) handleInvocationQuery(
 			"invalid invocation query",
 		)
 	}
-	record, found, lookupErr := client.runtime.Invocation(query.InvocationID)
+	record, found, lookupErr := client.runtime.RecoverInvocation(
+		ctx,
+		query.InvocationID,
+	)
 	if lookupErr != nil {
 		return client.writeCommandError(
 			writer,
@@ -1089,6 +1093,7 @@ func (client *Client) handleInvocationQuery(
 }
 
 func (client *Client) handleInvocationCancel(
+	ctx context.Context,
 	writer *connectedWriter,
 	envelope protocol.Envelope,
 ) error {
@@ -1117,7 +1122,7 @@ func (client *Client) handleInvocationCancel(
 			"invalid invocation cancellation request",
 		)
 	}
-	record, err := client.runtime.Cancel(request)
+	record, err := client.runtime.CancelContext(ctx, request)
 	if err != nil {
 		code := "CANCELLATION_FAILED"
 		message := "invocation cancellation failed"

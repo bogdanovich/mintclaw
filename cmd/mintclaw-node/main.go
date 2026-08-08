@@ -174,6 +174,22 @@ func run(args []string) error {
 		}
 		runtimeOptions = append(runtimeOptions, companion.WithServiceManager(serviceManager))
 	}
+	if managed && companion.HasEnabledUpdatePolicy(cfg.UpdatePolicies) {
+		resolveContext, cancelResolve := context.WithTimeout(context.Background(), 45*time.Second)
+		updateOption, updateErr := companion.WithManagedUpdates(
+			resolveContext,
+			cfg.UpdateSources,
+			cfg.UpdatePolicies,
+			coordinatorClient,
+			clientVersion(),
+		)
+		cancelResolve()
+		if updateErr != nil {
+			slog.Warn("managed node update capability is unavailable", "reason", "release_catalog_unavailable")
+		} else {
+			runtimeOptions = append(runtimeOptions, updateOption)
+		}
+	}
 	commandRuntime, err := companion.NewRuntime(
 		identity.ID,
 		clientVersion(),

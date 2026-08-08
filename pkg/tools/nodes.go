@@ -110,9 +110,18 @@ type nodeServiceCommandContract struct {
 }
 
 type nodeUpdateCommandContract struct {
-	Channel   string                          `json:"channel"`
-	Releases  []nodes.UpdateReleaseDescriptor `json:"releases"`
-	Downgrade bool                            `json:"downgrade"`
+	Channel        string                      `json:"channel"`
+	CurrentVersion string                      `json:"current_version"`
+	Platform       string                      `json:"platform"`
+	Architecture   string                      `json:"architecture"`
+	Releases       []nodeUpdateReleaseContract `json:"releases"`
+	Downgrade      bool                        `json:"downgrade"`
+}
+
+type nodeUpdateReleaseContract struct {
+	Alias       string `json:"alias"`
+	Version     string `json:"version"`
+	Description string `json:"description,omitempty"`
 }
 
 type nodeCommandDescription struct {
@@ -525,22 +534,15 @@ func projectUpdateDescriptorForTarget(
 	if updateProfile == "" || descriptor.Name != "node.update.v1" || descriptor.ModelContract == nil {
 		return nodes.CommandDescriptor{}, false
 	}
-	for _, profile := range descriptor.UpdateProfiles {
-		if profile.Alias != updateProfile {
-			continue
-		}
-		descriptor.UpdateProfiles = nodes.CloneUpdateProfileDescriptors(
-			[]nodes.UpdateProfileDescriptor{profile},
-		)
-		descriptor.InputSchema = nodes.NodeUpdateInputSchema(descriptor.UpdateProfiles)
-		contract := *descriptor.ModelContract
-		contract.Availability = nodes.ModelAvailable
-		contract.ApprovalMode = "each_command"
-		contract.Constraints.ProfileAliases = nil
-		descriptor.ModelContract = &contract
-		return descriptor, true
+	projected, available := nodes.ProjectUpdateDescriptorForProfile(descriptor, updateProfile)
+	if !available {
+		return nodes.CommandDescriptor{}, false
 	}
-	return nodes.CommandDescriptor{}, false
+	contract := *projected.ModelContract
+	contract.ApprovalMode = "each_command"
+	contract.Constraints.ProfileAliases = nil
+	projected.ModelContract = &contract
+	return projected, true
 }
 
 func visibleNodeCommand(
@@ -691,11 +693,17 @@ func makeNodeCommandContract(
 	}
 	if len(descriptor.UpdateProfiles) == 1 {
 		profile := descriptor.UpdateProfiles[0]
+		releases := make([]nodeUpdateReleaseContract, len(profile.Releases))
+		for index, release := range profile.Releases {
+			releases[index] = nodeUpdateReleaseContract{
+				Alias: release.Alias, Version: release.Version, Description: release.Description,
+			}
+		}
 		contract.Constraints.ProfileAliases = nil
 		contract.Update = &nodeUpdateCommandContract{
-			Channel:   profile.Channel,
-			Releases:  append([]nodes.UpdateReleaseDescriptor(nil), profile.Releases...),
-			Downgrade: profile.Downgrade,
+			Channel: profile.Channel, CurrentVersion: profile.CurrentVersion,
+			Platform: profile.Platform, Architecture: profile.Architecture,
+			Releases: releases, Downgrade: profile.Downgrade,
 		}
 		contract.Execution.Approval = profile.Approval
 	}

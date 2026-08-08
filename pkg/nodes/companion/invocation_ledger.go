@@ -166,6 +166,7 @@ func (ledger *InvocationLedger) Accept(
 		CatalogHash:    plan.CatalogHash,
 		Command:        plan.Command,
 		Risk:           plan.Risk,
+		Update:         cloneNodeUpdatePlanAuthority(plan.Update),
 		State:          nodes.InvocationAccepted,
 		AcceptedAt:     now,
 		UpdatedAt:      now,
@@ -257,6 +258,25 @@ func (ledger *InvocationLedger) CompleteSuccess(
 	})
 }
 
+func (ledger *InvocationLedger) RecoverSuccess(
+	invocationID string,
+	result json.RawMessage,
+) (nodes.InvocationRecord, error) {
+	return ledger.transition(invocationID, func(record *nodes.InvocationRecord, now int64) error {
+		if record.Command != "node.update.v1" ||
+			(record.State != nodes.InvocationRunning && record.State != nodes.InvocationUnknown) {
+			return fmt.Errorf("%w: invocation is %s", nodes.ErrInvalidInvocationRecord, record.State)
+		}
+		record.State = nodes.InvocationSucceeded
+		record.UpdatedAt = now
+		record.CompletedAt = now
+		record.Result = append(json.RawMessage(nil), result...)
+		record.Failure = nil
+		record.Cancellation = nil
+		return nil
+	})
+}
+
 func (ledger *InvocationLedger) CompleteFailure(
 	invocationID string,
 	failure nodes.InvocationFailure,
@@ -329,6 +349,25 @@ func (ledger *InvocationLedger) CompleteCancellation(
 			Message: "node command canceled",
 		}
 		record.Cancellation.TerminationConfirmed = true
+		return nil
+	})
+}
+
+func (ledger *InvocationLedger) RecoverCancellation(
+	invocationID string,
+) (nodes.InvocationRecord, error) {
+	return ledger.transition(invocationID, func(record *nodes.InvocationRecord, now int64) error {
+		if record.Command != "node.update.v1" ||
+			(record.State != nodes.InvocationRunning && record.State != nodes.InvocationUnknown) {
+			return fmt.Errorf("%w: invocation is %s", nodes.ErrInvalidInvocationRecord, record.State)
+		}
+		record.State = nodes.InvocationCanceled
+		record.UpdatedAt = now
+		record.CompletedAt = now
+		record.Failure = &nodes.InvocationFailure{Code: "CANCELED", Message: "node update canceled"}
+		record.Cancellation = &nodes.InvocationCancellation{
+			RequestedAt: now, TerminationConfirmed: true,
+		}
 		return nil
 	})
 }
@@ -590,6 +629,7 @@ func cloneInvocationRecords(
 
 func cloneInvocationRecord(record nodes.InvocationRecord) nodes.InvocationRecord {
 	record.Result = append(json.RawMessage(nil), record.Result...)
+	record.Update = cloneNodeUpdatePlanAuthority(record.Update)
 	if record.Failure != nil {
 		failure := *record.Failure
 		record.Failure = &failure
@@ -599,6 +639,16 @@ func cloneInvocationRecord(record nodes.InvocationRecord) nodes.InvocationRecord
 		record.Cancellation = &cancellation
 	}
 	return record
+}
+
+func cloneNodeUpdatePlanAuthority(
+	authority *nodes.NodeUpdatePlanAuthority,
+) *nodes.NodeUpdatePlanAuthority {
+	if authority == nil {
+		return nil
+	}
+	cloned := *authority
+	return &cloned
 }
 
 func decodeLedgerDocument(data []byte) (invocationLedgerDocument, error) {

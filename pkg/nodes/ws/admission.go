@@ -468,6 +468,25 @@ func validateInvocationApproval(
 			)
 		}
 	}
+	if len(descriptor.UpdateProfiles) > 0 {
+		if plan.Update == nil {
+			return fmt.Errorf(
+				"%w: execution plan lacks update authority",
+				nodes.ErrCommandDenied,
+			)
+		}
+		var projected bool
+		descriptor, projected = nodes.ProjectUpdateDescriptorForProfile(
+			descriptor,
+			plan.Update.Profile,
+		)
+		if !projected {
+			return fmt.Errorf(
+				"%w: execution plan does not match approved command",
+				nodes.ErrCommandDenied,
+			)
+		}
+	}
 	descriptorHash, err := descriptor.Hash()
 	if err != nil {
 		return err

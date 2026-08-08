@@ -102,6 +102,7 @@ type runtimeOptions struct {
 	terminalBroker  terminalBrokerOpener
 	fileDescriptors []nodes.CommandDescriptor
 	serviceManager  ServiceManager
+	update          *updateCommandHandler
 }
 
 type RuntimeOption func(*runtimeOptions) error
@@ -158,6 +159,16 @@ func WithServiceManager(manager ServiceManager) RuntimeOption {
 	}
 }
 
+func withUpdateHandler(handler *updateCommandHandler) RuntimeOption {
+	return func(options *runtimeOptions) error {
+		if handler == nil {
+			return errors.New("node update handler is required")
+		}
+		options.update = handler
+		return nil
+	}
+}
+
 type invocationStore interface {
 	Existing(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
 	Accept(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
@@ -166,7 +177,9 @@ type invocationStore interface {
 	RequestCancellation(string) (nodes.InvocationRecord, error)
 	CompleteCancellation(string) (nodes.InvocationRecord, error)
 	CompleteSuccess(string, json.RawMessage) (nodes.InvocationRecord, error)
+	RecoverSuccess(string, json.RawMessage) (nodes.InvocationRecord, error)
 	CompleteFailure(string, nodes.InvocationFailure) (nodes.InvocationRecord, error)
+	RecoverCancellation(string) (nodes.InvocationRecord, error)
 	Lookup(string) (nodes.InvocationRecord, bool, error)
 }
 
@@ -216,6 +229,9 @@ func NewRuntime(
 		}
 		handlers = append(handlers, serviceHandlers...)
 	}
+	if settings.update != nil {
+		handlers = append(handlers, settings.update)
+	}
 	if err := nodeID.Validate(); err != nil {
 		return nil, err
 	}
@@ -239,6 +255,13 @@ func NewRuntime(
 			}
 			descriptor.ModelContract = modelContract
 			shellExec.contract = cloneModelContract(modelContract)
+		} else if update, ok := handler.(*updateCommandHandler); ok {
+			modelContract := effectiveModelContract(descriptor, policy)
+			modelContract.ApprovalMode = "each_command"
+			modelContract.TimeoutSecondsMax = min(modelContract.TimeoutSecondsMax, 300)
+			modelContract.OutputBytesMax = min(modelContract.OutputBytesMax, 4096)
+			descriptor.ModelContract = modelContract
+			update.descriptorValue.ModelContract = cloneModelContract(modelContract)
 		} else if !nodes.IsServiceCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)
 		}
@@ -500,6 +523,13 @@ func (runtime *Runtime) completeInvalidOutput(
 func (runtime *Runtime) Cancel(
 	request nodes.InvocationCancelRequest,
 ) (nodes.InvocationRecord, error) {
+	return runtime.CancelContext(context.Background(), request)
+}
+
+func (runtime *Runtime) CancelContext(
+	ctx context.Context,
+	request nodes.InvocationCancelRequest,
+) (nodes.InvocationRecord, error) {
 	if runtime == nil {
 		return nodes.InvocationRecord{}, ErrCommandUnavailable
 	}
@@ -515,6 +545,11 @@ func (runtime *Runtime) Cancel(
 	}
 	if record.State.Terminal() {
 		return record, nil
+	}
+	if record.Command == "node.update.v1" &&
+		(record.State == nodes.InvocationUnknown ||
+			(record.State == nodes.InvocationRunning && runtime.activeInvocation(request.InvocationID) == nil)) {
+		return runtime.cancelRecoveredUpdate(ctx, record)
 	}
 	if record.State == nodes.InvocationUnknown {
 		return nodes.InvocationRecord{}, ErrInvocationOutcomeUnknown
@@ -559,6 +594,31 @@ func (runtime *Runtime) Cancel(
 		return nodes.InvocationRecord{}, ErrInvocationOutcomeUnknown
 	}
 	return record, nil
+}
+
+func (runtime *Runtime) cancelRecoveredUpdate(
+	ctx context.Context,
+	record nodes.InvocationRecord,
+) (nodes.InvocationRecord, error) {
+	handler, ok := runtime.handlers[record.Command].(*updateCommandHandler)
+	if !ok {
+		return nodes.InvocationRecord{}, ErrCancellationUnsupported
+	}
+	result, err := handler.cancel(ctx, record)
+	if err != nil {
+		return nodes.InvocationRecord{}, ErrInvocationOutcomeUnknown
+	}
+	if result.State == "canceled" {
+		return runtime.ledger.RecoverCancellation(record.InvocationID)
+	}
+	if updateObservationTerminal(result.State) {
+		raw, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			return nodes.InvocationRecord{}, marshalErr
+		}
+		return runtime.ledger.RecoverSuccess(record.InvocationID, raw)
+	}
+	return nodes.InvocationRecord{}, ErrInvocationOutcomeUnknown
 }
 
 func (runtime *Runtime) registerActive(id string, invocation *activeInvocation) bool {
@@ -618,6 +678,40 @@ func (runtime *Runtime) Invocation(
 		return nodes.InvocationRecord{}, false, nil
 	}
 	return runtime.ledger.Lookup(invocationID)
+}
+
+// RecoverInvocation reconciles an update record with the stable coordinator.
+// It never dispatches or resumes the update transaction.
+func (runtime *Runtime) RecoverInvocation(
+	ctx context.Context,
+	invocationID string,
+) (nodes.InvocationRecord, bool, error) {
+	record, found, err := runtime.Invocation(invocationID)
+	if err != nil || !found || record.Command != "node.update.v1" || record.State.Terminal() {
+		return record, found, err
+	}
+	handler, ok := runtime.handlers[record.Command].(*updateCommandHandler)
+	if !ok {
+		return record, found, nil
+	}
+	result, terminal, canceled, err := handler.status(ctx, record)
+	if err != nil || !terminal {
+		return record, true, err
+	}
+	if canceled {
+		recovered, recoverErr := runtime.ledger.RecoverCancellation(invocationID)
+		return recovered, true, recoverErr
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return record, true, err
+	}
+	raw, err = nodes.ValidateInvocationOutput(handler.descriptor(), raw, nodes.MaxInvocationOutput)
+	if err != nil {
+		return record, true, err
+	}
+	recovered, recoverErr := runtime.ledger.RecoverSuccess(invocationID, raw)
+	return recovered, true, recoverErr
 }
 
 func invocationRecordResult(record nodes.InvocationRecord) (json.RawMessage, error) {
