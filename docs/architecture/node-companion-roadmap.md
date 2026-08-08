@@ -698,6 +698,12 @@ P4 requires authenticated slim node release artifacts and a narrow stable
 local coordinator because the payload being replaced cannot prove its own
 failed startup. The deployed default remains deny-all.
 
+Implementation status: the trusted-release foundation, stable coordinator,
+and model-facing single-node slice are merged. Native Linux/macOS process
+proof, operations documentation, and deny-by-default deployment closeout are
+tracked in
+[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md).
+
 Fleet inventory, group targeting, rolling or parallel rollout, scheduled
 updates, key rotation, bootstrap, package-manager integration, and coordinator
 self-update remain unadmitted. Existing `nodes` discovery is sufficient for
