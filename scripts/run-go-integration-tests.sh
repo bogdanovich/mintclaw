@@ -11,6 +11,7 @@ integration_tests='^('\
 'TestCompanionProcessAuthenticatesAndInvokesOverWSS|'\
 'TestCompanionProcessTransfersFilesOverAuthenticatedWSS|'\
 'TestNodeInvocationVerticalSliceWithApprovalAndRealCompanion|'\
+'TestCompanionBrowserLifecycleAndReconnectOverProductionWSS|'\
 'TestNodeFileTransferVerticalSliceWithApprovalAndDelivery|'\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice'\
 ')$'
