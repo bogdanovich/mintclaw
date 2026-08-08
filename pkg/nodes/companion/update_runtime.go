@@ -153,12 +153,15 @@ func (handler *updateCommandHandler) execute(
 		return nil, fmt.Errorf("%w: coordinator update response unavailable", ErrInvocationOutcomeUnknown)
 	}
 	result := updateResult(response)
-	if result.RequestedRelease == "" && definitiveUpdatePreacceptError(response.ErrorCode) {
+	if definitiveUpdatePreacceptError(response.ErrorCode) {
 		return nil, newCommandFailure(
 			"UPDATE_DENIED",
 			"node update was denied before durable acceptance",
 			errors.New(response.ErrorCode),
 		)
+	}
+	if !updateObservationBound(response, authority.ReleaseVersion) {
+		return nil, fmt.Errorf("%w: coordinator update response is not transaction-bound", ErrInvocationOutcomeUnknown)
 	}
 	if result.State == "canceled" {
 		return nil, fmt.Errorf("%w: canceled update requires ledger reconciliation", ErrInvocationOutcomeUnknown)
@@ -214,6 +217,9 @@ func queryUpdateStatus(
 		return nodeUpdateResult{}, false, false, err
 	}
 	result := updateResult(response)
+	if !updateObservationBound(response, record.Update.ReleaseVersion) {
+		return nodeUpdateResult{}, false, false, ErrInvocationOutcomeUnknown
+	}
 	terminal := updateObservationTerminal(result.State)
 	return result, terminal, result.State == "canceled", nil
 }
@@ -232,6 +238,9 @@ func cancelUpdate(
 	})
 	if err != nil {
 		return nodeUpdateResult{}, err
+	}
+	if !updateObservationBound(response, record.Update.ReleaseVersion) {
+		return nodeUpdateResult{}, ErrInvocationOutcomeUnknown
 	}
 	return updateResult(response), nil
 }
@@ -270,7 +279,7 @@ func updateResult(response control.Response) nodeUpdateResult {
 		RollbackAttempted:   response.Observation.RollbackAttempted,
 		RollbackVerified:    response.Observation.RollbackVerified,
 		InstalledVersion:    response.Observation.InstalledVersion,
-		ErrorCode:           response.ErrorCode,
+		ErrorCode:           response.Observation.FailureCode,
 	}
 	if result.State == "" {
 		result.State = "unknown"
@@ -279,6 +288,12 @@ func updateResult(response control.Response) nodeUpdateResult {
 		result.RecoveryAction = "inspect the managed node locally; do not replay the update"
 	}
 	return result
+}
+
+func updateObservationBound(response control.Response, expectedRelease string) bool {
+	return response.ErrorCode == "" &&
+		expectedRelease != "" &&
+		response.Observation.RequestedRelease == expectedRelease
 }
 
 func updateObservationTerminal(state string) bool {

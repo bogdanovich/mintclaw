@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -158,7 +159,9 @@ func TestUpdateRuntimeCancelsRecoveredPreactivationTransaction(t *testing.T) {
 	coordinator := &recordingUpdateCoordinator{
 		errors: map[control.Kind]error{control.KindUpdate: context.DeadlineExceeded},
 		responses: map[control.Kind]control.Response{
-			control.KindCancel: {Observation: control.Observation{Phase: "canceled"}},
+			control.KindCancel: {Observation: control.Observation{
+				Phase: "canceled", RequestedRelease: "v1.1.0",
+			}},
 		},
 	}
 	runtimeValue, plan := updateRuntimeFixture(t, coordinator)
@@ -210,10 +213,20 @@ func TestUpdateRuntimeDistinguishesPreacceptDenialFromAcceptedFailure(t *testing
 			response: control.Response{
 				Observation: control.Observation{
 					Phase: "operator_action_required", RequestedRelease: "v1.1.0",
+					FailureCode: "manifest_changed",
 				},
-				ErrorCode: "manifest_changed",
 			},
 			wantState: nodes.InvocationSucceeded,
+		},
+		{
+			name: "request error after acceptance",
+			response: control.Response{
+				Observation: control.Observation{
+					Phase: "operator_action_required", RequestedRelease: "v1.1.0",
+				},
+				ErrorCode: "request_failed",
+			},
+			wantState: nodes.InvocationUnknown,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -227,6 +240,68 @@ func TestUpdateRuntimeDistinguishesPreacceptDenialFromAcceptedFailure(t *testing
 				t.Fatalf("invocation = %#v, %v, %v; want %s", record, found, err, test.wantState)
 			}
 		})
+	}
+}
+
+func TestUpdateRuntimeDoesNotTerminalizeUnboundRecoveryResponse(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response control.Response
+	}{
+		{
+			name: "request error",
+			response: control.Response{
+				Observation: control.Observation{Phase: "unknown"}, ErrorCode: "identity_conflict",
+			},
+		},
+		{
+			name: "different transaction",
+			response: control.Response{Observation: control.Observation{
+				Phase: "healthy", RequestedRelease: "v2.0.0", SuccessorVerified: true,
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator := &recordingUpdateCoordinator{
+				errors:    map[control.Kind]error{control.KindUpdate: context.DeadlineExceeded},
+				responses: map[control.Kind]control.Response{control.KindStatus: test.response},
+			}
+			runtimeValue, plan := updateRuntimeFixture(t, coordinator)
+			if _, err := runtimeValue.Invoke(t.Context(), plan); !errorsIs(err, ErrInvocationOutcomeUnknown) {
+				t.Fatalf("Invoke() error = %v, want unknown", err)
+			}
+			record, found, err := runtimeValue.RecoverInvocation(t.Context(), plan.InvocationID)
+			if !errorsIs(err, ErrInvocationOutcomeUnknown) || !found || record.State != nodes.InvocationUnknown {
+				t.Fatalf("RecoverInvocation() = %#v, %v, %v", record, found, err)
+			}
+		})
+	}
+}
+
+func TestUpdateRuntimePreservesDurableFailureCode(t *testing.T) {
+	coordinator := &recordingUpdateCoordinator{
+		errors: map[control.Kind]error{control.KindUpdate: context.DeadlineExceeded},
+		responses: map[control.Kind]control.Response{
+			control.KindStatus: {Observation: control.Observation{
+				Phase: "operator_action_required", RequestedRelease: "v1.1.0",
+				ActivationAttempted: true, FailureCode: "rollback_unproven",
+			}},
+		},
+	}
+	runtimeValue, plan := updateRuntimeFixture(t, coordinator)
+	if _, err := runtimeValue.Invoke(t.Context(), plan); !errorsIs(err, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("Invoke() error = %v, want unknown", err)
+	}
+	record, found, err := runtimeValue.RecoverInvocation(t.Context(), plan.InvocationID)
+	if err != nil || !found || record.State != nodes.InvocationSucceeded {
+		t.Fatalf("RecoverInvocation() = %#v, %v, %v", record, found, err)
+	}
+	var result nodeUpdateResult
+	if err = json.Unmarshal(record.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "rollback_unproven" || result.RecoveryAction == "" {
+		t.Fatalf("recovered result = %#v", result)
 	}
 }
 
