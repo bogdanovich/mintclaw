@@ -77,6 +77,57 @@ func NewAgentRegistry(
 	return registry
 }
 
+// NewAgentRegistryWithRuntimeProfile resolves every configured owner before it
+// constructs the first agent. A missing or mismatched layout therefore cannot
+// leave a partially populated registry behind.
+func NewAgentRegistryWithRuntimeProfile(
+	cfg *config.Config,
+	provider providers.LLMProvider,
+	profile RuntimeProfile,
+) (*AgentRegistry, error) {
+	agentConfigs := cfg.Agents.List
+	if len(agentConfigs) == 0 {
+		agentConfigs = []config.AgentConfig{{ID: "main", Default: true}}
+	}
+	agentIDs := make([]string, len(agentConfigs))
+	for index := range agentConfigs {
+		agentIDs[index] = routing.NormalizeAgentID(agentConfigs[index].ID)
+	}
+	if err := profile.validateAgentIDs(agentIDs); err != nil {
+		return nil, err
+	}
+
+	registry := &AgentRegistry{
+		cfg:      cfg,
+		agents:   make(map[string]*AgentInstance),
+		resolver: routing.NewRouteResolver(cfg),
+	}
+	for index := range agentConfigs {
+		agentCfg := &agentConfigs[index]
+		agentID := routing.NormalizeAgentID(agentCfg.ID)
+		layout, _ := profile.AgentLayout(agentID)
+		instance, err := NewAgentInstanceWithRuntimeLayout(
+			agentCfg,
+			&cfg.Agents.Defaults,
+			cfg,
+			provider,
+			layout,
+		)
+		if err != nil {
+			registry.Close()
+			return nil, err
+		}
+		registry.agents[agentID] = instance
+	}
+
+	for _, instance := range registry.agents {
+		if instance.ContextBuilder != nil {
+			instance.ContextBuilder.WithAgentDiscovery(instance.ID, registry.ListSpawnableAgents)
+		}
+	}
+	return registry, nil
+}
+
 // GetAgent returns the agent instance for a given ID.
 func (r *AgentRegistry) GetAgent(agentID string) (*AgentInstance, bool) {
 	r.mu.RLock()

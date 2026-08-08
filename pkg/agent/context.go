@@ -106,6 +106,14 @@ func getGlobalConfigDir() string {
 }
 
 func NewContextBuilder(workspace string) *ContextBuilder {
+	return newContextBuilderWithMemoryOwner(workspace, workspace)
+}
+
+func newRuntimeContextBuilder(layout RuntimeLayout) *ContextBuilder {
+	return newContextBuilderWithMemoryOwner(layout.ExecutionRoot(), layout.StateRoot())
+}
+
+func newContextBuilderWithMemoryOwner(workspace, memoryOwnerRoot string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
 	builtinSkillsDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
@@ -120,14 +128,33 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 		builtinSkillsDir = filepath.Join(wd, "skills")
 	}
 	globalSkillsDir := filepath.Join(getGlobalConfigDir(), "skills")
-	return newContextBuilder(workspace, globalSkillsDir, builtinSkillsDir)
+	return newContextBuilderWithMemoryOwnerAndSkills(
+		workspace,
+		memoryOwnerRoot,
+		globalSkillsDir,
+		builtinSkillsDir,
+	)
 }
 
 func newContextBuilder(workspace, globalSkillsDir, builtinSkillsDir string) *ContextBuilder {
+	return newContextBuilderWithMemoryOwnerAndSkills(
+		workspace,
+		workspace,
+		globalSkillsDir,
+		builtinSkillsDir,
+	)
+}
+
+func newContextBuilderWithMemoryOwnerAndSkills(
+	workspace string,
+	memoryOwnerRoot string,
+	globalSkillsDir string,
+	builtinSkillsDir string,
+) *ContextBuilder {
 	return &ContextBuilder{
 		workspace:      workspace,
 		skillsLoader:   skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
-		memory:         NewMemoryStore(workspace),
+		memory:         NewMemoryStore(memoryOwnerRoot),
 		promptRegistry: NewPromptRegistry(),
 	}
 }

@@ -780,6 +780,9 @@ Out of scope:
 
 Dependencies: P0.1
 
+Implementation evidence:
+[`local-coding-agent-p0-runtime-profile-admission.md`](local-coding-agent-p0-runtime-profile-admission.md)
+
 Scope:
 
 - Replace or extend the current post-registry option timing with a builder or
@@ -806,6 +809,9 @@ Scope:
 
 - Inject a session-store factory before agent instance creation.
 - Route Seahorse database construction through the resolved state root.
+- Keep derived context owner-scoped: one Seahorse database per personal agent
+  and one separate Seahorse database per coding thread; never one global coding
+  SQLite file.
 - Remove direct assumptions that the canonical session directory is always
   `<execution workspace>/sessions`.
 - Preserve canonical personal JSONL data through the one-time deployment
@@ -817,6 +823,7 @@ Done when:
   state root B.
 - Reconciliation still treats JSONL as authoritative.
 - Multi-agent personal workspaces retain their current per-agent separation.
+- Two coding-thread owners resolve to different Seahorse database files.
 - Fault-injection tests cover store/context construction rollback.
 
 #### P0.4 — Explicit tool bootstrap profiles

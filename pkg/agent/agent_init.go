@@ -33,7 +33,16 @@ func NewAgentLoop(
 	opts ...AgentLoopOption,
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
+	return newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+}
 
+func newAgentLoopWithRegistry(
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+	registry *AgentRegistry,
+	opts ...AgentLoopOption,
+) *AgentLoop {
 	// Set up shared fallback chain with rate limiting.
 	cooldown := providers.NewCooldownTracker()
 	rl := providers.NewRateLimiterRegistry()
@@ -119,6 +128,35 @@ func NewAgentLoopChecked(
 	if al.contextManagerInitErr != nil {
 		al.Close()
 		return nil, al.contextManagerInitErr
+	}
+	return al, nil
+}
+
+// NewAgentLoopWithRuntimeProfile applies a resolved profile before registry and
+// agent construction. It is the P0.2 entry point for frontends that require
+// distinct execution and state roots; existing gateway constructors remain
+// unchanged until the P0.3 storage cutover.
+func NewAgentLoopWithRuntimeProfile(
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+	profile RuntimeProfile,
+	opts ...AgentLoopOption,
+) (*AgentLoop, error) {
+	registry, err := NewAgentRegistryWithRuntimeProfile(cfg, provider, profile)
+	if err != nil {
+		return nil, err
+	}
+	if profile.hasCodingOwner() {
+		// P0.4 replaces this fail-closed bootstrap with an explicit coding tool
+		// profile. Until then, a coding owner cannot inherit personal shared tools.
+		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
+	}
+	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	if al.contextManagerInitErr != nil {
+		err := al.contextManagerInitErr
+		al.Close()
+		return nil, err
 	}
 	return al, nil
 }

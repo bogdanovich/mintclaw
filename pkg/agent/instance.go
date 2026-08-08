@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,6 +31,7 @@ type AgentInstance struct {
 	Model                     string
 	Fallbacks                 []string
 	Workspace                 string
+	Layout                    RuntimeLayout
 	MaxIterations             int
 	MaxTokens                 int
 	Temperature               float64
@@ -109,6 +111,30 @@ func NewAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentInstance {
+	instance, _ := newAgentInstance(agentCfg, defaults, cfg, provider, nil)
+	return instance
+}
+
+// NewAgentInstanceWithRuntimeLayout constructs an agent from a layout that was
+// resolved before registry construction. MintClaw-owned session state is opened
+// under StateRoot; ExecutionRoot is never created by construction.
+func NewAgentInstanceWithRuntimeLayout(
+	agentCfg *config.AgentConfig,
+	defaults *config.AgentDefaults,
+	cfg *config.Config,
+	provider providers.LLMProvider,
+	layout RuntimeLayout,
+) (*AgentInstance, error) {
+	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout)
+}
+
+func newAgentInstance(
+	agentCfg *config.AgentConfig,
+	defaults *config.AgentDefaults,
+	cfg *config.Config,
+	provider providers.LLMProvider,
+	layout *RuntimeLayout,
+) (*AgentInstance, error) {
 	if cfg != nil {
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
 		// before any tools or providers start spawning child processes.
@@ -116,7 +142,14 @@ func NewAgentInstance(
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
-	os.MkdirAll(workspace, 0o755)
+	if layout != nil {
+		if err := layout.Validate(); err != nil {
+			return nil, fmt.Errorf("construct agent: invalid runtime layout: %w", err)
+		}
+		workspace = layout.ExecutionRoot()
+	} else {
+		_ = os.MkdirAll(workspace, 0o755)
+	}
 
 	definition := loadAgentDefinition(workspace)
 	model := resolveAgentModel(agentCfg, defaults, definition)
@@ -125,21 +158,46 @@ func NewAgentInstance(
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
 
 	sessionsDir := filepath.Join(workspace, "sessions")
+	if layout != nil {
+		sessionsDir = layout.StatePaths().SessionsRoot
+	}
 	sessions := initSessionStore(sessionsDir)
-	contextBuilder := NewContextBuilder(workspace).
+	var contextBuilder *ContextBuilder
+	if layout != nil {
+		contextBuilder = newRuntimeContextBuilder(*layout)
+	} else {
+		contextBuilder = NewContextBuilder(workspace)
+	}
+	contextBuilder = contextBuilder.
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
 		WithPromptMemoryConfig(defaults.PromptMemory)
 
 	identity := buildAgentIdentityConfig(defaults, agentCfg, definition)
+	if layout != nil {
+		owner := layout.Owner()
+		if owner.Kind == RuntimeOwnerPersonalAgent && owner.ID != identity.agentID {
+			_ = sessions.Close()
+			return nil, fmt.Errorf(
+				"construct agent %q: personal runtime owner is %q",
+				identity.agentID,
+				owner.ID,
+			)
+		}
+	}
 	provider = resolvePrimaryProviderForAgent(cfg, workspace, identity.agentID, model, provider)
 	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, definition)
 
 	toolInit := newAgentToolInitConfig(defaults, cfg, agentToolPolicy)
-	initCoreAgentTools(workspace, cfg, toolInit)
+	// Coding owners stay intentionally tool-empty until P0.4 admits their exact
+	// trusted-local bootstrap profile. This also prevents legacy constructors
+	// such as exec from creating workspace-local scratch state during P0.2.
+	if layout == nil || layout.Owner().Kind == RuntimeOwnerPersonalAgent {
+		initCoreAgentTools(workspace, cfg, toolInit)
+	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
 	routingCfg := buildAgentRoutingConfig(cfg, defaults, workspace, model, fallbacks, identity.agentID)
 
-	return &AgentInstance{
+	instance := &AgentInstance{
 		ID:                        identity.agentID,
 		Name:                      identity.agentName,
 		Model:                     model,
@@ -170,6 +228,10 @@ func NewAgentInstance(
 		CandidateProviders:        routingCfg.candidateProviders,
 		ToolLoopDetection:         loopGuardConfigFromConfig(cfg.Tools.LoopDetection),
 	}
+	if layout != nil {
+		instance.Layout = *layout
+	}
+	return instance, nil
 }
 
 func resolveAgentMaxParallelTurns(agentCfg *config.AgentConfig) int {
