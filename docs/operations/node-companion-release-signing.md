@@ -4,9 +4,10 @@
 
 This runbook covers the trusted-release foundation for
 [`node-companion-p4-admission.md`](../architecture/node-companion-p4-admission.md).
-It publishes and verifies companion payloads, but does not enable remote
-activation. Until the later P4 coordinator and model-invocation PRs merge, no
-`node.update.v1` command is registered.
+It publishes and verifies companion payloads. The later P4 coordinator and
+model-invocation slices are implemented, but remote activation remains
+deny-by-default: `node.update.v1` is advertised only by a managed companion
+with an explicitly enabled, target-bound profile and authenticated catalog.
 
 MintClaw release manifests use a detached Ed25519 signature. The signature is
 over the exact manifest bytes. The manifest binds:
@@ -135,8 +136,8 @@ go run ./cmd/mintclaw-node-release verify
 Verification rejects unknown or duplicate JSON fields, trailing data,
 oversized documents, wrong key identity, invalid signatures, future or expired
 catalogs, incompatible contracts, missing tuples, unexpected filenames, and
-malformed size or digest values. Later P4 code must additionally hash the
-downloaded archive and compare its exact tuple to this verified manifest
+malformed size or digest values. The P4 coordinator additionally hashes the
+downloaded archive and compares its exact tuple to this verified manifest
 before staging.
 
 ## Rotation, Revocation, And Recovery
