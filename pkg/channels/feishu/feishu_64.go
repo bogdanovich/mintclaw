@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -340,7 +340,7 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 	}
 	chosenEmoji := "Pin"
 	if len(candidates) > 0 {
-		chosenEmoji = candidates[rand.Intn(len(candidates))]
+		chosenEmoji = candidates[rand.IntN(len(candidates))]
 	}
 
 	req := larkim.NewCreateMessageReactionReqBuilder().
