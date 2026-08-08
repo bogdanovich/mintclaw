@@ -116,7 +116,12 @@ func kindFromIdentifiers(identifiers []string) Kind {
 	for _, raw := range identifiers {
 		identifier := canonicalIdentifier(raw)
 		switch identifier {
-		case "authentication_error", "invalid_api_key", "unauthenticated", "permission_denied", "access_denied":
+		case "authentication_error",
+			"invalid_api_key",
+			"api_key_invalid",
+			"unauthenticated",
+			"permission_denied",
+			"access_denied":
 			found[KindAuthentication] = true
 		case "billing_error", "insufficient_quota", "payment_required", "credit_balance_exhausted":
 			found[KindBilling] = true

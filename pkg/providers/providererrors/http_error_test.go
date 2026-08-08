@@ -47,6 +47,13 @@ func TestFromHTTPResponse(t *testing.T) {
 			wantMessage: "Prompt rejected",
 		},
 		{
+			name:        "gemini invalid API key reason precedes generic status",
+			status:      http.StatusBadRequest,
+			body:        `{"error":{"code":400,"message":"API key rejected","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`,
+			wantKind:    KindAuthentication,
+			wantMessage: "API key rejected",
+		},
+		{
 			name:        "message text cannot override status",
 			status:      http.StatusTooManyRequests,
 			body:        `{"error":{"message":"billing balance exhausted"}}`,
