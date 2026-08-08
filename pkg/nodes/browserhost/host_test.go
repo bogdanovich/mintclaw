@@ -543,8 +543,9 @@ func TestBrowserHostExpiresAndClosesIdleWorker(t *testing.T) {
 }
 
 func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
 	profile := browserHostProfileFixture()
-	profile.DriverExecutable = "/usr/local/bin/npx"
+	profile.DriverExecutable = "/usr/local/lib/node_modules/npm/bin/npx-cli.js"
 	profile.ProfileDirectory = "/Users/operator/.mintclaw/browser/managed"
 	profile.LockFile = "/Users/operator/.mintclaw/browser.lock"
 	profile.DriverArguments = []string{"-y", "@playwright/mcp@0.0.78", "--browser=chrome"}
@@ -555,6 +556,7 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	joined := strings.Join(server.Args, "\x00")
 	if server.Command != profile.DriverExecutable ||
 		server.SessionLossReplay != "never" || server.ExclusiveLockFile != profile.LockFile ||
+		server.Env["PATH"] != "/usr/local/lib/node_modules/npm/bin:/usr/bin:/bin" || len(server.Env) != 1 ||
 		!strings.Contains(joined, "--user-data-dir\x00"+profile.ProfileDirectory) ||
 		!strings.Contains(joined, "--output-mode\x00stdout") ||
 		strings.Contains(joined, "--headless") {
@@ -564,6 +566,75 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	if _, err = companionPlaywrightServer(profile); err == nil ||
 		!strings.Contains(err.Error(), "host-managed option") || strings.Contains(err.Error(), "9222") {
 		t.Fatalf("raw endpoint argument error = %v", err)
+	}
+}
+
+func TestCompanionPlaywrightServerUsesNormalizedSymlinkLauncherDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("browser profile identity validation is admitted on Darwin and Linux")
+	}
+	t.Setenv("PATH", "/usr/bin:/bin")
+	root := t.TempDir()
+	brewBin := filepath.Join(root, "homebrew", "bin")
+	npmBin := filepath.Join(root, "homebrew", "lib", "node_modules", "npm", "bin")
+	profileDir := filepath.Join(root, "profile")
+	lockDir := filepath.Join(root, "locks")
+	for _, directory := range []string{brewBin, npmBin, profileDir, lockDir} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	canonical := filepath.Join(npmBin, "npx-cli.js")
+	if err := os.WriteFile(canonical, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(brewBin, "npx")
+	if err := os.Symlink(canonical, launcher); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("#!/bin/sh\n"))
+	cfg, err := (companion.Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]companion.BrowserProfilePolicy{
+			"managed": {
+				Enabled: true, Revision: "managed-v1",
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"owner"},
+				Driver:           nodes.BrowserDriverPlaywrightMCP,
+				DriverExecutable: launcher, DriverExecutableSHA256: hex.EncodeToString(digest[:]),
+				DriverArguments: []string{"--browser=chrome"}, ProfileDirectory: profileDir,
+				LockFile: filepath.Join(lockDir, "browser.lock"), Mode: nodes.BrowserProfileManaged,
+				NetworkMode: nodes.BrowserNetworkAnyHTTP, DryRun: true,
+				AllowedActions: []string{"navigate"}, Headed: true,
+			},
+		},
+	}).Normalize(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.BrowserProfiles["managed"]
+	server, err := companionPlaywrightServer(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalReal, err := filepath.EvalSymlinks(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brewBinReal, err := filepath.EvalSymlinks(brewBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := brewBinReal + string(os.PathListSeparator) + "/usr/bin:/bin"
+	if profile.DriverExecutable != canonicalReal ||
+		server.Command != canonicalReal || server.Env["PATH"] != wantPath || len(server.Env) != 1 {
+		t.Fatalf("normalized profile = %#v, server = %#v", profile, server)
+	}
+	if err = os.Chmod(brewBin, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err = companion.VerifyBrowserProfileRuntimeIdentity(profile); err == nil ||
+		!strings.Contains(err.Error(), "executable identity changed") {
+		t.Fatalf("unsafe launcher directory runtime identity error = %v", err)
 	}
 }
 
