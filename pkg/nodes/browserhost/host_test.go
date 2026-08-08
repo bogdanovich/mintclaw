@@ -57,6 +57,7 @@ type fakeBrowserHostWorker struct {
 	observeCalls int
 	actions      []browserworker.DriverAction
 	executeErr   error
+	executeFunc  func(context.Context, browserworker.DriverAction) error
 	closeErr     error
 	closeCalls   int
 }
@@ -87,10 +88,13 @@ func (*fakeBrowserHostWorker) Resolve(
 }
 
 func (worker *fakeBrowserHostWorker) Execute(
-	_ context.Context,
+	ctx context.Context,
 	action browserworker.DriverAction,
 ) error {
 	worker.actions = append(worker.actions, action)
+	if worker.executeFunc != nil {
+		return worker.executeFunc(ctx, action)
+	}
 	return worker.executeErr
 }
 
@@ -143,6 +147,17 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	if len(worker.actions) != 1 || worker.actions[0].Kind != browserworker.DriverNavigate ||
 		worker.actions[0].URL != "https://example.com/" {
 		t.Fatalf("driver actions = %#v", worker.actions)
+	}
+	replayed := browserHostNavigateFixture()
+	replayed.SnapshotGeneration = 2
+	if _, err = host.Navigate(t.Context(), replayed); !errors.Is(err, ErrBrowserHostStale) ||
+		len(worker.actions) != 1 {
+		t.Fatalf("replayed successful Navigate() error = %v, actions = %d", err, len(worker.actions))
+	}
+	replayed.PreparedActionHash = strings.Repeat("c", 64)
+	if _, err = host.Navigate(t.Context(), replayed); !errors.Is(err, ErrBrowserHostDenied) ||
+		len(worker.actions) != 1 {
+		t.Fatalf("rebound Navigate() error = %v, actions = %d", err, len(worker.actions))
 	}
 
 	_, err = host.Navigate(t.Context(), BrowserHostNavigateRequest{
@@ -250,6 +265,138 @@ func TestBrowserHostRetriesFailedStartupCleanupOnClose(t *testing.T) {
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 2 {
 		t.Fatalf("cleanup Close() = %#v, %v, closes = %d", closed, err, worker.closeCalls)
+	}
+}
+
+func TestBrowserHostFailedCleanupKeepsProfileOccupied(t *testing.T) {
+	worker := &fakeBrowserHostWorker{closeErr: errors.New("cleanup failed")}
+	factory := &fakeBrowserHostFactory{
+		worker: worker, err: browserworker.ErrWorkerUnavailable,
+	}
+	host := newTestBrowserHost(t, factory)
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); !errors.Is(err, browserworker.ErrWorkerUnavailable) {
+		t.Fatal(err)
+	}
+	second := browserHostOpenFixture()
+	second.SessionID = "browser_session_2"
+	if _, err := host.Open(t.Context(), second); !errors.Is(err, ErrBrowserHostBusy) ||
+		len(factory.requests) != 1 {
+		t.Fatalf("Open() during unresolved cleanup error = %v, requests = %d", err, len(factory.requests))
+	}
+	worker.closeErr = nil
+	if _, err := host.Close(t.Context(), BrowserHostCloseRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		AgentID: "browser", ActorID: "telegram:owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Open(t.Context(), second); !errors.Is(err, browserworker.ErrWorkerUnavailable) ||
+		len(factory.requests) != 2 {
+		t.Fatalf("Open() after cleanup error = %v, requests = %d", err, len(factory.requests))
+	}
+}
+
+func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "https://example.com/", Origin: "https://example.com"},
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	request := browserHostOpenFixture()
+	request.Limits.IdleSeconds = 2
+	if _, err := host.Open(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(101, 0).UTC() }
+	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(102, 0).UTC() }
+	navigateRequest := browserHostNavigateFixture()
+	navigateRequest.SnapshotGeneration = 1
+	if _, err = host.Navigate(t.Context(), navigateRequest); err != nil {
+		t.Fatal(err)
+	}
+	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || observed.SnapshotGeneration != 1 || status.IdleExpiresAt != 104 {
+		t.Fatalf("activity status = %#v, observation = %#v, error = %v", status, observed, err)
+	}
+}
+
+func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.T) {
+	worker := &fakeBrowserHostWorker{executeErr: errors.New("ambiguous driver failure")}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	request := browserHostNavigateFixture()
+	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
+		t.Fatalf("ambiguous Navigate() error = %v", err)
+	}
+	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || status.State != "lost" || status.Reason != "outcome_unknown" ||
+		status.Recovery != "close" {
+		t.Fatalf("quarantined Status() = %#v, %v", status, err)
+	}
+	if _, err = host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) ||
+		len(worker.actions) != 1 {
+		t.Fatalf("replayed Navigate() error = %v, actions = %d", err, len(worker.actions))
+	}
+	session := host.sessions["browser_session_1"]
+	session.mu.Lock()
+	reservedHash := session.actionInvocations[request.ActionInvocationID]
+	session.mu.Unlock()
+	if reservedHash != request.PreparedActionHash {
+		t.Fatalf("reserved invocation hash = %q", reservedHash)
+	}
+}
+
+func TestBrowserHostQuarantinesWhenPostActionObserveFails(t *testing.T) {
+	worker := &fakeBrowserHostWorker{}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+		t.Fatalf("Navigate() with ambiguous observation error = %v", err)
+	}
+	if len(worker.actions) != 1 || worker.observeCalls != 0 {
+		t.Fatalf("driver actions = %d, completed observations = %d", len(worker.actions), worker.observeCalls)
+	}
+}
+
+func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		executeFunc: func(ctx context.Context, _ browserworker.DriverAction) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	request := browserHostOpenFixture()
+	request.Limits.ActionSeconds = 1
+	if _, err := host.Open(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+		t.Fatalf("deadline Navigate() error = %v", err)
+	}
+	elapsed := time.Since(started)
+	if elapsed < 500*time.Millisecond || elapsed > 2*time.Second || len(worker.actions) != 1 {
+		t.Fatalf("deadline Navigate() elapsed = %s, actions = %d", elapsed, len(worker.actions))
 	}
 }
 
@@ -421,5 +568,15 @@ func browserHostOpenFixture() BrowserHostOpenRequest {
 		SessionID: "browser_session_1", Profile: "managed", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), AgentID: "browser",
 		ActorID: "telegram:owner", DryRun: true, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+}
+
+func browserHostNavigateFixture() BrowserHostNavigateRequest {
+	return BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 0,
+		ActionInvocationID: "browser_action_1", URL: "https://example.com/",
+		Effect: "navigation", PreparedActionHash: strings.Repeat("b", 64),
+		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+		AgentID: "browser", ActorID: "telegram:owner",
 	}
 }

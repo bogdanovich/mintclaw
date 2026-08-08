@@ -122,10 +122,12 @@ type browserHostSession struct {
 	actorID               string
 	state                 string
 	safeFailure           string
+	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
+	actionInvocations     map[string]string
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -280,9 +282,10 @@ func (host *BrowserHost) Open(
 	}
 	for _, session := range host.sessions {
 		session.mu.Lock()
-		live := session.state == "opening" || session.state == "ready" || session.state == "closing"
+		occupied := session.state == "opening" || session.state == "ready" || session.state == "closing" ||
+			session.worker != nil || session.cleanupOwner != nil || session.safeFailure == "cleanup_required"
 		session.mu.Unlock()
-		if live {
+		if occupied {
 			host.mu.Unlock()
 			return BrowserHostSession{}, ErrBrowserHostBusy
 		}
@@ -292,9 +295,11 @@ func (host *BrowserHost) Open(
 		sessionID: request.SessionID,
 		profile:   profile, browserPolicyRevision: request.BrowserPolicyRevision,
 		agentID: request.AgentID, actorID: request.ActorID, state: "opening",
-		tabID:         "tab_primary",
-		expiresAt:     now.Add(time.Duration(request.Limits.SessionSeconds) * time.Second),
-		idleExpiresAt: now.Add(time.Duration(request.Limits.IdleSeconds) * time.Second),
+		limits:            request.Limits,
+		tabID:             "tab_primary",
+		actionInvocations: make(map[string]string),
+		expiresAt:         now.Add(time.Duration(request.Limits.SessionSeconds) * time.Second),
+		idleExpiresAt:     now.Add(time.Duration(request.Limits.IdleSeconds) * time.Second),
 	}
 	host.sessions[request.SessionID] = session
 	host.mu.Unlock()
@@ -391,12 +396,21 @@ func (host *BrowserHost) Observe(
 	if request.TabID != session.tabID || request.SnapshotGeneration != session.snapshotGeneration+1 {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	observation, observeErr := session.worker.Observe(ctx)
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	observation, observeErr := session.worker.Observe(actionCtx)
+	actionContextErr := actionCtx.Err()
+	cancelAction()
 	if observeErr != nil {
 		return BrowserHostObservation{}, observeErr
 	}
+	if actionContextErr != nil {
+		return BrowserHostObservation{}, actionContextErr
+	}
+	if !host.now().UTC().Before(actionDeadline) {
+		return BrowserHostObservation{}, context.DeadlineExceeded
+	}
 	session.snapshotGeneration = request.SnapshotGeneration
-	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.profile.Limits.IdleSeconds) * time.Second)
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
 	return browserHostObservation(request.SessionID, session, observation), nil
 }
 
@@ -429,18 +443,62 @@ func (host *BrowserHost) Navigate(
 		!slices.Contains(session.profile.AllowedActions, "navigate") {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if executeErr := session.worker.Execute(ctx, browserworker.DriverAction{
+	if existingHash, reserved := session.actionInvocations[request.ActionInvocationID]; reserved {
+		if existingHash != request.PreparedActionHash {
+			return BrowserHostObservation{}, ErrBrowserHostDenied
+		}
+		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	if ctx.Err() != nil {
+		return BrowserHostObservation{}, ctx.Err()
+	}
+	// Bind the gateway invocation before dispatch. Once reserved, an invocation
+	// can never execute again even if the driver outcome is ambiguous.
+	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	if executeErr := session.worker.Execute(actionCtx, browserworker.DriverAction{
 		Kind: browserworker.DriverNavigate, URL: request.URL,
 	}); executeErr != nil {
-		return BrowserHostObservation{}, executeErr
+		cancelAction()
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
-	observation, observeErr := session.worker.Observe(ctx)
-	if observeErr != nil {
-		return BrowserHostObservation{}, observeErr
+	if actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
+		cancelAction()
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
+	}
+	observation, observeErr := session.worker.Observe(actionCtx)
+	actionContextErr := actionCtx.Err()
+	cancelAction()
+	if observeErr != nil || actionContextErr != nil || !host.now().UTC().Before(actionDeadline) {
+		host.quarantineActionLocked(session)
+		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
 	session.snapshotGeneration++
-	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.profile.Limits.IdleSeconds) * time.Second)
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
 	return browserHostObservation(request.SessionID, session, observation), nil
+}
+
+func (host *BrowserHost) actionContextLocked(
+	ctx context.Context,
+	session *browserHostSession,
+) (context.Context, context.CancelFunc, time.Time) {
+	now := host.now().UTC()
+	deadline := now.Add(time.Duration(session.limits.ActionSeconds) * time.Second)
+	if session.expiresAt.Before(deadline) {
+		deadline = session.expiresAt
+	}
+	if session.idleExpiresAt.Before(deadline) {
+		deadline = session.idleExpiresAt
+	}
+	actionCtx, cancelAction := context.WithTimeout(ctx, max(deadline.Sub(now), 0))
+	return actionCtx, cancelAction, deadline
+}
+
+func (host *BrowserHost) quarantineActionLocked(session *browserHostSession) {
+	session.state = "lost"
+	session.safeFailure = "outcome_unknown"
 }
 
 func (host *BrowserHost) Close(
@@ -466,6 +524,7 @@ func (host *BrowserHost) Close(
 			session.cleanupOwner = nil
 		}
 		session.state = "closed"
+		session.safeFailure = ""
 		return browserHostSessionView(session), nil
 	}
 	session.state = "closing"
