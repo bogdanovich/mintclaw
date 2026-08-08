@@ -168,6 +168,13 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		return nil
 	}
 
+	// Adapter-owned classifications are authoritative. Check them before
+	// context sentinels because ProviderError exposes its underlying cause.
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr != nil {
+		return classifyProviderError(providerErr, err, provider, model)
+	}
+
 	// Context cancellation: user abort, never fallback.
 	if errors.Is(err, context.Canceled) {
 		return nil
@@ -181,14 +188,6 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 			Model:    model,
 			Wrapped:  err,
 		}
-	}
-
-	// Adapter-owned classifications are authoritative. Once an adapter emits a
-	// ProviderError, do not reinterpret its safe message with compatibility
-	// heuristics; only an explicit kind or structured HTTP status may classify it.
-	var providerErr *ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil {
-		return classifyProviderError(providerErr, err, provider, model)
 	}
 
 	msg := strings.ToLower(err.Error())

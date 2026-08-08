@@ -85,6 +85,20 @@ func TestClassifyError_ProviderErrorPrecedence(t *testing.T) {
 			},
 			wantNil: true,
 		},
+		{
+			name: "explicit billing precedes wrapped cancellation",
+			err: &ProviderError{
+				Kind: ProviderErrorBilling, Cause: context.Canceled,
+			},
+			wantReason: FailoverBilling,
+		},
+		{
+			name: "explicit cancellation precedes wrapped deadline",
+			err: &ProviderError{
+				Kind: ProviderErrorCanceled, Cause: context.DeadlineExceeded,
+			},
+			wantNil: true,
+		},
 	}
 
 	for _, test := range tests {
