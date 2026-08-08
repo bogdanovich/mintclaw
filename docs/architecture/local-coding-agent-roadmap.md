@@ -65,6 +65,10 @@ The following decisions are part of the admitted scope:
     during startup. Any future executable project resource needs a separate
     admitted trust policy even though model-initiated coding tools are local
     no-prompt by default.
+13. Future channel-to-coding delegation is a durable task dispatched to a
+    project-bound local coding worker through a typed paired-node capability.
+    The gateway, Telegram agent, and generic Codex provider never own or infer
+    the development machine's filesystem path.
 
 ## Intended User Experience
 
@@ -95,6 +99,64 @@ Expected behavior:
   and can produce stable JSONL for scripts.
 - Existing `mintclaw agent`, `mintclaw agent live`, `mintclaw gateway`, and
   channel behavior remain unchanged.
+
+### Future chat-to-coding handoff
+
+An owner should eventually be able to ask an always-running MintClaw agent from
+Telegram or another channel to investigate or fix code on a paired development
+machine. The correct boundary is a durable coding task placed on a local coding
+worker, not a gateway-side agent pretending it owns the remote cwd:
+
+```text
+Telegram request
+      |
+      v
+live agent -> durable CodingTask -> typed paired-node coding capability
+                                            |
+                                            v
+                              local coding worker/runtime
+                              CodingThread + isolated worktree
+                                            |
+                      progress / questions / structured result
+                                            v
+                         task registry + delivery coordinator
+                                            |
+                                            v
+                                      Telegram reply
+```
+
+The existing `codex-cli` provider is not this boundary. It launches a fresh
+`codex exec --json` subprocess for an LLM request, flattens MintClaw messages
+into a prompt, and does not map the returned Codex thread ID into MintClaw's
+durable task, project, or coding-thread model. It may remain a compatibility
+provider, but native chat-to-coding delegation should use the same MintClaw
+coding runtime and thread files as `mintclaw code`.
+
+The future handoff should reuse existing MintClaw foundations:
+
+- the task registry and delivery coordinator for durable parent task identity,
+  Telegram origin, progress, completion, and duplicate-delivery suppression;
+- paired-node target policy, idempotent invocation, progress, cancellation,
+  invocation ledger, and explicit uncertain outcomes;
+- the coding thread catalogue, lease, compaction, and frontend snapshot
+  protocol defined in this roadmap; and
+- isolated worktree ownership from P7.3 for mutating asynchronous tasks.
+
+The live agent supplies a bounded objective, done criteria, attachments, and an
+owner-configured target/project alias. It never invents an arbitrary remote
+path or forwards its entire personal-chat history. The local node resolves the
+alias, enforces node-local policy, and owns filesystem authority. An admitted
+task runs without per-tool approval inside that coding profile, but remote task
+admission is limited to allowed senders, targets, projects, and task modes.
+
+Progress delivered to chat is a semantic projection, not a stream of every TUI
+delta. Useful updates include started, waiting for input, tests running,
+compaction, completed, failed, cancelled, and uncertain. The final structured
+deliverable should include summary, changed paths, validation results, branch
+or patch reference, artifacts, unresolved issues, and the coding thread ID.
+That thread can later appear in `mintclaw resume` on the development machine;
+the TUI may observe a running thread and acquire its writer lease only after
+the remote task releases it.
 
 ## Current Architecture Assessment
 
@@ -353,6 +415,10 @@ Implementation PRs must preserve these system-level guarantees:
 18. Discovering `AGENTS.md` or another declarative instruction file does not
     implicitly load executable repository extensions, hooks, or dynamic
     configuration.
+19. A remote coding task names an owner-approved target and project alias. Only
+    the local worker resolves that alias to a path and owns the coding thread.
+20. Retrying Telegram delivery, gateway dispatch, or a node connection cannot
+    create a second coding task for the same idempotency identity.
 
 ## Compaction and Long-Session Continuity
 
@@ -1456,35 +1522,23 @@ Scope:
 
 - Evaluate whether a local daemon materially improves warm startup, background
   tasks, MCP reuse, or remote attachment.
+- Compare a supervised one-shot coding worker with a persistent daemon behind
+  the same project/thread/task interface.
 - Define local authentication, protocol versioning, process ownership, upgrade,
   crash recovery, and project filesystem authority.
 - Compare in-process CLI, daemon, and existing gateway/node approaches.
+- Keep the paired-node companion as a capability host: it may launch or contact
+  the coding worker but does not absorb agent-loop or thread-store ownership.
 
 Done when:
 
 - A design decision is recorded with measured startup/resource evidence.
+- The chosen worker boundary can start, resume, status, steer, and cancel a
+  coding thread without depending on terminal UI state.
 - No daemon is added unless it has a bounded product benefit.
 - The foreground local path remains supported.
 
-#### P7.3 — Gateway and node handoff investigation
-
-Dependencies: P7.2
-
-Scope:
-
-- Define how an always-on personal agent may request coding work on a paired
-  machine without pretending the remote gateway owns the local cwd.
-- Reuse node capability and approval boundaries where applicable.
-- Define thread ownership and user-visible handoff.
-
-Done when:
-
-- Filesystem authority and transcript ownership are explicit.
-- The design cannot make a server-side gateway accidentally edit an unrelated
-  local checkout.
-- This remains a separate follow-up from local coding MVP.
-
-#### P7.4 — Multi-agent coding and worktrees
+#### P7.3 — Multi-agent coding and worktrees
 
 Dependencies: P6.1, P7.1
 
@@ -1499,6 +1553,46 @@ Done when:
 - Each agent has an explicit execution root and transcript owner.
 - Worktree cleanup cannot delete user work.
 - Conflicts surface to the user rather than being silently resolved.
+
+#### P7.4 — Channel-to-coding task handoff
+
+Dependencies: P7.2, P7.3
+
+Scope:
+
+- Add an owner-scoped live-agent tool for starting, inspecting, steering, and
+  cancelling a coding task on an allowed paired target and project alias.
+- Register project aliases on the development machine; never accept an
+  unrestricted model-authored filesystem path. Registration declares allowed
+  task modes such as read-only investigation or isolated-worktree mutation.
+- Create the durable parent task and idempotency identity before dispatch, then
+  map it to one native `CodingThread` and one isolated execution root.
+- Define versioned node commands for project discovery and coding task
+  start/status/steer/cancel/result, with bounded progress and artifacts.
+- Route questions through durable human interaction and route semantic progress
+  and the final `DeliverableReport` through existing task delivery.
+- Allow an idle completed/paused thread to appear in local `mintclaw resume`;
+  allow read-only observation while running without granting a second writer.
+- Keep `codex-cli`, ACP/ACPX, and generic `system.exec.v1` as optional adapters
+  or bootstrap paths, not the native protocol contract.
+
+Done when:
+
+- An allowed Telegram sender can start a root-cause or fix task, receive an
+  immediate task ID, request status, answer a blocking question, cancel it, and
+  receive one deduplicated final result.
+- A mutating task defaults to an isolated execution root; an investigation mode
+  cannot silently escalate to file writes.
+- The result includes thread ID, project/target aliases, changed paths,
+  validation outcomes, branch/patch/artifact references, and unresolved work.
+- Disconnect after dispatch recovers through the node invocation ledger and
+  coding task status; it never blindly starts a duplicate coding task.
+- An offline node, stale project alias, busy thread, ambiguous project, or
+  uncertain result is explicit and actionable in chat.
+- The gateway never reads or writes the development checkout and cannot escape
+  the node-local project allowlist.
+- Per-tool prompts are unnecessary inside an admitted task, while sender,
+  target, project, and task-mode policy remain enforced at dispatch.
 
 #### P7.5 — Workspace checkpoint and rewind investigation
 
@@ -1593,7 +1687,7 @@ Dependencies: all admitted release packets
 Scope:
 
 - Document commands, keybindings, storage, trust, resume, compaction, recovery,
-  provider configuration, and troubleshooting.
+  provider configuration, channel-to-coding delegation, and troubleshooting.
 - Add schema migration and rollback guidance.
 - Document differences between personal and coding sessions.
 
@@ -1652,6 +1746,7 @@ Every production packet should select relevant rows from this matrix:
 | TUI | Screen/scrollback contract, resize, IME, Unicode width, paste, scroll, interruption, restoration, tmux/SSH, no-color, non-TTY |
 | Compaction | Tiered tool-output projection, protected evidence, budgets, recent turns, tool pairs, multiple levels, failure, rebuild, resume |
 | Code intelligence | Optional-server startup, diagnostics, navigation, audited workspace edits, timeout/crash fallback |
+| Chat handoff | Allowed sender/target/project, idempotent dispatch, progress, question/answer, cancel, offline recovery, deduplicated delivery, local resume |
 | Privacy | Cross-project isolation, preview redaction, summary redaction, diagnostics |
 | Cross-platform | Build, paths, locks, process groups, signals, terminal lifecycle |
 
@@ -1664,6 +1759,8 @@ the only evidence for persistence, compaction, or TUI correctness.
 Coding mode should expose privacy-safe measurements for:
 
 - thread create, open, resume, mismatch, lock contention, archive, and delete;
+- remote coding task create, dispatch, target/project resolution, progress,
+  question, steer, cancel, completion, uncertainty, and delivery;
 - cold and warm startup duration;
 - first paint and first model token;
 - tool start/end, duration, outcome, and bounded output size;
@@ -1687,7 +1784,8 @@ must not be included in metrics by default.
 - A complex approval selector or approve-once UI.
 - Automatic execution of repository-provided extensions, hooks, or dynamic
   agent configuration merely because a project was opened.
-- Remote editing through the deployed gateway.
+- Direct remote editing by the deployed gateway during the initial release;
+  P7.4 delegates to a project-bound worker on a paired machine instead.
 - Multi-agent concurrent writes to one working tree.
 - Automatic commit, push, reset, rebase, or merge without an explicit user
   request.
@@ -1716,7 +1814,9 @@ must not be included in metrics by default.
 | LSP adds slow or fragile startup | Optional lazy per-project lifecycle with timeouts and baseline-tool fallback |
 | Workspace rewind discards user changes | Keep it post-MVP until checkpoint ownership, preview, conflict, and inverse semantics are admitted |
 | Derived state slows resume | Revision watermarks, lazy/bounded rebuild, visible degraded mode |
-| Remote gateway edits the wrong filesystem | Keep MVP local; require an explicit daemon/node authority boundary later |
+| Remote gateway edits the wrong filesystem | Gateway sends only allowed target/project aliases; the node-local worker owns path, thread, and execution |
+| Chat retry starts duplicate coding work | Create durable parent task and idempotency identity before dispatch; reconcile through node and coding-task ledgers |
+| Telegram receives noisy or duplicate progress | Deliver semantic milestones and one structured final report through the existing durable delivery coordinator |
 | Existing Codex CLI provider becomes a nested agent | Do not use it as the native coding runtime; keep it optional as a provider or spike tool |
 
 ## Global Definition of Done
@@ -1748,6 +1848,10 @@ This roadmap is complete when:
     interrupted/unknown without automatic replay.
 14. Dropped frontend deltas recover from an authoritative revisioned snapshot
     without corrupting the transcript or composer.
+15. An allowed channel user can dispatch and manage a coding task on an allowed
+    paired project, receive a deduplicated structured result, and later resume
+    the same coding thread locally without giving the gateway filesystem
+    ownership.
 
 ## Handoff Rules for Implementing Agents
 
@@ -1777,5 +1881,7 @@ Stop and request an architecture decision when:
 - coding trusted-local mode would alter gateway approval behavior; or
 - opening a repository would execute project-provided extension or hook code
   without an admitted trust decision; or
+- a channel-to-coding design would accept a model-authored remote path, bypass
+  sender/target/project policy, or make the gateway own the coding thread; or
 - a remote component would gain filesystem authority not admitted by this
   roadmap.
