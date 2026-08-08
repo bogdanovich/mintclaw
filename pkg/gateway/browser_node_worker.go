@@ -442,7 +442,15 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 	if !ok {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
-	worker.catalogHash = record.Snapshot.CatalogHash
+	if worker.catalogHash != "" && worker.catalogHash != record.Snapshot.CatalogHash {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	if worker.profileRevision != "" && worker.profileRevision != profile.Revision {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
+	}
+	if worker.catalogHash == "" {
+		worker.catalogHash = record.Snapshot.CatalogHash
+	}
 	return descriptor, profile, nil
 }
 
