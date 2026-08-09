@@ -2,6 +2,7 @@ package companion
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -148,8 +150,8 @@ func mergeFileCapabilityDescriptors(
 		}
 		authorityDigests = append(authorityDigests, set[0].ModelContract.AuthorityDigest)
 	}
-	sort.Slice(profiles, func(left, right int) bool {
-		return profiles[left].Alias < profiles[right].Alias
+	slices.SortFunc(profiles, func(a, b nodes.FileProfileDescriptor) int {
+		return cmp.Compare(a.Alias, b.Alias)
 	})
 	sort.Strings(authorityDigests)
 	authorityData, err := json.Marshal(authorityDigests)

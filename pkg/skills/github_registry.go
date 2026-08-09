@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -203,11 +204,11 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 	for _, result := range resultsBySlug {
 		results = append(results, result)
 	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score == results[j].Score {
-			return results[i].Slug < results[j].Slug
+	slices.SortFunc(results, func(a, b SearchResult) int {
+		if c := cmp.Compare(b.Score, a.Score); c != 0 {
+			return c
 		}
-		return results[i].Score > results[j].Score
+		return cmp.Compare(a.Slug, b.Slug)
 	})
 	if len(results) > limit {
 		results = results[:limit]

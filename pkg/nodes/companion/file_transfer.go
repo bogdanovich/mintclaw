@@ -2,6 +2,7 @@ package companion
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -158,13 +160,11 @@ func openFileProfile(profile FilePolicyProfile) (*fileProfileRuntime, error) {
 		}
 		runtime.writableRoots = append(runtime.writableRoots, root)
 	}
-	sort.Slice(runtime.readableRoots, func(left, right int) bool {
-		return len(runtime.readableRoots[left].path) >
-			len(runtime.readableRoots[right].path)
+	slices.SortFunc(runtime.readableRoots, func(a, b *fileRoot) int {
+		return cmp.Compare(len(b.path), len(a.path))
 	})
-	sort.Slice(runtime.writableRoots, func(left, right int) bool {
-		return len(runtime.writableRoots[left].path) >
-			len(runtime.writableRoots[right].path)
+	slices.SortFunc(runtime.writableRoots, func(a, b *fileRoot) int {
+		return cmp.Compare(len(b.path), len(a.path))
 	})
 	return runtime, nil
 }

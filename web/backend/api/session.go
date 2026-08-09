@@ -2,12 +2,13 @@ package api
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -860,8 +861,8 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sort by updated descending (most recent first)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Updated > items[j].Updated
+	slices.SortFunc(items, func(a, b sessionListItem) int {
+		return cmp.Compare(b.Updated, a.Updated)
 	})
 
 	// Pagination parameters

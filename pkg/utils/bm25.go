@@ -13,8 +13,9 @@
 package utils
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -158,7 +159,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 		}
 	}
 
-	sort.Slice(heap, func(i, j int) bool { return heap[i].score > heap[j].score })
+	slices.SortFunc(heap, func(a, b bm25ScoredDoc) int { return cmp.Compare(b.score, a.score) })
 
 	out := make([]BM25Result[T], len(heap))
 	for i, h := range heap {

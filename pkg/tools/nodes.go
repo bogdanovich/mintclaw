@@ -1,12 +1,14 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -431,7 +433,7 @@ func visibleNodeCommands(
 			Approval:         descriptorApprovalMode(projected),
 		})
 	}
-	sort.Slice(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	slices.SortFunc(commands, func(a, b nodeCommandSummary) int { return cmp.Compare(a.Name, b.Name) })
 	return commands
 }
 

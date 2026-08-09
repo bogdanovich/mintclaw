@@ -2,12 +2,14 @@ package nodes
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -668,7 +670,7 @@ func (catalog CapabilityCatalog) Hash() (string, error) {
 	if commands == nil {
 		commands = make([]CommandDescriptor, 0)
 	}
-	sort.Slice(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	slices.SortFunc(commands, func(a, b CommandDescriptor) int { return cmp.Compare(a.Name, b.Name) })
 	for i := range commands {
 		var err error
 		commands[i].InputSchema, err = canonicalJSON(commands[i].InputSchema)

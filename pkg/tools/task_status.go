@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -141,11 +143,11 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		return toolshared.NewToolResult("No visible durable tasks are registered for this conversation.")
 	}
 
-	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].CreatedAt != filtered[j].CreatedAt {
-			return filtered[i].CreatedAt > filtered[j].CreatedAt
+	slices.SortFunc(filtered, func(a, b taskregistry.Record) int {
+		if c := cmp.Compare(b.CreatedAt, a.CreatedAt); c != 0 {
+			return c
 		}
-		return filtered[i].TaskID > filtered[j].TaskID
+		return cmp.Compare(b.TaskID, a.TaskID)
 	})
 
 	counts := map[taskregistry.Status]int{}
