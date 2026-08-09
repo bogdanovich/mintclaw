@@ -498,7 +498,7 @@ func browserProfilesUseLegacyDryRunMode(profiles []BrowserProfileDescriptor) boo
 			return false
 		}
 		for _, action := range profile.Actions {
-			if action == "click" || action == "press" || action == "scroll" || action == "select" {
+			if action == "click" || action == "press" || action == "select" {
 				return false
 			}
 		}
