@@ -78,7 +78,7 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		wakeChan:  make(chan struct{}),
 	}
 	// Initialize and load store on creation
-	cs.loadErr = cs.loadStore()
+	_ = cs.loadStore()
 	return cs
 }
 
@@ -404,12 +404,20 @@ func (cs *CronService) loadStore() error {
 	data, err := os.ReadFile(cs.storePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cs.loadErr = nil
 			return nil
 		}
+		cs.loadErr = err
 		return err
 	}
 
-	return json.Unmarshal(data, cs.store)
+	if err := json.Unmarshal(data, cs.store); err != nil {
+		cs.loadErr = err
+		return err
+	}
+
+	cs.loadErr = nil
+	return nil
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
@@ -609,13 +617,18 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	return removed
 }
 
-func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
+func (cs *CronService) EnableJob(jobID string, enabled bool) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.loadErr != nil {
+		return nil, fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	}
 
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.ID == jobID {
+			previous := cs.store.Jobs[i]
 			job.Enabled = enabled
 			job.UpdatedAtMS = time.Now().UnixMilli()
 
@@ -626,16 +639,26 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 			}
 
 			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after enable: %v", err)
+				if fileutil.IsCommittedWriteError(err) {
+					// The atomic rename already installed the new store: keep
+					// the in-memory change so it matches durable state and
+					// surface the uncertain durability.
+					cs.notify()
+					return job, fmt.Errorf("job %s updated but durability was not confirmed: %w", jobID, err)
+				}
+				// Pre-commit failure: restore the previous state so a job
+				// reported as not updated cannot run in the live scheduler.
+				cs.store.Jobs[i] = previous
+				return nil, fmt.Errorf("failed to save store after enable: %w", err)
 			}
 
 			cs.notify()
 
-			return job
+			return job, nil
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("job %s not found", jobID)
 }
 
 func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {

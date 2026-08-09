@@ -640,9 +640,9 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 		return toolshared.ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
 	}
 
-	updatedJob := t.cronService.EnableJob(jobID, enable)
-	if updatedJob == nil {
-		return toolshared.ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	updatedJob, err := t.cronService.EnableJob(jobID, enable)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error())
 	}
 
 	status := "enabled"

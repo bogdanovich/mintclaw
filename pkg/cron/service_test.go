@@ -77,7 +77,9 @@ func TestCronService_CRUD(t *testing.T) {
 	}
 
 	// Test EnableJob
-	cs.EnableJob(job.ID, false)
+	if _, err := cs.EnableJob(job.ID, false); err != nil {
+		t.Fatalf("EnableJob failed: %v", err)
+	}
 	if cs.store.Jobs[0].Enabled != false || cs.store.Jobs[0].State.NextRunAtMS != nil {
 		t.Error("EnableJob(false) failed to clear state")
 	}
@@ -168,8 +170,8 @@ func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *test
 		t.Fatalf("next run should be recomputed, still %d", initialNextRun)
 	}
 
-	if disabled := cs.EnableJob(job.ID, false); disabled == nil {
-		t.Fatal("EnableJob(false) returned nil")
+	if _, err := cs.EnableJob(job.ID, false); err != nil {
+		t.Fatalf("EnableJob(false) failed: %v", err)
 	}
 	disabled, ok := cs.GetJob(job.ID)
 	if !ok {
@@ -514,6 +516,99 @@ func TestAddJob_DoesNotOverwriteMalformedStore(t *testing.T) {
 	_, err := cs.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
 	if err == nil {
 		t.Fatal("AddJob succeeded, want load failure")
+	}
+
+	got, readErr := os.ReadFile(storePath)
+	if readErr != nil {
+		t.Fatalf("read store: %v", readErr)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("malformed store was overwritten: got %q, want original %q", got, malformed)
+	}
+}
+
+func TestEnableJob_DoesNotOverwriteMalformedStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+	malformed := []byte("{not valid json")
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("write malformed store: %v", err)
+	}
+
+	cs := NewCronService(storePath, nil)
+
+	if _, err := cs.EnableJob("job-1", true); err == nil {
+		t.Fatal("EnableJob succeeded, want load failure")
+	}
+	if _, err := cs.EnableJob("job-1", false); err == nil {
+		t.Fatal("DisableJob succeeded, want load failure")
+	}
+
+	got, readErr := os.ReadFile(storePath)
+	if readErr != nil {
+		t.Fatalf("read store: %v", readErr)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("malformed store was overwritten: got %q, want original %q", got, malformed)
+	}
+}
+
+func TestLoadErrRefreshesOnReload(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+	malformed := []byte("{not valid json")
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("write malformed store: %v", err)
+	}
+
+	cs := NewCronService(storePath, nil)
+
+	if _, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		"",
+		"hello",
+		"cli",
+		"direct",
+	); err == nil {
+		t.Fatal("AddJob succeeded against malformed store, want load failure")
+	}
+
+	// Repair the store on disk and reload: the latched error must clear.
+	if err := os.WriteFile(storePath, []byte(`{"version":1,"jobs":[]}`), 0o600); err != nil {
+		t.Fatalf("repair store: %v", err)
+	}
+	if err := cs.Load(); err != nil {
+		t.Fatalf("Load after repair failed: %v", err)
+	}
+	if _, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		"",
+		"hello",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatalf("AddJob after repair failed: %v", err)
+	}
+
+	// Corrupt the store again and reload: the new error must latch and
+	// mutations must fail closed without overwriting the bad file.
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("corrupt store: %v", err)
+	}
+	if err := cs.Load(); err == nil {
+		t.Fatal("Load over corrupted store succeeded, want error")
+	}
+	if _, err := cs.AddJob(
+		"task2",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		"",
+		"hello",
+		"cli",
+		"direct",
+	); err == nil {
+		t.Fatal("AddJob succeeded with latched load error, want failure")
 	}
 
 	got, readErr := os.ReadFile(storePath)
