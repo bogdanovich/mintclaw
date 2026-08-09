@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -236,13 +237,7 @@ func (p *Provider) Chat(
 
 	output, err := p.client.Converse(ctx, input)
 	if err != nil {
-		if isSSOTokenError(err) {
-			return nil, fmt.Errorf(
-				"bedrock converse: AWS credentials may have expired. If using AWS SSO, run 'aws sso login' to refresh: %w",
-				err,
-			)
-		}
-		return nil, fmt.Errorf("bedrock converse: %w", err)
+		return nil, normalizeProviderError(err)
 	}
 
 	return parseResponse(output)
@@ -279,16 +274,11 @@ func (p *Provider) ChatStream(
 
 	output, err := p.client.ConverseStream(ctx, input)
 	if err != nil {
-		if isSSOTokenError(err) {
-			return nil, fmt.Errorf(
-				"bedrock conversestream: AWS credentials may have expired. If using AWS SSO, run 'aws sso login' to refresh: %w",
-				err,
-			)
-		}
-		return nil, fmt.Errorf("bedrock conversestream: %w", err)
+		return nil, normalizeProviderError(err)
 	}
 
-	return parseStreamResponse(ctx, output.GetStream(), onChunk)
+	requestID, _ := awsmiddleware.GetRequestIDMetadata(output.ResultMetadata)
+	return parseStreamResponse(ctx, output.GetStream(), onChunk, requestID)
 }
 
 // converseStreamReader abstracts the Bedrock event stream so parseStreamResponse
@@ -304,6 +294,7 @@ func parseStreamResponse(
 	ctx context.Context,
 	stream converseStreamReader,
 	onChunk func(accumulated string),
+	requestID string,
 ) (resp *LLMResponse, err error) {
 	if stream == nil {
 		return nil, fmt.Errorf("bedrock conversestream: nil event stream")
@@ -311,7 +302,7 @@ func parseStreamResponse(
 	defer func() {
 		if closeErr := stream.Close(); closeErr != nil {
 			if err == nil {
-				err = fmt.Errorf("bedrock conversestream: close event stream: %w", closeErr)
+				err = normalizeProviderErrorWithRequestID(closeErr, requestID)
 			} else {
 				log.Printf("bedrock conversestream: close event stream: %v", closeErr)
 			}
@@ -335,7 +326,7 @@ func parseStreamResponse(
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, normalizeProviderErrorWithRequestID(ctx.Err(), requestID)
 		case event, ok := <-events:
 			if !ok {
 				// Stream closed
@@ -431,7 +422,7 @@ func parseStreamResponse(
 
 done:
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("bedrock conversestream: %w", err)
+		return nil, normalizeProviderErrorWithRequestID(err, requestID)
 	}
 
 	return &LLMResponse{
