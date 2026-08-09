@@ -243,8 +243,8 @@ tests, affected package tests, tagged tests, and repository lint.
    startup recovery; repeated/concurrent start and stop; HTTP serving; reload drain and shutdown ordering.
 6. **The PR sequence is merged.** PRs 595, 599, 605, 607, 609, 610, 612, 613, and 615 each landed as merge commits
    after their required local validation, CI, current-head review, feedback resolution, and repository-owner approval.
-7. **Merged main is clean.** At `origin/main` `ecc45a1a`, `make lint`,
-   `go test ./pkg/channels ./pkg/gateway ./pkg/agent`, `go test -race ./pkg/channels`, and
+7. **Merged main is clean.** The code-bearing merged-main tree at `ecc45a1a`, unchanged by the docs-only completion
+   merge, passes `make lint`, `go test ./pkg/channels`, `go test -race ./pkg/channels`, and
    `go test -tags goolm,stdjson ./pkg/channels ./pkg/gateway ./pkg/agent` pass. Documentation validation passes with
    `make lint-docs`. No obsolete compatibility ownership path remains. R7 is intentionally out of scope.
 
