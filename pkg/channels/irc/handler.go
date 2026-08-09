@@ -25,9 +25,13 @@ func (c *IRCChannel) onConnect(conn *ircevent.Connection) error {
 		if err := conn.Privmsg(
 			"NickServ",
 			"IDENTIFY "+c.config.NickServPassword.String(),
-		); err != nil &&
-			setupErr == nil {
-			setupErr = fmt.Errorf("irc nickserv identify failed: %w", err)
+		); err != nil {
+			logger.ErrorCF("irc", "Failed to authenticate with NickServ", map[string]any{
+				"error": err,
+			})
+			if setupErr == nil {
+				setupErr = fmt.Errorf("irc nickserv identify failed: %w", err)
+			}
 		}
 	}
 

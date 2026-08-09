@@ -652,3 +652,60 @@ func TestLoadFailurePreservesLiveStore(t *testing.T) {
 		t.Fatal("AddJob succeeded with latched load error, want failure")
 	}
 }
+
+func TestCheckJobsSkipsDueJobsAfterFailedReload(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	handlerCalled := false
+	cs := NewCronService(storePath, func(job *CronJob) (string, error) {
+		handlerCalled = true
+		return "ok", nil
+	})
+
+	job, err := cs.AddJobWithPayload(
+		"due",
+		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
+		CronPayload{Kind: "agent_turn", Message: "msg"},
+	)
+	if err != nil {
+		t.Fatalf("AddJobWithPayload failed: %v", err)
+	}
+	if job.State.NextRunAtMS == nil {
+		t.Fatal("expected next run")
+	}
+
+	// Make the job due, then latch a load error over the now-corrupt store
+	// while keeping the known-good job in the live store.
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+
+	malformed := []byte("{not valid json")
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("corrupt store: %v", err)
+	}
+	if err := cs.Load(); err == nil {
+		t.Fatal("Load over corrupted store succeeded, want error")
+	}
+
+	cs.running = true
+	cs.checkJobs()
+
+	if handlerCalled {
+		t.Fatal("due job executed while the store is unavailable")
+	}
+
+	got, readErr := os.ReadFile(storePath)
+	if readErr != nil {
+		t.Fatalf("read store: %v", readErr)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("corrupt store was overwritten by scheduler: got %q, want original %q", got, malformed)
+	}
+}

@@ -179,6 +179,14 @@ func (cs *CronService) checkJobs() {
 		return
 	}
 
+	// A failed reload latches loadErr and blocks mutations: do not select,
+	// persist, or execute due jobs while the authoritative store is
+	// unreadable, otherwise the live snapshot would overwrite the corrupt file.
+	if cs.loadErr != nil {
+		cs.mu.Unlock()
+		return
+	}
+
 	now := time.Now().UnixMilli()
 	var dueJobIDs []string
 
@@ -299,8 +307,10 @@ func (cs *CronService) executeJobByID(jobID string) {
 		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
 	}
 
-	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+	if cs.loadErr == nil {
+		if err := cs.saveStoreUnsafe(); err != nil {
+			log.Printf("[cron] failed to save store: %v", err)
+		}
 	}
 }
 
@@ -622,8 +632,10 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	removed := len(cs.store.Jobs) < before
 
 	if removed {
-		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store after remove: %v", err)
+		if cs.loadErr == nil {
+			if err := cs.saveStoreUnsafe(); err != nil {
+				log.Printf("[cron] failed to save store after remove: %v", err)
+			}
 		}
 	}
 
