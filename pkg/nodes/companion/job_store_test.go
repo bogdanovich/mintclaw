@@ -119,10 +119,14 @@ func TestJobStoreDoesNotPruneProtectedActiveRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	if _, _, err := store.Accept(testAcceptedJobRecord("active")); err != nil {
+	active := testAcceptedJobRecord("active")
+	active.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(active); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Accept(testAcceptedJobRecord("second")); !errors.Is(err, ErrJobStoreFull) {
+	second := testAcceptedJobRecord("second")
+	second.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(second); !errors.Is(err, ErrJobStoreFull) {
 		t.Fatalf("second Accept() error = %v", err)
 	}
 }
@@ -145,7 +149,8 @@ func testAcceptedJobRecord(suffix string) JobRecord {
 	return JobRecord{
 		JobID: "job_" + suffix, StartInvocationID: "inv_" + suffix,
 		StartIdempotencyKey: "idem_" + suffix, PlanHash: strings.Repeat("a", 64),
-		ProfileRevision: "jobs-v1",
+		ProfileAlias: "test-jobs", ProfileRevision: "jobs-v1",
+		RetentionSeconds: int(DefaultJobRetention / time.Second),
 		Owner: JobOwner{
 			AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
 		},

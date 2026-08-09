@@ -365,6 +365,11 @@ func newTestDirectJobManager(
 		WorkingRoots: []string{root},
 		Executables:  []string{executable},
 		Environment:  []string{jobHelperEnabled, jobHelperAction},
+		Discovery: &SystemExecDiscovery{
+			ExecutableAliases:   map[string]string{"helper": executable},
+			WorkingScopeAliases: map[string]string{"root": root},
+			EnvironmentNames:    []string{jobHelperEnabled, jobHelperAction},
+		},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +382,7 @@ func newTestDirectJobManager(
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	manager, err := NewDirectJobManager(store, policy, "job-profile-v1", limits)
+	manager, err := NewDirectJobManager(store, policy, "test-jobs", "job-profile-v1", limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,8 +404,8 @@ func testDirectJobPlan(
 ) nodes.ExecutionPlan {
 	t.Helper()
 	input, err := json.Marshal(directJobInput{
-		Argv: []string{executable, "-test.run=^TestJobHelperProcess$"},
-		CWD:  root,
+		Argv: []string{"helper", "-test.run=^TestJobHelperProcess$"},
+		CWD:  "root",
 		Env: map[string]string{
 			jobHelperEnabled: "1",
 			jobHelperAction:  action,
@@ -411,20 +416,32 @@ func testDirectJobPlan(
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := nodes.CommandDescriptor{
-		Name: JobCommandStart,
-		InputSchema: json.RawMessage(
-			`{"type":"object","required":["argv","cwd","timeout_seconds","env","artifacts"],"additionalProperties":true}`,
-		),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
-		Risk:         nodes.RiskWrite,
+	profiles := []nodes.JobProfileDescriptor{{
+		Alias: "test-jobs", Revision: "job-profile-v1", Executor: "system_exec",
+		AuthorityDigest: strings.Repeat("b", 64), TimeoutSecondsMax: timeout,
+		ConcurrentJobs: 2, StdoutBytesMax: DefaultJobLogBytes, StderrBytesMax: DefaultJobLogBytes,
+		ArtifactCountMax: DefaultJobArtifactCount, ArtifactBytesMax: DefaultJobArtifactBytes,
+		ArtifactsTotalBytesMax: DefaultJobArtifactBytes, RetentionSeconds: int(DefaultJobRetention / time.Second),
+		CancelGuarantee: string(JobCancelProcessGroup), ExecutableAliases: []string{"helper"},
+		WorkingScopes: []string{"root"}, EnvironmentNames: []string{jobHelperAction, jobHelperEnabled},
+		Approval: nodes.JobProfileApproval{Start: "required", Read: "none", Cancel: "required"},
+	}}
+	descriptors, err := nodes.JobCommandDescriptors(profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, ok := nodes.ProjectJobDescriptorForProfile(descriptors[0], "test-jobs")
+	if !ok {
+		t.Fatal("project job descriptor")
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID: "inv_job_" + suffix, IdempotencyKey: "idem_job_" + suffix,
 		NodeID: "node_test", CatalogHash: strings.Repeat("a", 64), Command: JobCommandStart,
 		Input: input, AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
-		TimeoutSeconds: timeout + 1, OutputLimitBytes: 4096,
+		// The invocation only accepts the durable start; it does not own the
+		// payload deadline.
+		TimeoutSeconds: 1, OutputLimitBytes: 4096, JobProfile: "test-jobs",
 	}, descriptor, LocalExecutor, "runtime-policy-v1", time.Now(), time.Minute)
 	if err != nil {
 		t.Fatal(err)

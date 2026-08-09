@@ -487,6 +487,19 @@ func validateInvocationApproval(
 			)
 		}
 	}
+	if len(descriptor.JobProfiles) > 0 {
+		var projected bool
+		descriptor, projected = nodes.ProjectJobDescriptorForProfile(
+			descriptor,
+			plan.JobProfile,
+		)
+		if !projected {
+			return fmt.Errorf(
+				"%w: execution plan does not match approved command",
+				nodes.ErrCommandDenied,
+			)
+		}
+	}
 	descriptorHash, err := descriptor.Hash()
 	if err != nil {
 		return err

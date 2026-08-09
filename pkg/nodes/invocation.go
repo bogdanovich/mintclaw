@@ -68,6 +68,7 @@ type InvocationRequest struct {
 	CatalogHash      string                   `json:"catalog_hash"`
 	Command          string                   `json:"command"`
 	ServiceProfile   string                   `json:"service_profile,omitempty"`
+	JobProfile       string                   `json:"job_profile,omitempty"`
 	Update           *NodeUpdatePlanAuthority `json:"update,omitempty"`
 	Input            json.RawMessage          `json:"input"`
 	AgentID          string                   `json:"agent_id"`
@@ -98,6 +99,11 @@ func (request InvocationRequest) Validate() error {
 	if request.ServiceProfile != "" {
 		if err := (Alias(request.ServiceProfile)).Validate(); err != nil {
 			return fmt.Errorf("%w: malformed service profile", ErrInvalidInvocation)
+		}
+	}
+	if request.JobProfile != "" {
+		if err := (Alias(request.JobProfile)).Validate(); err != nil {
+			return fmt.Errorf("%w: malformed job profile", ErrInvalidInvocation)
 		}
 	}
 	if request.Update != nil {
@@ -162,6 +168,20 @@ func PrepareExecutionPlan(
 		request.ServiceProfile != descriptor.ServiceProfiles[0].Alias {
 		return ExecutionPlan{}, fmt.Errorf(
 			"%w: descriptor does not match service profile",
+			ErrInvalidInvocation,
+		)
+	}
+	if len(descriptor.JobProfiles) == 0 {
+		if request.JobProfile != "" {
+			return ExecutionPlan{}, fmt.Errorf(
+				"%w: job profile supplied for non-job command",
+				ErrInvalidInvocation,
+			)
+		}
+	} else if len(descriptor.JobProfiles) != 1 ||
+		request.JobProfile != descriptor.JobProfiles[0].Alias {
+		return ExecutionPlan{}, fmt.Errorf(
+			"%w: descriptor does not match job profile",
 			ErrInvalidInvocation,
 		)
 	}
@@ -426,6 +446,16 @@ func (policy LocalCommandPolicy) authorize(
 		if !available {
 			return fmt.Errorf(
 				"%w: update profile is not advertised by local runtime",
+				ErrCommandDenied,
+			)
+		}
+		descriptor = projected
+	}
+	if plan.JobProfile != "" || len(descriptor.JobProfiles) > 0 {
+		projected, available := ProjectJobDescriptorForProfile(descriptor, plan.JobProfile)
+		if !available {
+			return fmt.Errorf(
+				"%w: job profile is not advertised by local runtime",
 				ErrCommandDenied,
 			)
 		}

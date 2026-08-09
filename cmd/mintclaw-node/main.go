@@ -80,7 +80,7 @@ func run(args []string) error {
 		return err
 	}
 	defer ledger.Close()
-	runtimeOptions := make([]companion.RuntimeOption, 0, 4)
+	runtimeOptions := make([]companion.RuntimeOption, 0, 5)
 	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
 		browserHost, browserHostErr := browserhost.NewBrowserHost(cfg.BrowserProfiles)
 		if browserHostErr != nil {
@@ -142,6 +142,24 @@ func run(args []string) error {
 	}
 	if cfg.SystemExec != nil {
 		runtimeOptions = append(runtimeOptions, companion.WithSystemExec(*cfg.SystemExec))
+	}
+	if companion.HasEnabledJobProfile(cfg.JobProfiles) {
+		jobRuntime, jobRuntimeErr := companion.NewJobRuntime(
+			cfg.StateDir,
+			cfg.JobProfiles,
+			*cfg.SystemExec,
+		)
+		if jobRuntimeErr != nil {
+			return fmt.Errorf("configure companion job runtime: %w", jobRuntimeErr)
+		}
+		runtimeOptions = append(runtimeOptions, companion.WithJobRuntime(jobRuntime))
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelShutdown()
+			if shutdownErr := jobRuntime.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion job cleanup failed", "error", shutdownErr)
+			}
+		}()
 	}
 	if cfg.OwnerShell != nil && cfg.OwnerShell.Enabled {
 		broker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)

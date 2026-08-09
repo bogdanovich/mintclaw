@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	JobCommandStart = "job.start.v1"
+	JobCommandStart = nodes.JobCommandStart
 	maxJobLogRead   = 256 * 1024
 )
 
@@ -108,6 +108,7 @@ type jobProcessDrainResult struct {
 type DirectJobManager struct {
 	store           *JobStore
 	policy          SystemExecPolicy
+	profileAlias    string
 	profileRevision string
 	limits          DirectJobLimits
 
@@ -120,6 +121,7 @@ type DirectJobManager struct {
 func NewDirectJobManager(
 	store *JobStore,
 	policy SystemExecPolicy,
+	profileAlias string,
 	profileRevision string,
 	limits DirectJobLimits,
 ) (*DirectJobManager, error) {
@@ -128,6 +130,9 @@ func NewDirectJobManager(
 	}
 	if supportErr := jobProcessSupported(); supportErr != nil {
 		return nil, supportErr
+	}
+	if err := (nodes.Alias(profileAlias)).Validate(); err != nil {
+		return nil, errors.New("node job profile alias is invalid")
 	}
 	cloned, cloneErr := cloneReadySystemExecPolicy(policy)
 	if cloneErr != nil {
@@ -143,6 +148,7 @@ func NewDirectJobManager(
 	return &DirectJobManager{
 		store:           store,
 		policy:          cloned,
+		profileAlias:    profileAlias,
 		profileRevision: profileRevision,
 		limits:          limits,
 		active:          make(map[string]*activeDirectJob),
@@ -156,7 +162,7 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 	if err := plan.Validate(); err != nil {
 		return JobRecord{}, err
 	}
-	if plan.Command != JobCommandStart {
+	if plan.Command != JobCommandStart || plan.JobProfile != manager.profileAlias {
 		return JobRecord{}, ErrCommandUnavailable
 	}
 	prepared, prepareErr := manager.prepare(plan)
@@ -178,7 +184,9 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 		StartInvocationID:   plan.InvocationID,
 		StartIdempotencyKey: plan.IdempotencyKey,
 		PlanHash:            plan.PlanHash,
+		ProfileAlias:        manager.profileAlias,
 		ProfileRevision:     manager.profileRevision,
+		RetentionSeconds:    int(manager.limits.Retention / time.Second),
 		Owner: JobOwner{
 			AgentID: plan.AgentID, SessionID: plan.SessionID, ActorID: plan.ActorID,
 		},
@@ -287,7 +295,7 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 
 func (manager *DirectJobManager) prepare(plan nodes.ExecutionPlan) (preparedDirectJob, error) {
 	var input directJobInput
-	if err := decodeStrictJSON(plan.Input, &input); err != nil || input.Artifacts == nil {
+	if err := decodeStrictJSON(plan.Input, &input); err != nil {
 		return preparedDirectJob{}, errors.New("invalid job.start input")
 	}
 	if len(input.Artifacts) > manager.limits.ArtifactCount {
@@ -312,7 +320,10 @@ func (manager *DirectJobManager) prepare(plan nodes.ExecutionPlan) (preparedDire
 	if err != nil {
 		return preparedDirectJob{}, err
 	}
-	command, err := newSystemExecHandler(manager.policy).prepare(base, plan.TimeoutSeconds)
+	command, err := newSystemExecHandler(manager.policy).prepare(
+		base,
+		int(manager.limits.Timeout/time.Second),
+	)
 	if err != nil {
 		return preparedDirectJob{}, err
 	}
@@ -608,7 +619,7 @@ func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord
 	if !found {
 		return JobRecord{}, ErrJobNotFound
 	}
-	if record.Owner != owner {
+	if !manager.owns(record, owner) {
 		return JobRecord{}, ErrJobNotFound
 	}
 	manager.mu.Lock()
@@ -631,7 +642,7 @@ func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord
 
 func (manager *DirectJobManager) Status(owner JobOwner, jobID string) (JobRecord, error) {
 	record, found := manager.store.Lookup(jobID)
-	if !found || record.Owner != owner {
+	if !found || !manager.owns(record, owner) {
 		return JobRecord{}, ErrJobNotFound
 	}
 	return record, nil
@@ -656,7 +667,7 @@ func (manager *DirectJobManager) ReadLog(
 		return JobLogChunk{}, errors.New("node job log request exceeds bounds")
 	}
 	record, found := manager.store.Lookup(jobID)
-	if !found || record.Owner != owner {
+	if !found || !manager.owns(record, owner) {
 		return JobLogChunk{}, ErrJobNotFound
 	}
 	file, info, err := manager.store.OpenFile(jobLogFileName(jobID, stderr))
@@ -694,7 +705,7 @@ func (manager *DirectJobManager) ReadLog(
 
 func (manager *DirectJobManager) Artifacts(owner JobOwner, jobID string) ([]JobArtifactRecord, error) {
 	record, found := manager.store.Lookup(jobID)
-	if !found || record.Owner != owner {
+	if !found || !manager.owns(record, owner) {
 		return nil, ErrJobNotFound
 	}
 	return cloneJobArtifacts(record.Artifacts), nil
@@ -706,7 +717,7 @@ func (manager *DirectJobManager) OpenArtifact(
 	artifactRef string,
 ) (*os.File, JobArtifactRecord, error) {
 	record, found := manager.store.Lookup(jobID)
-	if !found || record.Owner != owner {
+	if !found || !manager.owns(record, owner) {
 		return nil, JobArtifactRecord{}, ErrJobNotFound
 	}
 	for _, artifact := range record.Artifacts {
@@ -766,6 +777,12 @@ func (manager *DirectJobManager) Shutdown(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (manager *DirectJobManager) owns(record JobRecord, owner JobOwner) bool {
+	return record.Owner == owner &&
+		record.ProfileAlias == manager.profileAlias &&
+		record.ProfileRevision == manager.profileRevision
 }
 
 func (manager *DirectJobManager) reserve(jobID string) error {

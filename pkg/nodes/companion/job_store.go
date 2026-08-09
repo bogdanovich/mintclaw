@@ -127,6 +127,9 @@ func (store *JobStore) Accept(record JobRecord) (JobRecord, bool, error) {
 	if err := record.validate(); err != nil {
 		return JobRecord{}, false, err
 	}
+	if time.Duration(record.RetentionSeconds)*time.Second > store.retention {
+		return JobRecord{}, false, ErrJobConflict
+	}
 	if record.State != JobAccepted {
 		return JobRecord{}, false, ErrJobConflict
 	}
@@ -535,11 +538,12 @@ func (store *JobStore) pruneExpiredLocked(now time.Time, protectedID string) {
 }
 
 func (store *JobStore) pruneOldestExpiredLocked(now time.Time, protectedID string) bool {
-	cutoff := now.Add(-store.retention).UnixNano()
 	oldestID := ""
 	var oldestAt int64
 	for id, record := range store.records {
-		if id == protectedID || !record.State.terminal() || record.CompletedAt > cutoff {
+		retention := min(time.Duration(record.RetentionSeconds)*time.Second, store.retention)
+		if id == protectedID || !record.State.terminal() ||
+			now.Before(time.Unix(0, record.CompletedAt).Add(retention)) {
 			continue
 		}
 		if oldestID == "" || record.CompletedAt < oldestAt ||
@@ -690,7 +694,9 @@ func validateJobTransition(previous, next JobRecord) error {
 func sameJobStartBinding(left, right JobRecord) bool {
 	return left.StartInvocationID == right.StartInvocationID &&
 		left.StartIdempotencyKey == right.StartIdempotencyKey &&
-		left.PlanHash == right.PlanHash && left.ProfileRevision == right.ProfileRevision &&
+		left.PlanHash == right.PlanHash && left.ProfileAlias == right.ProfileAlias &&
+		left.ProfileRevision == right.ProfileRevision &&
+		left.RetentionSeconds == right.RetentionSeconds &&
 		left.Owner == right.Owner
 }
 
