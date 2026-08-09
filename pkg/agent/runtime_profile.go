@@ -213,8 +213,11 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 
 func preflightRuntimeDirectory(path string) error {
 	for current := path; ; current = filepath.Dir(current) {
-		_, err := os.Lstat(current)
+		entry, err := os.Lstat(current)
 		if err == nil {
+			if entry.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("path %q must not be a symbolic link", current)
+			}
 			info, statErr := os.Stat(current)
 			if statErr != nil {
 				return fmt.Errorf("resolve path %q: %w", current, statErr)
