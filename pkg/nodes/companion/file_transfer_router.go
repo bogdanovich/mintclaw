@@ -23,6 +23,10 @@ type FileTransferCapability interface {
 	Descriptors() []nodes.CommandDescriptor
 }
 
+type transferPolicyRevisionSource interface {
+	TransferPolicyRevisions() []string
+}
+
 type FileTransferRouter struct {
 	descriptors []nodes.CommandDescriptor
 	byRevision  map[string]FileTransferCapability
@@ -44,25 +48,41 @@ func NewFileTransferRouter(
 			return nil, errors.New("file transfer router source is unavailable")
 		}
 		descriptors := source.Descriptors()
-		if err := validateFileCapabilitySet(descriptors); err != nil {
-			return nil, err
-		}
-		for _, profile := range descriptors[0].FileProfiles {
-			foldedAlias := strings.ToLower(profile.Alias)
-			if prior, duplicate := aliases[foldedAlias]; duplicate {
-				return nil, fmt.Errorf(
-					"file transfer profiles %q and %q collide",
-					prior,
-					profile.Alias,
-				)
+		if len(descriptors) > 0 {
+			if err := validateFileCapabilitySet(descriptors); err != nil {
+				return nil, err
 			}
-			if router.byRevision[profile.Revision] != nil {
-				return nil, errors.New("file transfer profile revision is duplicated")
+			for _, profile := range descriptors[0].FileProfiles {
+				foldedAlias := strings.ToLower(profile.Alias)
+				if prior, duplicate := aliases[foldedAlias]; duplicate {
+					return nil, fmt.Errorf(
+						"file transfer profiles %q and %q collide",
+						prior,
+						profile.Alias,
+					)
+				}
+				if router.byRevision[profile.Revision] != nil {
+					return nil, errors.New("file transfer profile revision is duplicated")
+				}
+				aliases[foldedAlias] = profile.Alias
+				router.byRevision[profile.Revision] = source
 			}
-			aliases[foldedAlias] = profile.Alias
-			router.byRevision[profile.Revision] = source
+			descriptorSets = append(descriptorSets, descriptors)
 		}
-		descriptorSets = append(descriptorSets, descriptors)
+		if revisions, ok := source.(transferPolicyRevisionSource); ok {
+			for _, revision := range revisions.TransferPolicyRevisions() {
+				if revision == "" || router.byRevision[revision] != nil {
+					return nil, errors.New("file transfer policy revision is duplicated or empty")
+				}
+				router.byRevision[revision] = source
+			}
+		}
+	}
+	if len(router.byRevision) == 0 {
+		return nil, errors.New("file transfer router has no policy revisions")
+	}
+	if len(descriptorSets) == 0 {
+		return router, nil
 	}
 	if len(descriptorSets) == 1 {
 		router.descriptors = cloneFileCapabilityDescriptors(descriptorSets[0])

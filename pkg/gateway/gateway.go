@@ -535,7 +535,7 @@ func setupNodeTools(
 		if _, err := newNodeInvocationSource(cfg, runtime); err != nil {
 			return err
 		}
-		if configuredNodeFileTarget(cfg) {
+		if configuredNodeTransferTarget(cfg) {
 			if _, err := newNodeFileTransferSource(cfg, runtime); err != nil {
 				logger.ErrorCF("nodes", "Node file tools disabled", map[string]any{
 					"reason": "transfer_runtime_unavailable",
@@ -676,7 +676,7 @@ func nodeInvocationToolFactory(
 	build func(*config.Config, tools.NodeInvocationSource) toolshared.Tool,
 ) agent.RuntimeToolFactory {
 	return func(cfg *config.Config) (toolshared.Tool, error) {
-		if configuredNodeFileTarget(cfg) {
+		if configuredNodeTransferTarget(cfg) {
 			fileSource, fileErr := newNodeFileTransferSource(cfg, runtime)
 			if fileErr == nil && fileSource != nil {
 				return build(cfg, fileSource), nil
