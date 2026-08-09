@@ -441,7 +441,16 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
-	if err != nil || !bytes.Equal(actualInput, expectedInput) {
+	inputMatches := err == nil && bytes.Equal(actualInput, expectedInput)
+	if !inputMatches && descriptor.Name == BrowserCommandAct &&
+		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
+		legacyInput, legacyErr := canonicalJSON(legacyBrowserCommandInputSchema(
+			descriptor.Name,
+			descriptor.BrowserProfiles,
+		))
+		inputMatches = legacyErr == nil && bytes.Equal(actualInput, legacyInput)
+	}
+	if !inputMatches {
 		return fmt.Errorf("%w: browser input schema does not match typed contract", ErrInvalidCapability)
 	}
 	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(
@@ -456,6 +465,17 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 	}
 	return nil
+}
+
+func browserProfilesUseOnlyLegacyActions(profiles []BrowserProfileDescriptor) bool {
+	for _, profile := range profiles {
+		for _, action := range profile.Actions {
+			if action == "scroll" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (descriptor CommandDescriptor) validateUpdateProfiles() error {
