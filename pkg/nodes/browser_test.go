@@ -220,6 +220,24 @@ func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *te
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
 		t.Fatal("pre-scroll action schema accepted scroll authority")
 	}
+
+	profile.Actions = []string{"click", "download", "navigate"}
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandAct {
+			descriptors[index].InputSchema = legacyBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+			break
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("pre-click action schema accepted click authority")
+	}
 }
 
 func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgrade(t *testing.T) {
@@ -257,6 +275,25 @@ func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgra
 	}
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
 		t.Fatal("legacy dry-run schema granted approved-action authority")
+	}
+
+	dryRunClick := browserProfileDescriptorFixture()
+	dryRunClick.Actions = []string{"click", "download", "navigate"}
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{dryRunClick})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+			break
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("legacy session-open schema accepted click authority")
 	}
 }
 

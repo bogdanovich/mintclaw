@@ -484,7 +484,7 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 func browserProfilesUseOnlyLegacyActions(profiles []BrowserProfileDescriptor) bool {
 	for _, profile := range profiles {
 		for _, action := range profile.Actions {
-			if action == "scroll" {
+			if action == "click" || action == "scroll" {
 				return false
 			}
 		}
@@ -496,6 +496,11 @@ func browserProfilesUseLegacyDryRunMode(profiles []BrowserProfileDescriptor) boo
 	for _, profile := range profiles {
 		if !profile.DryRun || profile.AllowApprovedActions {
 			return false
+		}
+		for _, action := range profile.Actions {
+			if action == "click" {
+				return false
+			}
 		}
 	}
 	return true
