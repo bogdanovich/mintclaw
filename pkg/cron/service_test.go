@@ -35,8 +35,9 @@ func TestRecoveryWakeIsNotDroppedWhileSchedulerSuspended(t *testing.T) {
 		t.Fatalf("recovery wake dropped while scheduler suspended: %d pending, want 1", pending)
 	}
 
-	// A repaired store must rearm the scheduler: the pending wake is consumed
-	// on the next select and triggers a re-snapshot of the scheduler state.
+	// A repaired store must rearm the scheduler: runLoop is the sole receiver
+	// of the wake, so the queued signal must be consumed by it on the next
+	// select within a deadline.
 	cs.mu.Lock()
 	cs.loadErr = nil
 	cs.running = true
@@ -45,10 +46,18 @@ func TestRecoveryWakeIsNotDroppedWhileSchedulerSuspended(t *testing.T) {
 	go cs.runLoop(cs.stopChan)
 	defer cs.Stop()
 
-	select {
-	case <-cs.wakeChan:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("pending recovery wake was not consumed by the scheduler")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cs.mu.RLock()
+		left := len(cs.wakeChan)
+		cs.mu.RUnlock()
+		if left == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scheduler did not consume the queued recovery wake")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
