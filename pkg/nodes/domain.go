@@ -304,6 +304,7 @@ type CommandDescriptor struct {
 	ServiceProfiles  []ServiceProfileDescriptor `json:"service_profiles,omitempty"`
 	BrowserProfiles  []BrowserProfileDescriptor `json:"browser_profiles,omitempty"`
 	UpdateProfiles   []UpdateProfileDescriptor  `json:"update_profiles,omitempty"`
+	JobProfiles      []JobProfileDescriptor     `json:"job_profiles,omitempty"`
 }
 
 func (descriptor CommandDescriptor) Validate() error {
@@ -404,6 +405,9 @@ func (descriptor CommandDescriptor) Validate() error {
 		return err
 	}
 	if err := descriptor.validateUpdateProfiles(); err != nil {
+		return err
+	}
+	if err := descriptor.validateJobProfiles(); err != nil {
 		return err
 	}
 	return nil
@@ -630,15 +634,18 @@ func (catalog CapabilityCatalog) Validate() error {
 			totalBytes += len(modelContract)
 		}
 		if len(descriptor.FileProfiles) > 0 || len(descriptor.ServiceProfiles) > 0 ||
-			len(descriptor.BrowserProfiles) > 0 || len(descriptor.UpdateProfiles) > 0 {
+			len(descriptor.BrowserProfiles) > 0 || len(descriptor.UpdateProfiles) > 0 ||
+			len(descriptor.JobProfiles) > 0 {
 			profiles, err := json.Marshal(struct {
 				File    []FileProfileDescriptor    `json:"file,omitempty"`
 				Service []ServiceProfileDescriptor `json:"service,omitempty"`
 				Browser []BrowserProfileDescriptor `json:"browser,omitempty"`
 				Update  []UpdateProfileDescriptor  `json:"update,omitempty"`
+				Job     []JobProfileDescriptor     `json:"job,omitempty"`
 			}{
 				File: descriptor.FileProfiles, Service: descriptor.ServiceProfiles,
 				Browser: descriptor.BrowserProfiles, Update: descriptor.UpdateProfiles,
+				Job: descriptor.JobProfiles,
 			})
 			if err != nil {
 				return fmt.Errorf("%w: encode command profiles", ErrInvalidCapability)

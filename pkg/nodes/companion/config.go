@@ -60,6 +60,7 @@ type Config struct {
 	Reconnect              ReconnectConfig                 `json:"reconnect,omitempty"`
 	Policy                 nodes.LocalCommandPolicy        `json:"policy,omitempty"`
 	SystemExec             *SystemExecPolicy               `json:"system_exec,omitempty"`
+	JobProfiles            JobProfiles                     `json:"node_job_profiles,omitempty"`
 	OwnerShell             *OwnerShellConfig               `json:"owner_shell,omitempty"`
 	FilePolicies           FilePolicies                    `json:"node_file_policies,omitempty"`
 	FileHelper             *FileHelperClientConfig         `json:"file_helper,omitempty"`
@@ -184,6 +185,10 @@ func (cfg Config) Normalize(baseDir string) (Config, error) {
 			return Config{}, fmt.Errorf("validate system_exec discovery: %w", contractErr)
 		}
 		cfg.SystemExec = &normalized
+	}
+	cfg.JobProfiles, err = normalizeJobProfiles(cfg.JobProfiles, cfg.SystemExec)
+	if err != nil {
+		return Config{}, fmt.Errorf("validate node job profiles: %w", err)
 	}
 	if cfg.OwnerShell != nil {
 		if !cfg.OwnerShell.Enabled {

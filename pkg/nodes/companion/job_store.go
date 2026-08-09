@@ -32,6 +32,7 @@ type JobStore struct {
 	retention   time.Duration
 	now         func() time.Time
 	writeFile   func(string, []byte, os.FileMode) error
+	removeFile  func(string) error
 	directory   *jobStoreDirectory
 	releaseLock func()
 
@@ -82,6 +83,7 @@ func NewJobStore(
 		retention:   limits.Retention,
 		now:         time.Now,
 		writeFile:   fileutil.WriteFileAtomic,
+		removeFile:  directory.removeRegular,
 		directory:   directory,
 		releaseLock: release,
 		records:     make(map[string]JobRecord),
@@ -95,6 +97,10 @@ func NewJobStore(
 		return nil, err
 	}
 	if err := store.reconcileUnfinished(); err != nil {
+		store.Close()
+		return nil, err
+	}
+	if err := store.pruneExpired(); err != nil {
 		store.Close()
 		return nil, err
 	}
@@ -126,6 +132,9 @@ func (store *JobStore) Close() {
 func (store *JobStore) Accept(record JobRecord) (JobRecord, bool, error) {
 	if err := record.validate(); err != nil {
 		return JobRecord{}, false, err
+	}
+	if time.Duration(record.RetentionSeconds)*time.Second > store.retention {
+		return JobRecord{}, false, ErrJobConflict
 	}
 	if record.State != JobAccepted {
 		return JobRecord{}, false, ErrJobConflict
@@ -177,11 +186,14 @@ func (store *JobStore) existingLocked(record JobRecord) (JobRecord, bool, error)
 	return JobRecord{}, false, nil
 }
 
-func (store *JobStore) Lookup(jobID string) (JobRecord, bool) {
+func (store *JobStore) Lookup(jobID string) (JobRecord, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if _, err := store.pruneExpiredAndPersistLocked(); err != nil {
+		return JobRecord{}, false, fmt.Errorf("prune expired node jobs: %w", err)
+	}
 	record, found := store.records[jobID]
-	return cloneJobRecord(record), found
+	return cloneJobRecord(record), found, nil
 }
 
 func (store *JobStore) Records() []JobRecord {
@@ -534,12 +546,48 @@ func (store *JobStore) pruneExpiredLocked(now time.Time, protectedID string) {
 	}
 }
 
+func (store *JobStore) pruneExpired() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, err := store.pruneExpiredAndPersistLocked()
+	return err
+}
+
+func (store *JobStore) pruneExpiredAndPersistLocked() (bool, error) {
+	now := store.now()
+	if !store.hasExpiredLocked(now, "") {
+		if err := store.flushPendingLocked(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	previous := cloneJobRecords(store.records)
+	store.pruneExpiredLocked(now, "")
+	if err := store.persistLocked(""); err != nil {
+		store.rollbackLocked(previous, err)
+		return true, err
+	}
+	return true, nil
+}
+
+func (store *JobStore) hasExpiredLocked(now time.Time, protectedID string) bool {
+	for id, record := range store.records {
+		retention := min(time.Duration(record.RetentionSeconds)*time.Second, store.retention)
+		if id != protectedID && record.State.terminal() &&
+			!now.Before(time.Unix(0, record.CompletedAt).Add(retention)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (store *JobStore) pruneOldestExpiredLocked(now time.Time, protectedID string) bool {
-	cutoff := now.Add(-store.retention).UnixNano()
 	oldestID := ""
 	var oldestAt int64
 	for id, record := range store.records {
-		if id == protectedID || !record.State.terminal() || record.CompletedAt > cutoff {
+		retention := min(time.Duration(record.RetentionSeconds)*time.Second, store.retention)
+		if id == protectedID || !record.State.terminal() ||
+			now.Before(time.Unix(0, record.CompletedAt).Add(retention)) {
 			continue
 		}
 		if oldestID == "" || record.CompletedAt < oldestAt ||
@@ -592,7 +640,7 @@ func (store *JobStore) removeOrphanFiles() error {
 			}
 			continue
 		}
-		if err := store.directory.removeRegular(name); err != nil {
+		if err := store.removeFile(name); err != nil {
 			return fmt.Errorf("remove orphaned node job file %q: %w", name, err)
 		}
 	}
@@ -621,7 +669,7 @@ func (store *JobStore) flushPendingLocked() error {
 			return fmt.Errorf("inspect expired node job file %q: %w", name, err)
 		}
 		_ = file.Close()
-		if err := store.directory.removeRegular(name); err != nil {
+		if err := store.removeFile(name); err != nil {
 			return fmt.Errorf("remove expired node job file %q: %w", name, err)
 		}
 		store.payloadUsed -= info.Size()
@@ -690,7 +738,9 @@ func validateJobTransition(previous, next JobRecord) error {
 func sameJobStartBinding(left, right JobRecord) bool {
 	return left.StartInvocationID == right.StartInvocationID &&
 		left.StartIdempotencyKey == right.StartIdempotencyKey &&
-		left.PlanHash == right.PlanHash && left.ProfileRevision == right.ProfileRevision &&
+		left.PlanHash == right.PlanHash && left.ProfileAlias == right.ProfileAlias &&
+		left.ProfileRevision == right.ProfileRevision &&
+		left.RetentionSeconds == right.RetentionSeconds &&
 		left.Owner == right.Owner
 }
 

@@ -34,11 +34,16 @@
       "maxLength": 128,
       "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*\\.v[1-9][0-9]*$"
     },
-	"service_profile": {
-	  "type": "string",
-	  "maxLength": 64,
-	  "pattern": "^[a-z][a-z0-9_-]*$"
-	},
+    "service_profile": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "job_profile": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
     "update": {
       "type": "object",
       "additionalProperties": false,

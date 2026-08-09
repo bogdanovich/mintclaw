@@ -184,6 +184,45 @@ func TestExecutionPlanSchemaMatchesDomain(t *testing.T) {
 	if validationErr := resolveSchema(t, "execution-plan.v1").Validate(instance); validationErr != nil {
 		t.Fatalf("schema rejected service execution plan %s: %v", data, validationErr)
 	}
+	jobProfiles := []nodes.JobProfileDescriptor{{
+		Alias: "builds", Revision: "builds-v1", Executor: "system_exec",
+		AuthorityDigest: strings.Repeat("b", 64), TimeoutSecondsMax: 7200,
+		ConcurrentJobs: 2, StdoutBytesMax: 1024, StderrBytesMax: 1024,
+		ArtifactCountMax: 2, ArtifactBytesMax: 1024, ArtifactsTotalBytesMax: 2048,
+		RetentionSeconds: 3600, CancelGuarantee: "process_group",
+		ExecutableAliases: []string{"go"}, WorkingScopes: []string{"repo"},
+		Approval: nodes.JobProfileApproval{Start: "required", Read: "none", Cancel: "required"},
+	}}
+	jobDescriptors, err := nodes.JobCommandDescriptors(jobProfiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDescriptor, ok := nodes.ProjectJobDescriptorForProfile(jobDescriptors[0], "builds")
+	if !ok {
+		t.Fatal("project job schema fixture")
+	}
+	jobPlan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+		InvocationID: "inv_job", IdempotencyKey: "idem_job", NodeID: nodes.ID("node_test"),
+		CatalogHash: strings.Repeat("a", 64), Command: jobDescriptor.Name, JobProfile: "builds",
+		Input: json.RawMessage(
+			`{"argv":["go","test","./..."],"cwd":"repo","timeout_seconds":120,"env":{}}`,
+		),
+		AgentID: "main", SessionID: "telegram:chat-1", ActorID: "user-1",
+		TimeoutSeconds: 30, OutputLimitBytes: 4096,
+	}, jobDescriptor, "local", "policy-1", time.Unix(1, 0), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(jobPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unmarshalErr := json.Unmarshal(data, &instance); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if validationErr := resolveSchema(t, "execution-plan.v1").Validate(instance); validationErr != nil {
+		t.Fatalf("schema rejected job execution plan %s: %v", data, validationErr)
+	}
 	updateProfile := nodes.UpdateProfileDescriptor{
 		Alias: "stable", Revision: "stable-v1", Channel: "stable", Approval: "required",
 		CurrentVersion: "v1.0.0", Platform: "linux", Architecture: "amd64",
@@ -351,6 +390,30 @@ func TestCommandDescriptorSchemaAndDomainConformance(t *testing.T) {
 					Risk:            nodes.RiskRead,
 					ServiceProfiles: profiles,
 				}
+			}(),
+			schemaOK: true,
+			domainOK: true,
+		},
+		{
+			name: "valid job descriptor",
+			descriptor: func() nodes.CommandDescriptor {
+				profiles := []nodes.JobProfileDescriptor{{
+					Alias: "builds", Revision: "builds-v1", Executor: "system_exec",
+					AuthorityDigest: strings.Repeat("b", 64), TimeoutSecondsMax: 7200,
+					ConcurrentJobs: 2, StdoutBytesMax: 1024, StderrBytesMax: 1024,
+					ArtifactCountMax: 2, ArtifactBytesMax: 1024, ArtifactsTotalBytesMax: 2048,
+					RetentionSeconds: 3600, CancelGuarantee: "process_group",
+					ExecutableAliases: []string{"go"}, WorkingScopes: []string{"repo"},
+					EnvironmentNames: []string{"GOFLAGS"},
+					Approval: nodes.JobProfileApproval{
+						Start: "required", Read: "none", Cancel: "required",
+					},
+				}}
+				descriptors, err := nodes.JobCommandDescriptors(profiles)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return descriptors[0]
 			}(),
 			schemaOK: true,
 			domainOK: true,

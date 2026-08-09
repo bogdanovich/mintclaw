@@ -2,6 +2,7 @@ package companion
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,12 +71,12 @@ func TestJobStoreRestartPreservesAcceptedAndReconcilesLaunchBoundary(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(recovered.Close)
-	acceptedAfter, found := recovered.Lookup(accepted.JobID)
-	if !found || acceptedAfter.State != JobAccepted {
+	acceptedAfter, found, err := recovered.Lookup(accepted.JobID)
+	if err != nil || !found || acceptedAfter.State != JobAccepted {
 		t.Fatalf("accepted recovery = %#v, found %v", acceptedAfter, found)
 	}
-	launchedAfter, found := recovered.Lookup(launched.JobID)
-	if !found || launchedAfter.State != JobUnknown || launchedAfter.Stdout.Bytes != 13 ||
+	launchedAfter, found, err := recovered.Lookup(launched.JobID)
+	if err != nil || !found || launchedAfter.State != JobUnknown || launchedAfter.Stdout.Bytes != 13 ||
 		launchedAfter.FailureCode != "COMPANION_RESTART" {
 		t.Fatalf("launched recovery = %#v, found %v", launchedAfter, found)
 	}
@@ -119,11 +120,156 @@ func TestJobStoreDoesNotPruneProtectedActiveRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	if _, _, err := store.Accept(testAcceptedJobRecord("active")); err != nil {
+	active := testAcceptedJobRecord("active")
+	active.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(active); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Accept(testAcceptedJobRecord("second")); !errors.Is(err, ErrJobStoreFull) {
+	second := testAcceptedJobRecord("second")
+	second.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(second); !errors.Is(err, ErrJobStoreFull) {
 		t.Fatalf("second Accept() error = %v", err)
+	}
+}
+
+func TestJobStoreLookupPrunesExpiredWithoutAnotherAccept(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "jobs")
+	store, err := NewJobStore(root, JobStoreLimits{
+		Records: 8, IndexBytes: 1024 * 1024, PayloadBytes: 1024 * 1024,
+		Retention: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	base := time.Unix(1000, 0)
+	store.now = func() time.Time { return base }
+	record := testAcceptedJobRecord("expired-read")
+	record.CreatedAt = base.UnixNano()
+	record.UpdatedAt = base.UnixNano()
+	record.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkFailedBeforeLaunch(record.JobID, "TEST_COMPLETE"); err != nil {
+		t.Fatal(err)
+	}
+	log, err := store.CreateFile(jobLogFileName(record.JobID, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.WriteString("expired log"); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return base.Add(time.Minute + time.Second) }
+	if _, found, err := store.Lookup(record.JobID); err != nil || found {
+		t.Fatalf("expired Lookup() found = %v, error %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, jobLogFileName(record.JobID, false))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired log retained after lookup: %v", err)
+	}
+	index, err := os.ReadFile(filepath.Join(root, "index.json"))
+	if err != nil || strings.Contains(string(index), record.JobID) {
+		t.Fatalf("expired job retained in index %q, error %v", index, err)
+	}
+}
+
+func TestJobStoreLookupRetriesCommittedPrunePayloadCleanup(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "jobs")
+	store, err := NewJobStore(root, JobStoreLimits{
+		Records: 8, IndexBytes: 1024 * 1024, PayloadBytes: 1024 * 1024,
+		Retention: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	base := time.Unix(1000, 0)
+	store.now = func() time.Time { return base }
+	record := testAcceptedJobRecord("cleanup-retry")
+	record.CreatedAt = base.UnixNano()
+	record.UpdatedAt = base.UnixNano()
+	record.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkFailedBeforeLaunch(record.JobID, "TEST_COMPLETE"); err != nil {
+		t.Fatal(err)
+	}
+	logName := jobLogFileName(record.JobID, false)
+	log, err := store.CreateFile(logName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.WriteString("expired log"); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	removeFile := store.removeFile
+	failCleanup := true
+	store.removeFile = func(name string) error {
+		if failCleanup && name == logName {
+			return errors.New("injected cleanup failure")
+		}
+		return removeFile(name)
+	}
+	store.now = func() time.Time { return base.Add(time.Minute + time.Second) }
+	if _, _, err := store.Lookup(record.JobID); err == nil {
+		t.Fatal("Lookup() accepted committed prune with incomplete payload cleanup")
+	}
+	index, err := os.ReadFile(filepath.Join(root, "index.json"))
+	if err != nil || strings.Contains(string(index), record.JobID) {
+		t.Fatalf("committed prune index = %q, error %v", index, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, logName)); err != nil {
+		t.Fatalf("failed cleanup unexpectedly removed payload: %v", err)
+	}
+	failCleanup = false
+	if _, found, err := store.Lookup(record.JobID); err != nil || found {
+		t.Fatalf("retry Lookup() found = %v, error %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, logName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retry retained expired payload: %v", err)
+	}
+}
+
+func TestJobStoreStartupPrunesExpiredWithoutAnotherAccept(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "jobs")
+	store, err := NewJobStore(root, JobStoreLimits{
+		Records: 8, IndexBytes: 1024 * 1024, PayloadBytes: 1024 * 1024,
+		Retention: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-2 * time.Minute)
+	store.now = func() time.Time { return base }
+	record := testAcceptedJobRecord("expired-restart")
+	record.CreatedAt = base.UnixNano()
+	record.UpdatedAt = base.UnixNano()
+	record.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkFailedBeforeLaunch(record.JobID, "TEST_COMPLETE"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reloaded, err := NewJobStore(root, JobStoreLimits{
+		Records: 8, IndexBytes: 1024 * 1024, PayloadBytes: 1024 * 1024,
+		Retention: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reloaded.Close)
+	if _, found, err := reloaded.Lookup(record.JobID); err != nil || found {
+		t.Fatalf("startup retained expired job, found = %v, error %v", found, err)
 	}
 }
 
@@ -145,7 +291,8 @@ func testAcceptedJobRecord(suffix string) JobRecord {
 	return JobRecord{
 		JobID: "job_" + suffix, StartInvocationID: "inv_" + suffix,
 		StartIdempotencyKey: "idem_" + suffix, PlanHash: strings.Repeat("a", 64),
-		ProfileRevision: "jobs-v1",
+		ProfileAlias: "test-jobs", ProfileRevision: "jobs-v1",
+		RetentionSeconds: int(DefaultJobRetention / time.Second),
 		Owner: JobOwner{
 			AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
 		},

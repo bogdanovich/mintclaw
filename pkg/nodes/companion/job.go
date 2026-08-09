@@ -24,13 +24,13 @@ const (
 	DefaultJobRetention          = 24 * time.Hour
 	MaxJobRecordLimit            = 1024
 	MaxJobStorePayloadBytes      = 64 * 1024 * 1024 * 1024
-	MaxJobConcurrency            = 32
-	MaxJobLogBytes               = 64 * 1024 * 1024
-	MaxJobArtifactCount          = 16
-	MaxJobArtifactBytes          = 512 * 1024 * 1024
-	MaxJobArtifactsTotalBytes    = 1024 * 1024 * 1024
+	MaxJobConcurrency            = nodes.MaxJobConcurrency
+	MaxJobLogBytes               = nodes.MaxJobLogBytes
+	MaxJobArtifactCount          = nodes.MaxJobArtifactCount
+	MaxJobArtifactBytes          = nodes.MaxJobArtifactBytes
+	MaxJobArtifactsTotalBytes    = nodes.MaxJobArtifactsTotal
 	MaxJobRetention              = 30 * 24 * time.Hour
-	MaxJobTimeout                = 24 * time.Hour
+	MaxJobTimeout                = time.Duration(nodes.MaxJobTimeoutSeconds) * time.Second
 	maxJobArtifactNameLength     = 64
 	maxJobArtifactRelativeLength = 4096
 )
@@ -170,7 +170,9 @@ type JobRecord struct {
 	StartInvocationID   string              `json:"start_invocation_id"`
 	StartIdempotencyKey string              `json:"start_idempotency_key"`
 	PlanHash            string              `json:"plan_hash"`
+	ProfileAlias        string              `json:"profile_alias"`
 	ProfileRevision     string              `json:"profile_revision"`
+	RetentionSeconds    int                 `json:"retention_seconds"`
 	Owner               JobOwner            `json:"owner"`
 	State               JobState            `json:"state"`
 	CancelGuarantee     JobCancelGuarantee  `json:"cancel_guarantee"`
@@ -200,6 +202,10 @@ func (record JobRecord) validate() error {
 		if err := nodes.ID(value).Validate(); err != nil {
 			return fmt.Errorf("invalid node job record identity: %w", err)
 		}
+	}
+	if err := (nodes.Alias(record.ProfileAlias)).Validate(); err != nil ||
+		record.RetentionSeconds < 60 || record.RetentionSeconds > nodes.MaxJobRetentionSeconds {
+		return errors.New("invalid node job profile binding")
 	}
 	if digest, err := hex.DecodeString(record.PlanHash); err != nil || len(digest) != 32 ||
 		record.CreatedAt <= 0 || record.UpdatedAt < record.CreatedAt ||

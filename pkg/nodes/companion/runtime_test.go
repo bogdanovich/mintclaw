@@ -965,6 +965,15 @@ func testRuntimePlanAtWithOutputLimit(
 			t.Fatal("project service runtime test descriptor")
 		}
 	}
+	jobProfile := ""
+	if len(descriptor.JobProfiles) > 0 {
+		jobProfile = descriptor.JobProfiles[0].Alias
+		var projected bool
+		descriptor, projected = nodes.ProjectJobDescriptorForProfile(descriptor, jobProfile)
+		if !projected {
+			t.Fatal("project job runtime test descriptor")
+		}
+	}
 	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:     "inv_" + strings.ReplaceAll(command, ".", "_"),
 		IdempotencyKey:   "idem_" + strings.ReplaceAll(command, ".", "_"),
@@ -972,6 +981,7 @@ func testRuntimePlanAtWithOutputLimit(
 		CatalogHash:      catalogHash,
 		Command:          command,
 		ServiceProfile:   serviceProfile,
+		JobProfile:       jobProfile,
 		Input:            input,
 		AgentID:          "agent_test",
 		SessionID:        "session_test",
