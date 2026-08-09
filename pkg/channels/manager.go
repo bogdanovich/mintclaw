@@ -1515,126 +1515,23 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 // SetupHTTPServerListeners creates a shared HTTP server on pre-opened listeners.
 // When listeners is empty it falls back to Addr-based ListenAndServe behavior.
 func (m *Manager) SetupHTTPServerListeners(listeners []net.Listener, addr string, healthServer *health.Server) {
-	m.lifecycle.mux = newDynamicServeMux()
-
-	// Register health endpoints
-	if healthServer != nil {
-		healthServer.RegisterOnMux(m.lifecycle.mux)
-	}
-
-	// Discover and register webhook handlers and health checkers
-	m.registerHTTPHandlersLocked()
-
-	m.lifecycle.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      m.lifecycle.mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-	m.lifecycle.httpListeners = append([]net.Listener(nil), listeners...)
+	m.lifecycle.setupHTTPServer(m, listeners, addr, healthServer)
 }
 
 // RegisterHTTPHandler adds a non-channel route to the shared gateway server.
 // It must be called after SetupHTTPServerListeners and rejects route collisions.
 func (m *Manager) RegisterHTTPHandler(pattern string, handler http.Handler) error {
-	m.lifecycle.mu.Lock()
-	defer m.lifecycle.mu.Unlock()
-	if m.lifecycle.mux == nil {
-		return errors.New("shared HTTP server is not configured")
-	}
-	if pattern == "" || handler == nil {
-		return errors.New("HTTP handler pattern and implementation are required")
-	}
-	if err := m.lifecycle.mux.TryHandle(pattern, handler); err != nil {
-		return fmt.Errorf("register HTTP handler %q: %w", pattern, err)
-	}
-	return nil
+	return m.lifecycle.registerHTTPHandler(pattern, handler)
 }
 
 // ReplaceHTTPHandler atomically replaces an existing non-channel route.
 func (m *Manager) ReplaceHTTPHandler(pattern string, handler http.Handler) error {
-	m.lifecycle.mu.Lock()
-	defer m.lifecycle.mu.Unlock()
-	if m.lifecycle.mux == nil {
-		return errors.New("shared HTTP server is not configured")
-	}
-	if pattern == "" || handler == nil {
-		return errors.New("HTTP handler pattern and implementation are required")
-	}
-	if err := m.lifecycle.mux.Replace(pattern, handler); err != nil {
-		return fmt.Errorf("replace HTTP handler %q: %w", pattern, err)
-	}
-	return nil
+	return m.lifecycle.replaceHTTPHandler(pattern, handler)
 }
 
 // UnregisterHTTPHandler removes a non-channel route from the shared gateway server.
 func (m *Manager) UnregisterHTTPHandler(pattern string) {
-	m.lifecycle.mu.Lock()
-	defer m.lifecycle.mu.Unlock()
-	if m.lifecycle.mux != nil {
-		m.lifecycle.mux.Unhandle(pattern)
-	}
-}
-
-// registerHTTPHandlersLocked registers webhook and health-check handlers for
-// all channels currently in m.lifecycle.channels. Caller must hold m.lifecycle.mu (or ensure
-// exclusive access).
-func (m *Manager) registerHTTPHandlersLocked() {
-	for name, ch := range m.lifecycle.channels {
-		m.registerChannelHTTPHandler(name, ch)
-	}
-}
-
-// registerChannelHTTPHandler registers the webhook/health handlers for a
-// single channel onto m.lifecycle.mux.
-func (m *Manager) registerChannelHTTPHandler(name string, ch Channel) {
-	if wh, ok := ch.(WebhookHandler); ok {
-		m.lifecycle.mux.Handle(wh.WebhookPath(), wh)
-		m.publishChannelEvent(
-			runtimeevents.KindChannelWebhookRegistered,
-			name,
-			runtimeevents.Scope{Channel: name},
-			runtimeevents.SeverityInfo,
-			ChannelLifecyclePayload{Type: channelTypeForEvent(m, name)},
-		)
-		logger.InfoCF("channels", "Webhook handler registered", map[string]any{
-			"channel": name,
-			"path":    wh.WebhookPath(),
-		})
-	}
-	if hc, ok := ch.(HealthChecker); ok {
-		m.lifecycle.mux.HandleFunc(hc.HealthPath(), hc.HealthHandler)
-		logger.InfoCF("channels", "Health endpoint registered", map[string]any{
-			"channel": name,
-			"path":    hc.HealthPath(),
-		})
-	}
-}
-
-// unregisterChannelHTTPHandler removes the webhook/health handlers for a
-// single channel from m.lifecycle.mux.
-func (m *Manager) unregisterChannelHTTPHandler(name string, ch Channel) {
-	if wh, ok := ch.(WebhookHandler); ok {
-		m.lifecycle.mux.Unhandle(wh.WebhookPath())
-		m.publishChannelEvent(
-			runtimeevents.KindChannelWebhookUnregistered,
-			name,
-			runtimeevents.Scope{Channel: name},
-			runtimeevents.SeverityInfo,
-			ChannelLifecyclePayload{Type: channelTypeForEvent(m, name)},
-		)
-		logger.InfoCF("channels", "Webhook handler unregistered", map[string]any{
-			"channel": name,
-			"path":    wh.WebhookPath(),
-		})
-	}
-	if hc, ok := ch.(HealthChecker); ok {
-		m.lifecycle.mux.Unhandle(hc.HealthPath())
-		logger.InfoCF("channels", "Health endpoint unregistered", map[string]any{
-			"channel": name,
-			"path":    hc.HealthPath(),
-		})
-	}
+	m.lifecycle.unregisterHTTPHandler(pattern)
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
@@ -2656,40 +2553,15 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
-	m.lifecycle.mu.RLock()
-	defer m.lifecycle.mu.RUnlock()
-	channel, ok := m.lifecycle.channels[name]
-	return channel, ok
+	return m.lifecycle.channel(name)
 }
 
 func (m *Manager) GetStatus() map[string]any {
-	m.lifecycle.mu.RLock()
-	defer m.lifecycle.mu.RUnlock()
-
-	status := make(map[string]any)
-	for name, channel := range m.lifecycle.channels {
-		channelStatus := map[string]any{
-			"enabled": true,
-			"running": channel.IsRunning(),
-		}
-		if _, ok := m.lifecycle.restartRequired[name]; ok {
-			channelStatus["restart_required"] = true
-			channelStatus["restart_reason"] = "channel config changed"
-		}
-		status[name] = channelStatus
-	}
-	return status
+	return m.lifecycle.status()
 }
 
 func (m *Manager) GetEnabledChannels() []string {
-	m.lifecycle.mu.RLock()
-	defer m.lifecycle.mu.RUnlock()
-
-	names := make([]string, 0, len(m.lifecycle.channels))
-	for name := range m.lifecycle.channels {
-		names = append(names, name)
-	}
-	return names
+	return m.lifecycle.enabledChannels()
 }
 
 // Reload updates the config reference without restarting channels.
@@ -2867,7 +2739,7 @@ func (m *Manager) RegisterChannel(name string, channel Channel) {
 	defer m.lifecycle.mu.Unlock()
 	m.lifecycle.channels[name] = channel
 	if m.lifecycle.mux != nil {
-		m.registerChannelHTTPHandler(name, channel)
+		m.lifecycle.registerChannelHTTPHandler(m, name, channel)
 	}
 }
 
@@ -2875,7 +2747,7 @@ func (m *Manager) UnregisterChannel(name string) {
 	m.lifecycle.mu.Lock()
 	ch := m.lifecycle.channels[name]
 	if ch != nil && m.lifecycle.mux != nil {
-		m.unregisterChannelHTTPHandler(name, ch)
+		m.lifecycle.unregisterChannelHTTPHandler(m, name, ch)
 	}
 	owner := m.delivery.owner(name)
 	if owner == nil {
