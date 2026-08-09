@@ -206,6 +206,29 @@ func (source *nodeInvocationSource) DispatchInvocation(
 	invocationID string,
 	expectedPlanHash string,
 ) (json.RawMessage, bool, error) {
+	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, nil)
+}
+
+func (source *nodeInvocationSource) DispatchInvocationEphemeral(
+	ctx context.Context,
+	owner nodes.GatewayInvocationOwner,
+	invocationID string,
+	expectedPlanHash string,
+	ephemeralInput json.RawMessage,
+) (json.RawMessage, bool, error) {
+	if len(ephemeralInput) == 0 {
+		return nil, false, nodes.ErrGatewayInvocationConflict
+	}
+	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, ephemeralInput)
+}
+
+func (source *nodeInvocationSource) dispatchInvocation(
+	ctx context.Context,
+	owner nodes.GatewayInvocationOwner,
+	invocationID string,
+	expectedPlanHash string,
+	ephemeralInput json.RawMessage,
+) (json.RawMessage, bool, error) {
 	if source == nil || source.store == nil || source.runtime == nil {
 		return nil, false, errNodeDiscoveryAuthorityUnavailable
 	}
@@ -250,6 +273,7 @@ func (source *nodeInvocationSource) DispatchInvocation(
 		ctx,
 		record.Plan.NodeID,
 		record.Plan,
+		ephemeralInput,
 		func() error {
 			return source.runtime.withInvocationHandler(
 				source.registryPath,
@@ -311,7 +335,7 @@ func (source *nodeInvocationSource) RedispatchInvocation(
 		record.State != nodes.GatewayInvocationDispatched {
 		return nil, false, nodes.ErrGatewayInvocationConflict
 	}
-	return handler.Invoke(ctx, nodeID, record.Plan, nil)
+	return handler.Invoke(ctx, nodeID, record.Plan, nil, nil)
 }
 
 func gatewayInvocationMatchesOwner(

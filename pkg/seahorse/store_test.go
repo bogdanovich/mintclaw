@@ -371,9 +371,15 @@ func TestStoreGetMessageCount(t *testing.T) {
 
 	conv, _ := s.GetOrCreateConversation(ctx, "agent:test")
 
-	s.AddMessage(ctx, conv.ConversationID, "user", "msg1", 2)
-	s.AddMessage(ctx, conv.ConversationID, "assistant", "msg2", 3)
-	s.AddMessage(ctx, conv.ConversationID, "user", "msg3", 1)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "msg1", 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "assistant", "msg2", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "msg3", 1); err != nil {
+		t.Fatal(err)
+	}
 
 	count, err := s.GetMessageCount(ctx, conv.ConversationID)
 	if err != nil {
@@ -604,10 +610,12 @@ func TestStoreGetRootSummaries(t *testing.T) {
 	}
 
 	// Condense them
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID, Kind: SummaryKindCondensed, Depth: 1,
 		Content: "c1", TokenCount: 15, ParentIDs: []string{leaf1.SummaryID, leaf2.SummaryID},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// After condensation — only the condensed is root
 	roots, _ = s.GetRootSummaries(ctx, conv.ConversationID)
@@ -664,9 +672,11 @@ func TestStoreAppendContextMessages(t *testing.T) {
 	msg1, _ := s.AddMessage(ctx, conv.ConversationID, "user", "hello", 2)
 	msg2, _ := s.AddMessage(ctx, conv.ConversationID, "assistant", "world", 2)
 
-	s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
 		{Ordinal: 100, ItemType: "message", MessageID: msg1.ID, TokenCount: 2},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Append single message
 	err := s.AppendContextMessage(ctx, conv.ConversationID, msg2.ID)
@@ -702,7 +712,9 @@ func TestStoreReplaceContextRangeWithSummary(t *testing.T) {
 		{Ordinal: 300, ItemType: "message", MessageID: msgs[2], TokenCount: 2},
 		{Ordinal: 400, ItemType: "message", MessageID: msgs[3], TokenCount: 2},
 	}
-	s.UpsertContextItems(ctx, conv.ConversationID, items)
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a summary
 	summary, _ := s.CreateSummary(ctx, CreateSummaryInput{
@@ -786,7 +798,9 @@ func TestStoreReplaceContextRangeResequenceOrdinals(t *testing.T) {
 		{Ordinal: 103, ItemType: "message", MessageID: msgs[3], TokenCount: 2},
 		{Ordinal: 104, ItemType: "message", MessageID: msgs[4], TokenCount: 2},
 	}
-	s.UpsertContextItems(ctx, conv.ConversationID, items)
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a summary
 	summary, _ := s.CreateSummary(ctx, CreateSummaryInput{
@@ -895,7 +909,9 @@ func TestResequenceContextItemsTxAssignsUniqueOrdinals(t *testing.T) {
 		{Ordinal: 400, ItemType: "message", MessageID: msgs[3], TokenCount: 2},
 		{Ordinal: 500, ItemType: "message", MessageID: msgs[4], TokenCount: 2},
 	}
-	s.UpsertContextItems(ctx, conv.ConversationID, items)
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a summary
 	summary, _ := s.CreateSummary(ctx, CreateSummaryInput{
@@ -908,13 +924,15 @@ func TestResequenceContextItemsTxAssignsUniqueOrdinals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	err = s.resequenceContextItemsTx(ctx, tx, conv.ConversationID, summary.SummaryID)
 	if err != nil {
 		t.Fatalf("resequenceContextItemsTx: %v", err)
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 
 	// Verify ordinals are unique and properly spaced
 	result, _ := s.GetContextItems(ctx, conv.ConversationID)
@@ -964,9 +982,11 @@ func TestStoreGetContextTokenCount(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "agent:test")
 	msg, _ := s.AddMessage(ctx, conv.ConversationID, "user", "hello", 0)
 
-	s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
 		{Ordinal: 100, ItemType: "message", MessageID: msg.ID, TokenCount: 42},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	count, err := s.GetContextTokenCount(ctx, conv.ConversationID)
 	if err != nil {
@@ -995,10 +1015,12 @@ func TestStoreGetMaxOrdinal(t *testing.T) {
 	// Add items
 	msg1, _ := s.AddMessage(ctx, conv.ConversationID, "user", "a", 1)
 	msg2, _ := s.AddMessage(ctx, conv.ConversationID, "user", "b", 1)
-	s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
 		{Ordinal: 100, ItemType: "message", MessageID: msg1.ID, TokenCount: 1},
 		{Ordinal: 250, ItemType: "message", MessageID: msg2.ID, TokenCount: 1},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	maxOrd, _ = s.GetMaxOrdinal(ctx, conv.ConversationID)
 	if maxOrd != 250 {
@@ -1035,10 +1057,12 @@ func TestStoreGetDistinctDepthsInContext(t *testing.T) {
 	})
 
 	// Add summaries to context
-	s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: s1.SummaryID, TokenCount: 10},
 		{Ordinal: 200, ItemType: "summary", SummaryID: s2.SummaryID, TokenCount: 10},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Should find depth 0
 	depths, err = s.GetDistinctDepthsInContext(ctx, conv.ConversationID, 0)
@@ -1054,7 +1078,9 @@ func TestStoreGetDistinctDepthsInContext(t *testing.T) {
 		ConversationID: conv.ConversationID, Kind: SummaryKindCondensed, Depth: 1,
 		Content: "condensed1", TokenCount: 15, ParentIDs: []string{s1.SummaryID, s2.SummaryID},
 	})
-	s.AppendContextSummary(ctx, conv.ConversationID, c1.SummaryID)
+	if err := s.AppendContextSummary(ctx, conv.ConversationID, c1.SummaryID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Should find depths [0, 1] or [1, 0]
 	depths, _ = s.GetDistinctDepthsInContext(ctx, conv.ConversationID, 0)
@@ -1134,14 +1160,18 @@ func TestStoreSearchSummariesWithRank(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "agent:test")
 
 	// Create summaries with different content (for FTS matching)
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID, Kind: SummaryKindLeaf, Depth: 0,
 		Content: "machine learning neural network", TokenCount: 10,
-	})
-	s.CreateSummary(ctx, CreateSummaryInput{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID, Kind: SummaryKindLeaf, Depth: 0,
 		Content: "deep learning reinforcement", TokenCount: 10,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// FTS search — results should have Rank populated
 	results, err := s.SearchSummaries(ctx, SearchInput{
@@ -1170,10 +1200,12 @@ func TestStoreSearchSummariesWithTimeFilter(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "agent:test")
 
 	// Create a summary
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID, Kind: SummaryKindLeaf, Depth: 0,
 		Content: "important meeting notes", TokenCount: 10,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search with Since filter (now - 1 hour → should match)
 	since := time.Now().UTC().Add(-1 * time.Hour)
@@ -1229,9 +1261,15 @@ func TestSearchMessagesUsesFTS5(t *testing.T) {
 	convID := conv.ConversationID
 
 	// Add messages with searchable content
-	s.AddMessage(ctx, convID, "user", "The quick brown fox jumps over the lazy dog", 10)
-	s.AddMessage(ctx, convID, "assistant", "A response about something else entirely", 10)
-	s.AddMessage(ctx, convID, "user", "Five boxing wizards jump quickly at dawn", 10)
+	if _, err := s.AddMessage(ctx, convID, "user", "The quick brown fox jumps over the lazy dog", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "assistant", "A response about something else entirely", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "user", "Five boxing wizards jump quickly at dawn", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	input := SearchInput{
 		Pattern:        "fox jumps",
@@ -1304,7 +1342,9 @@ func TestSearchMessagesWithTimeFilter(t *testing.T) {
 	convID := conv.ConversationID
 
 	// Add messages
-	s.AddMessage(ctx, convID, "user", "important deployment notes", 10)
+	if _, err := s.AddMessage(ctx, convID, "user", "important deployment notes", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search with Since filter (1 hour ago → should match)
 	since := time.Now().UTC().Add(-1 * time.Hour)
@@ -1359,13 +1399,15 @@ func TestStoreSearchSummariesReturnsContent(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "agent:test")
 
 	// Create a summary with known content
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "This is the summary content for testing",
 		TokenCount:     10,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search should return the full content, not empty
 	results, err := s.SearchSummaries(ctx, SearchInput{
@@ -1421,7 +1463,9 @@ func TestStoreReplaceContextItemsWithSummary(t *testing.T) {
 		{Ordinal: 300, ItemType: "summary", SummaryID: summaries[1], TokenCount: 10},
 		{Ordinal: 400, ItemType: "summary", SummaryID: summaries[2], TokenCount: 10},
 	}
-	s.UpsertContextItems(ctx, conv.ConversationID, items)
+	if err := s.UpsertContextItems(ctx, conv.ConversationID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a new summary to replace with
 	newSummary, _ := s.CreateSummary(ctx, CreateSummaryInput{

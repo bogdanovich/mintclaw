@@ -52,15 +52,19 @@ func (factory *fakeBrowserHostFactory) Open(
 }
 
 type fakeBrowserHostWorker struct {
-	status       browserworker.WorkerStatus
-	statusErr    error
-	observations []browserworker.DriverObservation
-	observeCalls int
-	actions      []browserworker.DriverAction
-	executeErr   error
-	executeFunc  func(context.Context, browserworker.DriverAction) error
-	closeErr     error
-	closeCalls   int
+	status                  browserworker.WorkerStatus
+	statusErr               error
+	observations            []browserworker.DriverObservation
+	observeCalls            int
+	navigationIdentities    []string
+	navigationIdentityCalls int
+	dispatchNavigationID    string
+	beforeBoundDispatch     func()
+	actions                 []browserworker.DriverAction
+	executeErr              error
+	executeFunc             func(context.Context, browserworker.DriverAction) error
+	closeErr                error
+	closeCalls              int
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -81,6 +85,15 @@ func (worker *fakeBrowserHostWorker) Observe(context.Context) (browserworker.Dri
 	return observation, nil
 }
 
+func (worker *fakeBrowserHostWorker) NavigationIdentity(context.Context) (string, error) {
+	identity := "navigation_1"
+	if worker.navigationIdentityCalls < len(worker.navigationIdentities) {
+		identity = worker.navigationIdentities[worker.navigationIdentityCalls]
+	}
+	worker.navigationIdentityCalls++
+	return identity, nil
+}
+
 func (*fakeBrowserHostWorker) Resolve(
 	context.Context,
 	string,
@@ -97,6 +110,20 @@ func (worker *fakeBrowserHostWorker) Execute(
 		return worker.executeFunc(ctx, action)
 	}
 	return worker.executeErr
+}
+
+func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
+	ctx context.Context,
+	expectedNavigationID string,
+	action browserworker.DriverAction,
+) error {
+	if worker.beforeBoundDispatch != nil {
+		worker.beforeBoundDispatch()
+	}
+	if worker.dispatchNavigationID != "" && worker.dispatchNavigationID != expectedNavigationID {
+		return browserworker.ErrStale
+	}
+	return worker.Execute(ctx, action)
 }
 
 func (*fakeBrowserHostWorker) CatalogRevision() string { return "driver-v1" }
@@ -364,6 +391,211 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 	})
 }
 
+func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
+	newFixture := func(
+		t *testing.T,
+		element browserworker.DriverElement,
+	) (*BrowserHost, *fakeBrowserHostWorker, BrowserHostObservation) {
+		t.Helper()
+		observation := browserworker.DriverObservation{
+			URL: "https://example.com/form", Origin: "https://example.com", Title: "Fixture",
+			Snapshot: "- " + element.Role + " State", Elements: []browserworker.DriverElement{element},
+		}
+		worker := &fakeBrowserHostWorker{
+			status: browserworker.WorkerReady,
+			observations: []browserworker.DriverObservation{
+				observation, observation, observation,
+			},
+		}
+		profile := browserHostProfileFixture()
+		profile.AllowedActions = []string{"navigate", "press", "select"}
+		profile.DryRun = false
+		profile.AllowApprovedActions = true
+		host, err := newBrowserHost(
+			map[string]companion.BrowserProfilePolicy{"managed": profile},
+			map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+		host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+		open := browserHostOpenFixture()
+		open.DryRun = false
+		if _, err = host.Open(t.Context(), open); err != nil {
+			t.Fatal(err)
+		}
+		initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return host, worker, initial
+	}
+
+	t.Run("select semantic option", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_select_1", Role: "combobox", Name: "State"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_select_1",
+			Action:             nodes.BrowserAction{Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA"},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		result, err := host.Select(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Select() = %#v, %v", result, err)
+		}
+		if want := (browserworker.DriverAction{
+			Kind: browserworker.DriverSelect, Target: element.Target, Element: element.Name, Value: "CA",
+		}); len(worker.actions) != 1 || worker.actions[0] != want {
+			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	t.Run("press document", func(t *testing.T) {
+		host, worker, _ := newFixture(t, browserworker.DriverElement{})
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_press_1",
+			Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Enter"},
+			Effect:             "unknown", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
+			AgentID: "browser", ActorID: "telegram:owner",
+		}
+		var err error
+		request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := host.Press(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Press() = %#v, %v", result, err)
+		}
+		if want := (browserworker.DriverAction{Kind: browserworker.DriverPress, Key: "Enter"}); len(
+			worker.actions,
+		) != 1 ||
+			worker.actions[0] != want {
+			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	t.Run("privileged shortcut denied", func(t *testing.T) {
+		host, worker, _ := newFixture(t, browserworker.DriverElement{})
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_press_denied",
+			Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Control+L"},
+			Effect:             "unknown", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
+			AgentID: "browser", ActorID: "telegram:owner",
+		}
+		request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
+		if _, err := host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Press(Control+L) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("denied shortcut reached driver: %#v", worker.actions)
+		}
+	})
+
+	for _, transition := range []string{"document replacement", "same-document navigation"} {
+		for _, action := range []string{"press", "select"} {
+			t.Run(action+" rejects byte-identical "+transition, func(t *testing.T) {
+				element := browserworker.DriverElement{
+					Target: "driver_select_1", Role: "combobox", Name: "State",
+				}
+				host, worker, initial := newFixture(t, element)
+				worker.navigationIdentities = []string{
+					"navigation_1", "navigation_1", "navigation_2", "navigation_2",
+				}
+				request := BrowserHostNavigateRequest{
+					SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+					ActionInvocationID: "browser_replaced_" + action,
+					Effect:             "local_edit", CurrentOrigin: "https://example.com",
+					PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+					ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+					RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				}
+				if action == "select" {
+					request.Action = nodes.BrowserAction{
+						Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+					}
+					if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+						t.Fatalf("Select(%s) error = %v, want stale", transition, err)
+					}
+				} else {
+					request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+					request.Effect = "unknown"
+					request.ExpectedRole, request.ExpectedName = "", ""
+					var err error
+					request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+						t.Fatalf("Press(%s) error = %v, want stale", transition, err)
+					}
+				}
+				if len(worker.actions) != 0 {
+					t.Fatalf("%s reached transitioned page: %#v", action, worker.actions)
+				}
+			})
+		}
+	}
+
+	for _, action := range []string{"press", "select"} {
+		t.Run(action+" rejects navigation before driver input", func(t *testing.T) {
+			element := browserworker.DriverElement{
+				Target: "driver_select_1", Role: "combobox", Name: "State",
+			}
+			host, worker, initial := newFixture(t, element)
+			worker.dispatchNavigationID = "navigation_1"
+			worker.beforeBoundDispatch = func() {
+				worker.dispatchNavigationID = "navigation_2"
+			}
+			request := BrowserHostNavigateRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_dispatch_race_" + action,
+				Effect:             "local_edit", CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			if action == "select" {
+				request.Action = nodes.BrowserAction{
+					Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+				}
+				if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Select(dispatch navigation) error = %v, want stale", err)
+				}
+			} else {
+				request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+				request.Effect = "unknown"
+				request.ExpectedRole, request.ExpectedName = "", ""
+				var err error
+				request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Press(dispatch navigation) error = %v, want stale", err)
+				}
+			}
+			if len(worker.actions) != 0 {
+				t.Fatalf("%s reached transitioned page: %#v", action, worker.actions)
+			}
+		})
+	}
+}
+
 func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
 	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
 	factory := &fakeBrowserHostFactory{worker: worker}
@@ -551,14 +783,21 @@ func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
 
 func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		executeErr:   errors.New("ambiguous driver failure"),
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		executeErr: errors.New("ambiguous driver failure"),
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
 	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
 	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("ambiguous Navigate() error = %v", err)
 	}
@@ -584,14 +823,19 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 }
 
 func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
-	worker := &fakeBrowserHostWorker{observations: []browserworker.DriverObservation{{
-		URL: "https://changed.example/", Origin: "https://changed.example",
-	}}}
+	worker := &fakeBrowserHostWorker{observations: []browserworker.DriverObservation{
+		{URL: "about:blank", Origin: "about:blank"},
+		{URL: "https://changed.example/", Origin: "https://changed.example"},
+	}}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
 	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
 	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("changed-origin Navigate() error = %v", err)
 	}
@@ -609,23 +853,34 @@ func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
 
 func TestBrowserHostQuarantinesWhenPostActionObserveFails(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	navigate := browserHostNavigateFixture()
+	navigate.SnapshotGeneration = 1
+	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("Navigate() with ambiguous observation error = %v", err)
 	}
-	if len(worker.actions) != 1 || worker.observeCalls != 1 {
+	if len(worker.actions) != 1 || worker.observeCalls != 2 {
 		t.Fatalf("driver actions = %d, completed observations = %d", len(worker.actions), worker.observeCalls)
 	}
 }
 
 func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 		executeFunc: func(ctx context.Context, _ browserworker.DriverAction) error {
 			<-ctx.Done()
 			return ctx.Err()
@@ -637,8 +892,13 @@ func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
 	if _, err := host.Open(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	navigate := browserHostNavigateFixture()
+	navigate.SnapshotGeneration = 1
 	started := time.Now()
-	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("deadline Navigate() error = %v", err)
 	}
 	elapsed := time.Since(started)
@@ -924,6 +1184,13 @@ func browserHostNavigateFixture() BrowserHostNavigateRequest {
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+}
+
+func browserHostObserveFixture() BrowserHostObserveRequest {
+	return BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	}
 }

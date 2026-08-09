@@ -75,7 +75,7 @@ func TestSessionHubRequestRequiresDispatchCapableLiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer func() { _, _ = release() }()
 	if _, _, err := hub.Request(
 		t.Context(),
 		nodes.ID("node_legacy"),

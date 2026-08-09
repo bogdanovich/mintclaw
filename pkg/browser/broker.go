@@ -50,6 +50,24 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
+// current main-frame navigation state. The identity is private runtime state:
+// callers use it to reject document and same-document transitions that
+// reproduce the same observable snapshot.
+type NavigationIdentityWorker interface {
+	ActionWorker
+	NavigationIdentity(context.Context) (string, error)
+}
+
+// NavigationCheckedActionWorker performs one final private navigation check
+// immediately before issuing a fixed typed action. The check is the authority
+// linearization point; the native input operation that follows is not atomic
+// with it.
+type NavigationCheckedActionWorker interface {
+	NavigationIdentityWorker
+	ExecuteAfterNavigationCheck(context.Context, string, DriverAction) error
+}
+
 // PreparedActionWorker receives the gateway-owned durable authority for one
 // accepted action and must revalidate live driver state before dispatch.
 // Remote workers use it to bind a typed node invocation; local driver workers
@@ -209,6 +227,7 @@ type workerSlot struct {
 	refs            map[string]DriverElement
 	inputs          map[string]string
 	uploads         map[string]UploadBinding
+	navigationID    string
 	safeFailure     string
 	cleanupComplete bool
 }

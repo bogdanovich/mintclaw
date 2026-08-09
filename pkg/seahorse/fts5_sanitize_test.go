@@ -64,23 +64,45 @@ func TestFTS5SpecialCharsShouldNotError(t *testing.T) {
 	re := &RetrievalEngine{store: s}
 
 	// Seed data with content containing special characters
-	s.AddMessage(ctx, conv.ConversationID, "user", "the sub-agent restarted after crash", 10)
-	s.AddMessage(ctx, conv.ConversationID, "assistant", "agent:main session restored successfully", 10)
-	s.AddMessage(ctx, conv.ConversationID, "user", "use NOT operator in the query filter", 10)
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "the sub-agent restarted after crash", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(
+		ctx,
+		conv.ConversationID,
+		"assistant",
+		"agent:main session restored successfully",
+		10,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(
+		ctx,
+		conv.ConversationID,
+		"user",
+		"use NOT operator in the query filter",
+		10,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "sub-agent crashed and was restarted by the orchestrator",
 		TokenCount:     50,
-	})
-	s.CreateSummary(ctx, CreateSummaryInput{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "agent:main handled the restart procedure",
 		TokenCount:     50,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name           string
@@ -160,33 +182,43 @@ func TestFTS5OperatorsNotInterpreted(t *testing.T) {
 	// "restart only" — contains "restart" but NOT "crash".
 	// If OR is treated as boolean, "crash OR restart" would match this.
 	// With sanitization (literal AND), it should NOT match.
-	s.AddMessage(ctx, conv.ConversationID, "user", "restart the service now please", 10)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "restart the service now please", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	// "subcommand" — starts with "sub" but is not "sub-agent".
 	// If * is treated as prefix wildcard, "sub*" would match this.
 	// With sanitization (literal "sub*"), it should NOT match.
-	s.AddMessage(ctx, conv.ConversationID, "user", "run the subcommand to deploy", 10)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "run the subcommand to deploy", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	// "agent grouped" — contains "agent" but not "(agent)".
 	// If () is treated as grouping, "(agent)" would match this.
 	// With sanitization (literal "(agent)"), it should NOT match.
-	s.AddMessage(ctx, conv.ConversationID, "user", "the agent processed the request", 10)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "the agent processed the request", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	// Same patterns in summaries
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "restart procedure completed without any crash involvement",
 		TokenCount:     50,
-	})
-	s.CreateSummary(ctx, CreateSummaryInput{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "subprocess and subcommand management overview",
 		TokenCount:     50,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("OR must not be boolean", func(t *testing.T) {
 		// "crash OR restart" as literal means all three tokens must appear.

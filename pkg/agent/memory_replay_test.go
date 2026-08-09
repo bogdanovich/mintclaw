@@ -62,7 +62,7 @@ func replayCuratedMemoryLifecycle(t *testing.T) curatedMemoryReplay {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 
 	builder := NewContextBuilder(workspace)
 	_ = builder.BuildSystemPromptWithCache()
@@ -239,7 +239,7 @@ func replayRecallIsolation(t *testing.T) recallReplay {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 	store := engine.GetRetrieval().Store()
 	ctx := context.Background()
 	seed := func(sessionKey, routeKey, agentID, content string) int64 {

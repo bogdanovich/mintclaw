@@ -277,7 +277,7 @@ func TestTerminateTerminalAttachesClosesAndConfirmsStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer func() { _, _ = release() }()
 	handler := &AdmissionHandler{sessions: hub}
 	request := nodes.TerminalSessionRequest{
 		TerminalID: "terminal_cleanup",
@@ -359,7 +359,7 @@ func TestRejectedTerminalAttachDoesNotRetainTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer func() { _, _ = release() }()
 	handler := &AdmissionHandler{sessions: hub}
 	request := nodes.TerminalSessionRequest{
 		TerminalID: "terminal_rejected",
@@ -434,7 +434,7 @@ func TestAttachPostDispatchCancellationPerformsOwnerBoundDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer func() { _, _ = release() }()
 	handler := &AdmissionHandler{sessions: hub}
 	request := nodes.TerminalSessionRequest{
 		TerminalID: "terminal_test",
@@ -482,7 +482,7 @@ func TestAttachUnrelatedSuccessPerformsOwnerBoundDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer func() { _, _ = release() }()
 	handler := &AdmissionHandler{sessions: hub}
 	request := nodes.TerminalSessionRequest{
 		TerminalID: "terminal_test",

@@ -18,10 +18,10 @@ func newBenchStore(b *testing.B) (*Store, func()) {
 		b.Fatalf("open test db: %v", err)
 	}
 	if err := runSchema(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		b.Fatalf("migration: %v", err)
 	}
-	return &Store{db: db}, func() { db.Close() }
+	return &Store{db: db}, func() { _ = db.Close() }
 }
 
 // --- Ingest benchmarks ---
@@ -58,7 +58,9 @@ func BenchmarkIngest_BatchMessages(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			s.AppendContextMessage(ctx, convID, added.ID)
+			if err := s.AppendContextMessage(ctx, convID, added.ID); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
 }
@@ -76,7 +78,9 @@ func BenchmarkAssemble_MessagesOnly(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user",
 			fmt.Sprintf("Message content %d with some text", i), 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	a := &Assembler{store: s}
@@ -111,13 +115,17 @@ func BenchmarkAssemble_WithSummaries(b *testing.B) {
 			EarliestAt:     &now,
 			LatestAt:       &now,
 		})
-		s.AppendContextSummary(ctx, convID, sum.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	// Add 20 fresh messages
 	for i := 0; i < 20; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("Fresh message %d", i), 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	a := &Assembler{store: s}
@@ -152,13 +160,17 @@ func BenchmarkAssemble_BudgetEviction(b *testing.B) {
 			EarliestAt:     &now,
 			LatestAt:       &now,
 		})
-		s.AppendContextSummary(ctx, convID, sum.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	// Add fresh tail
 	for i := 0; i < FreshTailCount; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	a := &Assembler{store: s}
@@ -192,7 +204,9 @@ func benchSeedSummaries(b *testing.B, s *Store, convID int64, n int, contentTpl 
 		if err != nil {
 			b.Fatalf("create summary: %v", err)
 		}
-		s.AppendContextSummary(context.Background(), convID, sum.SummaryID)
+		if err := s.AppendContextSummary(context.Background(), convID, sum.SummaryID); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -251,7 +265,9 @@ func BenchmarkSearchMessages_FTS5(b *testing.B) {
 	for i := 0; i < 500; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user",
 			fmt.Sprintf("User message about API and database integration %d", i), 20)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	b.ResetTimer()
@@ -304,7 +320,9 @@ func BenchmarkBootstrap_100Messages(b *testing.B) {
 
 		for _, m := range msgs {
 			added, _ := s.AddMessage(ctx, convID, m.Role, m.Content, m.TokenCount)
-			s.AppendContextMessage(ctx, convID, added.ID)
+			if err := s.AppendContextMessage(ctx, convID, added.ID); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
 }
@@ -330,7 +348,9 @@ func BenchmarkBootstrap_500Messages(b *testing.B) {
 
 		for _, m := range msgs {
 			added, _ := s.AddMessage(ctx, convID, m.Role, m.Content, m.TokenCount)
-			s.AppendContextMessage(ctx, convID, added.ID)
+			if err := s.AppendContextMessage(ctx, convID, added.ID); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
 }

@@ -1001,6 +1001,12 @@ func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 }
 
 func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T) {
+	press, err := browserActionFromArgs(map[string]any{
+		"kind": "press", "target": "document", "key": "Tab",
+	})
+	if err != nil || press.Target != "document" || press.Key != "Tab" {
+		t.Fatalf("press action = %#v, error = %v", press, err)
+	}
 	fill, err := browserActionFromArgs(map[string]any{
 		"kind": "fill", "ref": "element_1", "value": "draft text",
 	})
@@ -1018,6 +1024,16 @@ func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T)
 	})
 	if err != nil || dismiss.PromptProvided {
 		t.Fatalf("dismiss action = %#v, error = %v", dismiss, err)
+	}
+}
+
+func TestBrowserApprovalSummaryNamesDocumentKey(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
+		Action: browser.Action{Kind: browser.ActionPress, Target: "document", Key: "Tab"},
+	}})
+	if summary != `Allow browser press action for document key "Tab" with unknown effect on https://example.com?` {
+		t.Fatalf("approval summary = %q", summary)
 	}
 }
 

@@ -30,7 +30,9 @@ func TestCompactUntilUnderIterationCap(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		m, _ := s.AddMessage(context.Background(), convID, "user",
 			"this is a long message with lots of tokens to push context over budget", 100)
-		s.AppendContextMessage(context.Background(), convID, m.ID)
+		if err := s.AppendContextMessage(context.Background(), convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// A completeFn that always succeeds but returns non-reducing content

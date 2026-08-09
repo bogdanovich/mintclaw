@@ -63,12 +63,14 @@ type browserHostSession struct {
 	safeFailure           string
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
+	navigationWorker      browserworker.NavigationCheckedActionWorker
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
 	actionInvocations     map[string]string
 	elementBindingKey     []byte
 	elementRefs           map[string]browserworker.DriverElement
+	observationDigest     []byte
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -268,7 +270,8 @@ func (host *BrowserHost) Open(
 		Limits: browserConfigLimits(request.Limits),
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
-	if openErr != nil || !workerOK || actionWorker == nil {
+	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationCheckedActionWorker)
+	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
@@ -300,6 +303,7 @@ func (host *BrowserHost) Open(
 		return host.sessionView(session), ErrBrowserHostLost
 	}
 	session.worker = actionWorker
+	session.navigationWorker = navigationWorker
 	session.state = "ready"
 	session.mu.Unlock()
 	return host.sessionView(session), nil
@@ -361,7 +365,7 @@ func (host *BrowserHost) Observe(
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	observation, observeErr := session.worker.Observe(actionCtx)
+	observation, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil {
@@ -375,7 +379,7 @@ func (host *BrowserHost) Observe(
 	}
 	session.snapshotGeneration = request.SnapshotGeneration
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation), nil
+	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
 }
 
 func (host *BrowserHost) Navigate(
@@ -386,7 +390,8 @@ func (host *BrowserHost) Navigate(
 		!browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" ||
 		request.Action.Kind != "navigate" || request.Action.URL == "" ||
-		request.Action.Ref != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.Action.Ref != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -404,7 +409,8 @@ func (host *BrowserHost) Click(
 		!browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) ||
 		request.Action.Kind != "click" || !browserHostIdentifier(request.Action.Ref) ||
-		request.Action.URL != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
 		request.Effect != nodes.BrowserClickEffect(request.ExpectedRole) ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
@@ -413,6 +419,47 @@ func (host *BrowserHost) Click(
 	}
 	return host.executeAction(ctx, request, "click", browserworker.DriverAction{
 		Kind: browserworker.DriverClick,
+	})
+}
+
+func (host *BrowserHost) Select(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != "select" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.Value == "" || len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "combobox" || len(request.ExpectedName) > 4096 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "select", browserworker.DriverAction{
+		Kind: browserworker.DriverSelect, Value: request.Action.Value,
+	})
+}
+
+func (host *BrowserHost) Press(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "unknown" ||
+		request.Action.Kind != "press" || request.Action.Target != "document" ||
+		!nodes.BrowserPressKeyValid(request.Action.Key) || request.Action.URL != "" || request.Action.Ref != "" ||
+		request.Action.Value != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "" || request.ExpectedName != "" ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "press", browserworker.DriverAction{
+		Kind: browserworker.DriverPress, Key: request.Action.Key,
 	})
 }
 
@@ -426,7 +473,8 @@ func (host *BrowserHost) Scroll(
 		request.Action.Kind != "scroll" ||
 		(request.Action.Direction != "up" && request.Action.Direction != "down") ||
 		request.Action.Amount < 1 || request.Action.Amount > nodes.MaxBrowserScrollAmount ||
-		request.Action.URL != "" || request.Action.Ref != "" ||
+		request.Action.URL != "" || request.Action.Ref != "" || request.Action.Target != "" ||
+		request.Action.Value != "" || request.Action.Key != "" ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -463,12 +511,12 @@ func (host *BrowserHost) executeAction(
 		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
+	if (action == "click" || action == "press") && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
 		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
-	if action == "click" {
+	if action == "click" || action == "select" {
 		var found bool
 		boundElement, found = session.elementRefs[request.Action.Ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
@@ -485,16 +533,21 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ctx.Err()
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	current, observeErr := session.worker.Observe(actionCtx)
-	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin {
+	current, currentNavigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
+	currentDigest := browserHostObservationDigest(session, current, currentNavigationIdentity)
+	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin ||
+		len(session.observationDigest) != sha256.Size || !hmac.Equal(currentDigest, session.observationDigest) {
 		actionContextErr := actionCtx.Err()
 		cancelAction()
+		if errors.Is(observeErr, browserworker.ErrStale) {
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
 		if observeErr != nil || actionContextErr != nil {
 			return BrowserHostObservation{}, ErrBrowserHostLost
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" {
+	if action == "click" || action == "select" {
 		targets, matches := 0, 0
 		for _, element := range current.Elements {
 			if element.Target != boundElement.Target {
@@ -515,8 +568,15 @@ func (host *BrowserHost) executeAction(
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
-	if executeErr := session.worker.Execute(actionCtx, driverAction); executeErr != nil {
+	if executeErr := session.navigationWorker.ExecuteAfterNavigationCheck(
+		actionCtx,
+		currentNavigationIdentity,
+		driverAction,
+	); executeErr != nil {
 		cancelAction()
+		if errors.Is(executeErr, browserworker.ErrStale) {
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
@@ -525,7 +585,7 @@ func (host *BrowserHost) executeAction(
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
-	observation, observeErr := session.worker.Observe(actionCtx)
+	observation, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil || actionContextErr != nil || !host.now().UTC().Before(actionDeadline) {
@@ -534,7 +594,32 @@ func (host *BrowserHost) executeAction(
 	}
 	session.snapshotGeneration++
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation), nil
+	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
+}
+
+func observeBrowserHostNavigation(
+	ctx context.Context,
+	session *browserHostSession,
+) (browserworker.DriverObservation, string, error) {
+	if session.navigationWorker == nil {
+		return browserworker.DriverObservation{}, "", browserworker.ErrDriverIncompatible
+	}
+	before, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	observation, err := session.worker.Observe(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	after, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	if before == "" || before != after {
+		return browserworker.DriverObservation{}, "", browserworker.ErrStale
+	}
+	return observation, after, nil
 }
 
 func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
@@ -571,6 +656,7 @@ func (host *BrowserHost) quarantineActionLocked(session *browserHostSession) {
 	session.state = "lost"
 	session.safeFailure = "outcome_unknown"
 	session.elementRefs = make(map[string]browserworker.DriverElement)
+	session.observationDigest = nil
 }
 
 func (host *BrowserHost) Close(
@@ -747,7 +833,9 @@ func browserHostObservation(
 	sessionID string,
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
+	navigationIdentity string,
 ) BrowserHostObservation {
+	session.observationDigest = browserHostObservationDigest(session, observation, navigationIdentity)
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
@@ -765,6 +853,45 @@ func browserHostObservation(
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: snapshot, Elements: elements, Truncated: observation.Truncated,
 	}
+}
+
+func browserHostObservationDigest(
+	session *browserHostSession,
+	observation browserworker.DriverObservation,
+	navigationIdentity string,
+) []byte {
+	hash := hmac.New(sha256.New, session.elementBindingKey)
+	_, _ = fmt.Fprintf(
+		hash,
+		"mintclaw.browser.host-observation.v2\x00%d:%s%d:%s%d:%s%d:%s%d:%s:%t:%d",
+		len(navigationIdentity), navigationIdentity,
+		len(observation.URL), observation.URL,
+		len(observation.Origin), observation.Origin,
+		len(observation.Title), observation.Title,
+		len(observation.Snapshot), observation.Snapshot,
+		observation.Truncated,
+		len(observation.Elements),
+	)
+	for _, element := range observation.Elements {
+		_, _ = fmt.Fprintf(
+			hash,
+			"%d:%s%d:%s%d:%s",
+			len(element.Target), element.Target,
+			len(element.Role), element.Role,
+			len(element.Name), element.Name,
+		)
+	}
+	if observation.PendingDialog == nil {
+		_, _ = hash.Write([]byte("dialog:nil"))
+	} else {
+		_, _ = fmt.Fprintf(
+			hash,
+			"dialog:%d:%s%d:%s",
+			len(observation.PendingDialog.Type), observation.PendingDialog.Type,
+			len(observation.PendingDialog.Message), observation.PendingDialog.Message,
+		)
+	}
+	return hash.Sum(nil)
 }
 
 func browserHostElementRef(

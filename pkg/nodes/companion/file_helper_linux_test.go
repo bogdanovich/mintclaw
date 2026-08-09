@@ -566,7 +566,7 @@ func rawFileHelperRequest(
 		t.Fatal(err)
 	}
 	connection := rawFileHelperConnection(t, config.SocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	writeRawFileHelperTransfer(t, connection, serviceDigest, profileAlias, frame)
 	return readRawFileHelperTransfer(t, connection)
 }

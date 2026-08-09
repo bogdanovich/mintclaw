@@ -56,6 +56,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   admitted shared semantic click authority, explicit approved-action mode,
   companion approval attestation, target revalidation, recovery, rollout, and
   completion gates.
+- [Browser Capability BF1 Press And Select Parity Admission](browser-capability-bf1-press-select-admission.md):
+  admitted document-scoped keyboard input, bounded semantic option selection,
+  companion attestation, no-replay behavior, and cross-placement completion
+  gates.
 - [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md):
   selected six-phase BF1/BF2 execution program for shared interaction,
   document-context, protected form, artifact, diagnostic, and large-snapshot
@@ -73,6 +77,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Tool-Loop Stagnation Protection](tool-loop-stagnation.md): warning-first repeated failure and read-only no-progress detection with hash-safe state and events.
 - [Passive Diagnostics](passive-diagnostics.md): bounded redacted execution traces for direct human and Codex debugging without runtime coupling.
 - [Current Refactoring Audit](current-refactoring-audit.md): near-term architecture risks around metadata, delivery, turn state, context manager migration, and provider contracts.
-- [Reliability and Refactoring Roadmap](reliability-refactoring-roadmap.md): prioritized durability, security, ownership, provider-contract, and cross-platform verification work with explicit completion criteria.
 - [Test Suite Performance Roadmap](test-suite-performance-roadmap.md): measured test-runtime bottlenecks, coverage-preserving remediation phases, and explicit completion criteria.
 - [Hook System Guide](hooks/README.md): current hook architecture and protocol details.
+
+## Archived Plans
+
+- [Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md): completed durability, security,
+  ownership, provider-contract, and cross-platform verification program.
