@@ -1,6 +1,7 @@
 # Reliability and Refactoring Roadmap
 
-Status: proposed
+Status: completed and archived
+Archived: 2026-08-09
 Audit baseline: `origin/main` at `d796943c`, 2026-08-01
 
 ## Purpose
@@ -23,7 +24,7 @@ message, a durable turn record, an external side effect, and a user-visible fina
 reliability contract.
 
 This roadmap supersedes the priority order in
-[Current Refactoring Audit](current-refactoring-audit.md), while retaining that document as the history of already
+[Current Refactoring Audit](../current-refactoring-audit.md), while retaining that document as the history of already
 completed refactors and narrower implementation notes.
 
 ## Current Assessment
@@ -62,6 +63,9 @@ types as long as the resulting behavior is explicit and testable.
 
 ### R0: Final Reply Admission Is Not Part of Inbound Acknowledgement
 
+Status: implemented. Final reply admission is part of the inbound acknowledgement contract, and rejected or
+cancelled outbound admission cannot acknowledge durable ingress work.
+
 The aggregated final response path calls `MessageBus.PublishOutbound`, ignores its returned error, and then reports
 the turn as handled. The inbound coordinator subsequently acknowledges the durable ingress item. The outbound bus is
 an in-memory buffered channel, and shutdown drains queued outbound values without persisting or delivering them.
@@ -85,6 +89,9 @@ successful in-memory admission and is owned by R2.
 - Existing final reply, streaming, steering, and message-tool suppression behavior remains covered.
 
 ### R1: Canonical Session Writes Fail Open
+
+Status: implemented. Contextual, error-returning turn-journal writes make the root user append a mandatory admission
+barrier before model or tool execution.
 
 `SessionStore` retains fire-and-forget write methods, while error-aware writes are an optional interface. The root
 user message path logs or forwards a canonical write error to the context manager but continues into model and tool
@@ -114,7 +121,7 @@ Status: implemented. Final text and media responses transfer to one canonical
 outbox before inbound acknowledgement. Typed adapter outcomes persist remote
 acceptance, platform IDs, and retry deadlines; startup replays only `pending`
 and `definitely_failed` records while interrupted attempts become `ambiguous`.
-See [Durable Outbound Delivery](durable-outbound-delivery.md).
+See [Durable Outbound Delivery](../durable-outbound-delivery.md).
 
 Fixing error propagation in R0 closes immediate fail-open behavior but does not protect a reply already accepted by
 the in-memory bus. A durable outbound outbox is needed to survive the process boundary.
@@ -161,6 +168,9 @@ from public ones.
 Structural work follows the reliability milestones unless a small extraction is required to implement them safely.
 
 ### R4: Narrow Turn Phase State
+
+Status: implemented. Finalization consumes a typed `FinalizationContext`, each model call owns a short-lived
+`LLMIterationState`, and typed dispositions replace shared terminal-control booleans.
 
 `turnExecution` mixes history, model selection, streaming, tool execution, persistence errors, usage, and final
 rendering. Typed `LLMCallOutcome` and `ToolLoopOutcome` improved terminal control flow, but `CallLLM` and
