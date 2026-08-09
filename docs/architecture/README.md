@@ -52,6 +52,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   admitted shared scroll semantics, exact per-target action discovery,
   companion wire authority, deployment order, and completion gates for the
   first post-B3 parity slice.
+- [Browser Capability BF1 Click Parity Admission](browser-capability-bf1-click-admission.md):
+  admitted shared semantic click authority, explicit approved-action mode,
+  companion approval attestation, target revalidation, recovery, rollout, and
+  completion gates.
 - [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md):
   selected six-phase BF1/BF2 execution program for shared interaction,
   document-context, protected form, artifact, diagnostic, and large-snapshot
