@@ -153,7 +153,7 @@ func TestSendFileTool_AllowsWhitelistedMediaTempPath(t *testing.T) {
 	}
 	testPath := testFile.Name()
 	if _, err := testFile.WriteString("forward me"); err != nil {
-		testFile.Close()
+		_ = testFile.Close()
 		t.Fatalf("WriteString(testFile) error = %v", err)
 	}
 	if err := testFile.Close(); err != nil {

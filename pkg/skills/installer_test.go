@@ -549,7 +549,7 @@ func TestSkillInstaller_DownloadFile(t *testing.T) {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(content))
+		_, _ = w.Write([]byte(content))
 	}))
 	defer server.Close()
 
@@ -593,7 +593,7 @@ func TestSkillInstaller_DownloadFile(t *testing.T) {
 	t.Run("http error", func(t *testing.T) {
 		errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("not found"))
+			_, _ = w.Write([]byte("not found"))
 		}))
 		defer errorServer.Close()
 
@@ -609,7 +609,7 @@ func TestSkillInstaller_DownloadRaw(t *testing.T) {
 	content := "raw skill content"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(content))
+		_, _ = w.Write([]byte(content))
 	}))
 	defer server.Close()
 
@@ -648,7 +648,9 @@ func TestSkillInstaller_DownloadRaw(t *testing.T) {
 func TestSkillInstaller_Uninstall(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillsDir := filepath.Join(tmpDir, "skills")
-	os.MkdirAll(skillsDir, 0o755)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	installer, err := NewSkillInstaller(tmpDir, "", "")
 	if err != nil {
@@ -660,8 +662,12 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 		skillDir := filepath.Join(skillsDir, skillName)
 
 		// Create skill directory with a file
-		os.MkdirAll(skillDir, 0o755)
-		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := installer.Uninstall(skillName); err != nil {
 			t.Errorf("Uninstall() error = %v", err)
@@ -686,8 +692,12 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 		skillDir := filepath.Join(skillsDir, "skill-name")
 
 		// Create skill directory
-		os.MkdirAll(skillDir, 0o755)
-		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := installer.Uninstall(skillName); err != nil {
 			t.Errorf("Uninstall() error = %v", err)
@@ -703,8 +713,12 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 		skillDir := filepath.Join(skillsDir, "skill-name")
 
 		// Create skill directory
-		os.MkdirAll(skillDir, 0o755)
-		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("test"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := installer.Uninstall(skillName); err != nil {
 			t.Errorf("Uninstall() error = %v", err)
@@ -719,7 +733,9 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillsDir := filepath.Join(tmpDir, "skills")
-	os.MkdirAll(skillsDir, 0o755)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	installer, err := NewSkillInstaller(tmpDir, "", "")
 	if err != nil {
@@ -728,8 +744,12 @@ func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {
 
 	// Create an existing skill directory
 	existingSkill := filepath.Join(skillsDir, "mintclaw")
-	os.MkdirAll(existingSkill, 0o755)
-	os.WriteFile(filepath.Join(existingSkill, "SKILL.md"), []byte("existing"), 0o644)
+	if err := os.MkdirAll(existingSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(existingSkill, "SKILL.md"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Try to install the same skill - should fail
 	err = installer.InstallFromGitHub(context.Background(), "bogdanovich/mintclaw")
@@ -805,7 +825,7 @@ func TestSkillInstaller_GetGithubDirAllFiles(t *testing.T) {
 					"url":  serverURL + "/api/scripts",
 				},
 			}
-			json.NewEncoder(w).Encode(items)
+			_ = json.NewEncoder(w).Encode(items)
 		} else if strings.Contains(r.URL.Path, "/api/scripts") {
 			// API response for scripts subdirectory
 			w.Header().Set("Content-Type", "application/json")
@@ -819,11 +839,11 @@ func TestSkillInstaller_GetGithubDirAllFiles(t *testing.T) {
 					"download_url": serverURL + "/download/test.py",
 				},
 			}
-			json.NewEncoder(w).Encode(items)
+			_ = json.NewEncoder(w).Encode(items)
 		} else if strings.Contains(r.URL.Path, "/download/") {
 			// Raw file download
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fileContent))
+			_, _ = w.Write([]byte(fileContent))
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -884,7 +904,9 @@ func TestSkillInstaller_GetGithubDirAllFiles(t *testing.T) {
 func TestSkillInstaller_InstallFromGitHub_WithToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillsDir := filepath.Join(tmpDir, "skills")
-	os.MkdirAll(skillsDir, 0o755)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -906,7 +928,7 @@ func TestSkillInstaller_InstallFromGitHub_WithToken(t *testing.T) {
 				"download_url": serverURL + "/download/SKILL.md",
 			},
 		}
-		json.NewEncoder(w).Encode(items)
+		_ = json.NewEncoder(w).Encode(items)
 	}))
 	serverURL = server.URL
 	defer server.Close()
@@ -944,7 +966,7 @@ func TestSkillInstaller_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("response"))
+		_, _ = w.Write([]byte("response"))
 	}))
 	defer server.Close()
 

@@ -27,7 +27,7 @@ func TestWebTool_WebFetch_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("<html><body><h1>Test Page</h1><p>Content here</p></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>Test Page</h1><p>Content here</p></body></html>"))
 	}))
 	defer server.Close()
 
@@ -69,7 +69,7 @@ func TestWebTool_WebFetch_JSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write(expectedJSON)
+		_, _ = w.Write(expectedJSON)
 	}))
 	defer server.Close()
 
@@ -178,7 +178,7 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(longContent))
+		_, _ = w.Write([]byte(longContent))
 	}))
 	defer server.Close()
 
@@ -201,7 +201,9 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 
 	// ForLLM should contain truncated content (not the full 20000 chars)
 	resultMap := make(map[string]any)
-	json.Unmarshal([]byte(result.ForLLM), &resultMap)
+	if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+		t.Fatal(err)
+	}
 	if text, ok := resultMap["text"].(string); ok {
 		if len(text) > 1100 { // Allow some margin
 			t.Errorf("Expected content to be truncated to ~1000 chars, got: %d", len(text))
@@ -266,7 +268,7 @@ func TestWebTool_WebFetch_TruncationNotice(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", tt.contentType)
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(tt.body))
+				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer server.Close()
 
@@ -311,7 +313,7 @@ func TestWebTool_WebFetch_NoTruncationNoticeWhenFitsInLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("short content"))
+		_, _ = w.Write([]byte("short content"))
 	}))
 	defer server.Close()
 
@@ -352,7 +354,7 @@ func TestWebFetchTool_PayloadTooLarge(t *testing.T) {
 		// Limit: 10 * 1024 * 1024 (10MB). We generate 10MB + 100 bytes of the letter 'A'.
 		largeData := bytes.Repeat([]byte("A"), int(testFetchLimit)+100)
 
-		w.Write(largeData)
+		_, _ = w.Write(largeData)
 	}))
 	// Ensure the server is shut down at the end of the test
 	defer ts.Close()
@@ -523,7 +525,7 @@ func TestWebTool_WebFetch_HTMLExtraction(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		w.Write(
+		_, _ = w.Write(
 			[]byte(
 				`<html><body><script>alert('test');</script><style>body{color:red;}</style><h1>Title</h1><p>Content</p></body></html>`,
 			),
@@ -688,7 +690,7 @@ func TestWebTool_WebFetch_PrivateHostAllowedByExactWhitelist(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("exact whitelist ok"))
+		_, _ = w.Write([]byte("exact whitelist ok"))
 	}))
 	defer server.Close()
 
@@ -713,7 +715,7 @@ func TestWebTool_WebFetch_PrivateHostAllowedByCIDRWhitelist(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("cidr whitelist ok"))
+		_, _ = w.Write([]byte("cidr whitelist ok"))
 	}))
 	defer server.Close()
 
@@ -740,7 +742,7 @@ func TestWebTool_WebFetch_PrivateHostAllowedForTests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
@@ -764,7 +766,7 @@ func TestWebTool_WebFetch_AllowsLoopbackProxy(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("proxied content"))
+		_, _ = w.Write([]byte("proxied content"))
 	}))
 	defer proxy.Close()
 
@@ -914,7 +916,7 @@ func TestNewSafeDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testin
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
@@ -936,7 +938,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	accepted := make(chan struct{}, 1)
 	go func() {
@@ -944,7 +946,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 		if acceptErr != nil {
 			return
 		}
-		conn.Close()
+		_ = conn.Close()
 		accepted <- struct{}{}
 	}()
 
@@ -963,7 +965,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 	if err != nil {
 		t.Fatalf("expected localhost DNS resolution to succeed with whitelist, got %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	select {
 	case <-accepted:
@@ -1186,7 +1188,7 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 
 		// Verify payload
 		var payload map[string]any
-		json.NewDecoder(r.Body).Decode(&payload)
+		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if payload["api_key"] != "test-key" {
 			t.Errorf("Expected api_key test-key, got %v", payload["api_key"])
 		}
@@ -1211,7 +1213,7 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -1261,7 +1263,7 @@ func TestWebTool_TavilySearch_RangeMapping(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{"title": "Recent result", "url": "https://example.com/recent", "content": "snippet"},
 			},
@@ -1322,7 +1324,7 @@ func TestWebTool_KagiSearch_SuccessRequestAndParsing(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"data": {
 				"search": [
 					{
@@ -1400,7 +1402,7 @@ func TestWebTool_KagiSearch_AuthErrorDoesNotLeakKey(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"unauthorized"}`))
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
 	defer server.Close()
 
@@ -1430,7 +1432,7 @@ func TestWebTool_KagiSearch_Non200Response(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"temporary failure"}`))
+		_, _ = w.Write([]byte(`{"error":"temporary failure"}`))
 	}))
 	defer server.Close()
 
@@ -1457,7 +1459,7 @@ func TestWebTool_KagiSearch_SkipsUnsupportedAndMalformedResults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"data": {
 				"image": [
 					{"title": "Image Result", "url": "https://images.example.com/1"}
@@ -1512,13 +1514,13 @@ func TestWebFetchTool_CloudflareChallenge_RetryWithHonestUA(t *testing.T) {
 			w.Header().Set("Cf-Mitigated", "challenge")
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("<html><body>Cloudflare challenge</body></html>"))
+			_, _ = w.Write([]byte("<html><body>Cloudflare challenge</body></html>"))
 			return
 		}
 		// Second request (honest UA retry): success
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("real content"))
+		_, _ = w.Write([]byte("real content"))
 	}))
 	defer server.Close()
 
@@ -1560,7 +1562,7 @@ func TestWebFetchTool_CloudflareChallenge_NoRetryOnOtherErrors(t *testing.T) {
 		requestCount++
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("plain forbidden"))
+		_, _ = w.Write([]byte("plain forbidden"))
 	}))
 	defer server.Close()
 
@@ -1586,7 +1588,7 @@ func TestWebFetchTool_CloudflareChallenge_RetryFailsToo(t *testing.T) {
 		w.Header().Set("Cf-Mitigated", "challenge")
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("<html><body>still blocked</body></html>"))
+		_, _ = w.Write([]byte("<html><body>still blocked</body></html>"))
 	}))
 	defer server.Close()
 
@@ -1672,7 +1674,7 @@ func TestWebTool_TavilySearch_Failover(t *testing.T) {
 
 		if apiKey == "key1" {
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte("Rate limited"))
+			_, _ = w.Write([]byte("Rate limited"))
 			return
 		}
 
@@ -1689,7 +1691,7 @@ func TestWebTool_TavilySearch_Failover(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -1729,7 +1731,7 @@ func TestWebTool_SearXNGSearch_RangeMapping(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{"title": "Recent result", "url": "https://example.com/1", "content": "snippet"},
 			},
@@ -1768,7 +1770,7 @@ func TestWebTool_GLMSearch_Success(t *testing.T) {
 		}
 
 		var payload map[string]any
-		json.NewDecoder(r.Body).Decode(&payload)
+		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if payload["search_query"] != "test query" {
 			t.Errorf("Expected search_query 'test query', got %v", payload["search_query"])
 		}
@@ -1791,7 +1793,7 @@ func TestWebTool_GLMSearch_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -1835,7 +1837,7 @@ func TestWebTool_GLMSearch_RangeMapping(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"search_result": []map[string]any{
 				{"title": "Recent GLM Result", "content": "snippet", "link": "https://example.com/glm-range"},
 			},
@@ -1874,7 +1876,7 @@ func TestWebTool_BaiduSearch_RangeMapping(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"references": []map[string]any{
 				{"title": "Recent Baidu Result", "url": "https://example.com/baidu", "content": "snippet"},
 			},
@@ -1903,7 +1905,7 @@ func TestWebTool_BaiduSearch_RangeMapping(t *testing.T) {
 func TestWebTool_GLMSearch_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"invalid api key"}`))
+		_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
 	}))
 	defer server.Close()
 

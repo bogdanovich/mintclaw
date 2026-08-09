@@ -42,7 +42,9 @@ func TestLoadImage_NoChannelContext(t *testing.T) {
 func TestLoadImage_NonImageFile(t *testing.T) {
 	dir := t.TempDir()
 	txtFile := filepath.Join(dir, "readme.txt")
-	os.WriteFile(txtFile, []byte("hello"), 0o644)
+	if err := os.WriteFile(txtFile, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	store := media.NewFileMediaStore()
 	tool := NewLoadImageTool(dir, false, 0, store)
@@ -66,7 +68,9 @@ func TestLoadImage_FileTooLarge(t *testing.T) {
 	// Create a file with PNG header but exceeding max size
 	data := make([]byte, 1024)
 	copy(data, []byte{0x89, 0x50, 0x4E, 0x47}) // PNG magic bytes
-	os.WriteFile(bigFile, data, 0o644)
+	if err := os.WriteFile(bigFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	store := media.NewFileMediaStore()
 	tool := NewLoadImageTool(dir, false, 512, store) // maxSize = 512
