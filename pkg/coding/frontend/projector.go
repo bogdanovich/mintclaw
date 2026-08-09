@@ -354,26 +354,11 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 }
 
 func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry TranscriptEntry) {
-	for i := range state.Entries {
-		if state.Entries[i].ID == entry.ID {
-			state.Entries[i] = entry
-			return
-		}
+	previousLength := len(state.Entries)
+	state.Entries = replaceEntry(state.Entries, entry)
+	if len(state.Entries) == previousLength {
+		return
 	}
-	insertAt := len(state.Entries)
-	if entry.Kind == EntryUser {
-		for i := range state.Entries {
-			candidate := state.Entries[i]
-			if candidate.TurnID == entry.TurnID &&
-				(candidate.Kind == EntryAssistant || candidate.Kind == EntryReasoning) {
-				insertAt = i
-				break
-			}
-		}
-	}
-	state.Entries = append(state.Entries, TranscriptEntry{})
-	copy(state.Entries[insertAt+1:], state.Entries[insertAt:])
-	state.Entries[insertAt] = entry
 	if overflow := len(state.Entries) - p.limits.Entries; overflow > 0 {
 		state.HasOlderEntries = true
 		state.Entries = slices.Clone(state.Entries[overflow:])

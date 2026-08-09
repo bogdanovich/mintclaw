@@ -125,7 +125,21 @@ func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []Tran
 			return entries
 		}
 	}
-	return append(entries, replacement)
+	insertAt := len(entries)
+	if replacement.Kind == EntryUser {
+		for i := range entries {
+			candidate := entries[i]
+			if candidate.TurnID == replacement.TurnID &&
+				(candidate.Kind == EntryAssistant || candidate.Kind == EntryReasoning) {
+				insertAt = i
+				break
+			}
+		}
+	}
+	entries = append(entries, TranscriptEntry{})
+	copy(entries[insertAt+1:], entries[insertAt:])
+	entries[insertAt] = replacement
+	return entries
 }
 
 func replaceTool(tools []ToolState, replacement ToolState) []ToolState {

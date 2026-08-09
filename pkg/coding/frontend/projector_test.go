@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -167,6 +168,36 @@ func TestLateTurnStartOrdersUserBeforeStreamedAssistant(t *testing.T) {
 	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryUser ||
 		snapshot.Entries[1].Kind != EntryAssistant {
 		t.Fatalf("late turn-start ordering = %+v", snapshot.Entries)
+	}
+}
+
+func TestLateTurnStartDeltaReductionConvergesWithSnapshot(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delta := range []Delta{
+		projector.AssistantAccumulated("turn-1", "already streaming", false),
+		projector.TurnStarted("turn-1", "fix it"),
+	} {
+		if err = reducer.Apply(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reducer.State(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("delta-reduced state = %+v, want snapshot %+v", got, want)
 	}
 }
 
