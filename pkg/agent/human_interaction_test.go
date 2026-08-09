@@ -741,6 +741,8 @@ func TestInteractionResolutionCallbackRunsOnceForTerminalHumanOutcome(t *testing
 func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
@@ -782,7 +784,8 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
-		Text: "yes", Values: map[string]string{"confirm": "yes"}, ReceivedAt: time.Now().UnixMilli(),
+		Text: "yes", Values: map[string]string{"confirm": "yes"},
+		MessageID: "question-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
 	if err != nil {
 		t.Fatal(err)
@@ -798,6 +801,18 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		t.Context(), registry, workspace, record, inbound, "raw child final", nil,
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
+	}
+	select {
+	case acknowledgement := <-manager.sent:
+		metadata := bus.OutboundMetadataFromMessage(acknowledgement)
+		if acknowledgement.Content == "raw child final" ||
+			acknowledgement.ReplyToMessageID != "question-answer" ||
+			!metadata.RemovesInteractionControls() ||
+			metadata.InteractionKind != bus.OutboundInteractionQuestion {
+			t.Fatalf("question control acknowledgement = %#v", acknowledgement)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent-only question did not remove Telegram controls")
 	}
 	task, _ := tasks.Get("subagent-parent")
 	if task.Status != taskregistry.StatusSucceeded ||
@@ -825,14 +840,19 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	if startedAt < 0 || completedAt <= startedAt {
 		t.Fatalf("task delivery was not durably started before completion: %#v", events)
 	}
-	msgBus := al.bus.(*bus.MessageBus)
 	select {
-	case outbound := <-msgBus.OutboundChan():
+	case outbound := <-manager.sent:
 		if outbound.Content == "raw child final" {
 			t.Fatalf("parent-only delivery leaked raw child final: %#v", outbound)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("parent-only completion was not processed")
+	default:
+	}
+	select {
+	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+		if outbound.Content == "raw child final" {
+			t.Fatalf("parent-only delivery leaked raw child final: %#v", outbound)
+		}
+	default:
 	}
 }
 

@@ -349,6 +349,7 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 		Account:   record.Route.AccountID,
 		ChatID:    record.Route.ChatID,
 		ChatType:  record.Route.ChatType,
+		SenderID:  record.Route.SenderID,
 		TopicID:   record.Route.TopicID,
 		SpaceID:   record.Route.SpaceID,
 		SpaceType: record.Route.SpaceType,
