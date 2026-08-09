@@ -207,9 +207,9 @@
           "actions": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 4,
+            "maxItems": 6,
             "uniqueItems": true,
-            "items": {"enum": ["click", "download", "navigate", "scroll"]}
+            "items": {"enum": ["click", "download", "navigate", "press", "scroll", "select"]}
           },
           "limits": {
             "type": "object",

@@ -188,7 +188,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "click" || action == "navigate" || action == "scroll" {
+			if action == "click" || action == "navigate" || action == "press" || action == "scroll" ||
+				action == "select" {
 				current[action] = struct{}{}
 			}
 		}
@@ -205,7 +206,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	actions := make([]browser.ActionKind, 0, len(intersection))
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionClick, browser.ActionScroll,
+			browser.ActionNavigate, browser.ActionClick, browser.ActionPress, browser.ActionScroll, browser.ActionSelect,
 		} {
 			if _, available := intersection[string(action)]; available {
 				actions = append(actions, action)
@@ -429,6 +430,10 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "navigate")
 	case browser.ActionClick:
 		return slices.Contains(worker.actions, "click")
+	case browser.ActionSelect:
+		return slices.Contains(worker.actions, "select")
+	case browser.ActionPress:
+		return slices.Contains(worker.actions, "press")
 	case browser.ActionScroll:
 		return slices.Contains(worker.actions, "scroll")
 	default:
@@ -457,6 +462,18 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		request.DriverAction.Kind == browser.DriverClick && slices.Contains(worker.actions, "click"):
 		action = nodes.BrowserAction{Kind: "click", Ref: request.DriverAction.Target}
 		effect = string(request.Prepared.Effect)
+	case request.Prepared.Action.Kind == browser.ActionSelect &&
+		request.DriverAction.Kind == browser.DriverSelect && slices.Contains(worker.actions, "select"):
+		action = nodes.BrowserAction{
+			Kind: "select", Ref: request.DriverAction.Target, Value: request.DriverAction.Value,
+		}
+		effect = "local_edit"
+	case request.Prepared.Action.Kind == browser.ActionPress &&
+		request.DriverAction.Kind == browser.DriverPress && slices.Contains(worker.actions, "press"):
+		action = nodes.BrowserAction{
+			Kind: "press", Target: request.Prepared.Action.Target, Key: request.DriverAction.Key,
+		}
+		effect = "unknown"
 	default:
 		return browser.ErrDenied
 	}
@@ -475,9 +492,11 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
 	}
-	if action.Kind == "click" {
+	if action.Kind == "click" || action.Kind == "select" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
+	}
+	if action.Kind == "click" || action.Kind == "press" {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
 			return browser.ErrDenied

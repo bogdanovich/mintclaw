@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 )
 
@@ -26,7 +27,7 @@ const (
 	BrowserNetworkAnyHTTP      = "any_http"
 
 	MaxBrowserProfiles         = 8
-	MaxBrowserActions          = 4
+	MaxBrowserActions          = 6
 	MaxBrowserScrollAmount     = 5
 	MaxBrowserSessions         = 1
 	MaxBrowserTabs             = 4
@@ -259,6 +260,9 @@ type BrowserAction struct {
 	Kind      string `json:"kind"`
 	URL       string `json:"url,omitempty"`
 	Ref       string `json:"ref,omitempty"`
+	Target    string `json:"target,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Key       string `json:"key,omitempty"`
 	Direction string `json:"direction,omitempty"`
 	Amount    int    `json:"amount,omitempty"`
 }
@@ -268,6 +272,9 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		Kind      string          `json:"kind"`
 		URL       string          `json:"url,omitempty"`
 		Ref       string          `json:"ref,omitempty"`
+		Target    string          `json:"target,omitempty"`
+		Value     string          `json:"value,omitempty"`
+		Key       string          `json:"key,omitempty"`
 		Direction string          `json:"direction,omitempty"`
 		Amount    json.RawMessage `json:"amount,omitempty"`
 	}
@@ -283,7 +290,8 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		)
 	}
 	*action = BrowserAction{
-		Kind: value.Kind, URL: value.URL, Ref: value.Ref, Direction: value.Direction, Amount: int(amount),
+		Kind: value.Kind, URL: value.URL, Ref: value.Ref, Target: value.Target,
+		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
 	}
 	return nil
 }
@@ -373,6 +381,18 @@ func BrowserClickEffect(role string) string {
 		return "external_commit"
 	}
 	return "unknown"
+}
+
+// BrowserPressKeyValid admits only document-scoped keys that cannot express
+// browser chrome, operating-system, or arbitrary modifier shortcuts.
+func BrowserPressKeyValid(key string) bool {
+	switch key {
+	case "Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+		"Home", "End", "PageUp", "PageDown", "Backspace", "Delete":
+		return true
+	default:
+		return false
+	}
 }
 
 type BrowserHostFeatures struct {
@@ -587,7 +607,8 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "click" && action != "download" && action != "navigate" && action != "scroll" {
+		if action != "click" && action != "download" && action != "navigate" && action != "press" &&
+			action != "scroll" && action != "select" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -730,13 +751,17 @@ func browserCommandInputSchema(
 			switch action {
 			case "download":
 				effect = "download"
+			case "select":
+				effect = "local_edit"
+			case "press":
+				effect = "unknown"
 			case "scroll":
 				effect = "read"
 			case "click":
 				effect = "unknown"
 			}
 			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" || action == "click" {
+			if action == "download" || action == "click" || action == "press" {
 				required = append(required, "approval_digest")
 			}
 			properties := map[string]any{
@@ -744,15 +769,29 @@ func browserCommandInputSchema(
 				"action":           browserActionSchema([]string{action}),
 				"effect":           map[string]any{"const": effect},
 			}
-			if action == "click" {
+			if action == "click" || action == "select" {
 				required = append(required, "expected_role")
-				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+			}
+			if action == "select" {
+				properties["expected_role"] = map[string]any{"const": "combobox"}
+			}
+			if action == "click" {
+				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
 			}
 			branch := map[string]any{
 				"required":   required,
 				"properties": properties,
+			}
+			if action == "select" {
+				branch["not"] = map[string]any{"required": []string{"approval_digest"}}
+			}
+			if action == "press" {
+				branch["not"] = map[string]any{"anyOf": []any{
+					map[string]any{"required": []string{"expected_role"}},
+					map[string]any{"required": []string{"expected_name"}},
+				}}
 			}
 			if action == "click" {
 				branch["oneOf"] = []any{
@@ -808,6 +847,12 @@ func browserCommandInputSchema(
 		if _, hasClick := allActions["click"]; hasClick {
 			actEffects = append(actEffects, "external_commit", "unknown")
 		}
+		if _, hasPress := allActions["press"]; hasPress && !slices.Contains(actEffects, "unknown") {
+			actEffects = append(actEffects, "unknown")
+		}
+		if _, hasSelect := allActions["select"]; hasSelect {
+			actEffects = append(actEffects, "local_edit")
+		}
 		add("session_id", identifier)
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
@@ -820,7 +865,9 @@ func browserCommandInputSchema(
 		add("prepared_action_hash", digest)
 		add("browser_policy_revision", digest)
 		add("profile_revision", identifier)
-		if _, hasClick := allActions["click"]; hasClick {
+		_, hasClick := allActions["click"]
+		_, hasSelect := allActions["select"]
+		if hasClick || hasSelect {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
@@ -994,6 +1041,29 @@ func browserActionSchema(actions []string) map[string]any {
 				"properties": map[string]any{
 					"kind": map[string]any{"const": "click"},
 					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
+		case "select":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "ref", "value"},
+				"properties": map[string]any{
+					"kind":  map[string]any{"const": "select"},
+					"ref":   map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"value": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxBrowserTextInputBytes},
+				},
+			})
+		case "press":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "target", "key"},
+				"properties": map[string]any{
+					"kind":   map[string]any{"const": "press"},
+					"target": map[string]any{"const": "document"},
+					"key": map[string]any{"enum": []string{
+						"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
+						"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
+					}},
 				},
 			})
 		}

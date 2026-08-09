@@ -16,6 +16,8 @@ type fakeBrowserCommandHost struct {
 	observed       int
 	navigated      int
 	clicked        int
+	selected       int
+	pressed        int
 	scrolled       int
 	closed         int
 	navigateError  error
@@ -95,6 +97,24 @@ func (host *fakeBrowserCommandHost) Click(
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Select(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.selected++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1), host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Press(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.pressed++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1), host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Close(
@@ -256,6 +276,69 @@ func TestRuntimeExecutesOnlyExactlyAttestedTypedBrowserClick(t *testing.T) {
 	}
 	if host.clicked != 1 {
 		t.Fatalf("denied clicks reached host: %d", host.clicked)
+	}
+}
+
+func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
+	selectHost := browserRuntimeHostFixture()
+	selectHost.profiles[0].DryRun = false
+	selectHost.profiles[0].AllowApprovedActions = true
+	selectHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	selectRuntime := newBrowserRuntimeFixture(t, selectHost)
+	selectInput := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_select_1",
+		Action:             nodes.BrowserAction{Kind: "select", Ref: "host_ref_1", Value: "CA"},
+		Effect:             "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+	}
+	invokeBrowserRuntime(t, selectRuntime, nodes.BrowserCommandAct, selectInput)
+	if selectHost.selected != 1 {
+		t.Fatalf("select calls = %d", selectHost.selected)
+	}
+
+	pressHost := browserRuntimeHostFixture()
+	pressHost.profiles[0].DryRun = false
+	pressHost.profiles[0].AllowApprovedActions = true
+	pressHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	pressRuntime := newBrowserRuntimeFixture(t, pressHost)
+	pressInput := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
+		ActionInvocationID: "browser_press_1",
+		Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Enter"},
+		Effect:             "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1",
+	}
+	var err error
+	pressInput.ApprovalDigest, err = nodes.BrowserApprovalDigest(pressInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invokeBrowserRuntime(t, pressRuntime, nodes.BrowserCommandAct, pressInput)
+	if pressHost.pressed != 1 {
+		t.Fatalf("press calls = %d", pressHost.pressed)
+	}
+
+	deniedHost := browserRuntimeHostFixture()
+	deniedHost.profiles[0].DryRun = false
+	deniedHost.profiles[0].AllowApprovedActions = true
+	deniedHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	deniedRuntime := newBrowserRuntimeFixture(t, deniedHost)
+	denied := pressInput
+	denied.ActionInvocationID = "browser_press_denied"
+	denied.ApprovalDigest = strings.Repeat("f", 64)
+	raw, err := json.Marshal(denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, deniedRuntime, nodes.BrowserCommandAct, raw)
+	if _, err = deniedRuntime.Invoke(t.Context(), plan); err == nil {
+		t.Fatal("unattested press was accepted")
+	}
+	if deniedHost.pressed != 0 {
+		t.Fatalf("denied press reached host: %d", deniedHost.pressed)
 	}
 }
 

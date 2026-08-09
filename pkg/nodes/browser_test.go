@@ -194,6 +194,58 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	}
 }
 
+func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"navigate", "press", "select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+
+	press := browserActInputFixture()
+	press["action"] = map[string]any{"kind": "press", "target": "document", "key": "Tab"}
+	press["effect"] = "unknown"
+	press["approval_digest"] = strings.Repeat("c", 64)
+	if err = validateInvocationInput(act.InputSchema, press); err != nil {
+		t.Fatalf("typed press input rejected: %v", err)
+	}
+	press["action"].(map[string]any)["key"] = "Control+L"
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("press schema accepted a privileged browser-chrome shortcut")
+	}
+	press["action"].(map[string]any)["key"] = "Tab"
+	press["expected_role"] = "button"
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("document press schema accepted an element semantic binding")
+	}
+	delete(press, "expected_role")
+	delete(press, "approval_digest")
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("press schema accepted missing approval attestation")
+	}
+
+	selection := browserActInputFixture()
+	selection["action"] = map[string]any{"kind": "select", "ref": "host_ref_1", "value": "CA"}
+	selection["effect"] = "local_edit"
+	selection["expected_role"] = "combobox"
+	selection["expected_name"] = "State"
+	if err = validateInvocationInput(act.InputSchema, selection); err != nil {
+		t.Fatalf("typed select input rejected: %v", err)
+	}
+	selection["expected_role"] = "textbox"
+	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+		t.Fatal("select schema accepted a non-combobox semantic role")
+	}
+	selection["expected_role"] = "combobox"
+	selection["approval_digest"] = strings.Repeat("d", 64)
+	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+		t.Fatal("select schema accepted an unrelated approval attestation")
+	}
+}
+
 func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate"}

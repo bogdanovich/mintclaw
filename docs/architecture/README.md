@@ -56,6 +56,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   admitted shared semantic click authority, explicit approved-action mode,
   companion approval attestation, target revalidation, recovery, rollout, and
   completion gates.
+- [Browser Capability BF1 Press And Select Parity Admission](browser-capability-bf1-press-select-admission.md):
+  admitted document-scoped keyboard input, bounded semantic option selection,
+  companion attestation, no-replay behavior, and cross-placement completion
+  gates.
 - [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md):
   selected six-phase BF1/BF2 execution program for shared interaction,
   document-context, protected form, artifact, diagnostic, and large-snapshot

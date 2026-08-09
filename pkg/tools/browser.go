@@ -668,11 +668,15 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		actions = append(actions, "download")
 	}
 	actionProperties := map[string]any{
-		"kind":         map[string]any{"type": "string", "enum": actions},
-		"url":          map[string]any{"type": "string"},
-		"ref":          map[string]any{"type": "string"},
-		"value":        map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
-		"key":          map[string]any{"type": "string"},
+		"kind":   map[string]any{"type": "string", "enum": actions},
+		"url":    map[string]any{"type": "string"},
+		"ref":    map[string]any{"type": "string"},
+		"target": map[string]any{"type": "string", "enum": []string{"document"}},
+		"value":  map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
+		"key": map[string]any{"type": "string", "enum": []string{
+			"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
+			"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
+		}},
 		"direction":    map[string]any{"type": "string", "enum": []string{"up", "down"}},
 		"amount":       map[string]any{"type": "integer"},
 		"decision":     map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}},
@@ -881,6 +885,7 @@ func browserActionFromArgs(raw any) (browser.Action, error) {
 	action.Kind = browser.ActionKind(kind)
 	action.URL, _ = args["url"].(string)
 	action.Ref, _ = args["ref"].(string)
+	action.Target, _ = args["target"].(string)
 	action.Value, _ = args["value"].(string)
 	if action.Kind == browser.ActionDialog {
 		_, action.PromptProvided = args["value"]
@@ -924,6 +929,8 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 		if action.ElementName != "" {
 			target += fmt.Sprintf(" %q", action.ElementName)
 		}
+	} else if action.Action.Kind == browser.ActionPress {
+		target = fmt.Sprintf(" for document key %q", action.Action.Key)
 	}
 	return fmt.Sprintf(
 		"Allow browser %s action%s with %s effect on %s?",

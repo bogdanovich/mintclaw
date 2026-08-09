@@ -1328,7 +1328,7 @@ func TestBrokerTreatsGlobalPressAsUnknownAndDryRunDenied(t *testing.T) {
 	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
 		Owner: owner, RequestID: "request_press", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
-		Action: Action{Kind: ActionPress, Key: "Tab"},
+		Action: Action{Kind: ActionPress, Target: "document", Key: "Tab"},
 	})
 	if err != nil || !prepared.RequiresApproval || prepared.Action.Effect != EffectUnknown {
 		t.Fatalf("PrepareAction(Tab) = %+v, %v", prepared, err)

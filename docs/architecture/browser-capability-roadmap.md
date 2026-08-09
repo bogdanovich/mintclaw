@@ -10,6 +10,8 @@ The first BF1 shared-action slice is admitted in
 [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md).
 The next selected slice is admitted in
 [Browser Capability BF1 Click Parity Admission](browser-capability-bf1-click-admission.md).
+The typed keyboard and option-selection slice is admitted in
+[Browser Capability BF1 Press And Select Parity Admission](browser-capability-bf1-press-select-admission.md).
 The selected six-phase continuation is governed by
 [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md).
 B2 completion evidence is recorded in

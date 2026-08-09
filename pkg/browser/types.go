@@ -286,6 +286,7 @@ type Action struct {
 	Kind           ActionKind `json:"kind"`
 	URL            string     `json:"url,omitempty"`
 	Ref            string     `json:"ref,omitempty"`
+	Target         string     `json:"target,omitempty"`
 	Value          string     `json:"value,omitempty"`
 	Key            string     `json:"key,omitempty"`
 	Direction      string     `json:"direction,omitempty"`
@@ -306,14 +307,16 @@ func (action Action) Validate(maxTextBytes int) error {
 	}
 	switch action.Kind {
 	case ActionNavigate:
-		if action.URL == "" || action.Ref != "" || action.Value != "" || action.Key != "" || action.Direction != "" ||
+		if action.URL == "" || action.Ref != "" || action.Target != "" || action.Value != "" || action.Key != "" ||
+			action.Direction != "" ||
 			action.Decision != "" ||
 			action.PromptProvided ||
 			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed navigate action", ErrInvalid)
 		}
 	case ActionClick:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Value != "" || action.Key != "" ||
+		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Value != "" ||
+			action.Key != "" ||
 			action.Decision != "" ||
 			action.PromptProvided ||
 			action.Direction != "" ||
@@ -321,21 +324,24 @@ func (action Action) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed click action", ErrInvalid)
 		}
 	case ActionFill:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Key != "" || action.Direction != "" ||
+		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
+			action.Direction != "" ||
 			action.Decision != "" ||
 			action.PromptProvided ||
 			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed fill action", ErrInvalid)
 		}
 	case ActionSelect:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Key != "" || action.Direction != "" ||
+		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
+			action.Direction != "" ||
 			action.Decision != "" ||
 			action.PromptProvided ||
 			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed select action", ErrInvalid)
 		}
 	case ActionPress:
-		if action.URL != "" || action.Ref != "" || action.Value != "" || !validBrowserKey(action.Key) ||
+		if action.URL != "" || action.Ref != "" || action.Target != "document" || action.Value != "" ||
+			!validBrowserKey(action.Key) ||
 			action.Decision != "" ||
 			action.PromptProvided ||
 			action.Direction != "" ||
@@ -343,7 +349,8 @@ func (action Action) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed press action", ErrInvalid)
 		}
 	case ActionScroll:
-		if action.URL != "" || action.Ref != "" || action.Value != "" || action.Key != "" || action.Decision != "" ||
+		if action.URL != "" || action.Ref != "" || action.Target != "" || action.Value != "" || action.Key != "" ||
+			action.Decision != "" ||
 			action.PromptProvided ||
 			(action.Direction != "up" && action.Direction != "down") ||
 			action.Amount < 1 ||
@@ -351,7 +358,8 @@ func (action Action) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed scroll action", ErrInvalid)
 		}
 	case ActionDialog:
-		if action.URL != "" || action.Ref != "" || action.Key != "" || action.Direction != "" || action.Amount != 0 ||
+		if action.URL != "" || action.Ref != "" || action.Target != "" || action.Key != "" || action.Direction != "" ||
+			action.Amount != 0 ||
 			(action.Decision != "accept" && action.Decision != "dismiss") ||
 			(action.Decision == "dismiss" && (action.Value != "" || action.PromptProvided)) ||
 			(!action.PromptProvided && action.Value != "") {
@@ -360,13 +368,20 @@ func (action Action) Validate(maxTextBytes int) error {
 	case ActionUpload:
 		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
 			len(action.ArtifactRef) > 512 ||
-			action.URL != "" || action.Value != "" || action.Key != "" || action.Direction != "" ||
+			action.URL != "" || action.Target != "" || action.Value != "" || action.Key != "" || action.Direction != "" ||
 			action.Amount != 0 || action.Decision != "" || action.PromptProvided || action.Deliver {
 			return fmt.Errorf("%w: malformed upload action", ErrInvalid)
 		}
 	case ActionDownload:
-		if !validIdentifier(action.Ref) || action.ArtifactRef != "" || action.URL != "" || action.Value != "" ||
-			action.Key != "" || action.Direction != "" || action.Amount != 0 || action.Decision != "" ||
+		if !validIdentifier(action.Ref) ||
+			action.ArtifactRef != "" ||
+			action.URL != "" ||
+			action.Target != "" ||
+			action.Value != "" ||
+			action.Key != "" ||
+			action.Direction != "" ||
+			action.Amount != 0 ||
+			action.Decision != "" ||
 			action.PromptProvided {
 			return fmt.Errorf("%w: malformed download action", ErrInvalid)
 		}
@@ -376,7 +391,7 @@ func (action Action) Validate(maxTextBytes int) error {
 
 func validBrowserKey(key string) bool {
 	switch key {
-	case "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+	case "Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
 		"Home", "End", "PageUp", "PageDown", "Backspace", "Delete":
 		return true
 	default:

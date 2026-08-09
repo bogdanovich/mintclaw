@@ -386,7 +386,8 @@ func (host *BrowserHost) Navigate(
 		!browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" ||
 		request.Action.Kind != "navigate" || request.Action.URL == "" ||
-		request.Action.Ref != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.Action.Ref != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -404,7 +405,8 @@ func (host *BrowserHost) Click(
 		!browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) ||
 		request.Action.Kind != "click" || !browserHostIdentifier(request.Action.Ref) ||
-		request.Action.URL != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
 		request.Effect != nodes.BrowserClickEffect(request.ExpectedRole) ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
@@ -413,6 +415,47 @@ func (host *BrowserHost) Click(
 	}
 	return host.executeAction(ctx, request, "click", browserworker.DriverAction{
 		Kind: browserworker.DriverClick,
+	})
+}
+
+func (host *BrowserHost) Select(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != "select" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.Value == "" || len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "combobox" || len(request.ExpectedName) > 4096 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "select", browserworker.DriverAction{
+		Kind: browserworker.DriverSelect, Value: request.Action.Value,
+	})
+}
+
+func (host *BrowserHost) Press(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "unknown" ||
+		request.Action.Kind != "press" || request.Action.Target != "document" ||
+		!nodes.BrowserPressKeyValid(request.Action.Key) || request.Action.URL != "" || request.Action.Ref != "" ||
+		request.Action.Value != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "" || request.ExpectedName != "" ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "press", browserworker.DriverAction{
+		Kind: browserworker.DriverPress, Key: request.Action.Key,
 	})
 }
 
@@ -426,7 +469,8 @@ func (host *BrowserHost) Scroll(
 		request.Action.Kind != "scroll" ||
 		(request.Action.Direction != "up" && request.Action.Direction != "down") ||
 		request.Action.Amount < 1 || request.Action.Amount > nodes.MaxBrowserScrollAmount ||
-		request.Action.URL != "" || request.Action.Ref != "" ||
+		request.Action.URL != "" || request.Action.Ref != "" || request.Action.Target != "" ||
+		request.Action.Value != "" || request.Action.Key != "" ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -463,12 +507,12 @@ func (host *BrowserHost) executeAction(
 		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
+	if (action == "click" || action == "press") && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
 		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
-	if action == "click" {
+	if action == "click" || action == "select" {
 		var found bool
 		boundElement, found = session.elementRefs[request.Action.Ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
@@ -494,7 +538,7 @@ func (host *BrowserHost) executeAction(
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" {
+	if action == "click" || action == "select" {
 		targets, matches := 0, 0
 		for _, element := range current.Elements {
 			if element.Target != boundElement.Target {
