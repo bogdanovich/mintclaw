@@ -603,6 +603,15 @@ func validUTF8Suffix(s string, maxBytes int) string {
 }
 
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *toolshared.ToolResult {
+	admission, ok := t.sessionManager.beginAdmission()
+	if !ok {
+		return toolshared.ErrorResult("runtime exec closed before process admission")
+	}
+	var admissionErr error
+	defer func() {
+		admission.finish(admissionErr)
+	}()
+
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -681,16 +690,25 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 
 	session.PID = cmd.Process.Pid
-	if !t.sessionManager.Add(session) {
+	if !admission.admit(session) {
 		terminateErr := terminateProcessTree(cmd)
 		waitErr := cmd.Wait()
-		if session.ptyMaster != nil {
-			_ = session.ptyMaster.Close()
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			waitErr = nil
 		}
-		return toolshared.ErrorResult(fmt.Sprintf(
-			"runtime exec closed during process admission: %v",
-			errors.Join(terminateErr, waitErr),
-		))
+		var ptyCloseErr error
+		if session.ptyMaster != nil {
+			ptyCloseErr = session.ptyMaster.Close()
+		}
+		admissionErr = errors.Join(terminateErr, waitErr, ptyCloseErr)
+		if admissionErr != nil {
+			return toolshared.ErrorResult(fmt.Sprintf(
+				"runtime exec closed during process admission cleanup: %v",
+				admissionErr,
+			))
+		}
+		return toolshared.ErrorResult("runtime exec closed during process admission")
 	}
 
 	session.outputBuffer = &bytes.Buffer{}

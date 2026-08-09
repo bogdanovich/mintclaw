@@ -171,14 +171,21 @@ func (s *ProcessSession) ToSessionInfo() toolshared.SessionInfo {
 }
 
 type SessionManager struct {
-	mu        sync.RWMutex
-	sessions  map[string]*ProcessSession
-	closing   bool
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	closeOnce sync.Once
-	closeDone chan struct{}
-	closeErr  error
+	mu              sync.RWMutex
+	sessions        map[string]*ProcessSession
+	closing         bool
+	admissionWG     sync.WaitGroup
+	admissionErrors []error
+	stopCh          chan struct{}
+	stopOnce        sync.Once
+	closeOnce       sync.Once
+	closeDone       chan struct{}
+	closeErr        error
+}
+
+type sessionAdmission struct {
+	manager *SessionManager
+	once    sync.Once
 }
 
 func NewSessionManager() *SessionManager {
@@ -228,13 +235,52 @@ func (sm *SessionManager) cleanupOldSessions() {
 }
 
 func (sm *SessionManager) Add(session *ProcessSession) bool {
+	admission, ok := sm.beginAdmission()
+	if !ok {
+		return false
+	}
+	admitted := admission.admit(session)
+	admission.finish(nil)
+	return admitted
+}
+
+// beginAdmission reserves startup work before a process is created. Close
+// seals this gate and waits for every reservation to commit or clean up.
+func (sm *SessionManager) beginAdmission() (*sessionAdmission, bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	if sm.closing {
+		return nil, false
+	}
+	sm.admissionWG.Add(1)
+	return &sessionAdmission{manager: sm}, true
+}
+
+func (a *sessionAdmission) admit(session *ProcessSession) bool {
+	if a == nil || a.manager == nil {
 		return false
 	}
-	sm.sessions[session.ID] = session
+	a.manager.mu.Lock()
+	defer a.manager.mu.Unlock()
+	if a.manager.closing {
+		return false
+	}
+	a.manager.sessions[session.ID] = session
 	return true
+}
+
+func (a *sessionAdmission) finish(err error) {
+	if a == nil || a.manager == nil {
+		return
+	}
+	a.once.Do(func() {
+		if err != nil {
+			a.manager.mu.Lock()
+			a.manager.admissionErrors = append(a.manager.admissionErrors, err)
+			a.manager.mu.Unlock()
+		}
+		a.manager.admissionWG.Done()
+	})
 }
 
 // Close rejects new sessions, terminates admitted processes, and stops cleanup.
@@ -242,14 +288,17 @@ func (sm *SessionManager) Close() error {
 	sm.closeOnce.Do(func() {
 		sm.mu.Lock()
 		sm.closing = true
+		sm.mu.Unlock()
+
+		sm.Stop()
+		sm.admissionWG.Wait()
+		sm.mu.Lock()
 		sessions := make([]*ProcessSession, 0, len(sm.sessions))
 		for _, session := range sm.sessions {
 			sessions = append(sessions, session)
 		}
+		closeErrors := append([]error(nil), sm.admissionErrors...)
 		sm.mu.Unlock()
-
-		sm.Stop()
-		var closeErrors []error
 		for _, session := range sessions {
 			if session == nil || session.IsDone() {
 				continue

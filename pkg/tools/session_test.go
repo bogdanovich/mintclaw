@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +85,31 @@ func TestSessionManager_CloseRejectsLateAdmissionAndReturnsKillErrors(t *testing
 	_, err := sm.Get("late")
 	require.ErrorIs(t, err, ErrSessionNotFound)
 	require.ErrorIs(t, sm.Close(), ErrSessionNotFound)
+}
+
+func TestSessionManager_CloseWaitsForInFlightAdmissionCleanup(t *testing.T) {
+	sm := NewSessionManager()
+	admission, ok := sm.beginAdmission()
+	require.True(t, ok)
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- sm.Close()
+	}()
+	require.Eventually(t, func() bool {
+		sm.mu.RLock()
+		defer sm.mu.RUnlock()
+		return sm.closing
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-closed:
+		t.Fatalf("Close() returned before admission cleanup: %v", err)
+	default:
+	}
+	require.False(t, admission.admit(&ProcessSession{ID: "too-late"}))
+	cleanupErr := errors.New("admission cleanup failed")
+	admission.finish(cleanupErr)
+	require.ErrorIs(t, <-closed, cleanupErr)
 }
 
 func TestProcessSession_IsDone(t *testing.T) {

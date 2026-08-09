@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -70,6 +72,13 @@ type AgentInstance struct {
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
+	ownedToolClosers   []interface{ Close() error }
+	closeState         *agentInstanceCloseState
+}
+
+type agentInstanceCloseState struct {
+	once sync.Once
+	err  error
 }
 
 func (a *AgentInstance) admitTrustedToolRegistry() {
@@ -78,8 +87,8 @@ func (a *AgentInstance) admitTrustedToolRegistry() {
 	}
 }
 
-func (a *AgentInstance) usesAdmittedTrustedToolRegistry() bool {
-	return a != nil && a.trustedToolRegistry != nil && a.Tools == a.trustedToolRegistry
+func (a *AgentInstance) isAdmittedTrustedToolRegistry(registry *tools.ToolRegistry) bool {
+	return a != nil && a.trustedToolRegistry != nil && registry == a.trustedToolRegistry
 }
 
 type providerOwnership struct {
@@ -342,6 +351,14 @@ func newAgentInstance(
 		CandidateProviders:        routingCfg.candidateProviders,
 		ToolLoopDetection:         loopGuardConfigFromConfig(cfg.Tools.LoopDetection),
 		ownedProviders:            providerOwnership.owned,
+		closeState:                &agentInstanceCloseState{},
+	}
+	if layout != nil {
+		if execTool, ok := toolInit.toolsRegistry.Get("exec"); ok {
+			if closer, ok := execTool.(interface{ Close() error }); ok {
+				instance.ownedToolClosers = append(instance.ownedToolClosers, closer)
+			}
+		}
 	}
 	if layout != nil {
 		instance.Layout = *layout
@@ -832,23 +849,31 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
-	var sessionErr error
-	if a.Tools != nil {
-		if execTool, ok := a.Tools.Get("exec"); ok {
-			if closer, ok := execTool.(interface{ Close() error }); ok {
-				_ = closer.Close()
+	if a == nil {
+		return nil
+	}
+	if a.closeState == nil {
+		a.closeState = &agentInstanceCloseState{}
+	}
+	a.closeState.once.Do(func() {
+		var closeErrors []error
+		for _, closer := range a.ownedToolClosers {
+			if closer != nil {
+				closeErrors = append(closeErrors, closer.Close())
 			}
 		}
-	}
-	if a.Sessions != nil {
-		sessionErr = a.Sessions.Close()
-		a.Sessions = nil
-	}
-	for _, provider := range a.ownedProviders {
-		provider.Close()
-	}
-	a.ownedProviders = nil
-	return sessionErr
+		a.ownedToolClosers = nil
+		if a.Sessions != nil {
+			closeErrors = append(closeErrors, a.Sessions.Close())
+			a.Sessions = nil
+		}
+		for _, provider := range a.ownedProviders {
+			provider.Close()
+		}
+		a.ownedProviders = nil
+		a.closeState.err = errors.Join(closeErrors...)
+	})
+	return a.closeState.err
 }
 
 // initSessionStore creates the session persistence backend.

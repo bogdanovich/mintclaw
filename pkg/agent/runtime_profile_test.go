@@ -34,6 +34,27 @@ type trackedRuntimeSessionStore struct {
 	closeCount int
 }
 
+type failingRuntimeCloser struct {
+	err        error
+	closeCount int
+}
+
+func (c *failingRuntimeCloser) Close() error {
+	c.closeCount++
+	return c.err
+}
+
+type failingRuntimeSessionStore struct {
+	session.SessionStore
+	err        error
+	closeCount int
+}
+
+func (s *failingRuntimeSessionStore) Close() error {
+	s.closeCount++
+	return s.err
+}
+
 func (s *trackedRuntimeSessionStore) Close() error {
 	s.closeCount++
 	return s.SessionStore.Close()
@@ -157,6 +178,25 @@ func TestAgentInstanceCloseOwnsOnlyInternallyCreatedProviders(t *testing.T) {
 	}
 }
 
+func TestAgentInstanceCloseAggregatesOwnedRuntimeErrors(t *testing.T) {
+	toolErr := errors.New("tool close failed")
+	sessionErr := errors.New("session close failed")
+	closer := &failingRuntimeCloser{err: toolErr}
+	store := &failingRuntimeSessionStore{err: sessionErr}
+	agent := &AgentInstance{Sessions: store, ownedToolClosers: []interface{ Close() error }{closer}}
+
+	err := agent.Close()
+	if !errors.Is(err, toolErr) || !errors.Is(err, sessionErr) {
+		t.Fatalf("Close() error = %v, want joined tool and session errors", err)
+	}
+	if secondErr := agent.Close(); !errors.Is(secondErr, toolErr) || !errors.Is(secondErr, sessionErr) {
+		t.Fatalf("second Close() error = %v, want stable joined error", secondErr)
+	}
+	if closer.closeCount != 1 || store.closeCount != 1 {
+		t.Fatalf("close counts = tool:%d session:%d, want one each", closer.closeCount, store.closeCount)
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -239,11 +279,11 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 	admittedRegistry := agent.Tools
 	agent.Tools = admittedRegistry.Clone()
-	if agent.usesAdmittedTrustedToolRegistry() {
+	if agent.isAdmittedTrustedToolRegistry(agent.Tools) {
 		t.Fatal("cloned replacement registry retained coding trust")
 	}
 	agent.Tools = admittedRegistry
-	if !agent.usesAdmittedTrustedToolRegistry() {
+	if !agent.isAdmittedTrustedToolRegistry(agent.Tools) {
 		t.Fatal("restored admitted registry lost coding trust")
 	}
 	if err := loop.RegisterRuntimeTool("extra", nil); err == nil {
