@@ -320,46 +320,14 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("context manager changes require restart; hot reload is supported only for none")
 	}
 
-	// Create new registry with updated config and provider
-	// Wrap in defer/recover to handle any panics gracefully
-	var registry *AgentRegistry
-	var constructionErr error
-	done := make(chan struct{}, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.RecoverPanicNoExit(r)
-				constructionErr = fmt.Errorf("panic during registry creation: %v", r)
-				logger.ErrorCF("agent", "Panic during registry creation",
-					map[string]any{"panic": r})
-			}
-			close(done)
-		}()
-
+	registry, err := constructAgentRegistry(ctx, func() (*AgentRegistry, error) {
 		if al.runtimeProfile != nil {
-			registry, constructionErr = newAgentRegistryWithRuntimeProfile(cfg, provider, *al.runtimeProfile)
-			return
+			return newAgentRegistryWithRuntimeProfile(cfg, provider, *al.runtimeProfile)
 		}
-		registry = NewAgentRegistry(cfg, provider)
-	}()
-
-	// Wait for completion or context cancellation
-	select {
-	case <-done:
-		if registry == nil {
-			if constructionErr != nil {
-				return fmt.Errorf("registry creation failed: %w", constructionErr)
-			}
-			return fmt.Errorf("registry creation failed (nil result)")
-		}
-	case <-ctx.Done():
-		return fmt.Errorf("context canceled during registry creation: %w", ctx.Err())
-	}
-
-	// Check context again before proceeding
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled after registry creation: %w", err)
+		return NewAgentRegistry(cfg, provider), nil
+	})
+	if err != nil {
+		return err
 	}
 	if al.isolatedSkillBootstrap {
 		al.isolateSkillRegistry(registry, cfg)
@@ -418,27 +386,19 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 			map[string]any{"error": err.Error()})
 	}
 
-	// Close old provider after releasing the lock
-	// This prevents blocking readers while closing
-	if oldProvider, ok := extractProvider(oldRegistry); ok {
+	// Close old runtime-owned resources after releasing the lock and draining
+	// readers. Legacy loops retain their historical caller-provider lifecycle.
+	if al.runtimeProfile != nil {
+		if !al.waitForActiveRequests(ctx, 2*time.Second) {
+			logReloadCleanupWaitFailure(ctx)
+		}
+		oldRegistry.Close()
+	} else if oldProvider, ok := extractProvider(oldRegistry); ok {
 		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
 			// Wait for in-flight turns to drain before closing the previous
 			// provider so reload does not interrupt an active request.
 			if !al.waitForActiveRequests(ctx, 2*time.Second) {
-				if ctx.Err() != nil {
-					// Context canceled, close immediately but log warning
-					logger.WarnCF(
-						"agent",
-						"Context canceled during provider cleanup, forcing close",
-						map[string]any{"error": ctx.Err()},
-					)
-				} else {
-					logger.WarnCF(
-						"agent",
-						"Timed out waiting for active requests during provider cleanup, forcing close",
-						map[string]any{"timeout_ms": 2000},
-					)
-				}
+				logReloadCleanupWaitFailure(ctx)
 			}
 			stateful.Close()
 		}
@@ -450,6 +410,76 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		})
 
 	return nil
+}
+
+type registryConstructionResult struct {
+	registry *AgentRegistry
+	err      error
+}
+
+func constructAgentRegistry(
+	ctx context.Context,
+	construct func() (*AgentRegistry, error),
+) (*AgentRegistry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before registry creation: %w", err)
+	}
+
+	results := make(chan registryConstructionResult, 1)
+	go func() {
+		result := registryConstructionResult{}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.RecoverPanicNoExit(recovered)
+				result.err = fmt.Errorf("panic during registry creation: %v", recovered)
+				logger.ErrorCF("agent", "Panic during registry creation", map[string]any{"panic": recovered})
+			}
+			results <- result
+		}()
+		result.registry, result.err = construct()
+	}()
+
+	select {
+	case result := <-results:
+		if result.err != nil {
+			if result.registry != nil {
+				result.registry.Close()
+			}
+			return nil, fmt.Errorf("registry creation failed: %w", result.err)
+		}
+		if result.registry == nil {
+			return nil, fmt.Errorf("registry creation failed (nil result)")
+		}
+		if err := ctx.Err(); err != nil {
+			result.registry.Close()
+			return nil, fmt.Errorf("context canceled after registry creation: %w", err)
+		}
+		return result.registry, nil
+	case <-ctx.Done():
+		go func() {
+			result := <-results
+			if result.registry != nil {
+				result.registry.Close()
+			}
+		}()
+		return nil, fmt.Errorf("context canceled during registry creation: %w", ctx.Err())
+	}
+}
+
+func logReloadCleanupWaitFailure(ctx context.Context) {
+	if ctx.Err() != nil {
+		logger.WarnCF(
+			"agent",
+			"Context canceled during runtime cleanup, forcing close",
+			map[string]any{"error": ctx.Err()},
+		)
+		return
+	}
+	logger.WarnCF(
+		"agent",
+		"Timed out waiting for active requests during runtime cleanup, forcing close",
+		map[string]any{"timeout_ms": 2000},
+	)
 }
 
 // GetRegistry returns the current registry (thread-safe)

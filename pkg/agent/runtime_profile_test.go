@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 type countingStatefulProvider struct {
@@ -49,6 +51,98 @@ func TestAgentInstanceCloseOwnsOnlyInternallyCreatedProviders(t *testing.T) {
 	}
 	if created.closeCount != 1 {
 		t.Fatalf("internally created provider close count = %d, want 1", created.closeCount)
+	}
+}
+
+type closeTrackingSessionStore struct {
+	session.SessionStore
+	closed chan struct{}
+}
+
+func (s *closeTrackingSessionStore) Close() error {
+	select {
+	case <-s.closed:
+	default:
+		close(s.closed)
+	}
+	return s.SessionStore.Close()
+}
+
+func TestConstructAgentRegistryClosesLateResultAfterCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store := &closeTrackingSessionStore{
+		SessionStore: session.NewSessionManager(""),
+		closed:       make(chan struct{}),
+	}
+	registry := &AgentRegistry{agents: map[string]*AgentInstance{
+		"main": {ID: "main", Sessions: store},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := constructAgentRegistry(ctx, func() (*AgentRegistry, error) {
+			close(started)
+			<-release
+			return registry, nil
+		})
+		result <- err
+	}()
+	<-started
+	cancel()
+	if err := <-result; err == nil {
+		t.Fatal("constructAgentRegistry() error = nil, want cancellation")
+	}
+	close(release)
+	select {
+	case <-store.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("late registry was not closed after cancellation")
+	}
+}
+
+func TestRuntimeProfileReloadClosesOldRegistryWithoutClosingInjectedProvider(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-reload-cleanup"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	injected := &countingStatefulProvider{}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), injected, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	oldAgent := loop.GetRegistry().GetDefaultAgent()
+	oldStore := &closeTrackingSessionStore{
+		SessionStore: oldAgent.Sessions,
+		closed:       make(chan struct{}),
+	}
+	oldAgent.Sessions = oldStore
+
+	reloaded := *cfg
+	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err != nil {
+		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
+	}
+	select {
+	case <-oldStore.closed:
+	default:
+		t.Fatal("profile reload did not close old registry session store")
+	}
+	if injected.closeCount != 0 {
+		t.Fatalf("profile reload closed caller-injected provider %d times", injected.closeCount)
 	}
 }
 
