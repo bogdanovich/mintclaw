@@ -608,7 +608,7 @@ func (host *BrowserHost) sessionView(session *browserHostSession) BrowserHostSes
 }
 
 func browserHostSessionView(session *browserHostSession) BrowserHostSession {
-	recovery := "none"
+	recovery := ""
 	if session.state == "lost" {
 		recovery = "close"
 		if session.safeFailure == "cleanup_required" {

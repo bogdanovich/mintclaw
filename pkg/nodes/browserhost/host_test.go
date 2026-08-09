@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -120,6 +121,19 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	if err != nil || opened.SessionID != "browser_session_1" || opened.State != "ready" ||
 		opened.TabID != "tab_primary" || !opened.Features.Navigate || opened.Features.Download {
 		t.Fatalf("Open() = %#v, %v", opened, err)
+	}
+	rawOpened, err := json.Marshal(opened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors, err := nodes.BrowserCommandDescriptors(host.BrowserProfiles())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = nodes.ValidateInvocationOutput(
+		descriptors[0], rawOpened, nodes.BrowserLimits{}.Effective().ToolResultBytes,
+	); err != nil {
+		t.Fatalf("Open() output violates its typed command schema: %v", err)
 	}
 	if len(factory.requests) != 1 || factory.requests[0].Target != companionBrowserTarget ||
 		factory.requests[0].Profile != nodes.BrowserProfileManaged {
