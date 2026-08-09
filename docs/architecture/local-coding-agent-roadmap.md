@@ -74,6 +74,12 @@ The following decisions are part of the admitted scope:
     narrow authenticated local client, not by asking the live agent's model to
     proxy a second agent turn. Remote capability access never changes the local
     thread's cwd or silently grants every paired node to the coding profile.
+15. Node Companion P5a durable jobs and P8 remote workspace routing remain
+    separate from coding-task ownership. A coding client may invoke a P5a job
+    for a bounded remote build or test, while repository-owning remote work
+    remains one `CodingTask`, one `CodingThread`, and one node-local execution
+    root. The shared relationship is defined in
+    [`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
 
 ## Intended User Experience
 
@@ -198,6 +204,14 @@ This supports two deliberately different operations:
   a `CodingTask` to a project-bound coding worker there and observes, steers,
   or cancels it. It must not approximate remote editing with a long sequence of
   shell reads and writes or pretend that a remote path is its local cwd.
+
+A durable node job is a third, lower-level operation: it owns one OS process,
+bounded logs, cancellation evidence, and declared artifacts. It may be used by
+a coding thread for a long build or test, but it never owns repository
+reasoning, transcript resume, worktree isolation, questions, or PR delivery.
+Likewise, a future live-agent remote workspace routes compatible tools to a
+target and working scope; it does not become a coding worker or a second job
+manager.
 
 The first slice should require an already-running local gateway/control-plane
 endpoint. A Unix-domain socket or equivalent same-user local transport exposes

@@ -12,8 +12,11 @@ P0, P1, P2, P3, and P4 are complete. P2 deployment evidence is recorded in
 P3 completion evidence is recorded in
 [`node-companion-p3-deployment-evidence.md`](../operations/node-companion-p3-deployment-evidence.md).
 P4 completion evidence is recorded in
-[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). P5
-and later milestones remain unadmitted.
+[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). The
+bounded P5a durable-jobs slice is admitted under
+[`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
+The remainder of P5, P8 remote workspace routing, and later milestones remain
+unadmitted.
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -751,6 +754,13 @@ Telegram message or an inbound node port.
 
 ## P5: Additional Executors And Long-Running Work
 
+The first bounded slice, P5a durable node jobs, is admitted under
+[`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
+It deliberately implements process lifecycle rather than remote workspace or
+coding-task ownership. Its job identity, logs, cancellation, and artifact
+contracts are designed for later reuse by P8 without creating a second job
+API.
+
 Add isolation and durable work as independent capabilities:
 
 - Docker executor with pinned images, resource limits, explicit mounts, and
@@ -808,6 +818,12 @@ Interactive sessions must not reuse synchronous `system.exec.v1` semantics.
 Media output uses the artifact contract established by P2.
 
 ## P8: Remote Workspace Routing
+
+P8 remains unadmitted. P5a establishes only the durable job capability that a
+future remote workspace may route. The local coding-agent roadmap separately
+owns `CodingTask` and `CodingThread` semantics for repository-owning remote
+development; P8 must reuse that boundary rather than approximating a coding
+worker with remote file calls and shell jobs.
 
 After shell, filesystem, artifact, and selected application capabilities have
 proven their individual contracts, consider a remote workspace abstraction.
