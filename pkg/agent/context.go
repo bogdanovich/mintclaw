@@ -206,6 +206,12 @@ func (cb *ContextBuilder) promptRegistryOrDefault() *PromptRegistry {
 
 func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
+	memoryDir := filepath.Join(workspacePath, "memory")
+	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
+	if cb.memory != nil {
+		memoryDir, _ = filepath.Abs(cb.memory.memoryDir)
+		memoryFile, _ = filepath.Abs(cb.memory.memoryFile)
+	}
 	workspaceTmp := workspaceutil.TempDir(workspacePath)
 	version := config.FormatVersion()
 	rules := []string{}
@@ -225,8 +231,8 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 		rules = append(
 			rules,
 			fmt.Sprintf(
-				"**Memory** - Prefer the memory tool when available. Use add for a new stable fact, replace for a correction, remove for explicit forgetting, and append_daily only for noteworthy transient events, decisions, progress, or unfinished context that may matter over the next few days. For append_daily, choose a stable unique idempotency_key for the source event and reuse it only when retrying that same write. Do not record routine conversation. Otherwise update %s/memory/MEMORY.md or the appropriate daily note carefully.",
-				workspacePath,
+				"**Memory** - Prefer the memory tool when available. Use add for a new stable fact, replace for a correction, remove for explicit forgetting, and append_daily only for noteworthy transient events, decisions, progress, or unfinished context that may matter over the next few days. For append_daily, choose a stable unique idempotency_key for the source event and reuse it only when retrying that same write. Do not record routine conversation. Otherwise update %s or the appropriate daily note carefully.",
+				memoryFile,
 			),
 		)
 	}
@@ -241,8 +247,8 @@ You are mintclaw, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: %s
-- Memory: %s/memory/MEMORY.md
-- Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
+- Memory: %s
+- Daily Notes: %s
 - Skills: %s/skills/{skill-name}/SKILL.md
 - Temporary files: %s
 
@@ -252,8 +258,8 @@ Your workspace is at: %s
 `,
 		version,
 		workspacePath,
-		workspacePath,
-		workspacePath,
+		memoryFile,
+		filepath.Join(memoryDir, "YYYYMM", "YYYYMMDD.md"),
 		workspacePath,
 		workspaceTmp,
 		strings.Join(rules, "\n\n"),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -97,6 +98,14 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if got := agent.Tools.List(); len(got) != 0 {
 		t.Fatalf("P0.2 coding tools = %v, want fail-closed empty registry before P0.4", got)
 	}
+	identity := agent.ContextBuilder.getIdentity(true)
+	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
+	if !strings.Contains(identity, externalMemoryFile) {
+		t.Fatalf("runtime identity does not advertise external memory file %q:\n%s", externalMemoryFile, identity)
+	}
+	if strings.Contains(identity, filepath.Join(executionRoot, "memory")) {
+		t.Fatalf("runtime identity advertises execution-root memory:\n%s", identity)
+	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		var created []string
 		_ = filepath.Walk(executionRoot, func(path string, _ os.FileInfo, _ error) error {
@@ -107,6 +116,45 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 	if _, statErr := os.Stat(layout.StatePaths().SessionsRoot); statErr != nil {
 		t.Fatalf("state sessions root was not created: %v", statErr)
+	}
+}
+
+func TestNewRuntimeProfileRejectsStateInsideAnotherExecutionRoot(t *testing.T) {
+	root := t.TempDir()
+	firstExecution := filepath.Join(root, "project-a")
+	secondExecution := filepath.Join(root, "project-b")
+	firstLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-a"},
+		firstExecution,
+		filepath.Join(secondExecution, ".mintclaw", "thread-a"),
+		[]string{firstExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+	}
+	secondState := filepath.Join(root, "state", "thread-b")
+	secondLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-b"},
+		secondExecution,
+		secondState,
+		[]string{secondExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+	}
+
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: firstLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: secondLayout},
+	)
+	if err == nil {
+		t.Fatalf("NewRuntimeProfile() = %#v, want cross-agent root rejection", profile)
+	}
+	if _, statErr := os.Stat(firstLayout.StateRoot()); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected profile created first state root: %v", statErr)
+	}
+	if _, statErr := os.Stat(secondState); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected profile created second state root: %v", statErr)
 	}
 }
 

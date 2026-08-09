@@ -66,6 +66,32 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 	if len(profile.agentLayouts) == 0 {
 		return RuntimeProfile{}, fmt.Errorf("runtime profile: at least one agent binding is required")
 	}
+	for stateIndex, stateBinding := range bindings {
+		for executionIndex, executionBinding := range bindings {
+			if stateIndex == executionIndex {
+				continue
+			}
+			inside, err := runtimeLayoutPathWithin(
+				stateBinding.Layout.StateRoot(),
+				executionBinding.Layout.ExecutionRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf(
+					"runtime profile: compare state root for agent %q with execution root for agent %q: %w",
+					routing.NormalizeAgentID(stateBinding.AgentID),
+					routing.NormalizeAgentID(executionBinding.AgentID),
+					err,
+				)
+			}
+			if inside {
+				return RuntimeProfile{}, fmt.Errorf(
+					"runtime profile: state root for agent %q must be outside execution root for agent %q",
+					routing.NormalizeAgentID(stateBinding.AgentID),
+					routing.NormalizeAgentID(executionBinding.AgentID),
+				)
+			}
+		}
+	}
 	return profile, nil
 }
 
