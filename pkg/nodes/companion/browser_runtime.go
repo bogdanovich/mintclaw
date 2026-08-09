@@ -146,11 +146,12 @@ func (handler *browserCommandHandler) executeAct(
 	}
 	var observation nodes.BrowserObservationResult
 	var err error
-	if input.Action.Kind == "scroll" {
+	switch input.Action.Kind {
+	case "scroll":
 		observation, err = handler.host.Scroll(ctx, request)
-	} else if input.Action.Kind == "click" {
+	case "click":
 		observation, err = handler.host.Click(ctx, request)
-	} else {
+	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}
 	if err != nil {
