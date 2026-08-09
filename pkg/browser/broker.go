@@ -59,6 +59,13 @@ type NavigationIdentityWorker interface {
 	NavigationIdentity(context.Context) (string, error)
 }
 
+// NavigationBoundActionWorker issues an action only if the driver-owned
+// navigation identity still matches at the private dispatch boundary.
+type NavigationBoundActionWorker interface {
+	NavigationIdentityWorker
+	ExecuteAtNavigation(context.Context, string, DriverAction) error
+}
+
 // PreparedActionWorker receives the gateway-owned durable authority for one
 // accepted action and must revalidate live driver state before dispatch.
 // Remote workers use it to bind a typed node invocation; local driver workers

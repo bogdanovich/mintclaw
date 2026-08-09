@@ -71,6 +71,13 @@ transport loss, or ambiguous driver result quarantines the session and never
 replays an accepted action. The raw driver identity and generation are not
 exposed in tool output or persisted in either invocation ledger.
 
+The final action is issued through a private navigation-bound Playwright
+callback. That callback refreshes the CDP main-frame state, compares the exact
+expected frame, loader, and monotonic generation, and only then issues the
+fixed typed action in the same driver operation. A transition after host
+revalidation but before driver dispatch therefore returns stale without
+issuing input. This boundary applies to click, select, press, and scroll.
+
 ## Acceptance evidence
 
 Implementation is complete only when focused broker, schema, runtime, host,
@@ -85,6 +92,8 @@ real-driver, and production-WSS tests prove:
 - byte-identical observations from different main documents or different
   same-document navigation generations fail stale before either press or
   select reaches the driver;
+- a navigation committed after host revalidation but before the private
+  dispatch boundary fails stale with zero input dispatch;
 - gateway and companion catalogs advertise the same admitted action shapes;
 - reconnect cannot revive stale authority or replay an accepted action; and
 - live gateway and companion canaries execute `press` and `select`, observe a

@@ -58,6 +58,8 @@ type fakeBrowserHostWorker struct {
 	observeCalls            int
 	navigationIdentities    []string
 	navigationIdentityCalls int
+	dispatchNavigationID    string
+	beforeBoundDispatch     func()
 	actions                 []browserworker.DriverAction
 	executeErr              error
 	executeFunc             func(context.Context, browserworker.DriverAction) error
@@ -108,6 +110,20 @@ func (worker *fakeBrowserHostWorker) Execute(
 		return worker.executeFunc(ctx, action)
 	}
 	return worker.executeErr
+}
+
+func (worker *fakeBrowserHostWorker) ExecuteAtNavigation(
+	ctx context.Context,
+	expectedNavigationID string,
+	action browserworker.DriverAction,
+) error {
+	if worker.beforeBoundDispatch != nil {
+		worker.beforeBoundDispatch()
+	}
+	if worker.dispatchNavigationID != "" && worker.dispatchNavigationID != expectedNavigationID {
+		return browserworker.ErrStale
+	}
+	return worker.Execute(ctx, action)
 }
 
 func (*fakeBrowserHostWorker) CatalogRevision() string { return "driver-v1" }
@@ -533,6 +549,50 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				}
 			})
 		}
+	}
+
+	for _, action := range []string{"press", "select"} {
+		t.Run(action+" rejects navigation at dispatch boundary", func(t *testing.T) {
+			element := browserworker.DriverElement{
+				Target: "driver_select_1", Role: "combobox", Name: "State",
+			}
+			host, worker, initial := newFixture(t, element)
+			worker.dispatchNavigationID = "navigation_1"
+			worker.beforeBoundDispatch = func() {
+				worker.dispatchNavigationID = "navigation_2"
+			}
+			request := BrowserHostNavigateRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_dispatch_race_" + action,
+				Effect:             "local_edit", CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			if action == "select" {
+				request.Action = nodes.BrowserAction{
+					Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+				}
+				if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Select(dispatch navigation) error = %v, want stale", err)
+				}
+			} else {
+				request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+				request.Effect = "unknown"
+				request.ExpectedRole, request.ExpectedName = "", ""
+				var err error
+				request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Press(dispatch navigation) error = %v, want stale", err)
+				}
+			}
+			if len(worker.actions) != 0 {
+				t.Fatalf("%s reached transitioned page: %#v", action, worker.actions)
+			}
+		})
 	}
 }
 
