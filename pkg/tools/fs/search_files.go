@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const (
@@ -58,10 +57,6 @@ func (t *SearchFilesTool) Name() string {
 
 func (t *SearchFilesTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
-}
-
-func (t *SearchFilesTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
 }
 
 func (t *SearchFilesTool) Description() string {

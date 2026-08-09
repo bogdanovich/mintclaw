@@ -393,7 +393,7 @@ func TestCodingTrustRejectsRegistryReplacementAfterApproval(t *testing.T) {
 
 func TestPipelineToolResultJournalFailureLeavesDurableUnresolvedIntent(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	tool := &steeringSafetyTestTool{name: "side-effect", safety: toolshared.SteeringSafetyNonCancellable}
+	tool := &countingTestTool{name: "side-effect"}
 	registry.Register(tool)
 	baseStore := session.NewSessionManager("")
 	journalErr := errors.New("tool result fsync failed")
@@ -688,7 +688,7 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 
 func TestPipelineToolCallIntentJournalFailurePreventsExecution(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	tool := &steeringSafetyTestTool{name: "must-not-run", safety: toolshared.SteeringSafetyNonCancellable}
+	tool := &countingTestTool{name: "must-not-run"}
 	registry.Register(tool)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
 	ts := &turnState{agent: agent, opts: processOptions{Dispatch: DispatchRequest{SessionKey: "intent-fail"}}}
@@ -815,9 +815,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	if err != nil {
 		t.Fatalf("NewRequestUserInputTool() error = %v", err)
 	}
-	deferredTool := &steeringSafetyTestTool{
-		name: "deferred-write", safety: toolshared.SteeringSafetyCancellable,
-	}
+	deferredTool := &countingTestTool{name: "deferred-write"}
 	registry.Register(requestTool)
 	registry.Register(deferredTool)
 	store := session.NewSessionManager("")
@@ -1246,38 +1244,33 @@ type pipelineLoopGuardReadTool struct {
 	executions int
 }
 
-type steeringSafetyTestTool struct {
+type countingTestTool struct {
 	name       string
-	safety     toolshared.SteeringSafety
 	executions int
 }
 
-func (t *steeringSafetyTestTool) Name() string        { return t.name }
-func (t *steeringSafetyTestTool) Description() string { return "steering safety test" }
-func (t *steeringSafetyTestTool) Parameters() map[string]any {
+func (t *countingTestTool) Name() string        { return t.name }
+func (t *countingTestTool) Description() string { return "counting test tool" }
+func (t *countingTestTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
 
-func (t *steeringSafetyTestTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return t.safety
-}
-
-func (t *steeringSafetyTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+func (t *countingTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
 	return toolshared.SilentResult(t.name + " complete")
 }
 
-type unknownSteeringSafetyTestTool struct {
+type unknownLoopGuardTestTool struct {
 	executions int
 }
 
-func (*unknownSteeringSafetyTestTool) Name() string        { return "unknown" }
-func (*unknownSteeringSafetyTestTool) Description() string { return "unknown steering safety test" }
-func (*unknownSteeringSafetyTestTool) Parameters() map[string]any {
+func (*unknownLoopGuardTestTool) Name() string        { return "unknown" }
+func (*unknownLoopGuardTestTool) Description() string { return "unknown loop guard test" }
+func (*unknownLoopGuardTestTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
 
-func (t *unknownSteeringSafetyTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+func (t *unknownLoopGuardTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
 	return toolshared.SilentResult("unknown complete")
 }
@@ -1405,8 +1398,8 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 		}
 	}
 
-	if tool.executions != 2 {
-		t.Fatalf("tool executions = %d, want 2", tool.executions)
+	if tool.executions != 3 {
+		t.Fatalf("tool executions = %d, want 3", tool.executions)
 	}
 	if len(exec.messages) != 4 {
 		t.Fatalf("tool messages = %d, want 4", len(exec.messages))
@@ -1425,15 +1418,16 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 			exec.messages[1].ToolResultStatus,
 		)
 	}
-	if exec.messages[2].ToolResultStatus != "" || exec.messages[3].ToolResultStatus != "" {
-		t.Fatalf("non-executed results must remain unknown: %#v", exec.messages[2:])
+	if exec.messages[2].ToolResultStatus != "" ||
+		exec.messages[3].ToolResultStatus != providers.ToolResultStatusError {
+		t.Fatalf("blocked and post-steering results = %#v", exec.messages[2:])
 	}
 	if !strings.Contains(exec.messages[2].Content, "repeated_exact_failure_block") {
 		t.Fatalf("blocked content = %q", exec.messages[2].Content)
 	}
 	if exec.messages[3].ToolCallID != "call-3-skipped" ||
-		!strings.Contains(exec.messages[3].Content, "newer user message arrived") {
-		t.Fatalf("steering-skipped result = %#v", exec.messages[3])
+		!strings.Contains(exec.messages[3].Content, "stable pipeline failure") {
+		t.Fatalf("post-steering result = %#v", exec.messages[3])
 	}
 	var decisions []ToolLoopDecisionPayload
 	for _, event := range emitter.events {
@@ -1441,7 +1435,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 			decisions = append(decisions, event.payload.(ToolLoopDecisionPayload))
 		}
 	}
-	if len(decisions) != 3 || decisions[len(decisions)-1].Action != "block" {
+	if len(decisions) != 4 || decisions[2].Action != "block" {
 		t.Fatalf("loop decision events = %#v", decisions)
 	}
 	encoded, err := json.Marshal(decisions)
@@ -1477,7 +1471,7 @@ func TestTurnExecutionsHaveIsolatedLoopGuardState(t *testing.T) {
 
 func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	tool := &unknownSteeringSafetyTestTool{}
+	tool := &unknownLoopGuardTestTool{}
 	registry.Register(tool)
 	config := loopguard.DefaultConfig()
 	config.IdenticalCallHalt = 3
@@ -1935,15 +1929,15 @@ func TestPipelineAppendSkippedToolMessages_PersistsRemainingWithoutIngest(t *tes
 
 	runner.appendSkippedToolMessages(
 		1,
-		"queued user steering message",
-		queuedSteeringDeferredToolResult,
+		"test skip",
+		"Skipped for test.",
 	)
 	if len(runner.messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(runner.messages))
 	}
 	if runner.messages[0].ToolCallID != "call-skip-1" ||
 		runner.messages[1].ToolCallID != "call-skip-2" ||
-		runner.messages[0].Content != queuedSteeringDeferredToolResult {
+		runner.messages[0].Content != "Skipped for test." {
 		t.Fatalf("messages = %#v, want skipped tool messages", runner.messages)
 	}
 	history := sessionStore.GetHistory(ts.sessionKey)
@@ -1957,13 +1951,13 @@ func TestPipelineAppendSkippedToolMessages_PersistsRemainingWithoutIngest(t *tes
 	}
 }
 
-func TestPipelineSteeringClassifiesEveryPendingToolAndPreservesPairing(t *testing.T) {
+func TestPipelineSteeringPreservesEntireEmittedToolBatch(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	readOnly := &steeringSafetyTestTool{name: "read", safety: toolshared.SteeringSafetyReadOnly}
-	cancellable := &steeringSafetyTestTool{name: "write", safety: toolshared.SteeringSafetyCancellable}
-	nonCancellable := &steeringSafetyTestTool{name: "commit", safety: toolshared.SteeringSafetyNonCancellable}
-	unknown := &unknownSteeringSafetyTestTool{}
-	for _, tool := range []toolshared.Tool{readOnly, cancellable, nonCancellable, unknown} {
+	read := &countingTestTool{name: "read"}
+	write := &countingTestTool{name: "write"}
+	commit := &countingTestTool{name: "commit"}
+	unknown := &unknownLoopGuardTestTool{}
+	for _, tool := range []toolshared.Tool{read, write, commit, unknown} {
 		registry.Register(tool)
 	}
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
@@ -1979,12 +1973,10 @@ func TestPipelineSteeringClassifiesEveryPendingToolAndPreservesPairing(t *testin
 		{ID: "call-commit", Name: "commit"},
 		{ID: "call-unknown", Name: "unknown"},
 	}
-	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{
 		Context: PipelineContextServices{Steering: &oneShotLoopGuardSteering{
 			messages: []providers.Message{{Role: "user", Content: "change course"}},
 		}},
-		Runtime: PipelineRuntimeServices{Events: emitter},
 	}
 
 	if got := pipeline.ExecuteTools(
@@ -1996,11 +1988,14 @@ func TestPipelineSteeringClassifiesEveryPendingToolAndPreservesPairing(t *testin
 	); got.Control != ToolControlContinue {
 		t.Fatalf("control = %v, want continue", got.Control)
 	}
-	if readOnly.executions != 1 || nonCancellable.executions != 1 {
-		t.Fatalf("safe executions = read:%d commit:%d, want 1 each", readOnly.executions, nonCancellable.executions)
-	}
-	if cancellable.executions != 0 || unknown.executions != 0 {
-		t.Fatalf("unsafe executions = write:%d unknown:%d, want 0", cancellable.executions, unknown.executions)
+	if read.executions != 1 || write.executions != 1 || commit.executions != 1 || unknown.executions != 1 {
+		t.Fatalf(
+			"executions = read:%d write:%d commit:%d unknown:%d, want one each",
+			read.executions,
+			write.executions,
+			commit.executions,
+			unknown.executions,
+		)
 	}
 	if len(exec.messages) != 4 {
 		t.Fatalf("tool results = %d, want one per call", len(exec.messages))
@@ -2010,36 +2005,17 @@ func TestPipelineSteeringClassifiesEveryPendingToolAndPreservesPairing(t *testin
 			t.Fatalf("result[%d] = %#v, want source-ordered result for %s", i, exec.messages[i], call.ID)
 		}
 	}
-	if exec.messages[0].ToolResultStatus != providers.ToolResultStatusSuccess ||
-		exec.messages[1].ToolResultStatus != "" ||
-		exec.messages[2].ToolResultStatus != providers.ToolResultStatusSuccess ||
-		exec.messages[3].ToolResultStatus != "" {
-		t.Fatalf("steering result statuses = %#v", exec.messages)
-	}
-	if !strings.Contains(exec.messages[1].Content, "reissue it if it is still requested") ||
-		!strings.Contains(exec.messages[3].Content, "omit it only if the user canceled or replaced it") {
-		t.Fatalf("deferred results do not explain reconciliation: %#v", exec.messages)
-	}
-
-	decisions := make(map[string]ToolSteeringDecisionPayload)
-	for _, event := range emitter.events {
-		if event.kind != runtimeevents.KindAgentToolSteeringDecision {
-			continue
+	for _, message := range exec.messages {
+		if message.ToolResultStatus != providers.ToolResultStatusSuccess {
+			t.Fatalf("tool result = %#v, want real success", message)
 		}
-		payload := event.payload.(ToolSteeringDecisionPayload)
-		decisions[payload.ToolCallID] = payload
-	}
-	if len(decisions) != 4 || decisions["call-read"].Decision != "finish" ||
-		decisions["call-write"].Decision != "skip" || decisions["call-commit"].Decision != "finish" ||
-		decisions["call-unknown"].Classification != string(toolshared.SteeringSafetyUnknown) {
-		t.Fatalf("decisions = %#v", decisions)
 	}
 }
 
-func TestPipelineSteeringArrivingDuringBatchDoesNotCancelCompletedCall(t *testing.T) {
+func TestPipelineSteeringArrivingDuringBatchPreservesRemainingCalls(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	first := &steeringSafetyTestTool{name: "first-write", safety: toolshared.SteeringSafetyCancellable}
-	second := &steeringSafetyTestTool{name: "second-write", safety: toolshared.SteeringSafetyCancellable}
+	first := &countingTestTool{name: "first-write"}
+	second := &countingTestTool{name: "second-write"}
 	registry.Register(first)
 	registry.Register(second)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
@@ -2058,8 +2034,8 @@ func TestPipelineSteeringArrivingDuringBatchDoesNotCancelCompletedCall(t *testin
 	}}}
 
 	pipeline.ExecuteTools(context.Background(), context.Background(), ts, exec, llm)
-	if first.executions != 1 || second.executions != 0 {
-		t.Fatalf("executions = first:%d second:%d, want 1 and 0", first.executions, second.executions)
+	if first.executions != 1 || second.executions != 1 {
+		t.Fatalf("executions = first:%d second:%d, want 1 each", first.executions, second.executions)
 	}
 	if len(exec.messages) != 2 || exec.messages[0].ToolCallID != "call-first" ||
 		exec.messages[1].ToolCallID != "call-second" {

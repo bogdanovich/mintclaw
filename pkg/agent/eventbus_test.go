@@ -443,7 +443,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
+func TestAgentLoop_EmitsSteeringAfterCompletedToolBatch(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-eventbus-steering-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -501,7 +501,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 		al,
 		32,
 		runtimeevents.KindAgentSteeringInjected,
-		runtimeevents.KindAgentToolExecSkipped,
+		runtimeevents.KindAgentToolExecEnd,
 		runtimeevents.KindAgentInterruptReceived,
 	)
 	defer closeRuntimeEvents()
@@ -544,16 +544,19 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 		t.Fatalf("expected 1 steering message, got %d", steeringPayload.Count)
 	}
 
-	skippedEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecSkipped)
-	if !ok {
-		t.Fatal("expected skipped tool event")
+	completedTools := make(map[string]bool)
+	for _, event := range events {
+		if event.Kind != runtimeevents.KindAgentToolExecEnd {
+			continue
+		}
+		payload, ok := event.Payload.(ToolExecEndPayload)
+		if !ok {
+			t.Fatalf("expected ToolExecEndPayload, got %T", event.Payload)
+		}
+		completedTools[payload.Tool] = true
 	}
-	skippedPayload, ok := skippedEvt.Payload.(ToolExecSkippedPayload)
-	if !ok {
-		t.Fatalf("expected ToolExecSkippedPayload, got %T", skippedEvt.Payload)
-	}
-	if skippedPayload.Tool != "tool_two" {
-		t.Fatalf("expected skipped tool_two, got %q", skippedPayload.Tool)
+	if !completedTools["tool_one"] || !completedTools["tool_two"] {
+		t.Fatalf("completed tools = %#v, want both emitted calls", completedTools)
 	}
 
 	interruptEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentInterruptReceived)

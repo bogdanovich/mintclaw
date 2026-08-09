@@ -48,8 +48,6 @@ type ToolPayload struct {
 	DecisionCode     string `json:"decision_code,omitempty"`
 	Count            int    `json:"count,omitempty"`
 	Threshold        int    `json:"threshold,omitempty"`
-	Classification   string `json:"classification,omitempty"`
-	Cause            string `json:"cause,omitempty"`
 	ArgumentsPreview string `json:"arguments_preview,omitempty"`
 	ResultPreview    string `json:"result_preview,omitempty"`
 }

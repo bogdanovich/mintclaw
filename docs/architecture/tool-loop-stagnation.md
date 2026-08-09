@@ -61,7 +61,7 @@ general mechanism if its fail-fast behavior is retained by tests.
 ## Required Invariants
 
 1. Every provider tool call receives exactly one role=`tool` result with its
-   original `tool_call_id`, including blocked and steering-skipped calls.
+   original `tool_call_id`, including calls blocked by loop protection.
 2. The detector never executes tools, mutates conversation history, publishes
    events, logs, or performs delivery.
 3. Raw tool arguments and raw tool results are not retained or emitted by the
@@ -300,7 +300,7 @@ Required focused coverage:
 - blocked calls preserve provider history and all tool-call IDs;
 - hook-modified names, arguments, and results;
 - policy/approval denials do not count as execution failures;
-- steering with remaining skipped calls;
+- steering arriving during a batch that still reaches real tool results;
 - parent/SubTurn state isolation;
 - deterministic legacy parallel-batch observation;
 - existing fatal-MCP fail-fast intent;

@@ -296,10 +296,6 @@ type toolCallState struct {
 	toolRegistry     *tools.ToolRegistry
 }
 
-const queuedSteeringDeferredToolResult = "Deferred without execution because a newer user message arrived. " +
-	"Reconcile this operation after reading the newer message: reissue it if it is still requested, " +
-	"update it if the user corrected it, and omit it only if the user canceled or replaced it."
-
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
 // tool execution with async callbacks, media delivery, and steering injection.
 // Returns an explicit outcome indicating what the coordinator should do next:
@@ -396,7 +392,7 @@ func (runner *toolLoopRunner) admitToolCall(
 
 	toolName := call.name
 	toolArgs := call.arguments
-	if p.Interaction.Hooks == nil && runner.skipPendingToolForInterrupt(tc, toolName, toolArgs) {
+	if p.Interaction.Hooks == nil && runner.skipPendingToolForGracefulInterrupt(tc, toolName) {
 		return skipToolCall()
 	}
 	denyByTurnProfile := func() bool {
@@ -445,8 +441,6 @@ func (runner *toolLoopRunner) admitToolCall(
 					return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 				}
 				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
-				runner.recordCommittedHookResponseDecision(tc, toolName)
-
 				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
 				argsJSON, _ := json.Marshal(auditArgs)
 				argsPreview := utils.Truncate(string(argsJSON), 200)
@@ -596,7 +590,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 		}
 	}
-	if p.Interaction.Hooks != nil && runner.skipPendingToolForInterrupt(tc, toolName, toolArgs) {
+	if p.Interaction.Hooks != nil && runner.skipPendingToolForGracefulInterrupt(tc, toolName) {
 		return skipToolCall()
 	}
 	if denyByTurnProfile() {
@@ -1294,12 +1288,11 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 	exec.messages = runner.messages
 
-	// Continue if pending steering exists regardless of the tool response disposition.
-	// This covers the case where tools were partially executed and skipped due to steering,
-	// but one tool still requires a model response.
+	// Continue if steering was captured while the emitted tool batch completed.
+	// The next model iteration receives every real result plus the new user input.
 	if len(exec.pendingMessages) > 0 {
 		exec.markAdditionalUserInputObserved()
-		logger.InfoCF("agent", "Pending steering after partial tool execution; continuing turn",
+		logger.InfoCF("agent", "Pending steering after emitted tool batch; continuing turn",
 			map[string]any{
 				"agent_id":                  ts.agent.ID,
 				"pending_count":             len(exec.pendingMessages),
@@ -1489,71 +1482,22 @@ func (r *toolLoopRunner) captureSteering(markAdditional bool) {
 	r.exec.pendingMessages = append(r.exec.pendingMessages, steerMsgs...)
 }
 
-func (r *toolLoopRunner) pendingInterruptCause() string {
-	cause := ""
-	if len(r.exec.pendingMessages) > 0 {
-		cause = "queued_user_steering"
-	} else if gracefulPending, _ := r.ts.gracefulInterruptRequested(); gracefulPending {
-		cause = "graceful_interrupt"
-	}
-	return cause
-}
-
-func (r *toolLoopRunner) skipPendingToolForInterrupt(
+func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
 	tc providers.ToolCall,
 	toolName string,
-	toolArgs map[string]any,
 ) bool {
-	cause := r.pendingInterruptCause()
-	if cause == "" {
+	gracefulPending, _ := r.ts.gracefulInterruptRequested()
+	if !gracefulPending {
 		return false
-	}
-
-	safety := toolshared.SteeringSafetyUnknown
-	if r.ts != nil && r.ts.agent != nil && r.ts.agent.Tools != nil {
-		safety = r.ts.agent.Tools.SteeringSafety(toolName, toolArgs)
-	}
-	decision := "skip"
-	if cause == "queued_user_steering" &&
-		(safety == toolshared.SteeringSafetyReadOnly || safety == toolshared.SteeringSafetyNonCancellable) {
-		decision = "finish"
-	}
-	r.p.emitEvent(
-		runtimeevents.KindAgentToolSteeringDecision,
-		r.ts.eventMeta("runTurn", "turn.tool.steering_decision"),
-		ToolSteeringDecisionPayload{
-			ToolCallID: tc.ID, Tool: toolName, Classification: string(safety), Decision: decision, Cause: cause,
-		},
-	)
-	if decision == "finish" {
-		return false
-	}
-
-	reason := "queued user steering message"
-	content := queuedSteeringDeferredToolResult
-	if cause == "graceful_interrupt" {
-		reason = "graceful interrupt requested"
-		content = "Skipped due to graceful interrupt."
 	}
 	skippedTC := tc
 	skippedTC.Name = toolName
-	r.appendSkippedToolMessage(skippedTC, reason, content)
-	return true
-}
-
-func (r *toolLoopRunner) recordCommittedHookResponseDecision(tc providers.ToolCall, toolName string) {
-	cause := r.pendingInterruptCause()
-	if cause == "" {
-		return
-	}
-	r.p.emitEvent(
-		runtimeevents.KindAgentToolSteeringDecision,
-		r.ts.eventMeta("runTurn", "turn.tool.steering_decision"),
-		ToolSteeringDecisionPayload{
-			ToolCallID: tc.ID, Tool: toolName, Classification: string(toolshared.SteeringSafetyNonCancellable),
-			Decision: "finish", Cause: cause,
-		},
+	r.appendSkippedToolMessage(
+		skippedTC,
+		"graceful interrupt requested",
+		"Skipped due to graceful interrupt.",
 	)
+	return true
 }
 
 func (r *toolLoopRunner) appendPendingSubTurnResult() {
@@ -1605,20 +1549,21 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 	resolveCanceled := func() { resolveCanceledToolSuspension(ctx, result) }
 
-	// A newer user message wins if it arrived before durable suspension. Pair
-	// every call in the current batch and let the next iteration reconcile it.
+	// A genuine user message that arrives before suspension admission is already
+	// the next same-turn input. Do not open a second, stale interaction for it.
 	r.captureSteering(false)
 	if len(r.exec.pendingMessages) > 0 {
 		resolveCanceled()
 		_ = r.appendToolMessage(providers.Message{
-			Role:       "tool",
-			Content:    queuedSteeringDeferredToolResult,
-			ToolCallID: toolCall.ID,
+			Role:             "tool",
+			Content:          "The interaction was not opened because new user input arrived first. Use that input and decide whether another question is still needed.",
+			ToolCallID:       toolCall.ID,
+			ToolResultStatus: providers.ToolResultStatusError,
 		}, toolMessagePersistAndIngest)
 		r.appendSkippedToolMessages(
 			callIndex+1,
-			"newer user message arrived before input suspension",
-			queuedSteeringDeferredToolResult,
+			"tool batch awaited human input that arrived as same-turn steering",
+			"Skipped because an earlier call required the newly arrived user input before this call could be reconsidered.",
 		)
 		r.exec.messages = r.messages
 		r.llm.toolResponseDisposition = toolResponseNeedsModel

@@ -1865,15 +1865,3 @@ func (*NodeUploadTool) ToolLoopSemantics() loopguard.Semantics {
 func (*NodeDownloadTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
-
-func (*NodeFileInfoTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
-}
-
-func (*NodeUploadTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
-func (*NodeDownloadTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
