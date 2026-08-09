@@ -942,16 +942,6 @@ func (m *Manager) installDeliveryOwnerLocked(
 	return owner
 }
 
-func closeWorkerAndWait(w *channelWorker) {
-	if w == nil {
-		return
-	}
-	close(w.queue)
-	<-w.done
-	close(w.mediaQueue)
-	<-w.mediaDone
-}
-
 // GetStreamer implements bus.StreamDelegate.
 // It checks if the named channel supports streaming and returns a Streamer.
 func (m *Manager) GetStreamer(
@@ -1895,12 +1885,8 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	}
 
 	// Close delivery queues and wait for accepted work to drain.
-	for _, delivery := range deliveries {
-		if delivery.owner != nil {
-			delivery.owner.CloseDeliveryAndWait()
-			continue
-		}
-		closeWorkerAndWait(delivery.worker)
+	for _, owner := range deliveries {
+		owner.CloseDeliveryAndWait()
 	}
 	m.interactions.stopToolFeedback()
 
@@ -1953,17 +1939,6 @@ func newDeliveryOwner(name string, ch Channel, channelType string) *deliveryOwne
 		name:      name,
 		ch:        ch,
 		worker:    newChannelWorker(name, ch, channelType),
-		closedCh:  make(chan struct{}),
-		closeDone: make(chan struct{}),
-	}
-}
-
-func deliveryOwnerFromWorker(name string, ch Channel, w *channelWorker) *deliveryOwner {
-	if ch == nil || w == nil {
-		return nil
-	}
-	return &deliveryOwner{
-		name: name, ch: ch, worker: w,
 		closedCh:  make(chan struct{}),
 		closeDone: make(chan struct{}),
 	}
@@ -2745,7 +2720,7 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 }
 
 func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.deliveries.owner(name, m.channels[name])
+	return m.deliveries.owner(name)
 }
 
 func (m *Manager) GetStatus() map[string]any {
@@ -2968,22 +2943,19 @@ func (m *Manager) UnregisterChannel(name string) {
 	if ch != nil && m.mux != nil {
 		m.unregisterChannelHTTPHandler(name, ch)
 	}
-	owner, w := m.deliveries.lookup(name)
+	owner := m.deliveries.owner(name)
 	if owner == nil {
-		m.deliveries.removeWorkerIfUnowned(name)
 		delete(m.channels, name)
 	}
 	m.mu.Unlock()
 
 	if owner != nil {
 		owner.CloseDeliveryAndWait()
-	} else {
-		closeWorkerAndWait(w)
 	}
 	m.interactions.retireToolFeedbackChannel(context.Background(), name)
 
 	m.mu.Lock()
-	m.deliveries.removeIfMatches(name, owner, w)
+	m.deliveries.removeIfMatches(name, owner)
 	if ch != nil && m.channels[name] == ch {
 		delete(m.channels, name)
 	}
