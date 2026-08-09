@@ -271,31 +271,19 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
-	job, err := t.cronService.AddJob(
+	job, err := t.cronService.AddJobWithPayload(
 		messagePreview,
 		schedule,
-		payloadKind,
-		message,
-		channel,
-		chatID,
+		cron.CronPayload{
+			Kind:    payloadKind,
+			Message: message,
+			Channel: channel,
+			To:      chatID,
+			Command: command,
+		},
 	)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("Error adding job: %v", err))
-	}
-
-	// Apply optional payload fields and persist in a single UpdateJob call
-	needsUpdate := false
-	if command != "" {
-		job.Payload.Command = command
-		needsUpdate = true
-	}
-	if needsUpdate {
-		if err := t.cronService.UpdateJob(job); err != nil {
-			// The job was persisted without its command; removing it avoids a
-			// partially configured job that runs until the next restart.
-			_ = t.cronService.RemoveJob(job.ID)
-			return toolshared.ErrorResult(fmt.Sprintf("Error updating job: %v", err))
-		}
 	}
 
 	return toolshared.SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))

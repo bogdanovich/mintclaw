@@ -101,6 +101,12 @@ func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error
 		_ = os.Remove(tmpPath)
 		return "", err
 	}
+	// Finalize the download before checksum verification and extraction: a
+	// close failure can mean the file is incompletely written on disk.
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("finalize downloaded asset: %w", closeErr)
+	}
 	// ensure final progress line ends with newline
 	pw.Finish()
 

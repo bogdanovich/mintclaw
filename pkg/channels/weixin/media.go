@@ -354,12 +354,19 @@ func writeManagedTempFile(prefix, filename string, data []byte) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }()
+	path := f.Name()
 	if _, err := f.Write(data); err != nil {
-		os.Remove(f.Name())
+		_ = f.Close()
+		os.Remove(path)
 		return "", err
 	}
-	return f.Name(), nil
+	// Finalize explicitly: a delayed writeback error at close must not turn
+	// into a stored reference to a truncated attachment.
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("finalize temporary file: %w", err)
+	}
+	return path, nil
 }
 
 func (c *WeixinChannel) storeInboundBytes(

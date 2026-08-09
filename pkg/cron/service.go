@@ -428,6 +428,23 @@ func (cs *CronService) AddJob(
 	message string,
 	channel, to string,
 ) (*CronJob, error) {
+	return cs.AddJobWithPayload(name, schedule, CronPayload{
+		Kind:    payloadKind,
+		Message: message,
+		Channel: channel,
+		To:      to,
+	})
+}
+
+// AddJobWithPayload persists a fully populated payload atomically. Callers
+// that set optional fields (e.g. command jobs) must use this so a failed
+// follow-up write cannot leave a partial job on disk that reappears after
+// restart.
+func (cs *CronService) AddJobWithPayload(
+	name string,
+	schedule CronSchedule,
+	payload CronPayload,
+) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -435,8 +452,8 @@ func (cs *CronService) AddJob(
 
 	// One-time tasks (at) should be deleted after execution
 	deleteAfterRun := (schedule.Kind == "at")
-	if payloadKind == "" {
-		payloadKind = "agent_turn"
+	if payload.Kind == "" {
+		payload.Kind = "agent_turn"
 	}
 
 	job := CronJob{
@@ -444,12 +461,7 @@ func (cs *CronService) AddJob(
 		Name:     name,
 		Enabled:  true,
 		Schedule: schedule,
-		Payload: CronPayload{
-			Kind:    payloadKind,
-			Message: message,
-			Channel: channel,
-			To:      to,
-		},
+		Payload:  payload,
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
 		},
