@@ -102,19 +102,19 @@ func (client *fakePlaywrightClient) CallTool(
 	return playwrightTextResult("ok"), nil
 }
 
-func TestPlaywrightWorkerUsesCDPMainDocumentIdentity(t *testing.T) {
+func TestPlaywrightWorkerUsesMonotonicCDPNavigationIdentity(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
-			playwrightTextResult("### Result\n\"MINTCLAW_DOC_V1|ok|frame-1|loader-1\""),
-			playwrightTextResult("### Result\n\"MINTCLAW_DOC_V1|ok|frame-1|loader-2\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|1\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-2|2\""),
 		},
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
-	first, err := worker.DocumentIdentity(t.Context())
+	first, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := worker.DocumentIdentity(t.Context())
+	second, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,22 +129,24 @@ func TestPlaywrightWorkerUsesCDPMainDocumentIdentity(t *testing.T) {
 		if call.tool != "browser_run_code_unsafe" || !ok ||
 			!strings.Contains(code, `Page.getFrameTree`) ||
 			!strings.Contains(code, `frame.loaderId`) ||
-			!strings.Contains(code, `await cdp.detach()`) {
-			t.Fatalf("document identity call = %#v", call)
+			!strings.Contains(code, `Page.frameNavigated`) ||
+			!strings.Contains(code, `Page.navigatedWithinDocument`) ||
+			!strings.Contains(code, `state.generation++`) {
+			t.Fatalf("navigation identity call = %#v", call)
 		}
 	}
 }
 
-func TestPlaywrightWorkerRejectsMalformedDocumentIdentity(t *testing.T) {
+func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
-		"browser_run_code_unsafe": playwrightTextResult("MINTCLAW_DOC_V1|ok|frame-1|"),
+		"browser_run_code_unsafe": playwrightTextResult("### Result\nMINTCLAW_NAV_V1|ok|frame-1|loader-1|0"),
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
-	if _, err := worker.DocumentIdentity(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
-		t.Fatalf("DocumentIdentity() error = %v", err)
+	if _, err := worker.NavigationIdentity(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("NavigationIdentity() error = %v", err)
 	}
 	if !worker.lost {
-		t.Fatal("malformed document identity did not retire the worker")
+		t.Fatal("malformed navigation identity did not retire the worker")
 	}
 }
 
@@ -1650,9 +1652,9 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	}
 	worker := opened.Owner.(*playwrightWorker)
 	t.Cleanup(func() { _ = worker.Close(context.Background()) })
-	blankDocument, err := worker.DocumentIdentity(ctx)
+	blankNavigation, err := worker.NavigationIdentity(ctx)
 	if err != nil {
-		t.Fatalf("initial DocumentIdentity() error = %v", err)
+		t.Fatalf("initial NavigationIdentity() error = %v", err)
 	}
 	initial, err := worker.Observe(ctx)
 	if err != nil || initial.URL != initialBlankOrigin || initial.Origin != initialBlankOrigin ||
@@ -1662,9 +1664,53 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
 		t.Fatalf("navigate error = %v", err)
 	}
-	fixtureDocument, err := worker.DocumentIdentity(ctx)
-	if err != nil || fixtureDocument == blankDocument {
-		t.Fatalf("navigated DocumentIdentity() = %q, initial %q, error %v", fixtureDocument, blankDocument, err)
+	fixtureNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || fixtureNavigation == blankNavigation {
+		t.Fatalf("navigated NavigationIdentity() = %q, initial %q, error %v", fixtureNavigation, blankNavigation, err)
+	}
+	pushStateResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => history.pushState({}, "", location.href));
+			return "push_state_complete";
+		}`,
+	})
+	if err != nil || pushStateResult == nil || pushStateResult.IsError {
+		t.Fatalf("byte-identical pushState error = %v, result = %#v", err, pushStateResult)
+	}
+	pushStateNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || pushStateNavigation == fixtureNavigation {
+		t.Fatalf(
+			"pushState NavigationIdentity() = %q, prior %q, error %v",
+			pushStateNavigation,
+			fixtureNavigation,
+			err,
+		)
+	}
+	historyBackResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => new Promise((resolve, reject) => {
+				const timeout = setTimeout(() => reject(new Error("popstate timeout")), 5000);
+				addEventListener("popstate", () => {
+					clearTimeout(timeout);
+					resolve();
+				}, { once: true });
+				history.back();
+			}));
+			return "history_back_complete";
+		}`,
+	})
+	if err != nil || historyBackResult == nil || historyBackResult.IsError {
+		t.Fatalf("byte-identical history.back error = %v, result = %#v", err, historyBackResult)
+	}
+	historyBackNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || historyBackNavigation == fixtureNavigation || historyBackNavigation == pushStateNavigation {
+		t.Fatalf(
+			"history.back NavigationIdentity() = %q, fixture %q, pushState %q, error %v",
+			historyBackNavigation,
+			fixtureNavigation,
+			pushStateNavigation,
+			err,
+		)
 	}
 	observation, err := worker.Observe(ctx)
 	if err != nil {

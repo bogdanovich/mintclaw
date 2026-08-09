@@ -63,7 +63,7 @@ type browserHostSession struct {
 	safeFailure           string
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
-	documentWorker        browserworker.DocumentIdentityWorker
+	navigationWorker      browserworker.NavigationIdentityWorker
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
@@ -270,8 +270,8 @@ func (host *BrowserHost) Open(
 		Limits: browserConfigLimits(request.Limits),
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
-	documentWorker, documentOK := opened.Owner.(browserworker.DocumentIdentityWorker)
-	if openErr != nil || !workerOK || actionWorker == nil || !documentOK || documentWorker == nil {
+	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationIdentityWorker)
+	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
@@ -303,7 +303,7 @@ func (host *BrowserHost) Open(
 		return host.sessionView(session), ErrBrowserHostLost
 	}
 	session.worker = actionWorker
-	session.documentWorker = documentWorker
+	session.navigationWorker = navigationWorker
 	session.state = "ready"
 	session.mu.Unlock()
 	return host.sessionView(session), nil
@@ -365,7 +365,7 @@ func (host *BrowserHost) Observe(
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	observation, documentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
+	observation, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil {
@@ -379,7 +379,7 @@ func (host *BrowserHost) Observe(
 	}
 	session.snapshotGeneration = request.SnapshotGeneration
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation, documentIdentity), nil
+	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
 }
 
 func (host *BrowserHost) Navigate(
@@ -533,8 +533,8 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ctx.Err()
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	current, currentDocumentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
-	currentDigest := browserHostObservationDigest(session, current, currentDocumentIdentity)
+	current, currentNavigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
+	currentDigest := browserHostObservationDigest(session, current, currentNavigationIdentity)
 	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin ||
 		len(session.observationDigest) != sha256.Size || !hmac.Equal(currentDigest, session.observationDigest) {
 		actionContextErr := actionCtx.Err()
@@ -578,7 +578,7 @@ func (host *BrowserHost) executeAction(
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
-	observation, documentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
+	observation, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil || actionContextErr != nil || !host.now().UTC().Before(actionDeadline) {
@@ -587,17 +587,17 @@ func (host *BrowserHost) executeAction(
 	}
 	session.snapshotGeneration++
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation, documentIdentity), nil
+	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
 }
 
-func observeBrowserHostDocument(
+func observeBrowserHostNavigation(
 	ctx context.Context,
 	session *browserHostSession,
 ) (browserworker.DriverObservation, string, error) {
-	if session.documentWorker == nil {
+	if session.navigationWorker == nil {
 		return browserworker.DriverObservation{}, "", browserworker.ErrDriverIncompatible
 	}
-	before, err := session.documentWorker.DocumentIdentity(ctx)
+	before, err := session.navigationWorker.NavigationIdentity(ctx)
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
@@ -605,7 +605,7 @@ func observeBrowserHostDocument(
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
-	after, err := session.documentWorker.DocumentIdentity(ctx)
+	after, err := session.navigationWorker.NavigationIdentity(ctx)
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
@@ -826,9 +826,9 @@ func browserHostObservation(
 	sessionID string,
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
-	documentIdentity string,
+	navigationIdentity string,
 ) BrowserHostObservation {
-	session.observationDigest = browserHostObservationDigest(session, observation, documentIdentity)
+	session.observationDigest = browserHostObservationDigest(session, observation, navigationIdentity)
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
@@ -851,13 +851,13 @@ func browserHostObservation(
 func browserHostObservationDigest(
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
-	documentIdentity string,
+	navigationIdentity string,
 ) []byte {
 	hash := hmac.New(sha256.New, session.elementBindingKey)
 	_, _ = fmt.Fprintf(
 		hash,
 		"mintclaw.browser.host-observation.v2\x00%d:%s%d:%s%d:%s%d:%s%d:%s:%t:%d",
-		len(documentIdentity), documentIdentity,
+		len(navigationIdentity), navigationIdentity,
 		len(observation.URL), observation.URL,
 		len(observation.Origin), observation.Origin,
 		len(observation.Title), observation.Title,

@@ -59,15 +59,17 @@ target policy. The typed `browser.act.v1` schema then enforces:
 The companion browser host independently revalidates those invariants against
 its current observation immediately before dispatch. Every accepted
 observation is bracketed by a private driver query for the Chromium main-frame
-and loader identity; a document transition during observation fails stale.
-The host-private HMAC binds that driver-sourced identity together with the
-entire observation that minted the current authority. Therefore even a
-same-origin replacement that reproduces byte-identical URL, title, snapshot,
-element, and dialog fields fails stale before dispatch. Any other observable
-mutation also fails stale. A timeout, transport loss, or ambiguous driver
-result quarantines the session and never replays an accepted action. The raw
-driver identity is not exposed in tool output or persisted in either
-invocation ledger.
+identity and a monotonic navigation generation. The private Playwright adapter
+advances that generation for committed-document and same-document main-frame
+navigation events; a transition during observation fails stale. The
+host-private HMAC binds that driver-sourced navigation identity together with
+the entire observation that minted the current authority. Therefore even a
+same-origin replacement or same-document history transition that reproduces
+byte-identical URL, title, snapshot, element, and dialog fields fails stale
+before dispatch. Any other observable mutation also fails stale. A timeout,
+transport loss, or ambiguous driver result quarantines the session and never
+replays an accepted action. The raw driver identity and generation are not
+exposed in tool output or persisted in either invocation ledger.
 
 ## Acceptance evidence
 
@@ -80,8 +82,9 @@ real-driver, and production-WSS tests prove:
 - stale references, invalid options, disabled controls, navigation, dialogs,
   popups, timeout, close races, expiry, disconnect, and ambiguous results fail
   closed with bounded placement-equivalent outcomes;
-- byte-identical observations from different main documents fail stale before
-  either press or select reaches the driver;
+- byte-identical observations from different main documents or different
+  same-document navigation generations fail stale before either press or
+  select reaches the driver;
 - gateway and companion catalogs advertise the same admitted action shapes;
 - reconnect cannot revive stale authority or replay an accepted action; and
 - live gateway and companion canaries execute `press` and `select`, observe a

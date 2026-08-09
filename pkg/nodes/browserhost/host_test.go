@@ -52,17 +52,17 @@ func (factory *fakeBrowserHostFactory) Open(
 }
 
 type fakeBrowserHostWorker struct {
-	status                browserworker.WorkerStatus
-	statusErr             error
-	observations          []browserworker.DriverObservation
-	observeCalls          int
-	documentIdentities    []string
-	documentIdentityCalls int
-	actions               []browserworker.DriverAction
-	executeErr            error
-	executeFunc           func(context.Context, browserworker.DriverAction) error
-	closeErr              error
-	closeCalls            int
+	status                  browserworker.WorkerStatus
+	statusErr               error
+	observations            []browserworker.DriverObservation
+	observeCalls            int
+	navigationIdentities    []string
+	navigationIdentityCalls int
+	actions                 []browserworker.DriverAction
+	executeErr              error
+	executeFunc             func(context.Context, browserworker.DriverAction) error
+	closeErr                error
+	closeCalls              int
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -83,12 +83,12 @@ func (worker *fakeBrowserHostWorker) Observe(context.Context) (browserworker.Dri
 	return observation, nil
 }
 
-func (worker *fakeBrowserHostWorker) DocumentIdentity(context.Context) (string, error) {
-	identity := "document_1"
-	if worker.documentIdentityCalls < len(worker.documentIdentities) {
-		identity = worker.documentIdentities[worker.documentIdentityCalls]
+func (worker *fakeBrowserHostWorker) NavigationIdentity(context.Context) (string, error) {
+	identity := "navigation_1"
+	if worker.navigationIdentityCalls < len(worker.navigationIdentities) {
+		identity = worker.navigationIdentities[worker.navigationIdentityCalls]
 	}
-	worker.documentIdentityCalls++
+	worker.navigationIdentityCalls++
 	return identity, nil
 }
 
@@ -490,47 +490,49 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 	})
 
-	for _, action := range []string{"press", "select"} {
-		t.Run(action+" rejects byte-identical same-origin document replacement", func(t *testing.T) {
-			element := browserworker.DriverElement{
-				Target: "driver_select_1", Role: "combobox", Name: "State",
-			}
-			host, worker, initial := newFixture(t, element)
-			worker.documentIdentities = []string{
-				"document_1", "document_1", "document_2", "document_2",
-			}
-			request := BrowserHostNavigateRequest{
-				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-				ActionInvocationID: "browser_replaced_" + action,
-				Effect:             "local_edit", CurrentOrigin: "https://example.com",
-				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-				ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
-			}
-			if action == "select" {
-				request.Action = nodes.BrowserAction{
-					Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+	for _, transition := range []string{"document replacement", "same-document navigation"} {
+		for _, action := range []string{"press", "select"} {
+			t.Run(action+" rejects byte-identical "+transition, func(t *testing.T) {
+				element := browserworker.DriverElement{
+					Target: "driver_select_1", Role: "combobox", Name: "State",
 				}
-				if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
-					t.Fatalf("Select(replaced document) error = %v, want stale", err)
+				host, worker, initial := newFixture(t, element)
+				worker.navigationIdentities = []string{
+					"navigation_1", "navigation_1", "navigation_2", "navigation_2",
 				}
-			} else {
-				request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
-				request.Effect = "unknown"
-				request.ExpectedRole, request.ExpectedName = "", ""
-				var err error
-				request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
-				if err != nil {
-					t.Fatal(err)
+				request := BrowserHostNavigateRequest{
+					SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+					ActionInvocationID: "browser_replaced_" + action,
+					Effect:             "local_edit", CurrentOrigin: "https://example.com",
+					PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+					ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+					RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 				}
-				if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
-					t.Fatalf("Press(replaced document) error = %v, want stale", err)
+				if action == "select" {
+					request.Action = nodes.BrowserAction{
+						Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+					}
+					if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+						t.Fatalf("Select(%s) error = %v, want stale", transition, err)
+					}
+				} else {
+					request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+					request.Effect = "unknown"
+					request.ExpectedRole, request.ExpectedName = "", ""
+					var err error
+					request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+						t.Fatalf("Press(%s) error = %v, want stale", transition, err)
+					}
 				}
-			}
-			if len(worker.actions) != 0 {
-				t.Fatalf("%s reached replacement document: %#v", action, worker.actions)
-			}
-		})
+				if len(worker.actions) != 0 {
+					t.Fatalf("%s reached transitioned page: %#v", action, worker.actions)
+				}
+			})
+		}
 	}
 }
 

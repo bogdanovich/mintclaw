@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +37,7 @@ const playwrightDriverResponseBytes = config.BrowserMaxSnapshotBytes + config.Br
 
 const opaqueSnapshotReferenceBytes = len("ref_") + 32
 
-const playwrightDocumentIdentityResponseBytes = 4096
+const playwrightNavigationIdentityResponseBytes = 4096
 
 const playwrightTargetExpression = `(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}`
 
@@ -51,24 +52,60 @@ var (
 	playwrightDialogPattern = regexp.MustCompile(
 		`^- \["(alert|beforeunload|confirm|prompt)" dialog with message "(.*)"\]: can be handled by browser_handle_dialog$`,
 	)
-	playwrightSnapshotLinkPattern  = regexp.MustCompile(`^- \[Snapshot\]\(.+\)$`)
-	playwrightDocumentIdentityPart = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
+	playwrightSnapshotLinkPattern    = regexp.MustCompile(`^- \[Snapshot\]\(.+\)$`)
+	playwrightNavigationIdentityPart = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
 )
 
-const playwrightDocumentIdentityMarker = "MINTCLAW_DOC_V1"
+const playwrightNavigationIdentityMarker = "MINTCLAW_NAV_V1"
 
-const playwrightDocumentIdentityCode = `async (page) => {
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    const tree = await cdp.send("Page.getFrameTree");
-    const frame = tree.frameTree && tree.frameTree.frame;
-    const frameID = String(frame && frame.id || "");
-    const loaderID = String(frame && frame.loaderId || "");
-    if (!frameID || !loaderID) return "MINTCLAW_DOC_V1|error|missing_identity";
-    return "MINTCLAW_DOC_V1|ok|" + encodeURIComponent(frameID) + "|" + encodeURIComponent(loaderID);
-  } finally {
-    await cdp.detach();
+const playwrightNavigationIdentityCode = `async (page) => {
+  const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
+  let state = page[trackerKey];
+  if (!state) {
+    const cdp = await page.context().newCDPSession(page);
+    state = { cdp, mainFrameID: "", loaderID: "", generation: 1 };
+    cdp.on("Page.frameNavigated", event => {
+      const frame = event && event.frame;
+      const frameID = String(frame && frame.id || "");
+      const loaderID = String(frame && frame.loaderId || "");
+      if (frameID === state.mainFrameID && loaderID && loaderID !== state.loaderID) {
+        state.loaderID = loaderID;
+        state.generation++;
+      }
+    });
+    cdp.on("Page.navigatedWithinDocument", event => {
+      if (String(event && event.frameId || "") === state.mainFrameID) state.generation++;
+    });
+    await cdp.send("Page.enable");
+    const initialTree = await cdp.send("Page.getFrameTree");
+    const initialFrame = initialTree.frameTree && initialTree.frameTree.frame;
+    state.mainFrameID = String(initialFrame && initialFrame.id || "");
+    state.loaderID = String(initialFrame && initialFrame.loaderId || "");
+    if (!state.mainFrameID || !state.loaderID) {
+      await cdp.detach();
+      return "MINTCLAW_NAV_V1|error|missing_identity";
+    }
+    Object.defineProperty(page, trackerKey, { value: state, configurable: true });
+    page.once("close", () => {
+      delete page[trackerKey];
+      state.cdp.detach().catch(() => {});
+    });
   }
+  const tree = await state.cdp.send("Page.getFrameTree");
+  const frame = tree.frameTree && tree.frameTree.frame;
+  const frameID = String(frame && frame.id || "");
+  const loaderID = String(frame && frame.loaderId || "");
+  if (!frameID || !loaderID) return "MINTCLAW_NAV_V1|error|missing_identity";
+  if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
+    state.mainFrameID = frameID;
+    state.loaderID = loaderID;
+    state.generation++;
+  }
+  if (!Number.isSafeInteger(state.generation) || state.generation < 1) {
+    return "MINTCLAW_NAV_V1|error|invalid_generation";
+  }
+  return "MINTCLAW_NAV_V1|ok|" + encodeURIComponent(frameID) + "|" +
+    encodeURIComponent(loaderID) + "|" + String(state.generation);
 }`
 
 var playwrightManagedEnvironmentNames = []string{
@@ -700,25 +737,25 @@ func (worker *playwrightWorker) Observe(ctx context.Context) (DriverObservation,
 	return observation, nil
 }
 
-func (worker *playwrightWorker) DocumentIdentity(ctx context.Context) (string, error) {
+func (worker *playwrightWorker) NavigationIdentity(ctx context.Context) (string, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
 		return "", ErrWorkerUnavailable
 	}
 	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
-		"code": playwrightDocumentIdentityCode,
+		"code": playwrightNavigationIdentityCode,
 	})
 	if err != nil || result == nil {
 		worker.lost = true
 		return "", ErrWorkerUnavailable
 	}
-	text, err := boundedPlaywrightText(result, playwrightDocumentIdentityResponseBytes)
+	text, err := boundedPlaywrightText(result, playwrightNavigationIdentityResponseBytes)
 	if err != nil || result.IsError {
 		worker.lost = true
 		return "", ErrDriverIncompatible
 	}
-	identity, err := parsePlaywrightDocumentIdentity(text)
+	identity, err := parsePlaywrightNavigationIdentity(text)
 	if err != nil {
 		worker.lost = true
 		return "", err
@@ -726,7 +763,7 @@ func (worker *playwrightWorker) DocumentIdentity(ctx context.Context) (string, e
 	return identity, nil
 }
 
-func parsePlaywrightDocumentIdentity(text string) (string, error) {
+func parsePlaywrightNavigationIdentity(text string) (string, error) {
 	const resultHeader = "### Result"
 	if strings.Count(text, resultHeader) != 1 {
 		return "", ErrDriverIncompatible
@@ -739,16 +776,23 @@ func parsePlaywrightDocumentIdentity(text string) (string, error) {
 	}
 	line = strings.Trim(line, "\r\"' ")
 	fields := strings.Split(line, "|")
-	if len(fields) != 4 || fields[0] != playwrightDocumentIdentityMarker || fields[1] != "ok" {
+	if len(fields) != 5 || fields[0] != playwrightNavigationIdentityMarker || fields[1] != "ok" {
 		return "", ErrDriverIncompatible
 	}
 	frameID, frameErr := url.QueryUnescape(fields[2])
 	loaderID, loaderErr := url.QueryUnescape(fields[3])
-	if frameErr != nil || loaderErr != nil || !playwrightDocumentIdentityPart.MatchString(frameID) ||
-		!playwrightDocumentIdentityPart.MatchString(loaderID) {
+	generation, generationErr := strconv.ParseUint(fields[4], 10, 64)
+	if frameErr != nil || loaderErr != nil || generationErr != nil || generation == 0 ||
+		!playwrightNavigationIdentityPart.MatchString(frameID) ||
+		!playwrightNavigationIdentityPart.MatchString(loaderID) {
 		return "", ErrDriverIncompatible
 	}
-	digest := sha256.Sum256([]byte("mintclaw.browser.document-identity.v1\x00" + frameID + "\x00" + loaderID))
+	digest := sha256.Sum256([]byte(fmt.Sprintf(
+		"mintclaw.browser.navigation-identity.v1\x00%s\x00%s\x00%d",
+		frameID,
+		loaderID,
+		generation,
+	)))
 	return hex.EncodeToString(digest[:]), nil
 }
 

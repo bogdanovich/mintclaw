@@ -50,12 +50,13 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
-// DocumentIdentityWorker exposes a driver-owned identity for the current main
-// document. The identity is private runtime state: callers use it to reject a
-// document replacement that reproduces the same observable snapshot.
-type DocumentIdentityWorker interface {
+// NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
+// current main-frame navigation state. The identity is private runtime state:
+// callers use it to reject document and same-document transitions that
+// reproduce the same observable snapshot.
+type NavigationIdentityWorker interface {
 	ActionWorker
-	DocumentIdentity(context.Context) (string, error)
+	NavigationIdentity(context.Context) (string, error)
 }
 
 // PreparedActionWorker receives the gateway-owned durable authority for one
