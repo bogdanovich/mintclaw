@@ -210,8 +210,7 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 	var lastErrorCode string
 	var firstDecodeErr error
 	var firstMalformedLine string
-	nonEmptyLines := 0
-	usableEvents := 0
+	hasResultEvent := false
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -220,8 +219,6 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 		if line == "" {
 			continue
 		}
-		nonEmptyLines++
-
 		var event codexEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			if firstDecodeErr == nil {
@@ -237,14 +234,17 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 			}
 			continue
 		}
-		usableEvents++
 
 		switch event.Type {
 		case "item.completed":
-			if event.Item != nil && event.Item.Type == "agent_message" && event.Item.Text != "" {
-				lastAgentMessage = event.Item.Text
+			if event.Item != nil && event.Item.Type == "agent_message" {
+				hasResultEvent = true
+				if event.Item.Text != "" {
+					lastAgentMessage = event.Item.Text
+				}
 			}
 		case "turn.completed":
+			hasResultEvent = true
 			if event.Usage != nil {
 				promptTokens := event.Usage.InputTokens + event.Usage.CachedInputTokens
 				usage = &UsageInfo{
@@ -255,12 +255,18 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 			}
 		case "error":
 			lastError = event.Message
+			if event.Message != "" {
+				hasResultEvent = true
+			}
 			if event.Code != "" {
 				lastErrorCode = event.Code
 			}
 		case "turn.failed":
 			if event.Error != nil {
 				lastError = event.Error.Message
+				if event.Error.Message != "" {
+					hasResultEvent = true
+				}
 				if event.Error.Code != "" {
 					lastErrorCode = event.Error.Code
 				}
@@ -270,7 +276,7 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 	if err := scanner.Err(); err != nil {
 		return codexJSONLResult{}, normalizeCLIError(fmt.Errorf("scan codex CLI events: %w", err), "")
 	}
-	if nonEmptyLines > 0 && usableEvents == 0 {
+	if firstDecodeErr != nil && !hasResultEvent {
 		return codexJSONLResult{}, normalizeCLIError(
 			fmt.Errorf("decode codex CLI events: %w", firstDecodeErr),
 			firstMalformedLine,

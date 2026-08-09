@@ -241,6 +241,16 @@ func TestParseJSONLEvents_WhollyMalformedOutput(t *testing.T) {
 	}
 }
 
+func TestParseJSONLEvents_LifecycleEventDoesNotHideMalformedOutput(t *testing.T) {
+	p := &CodexCliProvider{}
+	events := `{"type":"thread.started","thread_id":"abc-123"}
+{"type":"turn.started"}
+{"type":"item.completed"`
+
+	_, err := p.parseJSONLEvents(events)
+	assertProviderErrorKind(t, err, providererrors.KindUnknown)
+}
+
 func TestParseJSONLEvents_CommandExecution(t *testing.T) {
 	p := &CodexCliProvider{}
 	events := `{"type":"turn.started"}
