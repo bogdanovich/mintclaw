@@ -75,7 +75,7 @@ func TestAgentHandleChunkCreatesSession(t *testing.T) {
 		t.Fatal("expected session to be created")
 	}
 
-	acc.Close()
+	_ = acc.Close()
 	_ = os.Remove(acc.file)
 }
 

@@ -198,7 +198,9 @@ func TestExchangeCodeForTokens(t *testing.T) {
 			return
 		}
 
-		r.ParseForm()
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
 		if r.FormValue("grant_type") != "authorization_code" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
@@ -209,7 +211,7 @@ func TestExchangeCodeForTokens(t *testing.T) {
 			"refresh_token": "mock-refresh-token",
 			"expires_in":    3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -237,7 +239,9 @@ func TestRefreshAccessToken(t *testing.T) {
 			return
 		}
 
-		r.ParseForm()
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
 		if r.FormValue("grant_type") != "refresh_token" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
@@ -248,7 +252,7 @@ func TestRefreshAccessToken(t *testing.T) {
 			"refresh_token": "refreshed-refresh-token",
 			"expires_in":    3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -297,7 +301,7 @@ func TestRefreshAccessTokenPreservesRefreshAndAccountID(t *testing.T) {
 			"access_token": "new-access-token-only",
 			"expires_in":   3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -382,7 +386,7 @@ func TestLoginBrowserWithOptionsNoBrowserDoesNotRequireCallbackPort(t *testing.T
 	if err != nil {
 		t.Fatalf("net.Listen() error: %v", err)
 	}
-	defer reservedListener.Close()
+	defer func() { _ = reservedListener.Close() }()
 
 	reservedPort := reservedListener.Addr().(*net.TCPAddr).Port
 	origOpenBrowserFunc := openBrowserFunc

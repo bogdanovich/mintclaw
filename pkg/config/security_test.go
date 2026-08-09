@@ -118,19 +118,19 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 				{"mintclaw_client", `{"enabled":true,"settings":{"token":"mintclaw_client_token"}}`},
 			} {
 				bc := &Channel{}
-				json.Unmarshal([]byte(d.raw), bc)
+				_ = json.Unmarshal([]byte(d.raw), bc)
 				bc.Type = d.name
 				switch bc.Type {
 				case "qq":
-					bc.Decode(&QQSettings{})
+					_ = bc.Decode(&QQSettings{})
 				case "telegram":
-					bc.Decode(&TelegramSettings{})
+					_ = bc.Decode(&TelegramSettings{})
 				case "discord":
-					bc.Decode(&DiscordSettings{})
+					_ = bc.Decode(&DiscordSettings{})
 				case "feishu":
-					bc.Decode(&FeishuSettings{})
+					_ = bc.Decode(&FeishuSettings{})
 				case "mintclaw_client":
-					bc.Decode(&MintClawClientSettings{})
+					_ = bc.Decode(&MintClawClientSettings{})
 				}
 				chs[d.name] = bc
 			}

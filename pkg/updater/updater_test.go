@@ -27,7 +27,7 @@ func matchesMagic(path, platform string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, 4)
 	n, err := f.Read(buf)
 	if err != nil && !errors.Is(err, io.EOF) {

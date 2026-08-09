@@ -38,7 +38,9 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	})
 
 	// Create HEARTBEAT.md
-	os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644)
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Execute heartbeat directly (internal method for testing)
 	hs.executeHeartbeat()
@@ -93,7 +95,9 @@ func TestExecuteHeartbeat_ResultLogging(t *testing.T) {
 				return tt.result
 			})
 
-			os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644)
+			if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			hs.executeHeartbeat()
 
 			logFile := filepath.Join(tmpDir, "heartbeat.log")
@@ -159,7 +163,9 @@ func TestExecuteHeartbeat_NilResult(t *testing.T) {
 	})
 
 	// Create HEARTBEAT.md
-	os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644)
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Should not panic with nil result
 	hs.executeHeartbeat()
