@@ -38,7 +38,10 @@ type AgentLoop struct {
 	bus      interfaces.MessageBus
 	cfg      *config.Config
 	registry *AgentRegistry
-	state    *state.Manager
+	// runtimeProfile marks a pre-construction loop whose updates require restart.
+	// Nil selects the legacy config-only loop with its existing reload behavior.
+	runtimeProfile *RuntimeProfile
+	state          *state.Manager
 
 	// Runtime event system
 	runtimeEvents      runtimeevents.Bus
@@ -312,6 +315,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
+	if al.runtimeProfile != nil {
+		return fmt.Errorf("runtime-profile loops require restart; hot reload is not supported")
+	}
 	if _, stateless := al.contextManager.(*noneContextManager); !stateless ||
 		contextManagerConfigName(cfg) != "none" {
 		return fmt.Errorf("context manager changes require restart; hot reload is supported only for none")
@@ -363,6 +369,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		registerSharedTools(al, cfg, al.bus, registry, provider)
 	}
 	if err := al.registerRuntimeToolsForRegistry(cfg, registry); err != nil {
+		registry.Close()
 		return err
 	}
 
