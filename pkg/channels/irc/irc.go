@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -90,9 +91,16 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 		conn.SASLPassword = c.config.SASLPassword.String()
 	}
 
-	// Register event handlers
+	// Register event handlers. The connect callback runs when registration
+	// completes (376/422) both on the initial connection and on reconnects;
+	// only the first result is reported back so Start can fail closed.
+	setupDone := make(chan error, 1)
+	var setupOnce sync.Once
 	conn.AddConnectCallback(func(e ircmsg.Message) {
-		c.onConnect(conn)
+		err := c.onConnect(conn)
+		setupOnce.Do(func() {
+			setupDone <- err
+		})
 	})
 	conn.AddCallback("PRIVMSG", func(e ircmsg.Message) {
 		c.onPrivmsg(conn, e)
@@ -100,6 +108,14 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 
 	if err := conn.Connect(); err != nil {
 		return fmt.Errorf("irc connect failed: %w", err)
+	}
+
+	// Connect returns once registration completes; the connect callback is
+	// processed right after in the same read-loop iteration, so the initial
+	// setup result is always delivered here.
+	if err := <-setupDone; err != nil {
+		conn.Quit()
+		return fmt.Errorf("irc setup failed: %w", err)
 	}
 
 	c.conn = conn

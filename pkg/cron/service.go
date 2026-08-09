@@ -396,28 +396,43 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 }
 
 func (cs *CronService) loadStore() error {
-	cs.store = &CronStore{
-		Version: 1,
-		Jobs:    []CronJob{},
-	}
-
 	data, err := os.ReadFile(cs.storePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cs.ensureStore()
 			cs.loadErr = nil
 			return nil
 		}
+		cs.ensureStore()
 		cs.loadErr = err
 		return err
 	}
 
-	if err := json.Unmarshal(data, cs.store); err != nil {
+	// Decode into a temporary store and publish it only after a successful
+	// read/unmarshal so a failed reload cannot replace known-good live state
+	// with an empty or partially decoded store.
+	store := &CronStore{
+		Version: 1,
+		Jobs:    []CronJob{},
+	}
+	if err := json.Unmarshal(data, store); err != nil {
+		cs.ensureStore()
 		cs.loadErr = err
 		return err
 	}
 
+	cs.store = store
 	cs.loadErr = nil
 	return nil
+}
+
+func (cs *CronService) ensureStore() {
+	if cs.store == nil {
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
+	}
 }
 
 func (cs *CronService) saveStoreUnsafe() error {

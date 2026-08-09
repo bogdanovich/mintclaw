@@ -619,3 +619,36 @@ func TestLoadErrRefreshesOnReload(t *testing.T) {
 		t.Fatalf("malformed store was overwritten: got %q, want original %q", got, malformed)
 	}
 }
+
+func TestLoadFailurePreservesLiveStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	cs := NewCronService(storePath, nil)
+	job, err := cs.AddJob("task", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	// A later reload over a corrupted file must fail closed but preserve the
+	// known-good live store instead of replacing it with empty state.
+	if err := os.WriteFile(storePath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt store: %v", err)
+	}
+	if err := cs.Load(); err == nil {
+		t.Fatal("Load over corrupted store succeeded, want error")
+	}
+	if _, ok := cs.GetJob(job.ID); !ok {
+		t.Fatal("live store lost known-good job after failed reload")
+	}
+	if _, err := cs.AddJob(
+		"task2",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		"",
+		"hello",
+		"cli",
+		"direct",
+	); err == nil {
+		t.Fatal("AddJob succeeded with latched load error, want failure")
+	}
+}
