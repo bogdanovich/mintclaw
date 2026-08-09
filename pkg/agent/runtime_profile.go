@@ -57,7 +57,7 @@ func NewRuntimeProfileWithStoreFactory(
 	storeFactory RuntimeStoreFactory,
 	bindings ...RuntimeProfileBinding,
 ) (RuntimeProfile, error) {
-	if runtimeStoreFactoryIsNil(storeFactory) {
+	if runtimeDependencyIsNil(storeFactory) {
 		return RuntimeProfile{}, fmt.Errorf("runtime profile: store factory is required")
 	}
 	profile := RuntimeProfile{
@@ -162,11 +162,11 @@ func NewRuntimeProfileWithStoreFactory(
 	return profile, nil
 }
 
-func runtimeStoreFactoryIsNil(storeFactory RuntimeStoreFactory) bool {
-	if storeFactory == nil {
+func runtimeDependencyIsNil(dependency any) bool {
+	if dependency == nil {
 		return true
 	}
-	value := reflect.ValueOf(storeFactory)
+	value := reflect.ValueOf(dependency)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		return value.IsNil()

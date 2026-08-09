@@ -219,6 +219,9 @@ func newAgentInstance(
 		if err != nil {
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
+		if runtimeDependencyIsNil(sessions) {
+			return nil, fmt.Errorf("construct agent: runtime store factory returned a nil session store")
+		}
 		contextBuilder, err = newRuntimeContextBuilder(*layout)
 		if err != nil {
 			_ = sessions.Close()

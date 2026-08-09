@@ -50,6 +50,9 @@ the first store. It also rejects a symlink or non-regular existing
 
 Store factories are injected into the profile before registry construction.
 Nil and typed-nil factories are rejected at profile admission.
+Successful factory calls must also return non-nil products: nil or typed-nil
+canonical stores and nil Seahorse engines fail construction through the normal
+rollback path.
 Each agent receives its canonical store before it can enter the registry. A
 failure while opening a later owner closes every earlier instance. The runtime
 profile itself is installed on the loop before context-manager resolution, so
@@ -73,6 +76,9 @@ Focused tests prove that:
 - context directories and database targets are preflighted fail-closed;
 - a custom runtime-profile Seahorse path is rejected;
 - an unsupported context manager is rejected before any store is opened;
+- nil and typed-nil canonical store products are rejected immediately;
+- a nil Seahorse engine product closes the canonical store through normal
+  rollback;
 - failure of a later session-store factory closes the earlier store exactly
   once and returns no partial loop; and
 - Seahorse factory failure closes the canonical store exactly once and returns

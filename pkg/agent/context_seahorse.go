@@ -113,6 +113,9 @@ func newSeahorseAgentRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
 	}
+	if engine == nil {
+		return nil, fmt.Errorf("create engine: runtime store factory returned a nil Seahorse engine")
+	}
 	return &seahorseAgentRuntime{
 		engine:    engine,
 		sessions:  agent.Sessions,

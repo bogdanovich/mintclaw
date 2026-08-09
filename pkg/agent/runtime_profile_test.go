@@ -29,15 +29,18 @@ func (s *trackedRuntimeSessionStore) Close() error {
 }
 
 type trackingRuntimeStoreFactory struct {
-	delegate       defaultRuntimeStoreFactory
-	failSessionAt  int
-	failSeahorse   bool
-	failSeahorseAt int
-	sessionCalls   int
-	seahorseCalls  int
-	sessions       []*trackedRuntimeSessionStore
-	seahorsePaths  []string
-	engines        []*seahorse.Engine
+	delegate        defaultRuntimeStoreFactory
+	failSessionAt   int
+	failSeahorse    bool
+	failSeahorseAt  int
+	nilSession      bool
+	typedNilSession bool
+	nilSeahorse     bool
+	sessionCalls    int
+	seahorseCalls   int
+	sessions        []*trackedRuntimeSessionStore
+	seahorsePaths   []string
+	engines         []*seahorse.Engine
 }
 
 func TestNewRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
@@ -67,6 +70,13 @@ func (f *trackingRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (ses
 	if f.sessionCalls == f.failSessionAt {
 		return nil, errInjectedRuntimeStore
 	}
+	if f.nilSession {
+		return nil, nil
+	}
+	if f.typedNilSession {
+		var store *trackedRuntimeSessionStore
+		return store, nil
+	}
 	store, err := f.delegate.NewSessionStore(layout)
 	if err != nil {
 		return nil, err
@@ -84,6 +94,9 @@ func (f *trackingRuntimeStoreFactory) NewSeahorseEngine(
 	f.seahorsePaths = append(f.seahorsePaths, config.DBPath)
 	if f.failSeahorse || f.seahorseCalls == f.failSeahorseAt {
 		return nil, errInjectedRuntimeStore
+	}
+	if f.nilSeahorse {
+		return nil, nil
 	}
 	engine, err := f.delegate.NewSeahorseEngine(config, complete)
 	if err == nil {
@@ -915,6 +928,62 @@ func TestRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*trackingRuntimeStoreFactory)
+	}{
+		{
+			name: "nil interface",
+			configure: func(factory *trackingRuntimeStoreFactory) {
+				factory.nilSession = true
+			},
+		},
+		{
+			name: "typed nil",
+			configure: func(factory *trackingRuntimeStoreFactory) {
+				factory.typedNilSession = true
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			executionRoot := filepath.Join(root, "project")
+			layout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-session"},
+				executionRoot,
+				filepath.Join(root, "state"),
+				[]string{executionRoot},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout() error = %v", err)
+			}
+			factory := &trackingRuntimeStoreFactory{}
+			test.configure(factory)
+			profile, err := NewRuntimeProfileWithStoreFactory(
+				factory,
+				RuntimeProfileBinding{AgentID: "main", Layout: layout},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.ContextManager = "none"
+
+			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			if err == nil || !strings.Contains(err.Error(), "nil session store") {
+				if loop != nil {
+					loop.Close()
+				}
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-store rejection", err)
+			}
+			if loop != nil {
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+			}
+		})
+	}
+}
+
 func TestRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -953,6 +1022,43 @@ func TestRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing
 	wantDB := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
 	if len(factory.seahorsePaths) != 1 || factory.seahorsePaths[0] != wantDB {
 		t.Fatalf("Seahorse paths = %v, want [%q]", factory.seahorsePaths, wantDB)
+	}
+}
+
+func TestRuntimeProfileNilSeahorseEngineClosesCanonicalStore(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-seahorse"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{nilSeahorse: true}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "nil Seahorse engine") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-engine rejection", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
+		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
 	}
 }
 
