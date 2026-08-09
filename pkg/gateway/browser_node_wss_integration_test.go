@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	urlpkg "net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -197,6 +199,15 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	invocation, err = broker.ExecuteAction(t.Context(), owner, selection.Action.ID, nil)
 	if err != nil || invocation.State != browser.InvocationSucceeded {
 		t.Fatalf("select invocation = %#v, %v", invocation, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(`"CA"`)) {
+			t.Fatalf("durable invocation state exposed select option in %s", retainedPath)
+		}
 	}
 	afterSelect, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
 	if err != nil || afterSelect.SnapshotGeneration != 4 {
@@ -1027,15 +1038,16 @@ func (handler *wssBrowserDropBeforeAcceptance) Invoke(
 	ctx context.Context,
 	nodeID nodes.ID,
 	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
 	commit func() error,
 ) (json.RawMessage, bool, error) {
 	if plan.Command != handler.command {
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	handler.mu.Lock()
 	if !handler.armed {
 		handler.mu.Unlock()
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	handler.plans = append(handler.plans, plan)
 	drop := !handler.dropped
@@ -1044,7 +1056,7 @@ func (handler *wssBrowserDropBeforeAcceptance) Invoke(
 	}
 	handler.mu.Unlock()
 	if !drop {
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	if commit != nil {
 		if err := commit(); err != nil {

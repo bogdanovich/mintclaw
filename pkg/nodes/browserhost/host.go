@@ -69,6 +69,7 @@ type browserHostSession struct {
 	actionInvocations     map[string]string
 	elementBindingKey     []byte
 	elementRefs           map[string]browserworker.DriverElement
+	observationDigest     []byte
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -530,7 +531,9 @@ func (host *BrowserHost) executeAction(
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
 	current, observeErr := session.worker.Observe(actionCtx)
-	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin {
+	currentDigest := browserHostObservationDigest(session, current)
+	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin ||
+		len(session.observationDigest) != sha256.Size || !hmac.Equal(currentDigest, session.observationDigest) {
 		actionContextErr := actionCtx.Err()
 		cancelAction()
 		if observeErr != nil || actionContextErr != nil {
@@ -615,6 +618,7 @@ func (host *BrowserHost) quarantineActionLocked(session *browserHostSession) {
 	session.state = "lost"
 	session.safeFailure = "outcome_unknown"
 	session.elementRefs = make(map[string]browserworker.DriverElement)
+	session.observationDigest = nil
 }
 
 func (host *BrowserHost) Close(
@@ -792,6 +796,7 @@ func browserHostObservation(
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
 ) BrowserHostObservation {
+	session.observationDigest = browserHostObservationDigest(session, observation)
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
@@ -809,6 +814,43 @@ func browserHostObservation(
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: snapshot, Elements: elements, Truncated: observation.Truncated,
 	}
+}
+
+func browserHostObservationDigest(
+	session *browserHostSession,
+	observation browserworker.DriverObservation,
+) []byte {
+	hash := hmac.New(sha256.New, session.elementBindingKey)
+	_, _ = fmt.Fprintf(
+		hash,
+		"mintclaw.browser.host-observation.v1\x00%d:%s%d:%s%d:%s%d:%s:%t:%d",
+		len(observation.URL), observation.URL,
+		len(observation.Origin), observation.Origin,
+		len(observation.Title), observation.Title,
+		len(observation.Snapshot), observation.Snapshot,
+		observation.Truncated,
+		len(observation.Elements),
+	)
+	for _, element := range observation.Elements {
+		_, _ = fmt.Fprintf(
+			hash,
+			"%d:%s%d:%s%d:%s",
+			len(element.Target), element.Target,
+			len(element.Role), element.Role,
+			len(element.Name), element.Name,
+		)
+	}
+	if observation.PendingDialog == nil {
+		_, _ = hash.Write([]byte("dialog:nil"))
+	} else {
+		_, _ = fmt.Fprintf(
+			hash,
+			"dialog:%d:%s%d:%s",
+			len(observation.PendingDialog.Type), observation.PendingDialog.Type,
+			len(observation.PendingDialog.Message), observation.PendingDialog.Message,
+		)
+	}
+	return hash.Sum(nil)
 }
 
 func browserHostElementRef(

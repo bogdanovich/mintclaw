@@ -55,6 +55,7 @@ func TestAdmissionRejectsPlanForUnapprovedCatalogBeforeDispatch(t *testing.T) {
 		t.Context(),
 		nodeID,
 		plan,
+		nil,
 		func() error {
 			commitCalls++
 			return nil
@@ -217,7 +218,7 @@ func TestAdmissionRevocationWaitsForDispatchWrite(t *testing.T) {
 	}
 	invoked := make(chan invokeResult, 1)
 	go func() {
-		_, dispatched, invokeErr := handler.Invoke(ctx, nodeID, plan, func() error {
+		_, dispatched, invokeErr := handler.Invoke(ctx, nodeID, plan, nil, func() error {
 			close(commitStarted)
 			<-allowCommit
 			return nil
@@ -277,6 +278,7 @@ func TestAdmissionWritesAfterCommittedDispatchError(t *testing.T) {
 		t.Context(),
 		nodeID,
 		plan,
+		nil,
 		func() error { return commitErr },
 	)
 	if !dispatched || !errors.Is(err, commitErr) {
@@ -316,6 +318,7 @@ func TestAdmissionPreservesBoundedCompanionRejectionCode(t *testing.T) {
 			t.Context(),
 			nodeID,
 			plan,
+			nil,
 			func() error { return nil },
 		)
 		invoked <- invokeResult{dispatched: dispatched, err: invokeErr}

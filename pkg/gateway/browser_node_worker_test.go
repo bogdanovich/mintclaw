@@ -53,6 +53,7 @@ func (handler *browserNodeTestHandler) Invoke(
 	_ context.Context,
 	_ nodes.ID,
 	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
 	commit func() error,
 ) (json.RawMessage, bool, error) {
 	if err := commit(); err != nil {
@@ -88,6 +89,13 @@ func (handler *browserNodeTestHandler) Invoke(
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
+		if input.Action.Kind == "select" {
+			var ephemeral struct {
+				Value string `json:"value"`
+			}
+			_ = json.Unmarshal(ephemeralInput, &ephemeral)
+			input.Action.Value = ephemeral.Value
+		}
 		handler.actInputs = append(handler.actInputs, input)
 		if input.Action.Kind == "navigate" {
 			handler.currentURL, handler.currentOrigin = "https://example.com/", "https://example.com"

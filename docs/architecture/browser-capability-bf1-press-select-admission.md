@@ -34,10 +34,14 @@ exact one-time approval and remains denied in dry-run mode.
 
 The option identity is data for Playwright's typed `selectOption` operation;
 it cannot become a selector, executable code, or a driver command. The broker
-keeps it out of the durable prepared-action record and binds its digest to the
-session, tab, snapshot generation, origin, policy, profile, catalog, semantic
-role, and accessible name. Invalid or disabled options fail through the same
-bounded action outcome as other driver failures.
+keeps it out of both gateway and companion durable invocation records. A
+transport-only ephemeral envelope carries it for the initial dispatch, while
+the durable plan contains only a domain-separated digest and byte length bound
+to the session, tab, snapshot generation, origin, policy, profile, catalog,
+semantic role, and accessible name. The companion verifies that binding before
+ledger acceptance. A restart or redispatch without the transient value fails
+closed. Invalid or disabled options fail through the same bounded action
+outcome as other driver failures.
 
 ## Companion parity
 
@@ -53,9 +57,12 @@ target policy. The typed `browser.act.v1` schema then enforces:
   disconnect, and invocation no-replay bindings.
 
 The companion browser host independently revalidates those invariants against
-its current observation immediately before dispatch. A timeout, transport
-loss, or ambiguous driver result quarantines the session and never replays an
-accepted action.
+its current observation immediately before dispatch. It also compares a
+host-private HMAC of the entire driver observation with the exact observation
+that minted the current authority. Any same-origin reload, replacement, or
+observable mutation fails stale before dispatch. A timeout, transport loss, or
+ambiguous driver result quarantines the session and never replays an accepted
+action.
 
 ## Acceptance evidence
 
@@ -72,4 +79,3 @@ real-driver, and production-WSS tests prove:
 - reconnect cannot revive stale authority or replay an accepted action; and
 - live gateway and companion canaries execute `press` and `select`, observe a
   fresh state, close, and immediately reuse the managed profile.
-

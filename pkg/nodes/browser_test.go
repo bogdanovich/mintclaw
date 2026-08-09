@@ -228,10 +228,12 @@ func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
 	}
 
 	selection := browserActInputFixture()
-	selection["action"] = map[string]any{"kind": "select", "ref": "host_ref_1", "value": "CA"}
+	selection["action"] = map[string]any{"kind": "select", "ref": "host_ref_1"}
 	selection["effect"] = "local_edit"
 	selection["expected_role"] = "combobox"
 	selection["expected_name"] = "State"
+	selection["input_digest"] = BrowserInputDigest("CA")
+	selection["input_bytes"] = 2
 	if err = validateInvocationInput(act.InputSchema, selection); err != nil {
 		t.Fatalf("typed select input rejected: %v", err)
 	}

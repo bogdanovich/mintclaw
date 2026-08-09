@@ -89,9 +89,14 @@ type commandAuthorizer interface {
 	authorize(nodes.ExecutionPlan) error
 }
 
+type ephemeralCommandAuthorizer interface {
+	authorizeEphemeral(nodes.ExecutionPlan, json.RawMessage) error
+}
+
 type commandInvocation struct {
 	Plan             nodes.ExecutionPlan
 	Input            json.RawMessage
+	EphemeralInput   json.RawMessage
 	TimeoutSeconds   int
 	OutputLimitBytes int
 }
@@ -411,6 +416,14 @@ func (runtime *Runtime) Invoke(
 	ctx context.Context,
 	plan nodes.ExecutionPlan,
 ) (json.RawMessage, error) {
+	return runtime.InvokeWithEphemeral(ctx, plan, nil)
+}
+
+func (runtime *Runtime) InvokeWithEphemeral(
+	ctx context.Context,
+	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
+) (json.RawMessage, error) {
 	if runtime == nil {
 		return nil, ErrCommandUnavailable
 	}
@@ -429,7 +442,10 @@ func (runtime *Runtime) Invoke(
 			); err != nil {
 				return nil, err
 			}
-			return runtime.executeAccepted(ctx, plan)
+			if err := runtime.authorizeEphemeral(plan, ephemeralInput); err != nil {
+				return nil, err
+			}
+			return runtime.executeAccepted(ctx, plan, ephemeralInput)
 		}
 		if err := runtime.policy.AuthorizeReplay(
 			plan,
@@ -451,22 +467,38 @@ func (runtime *Runtime) Invoke(
 	if err := runtime.authorizeHandler(plan); err != nil {
 		return nil, err
 	}
+	if err := runtime.authorizeEphemeral(plan, ephemeralInput); err != nil {
+		return nil, err
+	}
 	record, existing, acceptErr := runtime.ledger.Accept(plan)
 	if acceptErr != nil {
 		return nil, acceptErr
 	}
 	if existing {
 		if record.State == nodes.InvocationAccepted {
-			return runtime.executeAccepted(ctx, plan)
+			return runtime.executeAccepted(ctx, plan, ephemeralInput)
 		}
 		return invocationRecordResult(record)
 	}
-	return runtime.executeAccepted(ctx, plan)
+	return runtime.executeAccepted(ctx, plan, ephemeralInput)
+}
+
+func (runtime *Runtime) authorizeEphemeral(plan nodes.ExecutionPlan, input json.RawMessage) error {
+	handler := runtime.handlers[plan.Command]
+	authorizer, supported := handler.(ephemeralCommandAuthorizer)
+	if !supported {
+		if len(input) != 0 {
+			return nodes.ErrCommandDenied
+		}
+		return nil
+	}
+	return authorizer.authorizeEphemeral(plan, input)
 }
 
 func (runtime *Runtime) executeAccepted(
 	ctx context.Context,
 	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
 ) (json.RawMessage, error) {
 	handler := runtime.handlers[plan.Command]
 	if handler == nil {
@@ -499,6 +531,7 @@ func (runtime *Runtime) executeAccepted(
 	result, executeErr := handler.execute(invokeCtx, commandInvocation{
 		Plan:             plan,
 		Input:            plan.Input,
+		EphemeralInput:   ephemeralInput,
 		TimeoutSeconds:   plan.TimeoutSeconds,
 		OutputLimitBytes: plan.OutputLimitBytes,
 	})

@@ -465,7 +465,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	case request.Prepared.Action.Kind == browser.ActionSelect &&
 		request.DriverAction.Kind == browser.DriverSelect && slices.Contains(worker.actions, "select"):
 		action = nodes.BrowserAction{
-			Kind: "select", Ref: request.DriverAction.Target, Value: request.DriverAction.Value,
+			Kind: "select", Ref: request.DriverAction.Target,
 		}
 		effect = "local_edit"
 	case request.Prepared.Action.Kind == browser.ActionPress &&
@@ -496,6 +496,17 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}
+	var ephemeralInput json.RawMessage
+	if action.Kind == "select" {
+		input.InputDigest = nodes.BrowserInputDigest(request.DriverAction.Value)
+		input.InputBytes = len(request.DriverAction.Value)
+		ephemeralInput, err = json.Marshal(struct {
+			Value string `json:"value"`
+		}{Value: request.DriverAction.Value})
+		if err != nil {
+			return browser.ErrDenied
+		}
+	}
 	if action.Kind == "click" || action.Kind == "press" {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
@@ -503,7 +514,9 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		}
 	}
 	var result nodes.BrowserActResult
-	err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, input, &result)
+	err = worker.invokeWithEphemeral(
+		ctx, descriptor, "act_"+request.InvocationID, input, ephemeralInput, &result,
+	)
 	if err != nil {
 		return err
 	}
@@ -604,6 +617,17 @@ func (worker *nodeBrowserWorker) invoke(
 	input any,
 	output any,
 ) error {
+	return worker.invokeWithEphemeral(ctx, descriptor, requestKey, input, nil, output)
+}
+
+func (worker *nodeBrowserWorker) invokeWithEphemeral(
+	ctx context.Context,
+	descriptor nodes.CommandDescriptor,
+	requestKey string,
+	input any,
+	ephemeralInput json.RawMessage,
+	output any,
+) error {
 	executionTarget := worker.factory.config.Execution.Targets[worker.nodeTarget]
 	record, found, err := worker.factory.source.Lookup(executionTarget.Node)
 	if err != nil || !found || record.Registration == nil {
@@ -654,16 +678,30 @@ func (worker *nodeBrowserWorker) invoke(
 	var raw json.RawMessage
 	if gatewayRecord.State == nodes.GatewayInvocationPrepared {
 		var dispatched bool
-		raw, dispatched, err = worker.factory.source.DispatchInvocation(
-			ctx, owner, gatewayRecord.Plan.InvocationID, gatewayRecord.ExpectedPlanHash,
-		)
+		dispatch := func(
+			dispatchCtx context.Context,
+			dispatchOwner nodes.GatewayInvocationOwner,
+			invocationID string,
+			expectedPlanHash string,
+			input json.RawMessage,
+		) (json.RawMessage, bool, error) {
+			if len(input) != 0 {
+				return worker.factory.source.DispatchInvocationEphemeral(
+					dispatchCtx, dispatchOwner, invocationID, expectedPlanHash, input,
+				)
+			}
+			return worker.factory.source.DispatchInvocation(
+				dispatchCtx, dispatchOwner, invocationID, expectedPlanHash,
+			)
+		}
+		raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
+			gatewayRecord.ExpectedPlanHash, ephemeralInput)
 		if err == nil {
 			return json.Unmarshal(raw, output)
 		}
 		if !dispatched {
-			raw, dispatched, err = worker.factory.source.DispatchInvocation(
-				ctx, owner, gatewayRecord.Plan.InvocationID, gatewayRecord.ExpectedPlanHash,
-			)
+			raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
+				gatewayRecord.ExpectedPlanHash, ephemeralInput)
 			if err == nil {
 				return json.Unmarshal(raw, output)
 			}
@@ -676,7 +714,7 @@ func (worker *nodeBrowserWorker) invoke(
 		gatewayRecord.State != nodes.GatewayInvocationPrepared {
 		return browser.ErrWorkerUnavailable
 	}
-	return worker.reconcileInvocation(ctx, gatewayRecord, principal, output)
+	return worker.reconcileInvocation(ctx, gatewayRecord, principal, len(ephemeralInput) != 0, output)
 }
 
 func browserRetainedInvocationMatches(
@@ -704,6 +742,7 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 	ctx context.Context,
 	record nodes.GatewayInvocationRecord,
 	principal nodes.GatewayInvocationPrincipal,
+	ephemeral bool,
 	output any,
 ) error {
 	redispatched := false
@@ -724,7 +763,7 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				return browser.ErrWorkerUnavailable
 			}
 		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified &&
-			code == nodes.InvocationQueryNotFound && !redispatched {
+			code == nodes.InvocationQueryNotFound && !redispatched && !ephemeral {
 			raw, dispatched, dispatchErr := worker.factory.source.RedispatchInvocation(
 				ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
 			)

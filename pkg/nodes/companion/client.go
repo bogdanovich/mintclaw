@@ -964,8 +964,25 @@ func (client *Client) handleInvoke(
 			"node command runtime is disabled",
 		)
 	}
-	var plan nodes.ExecutionPlan
-	if planErr := decodeStrictJSON(envelope.Params, &plan); planErr != nil {
+	var (
+		plan           nodes.ExecutionPlan
+		ephemeralInput json.RawMessage
+		shape          map[string]json.RawMessage
+	)
+	if shapeErr := json.Unmarshal(envelope.Params, &shape); shapeErr == nil && shape["plan"] != nil {
+		var dispatch nodes.InvocationDispatch
+		if dispatchErr := decodeStrictJSON(envelope.Params, &dispatch); dispatchErr != nil ||
+			dispatch.Validate() != nil || len(dispatch.EphemeralInput) == 0 {
+			return client.writeCommandError(
+				writer,
+				envelope.ID,
+				"INVALID_PLAN",
+				"invalid execution plan",
+			)
+		}
+		plan = dispatch.Plan
+		ephemeralInput = dispatch.EphemeralInput
+	} else if planErr := decodeStrictJSON(envelope.Params, &plan); planErr != nil {
 		return client.writeCommandError(
 			writer,
 			envelope.ID,
@@ -981,7 +998,7 @@ func (client *Client) handleInvoke(
 			"invocation idempotency key mismatch",
 		)
 	}
-	result, err := client.runtime.Invoke(ctx, plan)
+	result, err := client.runtime.InvokeWithEphemeral(ctx, plan, ephemeralInput)
 	if err != nil {
 		code := "EXECUTION_FAILED"
 		message := "node command failed"

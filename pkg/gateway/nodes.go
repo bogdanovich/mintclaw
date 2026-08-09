@@ -41,6 +41,7 @@ type nodeAdmissionHandler interface {
 		context.Context,
 		nodes.ID,
 		nodes.ExecutionPlan,
+		json.RawMessage,
 		func() error,
 	) (json.RawMessage, bool, error)
 	Invocation(context.Context, nodes.ID, string) (nodes.InvocationRecord, error)

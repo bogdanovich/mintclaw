@@ -478,6 +478,50 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			t.Fatalf("denied shortcut reached driver: %#v", worker.actions)
 		}
 	})
+
+	for _, action := range []string{"press", "select"} {
+		t.Run(action+" rejects same-origin document replacement", func(t *testing.T) {
+			element := browserworker.DriverElement{
+				Target: "driver_select_1", Role: "combobox", Name: "State",
+			}
+			host, worker, initial := newFixture(t, element)
+			worker.observations[1] = browserworker.DriverObservation{
+				URL: "https://example.com/form", Origin: "https://example.com", Title: "Replacement",
+				Snapshot: "- combobox State after reload", Elements: []browserworker.DriverElement{element},
+			}
+			request := BrowserHostNavigateRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_replaced_" + action,
+				Effect:             "local_edit", CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			if action == "select" {
+				request.Action = nodes.BrowserAction{
+					Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
+				}
+				if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Select(replaced document) error = %v, want stale", err)
+				}
+			} else {
+				request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+				request.Effect = "unknown"
+				request.ExpectedRole, request.ExpectedName = "", ""
+				var err error
+				request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					t.Fatalf("Press(replaced document) error = %v, want stale", err)
+				}
+			}
+			if len(worker.actions) != 0 {
+				t.Fatalf("%s reached replacement document: %#v", action, worker.actions)
+			}
+		})
+	}
 }
 
 func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
@@ -667,14 +711,21 @@ func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
 
 func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		executeErr:   errors.New("ambiguous driver failure"),
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		executeErr: errors.New("ambiguous driver failure"),
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
 	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
 	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("ambiguous Navigate() error = %v", err)
 	}
@@ -700,14 +751,19 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 }
 
 func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
-	worker := &fakeBrowserHostWorker{observations: []browserworker.DriverObservation{{
-		URL: "https://changed.example/", Origin: "https://changed.example",
-	}}}
+	worker := &fakeBrowserHostWorker{observations: []browserworker.DriverObservation{
+		{URL: "about:blank", Origin: "about:blank"},
+		{URL: "https://changed.example/", Origin: "https://changed.example"},
+	}}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
 	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
 	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("changed-origin Navigate() error = %v", err)
 	}
@@ -725,23 +781,34 @@ func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
 
 func TestBrowserHostQuarantinesWhenPostActionObserveFails(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	navigate := browserHostNavigateFixture()
+	navigate.SnapshotGeneration = 1
+	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("Navigate() with ambiguous observation error = %v", err)
 	}
-	if len(worker.actions) != 1 || worker.observeCalls != 1 {
+	if len(worker.actions) != 1 || worker.observeCalls != 2 {
 		t.Fatalf("driver actions = %d, completed observations = %d", len(worker.actions), worker.observeCalls)
 	}
 }
 
 func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
-		observations: []browserworker.DriverObservation{{URL: "about:blank", Origin: "about:blank"}},
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
 		executeFunc: func(ctx context.Context, _ browserworker.DriverAction) error {
 			<-ctx.Done()
 			return ctx.Err()
@@ -753,8 +820,13 @@ func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
 	if _, err := host.Open(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	navigate := browserHostNavigateFixture()
+	navigate.SnapshotGeneration = 1
 	started := time.Now()
-	if _, err := host.Navigate(t.Context(), browserHostNavigateFixture()); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("deadline Navigate() error = %v", err)
 	}
 	elapsed := time.Since(started)
@@ -1040,6 +1112,13 @@ func browserHostNavigateFixture() BrowserHostNavigateRequest {
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+}
+
+func browserHostObserveFixture() BrowserHostObserveRequest {
+	return BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	}
 }

@@ -288,14 +288,52 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	selectInput := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_select_1",
-		Action:             nodes.BrowserAction{Kind: "select", Ref: "host_ref_1", Value: "CA"},
+		Action:             nodes.BrowserAction{Kind: "select", Ref: "host_ref_1"},
 		Effect:             "local_edit", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+		InputDigest: nodes.BrowserInputDigest("CA"), InputBytes: 2,
 	}
-	invokeBrowserRuntime(t, selectRuntime, nodes.BrowserCommandAct, selectInput)
+	selectRaw, err := json.Marshal(selectInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, selectRaw)
+	if strings.Contains(string(selectPlan.Input), "CA") {
+		t.Fatalf("durable select plan exposed option identity: %s", selectPlan.Input)
+	}
+	if _, err = selectRuntime.InvokeWithEphemeral(
+		t.Context(), selectPlan, json.RawMessage(`{"value":"CA"}`),
+	); err != nil {
+		t.Fatalf("InvokeWithEphemeral(select) error = %v", err)
+	}
 	if selectHost.selected != 1 {
 		t.Fatalf("select calls = %d", selectHost.selected)
+	}
+	missingInput := selectInput
+	missingInput.ActionInvocationID = "browser_select_missing"
+	missingRaw, err := json.Marshal(missingInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, missingRaw)
+	if _, err = selectRuntime.Invoke(t.Context(), missingPlan); err == nil {
+		t.Fatal("select without transient option identity was accepted")
+	}
+	wrongInput := selectInput
+	wrongInput.ActionInvocationID = "browser_select_wrong"
+	wrongRaw, err := json.Marshal(wrongInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, wrongRaw)
+	if _, err = selectRuntime.InvokeWithEphemeral(
+		t.Context(), wrongPlan, json.RawMessage(`{"value":"NY"}`),
+	); err == nil {
+		t.Fatal("select with a mismatched transient option identity was accepted")
+	}
+	if selectHost.selected != 1 {
+		t.Fatalf("missing transient input reached host: %d", selectHost.selected)
 	}
 
 	pressHost := browserRuntimeHostFixture()
@@ -311,7 +349,6 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1",
 	}
-	var err error
 	pressInput.ApprovalDigest, err = nodes.BrowserApprovalDigest(pressInput)
 	if err != nil {
 		t.Fatal(err)

@@ -309,6 +309,8 @@ type BrowserActInput struct {
 	ProfileRevision       string        `json:"profile_revision"`
 	ExpectedRole          string        `json:"expected_role,omitempty"`
 	ExpectedName          string        `json:"expected_name,omitempty"`
+	InputDigest           string        `json:"input_digest,omitempty"`
+	InputBytes            int           `json:"input_bytes,omitempty"`
 	ApprovalDigest        string        `json:"approval_digest,omitempty"`
 }
 
@@ -326,6 +328,8 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ProfileRevision       string          `json:"profile_revision"`
 		ExpectedRole          string          `json:"expected_role,omitempty"`
 		ExpectedName          string          `json:"expected_name,omitempty"`
+		InputDigest           string          `json:"input_digest,omitempty"`
+		InputBytes            json.RawMessage `json:"input_bytes,omitempty"`
 		ApprovalDigest        string          `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -335,6 +339,13 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("decode browser action generation: %w", err)
 	}
+	inputBytes, err := decodeCanonicalBrowserGeneration(value.InputBytes)
+	if err != nil {
+		return fmt.Errorf("decode browser action input bytes: %w", err)
+	}
+	if inputBytes > MaxBrowserTextInputBytes {
+		return fmt.Errorf("%w: browser action input bytes exceed the limit", ErrInvalidCapability)
+	}
 	*input = BrowserActInput{
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
@@ -343,12 +354,31 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		BrowserPolicyRevision: value.BrowserPolicyRevision,
 		ProfileRevision:       value.ProfileRevision,
 		ExpectedRole:          value.ExpectedRole, ExpectedName: value.ExpectedName,
+		InputDigest: value.InputDigest, InputBytes: int(inputBytes),
 		ApprovalDigest: value.ApprovalDigest,
 	}
 	return nil
 }
 
-const browserApprovalDigestDomain = "mintclaw.browser.act.approval.v1\x00"
+const (
+	browserApprovalDigestDomain = "mintclaw.browser.act.approval.v1\x00"
+	browserInputDigestDomain    = "mintclaw.browser.act.input.v1\x00"
+)
+
+func BrowserInputDigest(value string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(browserInputDigestDomain))
+	_, _ = hash.Write([]byte(value))
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func BrowserInputDigestMatches(digest string, value string) bool {
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	expected := BrowserInputDigest(value)
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(digest)) == 1
+}
 
 // BrowserApprovalDigest binds one approval-gated companion action to its
 // complete typed input without forwarding human approval authority.
@@ -775,7 +805,12 @@ func browserCommandInputSchema(
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 			}
 			if action == "select" {
+				required = append(required, "input_digest", "input_bytes")
 				properties["expected_role"] = map[string]any{"const": "combobox"}
+				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
+				properties["input_bytes"] = map[string]any{
+					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
+				}
 			}
 			if action == "click" {
 				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
@@ -791,6 +826,8 @@ func browserCommandInputSchema(
 				branch["not"] = map[string]any{"anyOf": []any{
 					map[string]any{"required": []string{"expected_role"}},
 					map[string]any{"required": []string{"expected_name"}},
+					map[string]any{"required": []string{"input_digest"}},
+					map[string]any{"required": []string{"input_bytes"}},
 				}}
 			}
 			if action == "click" {
@@ -870,6 +907,12 @@ func browserCommandInputSchema(
 		if hasClick || hasSelect {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		}
+		if hasSelect {
+			properties["input_digest"] = digest
+			properties["input_bytes"] = map[string]any{
+				"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
+			}
 		}
 		properties["approval_digest"] = digest
 		profileConstraint = map[string]any{"oneOf": actionBranches}
@@ -1046,11 +1089,10 @@ func browserActionSchema(actions []string) map[string]any {
 		case "select":
 			branches = append(branches, map[string]any{
 				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref", "value"},
+				"required": []string{"kind", "ref"},
 				"properties": map[string]any{
-					"kind":  map[string]any{"const": "select"},
-					"ref":   map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-					"value": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxBrowserTextInputBytes},
+					"kind": map[string]any{"const": "select"},
+					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 				},
 			})
 		case "press":
