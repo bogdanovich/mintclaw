@@ -472,6 +472,9 @@ func (cs *CronService) AddJobWithPayload(
 
 	cs.store.Jobs = append(cs.store.Jobs, job)
 	if err := cs.saveStoreUnsafe(); err != nil {
+		// Roll back the in-memory append: a job reported as not added must not
+		// remain enabled in the live scheduler store for this process lifetime.
+		cs.store.Jobs = cs.store.Jobs[:len(cs.store.Jobs)-1]
 		return nil, err
 	}
 

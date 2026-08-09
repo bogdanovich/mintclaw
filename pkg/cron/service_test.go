@@ -477,3 +477,26 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 		t.Fatalf("persisted seed state = (%+v, %t), want enabled seed", reloadedSeed, ok)
 	}
 }
+
+func TestAddJobWithPayload_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Make the store parent a regular file so every save attempt fails.
+	blocker := filepath.Join(tmpDir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+
+	cs := NewCronService(filepath.Join(blocker, "jobs.json"), nil)
+
+	_, err := cs.AddJobWithPayload(
+		"cmd",
+		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
+		CronPayload{Kind: "agent_turn", Message: "msg", Command: "echo hi", Channel: "internal", To: "me"},
+	)
+	if err == nil {
+		t.Fatal("AddJobWithPayload succeeded, want persistence failure")
+	}
+	if jobs := cs.ListJobs(false); len(jobs) != 0 {
+		t.Fatalf("live store still contains %d job(s) after failed persistence, want 0", len(jobs))
+	}
+}

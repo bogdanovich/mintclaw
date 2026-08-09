@@ -973,7 +973,6 @@ func (m *Manager) streamSplitOnMarker() bool {
 func (m *Manager) streamResponseFooterEnabled() bool {
 	return m.lifecycle.config != nil && m.lifecycle.config.Agents.Defaults.IsResponseFooterEnabled()
 }
-}
 
 func reasoningStreamerFrom(streamer bus.Streamer) bus.ReasoningStreamer {
 	if reasoningStreamer, ok := streamer.(bus.ReasoningStreamer); ok {
