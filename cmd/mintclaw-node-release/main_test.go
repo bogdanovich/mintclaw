@@ -77,14 +77,18 @@ func writeNodeReleaseArchive(
 	}
 	compressed := gzip.NewWriter(file)
 	archive := tar.NewWriter(compressed)
-	if err = archive.WriteHeader(&tar.Header{Name: "mintclaw-node", Mode: mode, Size: info.Size()}); err != nil {
+	if err = archive.WriteHeader(
+		&tar.Header{Name: "mintclaw-node", Typeflag: tar.TypeReg, Mode: mode, Size: info.Size()},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = io.Copy(archive, executable); err != nil {
 		t.Fatal(err)
 	}
 	if extraEntry {
-		if err = archive.WriteHeader(&tar.Header{Name: "README.md", Mode: 0o644, Size: 1}); err != nil {
+		if err = archive.WriteHeader(
+			&tar.Header{Name: "README.md", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+		); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = archive.Write([]byte("x")); err != nil {

@@ -700,7 +700,7 @@ func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
 	}
 	if github, hasGithub := asMapField(skills, "github"); hasGithub {
 		if token, hasToken := getSecretString(github, "token"); hasToken {
-			cfg.Tools.Skills.Github.Token.Set(token)
+			cfg.Tools.Skills.Github.Token.Set(token) //nolint:staticcheck // legacy tools.skills.github PATCH compat
 		}
 	}
 	if registries, hasRegistries := asMapField(skills, "registries"); hasRegistries {

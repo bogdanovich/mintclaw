@@ -1275,9 +1275,9 @@ func TestEngineSessionMutexSharded(t *testing.T) {
 
 	// Both mutexes should be valid and usable
 	mu1.Lock()
-	mu1.Unlock()
+	mu1.Unlock() //nolint:staticcheck // deliberate empty critical section proves sharded mutex is usable
 	mu3.Lock()
-	mu3.Unlock()
+	mu3.Unlock() //nolint:staticcheck // deliberate empty critical section proves sharded mutex is usable
 }
 
 func TestEngineSessionMutexBoundedMemory(t *testing.T) {
