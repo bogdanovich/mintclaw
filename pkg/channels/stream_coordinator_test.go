@@ -6,8 +6,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
+
+type streamCoordinatorTestHost struct {
+	channel        Channel
+	splitOnMarker  bool
+	footerEnabled  bool
+	dismissedCount atomic.Int32
+}
+
+func (h *streamCoordinatorTestHost) deliveryChannel(name string) (Channel, bool) {
+	return h.channel, name == "test" && h.channel != nil
+}
+
+func (h *streamCoordinatorTestHost) dismissToolFeedbackTargets(
+	context.Context,
+	string,
+	Channel,
+	string,
+	*bus.InboundContext,
+	string,
+	[]runtimeevents.TraceScope,
+) {
+	h.dismissedCount.Add(1)
+}
+
+func (h *streamCoordinatorTestHost) streamSplitOnMarker() bool {
+	return h.splitOnMarker
+}
+
+func (h *streamCoordinatorTestHost) streamResponseFooterEnabled() bool {
+	return h.footerEnabled
+}
 
 func TestStreamCoordinatorExpireInteractions(t *testing.T) {
 	var expiredStops atomic.Int32
@@ -169,6 +201,33 @@ func TestStreamCoordinatorFinalizationLifecycle(t *testing.T) {
 	state.clearTombstone(key)
 	if state.tombstoneActive(key, now) {
 		t.Fatal("clearTombstone() left tombstone active")
+	}
+}
+
+func TestStreamCoordinatorOwnsStreamerFinalization(t *testing.T) {
+	state := newStreamCoordinator()
+	underlying := &mockStreamer{}
+	host := &streamCoordinatorTestHost{
+		channel: &mockStreamingChannel{streamer: underlying},
+	}
+	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+
+	streamer, ok := state.getStreamer(
+		context.Background(), host, "test", "chat-1", "session-1", "request-1", traceScope,
+	)
+	if !ok {
+		t.Fatal("getStreamer() unavailable")
+	}
+	if err := streamer.Finalize(context.Background(), "done"); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+
+	key := streamSuppressionKey("test", "chat-1", "session-1", traceScope)
+	if !state.active(key) || !state.tombstoneExists(key) {
+		t.Fatal("finalization did not record active stream and auxiliary tombstone")
+	}
+	if host.dismissedCount.Load() != 1 {
+		t.Fatalf("tool feedback dismissals = %d, want 1", host.dismissedCount.Load())
 	}
 }
 
