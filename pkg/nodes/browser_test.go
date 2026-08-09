@@ -151,6 +151,30 @@ func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 	}
 }
 
+func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"navigate", "scroll"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 5}
+	input["effect"] = "read"
+	if err = validateInvocationInput(descriptors[3].InputSchema, input); err != nil {
+		t.Fatalf("bounded scroll input rejected: %v", err)
+	}
+	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 6}
+	if err = validateInvocationInput(descriptors[3].InputSchema, input); err == nil {
+		t.Fatal("scroll amount above the bound was accepted")
+	}
+	var decoded BrowserAction
+	if err = json.Unmarshal([]byte(`{"kind":"scroll","direction":"up","amount":1e0}`), &decoded); err != nil ||
+		decoded.Amount != 1 {
+		t.Fatalf("canonical scroll action = %#v, %v", decoded, err)
+	}
+}
+
 func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),

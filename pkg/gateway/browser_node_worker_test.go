@@ -20,10 +20,12 @@ import (
 )
 
 type browserNodeTestHandler struct {
-	mu           sync.Mutex
-	registration nodes.Registration
-	commands     []string
-	invocations  map[string]nodes.InvocationRecord
+	mu            sync.Mutex
+	registration  nodes.Registration
+	commands      []string
+	invocations   map[string]nodes.InvocationRecord
+	currentURL    string
+	currentOrigin string
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -76,15 +78,20 @@ func (handler *browserNodeTestHandler) Invoke(
 	case nodes.BrowserCommandObserve:
 		var input nodes.BrowserObserveInput
 		_ = json.Unmarshal(plan.Input, &input)
-		result = browserNodeTestObservation(
-			input.SessionID, input.TabID, input.SnapshotGeneration, "about:blank", "about:blank",
-		)
+		url, origin := handler.currentURL, handler.currentOrigin
+		if url == "" {
+			url, origin = "about:blank", "about:blank"
+		}
+		result = browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
+		if input.Action.Kind == "navigate" {
+			handler.currentURL, handler.currentOrigin = "https://example.com/", "https://example.com"
+		}
 		observation := browserNodeTestObservation(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
-			"https://example.com/", "https://example.com",
+			handler.currentURL, handler.currentOrigin,
 		)
 		result = nodes.BrowserActResult{
 			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
@@ -177,6 +184,22 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
 		t.Fatalf("final observation = %#v, %v", final, err)
 	}
+	scroll, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_2", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 2},
+	})
+	if err != nil || scroll.RequiresApproval || scroll.Action.Effect != browser.EffectRead {
+		t.Fatalf("PrepareAction(scroll) = %#v, %v", scroll, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, scroll.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("ExecuteAction(scroll) = %#v, %v", invocation, err)
+	}
+	afterScroll, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 3 {
+		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
+	}
 	closed, err := broker.Close(t.Context(), owner, session.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("Close() = %#v, %v", closed, err)
@@ -186,6 +209,8 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	handler.mu.Unlock()
 	want := []string{
 		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandAct,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandSessionClose,
@@ -207,6 +232,14 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	if readiness.Status != browser.ReadinessReady {
 		t.Fatalf("ready diagnostics = %#v", readiness)
 	}
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	)
+	if err != nil || !slices.Equal(
+		diagnostics.Actions, []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll},
+	) || diagnostics.Profiles["managed"].Status != browser.ReadinessReady {
+		t.Fatalf("target diagnostics = %#v, %v", diagnostics, err)
+	}
 	handler.registration.AllowedCommands = handler.registration.AllowedCommands[1:]
 	if _, err = runtime.registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
 		Aliases:         []nodes.Alias{"ab-local-test"},
@@ -220,6 +253,12 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	)
 	if readiness.Status != browser.ReadinessUnavailable || readiness.Code != "command_unapproved" {
 		t.Fatalf("unapproved diagnostics = %#v", readiness)
+	}
+	if diagnostics, err = factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	); err != nil || len(diagnostics.Actions) != 0 ||
+		diagnostics.Profiles["managed"].Code != "command_unapproved" {
+		t.Fatalf("unapproved target diagnostics = %#v, %v", diagnostics, err)
 	}
 }
 
@@ -385,7 +424,7 @@ func browserNodeTestRuntime(
 	profiles := []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}}
 	descriptors, err := nodes.BrowserCommandDescriptors(profiles)
 	if err != nil {

@@ -142,6 +142,22 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
 		t.Fatalf("final observation = %#v, %v", final, err)
 	}
+	scroll, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-scroll", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 2},
+	})
+	if err != nil || scroll.RequiresApproval || scroll.Action.Effect != browser.EffectRead {
+		t.Fatalf("scroll preparation = %#v, %v", scroll, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, scroll.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("scroll invocation = %#v, %v", invocation, err)
+	}
+	afterScroll, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 3 {
+		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
+	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("first close = %#v, %v", closed, err)
@@ -328,7 +344,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "close",
+		"open", "observe", "navigate", "observe", "scroll", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
@@ -480,6 +496,23 @@ func (host *wssBrowserHost) Navigate(
 	}, request.Action.URL), nil
 }
 
+func (host *wssBrowserHost) Scroll(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "scroll")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) failNextNavigate() {
 	host.mu.Lock()
 	defer host.mu.Unlock()
@@ -543,7 +576,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
 

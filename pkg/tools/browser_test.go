@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,6 +50,7 @@ type fakeBrowserToolSource struct {
 	profileStatus     browser.ProfileAvailability
 	readiness         browser.PassiveReadiness
 	readinessCalls    int
+	actions           []browser.ActionKind
 }
 
 func (source *fakeBrowserToolSource) Available() bool { return source.available }
@@ -121,8 +123,17 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 	for _, name := range profiles {
 		byProfile[name] = readiness
 	}
+	actions := source.actions
+	if actions == nil {
+		actions = []browser.ActionKind{
+			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionSelect,
+			browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+		}
+	}
 	return BrowserTargetDiagnostics{
-		Profiles: byProfile, Screenshot: !source.screenshotUnavailable,
+		Profiles:   byProfile,
+		Actions:    actions,
+		Screenshot: !source.screenshotUnavailable,
 		Upload:     !source.transferUnavailable,
 		Download:   !source.transferUnavailable && !source.downloadUnavailable,
 		HeadedView: source.handoffReady, Handoff: source.handoffReady,
@@ -346,6 +357,7 @@ func TestBrowserTargetsReportsUnavailableRuntimeWithoutAdvertisingCapabilities(t
 		result.Targets[0].Reason != "runtime_unavailable" ||
 		result.Targets[0].Features.Screenshot || result.Targets[0].Features.Upload ||
 		result.Targets[0].Features.Download || !result.Targets[0].Features.Diagnostics ||
+		len(result.Targets[0].Actions) != 0 ||
 		result.Targets[0].Profiles[0].Readiness.Code != "runtime_unavailable" ||
 		!result.Targets[0].Profiles[0].Readiness.Passive || source.readinessCalls != 1 {
 		t.Fatalf("unavailable browser targets = %#v", result)
@@ -360,7 +372,7 @@ func TestBrowserTargetsFailsCapabilitiesClosedWhenDiagnosticsSnapshotFails(t *te
 	)
 	if len(result.Targets) != 1 || result.Targets[0].Status != browser.ReadinessUnavailable ||
 		result.Targets[0].Features.Screenshot || result.Targets[0].Features.Upload ||
-		result.Targets[0].Features.Download ||
+		result.Targets[0].Features.Download || len(result.Targets[0].Actions) != 0 ||
 		result.Targets[0].Profiles[0].Readiness.Code != "runtime_unavailable" {
 		t.Fatalf("failed diagnostics snapshot = %#v", result)
 	}
@@ -611,6 +623,23 @@ func TestBrowserTargetsReportsExplicitAnyHTTPMode(t *testing.T) {
 	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkAnyHTTP {
 		t.Fatalf("browser targets = %#v", result)
+	}
+}
+
+func TestBrowserTargetsAdvertisesOnlyRuntimeActions(t *testing.T) {
+	sourceActions := []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll}
+	source := &fakeBrowserToolSource{
+		available: true, actions: sourceActions, transferUnavailable: true,
+	}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t, NewBrowserTargetsTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), nil), &result,
+	)
+	if len(result.Targets) != 1 {
+		t.Fatalf("targets = %#v", result.Targets)
+	}
+	if !slices.Equal(result.Targets[0].Actions, sourceActions) {
+		t.Fatalf("target actions = %#v", result.Targets[0].Actions)
 	}
 }
 

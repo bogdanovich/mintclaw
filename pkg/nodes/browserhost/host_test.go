@@ -206,6 +206,44 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	}
 }
 
+func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank", Snapshot: "after scroll"},
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.Scroll(t.Context(), BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_scroll_1",
+		Action:             nodes.BrowserAction{Kind: "scroll", Direction: "down", Amount: 2},
+		Effect:             "read", CurrentOrigin: "about:blank",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
+		AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || result.SnapshotGeneration != 2 || result.Snapshot != "after scroll" {
+		t.Fatalf("Scroll() = %#v, %v", result, err)
+	}
+	if len(worker.actions) != 1 || worker.actions[0] != (browserworker.DriverAction{
+		Kind: browserworker.DriverScroll, Direction: "down", Amount: 2,
+	}) {
+		t.Fatalf("driver actions = %#v", worker.actions)
+	}
+}
+
 func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
 	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
 	factory := &fakeBrowserHostFactory{worker: worker}
@@ -718,7 +756,7 @@ func browserHostProfileFixture() companion.BrowserProfilePolicy {
 		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 		Driver: nodes.BrowserDriverPlaywrightMCP, Mode: nodes.BrowserProfileManaged,
 		NetworkMode: nodes.BrowserNetworkAnyHTTP, DryRun: true,
-		AllowedActions: []string{"download", "navigate"}, Headed: true,
+		AllowedActions: []string{"download", "navigate", "scroll"}, Headed: true,
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }

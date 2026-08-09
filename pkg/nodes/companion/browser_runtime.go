@@ -17,6 +17,7 @@ type BrowserCommandHost interface {
 	Status(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Navigate(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
 
@@ -118,12 +119,15 @@ func (handler *browserCommandHandler) executeAct(
 	if err := json.Unmarshal(invocation.Input, &input); err != nil {
 		return nil, browserCommandFailure(err)
 	}
-	if input.Action.Kind != "navigate" || input.ApprovalDigest != "" {
+	if input.ApprovalDigest != "" ||
+		(input.Action.Kind != "navigate" && input.Action.Kind != "scroll") ||
+		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
+		(input.Action.Kind == "scroll" && input.Effect != "read") {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
 		)
 	}
-	observation, err := handler.host.Navigate(ctx, nodes.BrowserHostActRequest{
+	request := nodes.BrowserHostActRequest{
 		SessionID: input.SessionID, TabID: input.TabID,
 		RoutedSessionID:    invocation.Plan.SessionID,
 		SnapshotGeneration: input.SnapshotGeneration,
@@ -132,7 +136,14 @@ func (handler *browserCommandHandler) executeAct(
 		PreparedActionHash:    input.PreparedActionHash,
 		BrowserPolicyRevision: input.BrowserPolicyRevision, ProfileRevision: input.ProfileRevision,
 		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
-	})
+	}
+	var observation nodes.BrowserObservationResult
+	var err error
+	if input.Action.Kind == "scroll" {
+		observation, err = handler.host.Scroll(ctx, request)
+	} else {
+		observation, err = handler.host.Navigate(ctx, request)
+	}
 	if err != nil {
 		if errors.Is(err, nodes.ErrBrowserHostLost) {
 			return nil, fmt.Errorf("%w: browser action outcome is unknown", ErrInvocationOutcomeUnknown)

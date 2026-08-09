@@ -256,6 +256,10 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 		ctx,
 		source,
 		func(ctx context.Context, broker *browser.Broker) (tools.BrowserTargetDiagnostics, error) {
+			actions, readinessByProfile, err := broker.PassiveTargetDiagnostics(ctx, target, profiles)
+			if err != nil {
+				return tools.BrowserTargetDiagnostics{}, err
+			}
 			uploadAvailable := source.ArtifactTransferAvailable()
 			screenshotAvailable := source.ScreenshotAvailable()
 			downloadAvailable := uploadAvailable && source.DownloadAvailable()
@@ -271,6 +275,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			}
 			result := tools.BrowserTargetDiagnostics{
 				Profiles:   make(map[string]browser.PassiveReadiness, len(profiles)),
+				Actions:    actions,
 				Screenshot: screenshotAvailable,
 				Upload:     uploadAvailable,
 				Download:   downloadAvailable,
@@ -278,11 +283,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 				Handoff:    handoffAvailable,
 			}
 			for _, profile := range profiles {
-				readiness, err := broker.PassiveReadiness(ctx, target, profile)
-				if err != nil {
-					return tools.BrowserTargetDiagnostics{}, err
-				}
-				result.Profiles[profile] = readiness
+				result.Profiles[profile] = readinessByProfile[profile]
 			}
 			return result, nil
 		},
