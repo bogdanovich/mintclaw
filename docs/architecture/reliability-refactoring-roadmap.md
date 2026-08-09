@@ -209,9 +209,44 @@ contract tests cover the required failure taxonomy and capability invariants.
 
 ### R6: Complete Channel Runtime Ownership
 
-`channels.Manager` still owns channel lifecycle, HTTP listeners, workers, queueing, retry, stream state,
-placeholders, and tool feedback. Narrow state owners exist, but compatibility maps remain promoted into the manager
-and are mutated directly by package tests.
+Status: implemented. `channels.Manager` is now a composition facade over `ChannelLifecycle`, `DeliveryRuntime`, and
+`StreamCoordinator`, plus routing dependencies such as the bus, runtime events, and durable outbox. It has no
+promoted worker, queue, retry, listener, stream, placeholder, or interaction maps.
+
+`DeliveryRuntime` owns delivery registration, dispatcher lifetime, workers, queue admission, retry decisions, and
+delivery outcomes. `StreamCoordinator` owns stream lifecycle, final-stream metadata, placeholders, typing/reaction
+state, and the `ToolFeedbackCoordinator`. `ChannelLifecycle` owns the channel/config registry, shared HTTP runtime,
+restart-required hashes, and serialized start, stop, reload, registration, and shutdown transitions.
+
+The extraction landed incrementally in PRs 595, 599, 605, 607, 609, 610, 612, 613, and 615. Focused tests cover
+owner registration, queue admission and drain, retry outcomes, stream finalization and cancellation, placeholder and
+tool-feedback cleanup, restart-required reload, concurrent/repeated startup and shutdown, reload-versus-shutdown
+serialization, and one HTTP serve loop per lifecycle generation. The final merged-main audit passed channel race
+tests, affected package tests, tagged tests, and repository lint.
+
+#### Completion Audit (2026-08-09)
+
+1. **Manager is a facade.** Its fields are limited to the message bus, runtime events, durable outbox, and references
+   to the three owners. Static searches find no promoted or duplicate mutable delivery, stream, interaction, HTTP, or
+   lifecycle state.
+2. **Tests use owner boundaries.** Channel tests install and inspect state through package-private owner operations and
+   narrow fixtures. Static searches find no direct mutation of Manager-owned or promoted registry, stream,
+   interaction, hash, or restart-required maps.
+3. **Every runtime resource has one named owner.** `DeliveryRuntime` and per-channel `deliveryOwner` own dispatch,
+   workers, queue admission, retries, and outcomes; `StreamCoordinator` and `ToolFeedbackCoordinator` own streams and
+   transient interactions; `ChannelLifecycle` owns listeners, channel/config state, and lifecycle transitions.
+4. **Transitions are deterministic.** One lifecycle transition mutex serializes setup, start, stop, reload, register,
+   and unregister. Repeated start retries incomplete channels without duplicating dispatch or HTTP serving; repeated
+   stop shares one drain; reload actions finish before return; restart-required behavior remains conservative.
+5. **Regression coverage is explicit.** Focused tests cover delivery admission, draining, retry and ambiguous outcomes;
+   stream update/finalize/cancel and final metadata; placeholder, typing, reaction, and tool-feedback cleanup; partial
+   startup recovery; repeated/concurrent start and stop; HTTP serving; reload drain and shutdown ordering.
+6. **The PR sequence is merged.** PRs 595, 599, 605, 607, 609, 610, 612, 613, and 615 each landed as merge commits
+   after their required local validation, CI, current-head review, feedback resolution, and repository-owner approval.
+7. **Merged main is clean.** The code-bearing merged-main tree at `ecc45a1a`, unchanged by the docs-only completion
+   merge, passes `make lint`, `go test ./pkg/channels`, `go test -race ./pkg/channels`, and
+   `go test -tags goolm,stdjson ./pkg/channels ./pkg/gateway ./pkg/agent` pass. Documentation validation passes with
+   `make lint-docs`. No obsolete compatibility ownership path remains. R7 is intentionally out of scope.
 
 #### Direction
 
