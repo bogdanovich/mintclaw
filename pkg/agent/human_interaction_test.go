@@ -464,8 +464,14 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 			outbound.Context.Raw[interactionIDMetadata] != record.ID ||
 			outbound.Context.Raw["delivery_key"] != interactionDeliveryKey(record.ID, "prompt") ||
 			outbound.Context.Account != "primary" || outbound.ReplyToMessageID != "" ||
+			!strings.Contains(outbound.Content, "`/stop`") ||
 			bus.OutboundMetadataFromMessage(outbound).IsApprovalPrompt() {
 			t.Fatalf("outbound prompt = %#v", outbound)
+		}
+		metadata := bus.OutboundMetadataFromMessage(outbound)
+		if !metadata.IsQuestionPrompt() ||
+			!reflect.DeepEqual(metadata.InteractionChoices(), []string{"Canary", "All"}) {
+			t.Fatalf("question prompt metadata = %#v", metadata)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for interaction prompt")
@@ -519,6 +525,27 @@ func TestInteractionAnswerContentUsesTelegramApprovalButtonChoice(t *testing.T) 
 	answer, err := parseInteractionAnswer(record, content, "answer-1")
 	if err != nil || answer.Text != "allow_once" {
 		t.Fatalf("parseInteractionAnswer() = (%#v, %v)", answer, err)
+	}
+}
+
+func TestInteractionAnswerContentUsesCleanTelegramQuestionReply(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels["tg1"] = &config.Channel{Enabled: true, Type: config.ChannelTelegram}
+	al := &AgentLoop{cfg: cfg}
+	msg := bus.InboundMessage{
+		Content: "[quoted assistant message]: What value?\n\ngenerate it yourself",
+		Context: bus.InboundContext{
+			Channel: "tg1", ReplyToMessageID: "prompt-1",
+			Raw: map[string]string{
+				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			},
+		},
+	}
+
+	if got := al.interactionAnswerContent(
+		interactions.Record{Kind: interactions.KindQuestion}, msg,
+	); got != "generate it yourself" {
+		t.Fatalf("interactionAnswerContent() = %q", got)
 	}
 }
 
@@ -1772,7 +1799,7 @@ func TestRenderInteractionPromptUsesAgentAuthoredLanguage(t *testing.T) {
 				"• development — Среда разработки.\n" +
 				"• staging — Предпродовая среда.\n" +
 				"• production — Боевая среда.\n\n" +
-				"`/answer 16131195 …`",
+				"`/answer 16131195 …`\n`/stop`",
 		},
 		{
 			name: "Japanese single question with header",
@@ -1782,7 +1809,7 @@ func TestRenderInteractionPromptUsesAgentAuthoredLanguage(t *testing.T) {
 					ID: "region", Header: "地域", Question: "デプロイ先を選んでください。",
 				}},
 			},
-			want: "地域\n\nデプロイ先を選んでください。\n\n`/answer 8f03c2aa …`",
+			want: "地域\n\nデプロイ先を選んでください。\n\n`/answer 8f03c2aa …`\n`/stop`",
 		},
 	}
 	for _, test := range tests {
@@ -3534,6 +3561,31 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
+func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "Cancel turn",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			Raw: map[string]string{
+				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			},
+		},
+	})
+	_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+
+	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Matched || !result.Canceled || result.Failed ||
+		!result.CommandHandled || result.Kind != interactions.KindQuestion {
+		t.Fatalf("cancel button result = %#v", result)
+	}
+}
+
 func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T) {
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -3556,6 +3608,11 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		want := "Task stopped. Current task was canceled."
 		if outbound.Content != want {
 			t.Fatalf("stop reply = %q, want %q", outbound.Content, want)
+		}
+		metadata := bus.OutboundMetadataFromMessage(outbound)
+		if !metadata.RemovesInteractionControls() ||
+			metadata.InteractionKind != bus.OutboundInteractionQuestion {
+			t.Fatalf("stop reply metadata = %#v", metadata)
 		}
 		if strings.Contains(outbound.Content, "No active task to stop.") {
 			t.Fatalf("stop reply used inactive-task contract: %q", outbound.Content)

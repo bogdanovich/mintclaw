@@ -360,7 +360,8 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 		},
 	}
 	replyToMessageID := ""
-	if record.Kind == interactions.KindApproval {
+	switch record.Kind {
+	case interactions.KindApproval:
 		requestID := ""
 		if record.Origin.ExecutionContext != nil {
 			requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
@@ -376,6 +377,20 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 			InteractionKind:     bus.OutboundInteractionApproval,
 			InteractionControls: bus.OutboundInteractionControlsPrompt,
 		}.ApplyToContext(&outboundContext)
+	case interactions.KindQuestion:
+		choices := []string(nil)
+		if len(record.Questions) == 1 {
+			choices = make([]string, 0, len(record.Questions[0].Options))
+			for _, option := range record.Questions[0].Options {
+				choices = append(choices, option.Label)
+			}
+		}
+		metadata := bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+		}
+		metadata = metadata.WithInteractionChoices(choices)
+		metadata.ApplyToContext(&outboundContext)
 	}
 	message := bus.OutboundMessage{
 		Channel:          record.Route.Channel,
@@ -426,7 +441,7 @@ func renderInteractionPrompt(record interactions.Record) string {
 	}
 	if len(record.Questions) == 1 {
 		renderSingleInteractionQuestion(&builder, record.Questions[0])
-		fmt.Fprintf(&builder, "\n\n`/answer %s …`", record.ShortID)
+		fmt.Fprintf(&builder, "\n\n`/answer %s …`\n`/stop`", record.ShortID)
 		return builder.String()
 	}
 	for index, question := range record.Questions {

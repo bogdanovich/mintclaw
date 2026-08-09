@@ -363,6 +363,20 @@ func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyM
 			Selective:       true,
 		}
 	}
+	if metadata.IsQuestionPrompt() {
+		choices := metadata.InteractionChoices()
+		keyboard := make([][]telego.KeyboardButton, 0, len(choices)+1)
+		for _, choice := range choices {
+			keyboard = append(keyboard, []telego.KeyboardButton{{Text: choice}})
+		}
+		keyboard = append(keyboard, []telego.KeyboardButton{{Text: "Cancel turn"}})
+		return &telego.ReplyKeyboardMarkup{
+			Keyboard:        keyboard,
+			ResizeKeyboard:  true,
+			OneTimeKeyboard: true,
+			Selective:       true,
+		}
+	}
 	if metadata.RemovesInteractionControls() {
 		return &telego.ReplyKeyboardRemove{RemoveKeyboard: true, Selective: true}
 	}
@@ -1591,6 +1605,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
 	interactionChoice := c.telegramInteractionChoice(message)
+	interactionResponse := c.telegramInteractionResponse(message)
 
 	// In group chats, apply unified group trigger filtering
 	isMentioned := false
@@ -1711,6 +1726,9 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 	if interactionChoice != "" {
 		metadata[bus.InboundMetadataKeyInteractionChoice] = interactionChoice
+	}
+	if interactionResponse != "" {
+		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionResponse
 	}
 	mergeTelegramRawMetadata(metadata, mediaGroupMetadata)
 
@@ -1958,6 +1976,9 @@ func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
 }
 
 func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) string {
+	if message != nil && message.Text == "Cancel turn" {
+		return bus.InboundInteractionChoiceCancel
+	}
 	if message == nil || message.ReplyToMessage == nil ||
 		!c.isOwnBotUser(message.ReplyToMessage.From) {
 		return ""
@@ -1971,6 +1992,14 @@ func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) str
 	default:
 		return ""
 	}
+}
+
+func (c *TelegramChannel) telegramInteractionResponse(message *telego.Message) string {
+	if message == nil || message.ReplyToMessage == nil ||
+		!c.isOwnBotUser(message.ReplyToMessage.From) {
+		return ""
+	}
+	return strings.TrimSpace(message.Text)
 }
 
 func (c *TelegramChannel) ownBotIdentity() (int64, string) {

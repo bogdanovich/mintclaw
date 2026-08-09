@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -16,6 +17,7 @@ const (
 	OutboundMetadataKeyUsageTotal   = "usage_total_tokens"
 	OutboundMetadataKeyInteraction  = "interaction_kind"
 	OutboundMetadataKeyControls     = "interaction_controls"
+	OutboundMetadataKeyChoices      = "interaction_choices"
 	OutboundMetadataKeyRequestID    = "request_id"
 
 	OutboundMessageKindThought      = "thought"
@@ -27,6 +29,7 @@ const (
 	OutboundKindInterim = "interim"
 
 	OutboundInteractionApproval = "approval"
+	OutboundInteractionQuestion = "question"
 
 	OutboundInteractionControlsPrompt = "prompt"
 	OutboundInteractionControlsRemove = "remove"
@@ -35,16 +38,17 @@ const (
 // OutboundMetadata is the typed form of the cross-package outbound metadata
 // stored in InboundContext.Raw for wire/backward compatibility.
 type OutboundMetadata struct {
-	MessageKind         string
-	ToolCalls           string
-	OutboundKind        string
-	ModelName           string
-	DefaultModelName    string
-	UsageInputTokens    int
-	UsageOutputTokens   int
-	UsageTotalTokens    int
-	InteractionKind     string
-	InteractionControls string
+	MessageKind            string
+	ToolCalls              string
+	OutboundKind           string
+	ModelName              string
+	DefaultModelName       string
+	UsageInputTokens       int
+	UsageOutputTokens      int
+	UsageTotalTokens       int
+	InteractionKind        string
+	InteractionControls    string
+	InteractionChoicesJSON string
 }
 
 func OutboundMetadataFromMessage(msg OutboundMessage) OutboundMetadata {
@@ -60,16 +64,17 @@ func OutboundMetadataFromRaw(raw map[string]string) OutboundMetadata {
 		return OutboundMetadata{}
 	}
 	return OutboundMetadata{
-		MessageKind:         strings.TrimSpace(raw[OutboundMetadataKeyMessageKind]),
-		ToolCalls:           strings.TrimSpace(raw[OutboundMetadataKeyToolCalls]),
-		OutboundKind:        strings.TrimSpace(raw[OutboundMetadataKeyOutboundKind]),
-		ModelName:           strings.TrimSpace(raw[OutboundMetadataKeyModelName]),
-		DefaultModelName:    strings.TrimSpace(raw[OutboundMetadataKeyDefaultModel]),
-		UsageInputTokens:    parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageInput]),
-		UsageOutputTokens:   parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageOutput]),
-		UsageTotalTokens:    parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageTotal]),
-		InteractionKind:     strings.TrimSpace(raw[OutboundMetadataKeyInteraction]),
-		InteractionControls: strings.TrimSpace(raw[OutboundMetadataKeyControls]),
+		MessageKind:            strings.TrimSpace(raw[OutboundMetadataKeyMessageKind]),
+		ToolCalls:              strings.TrimSpace(raw[OutboundMetadataKeyToolCalls]),
+		OutboundKind:           strings.TrimSpace(raw[OutboundMetadataKeyOutboundKind]),
+		ModelName:              strings.TrimSpace(raw[OutboundMetadataKeyModelName]),
+		DefaultModelName:       strings.TrimSpace(raw[OutboundMetadataKeyDefaultModel]),
+		UsageInputTokens:       parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageInput]),
+		UsageOutputTokens:      parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageOutput]),
+		UsageTotalTokens:       parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageTotal]),
+		InteractionKind:        strings.TrimSpace(raw[OutboundMetadataKeyInteraction]),
+		InteractionControls:    strings.TrimSpace(raw[OutboundMetadataKeyControls]),
+		InteractionChoicesJSON: normalizeOutboundInteractionChoices(raw[OutboundMetadataKeyChoices]),
 	}
 }
 
@@ -108,6 +113,9 @@ func (m OutboundMetadata) ApplyToContext(ctx *InboundContext) {
 	if strings.TrimSpace(m.InteractionControls) != "" {
 		rawCount++
 	}
+	if m.InteractionChoicesJSON != "" {
+		rawCount++
+	}
 	if rawCount == 0 {
 		return
 	}
@@ -124,6 +132,7 @@ func (m OutboundMetadata) ApplyToContext(ctx *InboundContext) {
 	setOutboundMetadataInt(ctx.Raw, OutboundMetadataKeyUsageTotal, m.UsageTotalTokens)
 	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyInteraction, m.InteractionKind)
 	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyControls, m.InteractionControls)
+	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyChoices, m.InteractionChoicesJSON)
 }
 
 func (m OutboundMetadata) IsToolFeedback() bool {
@@ -155,7 +164,7 @@ func (m OutboundMetadata) IsInterim() bool {
 }
 
 func (m OutboundMetadata) BypassesPlaceholderEdit() bool {
-	return m.IsThought() || m.IsToolCalls() || m.IsFinalReply() || m.IsApprovalPrompt()
+	return m.IsThought() || m.IsToolCalls() || m.IsFinalReply() || m.IsApprovalPrompt() || m.IsQuestionPrompt()
 }
 
 func (m OutboundMetadata) IsApprovalPrompt() bool {
@@ -163,9 +172,65 @@ func (m OutboundMetadata) IsApprovalPrompt() bool {
 		strings.EqualFold(m.InteractionControls, OutboundInteractionControlsPrompt)
 }
 
+func (m OutboundMetadata) IsQuestionPrompt() bool {
+	return strings.EqualFold(m.InteractionKind, OutboundInteractionQuestion) &&
+		strings.EqualFold(m.InteractionControls, OutboundInteractionControlsPrompt)
+}
+
 func (m OutboundMetadata) RemovesInteractionControls() bool {
-	return strings.EqualFold(m.InteractionKind, OutboundInteractionApproval) &&
+	return (strings.EqualFold(m.InteractionKind, OutboundInteractionApproval) ||
+		strings.EqualFold(m.InteractionKind, OutboundInteractionQuestion)) &&
 		strings.EqualFold(m.InteractionControls, OutboundInteractionControlsRemove)
+}
+
+func (m OutboundMetadata) WithInteractionChoices(choices []string) OutboundMetadata {
+	m.InteractionChoicesJSON = encodeOutboundInteractionChoices(choices)
+	return m
+}
+
+func (m OutboundMetadata) InteractionChoices() []string {
+	return parseOutboundInteractionChoices(m.InteractionChoicesJSON)
+}
+
+func encodeOutboundInteractionChoices(choices []string) string {
+	if len(choices) == 0 || len(choices) > 3 {
+		return ""
+	}
+	normalized := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		choice = strings.TrimSpace(choice)
+		if choice == "" || len([]rune(choice)) > 64 {
+			return ""
+		}
+		normalized = append(normalized, choice)
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func normalizeOutboundInteractionChoices(encoded string) string {
+	return encodeOutboundInteractionChoices(parseOutboundInteractionChoices(encoded))
+}
+
+func parseOutboundInteractionChoices(encoded string) []string {
+	if strings.TrimSpace(encoded) == "" {
+		return nil
+	}
+	var choices []string
+	if err := json.Unmarshal([]byte(encoded), &choices); err != nil || len(choices) == 0 || len(choices) > 3 {
+		return nil
+	}
+	for index, choice := range choices {
+		choice = strings.TrimSpace(choice)
+		if choice == "" || len([]rune(choice)) > 64 {
+			return nil
+		}
+		choices[index] = choice
+	}
+	return choices
 }
 
 func parseOutboundMetadataInt(raw string) int {

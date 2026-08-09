@@ -69,6 +69,48 @@ func TestOutboundMetadataInteractionControls(t *testing.T) {
 	if metadata.IsApprovalPrompt() || !metadata.RemovesInteractionControls() {
 		t.Fatalf("approval removal metadata = %#v", metadata)
 	}
+
+	ctx = InboundContext{}
+	questionMetadata := OutboundMetadata{
+		InteractionKind:     OutboundInteractionQuestion,
+		InteractionControls: OutboundInteractionControlsPrompt,
+	}
+	questionMetadata = questionMetadata.WithInteractionChoices([]string{"Yes", "No"})
+	questionMetadata.ApplyToContext(&ctx)
+	metadata = OutboundMetadataFromContext(ctx)
+	if !metadata.IsQuestionPrompt() || metadata.IsApprovalPrompt() ||
+		len(metadata.InteractionChoices()) != 2 || metadata.InteractionChoices()[0] != "Yes" ||
+		!metadata.BypassesPlaceholderEdit() {
+		t.Fatalf("question prompt metadata = %#v", metadata)
+	}
+
+	ctx = InboundContext{}
+	OutboundMetadata{
+		InteractionKind:     OutboundInteractionQuestion,
+		InteractionControls: OutboundInteractionControlsRemove,
+	}.ApplyToContext(&ctx)
+	metadata = OutboundMetadataFromContext(ctx)
+	if metadata.IsQuestionPrompt() || !metadata.RemovesInteractionControls() {
+		t.Fatalf("question removal metadata = %#v", metadata)
+	}
+}
+
+func TestOutboundMetadataRejectsMalformedInteractionChoices(t *testing.T) {
+	for name, encoded := range map[string]string{
+		"invalid json": `{`,
+		"empty":        `[]`,
+		"too many":     `["1","2","3","4"]`,
+		"blank":        `["Yes",""]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			metadata := OutboundMetadataFromRaw(map[string]string{
+				OutboundMetadataKeyChoices: encoded,
+			})
+			if metadata.InteractionChoices() != nil {
+				t.Fatalf("malformed choices accepted: %#v", metadata.InteractionChoices())
+			}
+		})
+	}
 }
 
 func TestOutboundMetadataInterimKind(t *testing.T) {

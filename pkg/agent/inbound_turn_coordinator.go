@@ -47,6 +47,10 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		return
 	}
 	if cancellation.CommandHandled {
+		bus.OutboundMetadata{
+			InteractionKind:     string(cancellation.Kind),
+			InteractionControls: bus.OutboundInteractionControlsRemove,
+		}.ApplyToContext(&msg.Context)
 		admission := al.publishStopReply(
 			ctx,
 			msg,

@@ -43,6 +43,7 @@ type interactionControlCancellationResult struct {
 	Failed         bool
 	CommandHandled bool
 	TaskID         string
+	Kind           interactions.Kind
 }
 
 type explicitInteractionAnswerDisposition string
@@ -69,6 +70,11 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 ) (interactionControlCancellationResult, error) {
 	result := interactionControlCancellationResult{}
 	name, ok := commands.CommandName(msg.Content)
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) ==
+		bus.InboundInteractionChoiceCancel {
+		name = "stop"
+		ok = true
+	}
 	if !ok || (name != "new" && name != "reset" && name != "clear" && name != "stop") ||
 		al == nil || target == nil || target.Agent == nil {
 		return result, nil
@@ -80,6 +86,7 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	}
 	result.Matched = true
 	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+	result.Kind = record.Kind
 
 	claim, _, claimed := al.claimRuntimeRouteSession(
 		target,
@@ -615,8 +622,7 @@ func (al *AgentLoop) interactionNoticeResult(
 }
 
 func (al *AgentLoop) interactionAnswerContent(record interactions.Record, msg bus.InboundMessage) string {
-	if record.Kind != interactions.KindApproval ||
-		strings.TrimSpace(msg.Context.ReplyToMessageID) == "" {
+	if strings.TrimSpace(msg.Context.ReplyToMessageID) == "" {
 		return msg.Content
 	}
 	if al == nil {
@@ -631,13 +637,21 @@ func (al *AgentLoop) interactionAnswerContent(record interactions.Record, msg bu
 		return msg.Content
 	}
 
-	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-	switch choice {
-	case bus.InboundInteractionChoiceAllowOnce, bus.InboundInteractionChoiceDeny:
-		return choice
-	default:
-		return msg.Content
+	if record.Kind == interactions.KindApproval {
+		choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+		switch choice {
+		case bus.InboundInteractionChoiceAllowOnce, bus.InboundInteractionChoiceDeny:
+			return choice
+		}
 	}
+	if record.Kind == interactions.KindQuestion {
+		if response := strings.TrimSpace(
+			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse],
+		); response != "" {
+			return response
+		}
+	}
+	return msg.Content
 }
 
 func interactionAnswerOutcome(
@@ -1144,11 +1158,11 @@ func (al *AgentLoop) deliverInteractionFinal(
 	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
 	if record.Kind == interactions.KindApproval {
 		inbound.ReplyToMessageID = interactionApprovalReplyTarget(record, inbound)
-		bus.OutboundMetadata{
-			InteractionKind:     bus.OutboundInteractionApproval,
-			InteractionControls: bus.OutboundInteractionControlsRemove,
-		}.ApplyToContext(&inbound)
 	}
+	bus.OutboundMetadata{
+		InteractionKind:     string(record.Kind),
+		InteractionControls: bus.OutboundInteractionControlsRemove,
+	}.ApplyToContext(&inbound)
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
 			ctx, registry, interactionWorkspace, record, inbound, content, traceScopes,

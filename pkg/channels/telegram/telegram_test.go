@@ -1402,6 +1402,63 @@ func TestSend_ApprovalPromptUsesSelectiveOneTimeKeyboard(t *testing.T) {
 	assert.Equal(t, "Deny", row[1].(map[string]any)["text"])
 }
 
+func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponseWithMessageID(t, 1), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	outboundCtx := bus.InboundContext{}
+	metadata := bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}
+	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
+	metadata.ApplyToContext(&outboundCtx)
+
+	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Context: outboundCtx, Content: "Choose an input method",
+	})
+	require.NoError(t, err)
+	require.Len(t, caller.calls, 1)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+	markup := payload["reply_markup"].(map[string]any)
+	assert.Equal(t, true, markup["resize_keyboard"])
+	assert.Equal(t, true, markup["one_time_keyboard"])
+	assert.Equal(t, true, markup["selective"])
+	keyboard := markup["keyboard"].([]any)
+	require.Len(t, keyboard, 3)
+	assert.Equal(t, "Generate it", keyboard[0].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "Enter manually", keyboard[1].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "Cancel turn", keyboard[2].([]any)[0].(map[string]any)["text"])
+}
+
+func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponseWithMessageID(t, 1), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	outboundCtx := bus.InboundContext{}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&outboundCtx)
+
+	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Context: outboundCtx, Content: "What value should be used?",
+	})
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+	keyboard := payload["reply_markup"].(map[string]any)["keyboard"].([]any)
+	require.Len(t, keyboard, 1)
+	assert.Equal(t, "Cancel turn", keyboard[0].([]any)[0].(map[string]any)["text"])
+}
+
 func TestSend_ApprovalFinalRemovesKeyboard(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -3235,6 +3292,7 @@ func TestHandleMessage_ApprovalButtonReplyPreservesQuoteAndProjectsChoice(t *tes
 	)
 	assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
 		inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+	assert.Equal(t, "Allow once", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 }
 
 func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *testing.T) {
@@ -3293,6 +3351,9 @@ func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *test
 
 func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.T) {
 	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	assert.Equal(t, bus.InboundInteractionChoiceCancel, ch.telegramInteractionChoice(&telego.Message{
+		Text: "Cancel turn",
+	}))
 	assert.Equal(t, bus.InboundInteractionChoiceDeny, ch.telegramInteractionChoice(&telego.Message{
 		Text: "Deny", ReplyToMessage: &telego.Message{
 			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
@@ -3302,6 +3363,10 @@ func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.
 		name    string
 		message *telego.Message
 	}{
+		{
+			name:    "cancel with whitespace",
+			message: &telego.Message{Text: " Cancel turn"},
+		},
 		{
 			name: "reply to user",
 			message: &telego.Message{Text: "Allow once", ReplyToMessage: &telego.Message{
@@ -3332,6 +3397,18 @@ func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.
 			assert.Empty(t, ch.telegramInteractionChoice(test.message))
 		})
 	}
+}
+
+func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	ownBot := &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"}
+	assert.Equal(t, "generate it yourself", ch.telegramInteractionResponse(&telego.Message{
+		Text: "  generate it yourself  ", ReplyToMessage: &telego.Message{From: ownBot},
+	}))
+	assert.Empty(t, ch.telegramInteractionResponse(&telego.Message{
+		Text: "answer", ReplyToMessage: &telego.Message{From: &telego.User{ID: 7}},
+	}))
+	assert.Empty(t, ch.telegramInteractionResponse(&telego.Message{Text: "answer"}))
 }
 
 func TestTelegramQuotedContent_IncludesVoiceMarkerAlongsideCaption(t *testing.T) {
