@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -56,16 +57,10 @@ func (p *ClaudeCliProvider) Chat(
 	if err := isolation.Run(cmd); err != nil {
 		stderrStr := strings.TrimSpace(stderr.String())
 		stdoutStr := strings.TrimSpace(stdout.String())
-		switch {
-		case stderrStr != "" && stdoutStr != "":
-			return nil, fmt.Errorf("claude cli error: %w\nstderr: %s\nstdout: %s", err, stderrStr, stdoutStr)
-		case stderrStr != "":
-			return nil, fmt.Errorf("claude cli error: %s", stderrStr)
-		case stdoutStr != "":
-			return nil, fmt.Errorf("claude cli error: %w\noutput: %s", err, stdoutStr)
-		default:
-			return nil, fmt.Errorf("claude cli error: %w", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, normalizeCLIError(errors.Join(ctxErr, err), stderrStr)
 		}
+		return nil, normalizeCLIError(err, strings.Join([]string{stderrStr, stdoutStr}, "\n"))
 	}
 
 	return p.parseClaudeCliResponse(stdout.String())
@@ -122,11 +117,11 @@ func (p *ClaudeCliProvider) buildSystemPrompt(messages []Message, tools []ToolDe
 func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse, error) {
 	var resp claudeCliJSONResponse
 	if err := json.Unmarshal([]byte(output), &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse claude cli response: %w", err)
+		return nil, normalizeCLIError(err, "")
 	}
 
 	if resp.IsError {
-		return nil, fmt.Errorf("claude cli returned error: %s", resp.Result)
+		return nil, normalizeCodedCLIError(resp.Subtype, resp.Result, errors.New(resp.Result))
 	}
 
 	toolCalls := p.extractToolCalls(resp.Result)

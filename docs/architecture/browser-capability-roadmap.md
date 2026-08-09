@@ -6,9 +6,11 @@ Work derived from [`browser-capability.md`](browser-capability.md). B0, B1, N1,
 N2, B2, and the admitted B3/node P7 companion vertical slice are merged,
 deployed, and live-validated. The B3 authority and scope are recorded in
 [Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md).
+The first BF1 shared-action slice is admitted in
+[Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md).
 B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
-Later milestones remain proposals until an operator selects one and a separate
+All other later slices remain proposals until an operator selects one and a separate
 admission fixes its exact scope, authority, completion evidence, and stop
 conditions.
 
