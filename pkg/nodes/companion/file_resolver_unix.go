@@ -30,8 +30,7 @@ type fileIdentity struct {
 }
 
 type fileMountIdentity struct {
-	primary   uint64
-	secondary uint64
+	primary uint64
 }
 
 type fileRoot struct {

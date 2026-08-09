@@ -144,15 +144,6 @@ func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore
 	)
 }
 
-func newContextBuilder(workspace, globalSkillsDir, builtinSkillsDir string) *ContextBuilder {
-	return newContextBuilderWithMemoryOwnerAndSkills(
-		workspace,
-		workspace,
-		globalSkillsDir,
-		builtinSkillsDir,
-	)
-}
-
 func newContextBuilderWithMemoryOwnerAndSkills(
 	workspace string,
 	memoryOwnerRoot string,
