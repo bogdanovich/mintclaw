@@ -222,6 +222,44 @@ func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *te
 	}
 }
 
+func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgrade(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("pre-approved-action catalog rejected during rolling upgrade: %v", err)
+	}
+
+	approved := browserProfileDescriptorFixture()
+	approved.DryRun = false
+	approved.AllowApprovedActions = true
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{approved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("legacy dry-run schema granted approved-action authority")
+	}
+}
+
 func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),

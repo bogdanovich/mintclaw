@@ -630,7 +630,7 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"})
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false)
 }
 
 // legacyBrowserCommandInputSchema returns the exact browser input contract
@@ -638,13 +638,25 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 // persisted companion catalog during a rolling upgrade; fresh discovery is
 // always generated through BrowserCommandInputSchema.
 func legacyBrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"})
+	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"}, true)
+}
+
+// legacyDryRunBrowserCommandInputSchema returns the exact session-open input
+// contract emitted immediately before approved-action mode was admitted. It
+// is accepted only for persisted catalogs whose profiles retain the legacy
+// dry-run-only authority; fresh discovery always emits the current schema.
+func legacyDryRunBrowserCommandInputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, true)
 }
 
 func browserCommandInputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 	actEffects []string,
+	legacyDryRunOpen bool,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	actionBranches := make([]any, 0, len(profiles))
@@ -652,14 +664,18 @@ func browserCommandInputSchema(
 	allActions := make(map[string]struct{})
 	for _, profile := range profiles {
 		profileRevisions = append(profileRevisions, profile.Revision)
+		profileRequired := []string{"profile", "profile_revision"}
+		profileProperties := map[string]any{
+			"profile":          map[string]any{"const": profile.Alias},
+			"profile_revision": map[string]any{"const": profile.Revision},
+			"limits":           browserLimitsSchema(profile.Limits),
+		}
+		if !legacyDryRunOpen {
+			profileRequired = append(profileRequired, "dry_run")
+			profileProperties["dry_run"] = map[string]any{"const": profile.DryRun}
+		}
 		profileBranches = append(profileBranches, map[string]any{
-			"required": []string{"profile", "profile_revision", "dry_run"},
-			"properties": map[string]any{
-				"profile":          map[string]any{"const": profile.Alias},
-				"profile_revision": map[string]any{"const": profile.Revision},
-				"dry_run":          map[string]any{"const": profile.DryRun},
-				"limits":           browserLimitsSchema(profile.Limits),
-			},
+			"required": profileRequired, "properties": profileProperties,
 		})
 		for _, action := range profile.Actions {
 			allActions[action] = struct{}{}
@@ -707,7 +723,11 @@ func browserCommandInputSchema(
 		add("profile_revision", identifier)
 		profileConstraint = map[string]any{"oneOf": profileBranches}
 		add("browser_policy_revision", digest)
-		add("dry_run", map[string]any{"type": "boolean"})
+		if legacyDryRunOpen {
+			add("dry_run", map[string]any{"const": true})
+		} else {
+			add("dry_run", map[string]any{"type": "boolean"})
+		}
 		add("limits", browserLimitsSchema(BrowserLimits{}.Effective()))
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		add("session_id", identifier)

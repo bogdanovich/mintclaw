@@ -446,6 +446,14 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
 	inputMatches := err == nil && bytes.Equal(actualInput, expectedInput)
+	if !inputMatches && descriptor.Name == BrowserCommandSessionOpen &&
+		browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) {
+		legacyInput, legacyErr := canonicalJSON(legacyDryRunBrowserCommandInputSchema(
+			descriptor.Name,
+			descriptor.BrowserProfiles,
+		))
+		inputMatches = legacyErr == nil && bytes.Equal(actualInput, legacyInput)
+	}
 	if !inputMatches && descriptor.Name == BrowserCommandAct &&
 		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
 		legacyInput, legacyErr := canonicalJSON(legacyBrowserCommandInputSchema(
@@ -477,6 +485,15 @@ func browserProfilesUseOnlyLegacyActions(profiles []BrowserProfileDescriptor) bo
 			if action == "scroll" {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+func browserProfilesUseLegacyDryRunMode(profiles []BrowserProfileDescriptor) bool {
+	for _, profile := range profiles {
+		if !profile.DryRun || profile.AllowApprovedActions {
+			return false
 		}
 	}
 	return true
