@@ -133,9 +133,8 @@ func NewAgentLoopChecked(
 }
 
 // NewAgentLoopWithRuntimeProfile applies a resolved profile before registry and
-// agent construction. It is the P0.2 entry point for frontends that require
-// distinct execution and state roots; existing gateway constructors remain
-// unchanged until the P0.3 storage cutover.
+// agent construction. It is the strict entry point for frontends that require
+// distinct execution and state roots.
 func NewAgentLoopWithRuntimeProfile(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -144,24 +143,26 @@ func NewAgentLoopWithRuntimeProfile(
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
 	if !profile.hasCodingOwner() {
-		return nil, fmt.Errorf("personal runtime profiles require the P0.3 storage cutover")
+		return nil, fmt.Errorf("personal runtime profiles require the P0.4 tool bootstrap cutover")
 	}
-	if contextManagerConfigName(cfg) != "none" {
+	contextManagerName := contextManagerConfigName(cfg)
+	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
-			"coding runtime profile requires context manager none until P0.3 routes derived state externally",
+			"runtime profile context manager %q has no owner-scoped storage contract",
+			contextManagerName,
 		)
 	}
 	registry, err := newAgentRegistryWithRuntimeProfile(cfg, provider, profile)
 	if err != nil {
 		return nil, err
 	}
+	opts = append([]AgentLoopOption{withRuntimeProfile(profile)}, opts...)
 	if profile.hasCodingOwner() {
 		// P0.4 replaces this fail-closed bootstrap with an explicit coding tool
 		// profile. Until then, a coding owner cannot inherit personal shared tools.
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
-	al.runtimeProfile = &profile
 	if al.contextManagerInitErr != nil {
 		err := al.contextManagerInitErr
 		al.Close()

@@ -168,8 +168,9 @@ func newAgentInstanceWithRuntimeLayout(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout RuntimeLayout,
+	storeFactory RuntimeStoreFactory,
 ) (*AgentInstance, error) {
-	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout)
+	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, storeFactory)
 }
 
 func newAgentInstance(
@@ -178,6 +179,7 @@ func newAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout *RuntimeLayout,
+	storeFactory ...RuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	if cfg != nil {
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
@@ -209,9 +211,16 @@ func newAgentInstance(
 	var contextBuilder *ContextBuilder
 	if layout != nil {
 		var err error
-		sessions, err = initRuntimeSessionStore(sessionsDir)
+		factory := RuntimeStoreFactory(defaultRuntimeStoreFactory{})
+		if len(storeFactory) > 0 && storeFactory[0] != nil {
+			factory = storeFactory[0]
+		}
+		sessions, err = factory.NewSessionStore(*layout)
 		if err != nil {
 			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+		if runtimeDependencyIsNil(sessions) {
+			return nil, fmt.Errorf("construct agent: runtime store factory returned a nil session store")
 		}
 		contextBuilder, err = newRuntimeContextBuilder(*layout)
 		if err != nil {

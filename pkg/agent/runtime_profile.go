@@ -4,16 +4,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/seahorse"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 // RuntimeProfile is the immutable set of layouts admitted before registry construction.
-//
-// P0.2 deliberately keeps the profile limited to root and owner resolution.
-// Store and tool factories are added by the dependent P0.3 and P0.4 packets.
 type RuntimeProfile struct {
 	agentLayouts map[string]RuntimeLayout
+	storeFactory RuntimeStoreFactory
+}
+
+// RuntimeStoreFactory opens the canonical and derived stores owned by a
+// resolved runtime layout. Implementations must not fall back to legacy paths.
+type RuntimeStoreFactory interface {
+	NewSessionStore(layout RuntimeLayout) (session.SessionStore, error)
+	NewSeahorseEngine(config seahorse.Config, complete seahorse.CompleteFn) (*seahorse.Engine, error)
+}
+
+type defaultRuntimeStoreFactory struct{}
+
+func (defaultRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
+	return initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+}
+
+func (defaultRuntimeStoreFactory) NewSeahorseEngine(
+	config seahorse.Config,
+	complete seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	return seahorse.NewEngine(config, complete)
 }
 
 // RuntimeProfileBinding binds one configured runtime agent to its state owner.
@@ -26,8 +47,22 @@ type RuntimeProfileBinding struct {
 
 // NewRuntimeProfile validates and indexes bindings without creating filesystem state.
 func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error) {
+	return NewRuntimeProfileWithStoreFactory(defaultRuntimeStoreFactory{}, bindings...)
+}
+
+// NewRuntimeProfileWithStoreFactory creates a profile with construction-time
+// store injection. It is primarily useful for alternate frontends and fault
+// injection; normal callers should use NewRuntimeProfile.
+func NewRuntimeProfileWithStoreFactory(
+	storeFactory RuntimeStoreFactory,
+	bindings ...RuntimeProfileBinding,
+) (RuntimeProfile, error) {
+	if runtimeDependencyIsNil(storeFactory) {
+		return RuntimeProfile{}, fmt.Errorf("runtime profile: store factory is required")
+	}
 	profile := RuntimeProfile{
 		agentLayouts: make(map[string]RuntimeLayout, len(bindings)),
+		storeFactory: storeFactory,
 	}
 	var profileOwnerKind RuntimeOwnerKind
 	for index, binding := range bindings {
@@ -127,6 +162,19 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 	return profile, nil
 }
 
+func runtimeDependencyIsNil(dependency any) bool {
+	if dependency == nil {
+		return true
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // AgentLayout returns the layout bound to a canonical configured agent ID.
 func (p RuntimeProfile) AgentLayout(agentID string) (RuntimeLayout, bool) {
 	layout, ok := p.agentLayouts[routing.NormalizeAgentID(agentID)]
@@ -180,7 +228,7 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			Layout:  refreshedLayout,
 		})
 	}
-	refreshedProfile, err := NewRuntimeProfile(refreshedBindings...)
+	refreshedProfile, err := NewRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
 	if err != nil {
 		return fmt.Errorf("runtime profile: refresh physical root isolation: %w", err)
 	}
@@ -196,6 +244,7 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			path string
 		}{
 			{name: "sessions", path: paths.SessionsRoot},
+			{name: "context", path: paths.ContextRoot},
 			{name: "memory", path: paths.MemoryRoot},
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
@@ -207,6 +256,30 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 				)
 			}
 		}
+		if err := preflightRuntimeFile(filepath.Join(paths.ContextRoot, "seahorse.db")); err != nil {
+			return fmt.Errorf(
+				"runtime profile: preflight Seahorse state for agent %q: %w",
+				routing.NormalizeAgentID(agentID),
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func preflightRuntimeFile(path string) error {
+	entry, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect file %q: %w", path, err)
+	}
+	if entry.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("path %q must not be a symbolic link", path)
+	}
+	if !entry.Mode().IsRegular() {
+		return fmt.Errorf("path %q is not a regular file", path)
 	}
 	return nil
 }
