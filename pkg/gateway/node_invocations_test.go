@@ -554,7 +554,7 @@ func TestNodeInvocationPreparationAndDispatchLockOrderSurvivesReloadWriter(t *te
 	go func() {
 		close(writerStarted)
 		fixture.runtime.registryMu.Lock()
-		fixture.runtime.registryMu.Unlock()
+		fixture.runtime.registryMu.Unlock() //nolint:staticcheck // empty critical section asserts writer ordering
 		close(writerDone)
 	}()
 	<-writerStarted
@@ -635,7 +635,7 @@ func TestNodeDiscoveryAndPreparationLockOrderSurvivesReloadWriter(t *testing.T) 
 	go func() {
 		close(writerStarted)
 		fixture.runtime.registryMu.Lock()
-		fixture.runtime.registryMu.Unlock()
+		fixture.runtime.registryMu.Unlock() //nolint:staticcheck // empty critical section asserts writer ordering
 		close(writerDone)
 	}()
 	<-writerStarted

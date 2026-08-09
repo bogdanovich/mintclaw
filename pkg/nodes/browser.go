@@ -664,9 +664,10 @@ func browserCommandInputSchema(
 		}
 		for _, action := range profile.Actions {
 			effect := "navigation"
-			if action == "download" {
+			switch action {
+			case "download":
 				effect = "download"
-			} else if action == "scroll" {
+			case "scroll":
 				effect = "read"
 			}
 			required := []string{"profile_revision", "action", "effect"}

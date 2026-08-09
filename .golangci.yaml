@@ -19,6 +19,7 @@ linters:
     - nilerr
     - nilnesserr
     - reassign
+    - staticcheck
     - unconvert
     - wastedassign
 
@@ -43,10 +44,12 @@ linters:
     - gomoddirectives
 
   # Valuable checks that currently have a substantial existing backlog:
-  # errcheck (50+) and staticcheck (50+). Enable each after its findings are
-  # fixed or narrowly baselined. Gosec is better maintained as a separately
-  # tuned security job because its default rules are noisy for this
-  # CLI/server codebase.
+  # errcheck (50+). Enable after its findings are fixed or narrowly baselined.
+  # staticcheck is enabled with its remaining intentional findings baselined
+  # via targeted //nolint:staticcheck comments (legacy cfg.Github migration
+  # shims and deliberate empty-critical-section test assertions). Gosec is
+  # better maintained as a separately tuned security job because its default
+  # rules are noisy for this CLI/server codebase.
   settings:
     gomoddirectives:
       replace-allow-list:

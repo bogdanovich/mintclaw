@@ -4,6 +4,12 @@ import "github.com/bogdanovich/mintclaw/pkg/config"
 
 const defaultGitHubRegistryBaseURL = "https://github.com"
 
+// legacyGithubSettings returns the deprecated top-level cfg.Github registry
+// settings consumed by the migration shim; remove with SkillsGithubConfig.
+func legacyGithubSettings(cfg config.SkillsToolsConfig) (baseURL string, token config.SecureString, proxy string) {
+	return cfg.Github.BaseURL, cfg.Github.Token, cfg.Github.Proxy //nolint:staticcheck // legacy cfg.Github migration shim
+}
+
 func effectiveRegistryConfigsFromToolsConfig(cfg config.SkillsToolsConfig) []config.SkillRegistryConfig {
 	effective := make([]config.SkillRegistryConfig, 0, len(cfg.Registries)+1)
 	seen := map[string]struct{}{}
@@ -24,8 +30,8 @@ func effectiveRegistryConfigsFromToolsConfig(cfg config.SkillsToolsConfig) []con
 		return effective
 	}
 
-	legacyGithubConfigured := cfg.Github.BaseURL != "" || cfg.Github.Token.String() != "" || cfg.Github.Proxy != ""
-	if !legacyGithubConfigured {
+	baseURL, token, proxy := legacyGithubSettings(cfg)
+	if baseURL == "" && token.String() == "" && proxy == "" {
 		return effective
 	}
 
@@ -43,20 +49,21 @@ func applyLegacyGithubRegistryCompatibility(
 	if registryCfg.Name != "github" {
 		return registryCfg
 	}
+	baseURL, token, proxy := legacyGithubSettings(cfg)
 	if registryCfg.Param == nil {
 		registryCfg.Param = map[string]any{}
 	}
 	if registryCfg.BaseURL == "" ||
 		(registryCfg.BaseURL == defaultGitHubRegistryBaseURL &&
-			cfg.Github.BaseURL != "" &&
-			cfg.Github.BaseURL != defaultGitHubRegistryBaseURL) {
-		registryCfg.BaseURL = cfg.Github.BaseURL
+			baseURL != "" &&
+			baseURL != defaultGitHubRegistryBaseURL) {
+		registryCfg.BaseURL = baseURL
 	}
 	if registryCfg.AuthToken.String() == "" {
-		registryCfg.AuthToken = cfg.Github.Token
+		registryCfg.AuthToken = token
 	}
-	if _, ok := registryCfg.Param["proxy"]; !ok && cfg.Github.Proxy != "" {
-		registryCfg.Param["proxy"] = cfg.Github.Proxy
+	if _, ok := registryCfg.Param["proxy"]; !ok && proxy != "" {
+		registryCfg.Param["proxy"] = proxy
 	}
 	return registryCfg
 }
@@ -101,7 +108,8 @@ func GitHubInstallDirNameFromToolsConfig(cfg config.SkillsToolsConfig, target st
 		registryCfg = applyLegacyGithubRegistryCompatibility(cfg, registryCfg)
 		return githubInstallDirNameWithBaseURL(target, registryCfg.BaseURL)
 	}
-	return githubInstallDirNameWithBaseURL(target, cfg.Github.BaseURL)
+	baseURL, _, _ := legacyGithubSettings(cfg)
+	return githubInstallDirNameWithBaseURL(target, baseURL)
 }
 
 func NormalizeInstallTargetForRegistry(cfg config.SkillsToolsConfig, registryName, target string) string {
