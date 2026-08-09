@@ -112,6 +112,17 @@ func TestSessionManager_CloseWaitsForInFlightAdmissionCleanup(t *testing.T) {
 	require.ErrorIs(t, <-closed, cleanupErr)
 }
 
+func TestSessionManager_ClosePropagatesAdmittedSessionWaitError(t *testing.T) {
+	sm := NewSessionManager()
+	session := &ProcessSession{
+		ID: "wait-error", Status: "running", completion: make(chan struct{}),
+	}
+	require.True(t, sm.Add(session))
+	waitErr := errors.New("wait failed")
+	session.complete(-1, waitErr)
+	require.ErrorIs(t, sm.Close(), waitErr)
+}
+
 func TestProcessSession_IsDone(t *testing.T) {
 	session := &ProcessSession{Status: "running"}
 	require.False(t, session.IsDone())
@@ -120,6 +131,9 @@ func TestProcessSession_IsDone(t *testing.T) {
 	require.True(t, session.IsDone())
 
 	session.Status = "exited"
+	require.True(t, session.IsDone())
+
+	session.Status = "error"
 	require.True(t, session.IsDone())
 }
 

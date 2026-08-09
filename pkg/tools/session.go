@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ var (
 	ErrSessionDone     = errors.New("session already completed")
 	ErrPTYNotSupported = errors.New("PTY is not supported on this platform")
 	ErrNoStdin         = errors.New("no stdin available")
+	ErrSessionWait     = errors.New("session completion is unavailable")
 )
 
 type ProcessSession struct {
@@ -50,6 +52,9 @@ type ProcessSession struct {
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
 	ptyMaster       *os.File
+	completion      chan struct{}
+	waitErr         error
+	completionOnce  sync.Once
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -58,7 +63,7 @@ type ProcessSession struct {
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited"
+	return s.Status == "done" || s.Status == "exited" || s.Status == "error"
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {
@@ -114,13 +119,60 @@ func (s *ProcessSession) killProcess() error {
 		return err
 	}
 
-	s.Status = "done"
-	s.ExitCode = -1
 	return nil
 }
 
 func (s *ProcessSession) Kill() error {
 	return s.killProcess()
+}
+
+func (s *ProcessSession) complete(exitCode int, waitErr error) {
+	s.mu.Lock()
+	s.ExitCode = exitCode
+	s.waitErr = normalizeSessionWaitError(waitErr)
+	if s.waitErr != nil {
+		s.Status = "error"
+	} else {
+		s.Status = "done"
+	}
+	s.mu.Unlock()
+	if s.completion != nil {
+		s.completionOnce.Do(func() {
+			close(s.completion)
+		})
+	}
+}
+
+func normalizeSessionWaitError(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return nil
+	}
+	return err
+}
+
+func (s *ProcessSession) hasCompletion() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completion != nil
+}
+
+func (s *ProcessSession) waitForCompletion() error {
+	s.mu.Lock()
+	completion := s.completion
+	status := s.Status
+	waitErr := s.waitErr
+	s.mu.Unlock()
+	if completion == nil {
+		if status == "done" || status == "exited" || status == "error" {
+			return waitErr
+		}
+		return ErrSessionWait
+	}
+	<-completion
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.waitErr
 }
 
 func (s *ProcessSession) Write(data string) error {
@@ -300,11 +352,18 @@ func (sm *SessionManager) Close() error {
 		closeErrors := append([]error(nil), sm.admissionErrors...)
 		sm.mu.Unlock()
 		for _, session := range sessions {
-			if session == nil || session.IsDone() {
+			if session == nil {
 				continue
 			}
-			if err := session.Kill(); err != nil && !errors.Is(err, ErrSessionDone) {
-				closeErrors = append(closeErrors, err)
+			if !session.IsDone() {
+				if err := session.Kill(); err != nil && !errors.Is(err, ErrSessionDone) {
+					closeErrors = append(closeErrors, err)
+				}
+			}
+			if session.hasCompletion() {
+				if err := session.waitForCompletion(); err != nil {
+					closeErrors = append(closeErrors, err)
+				}
 			}
 		}
 		sm.closeErr = errors.Join(closeErrors...)

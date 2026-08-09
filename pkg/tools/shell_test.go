@@ -230,6 +230,35 @@ func TestShellTool_RuntimeSessionsAreOwnerScoped(t *testing.T) {
 	}
 }
 
+func TestShellTool_RuntimeCloseWaitsForAdmittedProcessReap(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	tool, err := NewExecToolWithRuntimeConfig(
+		workspace,
+		filepath.Join(root, "state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	command := "sleep 30"
+	if runtime.GOOS == "windows" {
+		command = "Start-Sleep -Seconds 30"
+	}
+	run := tool.Execute(context.Background(), map[string]any{
+		"action": "run", "command": command, "background": "true",
+	})
+	require.False(t, run.IsError, run.ForLLM)
+	var response toolshared.ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(run.ForLLM), &response))
+	session, err := tool.sessionManager.Get(response.SessionID)
+	require.NoError(t, err)
+
+	require.NoError(t, tool.Close())
+	require.NoError(t, session.waitForCompletion())
+	require.True(t, session.IsDone())
+}
+
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
 	tool, err := NewExecTool("", false)

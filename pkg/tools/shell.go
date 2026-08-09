@@ -621,6 +621,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		completion: make(chan struct{}),
 	}
 
 	var cmd *exec.Cmd
@@ -718,6 +719,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
 	if session.PTY && session.ptyMaster != nil {
 		go func() {
+			var waitErr error
 			defer func() {
 				if r := recover(); r != nil {
 					logger.ErrorCF("shell", "PTY cmd.Wait goroutine panic recovered",
@@ -725,18 +727,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
-					session.mu.Lock()
-					session.Status = "error"
-					session.mu.Unlock()
+					waitErr = fmt.Errorf("panic in PTY cmd.Wait: %v", r)
 				}
+				exitCode := -1
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				}
+				session.complete(exitCode, waitErr)
 			}()
-			_ = cmd.Wait() // Wait for process to exit
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			}
-			session.Status = "done"
-			session.mu.Unlock()
+			waitErr = cmd.Wait()
 		}()
 
 		go func() {
@@ -779,6 +778,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		// When Read() returns EOF (pipe closed), we break.
 		// When process exits, OS closes pipe write end → Read() returns EOF → we exit.
 		go func() {
+			var waitErr error
 			defer func() {
 				if r := recover(); r != nil {
 					logger.ErrorCF("shell", "pipe read goroutine panic recovered",
@@ -786,7 +786,13 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
+					waitErr = fmt.Errorf("panic while collecting background output: %v", r)
 				}
+				exitCode := -1
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				}
+				session.complete(exitCode, waitErr)
 			}()
 			buf := make([]byte, 4096)
 
@@ -834,14 +840,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			if stdinWriter != nil {
 				_ = stdinWriter.Close()
 			}
-			_ = cmd.Wait()
-
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			}
-			session.Status = "done"
-			session.mu.Unlock()
+			waitErr = cmd.Wait()
 		}()
 	}
 
@@ -1003,6 +1002,9 @@ func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
 
 	if err = session.Kill(); err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
+	}
+	if err = session.waitForCompletion(); err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("failed to reap session: %v", err))
 	}
 
 	t.sessionManager.Remove(sessionID)

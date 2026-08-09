@@ -62,8 +62,8 @@ Each coding exec tool also owns a separate in-process session manager, so
 background process handles cannot cross personal-agent or coding-thread
 boundaries. Background startup acquires an admission lease before creating a
 process. Shutdown seals that gate, waits for every in-flight lease to commit or
-clean up, terminates admitted processes, and propagates cleanup errors through
-agent shutdown.
+clean up, terminates and reaps admitted processes, and propagates termination,
+wait, and cleanup errors through agent shutdown.
 
 Strict construction preflights every operational leaf and rejects symlinks,
 wrong file types, unreadable files, malformed state/registry snapshots, and
