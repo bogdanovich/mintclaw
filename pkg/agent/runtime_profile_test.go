@@ -510,41 +510,36 @@ func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileChecksLaterSessionsEnumeration(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows does not enforce Unix directory mode bits")
-	}
+func TestNewAgentLoopWithRuntimeProfileDoesNotMigrateLegacySessions(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
-	mainState := filepath.Join(root, "state-main")
 	mainLayout, err := NewRuntimeLayout(
 		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
 		mainExecution,
-		mainState,
+		filepath.Join(root, "state-main"),
 		[]string{mainExecution},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
 	}
 	supportExecution := filepath.Join(root, "support-project")
-	supportState := filepath.Join(root, "state-support")
 	supportLayout, err := NewRuntimeLayout(
 		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
 		supportExecution,
-		supportState,
+		filepath.Join(root, "state-support"),
 		[]string{supportExecution},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
 	}
 	supportSessions := supportLayout.StatePaths().SessionsRoot
-	if err := os.MkdirAll(supportSessions, 0o300); err != nil {
-		t.Fatalf("MkdirAll(support sessions) error = %v", err)
+	if err := os.MkdirAll(filepath.Join(supportSessions, "blocked.meta.json"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(blocked metadata) error = %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.Chmod(supportSessions, 0o700)
-		_ = os.Chmod(supportState, 0o700)
-	})
+	legacySession := filepath.Join(supportSessions, "blocked.json")
+	if err := os.WriteFile(legacySession, []byte(`{"key":"blocked","messages":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy session) error = %v", err)
+	}
 	profile, err := NewRuntimeProfile(
 		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
 		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
@@ -560,17 +555,15 @@ func TestNewAgentLoopWithRuntimeProfileChecksLaterSessionsEnumeration(t *testing
 	}
 
 	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil {
-		if loop != nil {
-			loop.Close()
-		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want sessions-enumeration error")
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
 	}
-	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	t.Cleanup(loop.Close)
+	if _, statErr := os.Stat(legacySession); statErr != nil {
+		t.Fatalf("strict runtime mutated legacy session: %v", statErr)
 	}
-	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
-		t.Fatalf("failed sessions preflight created earlier owner state: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(supportSessions, "blocked.jsonl")); !os.IsNotExist(statErr) {
+		t.Fatalf("strict runtime created migrated JSONL: %v", statErr)
 	}
 }
 

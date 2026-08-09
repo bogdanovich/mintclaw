@@ -81,7 +81,10 @@ routing derived context through the external context root.
 ## P0.3 Handoff
 
 P0.2 routes the existing concrete JSONL session initialization through the
-layout only to establish the no-source-pollution construction invariant. P0.3
+layout only to establish the no-source-pollution construction invariant. The
+strict runtime path does not perform legacy JSON migration; deployment moves
+and verifies personal state during the P0.3 cutover, while new coding-thread
+owners start directly on canonical JSONL. P0.3
 replaces that concrete call with injected, rollback-aware store factories and
 routes Seahorse through `StatePaths().ContextRoot`.
 

@@ -797,15 +797,5 @@ func initRuntimeSessionStore(dir string) (session.SessionStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize runtime session store: %w", err)
 	}
-
-	n, err := memory.MigrateFromJSON(context.Background(), dir, store)
-	if err != nil {
-		_ = store.Close()
-		return nil, fmt.Errorf("migrate runtime sessions: %w", err)
-	}
-	if n > 0 {
-		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
-	}
-
 	return session.NewJSONLBackend(store), nil
 }
