@@ -7,7 +7,10 @@ import (
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
-var ErrStreamingContract = errors.New("provider declares streaming without implementing a streaming operation")
+var (
+	ErrStreamingContract       = errors.New("provider declares streaming without implementing a streaming operation")
+	ErrImageGenerationContract = errors.New("provider declares image generation without implementing the operation")
+)
 
 // Capabilities returns a normalized descriptor. The structural fallbacks are
 // isolated compatibility for external providers that predate CapabilityProvider.
@@ -33,6 +36,25 @@ func Capabilities(provider LLMProvider) ProviderCapabilities {
 		capabilities.NativeSearch = capable.SupportsNativeSearch()
 	}
 	return capabilities.Normalized()
+}
+
+// ImageCapabilities returns descriptor-first image generation metadata while
+// preserving the legacy external provider contract at one compatibility edge.
+func ImageCapabilities(provider ImageGenerationCapable) ImageGenerationCapabilities {
+	if provider == nil {
+		return ImageGenerationCapabilities{}
+	}
+	if capable, ok := provider.(CapabilityProvider); ok {
+		return capable.Capabilities().Normalized().ImageGeneration
+	}
+	if !provider.SupportsImageGeneration() {
+		return ImageGenerationCapabilities{}
+	}
+	return ImageGenerationCapabilities{
+		Supported:    true,
+		ProviderID:   provider.ImageGenerationProviderID(),
+		DefaultModel: provider.DefaultImageGenerationModel(),
+	}
 }
 
 // ChatStreamEvents invokes the provider's declared streaming operation and

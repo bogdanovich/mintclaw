@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -14,6 +15,25 @@ type toolCaptureProvider struct {
 }
 
 type streamingToolCaptureProvider struct{ toolCaptureProvider }
+
+type imageToolCaptureProvider struct {
+	toolCaptureProvider
+	request ImageGenerationRequest
+}
+
+func (p *imageToolCaptureProvider) SupportsImageGeneration() bool { return true }
+
+func (p *imageToolCaptureProvider) ImageGenerationProviderID() string { return "image-capture" }
+
+func (p *imageToolCaptureProvider) DefaultImageGenerationModel() string { return "image-default" }
+
+func (p *imageToolCaptureProvider) GenerateImage(
+	_ context.Context,
+	req ImageGenerationRequest,
+) (*ImageGenerationResponse, error) {
+	p.request = req
+	return &ImageGenerationResponse{Images: []GeneratedImage{{Data: []byte("image")}}}, nil
+}
 
 func (p *streamingToolCaptureProvider) ChatStreamEvents(
 	_ context.Context,
@@ -164,5 +184,51 @@ func TestToolSchemaTransformWrapperStreamsWithDeclaredCapabilities(t *testing.T)
 	}
 	if _, ok := capture.lastTools[0].Function.Parameters["$defs"]; ok {
 		t.Fatalf("streaming schema was not transformed: %+v", capture.lastTools)
+	}
+}
+
+func TestToolSchemaTransformWrapperPreservesAdvertisedImageOperation(t *testing.T) {
+	capture := &imageToolCaptureProvider{toolCaptureProvider: toolCaptureProvider{
+		capabilities: ProviderCapabilities{ImageGeneration: ImageGenerationCapabilities{
+			Supported:    true,
+			ProviderID:   "image-capture",
+			DefaultModel: "image-default",
+			MaxResults:   2,
+		}},
+	}}
+	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")
+	if err != nil {
+		t.Fatalf("wrapProviderWithToolSchemaTransform() error = %v", err)
+	}
+	imageProvider, ok := wrapped.(ImageGenerationProvider)
+	if !ok {
+		t.Fatalf("wrapped provider %T does not preserve image generation", wrapped)
+	}
+	response, err := imageProvider.GenerateImage(t.Context(), ImageGenerationRequest{Prompt: "icon"})
+	if err != nil {
+		t.Fatalf("GenerateImage() error = %v", err)
+	}
+	if len(response.Images) != 1 || capture.request.Prompt != "icon" {
+		t.Fatalf("response/request = %+v/%+v", response, capture.request)
+	}
+}
+
+func TestToolSchemaTransformWrapperClearsImageCapabilityWithoutOperation(t *testing.T) {
+	capture := &toolCaptureProvider{capabilities: ProviderCapabilities{
+		ImageGeneration: ImageGenerationCapabilities{Supported: true, ProviderID: "mismatch"},
+	}}
+	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")
+	if err != nil {
+		t.Fatalf("wrapProviderWithToolSchemaTransform() error = %v", err)
+	}
+	if Capabilities(wrapped).ImageGeneration.Supported {
+		t.Fatalf("wrapper advertised missing image operation: %+v", Capabilities(wrapped))
+	}
+	imageProvider := wrapped.(ImageGenerationProvider)
+	if _, err := imageProvider.GenerateImage(t.Context(), ImageGenerationRequest{}); !errors.Is(
+		err,
+		ErrImageGenerationContract,
+	) {
+		t.Fatalf("GenerateImage() error = %v, want ErrImageGenerationContract", err)
 	}
 }

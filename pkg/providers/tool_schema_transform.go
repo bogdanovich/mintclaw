@@ -96,8 +96,28 @@ func (p *toolSchemaTransformProvider) ChatStreamEvents(
 
 func (p *toolSchemaTransformProvider) Capabilities() ProviderCapabilities {
 	capabilities := Capabilities(p.delegate)
+	if capabilities.ImageGeneration.Supported {
+		if _, ok := p.delegate.(interface {
+			GenerateImage(context.Context, ImageGenerationRequest) (*ImageGenerationResponse, error)
+		}); !ok {
+			capabilities.ImageGeneration = ImageGenerationCapabilities{}
+		}
+	}
 	capabilities.ToolSchema = simpleToolSchemaLimits(common.MaxSimpleToolSchemaDepth)
 	return capabilities
+}
+
+func (p *toolSchemaTransformProvider) GenerateImage(
+	ctx context.Context,
+	req ImageGenerationRequest,
+) (*ImageGenerationResponse, error) {
+	generator, ok := p.delegate.(interface {
+		GenerateImage(context.Context, ImageGenerationRequest) (*ImageGenerationResponse, error)
+	})
+	if !ok || !p.Capabilities().ImageGeneration.Supported {
+		return nil, ErrImageGenerationContract
+	}
+	return generator.GenerateImage(ctx, req)
 }
 
 func (p *toolSchemaTransformProvider) Close() {

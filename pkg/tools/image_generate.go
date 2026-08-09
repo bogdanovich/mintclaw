@@ -25,16 +25,16 @@ type ImageGenerateTool struct {
 	workspace  string
 	model      string
 	outputDir  string
-	provider   providers.ImageGenerationProvider
+	provider   providers.ImageGenerationCapable
 	resolver   ImageGenerationProviderResolver
 	mediaStore media.MediaStore
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
 
-type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationProvider, string, error)
+type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationCapable, string, error)
 
-func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
+func WithImageGenerationProvider(provider providers.ImageGenerationCapable) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider
@@ -148,8 +148,8 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	if t.provider == nil {
 		return toolshared.ErrorResult("image generation provider not configured")
 	}
-	capabilities := t.provider.Capabilities().Normalized()
-	if !capabilities.ImageGeneration.Supported {
+	imageCapabilities := providers.ImageCapabilities(t.provider)
+	if !imageCapabilities.Supported {
 		return toolshared.ErrorResult("image generation provider does not declare image generation support")
 	}
 
@@ -159,10 +159,10 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		Size:         readStringDefault(args, "size", defaultImageGenerationSize),
 		Quality:      readStringDefault(args, "quality", ""),
 		OutputFormat: readStringDefault(args, "output_format", "png"),
-		Count:        readImageCount(args["count"], capabilities.ImageGeneration.MaxResults),
+		Count:        readImageCount(args["count"], imageCapabilities.MaxResults),
 	}
 	if strings.TrimSpace(req.Model) == "" {
-		req.Model = capabilities.ImageGeneration.DefaultModel
+		req.Model = imageCapabilities.DefaultModel
 	}
 	resp, err := t.provider.GenerateImage(ctx, req)
 	if err != nil {
@@ -201,7 +201,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		"Generated %d image(s) with %s via %s.",
 		len(refs),
 		req.Model,
-		capabilities.ImageGeneration.ProviderID,
+		imageCapabilities.ProviderID,
 	)
 	result := toolshared.MediaResult(message, refs)
 	switch readDeliveryIntentDefault(args, toolshared.DeliveryFinalHandled) {

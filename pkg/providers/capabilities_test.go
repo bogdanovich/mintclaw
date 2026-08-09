@@ -56,6 +56,21 @@ func (p *legacyTestProvider) ChatStream(
 
 type eventTestProvider struct{ descriptorTestProvider }
 
+type imageDescriptorTestProvider struct{ descriptorTestProvider }
+
+func (p *imageDescriptorTestProvider) SupportsImageGeneration() bool { return true }
+
+func (p *imageDescriptorTestProvider) ImageGenerationProviderID() string { return "legacy" }
+
+func (p *imageDescriptorTestProvider) DefaultImageGenerationModel() string { return "legacy-model" }
+
+func (p *imageDescriptorTestProvider) GenerateImage(
+	context.Context,
+	ImageGenerationRequest,
+) (*ImageGenerationResponse, error) {
+	return &ImageGenerationResponse{}, nil
+}
+
 func (p *eventTestProvider) ChatStreamEvents(
 	_ context.Context,
 	_ []Message,
@@ -72,6 +87,13 @@ func TestCapabilitiesDescriptorPrecedesCompatibilityMethods(t *testing.T) {
 	capabilities := Capabilities(&descriptorTestProvider{})
 	if capabilities.Thinking || capabilities.NativeSearch {
 		t.Fatalf("legacy methods overrode descriptor: %+v", capabilities)
+	}
+}
+
+func TestImageCapabilitiesDescriptorPrecedesCompatibilityMethods(t *testing.T) {
+	capabilities := ImageCapabilities(&imageDescriptorTestProvider{})
+	if capabilities != (ImageGenerationCapabilities{}) {
+		t.Fatalf("legacy image methods overrode descriptor: %+v", capabilities)
 	}
 }
 

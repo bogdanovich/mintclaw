@@ -86,8 +86,17 @@ type CapabilityProvider interface {
 	Capabilities() ProviderCapabilities
 }
 
-// ImageGenerationProvider performs provider-owned image generation outside the
-// chat loop. Support and default metadata are declared by Capabilities.
+// ImageGenerationCapable is the legacy provider-owned image generation
+// contract. New providers should also implement CapabilityProvider; the
+// descriptor then takes precedence over these compatibility methods.
+type ImageGenerationCapable interface {
+	SupportsImageGeneration() bool
+	ImageGenerationProviderID() string
+	DefaultImageGenerationModel() string
+	GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error)
+}
+
+// ImageGenerationProvider is the descriptor-based image generation contract.
 type ImageGenerationProvider interface {
 	CapabilityProvider
 	GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error)
