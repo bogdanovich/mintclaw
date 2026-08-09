@@ -269,7 +269,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		if downloadAvailable && !slices.Contains(actions, browser.ActionDownload) {
 			actions = append(actions, browser.ActionDownload)
 		}
-		sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
+		slices.Sort(actions)
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,

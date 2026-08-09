@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -157,7 +157,7 @@ func (s Store) Prune() (int, error) {
 		}
 		candidates = append(candidates, candidate{filepath.Join(root, entry.Name()), info.ModTime()})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].mod.Before(candidates[j].mod) })
+	slices.SortFunc(candidates, func(a, b candidate) int { return a.mod.Compare(b.mod) })
 	removed := 0
 	for len(candidates)-removed > maxTraces || (removed < len(candidates) && now.Sub(candidates[removed].mod) > retention) {
 		if err := os.Remove(candidates[removed].path); err != nil && !os.IsNotExist(err) {

@@ -2,7 +2,9 @@ package utils
 
 import (
 	"fmt"
+	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -121,6 +123,66 @@ func TestBM25Tokenize(t *testing.T) {
 				t.Errorf("bm25Tokenize(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestBM25ScoredDescTreatsNaNAsTie(t *testing.T) {
+	nan := float32(math.NaN())
+	cases := []struct {
+		name string
+		a, b bm25ScoredDoc
+		want int
+	}{
+		{"descending finite", bm25ScoredDoc{score: 2}, bm25ScoredDoc{score: 1}, -1},
+		{"ascending finite", bm25ScoredDoc{score: 1}, bm25ScoredDoc{score: 2}, 1},
+		{"equal finite", bm25ScoredDoc{score: 1}, bm25ScoredDoc{score: 1}, 0},
+		{"NaN vs finite", bm25ScoredDoc{score: nan}, bm25ScoredDoc{score: 1}, 0},
+		{"finite vs NaN", bm25ScoredDoc{score: 1}, bm25ScoredDoc{score: nan}, 0},
+		{"NaN vs NaN", bm25ScoredDoc{score: nan}, bm25ScoredDoc{score: nan}, 0},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bm25ScoredDesc(tt.a, tt.b); got != tt.want {
+				t.Fatalf("bm25ScoredDesc(%v, %v) = %d, want %d", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBM25SearchNaNScoreMixture(t *testing.T) {
+	corpus := []testDoc{
+		{1, "alpha beta"},
+		{2, "alpha beta gamma"},
+		{3, "alpha beta"},
+		{4, "alpha"},
+	}
+	// WithK1(-1) makes docs whose length equals the corpus average produce
+	// NaN scores (0/0 TF normalization), mixing them with finite scores.
+	engine := NewBM25Engine(corpus, extractText, WithK1(-1), WithB(0.75))
+
+	results := engine.Search("alpha", 10)
+	if len(results) != len(corpus) {
+		t.Fatalf("expected %d results, got %d", len(corpus), len(results))
+	}
+	ids := make([]int, 0, len(results))
+	for _, r := range results {
+		ids = append(ids, r.Document.ID)
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 2, 3, 4}) {
+		t.Fatalf("result IDs = %v, want [1 2 3 4]", ids)
+	}
+
+	var finite, nan int
+	for _, r := range results {
+		if math.IsNaN(float64(r.Score)) {
+			nan++
+		} else {
+			finite++
+		}
+	}
+	if finite != 2 || nan != 2 {
+		t.Fatalf("scores = %d finite, %d NaN; want 2 and 2", finite, nan)
 	}
 }
 

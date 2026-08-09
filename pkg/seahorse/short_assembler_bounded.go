@@ -1,9 +1,10 @@
 package seahorse
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -49,7 +50,7 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 	)
 
 	final := append(append([]resolvedItem(nil), selectedMessages...), selectedSummaries...)
-	sort.Slice(final, func(i, j int) bool { return final[i].ordinal < final[j].ordinal })
+	slices.SortFunc(final, func(a, b resolvedItem) int { return cmp.Compare(a.ordinal, b.ordinal) })
 	final, droppedCovered := a.dropCoveredSummaries(ctx, final)
 	if droppedCovered > 0 {
 		logger.InfoCF("seahorse", "assemble: dropped covered summaries", map[string]any{

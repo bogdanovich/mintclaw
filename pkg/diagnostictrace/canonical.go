@@ -2,12 +2,13 @@ package diagnostictrace
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 )
 
 func Finalize(trace Trace) (Trace, error) {
@@ -15,8 +16,8 @@ func Finalize(trace Trace) (Trace, error) {
 		trace.SchemaVersion = SchemaVersionV1
 	}
 	trace.Limits = NormalizeLimits(trace.Limits)
-	sort.SliceStable(trace.Records, func(i, j int) bool {
-		return trace.Records[i].Sequence < trace.Records[j].Sequence
+	slices.SortStableFunc(trace.Records, func(a, b Record) int {
+		return cmp.Compare(a.Sequence, b.Sequence)
 	})
 	for i := range trace.Records {
 		data, err := canonicalJSON(trace.Records[i].Data)

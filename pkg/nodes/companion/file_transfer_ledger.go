@@ -1,13 +1,14 @@
 package companion
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -243,8 +244,8 @@ func (ledger *FileTransferLedger) Records() []FileTransferRecord {
 	for _, record := range ledger.records {
 		records = append(records, cloneFileTransferRecord(record))
 	}
-	sort.Slice(records, func(left, right int) bool {
-		return records[left].TransferID < records[right].TransferID
+	slices.SortFunc(records, func(a, b FileTransferRecord) int {
+		return cmp.Compare(a.TransferID, b.TransferID)
 	})
 	return records
 }

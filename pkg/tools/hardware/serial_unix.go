@@ -3,11 +3,12 @@
 package hardwaretools
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -55,8 +56,8 @@ func serialListPorts() ([]serialPortInfo, error) {
 		}
 	}
 
-	sort.Slice(ports, func(i, j int) bool {
-		return ports[i].Path < ports[j].Path
+	slices.SortFunc(ports, func(a, b serialPortInfo) int {
+		return cmp.Compare(a.Path, b.Path)
 	})
 	return ports, nil
 }

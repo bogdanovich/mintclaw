@@ -3,9 +3,11 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -182,8 +184,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 				})
 			}
 
-			sort.Slice(servers, func(i, j int) bool {
-				return strings.ToLower(servers[i].Name) < strings.ToLower(servers[j].Name)
+			slices.SortFunc(servers, func(a, b commands.MCPServerInfo) int {
+				return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 			})
 
 			return servers
@@ -256,8 +258,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 					Parameters:  summarizeMCPToolParameters(tool.InputSchema),
 				})
 			}
-			sort.Slice(toolInfos, func(i, j int) bool {
-				return toolInfos[i].Name < toolInfos[j].Name
+			slices.SortFunc(toolInfos, func(a, b commands.MCPToolInfo) int {
+				return cmp.Compare(a.Name, b.Name)
 			})
 			return toolInfos, nil
 		},
@@ -403,34 +405,32 @@ func (al *AgentLoop) buildCommandsRuntime(
 			for _, item := range modelsByName {
 				order = append(order, item)
 			}
-			sort.Slice(order, func(i, j int) bool {
-				left := strings.ToLower(order[i].info.Name)
-				right := strings.ToLower(order[j].info.Name)
-				if left == right {
-					return order[i].order < order[j].order
+			slices.SortFunc(order, func(a, b *modelAggregate) int {
+				if c := cmp.Compare(strings.ToLower(a.info.Name), strings.ToLower(b.info.Name)); c != 0 {
+					return c
 				}
-				return left < right
+				return cmp.Compare(a.order, b.order)
 			})
 			for _, item := range order {
 				targetOrder := make([]*targetAggregate, 0, len(item.targets))
 				for _, target := range item.targets {
 					targetOrder = append(targetOrder, target)
 				}
-				sort.Slice(targetOrder, func(i, j int) bool {
+				slices.SortFunc(targetOrder, func(a, b *targetAggregate) int {
 					left := strings.ToLower(
-						targetOrder[i].target.Provider + "\x00" +
-							targetOrder[i].target.Model + "\x00" +
-							targetOrder[i].target.Workspace,
+						a.target.Provider + "\x00" +
+							a.target.Model + "\x00" +
+							a.target.Workspace,
 					)
 					right := strings.ToLower(
-						targetOrder[j].target.Provider + "\x00" +
-							targetOrder[j].target.Model + "\x00" +
-							targetOrder[j].target.Workspace,
+						b.target.Provider + "\x00" +
+							b.target.Model + "\x00" +
+							b.target.Workspace,
 					)
-					if left == right {
-						return targetOrder[i].order < targetOrder[j].order
+					if c := cmp.Compare(left, right); c != 0 {
+						return c
 					}
-					return left < right
+					return cmp.Compare(a.order, b.order)
 				})
 				item.info.Targets = make([]commands.ConfiguredModelTarget, 0, len(targetOrder))
 				for _, target := range targetOrder {
