@@ -1163,6 +1163,10 @@ func (al *AgentLoop) deliverInteractionFinal(
 		}
 		return err
 	}
+	bus.OutboundMetadata{
+		MessageKind:  bus.OutboundMessageKindFinalReply,
+		OutboundKind: bus.OutboundKindFinal,
+	}.ApplyToContext(&inbound)
 	if al.channelManager == nil {
 		_, _ = registry.RecordFinalDeliveryAttempt(
 			record.ID, record.Revision, false, "channel manager unavailable",
