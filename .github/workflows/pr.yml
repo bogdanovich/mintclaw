@@ -148,6 +148,29 @@ jobs:
       - name: Compile full Go test graph
         run: go test -exec=true -run '^$' -tags goolm,stdjson ./...
 
+  macos_portability:
+    name: macOS Portability
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run platform-sensitive tests
+        run: >-
+          go test -count=1 -p=4 -tags goolm,stdjson
+          ./pkg/fileutil
+          ./pkg/tools/fs
+          ./pkg/tools/shellguard
+          ./pkg/tools
+          ./cmd/mintclaw-node
+          ./pkg/updater
+          ./pkg/workspace
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
