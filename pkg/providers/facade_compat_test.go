@@ -38,7 +38,7 @@ func TestNormalizeToolCallFacadeMatchesCLIProvider(t *testing.T) {
 }
 
 func TestAntigravityFacadeSignaturesRemainAvailable(t *testing.T) {
-	var _ func(string) (string, error) = FetchAntigravityProjectID
-	var _ func(string, string) ([]AntigravityModelInfo, error) = FetchAntigravityModels
-	var _ AntigravityModelInfo = oauthprovider.AntigravityModelInfo{}
+	_ = FetchAntigravityProjectID
+	_ = FetchAntigravityModels
+	_ = oauthprovider.AntigravityModelInfo{}
 }

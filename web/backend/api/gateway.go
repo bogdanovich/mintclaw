@@ -602,10 +602,7 @@ func hasUnambiguousProviderPrefix(raw string) bool {
 		return false
 	}
 	normalizedProvider := providers.NormalizeProvider(provider)
-	if !providers.IsSupportedModelProvider(normalizedProvider) {
-		return false
-	}
-	return true
+	return providers.IsSupportedModelProvider(normalizedProvider)
 }
 
 func modelConfigMatchesProviderRef(mc *config.ModelConfig, raw string) bool {

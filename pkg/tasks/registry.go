@@ -1017,10 +1017,8 @@ func (r *Registry) pruneSnapshotBytesLocked() bool {
 	if r == nil || r.options.MaxSnapshotBytes <= 0 || r.snapshotSizeLocked() <= r.options.MaxSnapshotBytes {
 		return false
 	}
-	changed := false
-	if r.trimEventsForSnapshotBudgetLocked() {
-		changed = true
-	}
+	changed := r.trimEventsForSnapshotBudgetLocked()
+
 	if r.snapshotSizeLocked() <= r.options.MaxSnapshotBytes {
 		return changed
 	}

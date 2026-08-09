@@ -621,9 +621,7 @@ func kagiServerURL(baseURL string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(parsed.Path, "/search") {
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/search")
-	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/search")
 	if parsed.Path == "" {
 		parsed.Path = "/"
 	}

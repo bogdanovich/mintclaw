@@ -405,16 +405,17 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 				"correct_arguments",
 			)
 		}
-		if operation == "status" {
+		switch operation {
+		case "status":
 			session, err = tool.runtime.source.Status(ctx, owner, sessionID)
-		} else if operation == "close" {
+		case "close":
 			session, err = tool.runtime.source.Close(ctx, owner, sessionID)
-		} else if operation == "handoff" {
+		case "handoff":
 			if !tool.runtime.source.HandoffAvailable() {
 				return browserToolError(browser.ErrDriverIncompatible)
 			}
 			session, err = tool.runtime.source.Handoff(ctx, owner, sessionID)
-		} else {
+		default:
 			session, err = tool.runtime.source.Resume(ctx, owner, sessionID)
 		}
 	default:

@@ -674,9 +674,10 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordDeliveryAttempt
 		status := "queued"
-		if event.Kind == runtimeevents.KindChannelMessageOutboundSent {
+		switch event.Kind {
+		case runtimeevents.KindChannelMessageOutboundSent:
 			kind, status, critical = diagnostictrace.RecordDeliveryOutcome, "sent", true
-		} else if event.Kind == runtimeevents.KindChannelMessageOutboundFailed {
+		case runtimeevents.KindChannelMessageOutboundFailed:
 			kind, status, critical = diagnostictrace.RecordDeliveryOutcome, "failed", true
 		}
 		payload = diagnostictrace.DeliveryPayload{

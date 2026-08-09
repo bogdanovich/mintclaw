@@ -759,13 +759,10 @@ func main() {
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 		// Main event loop - wait for signals or config changes
-		for {
-			select {
-			case <-sigChan:
-				logger.Info("Shutting down...")
+		for range sigChan {
+			logger.Info("Shutting down...")
 
-				return
-			}
+			return
 		}
 	} else {
 		// GUI mode: start system tray

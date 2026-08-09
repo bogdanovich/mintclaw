@@ -370,7 +370,7 @@ func validateSystemdUnitDirectory(stat unix.Stat_t, expectedUID uint32, allowRoo
 	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return fmt.Errorf("systemd unit directory has file type mode %#o, want directory", stat.Mode&unix.S_IFMT)
 	}
-	if stat.Uid != expectedUID && !(allowRootOwner && stat.Uid == 0) {
+	if stat.Uid != expectedUID && (!allowRootOwner || stat.Uid != 0) {
 		return fmt.Errorf("systemd unit directory is owned by uid %d, want uid %d", stat.Uid, expectedUID)
 	}
 	if stat.Mode&0o022 != 0 {

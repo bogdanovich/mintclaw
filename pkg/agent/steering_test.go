@@ -2122,11 +2122,9 @@ func TestAgentLoop_Run_PendingStopStillContinuesQueuedFollowUp(t *testing.T) {
 	}
 
 	deadline = time.Now().Add(2 * time.Second)
-	for {
-		if al.GetActiveTurnBySession(targetSessionKey) == nil &&
-			al.pendingSteeringCountForScope(testRuntimeSessionScope(al, targetSessionKey)) == 0 {
-			break
-		}
+	for al.GetActiveTurnBySession(targetSessionKey) != nil ||
+		al.pendingSteeringCountForScope(testRuntimeSessionScope(al, targetSessionKey)) != 0 {
+
 		if time.Now().After(deadline) {
 			t.Fatal("timeout waiting for target session to go idle")
 		}

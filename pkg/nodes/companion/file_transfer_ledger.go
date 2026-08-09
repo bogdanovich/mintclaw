@@ -195,8 +195,8 @@ func (ledger *FileTransferLedger) Accept(
 		return FileTransferRecord{}, false, err
 	}
 	if record.State != FileTransferAccepted &&
-		!(record.Operation == fileOperationInfo &&
-			record.State == FileTransferCommitted) {
+		(record.Operation != fileOperationInfo ||
+			record.State != FileTransferCommitted) {
 		return FileTransferRecord{}, false, ErrFileTransferConflict
 	}
 	if now.Unix() >= record.ExpiresAt {
