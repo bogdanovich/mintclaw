@@ -241,7 +241,7 @@ func (m *mockStreamingChannel) ResolveOutboundChatID(
 func newTestManager() *Manager {
 	return &Manager{
 		channels:               make(map[string]Channel),
-		deliveries:             newDeliveryRegistry(),
+		delivery:               newDeliveryRuntime(),
 		bus:                    bus.NewMessageBus(),
 		channelHashes:          make(map[string]string),
 		channelRestartRequired: make(map[string]string),
@@ -256,7 +256,7 @@ func installTestDeliveryWorker(m *Manager, name string, worker *channelWorker) *
 		closedCh:  make(chan struct{}),
 		closeDone: make(chan struct{}),
 	}
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	return owner
 }
 
@@ -404,6 +404,24 @@ func TestSetMediaStorePropagatesToExistingChannels(t *testing.T) {
 	}
 }
 
+func TestReloadPreservesDispatcherOwnership(t *testing.T) {
+	m := newTestManager()
+	m.config = config.DefaultConfig()
+	m.channelHashes = toChannelHashes(m.config)
+	dispatchCtx := m.delivery.startDispatcher(context.Background())
+
+	if err := m.Reload(t.Context(), config.DefaultConfig()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	m.delivery.stopDispatcher()
+
+	select {
+	case <-dispatchCtx.Done():
+	default:
+		t.Fatal("Reload replaced the dispatcher cancel owner")
+	}
+}
+
 func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 	oldCfg := config.DefaultConfig()
 	oldCfg.Channels["test"] = &config.Channel{
@@ -446,7 +464,7 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 	if got := m.channels["test"]; got != ch {
 		t.Fatal("changed channel instance was replaced during reload")
 	}
-	if got := m.deliveries.owner("test").Worker().ch; got != ch {
+	if got := m.delivery.owner("test").Worker().ch; got != ch {
 		t.Fatal("changed channel worker was replaced during reload")
 	}
 	if got := m.channelHashes["test"]; got != oldHash {
@@ -528,7 +546,7 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 	if got := m.channels["test"]; got != recreated {
 		t.Fatal("inactive changed channel was not recreated")
 	}
-	if got := m.deliveries.owner("test").Worker().ch; got != recreated {
+	if got := m.delivery.owner("test").Worker().ch; got != recreated {
 		t.Fatal("inactive changed channel worker was not recreated")
 	}
 	if started != 1 {
@@ -628,7 +646,7 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 	m := newTestManager()
 	m.config = oldCfg
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	m.channelHashes = toChannelHashes(oldCfg)
 	owner.StartDelivery(context.Background(), m)
 
@@ -667,7 +685,7 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 	}
 
 	m.mu.RLock()
-	ownerExists := m.deliveries.owner("test") != nil
+	ownerExists := m.delivery.owner("test") != nil
 	_, channelExists := m.channels["test"]
 	m.mu.RUnlock()
 	if ownerExists || channelExists {
@@ -704,10 +722,10 @@ func TestStartAll_AllChannelsFail_ReturnsJoinedError(t *testing.T) {
 	if !errors.Is(err, errB) {
 		t.Fatalf("expected error to wrap errB, got: %v", err)
 	}
-	if m.deliveries.workerCount() != 0 {
-		t.Fatalf("expected no workers on full startup failure, got %d", m.deliveries.workerCount())
+	if m.delivery.workerCount() != 0 {
+		t.Fatalf("expected no workers on full startup failure, got %d", m.delivery.workerCount())
 	}
-	if m.dispatchTask != nil {
+	if m.delivery.dispatcherRunning() {
 		t.Fatal("expected dispatch task to be cleared on full startup failure")
 	}
 }
@@ -736,16 +754,16 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected StartAll to succeed with partial channel failures, got: %v", err)
 	}
-	if m.deliveries.workerCount() != 1 {
-		t.Fatalf("expected exactly 1 active worker, got %d", m.deliveries.workerCount())
+	if m.delivery.workerCount() != 1 {
+		t.Fatalf("expected exactly 1 active worker, got %d", m.delivery.workerCount())
 	}
-	if !m.deliveries.hasActiveWorker("good") {
+	if !m.delivery.hasActiveWorker("good") {
 		t.Fatal("expected worker for successful channel 'good'")
 	}
-	if m.deliveries.hasActiveWorker("bad") {
+	if m.delivery.hasActiveWorker("bad") {
 		t.Fatal("did not expect worker for failed channel 'bad'")
 	}
-	if m.dispatchTask == nil {
+	if !m.delivery.dispatcherRunning() {
 		t.Fatal("expected dispatch task to run when at least one channel starts")
 	}
 
@@ -789,7 +807,7 @@ func TestStartAll_CreatesDeliveryOwnerForStartedChannel(t *testing.T) {
 		}
 	})
 
-	owner := m.deliveries.owner("test")
+	owner := m.delivery.owner("test")
 	if owner == nil {
 		t.Fatal("expected delivery owner for started channel")
 	}
@@ -1147,7 +1165,7 @@ func TestDispatchOutbound_ClosedOwnerPublishesFailureAndContinues(t *testing.T) 
 	owner := newDeliveryOwner("test", &mockChannel{}, "test")
 	owner.closed = true
 	m.channels["test"] = owner.ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -1198,7 +1216,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m)
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -1224,7 +1242,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 
 	waitForDeliveryOwnerClosed(t, owner)
 	m.mu.RLock()
-	visibleOwner := m.deliveries.owner("test")
+	visibleOwner := m.delivery.owner("test")
 	visibleChannel := m.channels["test"]
 	m.mu.RUnlock()
 	if visibleOwner != owner {
@@ -1251,7 +1269,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}
 
 	m.mu.RLock()
-	ownerExists := m.deliveries.owner("test") != nil
+	ownerExists := m.delivery.owner("test") != nil
 	_, channelExists := m.channels["test"]
 	m.mu.RUnlock()
 	if ownerExists || channelExists {
@@ -1269,7 +1287,7 @@ func TestUnregisterChannel_RetiresToolFeedbackBeforeReplacement(t *testing.T) {
 	oldChannel := &toolFeedbackTestChannel{}
 	owner := newDeliveryOwner("test", oldChannel, "test")
 	m.channels["test"] = oldChannel
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m)
 
 	feedback := testOutboundMessage(bus.OutboundMessage{
@@ -1328,7 +1346,7 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m)
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -1363,7 +1381,7 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 		t.Fatal("StopAll deadlocked while draining delivery")
 	}
 
-	if got := m.deliveries.owner("test"); got != owner {
+	if got := m.delivery.owner("test"); got != owner {
 		t.Fatal("StopAll removed delivery owner visibility")
 	}
 	queued, err = owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -1812,7 +1830,7 @@ func TestSynchronousPreWorkerRejectionPublishesOnlyDefinitiveOutcome(t *testing.
 					if condition == "closed" {
 						owner := newDeliveryOwner("test", channel, "test")
 						owner.closed = true
-						m.deliveries.install(owner)
+						m.delivery.install(owner)
 					}
 
 					traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
@@ -2210,7 +2228,7 @@ func TestSendMedia_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 
 	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
 		Channel: "test",
@@ -6054,9 +6072,9 @@ func TestDispatcherExitsOnCancel(t *testing.T) {
 	defer mb.Close()
 
 	m := &Manager{
-		channels:   make(map[string]Channel),
-		deliveries: newDeliveryRegistry(),
-		bus:        mb,
+		channels: make(map[string]Channel),
+		delivery: newDeliveryRuntime(),
+		bus:      mb,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -6083,9 +6101,9 @@ func TestDispatcherMediaExitsOnCancel(t *testing.T) {
 	defer mb.Close()
 
 	m := &Manager{
-		channels:   make(map[string]Channel),
-		deliveries: newDeliveryRegistry(),
-		bus:        mb,
+		channels: make(map[string]Channel),
+		delivery: newDeliveryRuntime(),
+		bus:      mb,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -6199,7 +6217,7 @@ func TestLazyWorkerCreation(t *testing.T) {
 
 	m.mu.RLock()
 	_, chExists := m.channels["lazy"]
-	wExists := m.deliveries.hasActiveWorker("lazy")
+	wExists := m.delivery.hasActiveWorker("lazy")
 	m.mu.RUnlock()
 
 	if !chExists {
@@ -6246,8 +6264,8 @@ func TestBuildMediaScope_WithMessageID(t *testing.T) {
 
 func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 	mgr := &Manager{
-		channels:   make(map[string]Channel),
-		deliveries: newDeliveryRegistry(),
+		channels: make(map[string]Channel),
+		delivery: newDeliveryRuntime(),
 	}
 
 	mockCh := &mockChannel{
@@ -6372,7 +6390,7 @@ func TestSendMessage_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 
 	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -6739,7 +6757,7 @@ func TestSendToChannel_QueuesThroughDeliveryOwner(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m)
 	t.Cleanup(owner.CloseDeliveryAndWait)
 
@@ -6769,7 +6787,7 @@ func TestSendToChannel_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
 	m.channels["test"] = ch
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 
 	err := m.SendToChannel(context.Background(), "test", "chat-1", "hello")
 	if !errors.Is(err, errDeliveryClosed) {
@@ -6804,8 +6822,8 @@ func TestSendToChannel_FallbackUsesLockedChannelSnapshot(t *testing.T) {
 
 func TestManager_SendPlaceholder(t *testing.T) {
 	mgr := &Manager{
-		channels:   make(map[string]Channel),
-		deliveries: newDeliveryRegistry(),
+		channels: make(map[string]Channel),
+		delivery: newDeliveryRuntime(),
 	}
 
 	mockCh := &mockChannel{
