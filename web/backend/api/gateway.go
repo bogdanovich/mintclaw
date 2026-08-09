@@ -146,7 +146,7 @@ func getGatewayHealthByURL(url string, timeout time.Duration) (*health.StatusRes
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var healthResponse health.StatusResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&healthResponse); decErr != nil {

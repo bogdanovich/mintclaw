@@ -457,7 +457,7 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file is required", http.StatusBadRequest)
 		return
 	}
-	defer uploadedFile.Close()
+	defer func() { _ = uploadedFile.Close() }()
 
 	content, err := io.ReadAll(io.LimitReader(uploadedFile, maxImportedSkillSize+1))
 	if err != nil {

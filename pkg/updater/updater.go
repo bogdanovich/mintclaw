@@ -79,14 +79,14 @@ func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error
 		return "", err
 	}
 	tmpPath := tmpFile.Name()
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	resp, err := getWithRetry(assetURL)
 	if err != nil {
 		os.Remove(tmpPath)
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to download asset: status %d", resp.StatusCode)
@@ -100,6 +100,12 @@ func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error
 	if _, err = io.Copy(mw, resp.Body); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", err
+	}
+	// Finalize the download before checksum verification and extraction: a
+	// close failure can mean the file is incompletely written on disk.
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("finalize downloaded asset: %w", closeErr)
 	}
 	// ensure final progress line ends with newline
 	pw.Finish()
@@ -164,7 +170,7 @@ func UpdateSelfFromRelease(releaseURL, platform, arch, programName string) error
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Backup current executable so we can roll back if needed.
 	var opts selfupdate.Options
@@ -230,7 +236,7 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("failed to query releases: status %d", resp.StatusCode)
 	}
@@ -556,7 +562,7 @@ func extractZip(archivePath, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	destClean := filepath.Clean(destDir)
 	for _, f := range r.File {
 		target := filepath.Clean(filepath.Join(destClean, f.Name))
@@ -602,12 +608,12 @@ func extractTarGz(archivePath, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 	tr := tar.NewReader(gzr)
 	return extractTarFromReader(tr, destDir)
 }
@@ -617,7 +623,7 @@ func extractTar(archivePath, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	tr := tar.NewReader(f)
 	return extractTarFromReader(tr, destDir)
 }
@@ -653,7 +659,7 @@ func extractTarFromReader(tr *tar.Reader, destDir string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				_ = out.Close()
 				return err
 			}
 			if err := out.Close(); err != nil {

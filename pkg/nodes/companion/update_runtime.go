@@ -465,7 +465,7 @@ func fetchUpdateMetadata(
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.ContentLength > maximum {
 		return nil, errors.New("update metadata is unavailable")
 	}

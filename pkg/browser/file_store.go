@@ -110,7 +110,7 @@ func (store *FileStore) load() error {
 	if err != nil {
 		return fmt.Errorf("open browser state store: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	limited := io.LimitReader(file, int64(store.maxBytes)+1)
 	raw, err := io.ReadAll(limited)
 	if err != nil {

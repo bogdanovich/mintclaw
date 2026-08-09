@@ -110,7 +110,7 @@ func (s *StreamCoordinator) getStreamer(
 			if deleter, deleteOK := ch.(MessageDeleter); deleteOK {
 				_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id)
 			} else if editor, editOK := ch.(MessageEditor); editOK {
-				editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent)
+				_ = editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent)
 			}
 		}
 		s.markFinalized(streamKey, time.Now())

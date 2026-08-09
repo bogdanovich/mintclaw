@@ -56,7 +56,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 			Hooks:               &copilot.SessionHooks{},
 		})
 		if err != nil {
-			client.Stop()
+			_ = client.Stop()
 			return nil, normalizeCopilotError(err, nil)
 		}
 
@@ -75,7 +75,7 @@ func (p *GitHubCopilotProvider) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.client != nil {
-		p.client.Stop()
+		_ = p.client.Stop()
 		p.client = nil
 		p.session = nil
 	}

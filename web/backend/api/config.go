@@ -55,7 +55,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var raw map[string]any
 	if err = json.Unmarshal(body, &raw); err != nil {
@@ -137,7 +137,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// Validate the patch is valid JSON
 	var patch map[string]any
@@ -265,7 +265,7 @@ func (h *Handler) handleTestCommandPatterns(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		AllowPatterns []string `json:"allow_patterns"`

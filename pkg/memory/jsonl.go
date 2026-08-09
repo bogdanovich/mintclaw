@@ -604,7 +604,7 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: open jsonl: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var msgs []providers.Message
 	scanner := bufio.NewScanner(f)
@@ -658,7 +658,7 @@ func scanRetainedMessageLines(path string) (int, []int, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("memory: open jsonl: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	rawCount := 0
 	retained := make([]int, 0)
@@ -758,7 +758,7 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	}
 	_, writeErr := f.Write(line)
 	if writeErr != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("memory: append message: %w", writeErr)
 	}
 	// Flush to physical storage before closing. This matches the
@@ -770,7 +770,7 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		return fmt.Errorf("memory: sync jsonl: %w", faultErr)
 	}
 	if syncErr := f.Sync(); syncErr != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
 	}
 	if closeErr := f.Close(); closeErr != nil {

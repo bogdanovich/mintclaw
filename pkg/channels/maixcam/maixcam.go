@@ -113,7 +113,7 @@ func (c *MaixCamChannel) handleConnection(conn net.Conn) {
 	logger.DebugC("maixcam", "Handling MaixCam connection")
 
 	defer func() {
-		conn.Close()
+		_ = conn.Close()
 		c.clientsMux.Lock()
 		delete(c.clients, conn)
 		c.clientsMux.Unlock()
@@ -227,14 +227,14 @@ func (c *MaixCamChannel) Stop(ctx context.Context) error {
 	}
 
 	if c.listener != nil {
-		c.listener.Close()
+		_ = c.listener.Close()
 	}
 
 	c.clientsMux.Lock()
 	defer c.clientsMux.Unlock()
 
 	for conn := range c.clients {
-		conn.Close()
+		_ = conn.Close()
 	}
 	c.clients = make(map[net.Conn]bool)
 

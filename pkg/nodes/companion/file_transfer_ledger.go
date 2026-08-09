@@ -416,7 +416,7 @@ func (ledger *FileTransferLedger) load() error {
 	if err != nil {
 		return fmt.Errorf("open node file transfer ledger: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, int64(ledger.maxBytes)+1))
 	decoder.DisallowUnknownFields()
 	var document fileTransferLedgerDocument

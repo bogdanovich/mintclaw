@@ -756,7 +756,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 								outboundMessageEditPayload(msg, msg.Content),
 							)
 						} else {
-							editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
+							_ = editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
 						}
 					}
 				}

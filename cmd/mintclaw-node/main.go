@@ -65,7 +65,7 @@ func run(args []string) error {
 		return err
 	}
 	if managed {
-		defer coordinatorClient.Close()
+		defer func() { _ = coordinatorClient.Close() }()
 	}
 	identity, err := companion.LoadOrCreateIdentity(cfg.StateDir)
 	if err != nil {
@@ -148,7 +148,7 @@ func run(args []string) error {
 		if helperErr != nil {
 			return fmt.Errorf("load file helper snapshot: %w", helperErr)
 		}
-		defer fileHelper.Close()
+		defer func() { _ = fileHelper.Close() }()
 		fileCapabilities = append(fileCapabilities, fileHelper)
 	}
 	var fileTransfers *companion.FileTransferRouter
@@ -184,7 +184,7 @@ func run(args []string) error {
 		if helperErr != nil {
 			return fmt.Errorf("load service helper snapshot: %w", helperErr)
 		}
-		defer serviceHelper.Close()
+		defer func() { _ = serviceHelper.Close() }()
 		runtimeOptions = append(runtimeOptions, companion.WithServiceManager(serviceHelper))
 	} else if companion.HasEnabledServicePolicy(cfg.ServicePolicies) {
 		serviceManager, managerErr := companion.NewSystemdServiceManager(cfg.ServicePolicies)

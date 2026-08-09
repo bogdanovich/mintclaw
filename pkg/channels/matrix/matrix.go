@@ -300,7 +300,7 @@ func (c *MatrixChannel) Stop(ctx context.Context) error {
 	c.stopTypingSessions(ctx)
 	// Close crypto helper if initialized
 	if c.cryptoHelper != nil {
-		c.cryptoHelper.Close()
+		_ = c.cryptoHelper.Close()
 		c.cryptoHelper = nil
 		c.client.Crypto = nil
 	}
@@ -365,7 +365,7 @@ func (c *MatrixChannel) initCrypto(ctx context.Context) error {
 	}
 
 	if err = cryptoHelper.Init(ctx); err != nil {
-		cryptoHelper.Close()
+		_ = cryptoHelper.Close()
 		return fmt.Errorf("init crypto helper: %w", err)
 	}
 
@@ -495,7 +495,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			ContentType:   contentType,
 			FileName:      filename,
 		})
-		file.Close()
+		_ = file.Close()
 		if err != nil {
 			logger.ErrorCF("matrix", "Failed to upload media", map[string]any{
 				"path":  localPath,
@@ -903,7 +903,7 @@ func (c *MatrixChannel) downloadMedia(
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	reader := resp.Body
 	readerClose := func() error { return nil }

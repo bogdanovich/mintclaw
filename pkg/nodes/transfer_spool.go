@@ -923,7 +923,7 @@ func (store *GatewayTransferSpool) recoverStagingLocked(
 ) (*TransferArtifactRecord, error) {
 	file, info, err := store.directory.openRegular(record.DataName)
 	if err == nil {
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		if info.Size() != record.Spec.DeclaredSize {
 			return nil, nil
 		}

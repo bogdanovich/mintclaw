@@ -137,7 +137,7 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	msgs := make([]providers.Message, 0)
 	scanner := bufio.NewScanner(f)

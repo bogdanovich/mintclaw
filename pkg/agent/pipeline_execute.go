@@ -516,7 +516,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					hookResult.ForUser != "" &&
 					ts.opts.SendResponse
 				if shouldSendForUser {
-					p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
+					_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
 				}
 
 				if !hookResult.ResponseHandled {
@@ -1153,7 +1153,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		toolResult.ForUser != "" &&
 		ts.opts.SendResponse
 	if shouldSendForUser {
-		p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
+		_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
 		logger.DebugCF("agent", "Sent tool result to user",
 			map[string]any{
 				"tool":        toolName,
@@ -1323,7 +1323,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 			}
 		}
 		if !ts.opts.NoHistory && ts.opts.EnableSummary {
-			p.Context.Runtime.Compact(turnCtx, &CompactRequest{
+			_ = p.Context.Runtime.Compact(turnCtx, &CompactRequest{
 				Agent:      ts.agent,
 				SessionKey: ts.sessionKey,
 				Workspace:  ts.workspace,

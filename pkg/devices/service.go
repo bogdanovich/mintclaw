@@ -90,7 +90,7 @@ func (s *Service) Stop() {
 	}
 
 	for _, src := range s.sources {
-		src.Stop()
+		_ = src.Stop()
 	}
 
 	logger.InfoC("devices", "Device event service stopped")
@@ -130,7 +130,7 @@ func (s *Service) sendNotification(ev *events.DeviceEvent) {
 	msg := ev.FormatMessage()
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
-	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+	_ = msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.NewOutboundContext(platform, userID, ""),
 		Content: msg,
 	})

@@ -197,7 +197,7 @@ func (c *DiscordChannel) receiveVoice(vc *discordgo.VoiceConnection, guildID str
 	}(c.ctx, vc)
 	sessionID := fmt.Sprintf("discord_vc_%s", guildID)
 
-	c.bus.PublishVoiceControl(c.ctx, bus.VoiceControl{
+	_ = c.bus.PublishVoiceControl(c.ctx, bus.VoiceControl{
 		SessionID: sessionID,
 		Type:      "state",
 		Action:    "listening",

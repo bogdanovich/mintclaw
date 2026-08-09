@@ -488,7 +488,7 @@ func (store *JobStore) load() error {
 	if err != nil {
 		return fmt.Errorf("open node job index: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, int64(store.maxBytes)+1))
 	decoder.DisallowUnknownFields()
 	var document jobStoreDocument

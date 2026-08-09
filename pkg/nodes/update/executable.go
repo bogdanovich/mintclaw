@@ -16,7 +16,7 @@ func ValidateExecutable(file io.ReaderAt, platform string, architecture string) 
 		if err != nil {
 			return errors.New("candidate is not a valid ELF executable")
 		}
-		defer binary.Close()
+		defer func() { _ = binary.Close() }()
 		expected := elf.EM_X86_64
 		if architecture == "arm64" {
 			expected = elf.EM_AARCH64
@@ -31,7 +31,7 @@ func ValidateExecutable(file io.ReaderAt, platform string, architecture string) 
 		if err != nil {
 			return errors.New("candidate is not a valid Mach-O executable")
 		}
-		defer binary.Close()
+		defer func() { _ = binary.Close() }()
 		expected := macho.CpuAmd64
 		if architecture == "arm64" {
 			expected = macho.CpuArm64
