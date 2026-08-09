@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"context"
+
 	oauthprovider "github.com/bogdanovich/mintclaw/pkg/providers/oauth"
 )
 
@@ -43,12 +45,12 @@ func NewCodexProviderWithTokenSource(
 	return oauthprovider.NewCodexProviderWithTokenSource(token, accountID, tokenSource)
 }
 
-func FetchAntigravityProjectID(accessToken string) (string, error) {
-	return oauthprovider.FetchAntigravityProjectID(accessToken)
+func FetchAntigravityProjectID(ctx context.Context, accessToken string) (string, error) {
+	return oauthprovider.FetchAntigravityProjectID(ctx, accessToken)
 }
 
-func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelInfo, error) {
-	return oauthprovider.FetchAntigravityModels(accessToken, projectID)
+func FetchAntigravityModels(ctx context.Context, accessToken, projectID string) ([]AntigravityModelInfo, error) {
+	return oauthprovider.FetchAntigravityModels(ctx, accessToken, projectID)
 }
 
 func createClaudeTokenSource() func() (string, error) {

@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"testing"
 
 	cliprovider "github.com/bogdanovich/mintclaw/pkg/providers/cli"
@@ -39,9 +40,9 @@ func TestNormalizeToolCallFacadeMatchesCLIProvider(t *testing.T) {
 
 func TestAntigravityFacadeSignaturesRemainAvailable(t *testing.T) {
 	//nolint:staticcheck // compile-time contract assertions for the public facade
-	var _ func(string) (string, error) = FetchAntigravityProjectID
+	var _ func(context.Context, string) (string, error) = FetchAntigravityProjectID
 	//nolint:staticcheck // compile-time contract assertions for the public facade
-	var _ func(string, string) ([]AntigravityModelInfo, error) = FetchAntigravityModels
+	var _ func(context.Context, string, string) ([]AntigravityModelInfo, error) = FetchAntigravityModels
 	//nolint:staticcheck // compile-time contract assertions for the public facade
 	var _ AntigravityModelInfo = oauthprovider.AntigravityModelInfo{}
 }

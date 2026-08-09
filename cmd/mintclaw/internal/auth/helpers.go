@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,7 +104,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	cred.Provider = "google-antigravity"
 
 	// Fetch user email from Google userinfo
-	email, err := fetchGoogleUserEmail(cred.AccessToken)
+	email, err := fetchGoogleUserEmail(context.Background(), cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch email: %v\n", err)
 	} else {
@@ -112,7 +113,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	}
 
 	// Fetch Cloud Code Assist project ID
-	projectID, err := providers.FetchAntigravityProjectID(cred.AccessToken)
+	projectID, err := providers.FetchAntigravityProjectID(context.Background(), cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch project ID: %v\n", err)
 		fmt.Println("You may need Google Cloud Code Assist enabled on your account.")
@@ -234,8 +235,8 @@ func authLoginAnthropicSetupToken() error {
 	return nil
 }
 
-func fetchGoogleUserEmail(accessToken string) (string, error) {
-	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+func fetchGoogleUserEmail(ctx context.Context, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
 		return "", err
 	}
@@ -420,7 +421,7 @@ func authStatusCmd() error {
 		}
 
 		if provider == "anthropic" && cred.AuthMethod == "oauth" {
-			usage, err := auth.FetchAnthropicUsage(cred.AccessToken)
+			usage, err := auth.FetchAnthropicUsage(context.Background(), cred.AccessToken)
 			if err != nil {
 				fmt.Printf("    Usage: unavailable (%v)\n", err)
 			} else {
@@ -458,7 +459,7 @@ func authModelsCmd() error {
 
 	fmt.Printf("Fetching models for project: %s\n\n", projectID)
 
-	models, err := providers.FetchAntigravityModels(cred.AccessToken, projectID)
+	models, err := providers.FetchAntigravityModels(context.Background(), cred.AccessToken, projectID)
 	if err != nil {
 		return fmt.Errorf("error fetching models: %w", err)
 	}

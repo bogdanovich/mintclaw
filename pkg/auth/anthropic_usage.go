@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,8 +25,8 @@ type AnthropicUsage struct {
 	SevenDayUtilization float64
 }
 
-func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
-	req, err := http.NewRequest("GET", anthropicUsageURL, nil)
+func FetchAnthropicUsage(ctx context.Context, token string) (*AnthropicUsage, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", anthropicUsageURL, nil)
 	if err != nil {
 		return nil, err
 	}
