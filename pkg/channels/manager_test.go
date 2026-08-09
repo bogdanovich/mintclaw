@@ -3401,7 +3401,7 @@ func TestStreamActiveKey_UnscopedFallbackRejectsAmbiguousTurns(t *testing.T) {
 	m.streamActive.Store(first, true)
 	m.streamActive.Store(second, true)
 
-	if key, ok := m.streamDeliveryState.activeKey("test", "chat-1", "", runtimeevents.TraceScope{}); ok {
+	if key, ok := m.activeKey("test", "chat-1", "", runtimeevents.TraceScope{}); ok {
 		t.Fatalf("activeKey() = %q, want no ambiguous legacy match", key)
 	}
 }
@@ -3418,7 +3418,7 @@ func TestStreamAuxiliaryTombstone_UnscopedFallbackIgnoresExpiredScope(t *testing
 	m.streamAuxiliaryTombstones.Store(expired, time.Now().Add(-2*streamAuxiliaryTombstoneTTL))
 	m.streamAuxiliaryTombstones.Store(active, time.Now())
 
-	if !m.streamDeliveryState.tombstoneActiveForMessage(
+	if !m.tombstoneActiveForMessage(
 		"test", "chat-1", "", runtimeevents.TraceScope{}, time.Now(),
 	) {
 		t.Fatal("expected the single non-expired scoped tombstone to match")
