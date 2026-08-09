@@ -199,7 +199,8 @@ func TestExchangeCodeForTokens(t *testing.T) {
 		}
 
 		if err := r.ParseForm(); err != nil {
-			t.Fatal(err)
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
 		}
 		if r.FormValue("grant_type") != "authorization_code" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
@@ -240,7 +241,8 @@ func TestRefreshAccessToken(t *testing.T) {
 		}
 
 		if err := r.ParseForm(); err != nil {
-			t.Fatal(err)
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
 		}
 		if r.FormValue("grant_type") != "refresh_token" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
