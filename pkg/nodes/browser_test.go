@@ -42,6 +42,25 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	}
 }
 
+func TestBrowserCommandDescriptorsBindExplicitApprovedActionMode(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := browserSessionOpenInputFixture(profile.Limits)
+	input["dry_run"] = false
+	if err = validateDescriptorInvocationInput(descriptors[0], input); err != nil {
+		t.Fatalf("approved-action open input rejected: %v", err)
+	}
+	input["dry_run"] = true
+	if err = validateDescriptorInvocationInput(descriptors[0], input); err == nil {
+		t.Fatal("approved-action descriptor accepted dry-run open input")
+	}
+}
+
 func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	var result BrowserSessionResult
 	if err := json.Unmarshal([]byte(`{
@@ -203,6 +222,44 @@ func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *te
 	}
 }
 
+func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgrade(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("pre-approved-action catalog rejected during rolling upgrade: %v", err)
+	}
+
+	approved := browserProfileDescriptorFixture()
+	approved.DryRun = false
+	approved.AllowApprovedActions = true
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{approved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("legacy dry-run schema granted approved-action authority")
+	}
+}
+
 func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
@@ -328,6 +385,12 @@ func TestBrowserDescriptorRejectsProfileOrSchemaBroadening(t *testing.T) {
 			name: "non dry run",
 			mutate: func(descriptor *CommandDescriptor) {
 				descriptor.BrowserProfiles[0].DryRun = false
+			},
+		},
+		{
+			name: "conflicting action modes",
+			mutate: func(descriptor *CommandDescriptor) {
+				descriptor.BrowserProfiles[0].AllowApprovedActions = true
 			},
 		},
 		{

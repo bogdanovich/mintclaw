@@ -97,7 +97,8 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 				ProfileConfig: config.BrowserProfileConfig{
 					Enabled: true, Mode: config.BrowserProfileManaged,
 					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
-					AllowedOrigins: append([]string(nil), profile.AllowedOrigins...),
+					AllowApprovedActions: profile.AllowApprovedActions,
+					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 				},
 				ServerConfig: server,
 			},
@@ -195,12 +196,13 @@ func (host *BrowserHost) Open(
 ) (BrowserHostSession, error) {
 	if host == nil || !browserHostIdentifier(request.SessionID) ||
 		!browserHostIdentifier(request.RoutedSessionID) ||
-		!browserHostDigest(request.BrowserPolicyRevision) || !request.DryRun ||
+		!browserHostDigest(request.BrowserPolicyRevision) ||
 		request.Limits.Validate() != nil {
 		return BrowserHostSession{}, ErrBrowserHostDenied
 	}
 	profile, ok := host.profiles[request.Profile]
-	if !ok || !authorizeBrowserProfile(profile, request.ProfileRevision, request.AgentID, request.ActorID) ||
+	if !ok || request.DryRun != profile.DryRun ||
+		!authorizeBrowserProfile(profile, request.ProfileRevision, request.AgentID, request.ActorID) ||
 		!browserLimitsWithin(request.Limits, profile.Limits) {
 		return BrowserHostSession{}, ErrBrowserHostDenied
 	}
