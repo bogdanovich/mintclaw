@@ -780,7 +780,7 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 		inboundCtx.ReplyToMessageID = replyTo.String()
 	}
 
-	c.HandleInboundContext(c.baseContext(), roomID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.baseContext(), roomID, content, mediaPaths, inboundCtx, sender)
 }
 
 // decryptEvent decrypts an encrypted event and returns the decrypted message event content.

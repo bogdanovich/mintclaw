@@ -66,6 +66,31 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 }
 
+func TestConfigAcceptsExplicitApprovedActionBrowserProfile(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatalf("Normalize() approved-action mode error = %v", err)
+	}
+	ready := cfg.BrowserProfiles["managed"]
+	if ready.DryRun || !ready.AllowApprovedActions {
+		t.Fatalf("normalized approved-action profile = %#v", ready)
+	}
+	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
+	if err != nil || len(descriptors) != 1 || descriptors[0].DryRun ||
+		!descriptors[0].AllowApprovedActions {
+		t.Fatalf("approved-action descriptors = %#v, %v", descriptors, err)
+	}
+}
+
 func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	tests := []struct {
@@ -76,7 +101,14 @@ func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 		{
 			name:   "non dry run",
 			mutate: func(profile *BrowserProfilePolicy, _ string) { profile.DryRun = false },
-			want:   "dry_run=true",
+			want:   "exactly one of dry_run or allow_approved_actions",
+		},
+		{
+			name: "conflicting action modes",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.AllowApprovedActions = true
+			},
+			want: "exactly one of dry_run or allow_approved_actions",
 		},
 		{
 			name:   "attached mode",

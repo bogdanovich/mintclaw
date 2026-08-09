@@ -750,6 +750,32 @@ func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	return host
 }
 
+func TestBrowserHostOpensExplicitApprovedActionProfile(t *testing.T) {
+	profile := browserHostProfileFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	request := browserHostOpenFixture()
+	request.DryRun = false
+	opened, err := host.Open(t.Context(), request)
+	if err != nil || opened.State != "ready" {
+		t.Fatalf("Open() approved-action profile = %#v, %v", opened, err)
+	}
+	request.DryRun = true
+	request.SessionID = "browser_session_wrong_mode"
+	if _, err = host.Open(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Open() mismatched dry-run mode error = %v", err)
+	}
+}
+
 func browserHostProfileFixture() companion.BrowserProfilePolicy {
 	return companion.BrowserProfilePolicy{
 		Enabled: true, Revision: "managed-v1",

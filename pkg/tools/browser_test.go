@@ -322,7 +322,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	if len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
-		!result.Targets[0].Profiles[0].DryRun || !result.Targets[0].Features.Screenshot ||
+		!result.Targets[0].Profiles[0].DryRun || result.Targets[0].Profiles[0].AllowApprovedActions ||
+		!result.Targets[0].Features.Screenshot ||
 		!result.Targets[0].Features.Upload || !result.Targets[0].Features.Download ||
 		result.Targets[0].Limits.ScreenshotBytes != config.BrowserMaxScreenshotBytes ||
 		result.Targets[0].Limits.UploadBytes != config.BrowserMaxUploadBytes ||
@@ -344,6 +345,27 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	denied := tool.Execute(other, nil)
 	if denied == nil || !denied.IsError || !strings.Contains(denied.ContentForLLM(), `"code":"not_granted"`) {
 		t.Fatalf("ungranted result = %#v", denied)
+	}
+}
+
+func TestBrowserTargetsReportsExplicitApprovedActionMode(t *testing.T) {
+	cfg := browserToolTestConfig()
+	target := cfg.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	cfg.Tools.Browser.Targets["gateway"] = target
+
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t, NewBrowserTargetsTool(cfg, &fakeBrowserToolSource{available: true}).Execute(
+			browserToolTestContext(), nil,
+		), &result,
+	)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].DryRun || !result.Targets[0].Profiles[0].AllowApprovedActions {
+		t.Fatalf("approved-action browser targets = %#v", result)
 	}
 }
 

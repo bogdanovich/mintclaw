@@ -205,7 +205,7 @@ func (c *MQTTChannel) handleInbound(msg pahomqtt.Message) {
 		SenderID: clientID,
 	}
 
-	c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx)
+	_ = c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx)
 }
 
 // Stop disconnects from the MQTT broker.

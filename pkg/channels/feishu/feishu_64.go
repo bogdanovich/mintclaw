@@ -592,7 +592,7 @@ func (c *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		inboundCtx.SpaceID = *sender.TenantKey
 	}
 
-	c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo)
+	_ = c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo)
 	return nil
 }
 

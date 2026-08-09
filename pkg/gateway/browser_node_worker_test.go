@@ -290,6 +290,63 @@ func TestGatewayBrowserWorkerReadinessRejectsMismatchedCommandProfile(t *testing
 	}
 }
 
+func TestGatewayBrowserWorkerPinsCompleteProfileAcrossActiveCommands(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		for index := range catalog.Commands {
+			if catalog.Commands[index].Name != nodes.BrowserCommandAct {
+				continue
+			}
+			catalog.Commands[index].BrowserProfiles[0].DryRun = false
+			catalog.Commands[index].BrowserProfiles[0].AllowApprovedActions = true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases:         []nodes.Alias{"ab-local-test"},
+		AllowedCommands: registration.AllowedCommands,
+		At:              registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+	if err != nil || !found {
+		t.Fatalf("mixed-mode registration = %#v, %v, %v", registration, found, err)
+	}
+	handler.registration = registration
+
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, ok := opened.Owner.(*nodeBrowserWorker)
+	if !ok {
+		t.Fatalf("worker = %T", opened.Owner)
+	}
+	if _, _, err = worker.resolveAuthority(nodes.BrowserCommandAct); !errors.Is(err, browser.ErrDenied) {
+		t.Fatalf("mixed-mode act authority error = %v, want denied", err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
+		t.Fatalf("mixed-mode commands = %#v, want %#v", commands, want)
+	}
+}
+
 func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
@@ -513,4 +570,25 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	return cfg, runtime, handler
+}
+
+func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		AllowApprovedActions: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged,
+		NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
+	}
+	if !browserProfileIntersects(local, limits, remote) {
+		t.Fatal("matching approved-action profiles did not intersect")
+	}
+	local.DryRun = true
+	local.AllowApprovedActions = false
+	if browserProfileIntersects(local, limits, remote) {
+		t.Fatal("mismatched action modes intersected")
+	}
 }

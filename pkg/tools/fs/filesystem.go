@@ -1210,13 +1210,13 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 
 		tmpFile, err := root.OpenFile(tmpRelPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
-			root.Remove(tmpRelPath)
+			_ = root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to open temp file: %w", err)
 		}
 
 		if _, err := tmpFile.Write(data); err != nil {
 			_ = tmpFile.Close()
-			root.Remove(tmpRelPath)
+			_ = root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to write temp file: %w", err)
 		}
 
@@ -1224,17 +1224,17 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 		// This ensures data is physically written to disk, not just cached.
 		if err := tmpFile.Sync(); err != nil {
 			_ = tmpFile.Close()
-			root.Remove(tmpRelPath)
+			_ = root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to sync temp file: %w", err)
 		}
 
 		if err := tmpFile.Close(); err != nil {
-			root.Remove(tmpRelPath)
+			_ = root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to close temp file: %w", err)
 		}
 
 		if err := root.Rename(tmpRelPath, relPath); err != nil {
-			root.Remove(tmpRelPath)
+			_ = root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to rename temp file over target: %w", err)
 		}
 

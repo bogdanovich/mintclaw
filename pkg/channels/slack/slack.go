@@ -597,7 +597,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		inboundCtx.TopicID = threadTS
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
 func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
@@ -681,7 +681,7 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender)
 }
 
 func (c *SlackChannel) markInboundEventHandled(eventKind, channelID, messageTS string) bool {
@@ -786,7 +786,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender)
 }
 
 func (c *SlackChannel) downloadSlackFile(file slack.File) string {

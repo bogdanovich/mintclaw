@@ -1730,7 +1730,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		inboundCtx.ReplyToMessageID = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
 	}
 
-	c.HandleMessageWithContext(
+	_ = c.HandleMessageWithContext(
 		c.ctx,
 		compositeChatID,
 		content,

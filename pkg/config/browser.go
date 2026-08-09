@@ -72,11 +72,12 @@ func (target BrowserTargetConfig) EffectivePlacement() string {
 }
 
 type BrowserProfileConfig struct {
-	Enabled        bool     `json:"enabled"                   yaml:"-"`
-	Mode           string   `json:"mode,omitempty"            yaml:"-"`
-	NetworkMode    string   `json:"network_mode,omitempty"    yaml:"-"`
-	DryRun         bool     `json:"dry_run"                   yaml:"-"`
-	AllowedOrigins []string `json:"allowed_origins,omitempty" yaml:"-"`
+	Enabled              bool     `json:"enabled"                          yaml:"-"`
+	Mode                 string   `json:"mode,omitempty"                   yaml:"-"`
+	NetworkMode          string   `json:"network_mode,omitempty"           yaml:"-"`
+	DryRun               bool     `json:"dry_run"                          yaml:"-"`
+	AllowApprovedActions bool     `json:"allow_approved_actions,omitempty" yaml:"-"`
+	AllowedOrigins       []string `json:"allowed_origins,omitempty"        yaml:"-"`
 }
 
 func (profile BrowserProfileConfig) EffectiveNetworkMode() string {
@@ -314,8 +315,11 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		if profile.Mode != BrowserProfileManaged {
 			return fmt.Errorf("enabled browser profile %q requires mode %q", name, BrowserProfileManaged)
 		}
-		if !profile.DryRun {
-			return fmt.Errorf("enabled browser profile %q requires dry_run=true in B1", name)
+		if profile.DryRun == profile.AllowApprovedActions {
+			return fmt.Errorf(
+				"enabled browser profile %q requires exactly one of dry_run or allow_approved_actions",
+				name,
+			)
 		}
 		if networkMode == BrowserNetworkExactOrigins && len(profile.AllowedOrigins) == 0 {
 			return fmt.Errorf("enabled browser profile %q requires allowed_origins", name)
