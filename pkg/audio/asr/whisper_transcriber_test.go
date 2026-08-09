@@ -3,6 +3,7 @@ package asr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func TestWhisperTranscriberTranscribeDataUsesConfiguredModel(t *testing.T) {
 
 		for {
 			part, err := reader.NextPart()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -114,7 +115,7 @@ func TestWhisperTranscriberUsesOAuthTokenSource(t *testing.T) {
 		}
 		for {
 			part, err := reader.NextPart()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
