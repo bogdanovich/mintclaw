@@ -11,6 +11,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type countingStatefulProvider struct {
@@ -143,6 +144,123 @@ func TestRuntimeProfileReloadClosesOldRegistryWithoutClosingInjectedProvider(t *
 	}
 	if injected.closeCount != 0 {
 		t.Fatalf("profile reload closed caller-injected provider %d times", injected.closeCount)
+	}
+}
+
+type blockingRuntimeTool struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (t *blockingRuntimeTool) Name() string        { return "blocking_runtime_tool" }
+func (t *blockingRuntimeTool) Description() string { return "blocks until the test releases it" }
+func (t *blockingRuntimeTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+
+func (t *blockingRuntimeTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	close(t.started)
+	<-t.release
+	return toolshared.SilentResult("released")
+}
+
+type runtimeToolCallProvider struct {
+	calls int
+}
+
+func (p *runtimeToolCallProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+			ID:        "runtime-tool-call",
+			Name:      "blocking_runtime_tool",
+			Arguments: map[string]any{},
+		}}}, nil
+	}
+	return &providers.LLMResponse{Content: "done"}, nil
+}
+
+func (p *runtimeToolCallProvider) GetDefaultModel() string { return "runtime-tool-call" }
+
+func TestRuntimeProfileReloadDefersOldRegistryCleanupUntilTurnFinishes(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-overlap"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	provider := &runtimeToolCallProvider{}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	oldAgent := loop.GetRegistry().GetDefaultAgent()
+	oldStore := &closeTrackingSessionStore{
+		SessionStore: oldAgent.Sessions,
+		closed:       make(chan struct{}),
+	}
+	oldAgent.Sessions = oldStore
+	tool := &blockingRuntimeTool{started: make(chan struct{}), release: make(chan struct{})}
+	loop.RegisterTool(tool)
+	turnDone := make(chan error, 1)
+	go func() {
+		_, runErr := loop.runAgentLoop(context.Background(), oldAgent, processOptions{
+			SessionKey:      "overlap",
+			Channel:         "cli",
+			ChatID:          "direct",
+			UserMessage:     "run the blocking tool",
+			DefaultResponse: defaultResponse,
+			EnableSummary:   false,
+			SendResponse:    false,
+		})
+		turnDone <- runErr
+	}()
+	select {
+	case <-tool.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old-registry turn did not reach blocking tool")
+	}
+
+	reloaded := *cfg
+	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err != nil {
+		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
+	}
+	select {
+	case <-oldStore.closed:
+		t.Fatal("reload closed old registry while its turn was still running")
+	default:
+	}
+	close(tool.release)
+	select {
+	case err := <-turnDone:
+		if err != nil {
+			t.Fatalf("old-registry turn error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("old-registry turn did not finish")
+	}
+	select {
+	case <-oldStore.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old registry was not finalized after its turn released")
 	}
 }
 

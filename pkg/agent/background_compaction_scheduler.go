@@ -24,8 +24,13 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 	if contextManager == nil || agent == nil || sessionKey == "" {
 		return
 	}
+	releaseResources, ok := agent.acquireRuntimeResources()
+	if !ok {
+		return
+	}
 	key := agent.ID + ":" + sessionKey
 	if _, loaded := r.running.LoadOrStore(key, struct{}{}); loaded {
+		releaseResources()
 		logger.DebugCF("agent", "Background context compaction already running", map[string]any{
 			"agent_id":     agent.ID,
 			"session_key":  sessionKey,
@@ -36,6 +41,7 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 	}
 
 	go func() {
+		defer releaseResources()
 		defer r.running.Delete(key)
 
 		compactCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

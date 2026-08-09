@@ -41,10 +41,21 @@ if a concrete use case requires one.
 4. opens the current canonical session backend under
    `StatePaths().SessionsRoot`;
 5. places prompt-memory construction under `StatePaths().MemoryRoot`;
-6. closes already opened agent resources if a later instance fails; and
-7. closes the registry and context manager when loop construction fails; and
-8. retains the same profile-aware registry strategy across supported config and
+6. fails construction when the admitted session or prompt-memory path is
+   unusable instead of falling back to a legacy store;
+7. closes already opened agent resources if a later instance fails;
+8. closes the registry and context manager when loop construction fails; and
+9. retains the same profile-aware registry strategy across supported config and
    provider reloads.
+
+Each instance owns the stateful primary, light, and fallback providers created
+internally for it. The caller-injected provider remains caller-owned, and
+aliases of one internal provider are closed only once. Registry replacement
+retires old instances: complete turns and their background compaction work hold
+resource leases, so session stores and providers are finalized only after the
+last old-instance user releases. Reload never force-closes an in-use registry
+on a timeout, and a registry that finishes construction after cancellation is
+closed by the construction result owner.
 
 The existing `NewAgentLoop` and `NewAgentLoopChecked` gateway entry points are
 unchanged in P0.2. The deployed personal runtime switches to the new entry
@@ -107,4 +118,9 @@ Focused tests prove that:
   roots without adding coding tools or creating the execution root;
 - enabled configured MCP cannot start or register tools before or after reload;
   and
-- isolated skill bootstrap and reload preserve external prompt-memory ownership.
+- isolated skill bootstrap and reload preserve external prompt-memory ownership;
+- unusable external session and memory paths fail admission without creating
+  the execution root;
+- canceled reload construction closes a registry that completes late; and
+- reload leaves an old registry open while a turn is blocked outside its LLM
+  call, then finalizes it after that complete turn releases.

@@ -257,6 +257,11 @@ func (al *AgentLoop) processInboundMessageTurn(
 	if msg.Channel == "system" {
 		return al.processSystemMessage(ctx, msg)
 	}
+	releaseResources, ok := turn.Agent.acquireRuntimeResources()
+	if !ok {
+		return "", fmt.Errorf("agent runtime was retired during reload")
+	}
+	defer releaseResources()
 
 	defer turn.Cleanup()
 	turn.resetMessageToolRound()

@@ -387,11 +387,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	}
 
 	// Close old runtime-owned resources after releasing the lock and draining
-	// readers. Legacy loops retain their historical caller-provider lifecycle.
+	// readers. Retiring a profile registry defers final cleanup until every turn
+	// using one of its instances has released its resource lease.
 	if al.runtimeProfile != nil {
-		if !al.waitForActiveRequests(ctx, 2*time.Second) {
-			logReloadCleanupWaitFailure(ctx)
-		}
 		oldRegistry.Close()
 	} else if oldProvider, ok := extractProvider(oldRegistry); ok {
 		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
@@ -522,6 +520,12 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	releaseResources, ok := agent.acquireRuntimeResources()
+	if !ok {
+		return "", fmt.Errorf("agent runtime was retired during reload")
+	}
+	defer releaseResources()
+
 	opts = normalizeProcessOptions(opts)
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)

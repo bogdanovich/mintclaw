@@ -69,6 +69,7 @@ type AgentInstance struct {
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
+	runtimeResources   *agentInstanceResources
 }
 
 type providerOwnership struct {
@@ -302,6 +303,7 @@ func newAgentInstance(
 	if layout != nil {
 		instance.Layout = *layout
 	}
+	instance.runtimeResources = newAgentInstanceResources(instance.finalizeRuntimeResources)
 	return instance, nil
 }
 
@@ -751,8 +753,25 @@ func mediaTempDirPattern() string {
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
 }
 
-// Close releases resources held by the agent's session store.
+func (a *AgentInstance) acquireRuntimeResources() (func(), bool) {
+	if a == nil || a.runtimeResources == nil {
+		return func() {}, a != nil
+	}
+	return a.runtimeResources.acquire()
+}
+
+// Close retires the instance and releases its resources after active turns finish.
 func (a *AgentInstance) Close() error {
+	if a == nil {
+		return nil
+	}
+	if a.runtimeResources == nil {
+		return a.finalizeRuntimeResources()
+	}
+	return a.runtimeResources.retire()
+}
+
+func (a *AgentInstance) finalizeRuntimeResources() error {
 	var sessionErr error
 	if a.Sessions != nil {
 		sessionErr = a.Sessions.Close()
