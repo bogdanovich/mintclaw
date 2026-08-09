@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -110,12 +111,21 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 		return fmt.Errorf("irc connect failed: %w", err)
 	}
 
-	// Connect returns once registration completes; the connect callback is
-	// processed right after in the same read-loop iteration, so the initial
-	// setup result is always delivered here.
-	if err := <-setupDone; err != nil {
+	// AddConnectCallback fires on 376/422, which some servers omit after the
+	// 001 welcome; bound the wait so startup cannot hang, and honor context
+	// cancellation so gateway shutdown is not blocked.
+	select {
+	case err := <-setupDone:
+		if err != nil {
+			conn.Quit()
+			return fmt.Errorf("irc setup failed: %w", err)
+		}
+	case <-ctx.Done():
 		conn.Quit()
-		return fmt.Errorf("irc setup failed: %w", err)
+		return fmt.Errorf("irc setup canceled: %w", ctx.Err())
+	case <-time.After(conn.Timeout):
+		conn.Quit()
+		return fmt.Errorf("irc setup timed out after %s", conn.Timeout)
 	}
 
 	c.conn = conn

@@ -422,24 +422,29 @@ func (cs *CronService) Load() error {
 	cs.dispatchMu.Lock()
 	defer cs.dispatchMu.Unlock()
 
+	// Hold cs.mu across the authoritative re-read and publication so a CRUD
+	// mutation cannot commit between the read and the publish.
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
 	// Re-read after in-flight dispatch finishes and publish only that fresh
 	// snapshot: a handler may have committed deletion, disablement, or the
 	// next recurring run while we waited. Do not clear loadErr if this read
 	// fails.
 	store, readErr := cs.readStore()
 	if readErr != nil {
-		cs.mu.Lock()
 		cs.loadErr = readErr
 		cs.notify()
-		cs.mu.Unlock()
 		return readErr
 	}
 
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
 	if store == nil {
-		cs.ensureStore()
+		// A missing authoritative file is an empty store: replace the live
+		// state so jobs deleted from disk cannot run or recreate the file.
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
 	} else {
 		cs.store = store
 	}
@@ -464,7 +469,11 @@ func (cs *CronService) loadStore() error {
 		return err
 	}
 	if store == nil {
-		cs.ensureStore()
+		// A missing authoritative file is an empty store.
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
 		cs.loadErr = nil
 		return nil
 	}

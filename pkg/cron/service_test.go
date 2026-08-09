@@ -990,6 +990,32 @@ func TestLoadPublishesFreshSnapshotAfterDispatch(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileClearsLiveJobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	cs := NewCronService(storePath, nil)
+	job, err := cs.AddJob("task", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	// Removing the authoritative file must clear the live store, not leave
+	// stale jobs that could execute and recreate the file.
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store: %v", err)
+	}
+	if err := cs.Load(); err != nil {
+		t.Fatalf("Load with missing store failed: %v", err)
+	}
+	if _, ok := cs.GetJob(job.ID); ok {
+		t.Fatal("job survived reload after its authoritative file was removed")
+	}
+	if len(cs.ListJobs(true)) != 0 {
+		t.Fatalf("expected empty live store, got %d jobs", len(cs.ListJobs(true)))
+	}
+}
+
 func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")
