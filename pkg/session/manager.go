@@ -188,6 +188,28 @@ func (sm *SessionManager) RestoreTurnSnapshot(
 	history []providers.Message,
 	summary string,
 ) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, history, summary, true)
+}
+
+func (sm *SessionManager) ReplaceTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, history, "", false)
+}
+
+func (sm *SessionManager) ClearSession(ctx context.Context, sessionKey string) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, nil, "", true)
+}
+
+func (sm *SessionManager) replaceTurnSnapshot(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+	summary string,
+	replaceSummary bool,
+) error {
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
@@ -205,7 +227,9 @@ func (sm *SessionManager) RestoreTurnSnapshot(
 	}
 	next.Messages = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
 	normalizeHistoryCreatedAt(next.Messages)
-	next.Summary = summary
+	if replaceSummary {
+		next.Summary = summary
+	}
 	advanceHistoryRevision(&next)
 	next.Updated = now
 

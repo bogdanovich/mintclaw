@@ -109,6 +109,72 @@ func TestSessionManagerFailedSnapshotRestoreDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestSessionManagerReplaceTurnHistoryPreservesSummary(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewSessionManager(dir)
+	key := "turn"
+	manager.GetOrCreate(key)
+	manager.SetSummary(key, "retained summary")
+	if err := manager.ReplaceTurnHistory(
+		t.Context(),
+		key,
+		[]providers.Message{{Role: "user", Content: "replacement"}},
+	); err != nil {
+		t.Fatalf("ReplaceTurnHistory() error = %v", err)
+	}
+
+	reopened := NewSessionManager(dir)
+	history := reopened.GetHistory(key)
+	if len(history) != 1 || history[0].Content != "replacement" {
+		t.Fatalf("reopened history = %+v", history)
+	}
+	if summary := reopened.GetSummary(key); summary != "retained summary" {
+		t.Fatalf("reopened summary = %q", summary)
+	}
+}
+
+func TestSessionManagerCanceledHistoryReplacementDoesNotMutate(t *testing.T) {
+	manager := NewSessionManager(t.TempDir())
+	key := "turn"
+	manager.GetOrCreate(key)
+	manager.SetHistory(key, []providers.Message{{Role: "user", Content: "current"}})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := manager.ReplaceTurnHistory(
+		ctx,
+		key,
+		[]providers.Message{{Role: "user", Content: "replacement"}},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReplaceTurnHistory() error = %v, want %v", err, context.Canceled)
+	}
+	history := manager.GetHistory(key)
+	if len(history) != 1 || history[0].Content != "current" {
+		t.Fatalf("canceled replacement mutated history: %+v", history)
+	}
+}
+
+func TestSessionManagerClearSessionPersistsEmptyState(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewSessionManager(dir)
+	key := "turn"
+	manager.GetOrCreate(key)
+	manager.SetHistory(key, []providers.Message{{Role: "user", Content: "current"}})
+	manager.SetSummary(key, "current summary")
+	if err := manager.ClearSession(t.Context(), key); err != nil {
+		t.Fatalf("ClearSession() error = %v", err)
+	}
+
+	reopened := NewSessionManager(dir)
+	if history := reopened.GetHistory(key); len(history) != 0 {
+		t.Fatalf("reopened history = %+v", history)
+	}
+	if summary := reopened.GetSummary(key); summary != "" {
+		t.Fatalf("reopened summary = %q", summary)
+	}
+}
+
 func TestSanitizeFilename(t *testing.T) {
 	tests := []struct {
 		input    string

@@ -187,6 +187,28 @@ func (b *JSONLBackend) RestoreTurnSnapshot(
 	return nil
 }
 
+func (b *JSONLBackend) ReplaceTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
+	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
+	return b.store.SetHistory(ctx, resolvedKey, history)
+}
+
+func (b *JSONLBackend) ClearSession(ctx context.Context, sessionKey string) error {
+	return b.RestoreTurnSnapshot(ctx, sessionKey, nil, "")
+}
+
 func (b *JSONLBackend) GetHistory(key string) []providers.Message {
 	msgs, err := b.GetHistoryWithError(key)
 	if err != nil {

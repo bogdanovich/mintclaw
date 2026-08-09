@@ -214,15 +214,25 @@ func (p *Pipeline) invokeLLMWithRetry(
 				"error": err.Error(),
 				"retry": retry,
 			})
-			llm.callMessages = stripMessageMedia(llm.callMessages)
+			strippedCallMessages := stripMessageMedia(llm.callMessages)
 			if !ts.opts.NoHistory {
-				exec.history = stripMessageMedia(exec.history)
-				ts.agent.Sessions.SetHistory(ts.sessionKey, exec.history)
-				for i := range ts.persistedMessages {
-					ts.persistedMessages[i].Media = nil
+				strippedHistory := stripMessageMedia(exec.history)
+				if replaceErr := ts.agent.Sessions.ReplaceTurnHistory(
+					turnCtx,
+					ts.sessionKey,
+					strippedHistory,
+				); replaceErr != nil {
+					_, restoreErr := ts.restoreSessionBeforeToolExecution()
+					return llmStageResult{}, errors.Join(
+						fmt.Errorf("replace history for vision retry: %w", replaceErr),
+						restoreErr,
+					)
 				}
+				exec.history = strippedHistory
+				ts.stripPersistedMessageMedia()
 				ts.refreshCanonicalRestorePointFromSession()
 			}
+			llm.callMessages = strippedCallMessages
 			continue
 		}
 
