@@ -48,6 +48,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md):
   merged revisions, live artifact round-trip, passive diagnostics, human
   handoff and resume, privacy checks, cleanup, health, and residual limits.
+- [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md):
+  admitted shared scroll semantics, exact per-target action discovery,
+  companion wire authority, deployment order, and completion gates for the
+  first post-B3 parity slice.
 - [Node Companion P0 Capability Contracts](node-companion-p0-contracts.md): admitted scope, bounded discovery schema, effective-policy projection, freshness, redaction, and completion gates for model-visible node capabilities.
 - [Node Companion P1 Owner-Control Admission](node-companion-p1-admission.md): admitted owner shell, cancellation, Linux root broker, and interactive terminal contracts with disabled production defaults and exact completion gates.
 - [Node Companion P2 File Transfer Admission](node-companion-p2-admission.md): admitted regular-file transfer, gateway spool, path safety, Linux administrator helper, approval, replay, deployment, and mandatory completion gates.
