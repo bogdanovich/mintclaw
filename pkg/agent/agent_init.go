@@ -86,8 +86,14 @@ func newAgentLoopWithRegistry(
 		}
 	}
 	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
-		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok {
-			al.state = state.NewManagerAt(layout.StatePaths().RuntimeStateFile)
+		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
+			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
+			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)
+			if err != nil {
+				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+			} else {
+				al.state = manager
+			}
 		} else if !al.isolatedToolBootstrap {
 			al.state = state.NewManager(defaultAgent.Workspace)
 		}
@@ -113,6 +119,13 @@ func newAgentLoopWithRegistry(
 	// Register shared tools to all agents (now that al is created)
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
+	}
+	if al.hasCodingToolProfile() {
+		for _, agentID := range registry.ListAgentIDs() {
+			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
+				instance.Tools.Seal()
+			}
+		}
 	}
 
 	return al
@@ -144,6 +157,9 @@ func NewAgentLoopWithRuntimeProfile(
 	profile RuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
+	if profile.toolProfile == RuntimeToolProfilePersonal && len(profile.agentLayouts) != 1 {
+		return nil, fmt.Errorf("strict personal runtime profiles currently require exactly one owner")
+	}
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
@@ -160,6 +176,11 @@ func NewAgentLoopWithRuntimeProfile(
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	if al.runtimeProfileInitErr != nil {
+		err := al.runtimeProfileInitErr
+		al.Close()
+		return nil, err
+	}
 	if al.contextManagerInitErr != nil {
 		err := al.contextManagerInitErr
 		al.Close()

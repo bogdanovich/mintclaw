@@ -67,6 +67,9 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 		storePath,
 		options,
 	)
+	if al.runtimeProfile != nil && registry.LastLoadError() != nil {
+		al.runtimeProfileInitErr = fmt.Errorf("load strict interaction registry: %w", registry.LastLoadError())
+	}
 	actual, loaded := al.interactionRegistries.LoadOrStore(workspace, registry)
 	stored, _ := actual.(*interactions.Registry)
 	if stored == nil {

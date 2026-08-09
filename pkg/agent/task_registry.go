@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,9 @@ func (al *AgentLoop) taskRegistryForWorkspace(workspace string) *taskregistry.Re
 		storePath,
 		al.taskRegistryOptions(),
 	)
+	if al.runtimeProfile != nil && registry.LastLoadError() != nil {
+		al.runtimeProfileInitErr = fmt.Errorf("load strict task registry: %w", registry.LastLoadError())
+	}
 	actual, _ := al.taskRegistries.LoadOrStore(workspace, registry)
 	if stored, ok := actual.(*taskregistry.Registry); ok {
 		if stored == registry {

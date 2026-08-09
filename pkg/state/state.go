@@ -151,6 +151,16 @@ func NewManager(workspace string) *Manager {
 // NewManagerAt creates a manager for an exact runtime-owned state file. It
 // intentionally performs no legacy workspace migration.
 func NewManagerAt(stateFile string) *Manager {
+	sm, err := NewManagerAtChecked(stateFile)
+	if err != nil {
+		logger.WarnCF("state", "failed to load state", map[string]any{"error": err.Error()})
+	}
+	return sm
+}
+
+// NewManagerAtChecked creates a strict manager and reports existing state that
+// cannot be read or decoded.
+func NewManagerAtChecked(stateFile string) (*Manager, error) {
 	stateFile = filepath.Clean(strings.TrimSpace(stateFile))
 	stateDir := filepath.Dir(stateFile)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -164,10 +174,10 @@ func NewManagerAt(stateFile string) *Manager {
 		stateFile: stateFile,
 		state:     &State{},
 	}
-	if err := sm.load(); err != nil && !os.IsNotExist(err) {
-		logger.WarnCF("state", "failed to load state", map[string]any{"error": err.Error()})
+	if err := sm.load(); err != nil {
+		return sm, err
 	}
-	return sm
+	return sm, nil
 }
 
 // SetLastChannel atomically updates the last channel and saves the state.

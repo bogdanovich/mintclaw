@@ -113,3 +113,18 @@ func readArgumentHashKey(path string) ([]byte, error) {
 	}
 	return key, nil
 }
+
+// ValidateArgumentHashKey reports malformed existing runtime key material.
+func ValidateArgumentHashKey(path string) error {
+	key, err := os.ReadFile(strings.TrimSpace(path))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(key) != argumentHashKeySize {
+		return fmt.Errorf("approval hash key has invalid length")
+	}
+	return nil
+}

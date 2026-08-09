@@ -56,6 +56,7 @@ type AgentLoop struct {
 	running                    atomic.Bool
 	contextManager             ContextManager
 	contextManagerInitErr      error
+	runtimeProfileInitErr      error
 	fallback                   *providers.FallbackChain
 	modelExecution             *modelExecutionManager
 	channelManager             interfaces.ChannelManager

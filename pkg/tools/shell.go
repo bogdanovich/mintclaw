@@ -53,6 +53,7 @@ type ExecTool struct {
 	allowRemote         bool
 	permissionMode      string
 	sessionManager      *SessionManager
+	ownsSessionManager  bool
 	workspaceTempDir    string
 }
 
@@ -160,7 +161,27 @@ func NewExecToolWithRuntimeConfig(
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create exec scratch directory: %w", err)
 	}
-	return newExecToolWithConfig(workingDir, scratchDir, restrict, cfg, allowPaths...)
+	tool, err := newExecToolWithConfig(workingDir, scratchDir, restrict, cfg, allowPaths...)
+	if err != nil {
+		return nil, err
+	}
+	tool.sessionManager = NewSessionManager()
+	tool.ownsSessionManager = true
+	return tool, nil
+}
+
+// Close stops and terminates sessions owned by a runtime-scoped exec tool.
+func (t *ExecTool) Close() error {
+	if t == nil || !t.ownsSessionManager || t.sessionManager == nil {
+		return nil
+	}
+	for _, info := range t.sessionManager.List() {
+		if session, err := t.sessionManager.Get(info.ID); err == nil && !session.IsDone() {
+			_ = session.Kill()
+		}
+	}
+	t.sessionManager.Stop()
+	return nil
 }
 
 func newExecToolWithConfig(

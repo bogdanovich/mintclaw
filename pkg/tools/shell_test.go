@@ -179,6 +179,57 @@ func TestShellTool_RuntimeScratchStaysOutsideWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestShellTool_RuntimeSessionsAreOwnerScoped(t *testing.T) {
+	root := t.TempDir()
+	firstWorkspace := filepath.Join(root, "first-project")
+	secondWorkspace := filepath.Join(root, "second-project")
+	require.NoError(t, os.MkdirAll(firstWorkspace, 0o755))
+	require.NoError(t, os.MkdirAll(secondWorkspace, 0o755))
+	first, err := NewExecToolWithRuntimeConfig(
+		firstWorkspace,
+		filepath.Join(root, "first-state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	second, err := NewExecToolWithRuntimeConfig(
+		secondWorkspace,
+		filepath.Join(root, "second-state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(first.sessionManager.Stop)
+	t.Cleanup(second.sessionManager.Stop)
+
+	run := first.Execute(toolshared.WithToolContext(context.Background(), "cli", "test"), map[string]any{
+		"action": "run", "command": "sleep 30", "background": "true",
+	})
+	require.False(t, run.IsError, run.ForLLM)
+	var response toolshared.ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(run.ForLLM), &response))
+	t.Cleanup(func() {
+		_ = first.Execute(context.Background(), map[string]any{
+			"action": "kill", "sessionId": response.SessionID,
+		})
+	})
+
+	listed := second.Execute(context.Background(), map[string]any{"action": "list"})
+	require.False(t, listed.IsError)
+	require.Contains(t, listed.ForUser, "0 active sessions")
+	for _, request := range []map[string]any{
+		{"action": "poll", "sessionId": response.SessionID},
+		{"action": "read", "sessionId": response.SessionID},
+		{"action": "write", "sessionId": response.SessionID, "data": "hello"},
+		{"action": "send-keys", "sessionId": response.SessionID, "keys": "enter"},
+		{"action": "kill", "sessionId": response.SessionID},
+	} {
+		result := second.Execute(context.Background(), request)
+		require.True(t, result.IsError, "cross-runtime action unexpectedly succeeded: %v", request)
+		require.Contains(t, result.ForLLM, "session not found")
+	}
+}
+
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
 	tool, err := NewExecTool("", false)

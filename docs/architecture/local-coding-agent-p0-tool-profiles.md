@@ -15,6 +15,13 @@ Its canonical transcript, derived context, memory, runtime state, task and
 interaction registries, approval key, and exec scratch are rooted in the
 admitted state layout rather than the execution workspace.
 
+Strict personal admission currently accepts one owner per loop. The legacy
+gateway retains its existing multi-agent behavior; a future owner-aware
+operational-state service is required before a strict loop can safely combine
+multiple personal owners. Coding profiles may contain multiple owners because
+they do not mount personal operational-state or goal services, and duplicate
+execution roots are rejected.
+
 The coding profile exposes exactly these core tools:
 
 - `read_file`
@@ -43,6 +50,16 @@ Coding profiles do not initialize MCP, configured hooks, or process hooks and
 reject dynamic hook and runtime-tool mounting. Repository agent frontmatter
 cannot broaden the coding catalogue or admit MCP servers. Project-local
 executable extensions therefore require a future explicit trust design.
+
+After Seahorse registers its deliberate retrieval tools, each coding tool
+registry is sealed against direct registration, replacement, removal,
+allowlist changes, and hidden-tool visibility changes. Each coding exec tool
+also owns a separate in-process session manager, so background process handles
+cannot cross personal-agent or coding-thread boundaries.
+
+Strict construction preflights every operational leaf and rejects symlinks,
+wrong file types, unreadable files, malformed state/registry snapshots, and
+invalid approval keys instead of silently starting from empty state.
 
 ## Verification contract
 

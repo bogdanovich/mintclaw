@@ -7,9 +7,12 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/state"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
 // RuntimeProfile is the immutable set of layouts admitted before registry construction.
@@ -150,6 +153,27 @@ func NewRuntimeProfileWithStoreFactory(
 		left := bindings[leftIndex]
 		for rightIndex := leftIndex + 1; rightIndex < len(bindings); rightIndex++ {
 			right := bindings[rightIndex]
+			leftInsideRightExecution, err := runtimeLayoutPathWithin(
+				left.Layout.ExecutionRoot(),
+				right.Layout.ExecutionRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+			}
+			rightInsideLeftExecution, err := runtimeLayoutPathWithin(
+				right.Layout.ExecutionRoot(),
+				left.Layout.ExecutionRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+			}
+			if leftInsideRightExecution && rightInsideLeftExecution {
+				return RuntimeProfile{}, fmt.Errorf(
+					"runtime profile: agents %q and %q cannot share an execution root",
+					routing.NormalizeAgentID(left.AgentID),
+					routing.NormalizeAgentID(right.AgentID),
+				)
+			}
 			if left.Layout.Owner() == right.Layout.Owner() {
 				continue
 			}
@@ -310,6 +334,54 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 				err,
 			)
 		}
+		if err := preflightRuntimeOperationalFiles(paths); err != nil {
+			return fmt.Errorf(
+				"runtime profile: preflight operational state for agent %q: %w",
+				routing.NormalizeAgentID(agentID),
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func preflightRuntimeOperationalFiles(paths RuntimeStatePaths) error {
+	for _, target := range []struct {
+		name string
+		path string
+	}{
+		{name: "runtime state", path: paths.RuntimeStateFile},
+		{name: "task registry", path: paths.TaskRegistryFile},
+		{name: "interaction registry", path: paths.InteractionFile},
+		{name: "interaction key", path: paths.InteractionKeyFile},
+	} {
+		if err := preflightRuntimeFile(target.path); err != nil {
+			return fmt.Errorf("%s: %w", target.name, err)
+		}
+	}
+	if _, statErr := os.Lstat(paths.RuntimeStateFile); statErr == nil {
+		if _, loadErr := state.NewManagerAtChecked(paths.RuntimeStateFile); loadErr != nil {
+			return fmt.Errorf("runtime state: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("runtime state: inspect file: %w", statErr)
+	}
+	if _, statErr := os.Lstat(paths.TaskRegistryFile); statErr == nil {
+		if loadErr := taskregistry.NewRegistry(paths.TaskRegistryFile).LastLoadError(); loadErr != nil {
+			return fmt.Errorf("task registry: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("task registry: inspect file: %w", statErr)
+	}
+	if _, statErr := os.Lstat(paths.InteractionFile); statErr == nil {
+		if loadErr := interactions.NewRegistry(paths.InteractionFile).LastLoadError(); loadErr != nil {
+			return fmt.Errorf("interaction registry: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("interaction registry: inspect file: %w", statErr)
+	}
+	if err := interactions.ValidateArgumentHashKey(paths.InteractionKeyFile); err != nil {
+		return fmt.Errorf("interaction key: %w", err)
 	}
 	return nil
 }
@@ -327,6 +399,13 @@ func preflightRuntimeFile(path string) error {
 	}
 	if !entry.Mode().IsRegular() {
 		return fmt.Errorf("path %q is not a regular file", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open file %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close file %q: %w", path, err)
 	}
 	return nil
 }

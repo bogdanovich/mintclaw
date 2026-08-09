@@ -216,6 +216,10 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding tools = %v, want %v", got, codingRuntimeToolNames)
 	}
+	originalExec, ok := agent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("coding exec tool is missing")
+	}
 	if !NewPipeline(loop).Config.TrustAllToolExecution {
 		t.Fatal("coding pipeline did not select trusted tool execution")
 	}
@@ -226,6 +230,13 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 		t.Fatalf("coding construction mutated persisted exec config: %#v", cfg.Tools.Exec)
 	}
 	loop.RegisterTool(&echoTextTool{})
+	agent.Tools.Register(&allowlistTestTool{name: "exec"})
+	agent.Tools.RegisterHidden(&allowlistTestTool{name: "hidden-extra"})
+	agent.Tools.Unregister("read_file")
+	agent.Tools.SetAllowlist([]string{})
+	if gotExec, ok := agent.Tools.Get("exec"); !ok || gotExec != originalExec {
+		t.Fatal("sealed coding registry replaced its trusted exec tool")
+	}
 	if err := loop.RegisterRuntimeTool("extra", nil); err == nil {
 		t.Fatal("coding runtime admitted a dynamic runtime tool")
 	}
@@ -355,6 +366,35 @@ func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testi
 				t.Fatalf("rejected profile created state root: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestNewRuntimeProfileRejectsSharedExecutionRootForDistinctOwners(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	first, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-one"},
+		executionRoot,
+		filepath.Join(root, "state-one"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+	}
+	second, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-two"},
+		executionRoot,
+		filepath.Join(root, "state-two"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+	}
+	if _, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: first},
+		RuntimeProfileBinding{AgentID: "support", Layout: second},
+	); err == nil || !strings.Contains(err.Error(), "share an execution root") {
+		t.Fatalf("NewRuntimeProfile(shared execution root) error = %v", err)
 	}
 }
 
@@ -716,6 +756,79 @@ func TestNewAgentLoopWithRuntimeProfileRejectsSeahorseDatabaseSymlink(t *testing
 	info, statErr := os.Stat(target)
 	if statErr != nil || info.Size() != 0 {
 		t.Fatalf("rejected construction mutated symlink target: info=%v error=%v", info, statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileRejectsInvalidOperationalLeaves(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		path    func(RuntimeStatePaths) string
+		content []byte
+		link    bool
+	}{
+		{name: "runtime state symlink", path: func(paths RuntimeStatePaths) string {
+			return paths.RuntimeStateFile
+		}, link: true},
+		{name: "corrupt runtime state", path: func(paths RuntimeStatePaths) string {
+			return paths.RuntimeStateFile
+		}, content: []byte("{")},
+		{name: "corrupt task registry", path: func(paths RuntimeStatePaths) string {
+			return paths.TaskRegistryFile
+		}, content: []byte("{")},
+		{name: "corrupt interaction registry", path: func(paths RuntimeStatePaths) string {
+			return paths.InteractionFile
+		}, content: []byte("{")},
+		{name: "invalid interaction key", path: func(paths RuntimeStatePaths) string {
+			return paths.InteractionKeyFile
+		}, content: []byte("short")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			executionRoot := filepath.Join(root, "project")
+			layout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-operational"},
+				executionRoot,
+				filepath.Join(root, "state"),
+				[]string{executionRoot},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout() error = %v", err)
+			}
+			leaf := test.path(layout.StatePaths())
+			if err := os.MkdirAll(filepath.Dir(leaf), 0o700); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if test.link {
+				target := filepath.Join(root, "outside-state")
+				if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+					t.Fatalf("WriteFile(target) error = %v", err)
+				}
+				if err := os.Symlink(target, leaf); err != nil {
+					t.Skipf("Symlink() unavailable: %v", err)
+				}
+			} else if err := os.WriteFile(leaf, test.content, 0o600); err != nil {
+				t.Fatalf("WriteFile(leaf) error = %v", err)
+			}
+			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			if err != nil {
+				t.Fatalf("NewRuntimeProfile() error = %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.ContextManager = "none"
+			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			if err == nil {
+				if loop != nil {
+					loop.Close()
+				}
+				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want invalid-leaf rejection")
+			}
+			if loop != nil {
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+			}
+			if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("failed operational preflight created execution root: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -1528,5 +1641,42 @@ func TestRuntimeProfileRequiresExactConfiguredAgentSet(t *testing.T) {
 	cfg.Agents.List = []config.AgentConfig{{ID: "main"}, {ID: " MAIN "}}
 	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
 		t.Fatal("newAgentRegistryWithRuntimeProfile(duplicate configured ID) error = nil")
+	}
+}
+
+func TestStrictPersonalRuntimeRejectsMultipleOwnersBeforeConstruction(t *testing.T) {
+	root := t.TempDir()
+	bindings := make([]RuntimeProfileBinding, 0, 2)
+	for _, agentID := range []string{"main", "support"} {
+		executionRoot := filepath.Join(root, agentID+"-project")
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: agentID},
+			executionRoot,
+			filepath.Join(root, agentID+"-state"),
+			[]string{executionRoot},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", agentID, err)
+		}
+		bindings = append(bindings, RuntimeProfileBinding{AgentID: agentID, Layout: layout})
+	}
+	profile, err := NewRuntimeProfile(bindings...)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}, {ID: "support"}}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "exactly one owner") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile(multi-personal) error = %v", err)
+	}
+	for _, binding := range bindings {
+		if _, statErr := os.Stat(binding.Layout.StateRoot()); !os.IsNotExist(statErr) {
+			t.Fatalf("rejected strict personal profile created state root %q: %v", binding.Layout.StateRoot(), statErr)
+		}
 	}
 }
