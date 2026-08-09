@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +31,37 @@ type mockChannel struct {
 	placeholdersSent  int
 	editedMessages    int
 	lastPlaceholderID string
+}
+
+type countingListener struct {
+	accepts      atomic.Int32
+	secondAccept chan struct{}
+	closed       chan struct{}
+	closeOnce    sync.Once
+}
+
+func newCountingListener() *countingListener {
+	return &countingListener{
+		secondAccept: make(chan struct{}),
+		closed:       make(chan struct{}),
+	}
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	if l.accepts.Add(1) == 2 {
+		close(l.secondAccept)
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *countingListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *countingListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
 func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
@@ -1591,6 +1623,36 @@ func TestStartAll_ConcurrentCallsShareOneStartup(t *testing.T) {
 	}
 	if got := startCalls.Load(); got != 2 {
 		t.Fatalf("channel Start calls after restart = %d, want 2", got)
+	}
+}
+
+func TestStartAll_RepeatedCallsStartHTTPListenerOnce(t *testing.T) {
+	m := newTestManager()
+	listener := newCountingListener()
+	m.SetupHTTPServerListeners([]net.Listener{listener}, listener.Addr().String(), nil)
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("first StartAll() error = %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for listener.accepts.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := listener.accepts.Load(); got != 1 {
+		t.Fatalf("listener Accept calls after first startup = %d, want 1", got)
+	}
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("second StartAll() error = %v", err)
+	}
+	select {
+	case <-listener.secondAccept:
+		t.Fatal("second StartAll launched another HTTP Serve loop")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
 	}
 }
 

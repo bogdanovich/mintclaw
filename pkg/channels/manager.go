@@ -1637,7 +1637,9 @@ func (l *ChannelLifecycle) startAll(
 	// clear the owner fields as soon as this transition completes.
 	httpServer := l.httpServer
 	httpListeners := append([]net.Listener(nil), l.httpListeners...)
-	if httpServer != nil {
+	startHTTPServer := httpServer != nil && !l.httpServing
+	if startHTTPServer {
+		l.httpServing = true
 		if len(httpListeners) > 0 {
 			for _, listener := range httpListeners {
 				ln := listener
@@ -1729,6 +1731,7 @@ func (l *ChannelLifecycle) stopAll(
 	httpServer := l.httpServer
 	l.httpServer = nil
 	l.httpListeners = nil
+	l.httpServing = false
 
 	delivery.stopDispatcher()
 

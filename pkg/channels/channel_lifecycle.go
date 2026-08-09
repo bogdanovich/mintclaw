@@ -27,6 +27,7 @@ type ChannelLifecycle struct {
 	mux              *dynamicServeMux
 	httpServer       *http.Server
 	httpListeners    []net.Listener
+	httpServing      bool
 	channelHashes    map[string]string
 	restartRequired  map[string]string
 	shutdownRunning  bool
@@ -170,6 +171,7 @@ func (l *ChannelLifecycle) setupHTTPServer(
 		WriteTimeout: 30 * time.Second,
 	}
 	l.httpListeners = append([]net.Listener(nil), listeners...)
+	l.httpServing = false
 }
 
 func (l *ChannelLifecycle) registerHTTPHandler(pattern string, handler http.Handler) error {
