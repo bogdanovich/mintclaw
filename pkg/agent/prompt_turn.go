@@ -81,8 +81,7 @@ func turnProfileNativeSearchCallable(
 	if !turnProfileToolAllowed(profile, "web_search") {
 		return false
 	}
-	nativeProvider, ok := agent.Provider.(providers.NativeSearchCapable)
-	return ok && nativeProvider.SupportsNativeSearch()
+	return providers.Capabilities(agent.Provider).NativeSearch
 }
 
 func promptBuildRequestForProcessOptions(

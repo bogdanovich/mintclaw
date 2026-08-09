@@ -383,7 +383,7 @@ func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapabl
 			return nil, "", err
 		}
 		imageProvider, ok := provider.(ImageGenerationCapable)
-		if !ok || !imageProvider.SupportsImageGeneration() {
+		if !ok || !ImageCapabilities(imageProvider).Supported {
 			return nil, "", fmt.Errorf("provider %q does not support image generation", providerName)
 		}
 		return imageProvider, modelID, nil

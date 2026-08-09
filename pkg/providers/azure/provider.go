@@ -13,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
@@ -39,6 +40,10 @@ type Provider struct {
 	httpClient  *http.Client
 	userAgent   string
 	tokenSource func(ctx context.Context) (string, error)
+}
+
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 // Option configures the Azure Provider.

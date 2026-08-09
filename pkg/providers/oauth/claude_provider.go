@@ -6,10 +6,18 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/auth"
 	anthropicprovider "github.com/bogdanovich/mintclaw/pkg/providers/anthropic"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
 type ClaudeProvider struct {
 	delegate *anthropicprovider.Provider
+}
+
+func (p *ClaudeProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	if p == nil || p.delegate == nil {
+		return providercapabilities.ProviderCapabilities{}
+	}
+	return p.delegate.Capabilities()
 }
 
 func NewClaudeProvider(token string) *ClaudeProvider {

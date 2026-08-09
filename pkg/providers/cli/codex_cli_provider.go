@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -18,6 +19,10 @@ import (
 type CodexCliProvider struct {
 	command   string
 	workspace string
+}
+
+func (p *CodexCliProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 // NewCodexCliProvider creates a new Codex CLI provider.

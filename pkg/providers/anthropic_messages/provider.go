@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
@@ -43,6 +44,10 @@ type Provider struct {
 	apiBase    string
 	httpClient *http.Client
 	userAgent  string
+}
+
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 // NewProvider creates a new Anthropic Messages API provider.

@@ -125,8 +125,8 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 	if model != "gpt-image-2" {
 		t.Fatalf("model = %q, want gpt-image-2", model)
 	}
-	if provider.ImageGenerationProviderID() != "openai-codex" {
-		t.Fatalf("provider id = %q, want openai-codex", provider.ImageGenerationProviderID())
+	if ImageCapabilities(provider).ProviderID != "openai-codex" {
+		t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
 	}
 }
 

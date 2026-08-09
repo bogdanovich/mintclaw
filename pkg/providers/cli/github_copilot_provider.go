@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	copilot "github.com/github/copilot-sdk/go"
+
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
 type GitHubCopilotProvider struct {
@@ -19,6 +21,10 @@ type GitHubCopilotProvider struct {
 
 	mu     sync.Mutex
 	chatMu sync.Mutex
+}
+
+func (p *GitHubCopilotProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 type copilotSession interface {

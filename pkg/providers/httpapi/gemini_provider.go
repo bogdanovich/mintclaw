@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 )
@@ -61,8 +62,11 @@ func (p *GeminiProvider) GetDefaultModel() string {
 	return geminiDefaultModel
 }
 
-func (p *GeminiProvider) SupportsThinking() bool {
-	return true
+func (p *GeminiProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{
+		Streaming: providercapabilities.StreamingCapabilities{Supported: true, Events: true},
+		Thinking:  true,
+	}
 }
 
 func (p *GeminiProvider) Chat(

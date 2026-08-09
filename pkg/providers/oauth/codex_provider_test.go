@@ -85,9 +85,9 @@ func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
 	}
 }
 
-func TestCodexProvider_SupportsThinking(t *testing.T) {
+func TestCodexProviderDeclaresThinking(t *testing.T) {
 	provider := NewCodexProvider("test-token", "acc-123")
-	if !provider.SupportsThinking() {
+	if !provider.Capabilities().Thinking {
 		t.Fatal("CodexProvider should support thinking_level")
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const maxGeminiSchemaDepth = 64
+const MaxSimpleToolSchemaDepth = 64
 
 var geminiSupportedTypes = map[string]bool{
 	"array":   true,
@@ -54,7 +54,7 @@ func (s geminiSchemaSanitizer) sanitizeNode(
 	refTrail map[string]struct{},
 	depth int,
 ) map[string]any {
-	if node == nil || depth > maxGeminiSchemaDepth {
+	if node == nil || depth > MaxSimpleToolSchemaDepth {
 		return map[string]any{}
 	}
 
@@ -116,7 +116,7 @@ func (s geminiSchemaSanitizer) normalizeNode(
 	refTrail map[string]struct{},
 	depth int,
 ) map[string]any {
-	if node == nil || depth > maxGeminiSchemaDepth {
+	if node == nil || depth > MaxSimpleToolSchemaDepth {
 		return map[string]any{}
 	}
 

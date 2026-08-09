@@ -99,7 +99,7 @@ func applyThinkingOption(
 		opts["thinking_level"] = string(settings.level)
 		return
 	}
-	if tc, ok := provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
+	if providers.Capabilities(provider).Thinking {
 		opts["thinking_level"] = string(settings.level)
 		return
 	}
