@@ -333,7 +333,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if mc.APIKey != "" {
-		mc.ModelConfig.SetAPIKey(mc.APIKey)
+		mc.SetAPIKey(mc.APIKey)
 	}
 
 	cfg, err := config.LoadConfig(h.configPath)
@@ -408,9 +408,9 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	// Preserve the existing API key when the caller omits it (empty string).
 	// This lets the UI update api_base / proxy without clearing the stored secret.
 	if mc.APIKey == "" {
-		mc.ModelConfig.SetAPIKey(cfg.ModelList[idx].APIKey())
+		mc.SetAPIKey(cfg.ModelList[idx].APIKey())
 	} else {
-		mc.ModelConfig.SetAPIKey(mc.APIKey)
+		mc.SetAPIKey(mc.APIKey)
 	}
 	// Preserve existing ExtraBody when omitted (nil), but clear it when
 	// the frontend sends an empty object {} to indicate the field should

@@ -418,7 +418,7 @@ func (m *Manager) cleanupDeliveryState(
 			streamKey := streamSuppressionKey(
 				name, cleanupChatID, opts.SessionKey, primaryTraceScope(opts.TraceScopes),
 			)
-			m.streamDeliveryState.clear(streamKey)
+			m.clear(streamKey)
 		}
 	}
 
@@ -520,7 +520,7 @@ func (m *Manager) beginToolFeedbackTerminals(
 	traceScopes []runtimeevents.TraceScope,
 	transient bool,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.deliveryInteractionState.hasToolFeedback() {
+	if m == nil || !m.hasToolFeedback() {
 		return nil
 	}
 	keys, scoped := m.resolveToolFeedbackTargets(
@@ -542,7 +542,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 	ch Channel,
 	msg bus.OutboundMessage,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.deliveryInteractionState.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
+	if m == nil || !m.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
 		!OutboundMessageDismissesTrackedToolFeedback(msg) {
 		return nil
 	}
@@ -595,7 +595,7 @@ func (m *Manager) deliverToolFeedback(
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
 func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.deliveryInteractionState.hasToolFeedback() {
+	if m == nil || !m.hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -626,7 +626,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.deliveryInteractionState.dismissToolFeedback(ctx, keys, scoped)
+	m.dismissToolFeedback(ctx, keys, scoped)
 }
 
 func (m *Manager) resolveToolFeedbackTargets(
@@ -641,7 +641,7 @@ func (m *Manager) resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
 	if !scoped && len(keys) == 1 {
-		if key, ok := m.deliveryInteractionState.singleActiveScopedToolFeedbackKey(keys[0]); ok {
+		if key, ok := m.singleActiveScopedToolFeedbackKey(keys[0]); ok {
 			return []string{key}, true
 		}
 	}
@@ -728,7 +728,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	traceScope := primaryTraceScope(msg.TraceScopes)
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey, traceScope)
-	activeStreamKey, streamActive := m.streamDeliveryState.activeKey(name, chatID, msg.SessionKey, traceScope)
+	activeStreamKey, streamActive := m.activeKey(name, chatID, msg.SessionKey, traceScope)
 
 	m.cleanupDeliveryState(ctx, name, chatID, &msg.Context, ch, deliveryCleanupOptions{
 		StopTyping:   true,
@@ -750,7 +750,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if streamActive {
 			return nil, true
 		}
-		if m.streamDeliveryState.tombstoneActiveForMessage(
+		if m.tombstoneActiveForMessage(
 			name, chatID, msg.SessionKey, traceScope,
 			time.Now(),
 		) {
@@ -762,7 +762,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// outbound. Earlier queued visible messages must still be delivered.
 	if isFinalMessage {
 		if streamActive {
-			if !m.streamDeliveryState.consumeActive(activeStreamKey) {
+			if !m.consumeActive(activeStreamKey) {
 				streamActive = false
 			} else {
 				if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
@@ -784,11 +784,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 						}
 					}
 				}
-				if m.deliveryInteractionState.hasToolFeedback() {
+				if m.hasToolFeedback() {
 					keys, _ := toolFeedbackTargets(
 						name, ch, chatID, &msg.Context, msg.SessionKey, msg.TraceScopes,
 					)
-					m.deliveryInteractionState.releaseToolFeedbackTerminals(keys)
+					m.releaseToolFeedbackTerminals(keys)
 				}
 				return nil, true
 			}
@@ -798,12 +798,12 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if streamActive {
 		return nil, false
 	}
-	if m.streamDeliveryState.activeForChat(name, chatID) {
+	if m.activeForChat(name, chatID) {
 		return nil, false
 	}
 
 	if !isAuxiliaryMessage {
-		m.streamDeliveryState.clearTombstone(streamKey)
+		m.clearTombstone(streamKey)
 	}
 
 	// 5. Try editing placeholder
@@ -887,7 +887,7 @@ func NewManager(
 		channelRestartRequired: make(map[string]string),
 	}
 	if cfg != nil {
-		m.deliveryInteractionState.initializeToolFeedback(
+		m.initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -937,7 +937,7 @@ func (m *Manager) installDeliveryOwnerLocked(
 	channelType string,
 ) *deliveryOwner {
 	owner := newDeliveryOwner(name, channel, channelType)
-	m.deliveryRegistry.install(owner)
+	m.install(owner)
 	owner.StartDelivery(ctx, m)
 	return owner
 }
@@ -992,7 +992,7 @@ func (m *Manager) GetStreamer(
 	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
 	placeholderKey := channelName + ":" + chatID
 	clearMarker := func() {
-		m.streamDeliveryState.consumeActive(streamKey)
+		m.consumeActive(streamKey)
 	}
 	onFinalize := func(finalizeCtx context.Context, finalContent string) {
 		m.dismissToolFeedbackTargets(
@@ -1013,7 +1013,7 @@ func (m *Manager) GetStreamer(
 				}
 			}
 		}
-		m.streamDeliveryState.markFinalized(streamKey, time.Now())
+		m.markFinalized(streamKey, time.Now())
 	}
 
 	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
@@ -1756,7 +1756,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		)
 	}
 
-	if len(m.channels) > 0 && m.deliveryRegistry.workerCount() == 0 {
+	if len(m.channels) > 0 && m.workerCount() == 0 {
 		if m.dispatchTask != nil {
 			m.dispatchTask.cancel()
 			m.dispatchTask = nil
@@ -1780,7 +1780,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		sort.Strings(failedNames)
 		logger.WarnCF("channels", "Some channels failed to start", map[string]any{
 			"failed":          len(failedNames),
-			"started":         m.deliveryRegistry.workerCount(),
+			"started":         m.workerCount(),
 			"total":           len(m.channels),
 			"failed_channels": failedNames,
 		})
@@ -1845,7 +1845,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	logger.InfoCF("channels", "Channel startup completed", map[string]any{
-		"started": m.deliveryRegistry.workerCount(),
+		"started": m.workerCount(),
 		"failed":  len(failedNames),
 		"total":   len(m.channels),
 	})
@@ -1869,7 +1869,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.dispatchTask = nil
 	}
 
-	deliveries := m.deliveryRegistry.snapshot()
+	deliveries := m.snapshot()
 
 	channels := make([]channelStopTarget, 0, len(m.channels))
 	for name, channel := range m.channels {
@@ -1902,7 +1902,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		}
 		closeWorkerAndWait(delivery.worker)
 	}
-	m.deliveryInteractionState.stopToolFeedback()
+	m.stopToolFeedback()
 
 	// Stop all channels
 	for _, target := range channels {
@@ -2225,7 +2225,7 @@ func (m *Manager) finalizedStreamActiveForMessage(channelName string, msg bus.Ou
 	if strings.TrimSpace(channelName) == "" || strings.TrimSpace(chatID) == "" {
 		return false
 	}
-	_, active := m.streamDeliveryState.activeKey(
+	_, active := m.activeKey(
 		channelName, chatID, msg.SessionKey, primaryTraceScope(msg.TraceScopes),
 	)
 	return active
@@ -2326,7 +2326,7 @@ func (m *Manager) sendWithRetryPolicy(
 			attemptMsg := pending[0]
 			var msgIDs []string
 			var err error
-			if isToolFeedback && m.deliveryInteractionState.hasToolFeedback() {
+			if isToolFeedback && m.hasToolFeedback() {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
 				msgIDs, err = m.deliverToolFeedback(ctx, name, w.ch, attemptMsg, w.ch.Send)
@@ -2655,7 +2655,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 
 	terminalSucceeded := false
 	var terminals []*toolFeedbackTerminal
-	if m.deliveryInteractionState.hasToolFeedback() {
+	if m.hasToolFeedback() {
 		terminals = m.beginToolFeedbackTerminals(
 			name,
 			w.ch,
@@ -2745,7 +2745,7 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 }
 
 func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.deliveryRegistry.owner(name, m.channels[name])
+	return m.owner(name, m.channels[name])
 }
 
 func (m *Manager) GetStatus() map[string]any {
@@ -2811,7 +2811,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			added = append(added, name)
 			continue
 		}
-		if !m.deliveryRegistry.hasActiveWorker(name) {
+		if !m.hasActiveWorker(name) {
 			logger.InfoCF("channels", "Recreating inactive changed channel", map[string]any{
 				"channel": name,
 			})
@@ -2878,7 +2878,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			cancel()
 			return err
 		}
-		m.deliveryInteractionState.retireToolFeedbackChannel(ctx, name)
+		m.retireToolFeedbackChannel(ctx, name)
 		if err := oldChannel.Stop(ctx); err != nil {
 			logger.ErrorCF("channels", "Error stopping inactive changed channel", map[string]any{
 				"channel": name,
@@ -2928,7 +2928,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	// Commit hashes only on full success.
 	m.channelHashes = list
 	if cfg != nil {
-		m.deliveryInteractionState.configureToolFeedback(
+		m.configureToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -2968,9 +2968,9 @@ func (m *Manager) UnregisterChannel(name string) {
 	if ch != nil && m.mux != nil {
 		m.unregisterChannelHTTPHandler(name, ch)
 	}
-	owner, w := m.deliveryRegistry.lookup(name)
+	owner, w := m.lookup(name)
 	if owner == nil {
-		m.deliveryRegistry.removeWorkerIfUnowned(name)
+		m.removeWorkerIfUnowned(name)
 		delete(m.channels, name)
 	}
 	m.mu.Unlock()
@@ -2980,10 +2980,10 @@ func (m *Manager) UnregisterChannel(name string) {
 	} else {
 		closeWorkerAndWait(w)
 	}
-	m.deliveryInteractionState.retireToolFeedbackChannel(context.Background(), name)
+	m.retireToolFeedbackChannel(context.Background(), name)
 
 	m.mu.Lock()
-	m.deliveryRegistry.removeIfMatches(name, owner, w)
+	m.removeIfMatches(name, owner, w)
 	if ch != nil && m.channels[name] == ch {
 		delete(m.channels, name)
 	}
