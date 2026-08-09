@@ -12,9 +12,6 @@ func normalizeCopilotError(err error, event *copilot.SessionEvent) error {
 	if err == nil {
 		return nil
 	}
-	if normalized, ok := providererrors.FromTransportError(err); ok {
-		return normalized
-	}
 	if event == nil {
 		return normalizeCLIError(err, err.Error())
 	}
@@ -45,6 +42,11 @@ func normalizeCopilotError(err error, event *copilot.SessionEvent) error {
 	)
 	if normalized.Kind != providererrors.KindUnknown {
 		return normalized
+	}
+	if transport, ok := providererrors.FromTransportError(err); ok {
+		transportCopy := *transport
+		transportCopy.RequestID = requestID
+		return &transportCopy
 	}
 	compatibilityKind := classifyCLICompatibilityText(diagnostic)
 	return providererrors.FromStructuredError(

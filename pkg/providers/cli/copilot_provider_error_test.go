@@ -84,3 +84,42 @@ func TestNormalizeCopilotErrorStatusAndCompatibilityFallback(t *testing.T) {
 		providererrors.KindTimeout,
 	)
 }
+
+func TestNormalizeCopilotErrorStructuredEventPrecedesTransport(t *testing.T) {
+	errorType := "subscription"
+	status := int64(402)
+	requestID := "github-request-structured"
+	event := &copilot.SessionEvent{Data: copilot.Data{
+		ErrorType:      &errorType,
+		StatusCode:     &status,
+		ProviderCallID: &requestID,
+	}}
+
+	providerErr := assertProviderError(
+		t,
+		normalizeCopilotError(context.DeadlineExceeded, event),
+		context.DeadlineExceeded,
+		providererrors.KindBilling,
+	)
+	if providerErr.HTTPStatus != int(status) {
+		t.Fatalf("HTTPStatus = %d, want %d", providerErr.HTTPStatus, status)
+	}
+	if providerErr.RequestID != requestID {
+		t.Fatalf("RequestID = %q, want %q", providerErr.RequestID, requestID)
+	}
+}
+
+func TestNormalizeCopilotErrorTransportFallbackPreservesRequestID(t *testing.T) {
+	requestID := "github-request-transport"
+	event := &copilot.SessionEvent{Data: copilot.Data{ProviderCallID: &requestID}}
+
+	providerErr := assertProviderError(
+		t,
+		normalizeCopilotError(context.DeadlineExceeded, event),
+		context.DeadlineExceeded,
+		providererrors.KindTimeout,
+	)
+	if providerErr.RequestID != requestID {
+		t.Fatalf("RequestID = %q, want %q", providerErr.RequestID, requestID)
+	}
+}

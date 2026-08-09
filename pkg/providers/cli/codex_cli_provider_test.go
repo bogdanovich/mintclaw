@@ -227,6 +227,20 @@ another bad line
 	}
 }
 
+func TestParseJSONLEvents_WhollyMalformedOutput(t *testing.T) {
+	p := &CodexCliProvider{}
+	diagnostic := strings.Repeat("sensitive diagnostic ", 300)
+
+	_, err := p.parseJSONLEvents("not json\n" + diagnostic)
+	providerErr := assertProviderErrorKind(t, err, providererrors.KindUnknown)
+	if strings.Contains(providerErr.Error(), "sensitive diagnostic") {
+		t.Fatal("ProviderError exposed malformed CLI output")
+	}
+	if len([]rune(errors.Unwrap(providerErr).Error())) > 4100 {
+		t.Fatal("malformed CLI diagnostic was not bounded")
+	}
+}
+
 func TestParseJSONLEvents_CommandExecution(t *testing.T) {
 	p := &CodexCliProvider{}
 	events := `{"type":"turn.started"}
@@ -450,6 +464,24 @@ func TestCodexCliProvider_NonZeroExitPreservesCodedEvent(t *testing.T) {
 	provider := &CodexCliProvider{command: scriptPath}
 
 	_, err := provider.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, nil, "", nil)
+	providerErr := assertProviderErrorKind(t, err, providererrors.KindBilling)
+	var exitErr *exec.ExitError
+	if !errors.As(providerErr, &exitErr) {
+		t.Fatal("ProviderError does not preserve the process exit error")
+	}
+}
+
+func TestCodexCliProvider_NonZeroExitRejectsPartialResponse(t *testing.T) {
+	scriptPath := createMockCodexCLIWithExit(t, []string{
+		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Partial result."}}`,
+		`{"type":"turn.failed","error":{"code":"insufficient_quota","message":"rate limit exceeded"}}`,
+	}, 1)
+	provider := &CodexCliProvider{command: scriptPath}
+
+	resp, err := provider.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, nil, "", nil)
+	if resp != nil {
+		t.Fatalf("Chat() response = %+v, want nil after non-zero exit", resp)
+	}
 	providerErr := assertProviderErrorKind(t, err, providererrors.KindBilling)
 	var exitErr *exec.ExitError
 	if !errors.As(providerErr, &exitErr) {

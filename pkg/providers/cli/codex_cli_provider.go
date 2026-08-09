@@ -67,22 +67,22 @@ func (p *CodexCliProvider) Chat(
 	// Parse JSONL from stdout even if exit code is non-zero,
 	// because codex writes diagnostic noise to stderr (e.g. rollout errors)
 	// but still produces valid JSONL output.
-	var parsedResp *LLMResponse
+	var parsed codexJSONLResult
 	var parsedErr error
 	if stdoutStr := stdout.String(); stdoutStr != "" {
-		parsedResp, parsedErr = p.parseJSONLEvents(stdoutStr)
-		if parsedErr == nil && parsedResp != nil &&
-			(parsedResp.Content != "" || len(parsedResp.ToolCalls) > 0) {
-			return parsedResp, nil
-		}
+		parsed, parsedErr = p.parseJSONLResult(stdoutStr)
 	}
 
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, normalizeCLIError(errors.Join(ctxErr, err), stderr.String())
 		}
+		providerFailure := parsed.providerFailure
+		if providerFailure == nil {
+			providerFailure = parsedErr
+		}
 		var providerErr *providererrors.ProviderError
-		if errors.As(parsedErr, &providerErr) && providerErr != nil {
+		if errors.As(providerFailure, &providerErr) && providerErr != nil {
 			providerErrCopy := *providerErr
 			providerErrCopy.Cause = errors.Join(providerErr.Cause, err)
 			return nil, &providerErrCopy
@@ -96,8 +96,11 @@ func (p *CodexCliProvider) Chat(
 	if parsedErr != nil {
 		return nil, parsedErr
 	}
-	if parsedResp != nil {
-		return parsedResp, nil
+	if parsed.providerFailure != nil && !hasCodexResponse(parsed.response) {
+		return nil, parsed.providerFailure
+	}
+	if parsed.response != nil {
+		return parsed.response, nil
 	}
 	return p.parseJSONLEvents("")
 }
@@ -181,12 +184,34 @@ type codexEventErr struct {
 	Code    string `json:"code,omitempty"`
 }
 
-// parseJSONLEvents processes the JSONL output from codex exec --json.
+type codexJSONLResult struct {
+	response        *LLMResponse
+	providerFailure error
+}
+
+// parseJSONLEvents processes the JSONL output from codex exec --json. A response
+// produced by a successful process remains usable even if the stream also reports
+// a provider failure; Chat handles non-zero process exits before accepting it.
 func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error) {
+	result, err := p.parseJSONLResult(output)
+	if err != nil {
+		return nil, err
+	}
+	if result.providerFailure != nil && !hasCodexResponse(result.response) {
+		return nil, result.providerFailure
+	}
+	return result.response, nil
+}
+
+func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, error) {
 	var lastAgentMessage string
 	var usage *UsageInfo
 	var lastError string
 	var lastErrorCode string
+	var firstDecodeErr error
+	var firstMalformedLine string
+	nonEmptyLines := 0
+	usableEvents := 0
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -195,11 +220,24 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 		if line == "" {
 			continue
 		}
+		nonEmptyLines++
 
 		var event codexEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue // skip malformed lines
+			if firstDecodeErr == nil {
+				firstDecodeErr = err
+				firstMalformedLine = line
+			}
+			continue
 		}
+		if event.Type == "" {
+			if firstDecodeErr == nil {
+				firstDecodeErr = errors.New("missing event type")
+				firstMalformedLine = line
+			}
+			continue
+		}
+		usableEvents++
 
 		switch event.Type {
 		case "item.completed":
@@ -230,11 +268,18 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, normalizeCLIError(fmt.Errorf("scan codex CLI events: %w", err), "")
+		return codexJSONLResult{}, normalizeCLIError(fmt.Errorf("scan codex CLI events: %w", err), "")
+	}
+	if nonEmptyLines > 0 && usableEvents == 0 {
+		return codexJSONLResult{}, normalizeCLIError(
+			fmt.Errorf("decode codex CLI events: %w", firstDecodeErr),
+			firstMalformedLine,
+		)
 	}
 
-	if lastError != "" && lastAgentMessage == "" {
-		return nil, normalizeCodedCLIError(lastErrorCode, lastError, errors.New(lastError))
+	var providerFailure error
+	if lastError != "" {
+		providerFailure = normalizeCodedCLIError(lastErrorCode, lastError, errors.New(lastError))
 	}
 
 	content := lastAgentMessage
@@ -248,10 +293,17 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 		content = stripToolCallsFromText(content)
 	}
 
-	return &LLMResponse{
-		Content:      strings.TrimSpace(content),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+	return codexJSONLResult{
+		response: &LLMResponse{
+			Content:      strings.TrimSpace(content),
+			ToolCalls:    toolCalls,
+			FinishReason: finishReason,
+			Usage:        usage,
+		},
+		providerFailure: providerFailure,
 	}, nil
+}
+
+func hasCodexResponse(response *LLMResponse) bool {
+	return response != nil && (response.Content != "" || len(response.ToolCalls) > 0)
 }
