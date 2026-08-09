@@ -156,7 +156,22 @@ func currentTestExecutable(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return path
+	// go test compiles the test binary with the ambient umask, so its mode can be
+	// group/other-writable (for example umask 0002 yields 775) and openExecutable
+	// rejects it as a companion payload. Stage a mode-normalized copy so adoption
+	// fixtures are deterministic on any umask.
+	fixture := filepath.Join(t.TempDir(), "current-test-executable")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(fixture, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
 }
 
 func configureRuntimeInstallation(installation *Installation) {
