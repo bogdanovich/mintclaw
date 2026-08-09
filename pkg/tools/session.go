@@ -55,6 +55,7 @@ type ProcessSession struct {
 	completion      chan struct{}
 	waitErr         error
 	completionOnce  sync.Once
+	terminate       func(int) error
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -115,7 +116,11 @@ func (s *ProcessSession) killProcess() error {
 		return ErrSessionNotFound
 	}
 
-	if err := killProcessGroup(pid); err != nil {
+	terminate := s.terminate
+	if terminate == nil {
+		terminate = killProcessGroup
+	}
+	if err := terminate(pid); err != nil {
 		return err
 	}
 
@@ -355,12 +360,17 @@ func (sm *SessionManager) Close() error {
 			if session == nil {
 				continue
 			}
-			if !session.IsDone() {
-				if err := session.Kill(); err != nil && !errors.Is(err, ErrSessionDone) {
-					closeErrors = append(closeErrors, err)
+			waitForCompletion := session.IsDone()
+			if !waitForCompletion {
+				killErr := session.Kill()
+				switch {
+				case killErr == nil, errors.Is(killErr, ErrSessionDone):
+					waitForCompletion = true
+				default:
+					closeErrors = append(closeErrors, killErr)
 				}
 			}
-			if session.hasCompletion() {
+			if waitForCompletion && session.hasCompletion() {
 				if err := session.waitForCompletion(); err != nil {
 					closeErrors = append(closeErrors, err)
 				}

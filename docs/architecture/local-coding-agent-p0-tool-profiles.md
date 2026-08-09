@@ -63,7 +63,9 @@ background process handles cannot cross personal-agent or coding-thread
 boundaries. Background startup acquires an admission lease before creating a
 process. Shutdown seals that gate, waits for every in-flight lease to commit or
 clean up, terminates and reaps admitted processes, and propagates termination,
-wait, and cleanup errors through agent shutdown.
+wait, and cleanup errors through agent shutdown. A genuine termination failure
+returns promptly instead of waiting indefinitely for a child that may remain
+alive; successfully signaled processes are always reaped before shutdown ends.
 
 Strict construction preflights every operational leaf and rejects symlinks,
 wrong file types, unreadable files, malformed state/registry snapshots, and

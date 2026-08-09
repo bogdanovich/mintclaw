@@ -123,6 +123,26 @@ func TestSessionManager_ClosePropagatesAdmittedSessionWaitError(t *testing.T) {
 	require.ErrorIs(t, sm.Close(), waitErr)
 }
 
+func TestSessionManager_CloseReturnsPromptlyAfterTerminationFailure(t *testing.T) {
+	sm := NewSessionManager()
+	terminateErr := errors.New("termination failed")
+	session := &ProcessSession{
+		ID: "kill-error", PID: 42, Status: "running", completion: make(chan struct{}),
+		terminate: func(int) error { return terminateErr },
+	}
+	require.True(t, sm.Add(session))
+	closed := make(chan error, 1)
+	go func() {
+		closed <- sm.Close()
+	}()
+	select {
+	case err := <-closed:
+		require.ErrorIs(t, err, terminateErr)
+	case <-time.After(time.Second):
+		t.Fatal("Close() waited for completion after termination failed")
+	}
+}
+
 func TestProcessSession_IsDone(t *testing.T) {
 	session := &ProcessSession{Status: "running"}
 	require.False(t, session.IsDone())
