@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/health"
@@ -18,15 +19,19 @@ import (
 // ChannelLifecycle owns channel registry, configuration, and shared HTTP state.
 // Manager composes it with delivery and stream owners.
 type ChannelLifecycle struct {
-	mu              sync.RWMutex
-	channels        map[string]Channel
-	config          *config.Config
-	mediaStore      media.MediaStore
-	mux             *dynamicServeMux
-	httpServer      *http.Server
-	httpListeners   []net.Listener
-	channelHashes   map[string]string
-	restartRequired map[string]string
+	mu               sync.RWMutex
+	transitionMu     sync.Mutex
+	channels         map[string]Channel
+	config           *config.Config
+	mediaStore       media.MediaStore
+	mux              *dynamicServeMux
+	httpServer       *http.Server
+	httpListeners    []net.Listener
+	channelHashes    map[string]string
+	restartRequired  map[string]string
+	started          bool
+	shutdownRunning  bool
+	shutdownComplete bool
 }
 
 func newChannelLifecycle(cfg *config.Config, store media.MediaStore) *ChannelLifecycle {
@@ -49,11 +54,66 @@ type channelLifecycleEventPublisher interface {
 	)
 }
 
+type channelLifecycleHost interface {
+	channelLifecycleEventPublisher
+	lifecycleBus() *bus.MessageBus
+	lifecyclePlaceholderRecorder() PlaceholderRecorder
+}
+
 func (l *ChannelLifecycle) channel(name string) (Channel, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	channel, ok := l.channels[name]
 	return channel, ok
+}
+
+func (l *ChannelLifecycle) storeChannel(name string, channel Channel) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.channels[name] = channel
+	l.shutdownComplete = false
+}
+
+func (l *ChannelLifecycle) channelHash(name string) string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.channelHashes[name]
+}
+
+func (l *ChannelLifecycle) shutdownInProgress() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.shutdownRunning
+}
+
+func (l *ChannelLifecycle) splitOnMarker() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.config != nil && l.config.Agents.Defaults.SplitOnMarker
+}
+
+func (l *ChannelLifecycle) responseFooterEnabled() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.config != nil && l.config.Agents.Defaults.IsResponseFooterEnabled()
+}
+
+func (l *ChannelLifecycle) setMediaStore(store media.MediaStore) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.mediaStore = store
+	for _, ch := range l.channels {
+		if setter, ok := ch.(mediaStoreSetter); ok {
+			setter.SetMediaStore(store)
+		}
+	}
+}
+
+func (l *ChannelLifecycle) setInitialHashes(hashes map[string]string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.channelHashes = hashes
 }
 
 func (l *ChannelLifecycle) status() map[string]any {
@@ -92,8 +152,12 @@ func (l *ChannelLifecycle) setupHTTPServer(
 	addr string,
 	healthServer *health.Server,
 ) {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.shutdownComplete = false
 
 	l.mux = newDynamicServeMux()
 	if healthServer != nil {

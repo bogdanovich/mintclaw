@@ -63,7 +63,7 @@ type deliveryRuntimeHost interface {
 }
 
 // DeliveryRuntime owns outbound delivery registration and dispatcher lifetime.
-// Manager's mutex protects runtime mutations during channel lifecycle changes.
+// ChannelLifecycle serializes registrations with channel lifecycle transitions.
 type DeliveryRuntime struct {
 	mu             sync.RWMutex
 	owners         map[string]*deliveryOwner
