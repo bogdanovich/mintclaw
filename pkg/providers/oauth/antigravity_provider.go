@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/auth"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 )
@@ -31,6 +32,10 @@ const (
 type AntigravityProvider struct {
 	tokenSource func() (string, string, error) // Returns (accessToken, projectID, error)
 	httpClient  *http.Client
+}
+
+func (p *AntigravityProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 // NewAntigravityProvider creates a new Antigravity provider using stored auth credentials.

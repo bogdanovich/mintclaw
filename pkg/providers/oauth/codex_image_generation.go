@@ -22,18 +22,6 @@ const (
 	maxImageGenerationEvents         = 512
 )
 
-func (p *CodexProvider) SupportsImageGeneration() bool {
-	return true
-}
-
-func (p *CodexProvider) ImageGenerationProviderID() string {
-	return "openai-codex"
-}
-
-func (p *CodexProvider) DefaultImageGenerationModel() string {
-	return codexDefaultImageGenerationModel
-}
-
 func (p *CodexProvider) GenerateImage(
 	ctx context.Context,
 	req ImageGenerationRequest,
@@ -50,7 +38,7 @@ func (p *CodexProvider) GenerateImage(
 	}
 
 	if strings.TrimSpace(req.Model) == "" {
-		req.Model = p.DefaultImageGenerationModel()
+		req.Model = p.Capabilities().ImageGeneration.DefaultModel
 	}
 	if req.Count < 1 {
 		req.Count = 1

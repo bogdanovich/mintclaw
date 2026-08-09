@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"time"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
@@ -25,6 +26,10 @@ type (
 
 // Provider is a stub that returns an error when Bedrock support is not compiled in.
 type Provider struct{}
+
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
+}
 
 // Option is a no-op when Bedrock is not enabled.
 type Option func(*providerConfig)

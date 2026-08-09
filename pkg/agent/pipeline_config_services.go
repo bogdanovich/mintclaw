@@ -58,8 +58,7 @@ func (p configNativeSearchPolicy) useNativeSearch(
 	if !turnProfileToolAllowed(profile, "web_search") {
 		return false
 	}
-	nativeProvider, ok := provider.(providers.NativeSearchCapable)
-	return ok && nativeProvider.SupportsNativeSearch()
+	return providers.Capabilities(provider).NativeSearch
 }
 
 func (p *Pipeline) nativeSearchEnabled(

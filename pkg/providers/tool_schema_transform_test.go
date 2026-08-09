@@ -9,7 +9,23 @@ import (
 )
 
 type toolCaptureProvider struct {
-	lastTools []ToolDefinition
+	lastTools    []ToolDefinition
+	capabilities ProviderCapabilities
+}
+
+type streamingToolCaptureProvider struct{ toolCaptureProvider }
+
+func (p *streamingToolCaptureProvider) ChatStreamEvents(
+	_ context.Context,
+	_ []Message,
+	tools []ToolDefinition,
+	_ string,
+	_ map[string]any,
+	onChunk func(StreamChunk),
+) (*LLMResponse, error) {
+	p.lastTools = tools
+	onChunk(StreamChunk{Content: "streamed"})
+	return &LLMResponse{Content: "streamed"}, nil
 }
 
 func (p *toolCaptureProvider) Chat(
@@ -26,6 +42,8 @@ func (p *toolCaptureProvider) Chat(
 func (p *toolCaptureProvider) GetDefaultModel() string {
 	return "test"
 }
+
+func (p *toolCaptureProvider) Capabilities() ProviderCapabilities { return p.capabilities }
 
 func TestWrapProviderWithToolSchemaTransform_DisabledPassesToolsThrough(t *testing.T) {
 	capture := &toolCaptureProvider{}
@@ -52,7 +70,10 @@ func TestWrapProviderWithToolSchemaTransform_DisabledPassesToolsThrough(t *testi
 }
 
 func TestWrapProviderWithToolSchemaTransform_GoogleSanitizesSchemas(t *testing.T) {
-	capture := &toolCaptureProvider{}
+	capture := &toolCaptureProvider{capabilities: ProviderCapabilities{
+		Thinking:     true,
+		NativeSearch: true,
+	}}
 	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")
 	if err != nil {
 		t.Fatalf("wrapProviderWithToolSchemaTransform() error = %v", err)
@@ -100,5 +121,48 @@ func TestWrapProviderWithToolSchemaTransform_GoogleSanitizesSchemas(t *testing.T
 	got := capture.lastTools[0].Function.Parameters
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sanitized parameters mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+	capabilities := Capabilities(wrapped)
+	if !capabilities.Thinking || !capabilities.NativeSearch {
+		t.Fatalf("wrapper dropped delegate capabilities: %+v", capabilities)
+	}
+	if capabilities.ToolSchema.Transform != providercommon.ToolSchemaTransformSimple ||
+		capabilities.ToolSchema.MaxDepth != providercommon.MaxSimpleToolSchemaDepth {
+		t.Fatalf("tool schema limits = %+v", capabilities.ToolSchema)
+	}
+}
+
+func TestToolSchemaTransformWrapperStreamsWithDeclaredCapabilities(t *testing.T) {
+	capture := &streamingToolCaptureProvider{toolCaptureProvider: toolCaptureProvider{
+		capabilities: ProviderCapabilities{
+			Streaming: StreamingCapabilities{Supported: true, Events: true},
+		},
+	}}
+	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")
+	if err != nil {
+		t.Fatalf("wrapProviderWithToolSchemaTransform() error = %v", err)
+	}
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunctionDefinition{
+			Name: "lookup",
+			Parameters: map[string]any{
+				"type":  "object",
+				"$defs": map[string]any{"unused": map[string]any{"type": "string"}},
+			},
+		},
+	}}
+	var chunk StreamChunk
+	response, attempted, err := ChatStreamEvents(
+		t.Context(), wrapped, nil, tools, "test", nil, func(value StreamChunk) { chunk = value },
+	)
+	if err != nil || !attempted {
+		t.Fatalf("ChatStreamEvents() = attempted %v, error %v", attempted, err)
+	}
+	if response.Content != "streamed" || chunk.Content != "streamed" {
+		t.Fatalf("response/chunk = %+v/%+v", response, chunk)
+	}
+	if _, ok := capture.lastTools[0].Function.Parameters["$defs"]; ok {
+		t.Fatalf("streaming schema was not transformed: %+v", capture.lastTools)
 	}
 }

@@ -6,27 +6,32 @@ import (
 	"regexp"
 	"strings"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 type (
-	ToolCall                = protocoltypes.ToolCall
-	FunctionCall            = protocoltypes.FunctionCall
-	LLMResponse             = protocoltypes.LLMResponse
-	StreamChunk             = protocoltypes.StreamChunk
-	UsageInfo               = protocoltypes.UsageInfo
-	Message                 = protocoltypes.Message
-	ToolResultStatus        = protocoltypes.ToolResultStatus
-	ToolDefinition          = protocoltypes.ToolDefinition
-	ToolFunctionDefinition  = protocoltypes.ToolFunctionDefinition
-	ExtraContent            = protocoltypes.ExtraContent
-	GoogleExtra             = protocoltypes.GoogleExtra
-	ContentBlock            = protocoltypes.ContentBlock
-	CacheControl            = protocoltypes.CacheControl
-	Attachment              = protocoltypes.Attachment
-	ImageGenerationRequest  = protocoltypes.ImageGenerationRequest
-	GeneratedImage          = protocoltypes.GeneratedImage
-	ImageGenerationResponse = protocoltypes.ImageGenerationResponse
+	ToolCall                    = protocoltypes.ToolCall
+	FunctionCall                = protocoltypes.FunctionCall
+	LLMResponse                 = protocoltypes.LLMResponse
+	StreamChunk                 = protocoltypes.StreamChunk
+	UsageInfo                   = protocoltypes.UsageInfo
+	Message                     = protocoltypes.Message
+	ToolResultStatus            = protocoltypes.ToolResultStatus
+	ToolDefinition              = protocoltypes.ToolDefinition
+	ToolFunctionDefinition      = protocoltypes.ToolFunctionDefinition
+	ExtraContent                = protocoltypes.ExtraContent
+	GoogleExtra                 = protocoltypes.GoogleExtra
+	ContentBlock                = protocoltypes.ContentBlock
+	CacheControl                = protocoltypes.CacheControl
+	Attachment                  = protocoltypes.Attachment
+	ImageGenerationRequest      = protocoltypes.ImageGenerationRequest
+	GeneratedImage              = protocoltypes.GeneratedImage
+	ImageGenerationResponse     = protocoltypes.ImageGenerationResponse
+	ProviderCapabilities        = providercapabilities.ProviderCapabilities
+	StreamingCapabilities       = providercapabilities.StreamingCapabilities
+	ImageGenerationCapabilities = providercapabilities.ImageGenerationCapabilities
+	ToolSchemaLimits            = providercapabilities.ToolSchemaLimits
 )
 
 const (
@@ -76,30 +81,15 @@ type StreamingEventProvider interface {
 	) (*LLMResponse, error)
 }
 
-// ThinkingCapable is an optional interface for providers that support
-// extended thinking (e.g. Anthropic). Used by the agent loop to warn
-// when thinking_level is configured but the active provider cannot use it.
-type ThinkingCapable interface {
-	SupportsThinking() bool
+// CapabilityProvider exposes one authoritative provider feature descriptor.
+type CapabilityProvider interface {
+	Capabilities() ProviderCapabilities
 }
 
-// NativeSearchCapable is an optional interface for providers that support
-// built-in web search during LLM inference (e.g. OpenAI web_search_preview,
-// xAI Grok search). When the active provider implements this interface and
-// returns true, the agent loop can hide the client-side web_search tool to
-// avoid duplicate search surfaces and use the provider's native search instead.
-type NativeSearchCapable interface {
-	SupportsNativeSearch() bool
-}
-
-// ImageGenerationCapable is an optional interface for providers that can
-// generate raster images outside the normal chat inference loop. Core tools can
-// use this to reuse provider-owned auth/client behavior while keeping channel
-// media delivery in the agent runtime.
-type ImageGenerationCapable interface {
-	SupportsImageGeneration() bool
-	ImageGenerationProviderID() string
-	DefaultImageGenerationModel() string
+// ImageGenerationProvider performs provider-owned image generation outside the
+// chat loop. Support and default metadata are declared by Capabilities.
+type ImageGenerationProvider interface {
+	CapabilityProvider
 	GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error)
 }
 

@@ -17,7 +17,6 @@ import (
 
 const (
 	defaultImageGenerationSize = "1024x1024"
-	maxImageGenerationResults  = 4
 )
 
 // ImageGenerateTool generates images through a provider adapter and returns
@@ -26,16 +25,16 @@ type ImageGenerateTool struct {
 	workspace  string
 	model      string
 	outputDir  string
-	provider   providers.ImageGenerationCapable
+	provider   providers.ImageGenerationProvider
 	resolver   ImageGenerationProviderResolver
 	mediaStore media.MediaStore
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
 
-type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationCapable, string, error)
+type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationProvider, string, error)
 
-func WithImageGenerationProvider(provider providers.ImageGenerationCapable) ImageGenerateToolOption {
+func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider
@@ -113,7 +112,7 @@ func (t *ImageGenerateTool) Parameters() map[string]any {
 			},
 			"count": map[string]any{
 				"type":        "integer",
-				"description": "Number of images to generate, 1-4. Defaults to 1.",
+				"description": "Number of images to generate. Defaults to 1 and is capped by the active provider.",
 			},
 			"delivery_intent": map[string]any{
 				"type": "string",
@@ -149,6 +148,10 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	if t.provider == nil {
 		return toolshared.ErrorResult("image generation provider not configured")
 	}
+	capabilities := t.provider.Capabilities().Normalized()
+	if !capabilities.ImageGeneration.Supported {
+		return toolshared.ErrorResult("image generation provider does not declare image generation support")
+	}
 
 	req := providers.ImageGenerationRequest{
 		Prompt:       prompt,
@@ -156,10 +159,10 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		Size:         readStringDefault(args, "size", defaultImageGenerationSize),
 		Quality:      readStringDefault(args, "quality", ""),
 		OutputFormat: readStringDefault(args, "output_format", "png"),
-		Count:        readImageCount(args["count"]),
+		Count:        readImageCount(args["count"], capabilities.ImageGeneration.MaxResults),
 	}
 	if strings.TrimSpace(req.Model) == "" {
-		req.Model = t.provider.DefaultImageGenerationModel()
+		req.Model = capabilities.ImageGeneration.DefaultModel
 	}
 	resp, err := t.provider.GenerateImage(ctx, req)
 	if err != nil {
@@ -198,7 +201,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		"Generated %d image(s) with %s via %s.",
 		len(refs),
 		req.Model,
-		t.provider.ImageGenerationProviderID(),
+		capabilities.ImageGeneration.ProviderID,
 	)
 	result := toolshared.MediaResult(message, refs)
 	switch readDeliveryIntentDefault(args, toolshared.DeliveryFinalHandled) {
@@ -272,7 +275,7 @@ func readStringDefault(args map[string]any, key string, fallback string) string 
 	return value
 }
 
-func readImageCount(raw any) int {
+func readImageCount(raw any, maxResults int) int {
 	count := 1
 	switch v := raw.(type) {
 	case int:
@@ -287,8 +290,8 @@ func readImageCount(raw any) int {
 	if count < 1 {
 		return 1
 	}
-	if count > maxImageGenerationResults {
-		return maxImageGenerationResults
+	if maxResults > 0 && count > maxResults {
+		return maxResults
 	}
 	return count
 }

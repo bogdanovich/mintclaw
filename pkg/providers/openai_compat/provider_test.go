@@ -2027,16 +2027,16 @@ func TestIsNativeSearchHost(t *testing.T) {
 	}
 }
 
-func TestSupportsNativeSearch_OpenAI(t *testing.T) {
+func TestProviderCapabilitiesNativeSearchOpenAI(t *testing.T) {
 	p := NewProvider("key", "https://api.openai.com/v1", "")
-	if !p.SupportsNativeSearch() {
+	if !p.Capabilities().NativeSearch {
 		t.Fatal("OpenAI provider should support native search")
 	}
 }
 
-func TestSupportsNativeSearch_NonOpenAI(t *testing.T) {
+func TestProviderCapabilitiesNativeSearchNonOpenAI(t *testing.T) {
 	p := NewProvider("key", "https://api.deepseek.com/v1", "")
-	if p.SupportsNativeSearch() {
+	if p.Capabilities().NativeSearch {
 		t.Fatal("DeepSeek provider should not support native search")
 	}
 }

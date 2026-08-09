@@ -171,7 +171,7 @@ func TestCreateProviderFromConfig_UsesExplicitProvider(t *testing.T) {
 	}
 }
 
-func TestCreateProviderFromConfig_DeepSeekSupportsThinking(t *testing.T) {
+func TestCreateProviderFromConfigDeepSeekDeclaresThinking(t *testing.T) {
 	cfg := &config.ModelConfig{
 		ModelName: "deepseek-v4-flash",
 		Provider:  "deepseek",
@@ -186,12 +186,8 @@ func TestCreateProviderFromConfig_DeepSeekSupportsThinking(t *testing.T) {
 	if modelID != "deepseek-v4-flash" {
 		t.Fatalf("modelID = %q, want %q", modelID, "deepseek-v4-flash")
 	}
-	tc, ok := provider.(ThinkingCapable)
-	if !ok {
-		t.Fatalf("provider %T should implement ThinkingCapable for DeepSeek", provider)
-	}
-	if !tc.SupportsThinking() {
-		t.Fatalf("DeepSeek provider SupportsThinking() = false, want true")
+	if !Capabilities(provider).Thinking {
+		t.Fatalf("DeepSeek provider Thinking capability = false, want true")
 	}
 }
 

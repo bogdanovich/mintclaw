@@ -31,14 +31,15 @@ func (s *mockCodexImageStream) Err() error { return s.err }
 
 func TestCodexProviderSupportsImageGeneration(t *testing.T) {
 	provider := NewCodexProvider("test-token", "acct-123")
-	if !provider.SupportsImageGeneration() {
-		t.Fatal("SupportsImageGeneration = false, want true")
+	capabilities := provider.Capabilities()
+	if !capabilities.ImageGeneration.Supported {
+		t.Fatal("image generation capability = false, want true")
 	}
-	if provider.ImageGenerationProviderID() != "openai-codex" {
-		t.Fatalf("provider id = %q, want openai-codex", provider.ImageGenerationProviderID())
+	if capabilities.ImageGeneration.ProviderID != "openai-codex" {
+		t.Fatalf("provider id = %q, want openai-codex", capabilities.ImageGeneration.ProviderID)
 	}
-	if provider.DefaultImageGenerationModel() != "gpt-image-2" {
-		t.Fatalf("default image model = %q, want gpt-image-2", provider.DefaultImageGenerationModel())
+	if capabilities.ImageGeneration.DefaultModel != "gpt-image-2" {
+		t.Fatalf("default image model = %q, want gpt-image-2", capabilities.ImageGeneration.DefaultModel)
 	}
 }
 

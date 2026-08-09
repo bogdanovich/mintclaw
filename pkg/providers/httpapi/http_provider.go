@@ -10,6 +10,7 @@ import (
 	"context"
 	"time"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/openai_compat"
 )
 
@@ -85,15 +86,11 @@ func (p *HTTPProvider) GetDefaultModel() string {
 	return ""
 }
 
-func (p *HTTPProvider) SupportsNativeSearch() bool {
-	return p.delegate.SupportsNativeSearch()
-}
-
-func (p *HTTPProvider) SupportsThinking() bool {
+func (p *HTTPProvider) Capabilities() providercapabilities.ProviderCapabilities {
 	if p == nil || p.delegate == nil {
-		return false
+		return providercapabilities.ProviderCapabilities{}
 	}
-	return p.delegate.SupportsThinking()
+	return p.delegate.Capabilities()
 }
 
 func (p *HTTPProvider) SetProviderName(providerName string) {

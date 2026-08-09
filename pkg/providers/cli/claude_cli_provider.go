@@ -10,12 +10,17 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
 // ClaudeCliProvider implements LLMProvider using the claude CLI as a subprocess.
 type ClaudeCliProvider struct {
 	command   string
 	workspace string
+}
+
+func (p *ClaudeCliProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{}
 }
 
 // NewClaudeCliProvider creates a new Claude CLI provider.

@@ -11,10 +11,6 @@ type toolSchemaTransformProvider struct {
 	transform string
 }
 
-type toolSchemaStreamingProvider struct {
-	*toolSchemaTransformProvider
-}
-
 func wrapProviderWithToolSchemaTransform(delegate LLMProvider, transform string) (LLMProvider, error) {
 	transform, err := common.NormalizeToolSchemaTransform(transform)
 	if err != nil {
@@ -26,9 +22,6 @@ func wrapProviderWithToolSchemaTransform(delegate LLMProvider, transform string)
 	base := &toolSchemaTransformProvider{
 		delegate:  delegate,
 		transform: transform,
-	}
-	if _, ok := delegate.(StreamingProvider); ok {
-		return &toolSchemaStreamingProvider{toolSchemaTransformProvider: base}, nil
 	}
 	return base, nil
 }
@@ -51,7 +44,7 @@ func (p *toolSchemaTransformProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
 
-func (p *toolSchemaStreamingProvider) ChatStream(
+func (p *toolSchemaTransformProvider) ChatStream(
 	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
@@ -59,15 +52,30 @@ func (p *toolSchemaStreamingProvider) ChatStream(
 	options map[string]any,
 	onChunk func(accumulated string),
 ) (*LLMResponse, error) {
-	streaming := p.delegate.(StreamingProvider)
 	transformed, err := common.TransformToolDefinitions(tools, p.transform)
 	if err != nil {
 		return nil, err
 	}
-	return streaming.ChatStream(ctx, messages, transformed, model, options, onChunk)
+	response, attempted, err := ChatStreamEvents(
+		ctx,
+		p.delegate,
+		messages,
+		transformed,
+		model,
+		options,
+		func(chunk StreamChunk) {
+			if onChunk != nil {
+				onChunk(chunk.Content)
+			}
+		},
+	)
+	if !attempted {
+		return nil, ErrStreamingContract
+	}
+	return response, err
 }
 
-func (p *toolSchemaStreamingProvider) ChatStreamEvents(
+func (p *toolSchemaTransformProvider) ChatStreamEvents(
 	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
@@ -75,29 +83,21 @@ func (p *toolSchemaStreamingProvider) ChatStreamEvents(
 	options map[string]any,
 	onChunk func(StreamChunk),
 ) (*LLMResponse, error) {
-	streaming, ok := p.delegate.(StreamingEventProvider)
-	if !ok {
-		return p.ChatStream(ctx, messages, tools, model, options, func(accumulated string) {
-			if onChunk != nil {
-				onChunk(StreamChunk{Content: accumulated})
-			}
-		})
-	}
 	transformed, err := common.TransformToolDefinitions(tools, p.transform)
 	if err != nil {
 		return nil, err
 	}
-	return streaming.ChatStreamEvents(ctx, messages, transformed, model, options, onChunk)
+	response, attempted, err := ChatStreamEvents(ctx, p.delegate, messages, transformed, model, options, onChunk)
+	if !attempted {
+		return nil, ErrStreamingContract
+	}
+	return response, err
 }
 
-func (p *toolSchemaTransformProvider) SupportsThinking() bool {
-	tc, ok := p.delegate.(ThinkingCapable)
-	return ok && tc.SupportsThinking()
-}
-
-func (p *toolSchemaTransformProvider) SupportsNativeSearch() bool {
-	ns, ok := p.delegate.(NativeSearchCapable)
-	return ok && ns.SupportsNativeSearch()
+func (p *toolSchemaTransformProvider) Capabilities() ProviderCapabilities {
+	capabilities := Capabilities(p.delegate)
+	capabilities.ToolSchema = simpleToolSchemaLimits(common.MaxSimpleToolSchemaDepth)
+	return capabilities
 }
 
 func (p *toolSchemaTransformProvider) Close() {

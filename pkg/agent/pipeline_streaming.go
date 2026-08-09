@@ -28,8 +28,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	if !p.configuredStreamingEligible(ts, exec) {
 		return nil, false, nil
 	}
-	streamProvider, ok := exec.model.activeProvider.(providers.StreamingProvider)
-	if !ok {
+	if !providers.Capabilities(exec.model.activeProvider).Streaming.Supported {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{
 			"agent_id": ts.agent.ID,
 			"channel":  ts.channel,
@@ -88,38 +87,23 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		}
 		lastChunkAt = now
 	}
-	var response *providers.LLMResponse
-	var streamErr error
-	if eventProvider, ok := exec.model.activeProvider.(providers.StreamingEventProvider); ok {
-		response, streamErr = eventProvider.ChatStreamEvents(
-			ctx,
-			messagesForCall,
-			toolDefsForCall,
-			llm.llmModel,
-			llm.llmOpts,
-			func(chunk providers.StreamChunk) {
-				recordChunk()
-				if !llm.suppressReasoning && strings.TrimSpace(chunk.ReasoningContent) != "" {
-					publisher.UpdateReasoning(ctx, chunk.ReasoningContent)
-				}
-				if strings.TrimSpace(chunk.Content) != "" {
-					publisher.Update(ctx, chunk.Content)
-				}
-			},
-		)
-	} else {
-		response, streamErr = streamProvider.ChatStream(
-			ctx,
-			messagesForCall,
-			toolDefsForCall,
-			llm.llmModel,
-			llm.llmOpts,
-			func(accumulated string) {
-				recordChunk()
-				publisher.Update(ctx, accumulated)
-			},
-		)
-	}
+	response, _, streamErr := providers.ChatStreamEvents(
+		ctx,
+		exec.model.activeProvider,
+		messagesForCall,
+		toolDefsForCall,
+		llm.llmModel,
+		llm.llmOpts,
+		func(chunk providers.StreamChunk) {
+			recordChunk()
+			if !llm.suppressReasoning && strings.TrimSpace(chunk.ReasoningContent) != "" {
+				publisher.UpdateReasoning(ctx, chunk.ReasoningContent)
+			}
+			if strings.TrimSpace(chunk.Content) != "" {
+				publisher.Update(ctx, chunk.Content)
+			}
+		},
+	)
 	logConfiguredStreamingSummary(ts, llm, chunkCount, firstChunkAt, lastChunkAt, streamErr)
 	if streamErr == nil {
 		if updateErr := publisher.Err(); updateErr != nil {

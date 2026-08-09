@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
@@ -44,6 +45,17 @@ type Provider struct {
 	extraBody      map[string]any // Additional fields to inject into request body
 	customHeaders  map[string]string
 	userAgent      string
+}
+
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	if p == nil {
+		return providercapabilities.ProviderCapabilities{}
+	}
+	return providercapabilities.ProviderCapabilities{
+		Streaming:    providercapabilities.StreamingCapabilities{Supported: true, Events: true},
+		Thinking:     p.supportsThinking(),
+		NativeSearch: p.supportsNativeSearch(),
+	}
 }
 
 type Option func(*Provider)
@@ -225,7 +237,7 @@ func (p *Provider) applyThinkingControl(requestBody map[string]any, model string
 		return
 	}
 
-	if p.SupportsThinking() {
+	if p.supportsThinking() {
 		p.applyDeepSeekThinkingControl(requestBody, level)
 		return
 	}
@@ -338,7 +350,7 @@ func (p *Provider) SetProviderName(providerName string) {
 	p.providerName = strings.ToLower(strings.TrimSpace(providerName))
 }
 
-func (p *Provider) SupportsThinking() bool {
+func (p *Provider) supportsThinking() bool {
 	return strings.EqualFold(strings.TrimSpace(p.providerName), "deepseek") || isDeepSeekHost(p.apiBase)
 }
 
@@ -846,7 +858,7 @@ func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
 	return result
 }
 
-func (p *Provider) SupportsNativeSearch() bool {
+func (p *Provider) supportsNativeSearch() bool {
 	return isNativeSearchHost(p.apiBase)
 }
 

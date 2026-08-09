@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/auth"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
@@ -224,12 +225,20 @@ func (p *CodexProvider) GetDefaultModel() string {
 	return codexDefaultModel
 }
 
-func (p *CodexProvider) SupportsNativeSearch() bool {
-	return p.enableWebSearch
-}
-
-func (p *CodexProvider) SupportsThinking() bool {
-	return true
+func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities {
+	if p == nil {
+		return providercapabilities.ProviderCapabilities{}
+	}
+	return providercapabilities.ProviderCapabilities{
+		Thinking:     true,
+		NativeSearch: p.enableWebSearch,
+		ImageGeneration: providercapabilities.ImageGenerationCapabilities{
+			Supported:    true,
+			ProviderID:   "openai-codex",
+			DefaultModel: codexDefaultImageGenerationModel,
+			MaxResults:   maxImageGenerationResults,
+		},
+	}
 }
 
 func resolveCodexModel(model string) (string, string) {

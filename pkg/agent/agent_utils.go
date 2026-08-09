@@ -682,10 +682,7 @@ func mapCommandError(result commands.ExecuteResult) string {
 }
 
 func isNativeSearchProvider(p providers.LLMProvider) bool {
-	if ns, ok := p.(providers.NativeSearchCapable); ok {
-		return ns.SupportsNativeSearch()
-	}
-	return false
+	return providers.Capabilities(p).NativeSearch
 }
 
 func filterClientWebSearch(tools []providers.ToolDefinition) []providers.ToolDefinition {

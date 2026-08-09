@@ -14,14 +14,40 @@ import (
 type fakeImageGenerationProvider struct {
 	id           string
 	defaultModel string
+	maxResults   int
 	request      providers.ImageGenerationRequest
 }
 
-func (p *fakeImageGenerationProvider) SupportsImageGeneration() bool { return true }
+func (p *fakeImageGenerationProvider) Capabilities() providers.ProviderCapabilities {
+	maxResults := p.maxResults
+	if maxResults == 0 {
+		maxResults = 4
+	}
+	return providers.ProviderCapabilities{ImageGeneration: providers.ImageGenerationCapabilities{
+		Supported:    true,
+		ProviderID:   p.id,
+		DefaultModel: p.defaultModel,
+		MaxResults:   maxResults,
+	}}
+}
 
-func (p *fakeImageGenerationProvider) ImageGenerationProviderID() string { return p.id }
+func TestImageGenerateToolUsesProviderResultLimit(t *testing.T) {
+	provider := &fakeImageGenerationProvider{id: "test-provider", maxResults: 2}
+	tool := NewImageGenerateTool(
+		t.TempDir(),
+		"custom-image-model",
+		media.NewFileMediaStore(),
+		WithImageGenerationProvider(provider),
+	)
 
-func (p *fakeImageGenerationProvider) DefaultImageGenerationModel() string { return p.defaultModel }
+	result := tool.Execute(t.Context(), map[string]any{"prompt": "two icons", "count": float64(4)})
+	if result.IsError {
+		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
+	}
+	if provider.request.Count != 2 {
+		t.Fatalf("request count = %d, want provider limit 2", provider.request.Count)
+	}
+}
 
 func (p *fakeImageGenerationProvider) GenerateImage(
 	_ context.Context,
