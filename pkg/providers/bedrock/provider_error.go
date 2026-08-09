@@ -26,11 +26,15 @@ func normalizeProviderErrorWithRequestID(err error, fallbackRequestID string) er
 		return withRequestIDFallback(existing, err, fallbackRequestID)
 	}
 	if isSSOTokenError(err) {
+		status, header, requestID := bedrockHTTPMetadata(err)
+		if requestID == "" {
+			requestID = fallbackRequestID
+		}
 		return providererrors.FromStructuredError(
 			providererrors.KindAuthentication,
-			0,
-			nil,
-			fallbackRequestID,
+			status,
+			header,
+			requestID,
 			"AWS credentials expired; refresh the configured SSO session",
 			err,
 		)

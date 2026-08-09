@@ -102,11 +102,17 @@ func TestNormalizeProviderErrorSSOCompatibilityFallback(t *testing.T) {
 
 func TestNormalizeProviderErrorWrappedSSOPrecedesGenericClassifiers(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
+		name        string
+		err         error
+		wantStatus  int
+		wantRetry   time.Duration
+		wantRequest string
 	}{
 		{
-			name: "smithy invalid grant",
+			name:        "smithy invalid grant",
+			wantStatus:  http.StatusBadRequest,
+			wantRetry:   9 * time.Second,
+			wantRequest: "request-123",
 			err: bedrockResponseError(
 				"InvalidGrantException",
 				"operation error SSO OIDC: CreateToken, InvalidGrantException",
@@ -131,6 +137,15 @@ func TestNormalizeProviderErrorWrappedSSOPrecedesGenericClassifiers(t *testing.T
 			}
 			if !errors.Is(err, tt.err) {
 				t.Fatal("normalized error does not preserve its cause")
+			}
+			if providerErr.HTTPStatus != tt.wantStatus {
+				t.Fatalf("HTTPStatus = %d, want %d", providerErr.HTTPStatus, tt.wantStatus)
+			}
+			if providerErr.RetryAfter != tt.wantRetry {
+				t.Fatalf("RetryAfter = %v, want %v", providerErr.RetryAfter, tt.wantRetry)
+			}
+			if providerErr.RequestID != tt.wantRequest {
+				t.Fatalf("RequestID = %q, want %q", providerErr.RequestID, tt.wantRequest)
 			}
 		})
 	}
