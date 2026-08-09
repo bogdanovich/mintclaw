@@ -103,10 +103,12 @@ Preparation and dispatch bind all existing authority:
 - approval binding when the effect requires it.
 
 The driver-local target remains private and live. It is not persisted in the
-gateway prepared action or exposed to the model. The companion wire may carry
-the private target only inside the authenticated typed invocation needed by
-the companion host; it must never appear in model-visible output, approval
-text, events, or diagnostic traces.
+gateway prepared action or exposed to the model. The companion host mints a
+session- and generation-scoped opaque wire reference and retains the raw
+driver target only in memory. Only that opaque reference may cross the
+authenticated companion wire or enter an invocation ledger; the raw target
+must never appear in model-visible output, approval text, events, persisted
+state, or diagnostic traces.
 
 Immediately before acceptance, the gateway revalidates the prepared action
 against its live worker slot. Immediately before driver dispatch, the
@@ -146,7 +148,7 @@ Approved-action mode is explicit and fail-closed:
 The companion invocation carries a non-secret `approval_digest` only after the
 gateway has consumed the exact approval. It is the SHA-256 digest of a
 domain-separated canonical encoding of the complete normalized click input
-except the digest itself, including session, tab, generation, private target,
+except the digest itself, including session, tab, generation, opaque host reference,
 expected semantics, origin, effect, action invocation ID, prepared-action
 hash, and policy and profile revisions. The companion recomputes it and
 rejects an absent, malformed, unexpected, or mismatched value. The digest does
@@ -185,7 +187,8 @@ The companion host then:
 1. authenticates the existing routed owner and exact approved catalog;
 2. verifies session, tab, generation, policy, profile, mode, and current
    origin;
-3. re-observes and matches the private target, role, and accessible name;
+3. resolves the ephemeral host reference, then re-observes and matches the
+   private target, role, and accessible name;
 4. durably reserves the stable action invocation ID immediately before the
    driver call;
 5. performs one ordinary left click;
