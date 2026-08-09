@@ -115,11 +115,11 @@ func (al *AgentLoop) applySyncToolResultDelivery(
 	return al.syncToolResultDelivery().applySyncToolResultDelivery(ctx, ts, result, toolName)
 }
 
-func mcpServerNameForTool(ts *turnState, toolName string) string {
-	if ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+func mcpServerNameForTool(registry *tools.ToolRegistry, toolName string) string {
+	if registry == nil {
 		return ""
 	}
-	tool, ok := ts.agent.Tools.Get(toolName)
+	tool, ok := registry.Get(toolName)
 	if !ok || tool == nil {
 		return ""
 	}
@@ -293,6 +293,7 @@ type toolCallState struct {
 	duration         time.Duration
 	loopSemantics    loopguard.Semantics
 	mcpServerName    string
+	toolRegistry     *tools.ToolRegistry
 }
 
 const queuedSteeringDeferredToolResult = "Deferred without execution because a newer user message arrived. " +
@@ -648,6 +649,24 @@ func (runner *toolLoopRunner) approveToolCall(
 	tc := call.request
 	toolName := call.name
 	toolArgs := call.arguments
+	toolRegistry := ts.agent.Tools
+	if p.Config.TrustAllToolExecution && !ts.agent.isAdmittedTrustedToolRegistry(toolRegistry) {
+		llm.toolResponseDisposition = toolResponseNeedsModel
+		denyContent := hookDeniedToolContent(
+			"Tool execution denied because the trusted coding catalog was replaced",
+			"runtime tool registry does not match the admitted profile",
+		)
+		p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
+		)
+		_ = runner.appendToolMessage(providers.Message{
+			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
+		}, toolMessagePersistOnly)
+		return skipToolCall()
+	}
+	call.toolRegistry = toolRegistry
 
 	execCtx := toolshared.WithToolInboundContext(
 		turnCtx,
@@ -670,7 +689,11 @@ func (runner *toolLoopRunner) approveToolCall(
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	executionID := effectiveToolExecutionID(ts)
 	execCtx = toolshared.WithToolExecutionIdentity(execCtx, ts.workspace, executionID)
-	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, ts.agent.Tools, toolName, toolArgs)
+	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
+	if p.Config.TrustAllToolExecution {
+		approvalBypass = true
+		trustedExecution = nil
+	}
 	execCtx = toolshared.WithToolApprovalContinuation(
 		execCtx,
 		ts.opts.ApprovalGrant != nil && !approvalBypass,
@@ -697,9 +720,9 @@ func (runner *toolLoopRunner) approveToolCall(
 		var approvalArgsErr error
 		approvalCanProceed := approval.Approved || approval.RequireHuman
 		if (ts.opts.ApprovalGrant != nil || approval.RequireHuman) && approvalCanProceed {
-			approvalArgsErr = ts.agent.Tools.ValidateArguments(toolName, toolArgs)
+			approvalArgsErr = toolRegistry.ValidateArguments(toolName, toolArgs)
 			if approvalArgsErr == nil {
-				approvalArgs, approvalArgsErr = ts.agent.Tools.ApprovalArguments(
+				approvalArgs, approvalArgsErr = toolRegistry.ApprovalArguments(
 					execCtx,
 					toolName,
 					toolArgs,
@@ -756,7 +779,7 @@ func (runner *toolLoopRunner) approveToolCall(
 						)
 					}
 				} else {
-					argumentHash, consumeErr = interactions.HashArguments(
+					argumentHash, consumeErr = p.hashToolArguments(
 						interactionWorkspace,
 						approvalArgs,
 					)
@@ -785,7 +808,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			hashErr := approvalArgsErr
 			argumentHash := ""
 			if hashErr == nil {
-				argumentHash, hashErr = interactions.HashArguments(
+				argumentHash, hashErr = p.hashToolArguments(
 					interactionWorkspace,
 					approvalArgs,
 				)
@@ -878,6 +901,24 @@ func (runner *toolLoopRunner) invokeToolCall(
 	toolArgs := call.arguments
 	execCtx := call.executionContext
 	trustedExecution := call.trustedExecution
+	toolRegistry := call.toolRegistry
+	if p.Config.TrustAllToolExecution &&
+		(!ts.agent.isAdmittedTrustedToolRegistry(toolRegistry) || ts.agent.Tools != toolRegistry) {
+		llm.toolResponseDisposition = toolResponseNeedsModel
+		denyContent := hookDeniedToolContent(
+			"Tool execution denied because the trusted coding catalog was replaced",
+			"runtime tool registry changed after approval",
+		)
+		p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
+		)
+		_ = runner.appendToolMessage(providers.Message{
+			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
+		}, toolMessagePersistOnly)
+		return skipToolCall()
+	}
 
 	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
 	argsJSON, _ := json.Marshal(auditArgs)
@@ -902,9 +943,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	toolCallID := tc.ID
 	asyncToolName := toolName
-	mcpServerName := mcpServerNameForTool(ts, toolName)
+	mcpServerName := mcpServerNameForTool(toolRegistry, toolName)
 	var asyncAckDelivery AsyncDeliveryDecision
-	if tool, ok := ts.agent.Tools.Get(toolName); ok {
+	if tool, ok := toolRegistry.Get(toolName); ok {
 		if _, isAsync := tool.(toolshared.AsyncExecutor); isAsync {
 			if deliveryMode, err := asyncDeliveryModeFromToolArgs(toolName, toolArgs); err == nil {
 				asyncAckDelivery = decideAsyncToolResultDelivery(
@@ -957,7 +998,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 	}
 	var toolResult *toolshared.ToolResult
 	if trustedExecution != nil {
-		toolResult = ts.agent.Tools.ExecuteTrustedWithContext(
+		toolResult = toolRegistry.ExecuteTrustedWithContext(
 			execCtx,
 			trustedExecution,
 			toolArgs,
@@ -966,7 +1007,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			asyncCallback,
 		)
 	} else {
-		toolResult = ts.agent.Tools.ExecuteWithContext(
+		toolResult = toolRegistry.ExecuteWithContext(
 			execCtx,
 			toolName,
 			toolArgs,
@@ -1379,7 +1420,7 @@ func (r *toolLoopRunner) prepareToolApprovalSuspension(
 	if workspace == "" {
 		workspace = r.ts.workspace
 	}
-	hash, err := interactions.HashArguments(workspace, bound)
+	hash, err := r.p.hashToolArguments(workspace, bound)
 	if err != nil {
 		return "", "", err
 	}

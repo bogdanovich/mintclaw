@@ -43,15 +43,24 @@ type PipelineRuntimeServices struct {
 }
 
 type PipelineConfigServices struct {
-	ChannelStreaming  channelStreamingConfigProvider
-	NativeSearch      nativeSearchPolicy
-	LLMRetry          llmRetryPolicy
-	RetrySleeper      retrySleeper
-	MediaLimits       mediaLimitsProvider
-	FinalTurnRender   finalTurnRenderPolicy
-	ModelResolution   pipelineModelResolution
-	PromptBuilder     pipelinePromptBuilder
-	ToolContentFilter toolContentFilter
+	ChannelStreaming      channelStreamingConfigProvider
+	NativeSearch          nativeSearchPolicy
+	LLMRetry              llmRetryPolicy
+	RetrySleeper          retrySleeper
+	MediaLimits           mediaLimitsProvider
+	FinalTurnRender       finalTurnRenderPolicy
+	ModelResolution       pipelineModelResolution
+	PromptBuilder         pipelinePromptBuilder
+	ToolContentFilter     toolContentFilter
+	TrustAllToolExecution bool
+	HashToolArguments     func(string, map[string]any) (string, error)
+}
+
+func (p *Pipeline) hashToolArguments(workspace string, arguments map[string]any) (string, error) {
+	if p != nil && p.Config.HashToolArguments != nil {
+		return p.Config.HashToolArguments(workspace, arguments)
+	}
+	return interactions.HashArguments(workspace, arguments)
 }
 
 type PipelineContextServices struct {

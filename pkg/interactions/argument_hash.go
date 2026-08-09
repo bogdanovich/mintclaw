@@ -18,7 +18,13 @@ const argumentHashKeySize = 32
 // tool arguments. The workspace-local key prevents guessing low-entropy
 // secrets from hashes stored in interaction records.
 func HashArguments(workspace string, arguments map[string]any) (string, error) {
-	key, err := loadOrCreateArgumentHashKey(workspace)
+	return HashArgumentsAtPath(argumentHashKeyPath(workspace), arguments)
+}
+
+// HashArgumentsAtPath creates a durable approval binding using an exact
+// runtime-owned key path.
+func HashArgumentsAtPath(keyPath string, arguments map[string]any) (string, error) {
+	key, err := loadOrCreateArgumentHashKeyAtPath(strings.TrimSpace(keyPath))
 	if err != nil {
 		return "", err
 	}
@@ -40,9 +46,12 @@ func argumentHashKeyPath(workspace string) string {
 }
 
 func loadOrCreateArgumentHashKey(workspace string) ([]byte, error) {
-	path := argumentHashKeyPath(workspace)
+	return loadOrCreateArgumentHashKeyAtPath(argumentHashKeyPath(workspace))
+}
+
+func loadOrCreateArgumentHashKeyAtPath(path string) ([]byte, error) {
 	if path == "" {
-		return nil, fmt.Errorf("approval argument hash requires a workspace")
+		return nil, fmt.Errorf("approval argument hash requires a key path")
 	}
 	if key, err := readArgumentHashKey(path); err == nil {
 		return key, nil
@@ -103,4 +112,19 @@ func readArgumentHashKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("restrict approval hash key permissions: %w", err)
 	}
 	return key, nil
+}
+
+// ValidateArgumentHashKey reports malformed existing runtime key material.
+func ValidateArgumentHashKey(path string) error {
+	key, err := os.ReadFile(strings.TrimSpace(path))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(key) != argumentHashKeySize {
+		return fmt.Errorf("approval hash key has invalid length")
+	}
+	return nil
 }
