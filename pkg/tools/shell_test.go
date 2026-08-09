@@ -163,6 +163,22 @@ func TestShellTool_ExposesWorkspaceTmp(t *testing.T) {
 	}
 }
 
+func TestShellTool_RuntimeScratchStaysOutsideWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	workingDir := filepath.Join(root, "project")
+	scratchDir := filepath.Join(root, "state", "runtime", "tmp")
+	_, err := NewExecToolWithRuntimeConfig(workingDir, scratchDir, false, nil)
+	if err != nil {
+		t.Fatalf("NewExecToolWithRuntimeConfig() error = %v", err)
+	}
+	if _, err := os.Stat(workingDir); !os.IsNotExist(err) {
+		t.Fatalf("runtime exec construction created working directory: %v", err)
+	}
+	if info, err := os.Stat(scratchDir); err != nil || !info.IsDir() {
+		t.Fatalf("runtime scratch directory = %v, %v", info, err)
+	}
+}
+
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
 	tool, err := NewExecTool("", false)

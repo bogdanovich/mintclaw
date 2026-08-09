@@ -22,8 +22,12 @@ func (al *AgentLoop) taskRegistryForWorkspace(workspace string) *taskregistry.Re
 			return registry
 		}
 	}
+	storePath := taskregistry.WorkspaceStorePath(workspace)
+	if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+		storePath = layout.StatePaths().TaskRegistryFile
+	}
 	registry := taskregistry.NewRegistryWithOptions(
-		taskregistry.WorkspaceStorePath(workspace),
+		storePath,
 		al.taskRegistryOptions(),
 	)
 	actual, _ := al.taskRegistries.LoadOrStore(workspace, registry)

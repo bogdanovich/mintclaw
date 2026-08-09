@@ -120,6 +120,12 @@ type agentToolInitConfig struct {
 	allowWrite    []*regexp.Regexp
 	toolPolicy    *PatternPolicy
 	toolsRegistry *tools.ToolRegistry
+	execScratch   string
+}
+
+type runtimeInstanceDependencies struct {
+	storeFactory RuntimeStoreFactory
+	toolProfile  RuntimeToolProfile
 }
 
 type agentIdentityConfig struct {
@@ -155,7 +161,7 @@ func NewAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentInstance {
-	instance, _ := newAgentInstance(agentCfg, defaults, cfg, provider, nil)
+	instance, _ := newAgentInstance(agentCfg, defaults, cfg, provider, nil, nil)
 	return instance
 }
 
@@ -169,8 +175,12 @@ func newAgentInstanceWithRuntimeLayout(
 	provider providers.LLMProvider,
 	layout RuntimeLayout,
 	storeFactory RuntimeStoreFactory,
+	toolProfile RuntimeToolProfile,
 ) (*AgentInstance, error) {
-	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, storeFactory)
+	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
+		storeFactory: storeFactory,
+		toolProfile:  toolProfile,
+	})
 }
 
 func newAgentInstance(
@@ -179,7 +189,7 @@ func newAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout *RuntimeLayout,
-	storeFactory ...RuntimeStoreFactory,
+	runtimeDeps *runtimeInstanceDependencies,
 ) (*AgentInstance, error) {
 	if cfg != nil {
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
@@ -202,6 +212,15 @@ func newAgentInstance(
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	agentToolPolicy := resolveAgentToolPolicy(definition)
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
+	toolProfile := RuntimeToolProfilePersonal
+	if runtimeDeps != nil {
+		toolProfile = runtimeDeps.toolProfile
+	}
+	if toolProfile == RuntimeToolProfileCoding {
+		// Repository frontmatter cannot mutate the admitted coding catalog.
+		agentToolPolicy = nil
+		agentMCPServerPolicy = &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
+	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	if layout != nil {
@@ -212,8 +231,8 @@ func newAgentInstance(
 	if layout != nil {
 		var err error
 		factory := RuntimeStoreFactory(defaultRuntimeStoreFactory{})
-		if len(storeFactory) > 0 && storeFactory[0] != nil {
-			factory = storeFactory[0]
+		if runtimeDeps != nil && runtimeDeps.storeFactory != nil {
+			factory = runtimeDeps.storeFactory
 		}
 		sessions, err = factory.NewSessionStore(*layout)
 		if err != nil {
@@ -259,10 +278,15 @@ func newAgentInstance(
 	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, definition)
 
 	toolInit := newAgentToolInitConfig(defaults, cfg, agentToolPolicy)
-	// Coding owners stay intentionally tool-empty until P0.4 admits their exact
-	// trusted-local bootstrap profile. This also prevents legacy constructors
-	// such as exec from creating workspace-local scratch state during P0.2.
-	if layout == nil || layout.Owner().Kind == RuntimeOwnerPersonalAgent {
+	if layout != nil {
+		toolInit.execScratch = filepath.Join(layout.StatePaths().OperationalRoot, "tmp")
+	}
+	if toolProfile == RuntimeToolProfileCoding {
+		if err := initCodingAgentTools(workspace, cfg, toolInit); err != nil {
+			_ = sessions.Close()
+			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
@@ -412,7 +436,19 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 		)
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, initCfg.restrict, cfg, initCfg.allowRead)
+		var execTool *tools.ExecTool
+		var err error
+		if initCfg.execScratch != "" {
+			execTool, err = tools.NewExecToolWithRuntimeConfig(
+				workspace,
+				initCfg.execScratch,
+				initCfg.restrict,
+				cfg,
+				initCfg.allowRead,
+			)
+		} else {
+			execTool, err = tools.NewExecToolWithConfig(workspace, initCfg.restrict, cfg, initCfg.allowRead)
+		}
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -423,6 +459,32 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 	if cfg.Tools.IsToolEnabled("apply_patch") {
 		registerTool(fstools.NewApplyPatchTool(workspace, initCfg.restrict, initCfg.allowWrite))
 	}
+}
+
+func initCodingAgentTools(workspace string, cfg *config.Config, initCfg agentToolInitConfig) error {
+	registerTool := func(tool toolshared.Tool) {
+		initCfg.toolsRegistry.Register(tool)
+	}
+	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
+	registerTool(fstools.NewReadFileBytesTool(workspace, false, maxReadFileSize, nil))
+	registerTool(fstools.NewWriteFileTool(workspace, false, nil))
+	registerTool(fstools.NewListDirTool(workspace, false, nil))
+	registerTool(fstools.NewSearchFilesTool(workspace, false, maxReadFileSize, nil))
+
+	execCfg := *cfg
+	execCfg.Tools = cfg.Tools
+	execCfg.Tools.Exec = cfg.Tools.Exec
+	execCfg.Tools.Exec.EnableDenyPatterns = false
+	execCfg.Tools.Exec.AllowRemote = false
+	execCfg.Tools.Exec.PermissionMode = ""
+	execTool, err := tools.NewExecToolWithRuntimeConfig(workspace, initCfg.execScratch, false, &execCfg)
+	if err != nil {
+		return fmt.Errorf("initialize coding exec tool: %w", err)
+	}
+	registerTool(execTool)
+	registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
+	registerTool(tools.NewUpdatePlanTool())
+	return nil
 }
 
 func buildAgentIdentityConfig(

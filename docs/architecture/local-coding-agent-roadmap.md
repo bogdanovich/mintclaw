@@ -844,6 +844,9 @@ Done when:
 
 Dependencies: P0.2
 
+Implementation evidence:
+[`local-coding-agent-p0-tool-profiles.md`](local-coding-agent-p0-tool-profiles.md)
+
 Scope:
 
 - Resolve tool registration before the agent is exposed to a turn.

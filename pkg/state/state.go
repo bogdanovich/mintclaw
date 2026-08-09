@@ -148,6 +148,28 @@ func NewManager(workspace string) *Manager {
 	return sm
 }
 
+// NewManagerAt creates a manager for an exact runtime-owned state file. It
+// intentionally performs no legacy workspace migration.
+func NewManagerAt(stateFile string) *Manager {
+	stateFile = filepath.Clean(strings.TrimSpace(stateFile))
+	stateDir := filepath.Dir(stateFile)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		logger.WarnCF("state", "failed to create state directory", map[string]any{
+			"dir":   stateDir,
+			"error": err.Error(),
+		})
+	}
+	sm := &Manager{
+		workspace: stateDir,
+		stateFile: stateFile,
+		state:     &State{},
+	}
+	if err := sm.load(); err != nil && !os.IsNotExist(err) {
+		logger.WarnCF("state", "failed to load state", map[string]any{"error": err.Error()})
+	}
+	return sm
+}
+
 // SetLastChannel atomically updates the last channel and saves the state.
 // This method uses a temp file + rename pattern for atomic writes,
 // ensuring that the state file is never corrupted even if the process crashes.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,16 @@ import (
 )
 
 var errInjectedRuntimeStore = errors.New("injected runtime store failure")
+
+var codingRuntimeToolNames = []string{
+	"apply_patch",
+	"exec",
+	"list_dir",
+	"read_file",
+	"search_files",
+	"update_plan",
+	"write_file",
+}
 
 type trackedRuntimeSessionStore struct {
 	session.SessionStore
@@ -167,6 +178,11 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = filepath.Join(root, "ignored-default")
 	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.PermissionMode = "read_only"
+	cfg.Tools.MCP.Enabled = true
+	cfg.Hooks.Enabled = true
 	loop, err := NewAgentLoopWithRuntimeProfile(
 		cfg,
 		bus.NewMessageBus(),
@@ -188,8 +204,31 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if agent.Layout.StateRoot() != layout.StateRoot() {
 		t.Fatalf("Layout.StateRoot() = %q, want %q", agent.Layout.StateRoot(), layout.StateRoot())
 	}
-	if got := agent.Tools.List(); len(got) != 0 {
-		t.Fatalf("P0.2 coding tools = %v, want fail-closed empty registry before P0.4", got)
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding tools = %v, want %v", got, codingRuntimeToolNames)
+	}
+	if !NewPipeline(loop).Config.TrustAllToolExecution {
+		t.Fatal("coding pipeline did not select trusted tool execution")
+	}
+	if !cfg.Tools.Exec.EnableDenyPatterns || !cfg.Tools.Exec.AllowRemote ||
+		cfg.Tools.Exec.PermissionMode != "read_only" {
+		t.Fatalf("coding construction mutated persisted exec config: %#v", cfg.Tools.Exec)
+	}
+	loop.RegisterTool(&echoTextTool{})
+	if err := loop.RegisterRuntimeTool("extra", nil); err == nil {
+		t.Fatal("coding runtime admitted a dynamic runtime tool")
+	}
+	if err := loop.MountHook(HookRegistration{}); err == nil {
+		t.Fatal("coding runtime admitted an in-process hook")
+	}
+	if err := loop.MountProcessHook(context.Background(), "extra", ProcessHookOptions{}); err == nil {
+		t.Fatal("coding runtime admitted a process hook")
+	}
+	if err := loop.ensureHooksInitialized(context.Background()); err != nil {
+		t.Fatalf("coding hook initialization should be disabled: %v", err)
+	}
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding catalogue changed after dynamic injection: %v", got)
 	}
 	identity := agent.ContextBuilder.getIdentity(true)
 	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
@@ -812,6 +851,12 @@ func TestNewAgentLoopWithRuntimeProfileRoutesCodingSeahorseToStateRoot(t *testin
 		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
+	wantTools := append([]string(nil), codingRuntimeToolNames...)
+	wantTools = append(wantTools, "short_expand", "short_grep")
+	slices.Sort(wantTools)
+	if got := loop.GetRegistry().GetDefaultAgent().Tools.List(); !slices.Equal(got, wantTools) {
+		t.Fatalf("Seahorse coding tools = %v, want %v", got, wantTools)
+	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("strict construction created execution root: %v", statErr)
 	}
@@ -1203,7 +1248,7 @@ func TestRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
+func TestNewAgentLoopWithRuntimeProfilePreservesPersonalCatalogueAndExternalState(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "personal-project")
 	stateRoot := filepath.Join(root, "personal-state")
@@ -1222,19 +1267,35 @@ func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
+	legacyWorkspace := filepath.Join(root, "legacy-workspace")
+	cfg.Agents.Defaults.Workspace = legacyWorkspace
+	legacy := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(legacy.Close)
+	wantTools := legacy.GetRegistry().GetDefaultAgent().Tools.List()
 
 	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil {
-		if loop != nil {
-			loop.Close()
-		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want P0.4 personal-tool cutover guard")
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	gotTools := loop.GetRegistry().GetDefaultAgent().Tools.List()
+	if !slices.Equal(gotTools, wantTools) {
+		t.Fatalf("strict personal tools = %v, want legacy catalogue %v", gotTools, wantTools)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected personal cutover created execution root: %v", statErr)
+		t.Fatalf("strict personal construction created execution-root state: %v", statErr)
 	}
-	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected personal cutover created state root: %v", statErr)
+	if err := loop.state.SetLastChannel("test"); err != nil {
+		t.Fatalf("persist strict personal state: %v", err)
+	}
+	for _, path := range []string{
+		layout.StatePaths().SessionsRoot,
+		layout.StatePaths().RuntimeStateFile,
+		filepath.Join(layout.StatePaths().OperationalRoot, "tmp"),
+	} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("strict personal path %q missing: %v", path, statErr)
+		}
 	}
 }
 
@@ -1278,8 +1339,8 @@ func TestRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 	if agent.Layout.Owner() != layout.Owner() || agent.Layout.StateRoot() != layout.StateRoot() {
 		t.Fatalf("layout after rejected reload = %#v, want %#v", agent.Layout, layout)
 	}
-	if got := agent.Tools.List(); len(got) != 0 {
-		t.Fatalf("coding tools after rejected reload = %v, want empty P0.2 registry", got)
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding tools after rejected reload = %v, want %v", got, codingRuntimeToolNames)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected reload created execution root: %v", statErr)
@@ -1323,8 +1384,8 @@ func TestCodingRuntimeProfileKeepsMCPIsolatedWhenReloadRejected(t *testing.T) {
 			t.Fatalf("%s initialized MCP manager", stage)
 		}
 		agent := loop.GetRegistry().GetDefaultAgent()
-		if got := agent.Tools.List(); len(got) != 0 {
-			t.Fatalf("%s coding tools = %v, want empty registry", stage, got)
+		if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+			t.Fatalf("%s coding tools = %v, want %v", stage, got, codingRuntimeToolNames)
 		}
 	}
 	assertIsolated("startup")

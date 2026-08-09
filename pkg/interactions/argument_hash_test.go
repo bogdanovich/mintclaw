@@ -2,6 +2,7 @@ package interactions
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,20 @@ func TestHashArgumentsCanonicalRestartStableAndSecretSafe(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("argument hash key mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestHashArgumentsAtPathUsesExactRuntimeKey(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "runtime", "interaction_hmac.key")
+	if _, err := HashArgumentsAtPath(keyPath, map[string]any{"approved": true}); err != nil {
+		t.Fatalf("HashArgumentsAtPath() error = %v", err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("exact argument hash key missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "state")); !os.IsNotExist(err) {
+		t.Fatalf("HashArgumentsAtPath() created legacy state directory: %v", err)
 	}
 }
 

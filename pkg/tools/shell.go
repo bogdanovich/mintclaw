@@ -138,6 +138,38 @@ func NewExecToolWithConfig(
 	cfg *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
+	workspaceTempDir, err := workspaceutil.EnsureTempDir(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workspace tmp directory: %w", err)
+	}
+	return newExecToolWithConfig(workingDir, workspaceTempDir, restrict, cfg, allowPaths...)
+}
+
+// NewExecToolWithRuntimeConfig keeps MintClaw-owned scratch state outside the
+// execution root used as the subprocess working directory.
+func NewExecToolWithRuntimeConfig(
+	workingDir string,
+	scratchDir string,
+	restrict bool,
+	cfg *config.Config,
+	allowPaths ...[]*regexp.Regexp,
+) (*ExecTool, error) {
+	if strings.TrimSpace(scratchDir) == "" {
+		return nil, fmt.Errorf("exec scratch directory is required")
+	}
+	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create exec scratch directory: %w", err)
+	}
+	return newExecToolWithConfig(workingDir, scratchDir, restrict, cfg, allowPaths...)
+}
+
+func newExecToolWithConfig(
+	workingDir string,
+	workspaceTempDir string,
+	restrict bool,
+	cfg *config.Config,
+	allowPaths ...[]*regexp.Regexp,
+) (*ExecTool, error) {
 	builtInDenyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
@@ -191,11 +223,6 @@ func NewExecToolWithConfig(
 	var timeout time.Duration
 	if cfg != nil && cfg.Tools.Exec.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
-	}
-
-	workspaceTempDir, err := workspaceutil.EnsureTempDir(workingDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create workspace tmp directory: %w", err)
 	}
 
 	return &ExecTool{

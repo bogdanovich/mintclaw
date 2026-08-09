@@ -59,8 +59,12 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 	if cfg := al.GetConfig(); cfg != nil {
 		options.TerminalRetention = cfg.Tools.RequestUserInput.Retention()
 	}
+	storePath := interactions.WorkspaceStorePath(workspace)
+	if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+		storePath = layout.StatePaths().InteractionFile
+	}
 	registry := interactions.NewRegistryWithOptions(
-		interactions.WorkspaceStorePath(workspace),
+		storePath,
 		options,
 	)
 	actual, loaded := al.interactionRegistries.LoadOrStore(workspace, registry)

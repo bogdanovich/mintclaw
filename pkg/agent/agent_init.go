@@ -85,8 +85,10 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
-	if !al.isolatedToolBootstrap {
-		if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok {
+			al.state = state.NewManagerAt(layout.StatePaths().RuntimeStateFile)
+		} else if !al.isolatedToolBootstrap {
 			al.state = state.NewManager(defaultAgent.Workspace)
 		}
 	}
@@ -142,9 +144,6 @@ func NewAgentLoopWithRuntimeProfile(
 	profile RuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	if !profile.hasCodingOwner() {
-		return nil, fmt.Errorf("personal runtime profiles require the P0.4 tool bootstrap cutover")
-	}
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
@@ -158,8 +157,6 @@ func NewAgentLoopWithRuntimeProfile(
 	}
 	opts = append([]AgentLoopOption{withRuntimeProfile(profile)}, opts...)
 	if profile.hasCodingOwner() {
-		// P0.4 replaces this fail-closed bootstrap with an explicit coding tool
-		// profile. Until then, a coding owner cannot inherit personal shared tools.
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
@@ -208,10 +205,14 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("memory") {
 			workspace := agent.Workspace
+			memoryRoot := workspace
+			if layout, ok := profileLayoutForAgent(al.runtimeProfile, agent.ID); ok {
+				memoryRoot = layout.StateRoot()
+			}
 			registerToolIfAllowed(
 				agent,
 				tools.NewMemoryTool(
-					workspace,
+					memoryRoot,
 					func() { registry.invalidateWorkspaceContextCaches(workspace) },
 					al.runtimeEvents,
 				),
@@ -498,4 +499,11 @@ func registerSharedTools(
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}
+}
+
+func profileLayoutForAgent(profile *RuntimeProfile, agentID string) (RuntimeLayout, bool) {
+	if profile == nil {
+		return RuntimeLayout{}, false
+	}
+	return profile.AgentLayout(agentID)
 }

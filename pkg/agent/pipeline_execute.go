@@ -670,6 +670,10 @@ func (runner *toolLoopRunner) approveToolCall(
 	executionID := effectiveToolExecutionID(ts)
 	execCtx = toolshared.WithToolExecutionIdentity(execCtx, ts.workspace, executionID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, ts.agent.Tools, toolName, toolArgs)
+	if p.Config.TrustAllToolExecution {
+		approvalBypass = true
+		trustedExecution = nil
+	}
 	execCtx = toolshared.WithToolApprovalContinuation(
 		execCtx,
 		ts.opts.ApprovalGrant != nil && !approvalBypass,
@@ -755,7 +759,7 @@ func (runner *toolLoopRunner) approveToolCall(
 						)
 					}
 				} else {
-					argumentHash, consumeErr = interactions.HashArguments(
+					argumentHash, consumeErr = p.hashToolArguments(
 						interactionWorkspace,
 						approvalArgs,
 					)
@@ -784,7 +788,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			hashErr := approvalArgsErr
 			argumentHash := ""
 			if hashErr == nil {
-				argumentHash, hashErr = interactions.HashArguments(
+				argumentHash, hashErr = p.hashToolArguments(
 					interactionWorkspace,
 					approvalArgs,
 				)
@@ -1377,7 +1381,7 @@ func (r *toolLoopRunner) prepareToolApprovalSuspension(
 	if workspace == "" {
 		workspace = r.ts.workspace
 	}
-	hash, err := interactions.HashArguments(workspace, bound)
+	hash, err := r.p.hashToolArguments(workspace, bound)
 	if err != nil {
 		return "", "", err
 	}

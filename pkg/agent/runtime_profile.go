@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -15,7 +16,17 @@ import (
 type RuntimeProfile struct {
 	agentLayouts map[string]RuntimeLayout
 	storeFactory RuntimeStoreFactory
+	toolProfile  RuntimeToolProfile
 }
+
+// RuntimeToolProfile selects the complete pre-construction tool and trust
+// policy for a homogeneous runtime owner domain.
+type RuntimeToolProfile string
+
+const (
+	RuntimeToolProfilePersonal RuntimeToolProfile = "personal"
+	RuntimeToolProfileCoding   RuntimeToolProfile = "coding"
+)
 
 // RuntimeStoreFactory opens the canonical and derived stores owned by a
 // resolved runtime layout. Implementations must not fall back to legacy paths.
@@ -88,6 +99,12 @@ func NewRuntimeProfileWithStoreFactory(
 		}
 		if profileOwnerKind == "" {
 			profileOwnerKind = owner.Kind
+			switch owner.Kind {
+			case RuntimeOwnerPersonalAgent:
+				profile.toolProfile = RuntimeToolProfilePersonal
+			case RuntimeOwnerCodingThread:
+				profile.toolProfile = RuntimeToolProfileCoding
+			}
 		} else if owner.Kind != profileOwnerKind {
 			return RuntimeProfile{}, fmt.Errorf(
 				"runtime profile: mixed owner kinds %q and %q are not supported",
@@ -162,6 +179,11 @@ func NewRuntimeProfileWithStoreFactory(
 	return profile, nil
 }
 
+// ToolProfile returns the immutable tool/trust profile selected by the owner domain.
+func (p RuntimeProfile) ToolProfile() RuntimeToolProfile {
+	return p.toolProfile
+}
+
 func runtimeDependencyIsNil(dependency any) bool {
 	if dependency == nil {
 		return true
@@ -179,6 +201,29 @@ func runtimeDependencyIsNil(dependency any) bool {
 func (p RuntimeProfile) AgentLayout(agentID string) (RuntimeLayout, bool) {
 	layout, ok := p.agentLayouts[routing.NormalizeAgentID(agentID)]
 	return layout, ok
+}
+
+func (al *AgentLoop) runtimeLayoutForWorkspace(workspace string) (RuntimeLayout, bool) {
+	if al == nil || al.runtimeProfile == nil {
+		return RuntimeLayout{}, false
+	}
+	want := normalizeRuntimeWorkspace(workspace)
+	agentIDs := make([]string, 0, len(al.runtimeProfile.agentLayouts))
+	for agentID := range al.runtimeProfile.agentLayouts {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
+		layout := al.runtimeProfile.agentLayouts[agentID]
+		if normalizeRuntimeWorkspace(layout.ExecutionRoot()) == want {
+			return layout, true
+		}
+	}
+	return RuntimeLayout{}, false
+}
+
+func (al *AgentLoop) hasCodingToolProfile() bool {
+	return al != nil && al.runtimeProfile != nil && al.runtimeProfile.toolProfile == RuntimeToolProfileCoding
 }
 
 func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
@@ -246,6 +291,8 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			{name: "sessions", path: paths.SessionsRoot},
 			{name: "context", path: paths.ContextRoot},
 			{name: "memory", path: paths.MemoryRoot},
+			{name: "operational", path: paths.OperationalRoot},
+			{name: "tool scratch", path: filepath.Join(paths.OperationalRoot, "tmp")},
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
 				return fmt.Errorf(

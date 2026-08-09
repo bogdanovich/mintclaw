@@ -487,6 +487,9 @@ func (al *AgentLoop) MountProcessHook(ctx context.Context, name string, opts Pro
 	if al == nil {
 		return fmt.Errorf("agent loop is nil")
 	}
+	if al.hasCodingToolProfile() {
+		return fmt.Errorf("coding runtime profiles do not admit process hooks")
+	}
 	processHook, err := NewProcessHook(ctx, name, opts)
 	if err != nil {
 		return err
