@@ -255,7 +255,7 @@ func (handler *jobCommandHandler) execute(
 			input.JobID,
 			input.Stream == "stderr",
 			input.Cursor,
-			input.LimitBytes,
+			input.LimitBytes+utf8.UTFMax-1,
 		)
 		if readErr != nil {
 			return nil, jobCommandFailure(readErr)
@@ -422,27 +422,28 @@ type jobLogOutput struct {
 }
 
 func fitJobLogOutput(input jobLogsInput, chunk JobLogChunk, limit int) (jobLogOutput, error) {
+	pageEnd := jobLogPageEnd(chunk.Data, input.LimitBytes, chunk.State.terminal())
+	boundaries := jobLogRuneBoundaries(chunk.Data[:pageEnd])
 	fit := func(length int) (jobLogOutput, int) {
-		data := strings.ToValidUTF8(string(chunk.Data[:length]), string(utf8.RuneError))
 		output := jobLogOutput{
-			JobID: input.JobID, Stream: input.Stream, Data: data,
+			JobID: input.JobID, Stream: input.Stream, Data: safeJobLogString(chunk.Data[:length]),
 			NextCursor: input.Cursor + int64(length), Available: chunk.Available,
 			Truncated: chunk.Truncated, State: string(chunk.State),
 		}
 		encoded, _ := json.Marshal(output)
 		return output, len(encoded)
 	}
-	low, high := 0, len(chunk.Data)
+	low, high := 0, len(boundaries)-1
 	for low < high {
 		middle := low + (high-low+1)/2
-		_, size := fit(middle)
+		_, size := fit(boundaries[middle])
 		if size <= limit {
 			low = middle
 		} else {
 			high = middle - 1
 		}
 	}
-	output, size := fit(low)
+	output, size := fit(boundaries[low])
 	if size > limit {
 		return jobLogOutput{}, newCommandFailure(
 			"OUTPUT_LIMIT_TOO_SMALL",
@@ -451,6 +452,64 @@ func fitJobLogOutput(input jobLogsInput, chunk JobLogChunk, limit int) (jobLogOu
 		)
 	}
 	return output, nil
+}
+
+func jobLogPageEnd(data []byte, requested int, terminal bool) int {
+	if requested <= 0 || len(data) == 0 {
+		return 0
+	}
+	previous := 0
+	for offset := 0; offset < len(data); {
+		if !terminal && !utf8.FullRune(data[offset:]) {
+			return previous
+		}
+		_, size := utf8.DecodeRune(data[offset:])
+		if size <= 0 {
+			size = 1
+		}
+		next := offset + size
+		if next > requested {
+			if previous == 0 {
+				return next
+			}
+			return previous
+		}
+		previous = next
+		offset = next
+		if next == requested {
+			return next
+		}
+	}
+	return previous
+}
+
+func jobLogRuneBoundaries(data []byte) []int {
+	boundaries := []int{0}
+	for offset := 0; offset < len(data); {
+		_, size := utf8.DecodeRune(data[offset:])
+		if size <= 0 {
+			size = 1
+		}
+		offset += size
+		boundaries = append(boundaries, offset)
+	}
+	return boundaries
+}
+
+func safeJobLogString(data []byte) string {
+	var result strings.Builder
+	result.Grow(len(data))
+	for len(data) > 0 {
+		runeValue, size := utf8.DecodeRune(data)
+		if runeValue == utf8.RuneError && size == 1 {
+			result.WriteRune(utf8.RuneError)
+			data = data[1:]
+			continue
+		}
+		result.Write(data[:size])
+		data = data[size:]
+	}
+	return result.String()
 }
 
 type jobArtifactOutput struct {

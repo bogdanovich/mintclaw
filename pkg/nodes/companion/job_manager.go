@@ -214,7 +214,10 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 	}
 	if reserveErr := manager.reserve(record.JobID); reserveErr != nil {
 		if errors.Is(reserveErr, ErrJobConflict) {
-			current, currentFound := manager.store.Lookup(record.JobID)
+			current, currentFound, lookupErr := manager.store.Lookup(record.JobID)
+			if lookupErr != nil {
+				return JobRecord{}, lookupErr
+			}
 			if currentFound {
 				return current, nil
 			}
@@ -251,7 +254,11 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 	if _, launchErr := manager.store.MarkLaunchAttempted(record.JobID); launchErr != nil {
 		active.launchMu.Unlock()
 		manager.abortBeforeStart(record.JobID, active)
-		if current, currentFound := manager.store.Lookup(record.JobID); currentFound && current.State.terminal() {
+		current, currentFound, lookupErr := manager.store.Lookup(record.JobID)
+		if lookupErr != nil {
+			return JobRecord{}, errors.Join(launchErr, lookupErr)
+		}
+		if currentFound && current.State.terminal() {
 			return current, nil
 		}
 		return JobRecord{}, launchErr
@@ -615,7 +622,10 @@ func copyBoundedJobArtifact(destination io.Writer, source io.Reader, limit int64
 }
 
 func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord, error) {
-	record, found := manager.store.Lookup(jobID)
+	record, found, err := manager.store.Lookup(jobID)
+	if err != nil {
+		return JobRecord{}, err
+	}
 	if !found {
 		return JobRecord{}, ErrJobNotFound
 	}
@@ -629,7 +639,7 @@ func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord
 		active.launchMu.Lock()
 		defer active.launchMu.Unlock()
 	}
-	record, err := manager.store.RequestCancellation(jobID)
+	record, err = manager.store.RequestCancellation(jobID)
 	if err != nil || record.State.terminal() {
 		return record, err
 	}
@@ -641,7 +651,10 @@ func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord
 }
 
 func (manager *DirectJobManager) Status(owner JobOwner, jobID string) (JobRecord, error) {
-	record, found := manager.store.Lookup(jobID)
+	record, found, err := manager.store.Lookup(jobID)
+	if err != nil {
+		return JobRecord{}, err
+	}
 	if !found || !manager.owns(record, owner) {
 		return JobRecord{}, ErrJobNotFound
 	}
@@ -666,7 +679,10 @@ func (manager *DirectJobManager) ReadLog(
 	if cursor < 0 || limit <= 0 || limit > maxJobLogRead {
 		return JobLogChunk{}, errors.New("node job log request exceeds bounds")
 	}
-	record, found := manager.store.Lookup(jobID)
+	record, found, lookupErr := manager.store.Lookup(jobID)
+	if lookupErr != nil {
+		return JobLogChunk{}, lookupErr
+	}
 	if !found || !manager.owns(record, owner) {
 		return JobLogChunk{}, ErrJobNotFound
 	}
@@ -704,7 +720,10 @@ func (manager *DirectJobManager) ReadLog(
 }
 
 func (manager *DirectJobManager) Artifacts(owner JobOwner, jobID string) ([]JobArtifactRecord, error) {
-	record, found := manager.store.Lookup(jobID)
+	record, found, err := manager.store.Lookup(jobID)
+	if err != nil {
+		return nil, err
+	}
 	if !found || !manager.owns(record, owner) {
 		return nil, ErrJobNotFound
 	}
@@ -716,7 +735,10 @@ func (manager *DirectJobManager) OpenArtifact(
 	jobID string,
 	artifactRef string,
 ) (*os.File, JobArtifactRecord, error) {
-	record, found := manager.store.Lookup(jobID)
+	record, found, lookupErr := manager.store.Lookup(jobID)
+	if lookupErr != nil {
+		return nil, JobArtifactRecord{}, lookupErr
+	}
 	if !found || !manager.owns(record, owner) {
 		return nil, JobArtifactRecord{}, ErrJobNotFound
 	}
@@ -766,7 +788,10 @@ func (manager *DirectJobManager) Shutdown(ctx context.Context) error {
 	}
 	manager.mu.Unlock()
 	for _, item := range active {
-		record, found := manager.store.Lookup(item.jobID)
+		record, found, lookupErr := manager.store.Lookup(item.jobID)
+		if lookupErr != nil {
+			return lookupErr
+		}
 		if found {
 			_, _ = manager.Cancel(record.Owner, item.jobID)
 		}

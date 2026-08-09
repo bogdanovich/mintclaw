@@ -98,6 +98,10 @@ func NewJobStore(
 		store.Close()
 		return nil, err
 	}
+	if err := store.pruneExpired(); err != nil {
+		store.Close()
+		return nil, err
+	}
 	if err := store.removeOrphanFiles(); err != nil {
 		store.Close()
 		return nil, err
@@ -180,11 +184,14 @@ func (store *JobStore) existingLocked(record JobRecord) (JobRecord, bool, error)
 	return JobRecord{}, false, nil
 }
 
-func (store *JobStore) Lookup(jobID string) (JobRecord, bool) {
+func (store *JobStore) Lookup(jobID string) (JobRecord, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if _, err := store.pruneExpiredAndPersistLocked(); err != nil {
+		return JobRecord{}, false, fmt.Errorf("prune expired node jobs: %w", err)
+	}
 	record, found := store.records[jobID]
-	return cloneJobRecord(record), found
+	return cloneJobRecord(record), found, nil
 }
 
 func (store *JobStore) Records() []JobRecord {
@@ -535,6 +542,38 @@ func (store *JobStore) persistLocked(protectedID string) error {
 func (store *JobStore) pruneExpiredLocked(now time.Time, protectedID string) {
 	for store.pruneOldestExpiredLocked(now, protectedID) {
 	}
+}
+
+func (store *JobStore) pruneExpired() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, err := store.pruneExpiredAndPersistLocked()
+	return err
+}
+
+func (store *JobStore) pruneExpiredAndPersistLocked() (bool, error) {
+	now := store.now()
+	if !store.hasExpiredLocked(now, "") {
+		return false, nil
+	}
+	previous := cloneJobRecords(store.records)
+	store.pruneExpiredLocked(now, "")
+	if err := store.persistLocked(""); err != nil {
+		store.rollbackLocked(previous, err)
+		return true, err
+	}
+	return true, nil
+}
+
+func (store *JobStore) hasExpiredLocked(now time.Time, protectedID string) bool {
+	for id, record := range store.records {
+		retention := min(time.Duration(record.RetentionSeconds)*time.Second, store.retention)
+		if id != protectedID && record.State.terminal() &&
+			!now.Before(time.Unix(0, record.CompletedAt).Add(retention)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (store *JobStore) pruneOldestExpiredLocked(now time.Time, protectedID string) bool {

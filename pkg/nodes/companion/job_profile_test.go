@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
@@ -248,7 +249,10 @@ func TestJobRuntimeCancelIsSeparateAndIdempotent(t *testing.T) {
 }
 
 func TestFitJobLogOutputHonorsEncodedLimit(t *testing.T) {
-	input := jobLogsInput{JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout", Cursor: 7}
+	input := jobLogsInput{
+		JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout", Cursor: 7,
+		LimitBytes: 256,
+	}
 	chunk := JobLogChunk{
 		Data: []byte(strings.Repeat(`"`, 256)), Available: 256,
 		State: JobRunning,
@@ -263,6 +267,54 @@ func TestFitJobLogOutputHonorsEncodedLimit(t *testing.T) {
 	}
 	if _, err := fitJobLogOutput(input, chunk, 1); err == nil {
 		t.Fatal("impossible log output limit accepted")
+	}
+}
+
+func TestFitJobLogOutputKeepsUTF8RuneBoundaries(t *testing.T) {
+	for _, value := range []string{"é", "€", "😀"} {
+		t.Run(value, func(t *testing.T) {
+			input := jobLogsInput{
+				JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout",
+				LimitBytes: 1,
+			}
+			data := []byte(value)
+			output, err := fitJobLogOutput(input, JobLogChunk{
+				Data: data, Available: int64(len(data)), State: JobRunning,
+			}, 1024)
+			if err != nil || output.Data != value || output.NextCursor != int64(len(data)) {
+				t.Fatalf("fitJobLogOutput(%q) = %#v, error %v", value, output, err)
+			}
+		})
+	}
+	input := jobLogsInput{
+		JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout",
+		LimitBytes: 2,
+	}
+	output, err := fitJobLogOutput(input, JobLogChunk{
+		Data: []byte("Aé"), Available: 3, State: JobRunning,
+	}, 1024)
+	if err != nil || output.Data != "A" || output.NextCursor != 1 {
+		t.Fatalf("split after ASCII = %#v, error %v", output, err)
+	}
+}
+
+func TestFitJobLogOutputDefersIncompleteActiveRuneAndBoundsInvalidBytes(t *testing.T) {
+	input := jobLogsInput{
+		JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout",
+		LimitBytes: 1,
+	}
+	partial := []byte{0xf0, 0x9f}
+	output, err := fitJobLogOutput(input, JobLogChunk{
+		Data: partial, Available: int64(len(partial)), State: JobRunning,
+	}, 1024)
+	if err != nil || output.Data != "" || output.NextCursor != 0 {
+		t.Fatalf("active partial rune = %#v, error %v", output, err)
+	}
+	output, err = fitJobLogOutput(input, JobLogChunk{
+		Data: partial, Available: int64(len(partial)), State: JobSucceeded,
+	}, 1024)
+	if err != nil || output.Data != string(utf8.RuneError) || output.NextCursor != 1 {
+		t.Fatalf("terminal invalid byte = %#v, error %v", output, err)
 	}
 }
 

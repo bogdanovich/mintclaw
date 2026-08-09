@@ -453,13 +453,19 @@ func waitForTerminalJob(t *testing.T, store *JobStore, jobID string) JobRecord {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		record, found := store.Lookup(jobID)
+		record, found, err := store.Lookup(jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if found && record.State.terminal() {
 			return record
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	record, _ := store.Lookup(jobID)
+	record, _, err := store.Lookup(jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Fatalf("job did not become terminal: %#v", record)
 	return JobRecord{}
 }
