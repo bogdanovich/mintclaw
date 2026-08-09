@@ -38,7 +38,10 @@ func TestNormalizeToolCallFacadeMatchesCLIProvider(t *testing.T) {
 }
 
 func TestAntigravityFacadeSignaturesRemainAvailable(t *testing.T) {
-	_ = FetchAntigravityProjectID
-	_ = FetchAntigravityModels
-	_ = oauthprovider.AntigravityModelInfo{}
+	//nolint:staticcheck // compile-time contract assertions for the public facade
+	var _ func(string) (string, error) = FetchAntigravityProjectID
+	//nolint:staticcheck // compile-time contract assertions for the public facade
+	var _ func(string, string) ([]AntigravityModelInfo, error) = FetchAntigravityModels
+	//nolint:staticcheck // compile-time contract assertions for the public facade
+	var _ AntigravityModelInfo = oauthprovider.AntigravityModelInfo{}
 }

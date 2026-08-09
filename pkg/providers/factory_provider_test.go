@@ -1024,7 +1024,8 @@ func TestCreateProviderFromConfig_CodingPlanAnthropic(t *testing.T) {
 			}
 			// alibaba-coding-anthropic uses Anthropic Messages provider
 			// Verify it's the anthropic messages provider by checking interface
-			_ = provider
+			//nolint:staticcheck // compile-time contract assertion for the provider interface
+			var _ LLMProvider = provider
 		})
 	}
 }
