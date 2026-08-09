@@ -369,17 +369,6 @@ func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyM
 	return nil
 }
 
-func (c *TelegramChannel) sendTextChunks(
-	ctx context.Context,
-	text string,
-	baseParams sendChunkParams,
-	useRich bool,
-	isToolFeedback bool,
-) ([]string, error) {
-	result := c.sendTextChunkQueue(ctx, []string{text}, baseParams, useRich, isToolFeedback)
-	return result.MessageIDs, result.Err
-}
-
 func (c *TelegramChannel) sendTextChunkQueue(
 	ctx context.Context,
 	queue []string,
