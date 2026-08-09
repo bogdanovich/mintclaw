@@ -601,7 +601,7 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 		Raw: metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, actualChatID, content, mediaRefs, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, actualChatID, content, mediaRefs, inboundCtx, sender)
 	return nil
 }
 

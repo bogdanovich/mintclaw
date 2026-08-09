@@ -295,7 +295,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"models":           models,
 		"total":            len(models),
 		"default_model":    defaultModel,
@@ -351,7 +351,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"index":  len(cfg.ModelList) - 1,
 	})
@@ -487,7 +487,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleDeleteModel removes a model configuration entry at the given index.
@@ -526,7 +526,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleSetDefaultModel sets the default model for all agents.
@@ -599,7 +599,7 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":        "ok",
 		"default_model": req.ModelName,
 	})
@@ -698,7 +698,7 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"models": models,
 		"total":  len(models),
 	})
@@ -1006,7 +1006,7 @@ func (h *Handler) handleTestModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // handleTestInlineModel tests connectivity using inline (unsaved) parameters.
@@ -1080,7 +1080,7 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 	// Check if configuration exists
 	if !hasModelConfiguration(m) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success":    false,
 			"latency_ms": 0,
 			"status":     modelStatusUnconfigured,
@@ -1106,7 +1106,7 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // probeModelConnectivity performs a real network probe to verify model endpoint reachability.

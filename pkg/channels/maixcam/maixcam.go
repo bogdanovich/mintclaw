@@ -208,7 +208,7 @@ func (c *MaixCamChannel) handlePersonDetection(msg MaixCamMessage) {
 		Raw:      metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
 }
 
 func (c *MaixCamChannel) handleStatusUpdate(msg MaixCamMessage) {

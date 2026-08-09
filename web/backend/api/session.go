@@ -828,7 +828,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.ReadDir(dir); err != nil {
 		// Directory doesn't exist yet = no sessions
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]sessionListItem{})
+		_ = json.NewEncoder(w).Encode([]sessionListItem{})
 		return
 	}
 
@@ -892,7 +892,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(items)
+	_ = json.NewEncoder(w).Encode(items)
 }
 
 // handleGetSession returns the full message history for a specific session.
@@ -947,7 +947,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	messages := detailSessionMessages(sess.Messages, toolFeedbackMaxArgsLength)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":       sessionID,
 		"messages": messages,
 		"summary":  sess.Summary,

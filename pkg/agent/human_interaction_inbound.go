@@ -245,7 +245,7 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 	record := classification.Record
 	logExplicitInteractionAnswerDisposition(record, msg, disposition)
 	if disposition == explicitInteractionAnswerReplay {
-		c.al.settleInboundAdmission(
+		_ = c.al.settleInboundAdmission(
 			ctx,
 			msg,
 			finalResponseAdmission{status: finalResponseAdmissionNotRequired},
@@ -266,7 +266,7 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 	case explicitInteractionAnswerUnavailable:
 		notice = "Pending input state is unavailable; this session cannot continue until it is recovered."
 	}
-	c.al.settleInboundAdmission(
+	_ = c.al.settleInboundAdmission(
 		ctx,
 		msg,
 		c.al.publishInteractionNoticeAdmission(ctx, msg, sessionKey, notice),

@@ -547,7 +547,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		inboundCtx.ReplyToMessageID = m.MessageReference.MessageID
 	}
 
-	c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender)
 }
 
 // startTyping starts a continuous typing indicator loop for the given chatID.

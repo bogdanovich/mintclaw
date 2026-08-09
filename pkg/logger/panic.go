@@ -50,5 +50,5 @@ func RecoverPanicNoExit(err any) {
 		stack,
 	)
 
-	panicWriter.Write([]byte(logMsg))
+	_, _ = panicWriter.Write([]byte(logMsg))
 }

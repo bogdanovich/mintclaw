@@ -113,7 +113,7 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 		inboundCtx.ChatType = "group"
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
 }
 
 // nickMentionedAt returns the byte index where botNick is mentioned in content

@@ -44,7 +44,7 @@ func (h *Handler) handleGetAutoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(autoStartResponse{
+	_ = json.NewEncoder(w).Encode(autoStartResponse{
 		Enabled:   enabled,
 		Supported: supported,
 		Platform:  runtime.GOOS,
@@ -75,7 +75,7 @@ func (h *Handler) handleSetAutoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(autoStartResponse{
+	_ = json.NewEncoder(w).Encode(autoStartResponse{
 		Enabled:   enabled,
 		Supported: supported,
 		Platform:  runtime.GOOS,

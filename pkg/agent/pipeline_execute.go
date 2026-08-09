@@ -418,7 +418,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			Content:    denyContent,
 			ToolCallID: tc.ID,
 		}
-		runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+		_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 		return true
 	}
 
@@ -585,7 +585,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				Content:    denyContent,
 				ToolCallID: tc.ID,
 			}
-			runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+			_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 			return skipToolCall()
 		case HookActionAbortTurn:
 			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHook})
@@ -611,7 +611,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			ts.eventMeta("runTurn", "turn.tool.skipped"),
 			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: loopDecision.Code},
 		)
-		runner.appendToolMessage(providers.Message{
+		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: blockedContent, ToolCallID: tc.ID,
 		}, toolMessagePersistAndIngest)
 		llm.toolResponseDisposition = toolResponseNeedsModel
@@ -729,7 +729,7 @@ func (runner *toolLoopRunner) approveToolCall(
 					Reason:     denyContent,
 				},
 			)
-			runner.appendToolMessage(providers.Message{
+			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 			}, toolMessagePersistOnly)
 			return skipToolCall()
@@ -831,7 +831,7 @@ func (runner *toolLoopRunner) approveToolCall(
 				ts.eventMeta("runTurn", "turn.tool.skipped"),
 				ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
 			)
-			runner.appendToolMessage(providers.Message{
+			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 			}, toolMessagePersistOnly)
 			return skipToolCall()
@@ -853,7 +853,7 @@ func (runner *toolLoopRunner) approveToolCall(
 				Content:    denyContent,
 				ToolCallID: tc.ID,
 			}
-			runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+			_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 			return skipToolCall()
 		}
 	}
@@ -1567,7 +1567,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	r.captureSteering(false)
 	if len(r.exec.pendingMessages) > 0 {
 		resolveCanceled()
-		r.appendToolMessage(providers.Message{
+		_ = r.appendToolMessage(providers.Message{
 			Role:       "tool",
 			Content:    queuedSteeringDeferredToolResult,
 			ToolCallID: toolCall.ID,
@@ -1747,5 +1747,5 @@ func (r *toolLoopRunner) appendSkippedToolMessage(
 		Content:    content,
 		ToolCallID: skippedTC.ID,
 	}
-	r.appendToolMessage(skippedMsg, toolMessagePersistOnly)
+	_ = r.appendToolMessage(skippedMsg, toolMessagePersistOnly)
 }
