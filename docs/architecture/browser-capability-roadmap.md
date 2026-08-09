@@ -694,6 +694,10 @@ driver output to the model.
   traces, HAR, and optional video as retained artifact references;
 - add bounded, redacted console errors, failed-request summaries, download
   metadata, and page-crash diagnostics;
+- bound semantic snapshots at their source and define truncation, chunking,
+  backpressure, and timeout budgets for production WSS delivery so that a
+  successfully completed action is not quarantined solely because its page
+  snapshot is large;
 - add operator-configured viewport, device emulation, locale, timezone,
   geolocation, clipboard, and browser permissions without accepting hidden
   policy values from model arguments;
