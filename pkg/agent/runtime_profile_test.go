@@ -181,8 +181,17 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	cfg.Tools.Exec.EnableDenyPatterns = true
 	cfg.Tools.Exec.AllowRemote = true
 	cfg.Tools.Exec.PermissionMode = "read_only"
+	cfg.Tools.Exec.CustomAllowPatterns = []string{"[invalid-project-policy"}
+	cfg.Tools.Exec.CustomDenyPatterns = []string{"project-policy-must-not-load"}
 	cfg.Tools.MCP.Enabled = true
 	cfg.Hooks.Enabled = true
+	hookMarker := filepath.Join(root, "configured-hook-ran")
+	cfg.Hooks.Processes = map[string]config.ProcessHookConfig{
+		"project-extension": {
+			Enabled: true,
+			Command: []string{"sh", "-c", `touch "$1"`, "hook", hookMarker},
+		},
+	}
 	loop, err := NewAgentLoopWithRuntimeProfile(
 		cfg,
 		bus.NewMessageBus(),
@@ -211,7 +220,9 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 		t.Fatal("coding pipeline did not select trusted tool execution")
 	}
 	if !cfg.Tools.Exec.EnableDenyPatterns || !cfg.Tools.Exec.AllowRemote ||
-		cfg.Tools.Exec.PermissionMode != "read_only" {
+		cfg.Tools.Exec.PermissionMode != "read_only" ||
+		!slices.Equal(cfg.Tools.Exec.CustomAllowPatterns, []string{"[invalid-project-policy"}) ||
+		!slices.Equal(cfg.Tools.Exec.CustomDenyPatterns, []string{"project-policy-must-not-load"}) {
 		t.Fatalf("coding construction mutated persisted exec config: %#v", cfg.Tools.Exec)
 	}
 	loop.RegisterTool(&echoTextTool{})
@@ -226,6 +237,9 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 	if err := loop.ensureHooksInitialized(context.Background()); err != nil {
 		t.Fatalf("coding hook initialization should be disabled: %v", err)
+	}
+	if _, err := os.Stat(hookMarker); !os.IsNotExist(err) {
+		t.Fatalf("coding runtime executed configured process hook: %v", err)
 	}
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding catalogue changed after dynamic injection: %v", got)
@@ -1287,6 +1301,9 @@ func TestNewAgentLoopWithRuntimeProfilePreservesPersonalCatalogueAndExternalStat
 	}
 	if err := loop.state.SetLastChannel("test"); err != nil {
 		t.Fatalf("persist strict personal state: %v", err)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("strict personal state persistence wrote under execution root: %v", statErr)
 	}
 	for _, path := range []string{
 		layout.StatePaths().SessionsRoot,

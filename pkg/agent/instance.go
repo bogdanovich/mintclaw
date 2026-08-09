@@ -473,10 +473,7 @@ func initCodingAgentTools(workspace string, cfg *config.Config, initCfg agentToo
 
 	execCfg := *cfg
 	execCfg.Tools = cfg.Tools
-	execCfg.Tools.Exec = cfg.Tools.Exec
-	execCfg.Tools.Exec.EnableDenyPatterns = false
-	execCfg.Tools.Exec.AllowRemote = false
-	execCfg.Tools.Exec.PermissionMode = ""
+	execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
 	execTool, err := tools.NewExecToolWithRuntimeConfig(workspace, initCfg.execScratch, false, &execCfg)
 	if err != nil {
 		return fmt.Errorf("initialize coding exec tool: %w", err)
