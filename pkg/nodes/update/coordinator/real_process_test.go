@@ -54,7 +54,7 @@ func TestRealProcessUpdateCanaries(t *testing.T) {
 			fixture := newReleaseFixture(t, now, "mintclaw-node")
 			defer fixture.server.Close()
 			updateCoordinator, configPath, _ := realProcessCoordinator(t, fixture, now, test.scope, test.behavior)
-			defer updateCoordinator.Close()
+			defer func() { _ = updateCoordinator.Close() }()
 			request := fixture.stageRequest(now)
 			if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
 				t.Fatal(err)
@@ -114,7 +114,7 @@ func TestRealProcessDisconnectRecoversWithoutSecondActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	updateCoordinator = reopenRealProcessCoordinator(t, stateRoot, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	supervisor, err = NewSupervisor(updateCoordinator, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func runRealProcessCompanion(args []string) int {
 	if controlFile == nil {
 		return 9
 	}
-	defer controlFile.Close()
+	defer func() { _ = controlFile.Close() }()
 	if slot == "b" && string(behavior) == realProcessHold {
 		_, _ = io.Copy(io.Discard, controlFile)
 		return 0

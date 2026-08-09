@@ -104,9 +104,15 @@ func TestSteeringQueue_PushDequeue_OneAtATime(t *testing.T) {
 	sq := newSteeringQueue(SteeringOneAtATime)
 
 	scope := testSessionScope("queue")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg1"}, "")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg2"}, "")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg3"}, "")
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg1"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg2"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg3"}, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	if sq.len() != 3 {
 		t.Fatalf("expected 3 messages, got %d", sq.len())
@@ -143,9 +149,15 @@ func TestSteeringQueue_PushDequeue_All(t *testing.T) {
 	sq := newSteeringQueue(SteeringAll)
 
 	scope := testSessionScope("queue")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg1"}, "")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg2"}, "")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg3"}, "")
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg1"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg2"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "msg3"}, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	msgs := sq.dequeueScope(scope)
 	if len(msgs) != 3 {
@@ -185,8 +197,12 @@ func TestSteeringQueue_SetMode(t *testing.T) {
 
 	// Push two messages and verify all-mode drains them
 	scope := testSessionScope("queue")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "a"}, "")
-	sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "b"}, "")
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "a"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sq.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "b"}, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	msgs := sq.dequeueScope(scope)
 	if len(msgs) != 2 {
@@ -205,11 +221,13 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			sq.pushScopeWithSender(
+			if err := sq.pushScopeWithSender(
 				testSessionScope("queue"),
 				providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)},
 				"",
-			)
+			); err != nil {
+				t.Fatal(err)
+			}
 		}(i)
 	}
 	wg.Wait()

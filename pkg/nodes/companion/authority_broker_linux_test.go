@@ -230,7 +230,7 @@ func TestAuthorityBrokerUnixBoundsNonReadingPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if err := writeAuthorityBrokerFrame(
 		connection,
 		authorityBrokerRequestFrame{
@@ -271,7 +271,7 @@ func TestAuthorityBrokerTerminalUnixRoundTripRealPTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer terminal.Close()
+	defer func() { _ = terminal.Close() }()
 	if opened.Type != TerminalEventOpened || terminal.ID() != opened.TerminalID {
 		t.Fatalf("opened terminal = (%q, %#v)", terminal.ID(), opened)
 	}
@@ -316,7 +316,7 @@ func TestAuthorityBrokerTerminalRunnerExitPreservesStartedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer terminal.Close()
+	defer func() { _ = terminal.Close() }()
 	unknown := receiveAuthorityBrokerTerminalEvent(t, terminal)
 	if unknown.Type != TerminalEventUnknown ||
 		unknown.StartedAt != opened.StartedAt {
@@ -339,7 +339,7 @@ func TestAuthorityBrokerTerminalOpenCancellationReleasesPendingClient(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
@@ -385,7 +385,7 @@ func TestAuthorityBrokerTerminalOverflowReleasesProfileCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if err := second.Send(t.Context(), TerminalBrokerControl{
 		Sequence: 1, IdempotencyKey: "close-1", Close: true,
 	}); err != nil {
@@ -397,8 +397,8 @@ func TestAuthorityBrokerTerminalOverflowReleasesProfileCapacity(t *testing.T) {
 
 func TestAuthorityBrokerTerminalReceiveHonorsDeadlineFreeCancellation(t *testing.T) {
 	connection, peer := testAuthorityBrokerUnixPair(t)
-	defer connection.Close()
-	defer peer.Close()
+	defer func() { _ = connection.Close() }()
+	defer func() { _ = peer.Close() }()
 	terminal := &AuthorityBrokerTerminal{
 		connection: connection, terminalID: "terminal_test", done: make(chan struct{}),
 	}
@@ -424,8 +424,8 @@ func TestAuthorityBrokerTerminalReceiveHonorsDeadlineFreeCancellation(t *testing
 
 func TestAuthorityBrokerTerminalReceiveDeadlineClosesInterruptedStream(t *testing.T) {
 	connection, peer := testAuthorityBrokerUnixPair(t)
-	defer connection.Close()
-	defer peer.Close()
+	defer func() { _ = connection.Close() }()
+	defer func() { _ = peer.Close() }()
 	terminal := &AuthorityBrokerTerminal{
 		connection: connection, terminalID: "terminal_test", done: make(chan struct{}),
 	}
@@ -444,8 +444,8 @@ func TestAuthorityBrokerTerminalReceiveDeadlineClosesInterruptedStream(t *testin
 
 func TestAuthorityBrokerTerminalSendHonorsBackpressuredCancellation(t *testing.T) {
 	connection, peer := testAuthorityBrokerUnixPair(t)
-	defer connection.Close()
-	defer peer.Close()
+	defer func() { _ = connection.Close() }()
+	defer func() { _ = peer.Close() }()
 	fillAuthorityBrokerUnixWriteBuffer(t, connection)
 	terminal := &AuthorityBrokerTerminal{
 		connection: connection, terminalID: "terminal_test", done: make(chan struct{}),
@@ -475,8 +475,8 @@ func TestAuthorityBrokerTerminalSendHonorsBackpressuredCancellation(t *testing.T
 
 func TestAuthorityBrokerTerminalSendDeadlineClosesInterruptedStream(t *testing.T) {
 	connection, peer := testAuthorityBrokerUnixPair(t)
-	defer connection.Close()
-	defer peer.Close()
+	defer func() { _ = connection.Close() }()
+	defer func() { _ = peer.Close() }()
 	fillAuthorityBrokerUnixWriteBuffer(t, connection)
 	terminal := &AuthorityBrokerTerminal{
 		connection: connection, terminalID: "terminal_test", done: make(chan struct{}),
@@ -671,7 +671,7 @@ func testAuthorityBrokerUnixPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	accepted := make(chan *net.UnixConn, 1)
 	acceptErr := make(chan error, 1)
 	go func() {
@@ -694,7 +694,7 @@ func testAuthorityBrokerUnixPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 	case peer := <-accepted:
 		return connection, peer
 	case err := <-acceptErr:
-		connection.Close()
+		_ = connection.Close()
 		t.Fatal(err)
 		return nil, nil
 	}

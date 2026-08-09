@@ -18,7 +18,7 @@ func TestStoreInitializesCommitsAndRejectsStaleGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	state := testState(t)
 	if err = store.Initialize(state); err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestStoreInitialPublicationIsRecoverableAfterDurabilityUncertainty(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	loaded, err = reopened.Load()
 	if err != nil || loaded != state {
 		t.Fatalf("reopened state = %#v, %v", loaded, err)
@@ -81,7 +81,7 @@ func TestStorePowerLossBoundariesRecoverOldOrPublishedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	state := testState(t)
 	if err = store.Initialize(state); err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestStoreRejectsConcurrentOwnerAndUnsafeFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if _, err = OpenStore(root); err == nil || !strings.Contains(err.Error(), "already owned") {
 		t.Fatalf("second OpenStore() error = %v", err)
 	}
@@ -207,7 +207,7 @@ func TestStoreRejectsMalformedDuplicateAndTrailingState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 			if _, err = store.Load(); err == nil {
 				t.Fatal("malformed state was accepted")
 			}
@@ -221,7 +221,7 @@ func TestStoreRejectsHardlinkedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if err = store.Initialize(testState(t)); err != nil {
 		t.Fatal(err)
 	}

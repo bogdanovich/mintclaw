@@ -520,7 +520,7 @@ func TestSeahorseIgnoreHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	result, err := engine.Ingest(ctx, "heartbeat", []seahorse.Message{
@@ -557,7 +557,7 @@ func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	mgr := newSingleRuntimeTestManager(engine, nil)
@@ -616,7 +616,7 @@ func TestSeahorseAdapterReportsAbsoluteBudgetPressureBelowContextWindow(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, nil)
 	ctx := context.Background()
 	for turn := 0; turn < 3; turn++ {
@@ -659,7 +659,7 @@ func TestSeahorseAdapterFailsClosedWhenMandatoryPromptCannotFit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, nil)
 	_, err = mgr.Assemble(context.Background(), &AssembleRequest{
 		SessionKey:    "mandatory-overflow",
@@ -682,7 +682,7 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	// Wrap engine to track calls
 	_ = compactCalled // track via adapter behavior
@@ -739,7 +739,7 @@ func TestSeahorseCompactProactiveDoesNotForceCompactUntilUnder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	mgr := newSingleRuntimeTestManager(engine, nil)
 	ctx := context.Background()
@@ -1193,7 +1193,7 @@ func TestSeahorseAssembleReturnsAllSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	mgr := newSingleRuntimeTestManager(engine, nil)
@@ -1381,7 +1381,7 @@ func TestSeahorseAssembleSummaryNotInMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	mgr := newSingleRuntimeTestManager(engine, nil)

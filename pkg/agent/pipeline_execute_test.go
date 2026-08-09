@@ -1861,7 +1861,9 @@ func TestPipelineAppendToolMessage_PersistsWithoutIngest(t *testing.T) {
 		ToolCallID: "call-1",
 	}
 
-	runner.appendToolMessage(msg, toolMessagePersistOnly)
+	if err := runner.appendToolMessage(msg, toolMessagePersistOnly); err != nil {
+		t.Fatal(err)
+	}
 	if len(runner.messages) != 1 || runner.messages[0].Content != "skipped" {
 		t.Fatalf("messages = %#v, want appended message", runner.messages)
 	}
@@ -1893,7 +1895,9 @@ func TestPipelineAppendToolMessage_PersistsAndIngests(t *testing.T) {
 		ToolCallID: "call-2",
 	}
 
-	runner.appendToolMessage(msg, toolMessagePersistAndIngest)
+	if err := runner.appendToolMessage(msg, toolMessagePersistAndIngest); err != nil {
+		t.Fatal(err)
+	}
 	if len(runner.messages) != 1 || runner.messages[0].Content != "result" {
 		t.Fatalf("messages = %#v, want appended message", runner.messages)
 	}

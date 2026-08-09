@@ -163,7 +163,7 @@ func TestNewEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// DB file should exist
 	if _, pathErr := os.Stat(dbPath); os.IsNotExist(pathErr) {
@@ -199,7 +199,7 @@ func TestNewEngineWithPatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	if !eng.shouldIgnoreSession("cron:backup") {
 		t.Error("expected cron:backup to be ignored")
@@ -292,13 +292,17 @@ func TestEngineIngestIncremental(t *testing.T) {
 	ctx := context.Background()
 
 	// First ingest
-	eng.Ingest(ctx, "agent:test", []Message{
+	if _, err := eng.Ingest(ctx, "agent:test", []Message{
 		{Role: "user", Content: "msg1", TokenCount: 1},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Second ingest — should append, not replace
-	eng.Ingest(ctx, "agent:test", []Message{
+	if _, err := eng.Ingest(ctx, "agent:test", []Message{
 		{Role: "assistant", Content: "msg2", TokenCount: 1},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, _ := eng.store.GetOrCreateConversation(ctx, "agent:test")
 	stored, _ := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
@@ -667,7 +671,7 @@ func TestEngineIngestAssemblePreservesParts(t *testing.T) {
 	ctx := context.Background()
 
 	// Ingest a message with tool_use parts
-	eng.Ingest(ctx, "agent:parts-roundtrip", []Message{
+	if _, err := eng.Ingest(ctx, "agent:parts-roundtrip", []Message{
 		{Role: "user", Content: "list files", TokenCount: 3},
 		{
 			Role:       "assistant",
@@ -678,7 +682,9 @@ func TestEngineIngestAssemblePreservesParts(t *testing.T) {
 				{Type: "text", Text: "found 3 files"},
 			},
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Assemble should return messages with parts intact
 	result, err := eng.Assemble(ctx, "agent:parts-roundtrip", AssembleInput{Budget: 1000})
@@ -842,8 +848,12 @@ func TestEngineBootstrapIdempotent(t *testing.T) {
 	}
 
 	// Bootstrap twice with same messages
-	eng.Bootstrap(ctx, "agent:idem", msgs)
-	eng.Bootstrap(ctx, "agent:idem", msgs)
+	if err := eng.Bootstrap(ctx, "agent:idem", msgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Bootstrap(ctx, "agent:idem", msgs); err != nil {
+		t.Fatal(err)
+	}
 
 	// Should still have exactly 2 messages (no duplicates)
 	conv, _ := eng.store.GetConversationBySessionKey(ctx, "agent:idem")
@@ -1061,7 +1071,9 @@ func TestEngineBootstrapDelta(t *testing.T) {
 		{Role: "user", Content: "hello", TokenCount: 3},
 		{Role: "assistant", Content: "world", TokenCount: 3},
 	}
-	eng.Bootstrap(ctx, "agent:delta", msgs1)
+	if err := eng.Bootstrap(ctx, "agent:delta", msgs1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Second bootstrap with 4 messages (2 existing + 2 new)
 	msgs2 := []Message{
@@ -1070,7 +1082,9 @@ func TestEngineBootstrapDelta(t *testing.T) {
 		{Role: "user", Content: "new question", TokenCount: 5},
 		{Role: "assistant", Content: "new answer", TokenCount: 5},
 	}
-	eng.Bootstrap(ctx, "agent:delta", msgs2)
+	if err := eng.Bootstrap(ctx, "agent:delta", msgs2); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, _ := eng.store.GetConversationBySessionKey(ctx, "agent:delta")
 	if conv == nil {
@@ -1321,10 +1335,12 @@ func TestAssemblerSummaryRoleNotUser(t *testing.T) {
 	ctx := context.Background()
 
 	// Ingest messages
-	eng.Ingest(ctx, "agent:summary-role-test", []Message{
+	if _, err := eng.Ingest(ctx, "agent:summary-role-test", []Message{
 		{Role: "user", Content: "hello", TokenCount: 5},
 		{Role: "assistant", Content: "world", TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, _ := eng.store.GetOrCreateConversation(ctx, "agent:summary-role-test")
 
@@ -1339,7 +1355,9 @@ func TestAssemblerSummaryRoleNotUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSummary: %v", err)
 	}
-	eng.store.AppendContextSummary(ctx, conv.ConversationID, sum.SummaryID)
+	if err := eng.store.AppendContextSummary(ctx, conv.ConversationID, sum.SummaryID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Assemble and check summary message role
 	result, err := eng.Assemble(ctx, "agent:summary-role-test", AssembleInput{Budget: 1000})
@@ -1375,14 +1393,16 @@ func newTestEngineForConcurrency(t *testing.T) *Engine {
 func TestEngineConcurrentIngestAndAssemble(t *testing.T) {
 	// Concurrent Ingest + Assemble on same session should not panic or corrupt data
 	eng := newTestEngineForConcurrency(t)
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	ctx := context.Background()
 	sessionKey := "agent:race-test"
 
 	// Start with some initial data
-	eng.Ingest(ctx, sessionKey, []Message{
+	if _, err := eng.Ingest(ctx, sessionKey, []Message{
 		{Role: "user", Content: "initial", TokenCount: 2},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 10)
@@ -1431,16 +1451,18 @@ func TestEngineConcurrentIngestAndAssemble(t *testing.T) {
 func TestEngineConcurrentCompactAndAssemble(t *testing.T) {
 	// Concurrent Compact + Assemble should not panic
 	eng := newTestEngineForConcurrency(t)
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	ctx := context.Background()
 	sessionKey := "agent:compact-race"
 
 	// Ingest enough messages for compaction
 	for i := 0; i < 10; i++ {
-		eng.Ingest(ctx, sessionKey, []Message{
+		if _, err := eng.Ingest(ctx, sessionKey, []Message{
 			{Role: "user", Content: fmt.Sprintf("msg-%d", i), TokenCount: 50},
 			{Role: "assistant", Content: fmt.Sprintf("reply-%d", i), TokenCount: 50},
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -1516,7 +1538,9 @@ func TestBootstrapOutOfOrderAppend(t *testing.T) {
 		{Role: "user", Content: "msg1", TokenCount: 3},
 		{Role: "assistant", Content: "msg2", TokenCount: 3},
 	}
-	e.Bootstrap(ctx, sessionKey, msgs1)
+	if err := e.Bootstrap(ctx, sessionKey, msgs1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Second: bootstrap with same prefix (out of order append at end is fine)
 	// The key is that the prefix matching works correctly
@@ -1526,7 +1550,9 @@ func TestBootstrapOutOfOrderAppend(t *testing.T) {
 		{Role: "user", Content: "msg3", TokenCount: 3},
 		{Role: "assistant", Content: "msg4", TokenCount: 3},
 	}
-	e.Bootstrap(ctx, sessionKey, msgs2)
+	if err := e.Bootstrap(ctx, sessionKey, msgs2); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, _ := e.store.GetOrCreateConversation(ctx, sessionKey)
 	stored, _ := e.store.GetMessages(ctx, conv.ConversationID, 10, 0)
@@ -1641,7 +1667,9 @@ func TestBootstrapToolPartsDelta(t *testing.T) {
 		{Role: "user", Content: "hello", TokenCount: 3},
 		{Role: "assistant", Content: "hi", TokenCount: 3},
 	}
-	e.Bootstrap(ctx, sessionKey, msgs1)
+	if err := e.Bootstrap(ctx, sessionKey, msgs1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Second bootstrap: add message with tool parts
 	msgs2 := []Message{
@@ -1656,7 +1684,9 @@ func TestBootstrapToolPartsDelta(t *testing.T) {
 			},
 		},
 	}
-	e.Bootstrap(ctx, sessionKey, msgs2)
+	if err := e.Bootstrap(ctx, sessionKey, msgs2); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, _ := e.store.GetOrCreateConversation(ctx, sessionKey)
 	stored, _ := e.store.GetMessages(ctx, conv.ConversationID, 10, 0)
@@ -1711,7 +1741,9 @@ func TestBootstrapToolPartsIdempotent(t *testing.T) {
 	}
 
 	// First bootstrap
-	e.Bootstrap(ctx, sessionKey, msgs)
+	if err := e.Bootstrap(ctx, sessionKey, msgs); err != nil {
+		t.Fatal(err)
+	}
 
 	// Get message count after first bootstrap
 	conv, _ := e.store.GetOrCreateConversation(ctx, sessionKey)
@@ -1721,7 +1753,9 @@ func TestBootstrapToolPartsIdempotent(t *testing.T) {
 	}
 
 	// Second bootstrap with same messages - should be idempotent (no rebuild)
-	e.Bootstrap(ctx, sessionKey, msgs)
+	if err := e.Bootstrap(ctx, sessionKey, msgs); err != nil {
+		t.Fatal(err)
+	}
 
 	stored2, _ := e.store.GetMessages(ctx, conv.ConversationID, 10, 0)
 	if len(stored2) != 3 {
@@ -1903,7 +1937,9 @@ func TestAssemblerLazyInitRace(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start // Wait for all goroutines to be ready
-				e.Assemble(ctx, sessionKey, AssembleInput{Budget: 1000})
+				if _, err := e.Assemble(ctx, sessionKey, AssembleInput{Budget: 1000}); err != nil {
+					t.Errorf("Assemble: %v", err)
+				}
 			}()
 		}
 
@@ -1917,7 +1953,7 @@ func TestAssemblerLazyInitRace(t *testing.T) {
 
 func TestSelectShallowestCondensationWithNonConsecutiveDepths(t *testing.T) {
 	e := newTestEngineForConcurrency(t)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	ctx := context.Background()
 	sessionKey := "test-non-consecutive-depths"
 
