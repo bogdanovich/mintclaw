@@ -267,6 +267,8 @@ func (factory *nodeBrowserWorkerFactory) Open(
 	}
 	worker.profileRevision = remoteProfile.Revision
 	worker.actions = slices.Clone(remoteProfile.Actions)
+	worker.profileDescriptor = remoteProfile
+	worker.profileDescriptor.Actions = slices.Clone(remoteProfile.Actions)
 	worker.catalogRevision = worker.catalogHash
 	input := nodes.BrowserSessionOpenInput{
 		SessionID: request.SessionID, Profile: request.Profile,
@@ -287,21 +289,22 @@ func (factory *nodeBrowserWorkerFactory) Open(
 }
 
 type nodeBrowserWorker struct {
-	factory         *nodeBrowserWorkerFactory
-	owner           browser.Owner
-	browserTarget   string
-	nodeTarget      string
-	sessionID       string
-	profile         string
-	profileRevision string
-	limits          config.BrowserLimitsConfig
-	nodeID          nodes.ID
-	executor        string
-	policyRevision  string
-	catalogHash     string
-	catalogRevision string
-	actions         []string
-	tabID           string
+	factory           *nodeBrowserWorkerFactory
+	owner             browser.Owner
+	browserTarget     string
+	nodeTarget        string
+	sessionID         string
+	profile           string
+	profileRevision   string
+	profileDescriptor nodes.BrowserProfileDescriptor
+	limits            config.BrowserLimitsConfig
+	nodeID            nodes.ID
+	executor          string
+	policyRevision    string
+	catalogHash       string
+	catalogRevision   string
+	actions           []string
+	tabID             string
 
 	mu                 sync.Mutex
 	snapshotGeneration uint64
@@ -548,7 +551,8 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 		worker.catalogHash != record.Snapshot.CatalogHash {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
-	if worker.profileRevision != "" && worker.profileRevision != profile.Revision {
+	if worker.profileDescriptor.Alias != "" &&
+		!browserProfilesEqual(worker.profileDescriptor, profile) {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
 	return descriptor, profile, nil
@@ -731,7 +735,8 @@ func (worker *nodeBrowserWorker) validateAuthority(
 		return browser.ErrDenied
 	}
 	profile, ok := browserDescriptorProfile(descriptor, worker.profile)
-	if !ok || profile.Revision != worker.profileRevision && worker.profileRevision != "" {
+	if !ok || worker.profileDescriptor.Alias != "" &&
+		!browserProfilesEqual(worker.profileDescriptor, profile) {
 		return browser.ErrDenied
 	}
 	return nil
