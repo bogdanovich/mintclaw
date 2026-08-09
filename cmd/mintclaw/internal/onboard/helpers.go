@@ -150,7 +150,7 @@ func createWorkspaceTemplates(workspace string) {
 func copyEmbeddedToTarget(targetDir string) error {
 	// Ensure target directory exists
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("Failed to create target directory: %w", err)
+		return fmt.Errorf("failed to create target directory: %w", err)
 	}
 
 	// Walk through all files in the embedded root workspace template.
@@ -167,7 +167,7 @@ func copyEmbeddedToTarget(targetDir string) error {
 		// Read embedded file
 		data, err := workspacetemplates.FS.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("Failed to read embedded file %s: %w", path, err)
+			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
 
 		new_path := filepath.Clean(path)
@@ -175,10 +175,10 @@ func copyEmbeddedToTarget(targetDir string) error {
 			return nil
 		}
 		if strings.HasPrefix(new_path, "..") {
-			return fmt.Errorf("Failed to get relative path for %s", path)
+			return fmt.Errorf("failed to get relative path for %s", path)
 		}
 		if filepath.IsAbs(new_path) {
-			return fmt.Errorf("Unexpected absolute embedded path %s", path)
+			return fmt.Errorf("unexpected absolute embedded path %s", path)
 		}
 		if new_path == "AGENTS.md" || new_path == "IDENTITY.md" {
 			return nil
@@ -189,12 +189,12 @@ func copyEmbeddedToTarget(targetDir string) error {
 
 		// Ensure target file's directory exists
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-			return fmt.Errorf("Failed to create directory %s: %w", filepath.Dir(targetPath), err)
+			return fmt.Errorf("failed to create directory %s: %w", filepath.Dir(targetPath), err)
 		}
 
 		// Write file
 		if err := os.WriteFile(targetPath, data, 0o644); err != nil {
-			return fmt.Errorf("Failed to write file %s: %w", targetPath, err)
+			return fmt.Errorf("failed to write file %s: %w", targetPath, err)
 		}
 
 		return nil

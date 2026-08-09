@@ -128,7 +128,7 @@ func (p *Provider) Chat(
 	options map[string]any,
 ) (*LLMResponse, error) {
 	if p.apiBase == "" {
-		return nil, fmt.Errorf("Azure API base not configured")
+		return nil, fmt.Errorf("azure API base not configured")
 	}
 
 	requestURL, err := url.JoinPath(p.apiBase, responsesAPIPath)

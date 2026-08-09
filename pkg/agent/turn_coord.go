@@ -171,7 +171,7 @@ func (al *AgentLoop) askSideQuestion(
 
 	question = strings.TrimSpace(question)
 	if question == "" {
-		return "", fmt.Errorf("askSideQuestion: %w", fmt.Errorf("Usage: /btw <question>"))
+		return "", fmt.Errorf("askSideQuestion: %w", fmt.Errorf("usage: /btw <question>"))
 	}
 
 	if opts != nil {

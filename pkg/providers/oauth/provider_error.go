@@ -56,7 +56,7 @@ func normalizeCodexCredentialError(err error) error {
 }
 
 func normalizeCodexResponseFailure(code, message string) error {
-	cause := errors.New("Codex response stream reported failure")
+	cause := errors.New("codex response stream reported failure")
 	body, _ := json.Marshal(map[string]string{"code": code, "message": message, "type": code})
 	normalized := providererrors.FromHTTPResponse(0, nil, body, cause)
 	if normalized.Kind == providererrors.KindUnknown {
@@ -95,12 +95,12 @@ func codexIncompleteStreamError() error {
 	return &providererrors.ProviderError{
 		Kind:        providererrors.KindTransient,
 		SafeMessage: "Codex stream ended without a final response",
-		Cause:       errors.New("Codex stream ended without completed response event"),
+		Cause:       errors.New("codex stream ended without completed response event"),
 	}
 }
 
 func codexIncompleteResponseError(reason string) error {
-	cause := fmt.Errorf("Codex response incomplete: reason=%s", reason)
+	cause := fmt.Errorf("codex response incomplete: reason=%s", reason)
 	return &providererrors.ProviderError{
 		Kind:        providererrors.KindInvalidRequest,
 		SafeMessage: "Codex response was incomplete",
