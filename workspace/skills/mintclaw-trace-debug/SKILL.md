@@ -11,6 +11,13 @@ longer exist.
 
 ## Locate The Evidence
 
+For the deployed MintClaw stack, inspect evidence on the deployment host over
+SSH. Prefer `server@oc` and fall back to `server@oc-ts`, using batch mode and a
+short connection timeout. Run bounded `find`, `jq`, Python, and `journalctl`
+filters remotely; do not copy a rich trace to the local machine unless the
+diagnosis specifically requires it. Deployed profiles live under
+`/home/server/.mintclaw/<profile>`.
+
 1. Identify the affected profile, approximate wall-clock time, user-visible
    symptom, channel, and any known turn, task, session, tool-call, request, or
    completion ID.
