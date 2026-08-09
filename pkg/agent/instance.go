@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -67,6 +68,49 @@ type AgentInstance struct {
 	// from model_list, instead of inheriting the primary model's provider config.
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
+	ownedProviders     []providers.StatefulProvider
+}
+
+type providerOwnership struct {
+	injected providers.LLMProvider
+	owned    []providers.StatefulProvider
+}
+
+func newProviderOwnership(injected providers.LLMProvider) *providerOwnership {
+	return &providerOwnership{injected: injected}
+}
+
+func (o *providerOwnership) trackCreated(provider providers.LLMProvider) {
+	stateful, ok := provider.(providers.StatefulProvider)
+	if !ok || providersShareIdentity(provider, o.injected) {
+		return
+	}
+	for _, existing := range o.owned {
+		if providersShareIdentity(existing, provider) {
+			return
+		}
+	}
+	o.owned = append(o.owned, stateful)
+}
+
+func providersShareIdentity(first, second providers.LLMProvider) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	firstValue := reflect.ValueOf(first)
+	secondValue := reflect.ValueOf(second)
+	if firstValue.Type() != secondValue.Type() {
+		return false
+	}
+	if firstValue.Type().Comparable() {
+		return firstValue.Interface() == secondValue.Interface()
+	}
+	switch firstValue.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Slice, reflect.UnsafePointer:
+		return firstValue.Pointer() == secondValue.Pointer()
+	default:
+		return false
+	}
 }
 
 type agentToolInitConfig struct {
@@ -194,7 +238,15 @@ func newAgentInstance(
 			)
 		}
 	}
-	provider = resolvePrimaryProviderForAgent(cfg, workspace, identity.agentID, model, provider)
+	providerOwnership := newProviderOwnership(provider)
+	provider = resolvePrimaryProviderForAgent(
+		cfg,
+		workspace,
+		identity.agentID,
+		model,
+		provider,
+		providerOwnership,
+	)
 	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, definition)
 
 	toolInit := newAgentToolInitConfig(defaults, cfg, agentToolPolicy)
@@ -205,7 +257,15 @@ func newAgentInstance(
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
-	routingCfg := buildAgentRoutingConfig(cfg, defaults, workspace, model, fallbacks, identity.agentID)
+	routingCfg := buildAgentRoutingConfig(
+		cfg,
+		defaults,
+		workspace,
+		model,
+		fallbacks,
+		identity.agentID,
+		providerOwnership,
+	)
 
 	instance := &AgentInstance{
 		ID:                        identity.agentID,
@@ -237,6 +297,7 @@ func newAgentInstance(
 		LightProvider:             routingCfg.lightProvider,
 		CandidateProviders:        routingCfg.candidateProviders,
 		ToolLoopDetection:         loopGuardConfigFromConfig(cfg.Tools.LoopDetection),
+		ownedProviders:            providerOwnership.owned,
 	}
 	if layout != nil {
 		instance.Layout = *layout
@@ -438,12 +499,19 @@ func buildAgentRoutingConfig(
 	workspace, model string,
 	fallbacks []string,
 	agentID string,
+	providerOwnership *providerOwnership,
 ) agentRoutingConfig {
 	routingCfg := agentRoutingConfig{
 		candidates:         resolveModelCandidates(cfg, defaults.Provider, model, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
-	populateCandidateProvidersFromNames(cfg, workspace, fallbacks, routingCfg.candidateProviders)
+	populateCandidateProvidersFromNamesTracked(
+		cfg,
+		workspace,
+		fallbacks,
+		routingCfg.candidateProviders,
+		providerOwnership,
+	)
 
 	rc := defaults.Routing
 	if rc == nil || !rc.Enabled || rc.LightModel == "" {
@@ -484,7 +552,14 @@ func buildAgentRoutingConfig(
 	})
 	routingCfg.lightCandidates = resolved
 	routingCfg.lightProvider = lightProvider
-	populateCandidateProvidersFromNames(cfg, workspace, []string{rc.LightModel}, routingCfg.candidateProviders)
+	providerOwnership.trackCreated(lightProvider)
+	populateCandidateProvidersFromNamesTracked(
+		cfg,
+		workspace,
+		[]string{rc.LightModel},
+		routingCfg.candidateProviders,
+		providerOwnership,
+	)
 	return routingCfg
 }
 
@@ -497,6 +572,16 @@ func populateCandidateProvidersFromNames(
 	workspace string,
 	names []string,
 	out map[string]providers.LLMProvider,
+) {
+	populateCandidateProvidersFromNamesTracked(cfg, workspace, names, out, nil)
+}
+
+func populateCandidateProvidersFromNamesTracked(
+	cfg *config.Config,
+	workspace string,
+	names []string,
+	out map[string]providers.LLMProvider,
+	providerOwnership *providerOwnership,
 ) {
 	if cfg == nil || len(names) == 0 {
 		return
@@ -521,6 +606,9 @@ func populateCandidateProvidersFromNames(
 			continue
 		}
 		out[key] = p
+		if providerOwnership != nil {
+			providerOwnership.trackCreated(p)
+		}
 	}
 }
 
@@ -534,6 +622,7 @@ func resolvePrimaryProviderForAgent(
 	agentID string,
 	model string,
 	fallback providers.LLMProvider,
+	providerOwnership *providerOwnership,
 ) providers.LLMProvider {
 	model = strings.TrimSpace(model)
 	if cfg == nil || model == "" {
@@ -562,6 +651,7 @@ func resolvePrimaryProviderForAgent(
 	if resolvedProvider == nil {
 		return fallback
 	}
+	providerOwnership.trackCreated(resolvedProvider)
 	return resolvedProvider
 }
 
@@ -663,10 +753,16 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
+	var sessionErr error
 	if a.Sessions != nil {
-		return a.Sessions.Close()
+		sessionErr = a.Sessions.Close()
+		a.Sessions = nil
 	}
-	return nil
+	for _, provider := range a.ownedProviders {
+		provider.Close()
+	}
+	a.ownedProviders = nil
+	return sessionErr
 }
 
 // initSessionStore creates the session persistence backend.

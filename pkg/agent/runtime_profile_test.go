@@ -8,7 +8,49 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+type countingStatefulProvider struct {
+	closeCount int
+}
+
+func (p *countingStatefulProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{}, nil
+}
+
+func (p *countingStatefulProvider) GetDefaultModel() string { return "test" }
+
+func (p *countingStatefulProvider) Close() { p.closeCount++ }
+
+func TestAgentInstanceCloseOwnsOnlyInternallyCreatedProviders(t *testing.T) {
+	injected := &countingStatefulProvider{}
+	created := &countingStatefulProvider{}
+	ownership := newProviderOwnership(injected)
+	ownership.trackCreated(injected)
+	ownership.trackCreated(created)
+	ownership.trackCreated(created)
+	agent := &AgentInstance{ownedProviders: ownership.owned}
+
+	if err := agent.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := agent.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if injected.closeCount != 0 {
+		t.Fatalf("injected provider close count = %d, want 0", injected.closeCount)
+	}
+	if created.closeCount != 1 {
+		t.Fatalf("internally created provider close count = %d, want 1", created.closeCount)
+	}
+}
 
 func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) {
 	root := t.TempDir()
