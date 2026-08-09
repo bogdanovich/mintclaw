@@ -230,7 +230,7 @@ func TestTeamsWebhookChannel_SendDefaultTargetFallback(t *testing.T) {
 
 			ctx := context.Background()
 			_ = ch.Start(ctx)
-			defer ch.Stop(ctx)
+			defer func() { _ = ch.Stop(ctx) }()
 
 			msg := bus.OutboundMessage{Content: "test", ChatID: tt.chatID}
 			_, err = ch.Send(ctx, msg)
@@ -276,7 +276,7 @@ func TestTeamsWebhookChannel_SendSuccess(t *testing.T) {
 
 	ctx := context.Background()
 	_ = ch.Start(ctx)
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	msg := bus.OutboundMessage{Content: "Hello Teams!", ChatID: "alerts"}
 
@@ -317,7 +317,7 @@ func TestTeamsWebhookChannel_SendError(t *testing.T) {
 
 	ctx := context.Background()
 	_ = ch.Start(ctx)
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	msg := bus.OutboundMessage{Content: "test", ChatID: "alerts"}
 

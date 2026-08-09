@@ -37,7 +37,7 @@ func writeValidResponse(w http.ResponseWriter) {
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func TestProviderChat_AzureURLConstruction(t *testing.T) {
@@ -90,7 +90,7 @@ func TestProviderChat_AzureRequestBodyContainsModel(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&requestBody)
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
 		writeValidResponse(w)
 	}))
 	defer server.Close()
@@ -110,7 +110,7 @@ func TestProviderChat_AzureUsesMaxOutputTokens(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&requestBody)
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
 		writeValidResponse(w)
 	}))
 	defer server.Close()
@@ -142,7 +142,7 @@ func TestProviderChat_AzureStoreIsFalse(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&requestBody)
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
 		writeValidResponse(w)
 	}))
 	defer server.Close()
@@ -177,7 +177,7 @@ func TestProviderChat_AzureRateLimitError(t *testing.T) {
 		w.Header().Set("Retry-After", "9")
 		w.Header().Set("X-Request-Id", "req-azure")
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"error":{"message":"Rate limit exceeded","type":"rate_limit_error"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"Rate limit exceeded","type":"rate_limit_error"}}`))
 	}))
 	defer server.Close()
 
@@ -202,7 +202,7 @@ func TestProviderChat_AzureServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":{"message":"Internal server error","type":"server_error"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"Internal server error","type":"server_error"}}`))
 	}))
 	defer server.Close()
 
@@ -237,7 +237,7 @@ func TestProviderChat_AzureParseTextOutput(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -278,7 +278,7 @@ func TestProviderChat_AzureParseToolCalls(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -331,7 +331,7 @@ func TestProviderChat_AzureNativeWebSearchInjection(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&requestBody)
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
 		writeValidResponse(w)
 	}))
 	defer server.Close()
@@ -389,7 +389,7 @@ func TestProviderChat_AzureNoNativeWebSearch(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&requestBody)
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
 		writeValidResponse(w)
 	}))
 	defer server.Close()
