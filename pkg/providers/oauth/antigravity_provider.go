@@ -480,7 +480,7 @@ func createAntigravityTokenSource() func() (string, string, error) {
 		projectID := cred.ProjectID
 		if projectID == "" {
 			// Try to fetch project ID from API
-			fetchedID, err := FetchAntigravityProjectID(context.Background(), cred.AccessToken)
+			fetchedID, err := FetchAntigravityProjectID(cred.AccessToken)
 			if err != nil {
 				logger.WarnCF("provider.antigravity", "Could not fetch project ID, using fallback", map[string]any{
 					"error": err.Error(),
@@ -497,8 +497,15 @@ func createAntigravityTokenSource() func() (string, string, error) {
 	}
 }
 
-// FetchAntigravityProjectID retrieves the Google Cloud project ID from the loadCodeAssist endpoint.
-func FetchAntigravityProjectID(ctx context.Context, accessToken string) (string, error) {
+// FetchAntigravityProjectID retrieves the Google Cloud project ID from the
+// loadCodeAssist endpoint using a background context.
+func FetchAntigravityProjectID(accessToken string) (string, error) {
+	return FetchAntigravityProjectIDWithContext(context.Background(), accessToken)
+}
+
+// FetchAntigravityProjectIDWithContext retrieves the Google Cloud project ID
+// from the loadCodeAssist endpoint, propagating ctx.
+func FetchAntigravityProjectIDWithContext(ctx context.Context, accessToken string) (string, error) {
 	reqBody, _ := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"ideType":    "IDE_UNSPECIFIED",
@@ -547,8 +554,18 @@ func FetchAntigravityProjectID(ctx context.Context, accessToken string) (string,
 	return result.CloudAICompanionProject, nil
 }
 
-// FetchAntigravityModels fetches available models from the Cloud Code Assist API.
-func FetchAntigravityModels(ctx context.Context, accessToken, projectID string) ([]AntigravityModelInfo, error) {
+// FetchAntigravityModels fetches available models from the Cloud Code Assist
+// API using a background context.
+func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelInfo, error) {
+	return FetchAntigravityModelsWithContext(context.Background(), accessToken, projectID)
+}
+
+// FetchAntigravityModelsWithContext fetches available models from the Cloud
+// Code Assist API, propagating ctx.
+func FetchAntigravityModelsWithContext(
+	ctx context.Context,
+	accessToken, projectID string,
+) ([]AntigravityModelInfo, error) {
 	reqBody, _ := json.Marshal(map[string]any{
 		"project": projectID,
 	})

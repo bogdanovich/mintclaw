@@ -113,7 +113,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	}
 
 	// Fetch Cloud Code Assist project ID
-	projectID, err := providers.FetchAntigravityProjectID(context.Background(), cred.AccessToken)
+	projectID, err := providers.FetchAntigravityProjectIDWithContext(context.Background(), cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch project ID: %v\n", err)
 		fmt.Println("You may need Google Cloud Code Assist enabled on your account.")
@@ -421,7 +421,7 @@ func authStatusCmd() error {
 		}
 
 		if provider == "anthropic" && cred.AuthMethod == "oauth" {
-			usage, err := auth.FetchAnthropicUsage(context.Background(), cred.AccessToken)
+			usage, err := auth.FetchAnthropicUsageWithContext(context.Background(), cred.AccessToken)
 			if err != nil {
 				fmt.Printf("    Usage: unavailable (%v)\n", err)
 			} else {
@@ -459,7 +459,7 @@ func authModelsCmd() error {
 
 	fmt.Printf("Fetching models for project: %s\n\n", projectID)
 
-	models, err := providers.FetchAntigravityModels(context.Background(), cred.AccessToken, projectID)
+	models, err := providers.FetchAntigravityModelsWithContext(context.Background(), cred.AccessToken, projectID)
 	if err != nil {
 		return fmt.Errorf("error fetching models: %w", err)
 	}

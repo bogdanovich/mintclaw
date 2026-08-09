@@ -25,7 +25,13 @@ type AnthropicUsage struct {
 	SevenDayUtilization float64
 }
 
-func FetchAnthropicUsage(ctx context.Context, token string) (*AnthropicUsage, error) {
+// FetchAnthropicUsage fetches OAuth usage stats with a background context.
+func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
+	return FetchAnthropicUsageWithContext(context.Background(), token)
+}
+
+// FetchAnthropicUsageWithContext fetches OAuth usage stats, propagating ctx.
+func FetchAnthropicUsageWithContext(ctx context.Context, token string) (*AnthropicUsage, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", anthropicUsageURL, nil)
 	if err != nil {
 		return nil, err

@@ -45,12 +45,29 @@ func NewCodexProviderWithTokenSource(
 	return oauthprovider.NewCodexProviderWithTokenSource(token, accountID, tokenSource)
 }
 
-func FetchAntigravityProjectID(ctx context.Context, accessToken string) (string, error) {
-	return oauthprovider.FetchAntigravityProjectID(ctx, accessToken)
+// FetchAntigravityProjectID retrieves the Google Cloud project ID with a
+// background context.
+func FetchAntigravityProjectID(accessToken string) (string, error) {
+	return oauthprovider.FetchAntigravityProjectID(accessToken)
 }
 
-func FetchAntigravityModels(ctx context.Context, accessToken, projectID string) ([]AntigravityModelInfo, error) {
-	return oauthprovider.FetchAntigravityModels(ctx, accessToken, projectID)
+// FetchAntigravityProjectIDWithContext retrieves the Google Cloud project ID,
+// propagating ctx.
+func FetchAntigravityProjectIDWithContext(ctx context.Context, accessToken string) (string, error) {
+	return oauthprovider.FetchAntigravityProjectIDWithContext(ctx, accessToken)
+}
+
+// FetchAntigravityModels fetches available models with a background context.
+func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelInfo, error) {
+	return oauthprovider.FetchAntigravityModels(accessToken, projectID)
+}
+
+// FetchAntigravityModelsWithContext fetches available models, propagating ctx.
+func FetchAntigravityModelsWithContext(
+	ctx context.Context,
+	accessToken, projectID string,
+) ([]AntigravityModelInfo, error) {
+	return oauthprovider.FetchAntigravityModelsWithContext(ctx, accessToken, projectID)
 }
 
 func createClaudeTokenSource() func() (string, error) {

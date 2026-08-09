@@ -70,7 +70,7 @@ var (
 	oauthDeleteCredential         = auth.DeleteCredential
 	oauthLoadConfig               = config.LoadConfig
 	oauthSaveConfig               = config.SaveConfig
-	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectID
+	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectIDWithContext
 	oauthFetchGoogleUserEmailFunc = fetchGoogleUserEmail
 )
 
