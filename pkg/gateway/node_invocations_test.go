@@ -106,6 +106,7 @@ func (handler *fakeNodeAdmissionHandler) Invoke(
 	_ context.Context,
 	_ nodes.ID,
 	_ nodes.ExecutionPlan,
+	_ json.RawMessage,
 	commit func() error,
 ) (json.RawMessage, bool, error) {
 	handler.invokeCalls.Add(1)

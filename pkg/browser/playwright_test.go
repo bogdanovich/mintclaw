@@ -102,6 +102,102 @@ func (client *fakePlaywrightClient) CallTool(
 	return playwrightTextResult("ok"), nil
 }
 
+func TestPlaywrightWorkerUsesMonotonicCDPNavigationIdentity(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|1\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-2|2\""),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	first, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != sha256.Size*2 || len(second) != sha256.Size*2 || first == second {
+		t.Fatalf("document identities = %q, %q", first, second)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("document identity calls = %#v", client.calls)
+	}
+	for _, call := range client.calls {
+		code, ok := call.arguments["code"].(string)
+		if call.tool != "browser_run_code_unsafe" || !ok ||
+			!strings.Contains(code, `Page.getFrameTree`) ||
+			!strings.Contains(code, `frame.loaderId`) ||
+			!strings.Contains(code, `Page.frameNavigated`) ||
+			!strings.Contains(code, `Page.navigatedWithinDocument`) ||
+			!strings.Contains(code, `state.generation++`) {
+			t.Fatalf("navigation identity call = %#v", call)
+		}
+	}
+}
+
+func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult("### Result\nMINTCLAW_NAV_V1|ok|frame-1|loader-1|0"),
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	if _, err := worker.NavigationIdentity(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("NavigationIdentity() error = %v", err)
+	}
+	if !worker.lost {
+		t.Fatal("malformed navigation identity did not retire the worker")
+	}
+}
+
+func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|stale\""),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverSelect, Target: "e5", Element: "State", Value: "CA",
+	}); err != nil {
+		t.Fatalf("ExecuteAfterNavigationCheck(select) error = %v", err)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverPress, Key: "Tab",
+	}); !errors.Is(err, ErrStale) {
+		t.Fatalf("ExecuteAfterNavigationCheck(stale press) error = %v", err)
+	}
+	if worker.lost {
+		t.Fatal("stale conditional dispatch retired worker")
+	}
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), strings.Repeat("0", sha256.Size*2), DriverAction{
+		Kind: DriverPress, Key: "Tab",
+	}); !errors.Is(err, ErrStale) {
+		t.Fatalf("ExecuteAfterNavigationCheck(unknown identity) error = %v", err)
+	}
+	if len(client.calls) != 3 {
+		t.Fatalf("conditional dispatch calls = %#v", client.calls)
+	}
+	selectCode, selectOK := client.calls[1].arguments["code"].(string)
+	pressCode, pressOK := client.calls[2].arguments["code"].(string)
+	if !selectOK || client.calls[1].tool != "browser_run_code_unsafe" ||
+		!strings.Contains(selectCode, `const expectedGeneration = 7`) ||
+		!strings.Contains(selectCode, `state.generation !== expectedGeneration`) ||
+		!strings.Contains(selectCode, `page.locator("aria-ref=" + "e5").selectOption(["CA"])`) {
+		t.Fatalf("conditional select call = %#v", client.calls[1])
+	}
+	if !pressOK || client.calls[2].tool != "browser_run_code_unsafe" ||
+		!strings.Contains(pressCode, `page.keyboard.press("Tab")`) {
+		t.Fatalf("conditional press call = %#v", client.calls[2])
+	}
+}
+
 func TestPlaywrightWorkerDoesNotAttributeAmbientProxyDenialToSnapshot(t *testing.T) {
 	proxy := &browserNetworkProxy{}
 	client := &fakePlaywrightClient{
@@ -1604,6 +1700,17 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	}
 	worker := opened.Owner.(*playwrightWorker)
 	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	executeAtCurrentNavigation := func(action DriverAction) error {
+		navigationID, navigationErr := worker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return navigationErr
+		}
+		return worker.ExecuteAfterNavigationCheck(ctx, navigationID, action)
+	}
+	blankNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("initial NavigationIdentity() error = %v", err)
+	}
 	initial, err := worker.Observe(ctx)
 	if err != nil || initial.URL != initialBlankOrigin || initial.Origin != initialBlankOrigin ||
 		initial.Snapshot != "" || len(initial.Elements) != 0 {
@@ -1611,6 +1718,74 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	}
 	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
 		t.Fatalf("navigate error = %v", err)
+	}
+	fixtureNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || fixtureNavigation == blankNavigation {
+		t.Fatalf("navigated NavigationIdentity() = %q, initial %q, error %v", fixtureNavigation, blankNavigation, err)
+	}
+	pushStateResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => {
+				globalThis.__mintclawDispatchRaceKeydowns = 0;
+				addEventListener("keydown", () => globalThis.__mintclawDispatchRaceKeydowns++);
+				history.pushState({}, "", location.href);
+			});
+			return "push_state_complete";
+		}`,
+	})
+	if err != nil || pushStateResult == nil || pushStateResult.IsError {
+		t.Fatalf("byte-identical pushState error = %v, result = %#v", err, pushStateResult)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(ctx, fixtureNavigation, DriverAction{
+		Kind: DriverPress, Key: "Tab",
+	}); !errors.Is(err, ErrStale) {
+		t.Fatalf("navigation-checked press after pushState error = %v, want stale", err)
+	}
+	keydownResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_RACE_V1|" +
+			String(await page.evaluate(() => globalThis.__mintclawDispatchRaceKeydowns))`,
+	})
+	if err != nil || keydownResult == nil || keydownResult.IsError {
+		t.Fatalf("dispatch race keydown probe error = %v, result = %#v", err, keydownResult)
+	}
+	keydownText, err := boundedPlaywrightText(keydownResult, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(keydownText, "MINTCLAW_RACE_V1|0") {
+		t.Fatalf("dispatch race keydown probe = %q, %v", keydownText, err)
+	}
+	pushStateNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || pushStateNavigation == fixtureNavigation {
+		t.Fatalf(
+			"pushState NavigationIdentity() = %q, prior %q, error %v",
+			pushStateNavigation,
+			fixtureNavigation,
+			err,
+		)
+	}
+	historyBackResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => new Promise((resolve, reject) => {
+				const timeout = setTimeout(() => reject(new Error("popstate timeout")), 5000);
+				addEventListener("popstate", () => {
+					clearTimeout(timeout);
+					resolve();
+				}, { once: true });
+				history.back();
+			}));
+			return "history_back_complete";
+		}`,
+	})
+	if err != nil || historyBackResult == nil || historyBackResult.IsError {
+		t.Fatalf("byte-identical history.back error = %v, result = %#v", err, historyBackResult)
+	}
+	historyBackNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil || historyBackNavigation == fixtureNavigation || historyBackNavigation == pushStateNavigation {
+		t.Fatalf(
+			"history.back NavigationIdentity() = %q, fixture %q, pushState %q, error %v",
+			historyBackNavigation,
+			fixtureNavigation,
+			pushStateNavigation,
+			err,
+		)
 	}
 	observation, err := worker.Observe(ctx)
 	if err != nil {
@@ -1627,21 +1802,21 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		t.Fatalf("Observe() after fill = %+v, %v", observation, err)
 	}
 	state := mustSnapshotRef(t, observation.Snapshot, `combobox "State" \[ref=(e[0-9]+)\]`)
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverSelect, Target: state, Element: "State", Value: "NY",
 	}); err != nil {
 		t.Fatalf("select error = %v", err)
 	}
-	if err = worker.Execute(ctx, DriverAction{Kind: DriverPress, Key: "Tab"}); err != nil {
+	if err = executeAtCurrentNavigation(DriverAction{Kind: DriverPress, Key: "Tab"}); err != nil {
 		t.Fatalf("press error = %v", err)
 	}
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverScroll, Direction: "down", Amount: 1,
 	}); err != nil {
 		t.Fatalf("scroll error = %v", err)
 	}
 	button := mustSnapshotRef(t, observation.Snapshot, `button "Save" \[ref=(e[0-9]+)\]`)
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverClick, Target: button, Element: "Save",
 	}); err != nil {
 		t.Fatalf("click error = %v", err)
@@ -1651,7 +1826,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		t.Fatalf("Observe() after click = %+v, %v", observation, err)
 	}
 	promptButton := mustSnapshotRef(t, observation.Snapshot, `button "Prompt" \[ref=(e[0-9]+)\]`)
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverClick, Target: promptButton, Element: "Prompt",
 	}); err != nil {
 		t.Fatalf("open prompt error = %v", err)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
@@ -39,6 +40,64 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[3].Name != BrowserCommandAct || descriptors[3].Risk != RiskWrite ||
 		descriptors[4].Name != BrowserCommandSessionClose || descriptors[4].Risk != RiskWrite {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
+	}
+}
+
+func TestBrowserSelectDispatchAcceptsWorstCaseJSONEscaping(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == BrowserCommandAct {
+			descriptor = candidate
+			break
+		}
+	}
+	if descriptor.Name == "" {
+		t.Fatal("browser action descriptor is unavailable")
+	}
+	value := strings.Repeat("\x01", MaxBrowserTextInputBytes)
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "select", "ref": "host_ref_1"}
+	input["effect"] = "local_edit"
+	input["current_origin"] = "https://example.com"
+	input["expected_role"] = "combobox"
+	input["expected_name"] = "State"
+	input["input_digest"] = BrowserInputDigest(value)
+	input["input_bytes"] = len(value)
+	inputRaw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareExecutionPlan(InvocationRequest{
+		InvocationID: "inv_browser_select_escape", IdempotencyKey: "idem_browser_select_escape",
+		NodeID: ID("node_test"), CatalogHash: catalogHash, Command: BrowserCommandAct,
+		Input: inputRaw, AgentID: "main", SessionID: "session_test", ActorID: "user_test",
+		TimeoutSeconds: 30, OutputLimitBytes: MaxBrowserToolResultBytes,
+	}, descriptor, "local", "policy-1", time.Unix(1, 0), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ephemeral, err := json.Marshal(struct {
+		Value string `json:"value"`
+	}{Value: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ephemeral) <= MaxBrowserTextInputBytes+128 || len(ephemeral) > MaxBrowserEphemeralInputBytes {
+		t.Fatalf("escaped envelope bytes = %d", len(ephemeral))
+	}
+	if err = (InvocationDispatch{Plan: plan, EphemeralInput: ephemeral}).Validate(); err != nil {
+		t.Fatalf("InvocationDispatch.Validate() error = %v", err)
 	}
 }
 
@@ -191,6 +250,60 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	if err = json.Unmarshal([]byte(`{"kind":"scroll","direction":"up","amount":1e0}`), &decoded); err != nil ||
 		decoded.Amount != 1 {
 		t.Fatalf("canonical scroll action = %#v, %v", decoded, err)
+	}
+}
+
+func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"navigate", "press", "select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+
+	press := browserActInputFixture()
+	press["action"] = map[string]any{"kind": "press", "target": "document", "key": "Tab"}
+	press["effect"] = "unknown"
+	press["approval_digest"] = strings.Repeat("c", 64)
+	if err = validateInvocationInput(act.InputSchema, press); err != nil {
+		t.Fatalf("typed press input rejected: %v", err)
+	}
+	press["action"].(map[string]any)["key"] = "Control+L"
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("press schema accepted a privileged browser-chrome shortcut")
+	}
+	press["action"].(map[string]any)["key"] = "Tab"
+	press["expected_role"] = "button"
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("document press schema accepted an element semantic binding")
+	}
+	delete(press, "expected_role")
+	delete(press, "approval_digest")
+	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+		t.Fatal("press schema accepted missing approval attestation")
+	}
+
+	selection := browserActInputFixture()
+	selection["action"] = map[string]any{"kind": "select", "ref": "host_ref_1"}
+	selection["effect"] = "local_edit"
+	selection["expected_role"] = "combobox"
+	selection["expected_name"] = "State"
+	selection["input_digest"] = BrowserInputDigest("CA")
+	selection["input_bytes"] = 2
+	if err = validateInvocationInput(act.InputSchema, selection); err != nil {
+		t.Fatalf("typed select input rejected: %v", err)
+	}
+	selection["expected_role"] = "textbox"
+	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+		t.Fatal("select schema accepted a non-combobox semantic role")
+	}
+	selection["expected_role"] = "combobox"
+	selection["approval_digest"] = strings.Repeat("d", 64)
+	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+		t.Fatal("select schema accepted an unrelated approval attestation")
 	}
 }
 

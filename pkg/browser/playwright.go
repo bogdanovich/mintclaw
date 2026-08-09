@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,8 @@ const playwrightDriverResponseBytes = config.BrowserMaxSnapshotBytes + config.Br
 
 const opaqueSnapshotReferenceBytes = len("ref_") + 32
 
+const playwrightNavigationIdentityResponseBytes = 4096
+
 const playwrightTargetExpression = `(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}`
 
 var (
@@ -49,8 +52,63 @@ var (
 	playwrightDialogPattern = regexp.MustCompile(
 		`^- \["(alert|beforeunload|confirm|prompt)" dialog with message "(.*)"\]: can be handled by browser_handle_dialog$`,
 	)
-	playwrightSnapshotLinkPattern = regexp.MustCompile(`^- \[Snapshot\]\(.+\)$`)
+	playwrightSnapshotLinkPattern    = regexp.MustCompile(`^- \[Snapshot\]\(.+\)$`)
+	playwrightNavigationIdentityPart = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
 )
+
+const playwrightNavigationIdentityMarker = "MINTCLAW_NAV_V1"
+
+const playwrightNavigationCheckedActionMarker = "MINTCLAW_NAV_ACT_V1"
+
+const playwrightNavigationIdentityCode = `async (page) => {
+  const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
+  let state = page[trackerKey];
+  if (!state) {
+    const cdp = await page.context().newCDPSession(page);
+    state = { cdp, mainFrameID: "", loaderID: "", generation: 1 };
+    cdp.on("Page.frameNavigated", event => {
+      const frame = event && event.frame;
+      const frameID = String(frame && frame.id || "");
+      const loaderID = String(frame && frame.loaderId || "");
+      if (frameID === state.mainFrameID && loaderID && loaderID !== state.loaderID) {
+        state.loaderID = loaderID;
+        state.generation++;
+      }
+    });
+    cdp.on("Page.navigatedWithinDocument", event => {
+      if (String(event && event.frameId || "") === state.mainFrameID) state.generation++;
+    });
+    await cdp.send("Page.enable");
+    const initialTree = await cdp.send("Page.getFrameTree");
+    const initialFrame = initialTree.frameTree && initialTree.frameTree.frame;
+    state.mainFrameID = String(initialFrame && initialFrame.id || "");
+    state.loaderID = String(initialFrame && initialFrame.loaderId || "");
+    if (!state.mainFrameID || !state.loaderID) {
+      await cdp.detach();
+      return "MINTCLAW_NAV_V1|error|missing_identity";
+    }
+    Object.defineProperty(page, trackerKey, { value: state, configurable: true });
+    page.once("close", () => {
+      delete page[trackerKey];
+      state.cdp.detach().catch(() => {});
+    });
+  }
+  const tree = await state.cdp.send("Page.getFrameTree");
+  const frame = tree.frameTree && tree.frameTree.frame;
+  const frameID = String(frame && frame.id || "");
+  const loaderID = String(frame && frame.loaderId || "");
+  if (!frameID || !loaderID) return "MINTCLAW_NAV_V1|error|missing_identity";
+  if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
+    state.mainFrameID = frameID;
+    state.loaderID = loaderID;
+    state.generation++;
+  }
+  if (!Number.isSafeInteger(state.generation) || state.generation < 1) {
+    return "MINTCLAW_NAV_V1|error|invalid_generation";
+  }
+  return "MINTCLAW_NAV_V1|ok|" + encodeURIComponent(frameID) + "|" +
+    encodeURIComponent(loaderID) + "|" + String(state.generation);
+}`
 
 var playwrightManagedEnvironmentNames = []string{
 	"PLAYWRIGHT_MCP_ALLOWED_ORIGINS",
@@ -604,6 +662,8 @@ type playwrightWorker struct {
 	lastObservation DriverObservation
 	pendingDialog   *DialogObservation
 	humanControl    bool
+	navigationID    playwrightNavigationIdentity
+	navigationToken string
 }
 
 func (worker *playwrightWorker) BeginHumanControl(context.Context) error {
@@ -679,6 +739,191 @@ func (worker *playwrightWorker) Observe(ctx context.Context) (DriverObservation,
 	}
 	worker.lastObservation = observation
 	return observation, nil
+}
+
+func (worker *playwrightWorker) NavigationIdentity(ctx context.Context) (string, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+		return "", ErrWorkerUnavailable
+	}
+	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": playwrightNavigationIdentityCode,
+	})
+	if err != nil || result == nil {
+		worker.lost = true
+		return "", ErrWorkerUnavailable
+	}
+	text, err := boundedPlaywrightText(result, playwrightNavigationIdentityResponseBytes)
+	if err != nil || result.IsError {
+		worker.lost = true
+		return "", ErrDriverIncompatible
+	}
+	identity, err := parsePlaywrightNavigationIdentity(text)
+	if err != nil {
+		worker.lost = true
+		return "", err
+	}
+	worker.navigationID = identity
+	worker.navigationToken = identity.token()
+	return worker.navigationToken, nil
+}
+
+type playwrightNavigationIdentity struct {
+	frameID    string
+	loaderID   string
+	generation uint64
+}
+
+func (identity playwrightNavigationIdentity) token() string {
+	digest := sha256.Sum256([]byte(fmt.Sprintf(
+		"mintclaw.browser.navigation-identity.v1\x00%s\x00%s\x00%d",
+		identity.frameID,
+		identity.loaderID,
+		identity.generation,
+	)))
+	return hex.EncodeToString(digest[:])
+}
+
+func parsePlaywrightNavigationIdentity(text string) (playwrightNavigationIdentity, error) {
+	const resultHeader = "### Result"
+	if strings.Count(text, resultHeader) != 1 {
+		return playwrightNavigationIdentity{}, ErrDriverIncompatible
+	}
+	result := text[strings.Index(text, resultHeader)+len(resultHeader):]
+	result = strings.TrimLeft(result, "\r\n")
+	line := result
+	if end := strings.IndexByte(line, '\n'); end >= 0 {
+		line = line[:end]
+	}
+	line = strings.Trim(line, "\r\"' ")
+	fields := strings.Split(line, "|")
+	if len(fields) != 5 || fields[0] != playwrightNavigationIdentityMarker || fields[1] != "ok" {
+		return playwrightNavigationIdentity{}, ErrDriverIncompatible
+	}
+	frameID, frameErr := url.QueryUnescape(fields[2])
+	loaderID, loaderErr := url.QueryUnescape(fields[3])
+	generation, generationErr := strconv.ParseUint(fields[4], 10, 64)
+	if frameErr != nil || loaderErr != nil || generationErr != nil || generation == 0 ||
+		!playwrightNavigationIdentityPart.MatchString(frameID) ||
+		!playwrightNavigationIdentityPart.MatchString(loaderID) {
+		return playwrightNavigationIdentity{}, ErrDriverIncompatible
+	}
+	return playwrightNavigationIdentity{frameID: frameID, loaderID: loaderID, generation: generation}, nil
+}
+
+func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
+	ctx context.Context,
+	expectedToken string,
+	action DriverAction,
+) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+		return ErrWorkerUnavailable
+	}
+	if expectedToken == "" || expectedToken != worker.navigationToken {
+		return ErrStale
+	}
+	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
+	if err != nil {
+		return err
+	}
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
+		return err
+	}
+	// Playwright MCP reports a modal state instead of the callback result when
+	// the just-issued input opens a dialog. The dialog proves that dispatch
+	// crossed the conditional boundary; retain it for the existing dialog
+	// state machine and never replay the one-shot action.
+	if worker.pendingDialog != nil {
+		return nil
+	}
+	if err = parsePlaywrightNavigationDispatch(text); err != nil && !errors.Is(err, ErrStale) {
+		worker.lost = true
+	}
+	return err
+}
+
+func playwrightNavigationCheckedActionCode(
+	identity playwrightNavigationIdentity,
+	action DriverAction,
+	limits config.BrowserLimitsConfig,
+) (string, error) {
+	tool, _, err := mapPlaywrightAction(action, limits)
+	if err != nil {
+		return "", err
+	}
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	var dispatch string
+	switch tool {
+	case "browser_click":
+		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
+			").click({ button: \"left\" });"
+	case "browser_select_option":
+		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
+			").selectOption([" + jsonString(action.Value) + "]);"
+	case "browser_press_key":
+		dispatch = "await page.keyboard.press(" + jsonString(action.Key) + ");"
+	case "browser_mouse_wheel":
+		delta := action.Amount * 500
+		if action.Direction == "up" {
+			delta = -delta
+		}
+		dispatch = fmt.Sprintf("await page.mouse.wheel(0, %d);", delta)
+	default:
+		return "", fmt.Errorf("%w: navigation-checked action is unsupported", ErrInvalid)
+	}
+	return fmt.Sprintf(`async (page) => {
+  const expectedFrameID = %s;
+  const expectedLoaderID = %s;
+  const expectedGeneration = %d;
+  const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
+  const state = page[trackerKey];
+  if (!state) return "MINTCLAW_NAV_ACT_V1|error|missing_tracker";
+  const tree = await state.cdp.send("Page.getFrameTree");
+  const frame = tree.frameTree && tree.frameTree.frame;
+  const frameID = String(frame && frame.id || "");
+  const loaderID = String(frame && frame.loaderId || "");
+  if (!frameID || !loaderID) return "MINTCLAW_NAV_ACT_V1|error|missing_identity";
+  if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
+    state.mainFrameID = frameID;
+    state.loaderID = loaderID;
+    state.generation++;
+  }
+  if (frameID !== expectedFrameID || loaderID !== expectedLoaderID ||
+      state.generation !== expectedGeneration) return "MINTCLAW_NAV_ACT_V1|stale";
+  %s
+  return "MINTCLAW_NAV_ACT_V1|ok";
+}`,
+		jsonString(identity.frameID),
+		jsonString(identity.loaderID),
+		identity.generation,
+		dispatch,
+	), nil
+}
+
+func parsePlaywrightNavigationDispatch(text string) error {
+	const resultHeader = "### Result"
+	if strings.Count(text, resultHeader) != 1 {
+		return ErrDriverIncompatible
+	}
+	result := strings.TrimLeft(text[strings.Index(text, resultHeader)+len(resultHeader):], "\r\n")
+	if end := strings.IndexByte(result, '\n'); end >= 0 {
+		result = result[:end]
+	}
+	switch strings.Trim(result, "\r\"' ") {
+	case playwrightNavigationCheckedActionMarker + "|ok":
+		return nil
+	case playwrightNavigationCheckedActionMarker + "|stale":
+		return ErrStale
+	default:
+		return ErrDriverIncompatible
+	}
 }
 
 func (worker *playwrightWorker) CaptureScreenshot(

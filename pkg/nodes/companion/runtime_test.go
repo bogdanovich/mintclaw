@@ -422,7 +422,7 @@ func TestRuntimeCancellationReacquiresOwnerAfterDurableTransition(t *testing.T) 
 
 	invokeDone := make(chan error, 1)
 	go func() {
-		_, invokeErr := commandRuntime.executeAccepted(t.Context(), plan)
+		_, invokeErr := commandRuntime.executeAccepted(t.Context(), plan, nil)
 		invokeDone <- invokeErr
 	}()
 	<-handler.started
