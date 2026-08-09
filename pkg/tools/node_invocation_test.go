@@ -24,6 +24,36 @@ type recordingNodeEventBus struct {
 	events []runtimeevents.Event
 }
 
+func TestToolLogArgumentsRedactsNodeInvocationContent(t *testing.T) {
+	const secret = "sentinel-job-environment-secret"
+	arguments := map[string]any{
+		"target":             "private-build-node",
+		"command":            "job.start.v1",
+		"discovery_revision": "private-discovery-revision",
+		"input": map[string]any{
+			"argv": []any{"build", "--token=" + secret},
+			"env":  map[string]any{"ACCESS_TOKEN": secret},
+			"artifacts": []any{
+				map[string]any{"name": "report", "path": "private/output/report.json"},
+			},
+		},
+	}
+
+	got := ToolLogArguments("nodes_invoke", arguments)
+	if got["redacted"] != true || got["argument_count"] != len(arguments) || len(got) != 2 {
+		t.Fatalf("redacted node invocation arguments = %#v", got)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secret, "private-build-node", "report.json", "job.start.v1"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("redacted node invocation arguments leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func (bus *recordingNodeEventBus) Publish(
 	_ context.Context,
 	event runtimeevents.Event,
