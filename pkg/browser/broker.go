@@ -185,6 +185,12 @@ type WorkerFactory interface {
 	Open(context.Context, WorkerOpenRequest) (WorkerOpenResult, error)
 }
 
+// TargetActionFactory reports the exact model-facing actions supported by a
+// target/profile set in the current runtime generation.
+type TargetActionFactory interface {
+	TargetActions(context.Context, string, []string) ([]ActionKind, error)
+}
+
 type OpenRequest struct {
 	Owner   Owner
 	Target  string
@@ -225,6 +231,18 @@ type Broker struct {
 
 	mu    sync.Mutex
 	slots map[string]*workerSlot
+}
+
+func (broker *Broker) TargetActions(
+	ctx context.Context,
+	target string,
+	profiles []string,
+) ([]ActionKind, error) {
+	provider, ok := broker.factory.(TargetActionFactory)
+	if !ok {
+		return nil, ErrWorkerUnavailable
+	}
+	return provider.TargetActions(ctx, target, profiles)
 }
 
 func NewBroker(rootConfig *config.Config, store Store, factory WorkerFactory) (*Broker, error) {

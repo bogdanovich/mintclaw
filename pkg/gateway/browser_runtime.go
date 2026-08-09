@@ -256,6 +256,10 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 		ctx,
 		source,
 		func(ctx context.Context, broker *browser.Broker) (tools.BrowserTargetDiagnostics, error) {
+			actions, err := broker.TargetActions(ctx, target, profiles)
+			if err != nil {
+				return tools.BrowserTargetDiagnostics{}, err
+			}
 			uploadAvailable := source.ArtifactTransferAvailable()
 			screenshotAvailable := source.ScreenshotAvailable()
 			downloadAvailable := uploadAvailable && source.DownloadAvailable()
@@ -271,6 +275,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			}
 			result := tools.BrowserTargetDiagnostics{
 				Profiles:   make(map[string]browser.PassiveReadiness, len(profiles)),
+				Actions:    actions,
 				Screenshot: screenshotAvailable,
 				Upload:     uploadAvailable,
 				Download:   downloadAvailable,

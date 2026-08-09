@@ -88,6 +88,87 @@ func (factory *gatewayBrowserWorkerFactory) Open(
 	return factory.local.Open(ctx, request)
 }
 
+func (factory *gatewayBrowserWorkerFactory) TargetActions(
+	_ context.Context,
+	targetName string,
+	profileNames []string,
+) ([]browser.ActionKind, error) {
+	if factory == nil || factory.config == nil || len(profileNames) == 0 {
+		return nil, browser.ErrWorkerUnavailable
+	}
+	target, ok := factory.config.Tools.Browser.Targets[targetName]
+	if !ok || !target.Enabled {
+		return nil, browser.ErrDenied
+	}
+	if target.EffectivePlacement() != config.BrowserPlacementNode {
+		if factory.local == nil {
+			return nil, browser.ErrWorkerUnavailable
+		}
+		return []browser.ActionKind{
+			browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
+			browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+		}, nil
+	}
+	if factory.node == nil || factory.node.source == nil {
+		return nil, browser.ErrWorkerUnavailable
+	}
+	executionTarget, ok := factory.config.Execution.Targets[target.NodeTarget]
+	if !ok || executionTarget.Type != "node" {
+		return nil, browser.ErrDenied
+	}
+	record, found, err := factory.node.source.Lookup(executionTarget.Node)
+	if err != nil || !found || !record.Connected || record.Registration == nil ||
+		record.Snapshot.State != nodes.StateConnected {
+		return nil, browser.ErrWorkerUnavailable
+	}
+	var intersection map[string]struct{}
+	for _, profileName := range profileNames {
+		localProfile, enabled := target.Profiles[profileName]
+		if !enabled || !localProfile.Enabled {
+			return nil, browser.ErrDenied
+		}
+		var remoteProfile nodes.BrowserProfileDescriptor
+		for _, command := range []string{
+			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
+			nodes.BrowserCommandObserve, nodes.BrowserCommandAct, nodes.BrowserCommandSessionClose,
+		} {
+			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
+			if !approved {
+				return nil, browser.ErrDenied
+			}
+			candidate, available := browserDescriptorProfile(descriptor, profileName)
+			if !available || !browserProfileIntersects(
+				localProfile, factory.config.Tools.Browser.Limits, candidate,
+			) || (remoteProfile.Revision != "" && !browserProfilesEqual(remoteProfile, candidate)) {
+				return nil, browser.ErrDenied
+			}
+			remoteProfile = candidate
+		}
+		current := make(map[string]struct{}, len(remoteProfile.Actions))
+		for _, action := range remoteProfile.Actions {
+			if action == "navigate" || action == "scroll" {
+				current[action] = struct{}{}
+			}
+		}
+		if intersection == nil {
+			intersection = current
+		} else {
+			for action := range intersection {
+				if _, shared := current[action]; !shared {
+					delete(intersection, action)
+				}
+			}
+		}
+	}
+	actions := make([]browser.ActionKind, 0, len(intersection))
+	for _, action := range []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll} {
+		if _, available := intersection[string(action)]; available {
+			actions = append(actions, action)
+		}
+	}
+	return actions, nil
+}
+
 func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
 	_ context.Context,
 	targetName string,
@@ -192,6 +273,7 @@ func (factory *nodeBrowserWorkerFactory) Open(
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	worker.profileRevision = remoteProfile.Revision
+	worker.actions = slices.Clone(remoteProfile.Actions)
 	worker.catalogRevision = worker.catalogHash
 	input := nodes.BrowserSessionOpenInput{
 		SessionID: request.SessionID, Profile: request.Profile,
@@ -225,6 +307,7 @@ type nodeBrowserWorker struct {
 	policyRevision  string
 	catalogHash     string
 	catalogRevision string
+	actions         []string
 	tabID           string
 
 	mu                 sync.Mutex
@@ -340,16 +423,35 @@ func (*nodeBrowserWorker) Execute(context.Context, browser.DriverAction) error {
 	return browser.ErrDriverIncompatible
 }
 
-func (*nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind) bool {
-	return kind == browser.ActionNavigate
+func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind) bool {
+	switch kind {
+	case browser.ActionNavigate:
+		return slices.Contains(worker.actions, "navigate")
+	case browser.ActionScroll:
+		return slices.Contains(worker.actions, "scroll")
+	default:
+		return false
+	}
 }
 
 func (worker *nodeBrowserWorker) ExecutePrepared(
 	ctx context.Context,
 	request browser.WorkerPreparedAction,
 ) error {
-	if request.Prepared.Action.Kind != browser.ActionNavigate ||
-		request.DriverAction.Kind != browser.DriverNavigate {
+	var action nodes.BrowserAction
+	var effect string
+	switch {
+	case request.Prepared.Action.Kind == browser.ActionNavigate &&
+		request.DriverAction.Kind == browser.DriverNavigate && slices.Contains(worker.actions, "navigate"):
+		action = nodes.BrowserAction{Kind: "navigate", URL: request.DriverAction.URL}
+		effect = "navigation"
+	case request.Prepared.Action.Kind == browser.ActionScroll &&
+		request.DriverAction.Kind == browser.DriverScroll && slices.Contains(worker.actions, "scroll"):
+		action = nodes.BrowserAction{
+			Kind: "scroll", Direction: request.DriverAction.Direction, Amount: request.DriverAction.Amount,
+		}
+		effect = "read"
+	default:
 		return browser.ErrDenied
 	}
 	worker.mu.Lock()
@@ -363,8 +465,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, nodes.BrowserActInput{
 		SessionID: worker.sessionID, TabID: worker.tabID,
 		SnapshotGeneration: generation, ActionInvocationID: request.InvocationID,
-		Action: nodes.BrowserAction{Kind: "navigate", URL: request.DriverAction.URL},
-		Effect: "navigation", CurrentOrigin: request.Prepared.CurrentOrigin,
+		Action: action, Effect: effect, CurrentOrigin: request.Prepared.CurrentOrigin,
 		PreparedActionHash:    request.Prepared.ActionHash,
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,

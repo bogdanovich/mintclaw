@@ -242,11 +242,11 @@ func normalizeBrowserPrincipals(label string, values *[]string) error {
 
 func normalizeBrowserActions(actions *[]string) error {
 	if len(*actions) == 0 || len(*actions) > nodes.MaxBrowserActions {
-		return errors.New("allowed_actions must contain one or two admitted actions")
+		return fmt.Errorf("allowed_actions must contain between one and %d admitted actions", nodes.MaxBrowserActions)
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "navigate" && action != "download" {
+		if action != "navigate" && action != "download" && action != "scroll" {
 			return errors.New("allowed_actions contains an unsupported action")
 		}
 		if _, duplicate := seen[action]; duplicate {
