@@ -36,10 +36,11 @@ const (
 )
 
 var (
-	ErrJobConflict  = errors.New("node job conflicts with durable state")
-	ErrJobNotFound  = errors.New("node job not found")
-	ErrJobStoreFull = errors.New("node job store is full")
-	ErrJobBusy      = errors.New("node job concurrency limit reached")
+	ErrJobConflict            = errors.New("node job conflicts with durable state")
+	ErrJobNotFound            = errors.New("node job not found")
+	ErrJobStoreFull           = errors.New("node job store is full")
+	ErrJobBusy                = errors.New("node job concurrency limit reached")
+	ErrJobPlatformUnsupported = errors.New("durable node jobs are unsupported on this platform")
 )
 
 // JobState is the durable, node-local observation of one process. Unknown is

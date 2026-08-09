@@ -119,6 +119,9 @@ func NewDirectJobManager(
 	if store == nil {
 		return nil, errors.New("node job store is required")
 	}
+	if supportErr := jobProcessSupported(); supportErr != nil {
+		return nil, supportErr
+	}
 	cloned, cloneErr := cloneReadySystemExecPolicy(policy)
 	if cloneErr != nil {
 		return nil, cloneErr
@@ -256,7 +259,7 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 	}
 	running, err := manager.store.MarkRunning(record.JobID, prepared.timeout)
 	if err != nil {
-		_, _ = terminateJobProcess(active.command)
+		drainJobProcessGroup(active.command, true)
 		_ = active.command.Wait()
 		active.stdout.close()
 		active.stderr.close()
@@ -358,24 +361,26 @@ func (manager *DirectJobManager) prepareActive(
 }
 
 func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
-	waited := make(chan error, 1)
-	go func() { waited <- active.command.Wait() }()
 	timer := time.NewTimer(active.timeout)
 	defer timer.Stop()
+	observer := time.NewTicker(jobProcessObservationInterval)
+	defer observer.Stop()
 	reason := ""
-	signalSent := false
-	var waitErr error
-	select {
-	case waitErr = <-waited:
-	case <-active.cancel:
-		reason = "cancel"
-		signalSent, _ = terminateJobProcess(active.command)
-		waitErr = <-waited
-	case <-timer.C:
-		reason = "timeout"
-		signalSent, _ = terminateJobProcess(active.command)
-		waitErr = <-waited
+	for reason == "" {
+		select {
+		case <-active.cancel:
+			reason = "cancel"
+		case <-timer.C:
+			reason = "timeout"
+		case <-observer.C:
+			exited, err := jobProcessLeaderExited(active.command.Process.Pid)
+			if err == nil && exited {
+				reason = "completed"
+			}
+		}
 	}
+	signalSent, hadDescendants := drainJobProcessGroup(active.command, reason != "completed")
+	waitErr := active.command.Wait()
 	stdout := active.stdout.close()
 	stderr := active.stderr.close()
 	artifacts := manager.snapshotArtifacts(active)
@@ -385,7 +390,7 @@ func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
 		waitErr,
 		reason,
 		signalSent,
-		manager.limits.CancelGuarantee,
+		hadDescendants,
 	)
 	completion.Stdout = stdout
 	completion.Stderr = stderr
@@ -403,7 +408,7 @@ func jobCompletionForProcess(
 	waitErr error,
 	reason string,
 	signalSent bool,
-	guarantee JobCancelGuarantee,
+	hadDescendants bool,
 ) JobCompletion {
 	completion := JobCompletion{CancellationSignal: signalSent}
 	if command != nil && command.ProcessState != nil {
@@ -416,14 +421,19 @@ func jobCompletionForProcess(
 		completion.State = JobTimedOut
 		completion.FailureCode = "TIMEOUT"
 	case "cancel":
-		if signalSent && jobProcessDomainEmpty(command, guarantee) {
+		if signalSent {
 			completion.State = JobCanceled
 			completion.FailureCode = "CANCELED"
 		} else {
 			completion.State = JobCancelUnknown
 			completion.FailureCode = "CANCEL_OUTCOME_UNKNOWN"
 		}
-	case "":
+	case "completed":
+		if hadDescendants {
+			completion.State = JobFailed
+			completion.FailureCode = "PROCESS_GROUP_OUTLIVED_LEADER"
+			return completion
+		}
 		if waitErr == nil {
 			completion.State = JobSucceeded
 			return completion

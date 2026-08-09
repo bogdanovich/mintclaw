@@ -3,11 +3,13 @@
 package companion
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
+
+const jobProcessObservationInterval = 10 * time.Millisecond
 
 func prepareJobProcess(command *exec.Cmd) {
 	if command == nil {
@@ -16,32 +18,50 @@ func prepareJobProcess(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func terminateJobProcess(command *exec.Cmd) (bool, error) {
+// drainJobProcessGroup never reaps the leader. Its unreaped PID is the
+// non-reusable ownership token for the process-group ID while signals and
+// membership observations are in flight. Two empty observations after the
+// last group signal close the fork-versus-scan race before Cmd.Wait releases
+// that token.
+func drainJobProcessGroup(command *exec.Cmd, terminateLeader bool) (bool, bool) {
 	if command == nil || command.Process == nil || command.Process.Pid <= 0 {
-		return false, nil
+		return false, false
 	}
-	err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	if err == nil {
-		return true, nil
+	processGroup := command.Process.Pid
+	signalSent := false
+	hadDescendants := false
+	emptyObservations := 0
+	if terminateLeader {
+		signalSent = signalOwnedJobProcessGroup(processGroup) || signalSent
 	}
-	if errors.Is(err, syscall.ESRCH) {
-		return false, nil
+	for {
+		leaderExited, leaderErr := jobProcessLeaderExited(processGroup)
+		members, membersErr := liveJobProcessGroupMembers(processGroup, processGroup)
+		if leaderErr != nil || membersErr != nil {
+			time.Sleep(jobProcessObservationInterval)
+			continue
+		}
+		if members > 0 {
+			hadDescendants = true
+			emptyObservations = 0
+			signalSent = signalOwnedJobProcessGroup(processGroup) || signalSent
+		} else if leaderExited {
+			emptyObservations++
+			if emptyObservations >= 2 {
+				return signalSent, hadDescendants
+			}
+		} else {
+			emptyObservations = 0
+		}
+		if terminateLeader || hadDescendants {
+			signalSent = signalOwnedJobProcessGroup(processGroup) || signalSent
+		}
+		time.Sleep(jobProcessObservationInterval)
 	}
-	return false, err
 }
 
-func jobProcessDomainEmpty(command *exec.Cmd, guarantee JobCancelGuarantee) bool {
-	if command == nil || command.ProcessState == nil || !command.ProcessState.Exited() {
-		return false
-	}
-	if guarantee == JobCancelDirectProcess {
-		return true
-	}
-	if command.Process == nil || command.Process.Pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(-command.Process.Pid, 0)
-	return errors.Is(err, syscall.ESRCH)
+func signalOwnedJobProcessGroup(processGroup int) bool {
+	return syscall.Kill(-processGroup, syscall.SIGKILL) == nil
 }
 
 func jobProcessSignal(state *os.ProcessState) string {

@@ -3,17 +3,21 @@
 package companion
 
 import (
-	"errors"
 	"os"
 	"os/exec"
+	"time"
 )
+
+const jobProcessObservationInterval = time.Second
+
+func jobProcessSupported() error { return ErrJobPlatformUnsupported }
 
 func prepareJobProcess(*exec.Cmd) {}
 
-func terminateJobProcess(*exec.Cmd) (bool, error) {
-	return false, errors.New("durable node jobs are unsupported on this platform")
+func jobProcessLeaderExited(int) (bool, error) {
+	return false, ErrJobPlatformUnsupported
 }
 
-func jobProcessDomainEmpty(*exec.Cmd, JobCancelGuarantee) bool { return false }
+func drainJobProcessGroup(*exec.Cmd, bool) (bool, bool) { return false, false }
 
 func jobProcessSignal(*os.ProcessState) string { return "" }

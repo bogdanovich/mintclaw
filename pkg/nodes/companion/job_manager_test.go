@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,6 +41,20 @@ func TestJobHelperProcess(t *testing.T) {
 		_, _ = os.Stdout.WriteString(strings.Repeat("x", 8192))
 	case "sleep":
 		time.Sleep(30 * time.Second)
+	case "descendant":
+		_ = os.WriteFile("artifact.out", []byte("stable\n"), 0o600)
+		child := exec.Command(os.Args[0], "-test.run=^TestJobHelperProcess$")
+		child.Env = []string{
+			jobHelperEnabled + "=1",
+			jobHelperAction + "=descendant-child",
+		}
+		if err := child.Start(); err != nil {
+			os.Exit(65)
+		}
+		_ = os.WriteFile("descendant.pid", []byte(strconv.Itoa(child.Process.Pid)), 0o600)
+	case "descendant-child":
+		time.Sleep(time.Second)
+		_ = os.WriteFile("artifact.out", []byte("mutated\n"), 0o600)
 	case "symlink":
 		_ = os.WriteFile("outside", []byte("not a snapshot"), 0o600)
 		_ = os.Symlink("outside", "artifact.out")
@@ -188,6 +205,48 @@ func TestDirectJobManagerRejectsArtifactPathBeforeAcceptance(t *testing.T) {
 	}
 }
 
+func TestDirectJobManagerOwnsGroupUntilDescendantsExit(t *testing.T) {
+	manager, store, root, executable := newTestDirectJobManager(t, DirectJobLimits{})
+	plan := testDirectJobPlan(t, executable, root, "descendant", []JobArtifactDeclaration{
+		{Name: "result", Path: "artifact.out"},
+	}, 5)
+	started, err := manager.Start(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := waitForTerminalJob(t, store, started.JobID)
+	if record.State != JobFailed || record.FailureCode != "PROCESS_GROUP_OUTLIVED_LEADER" {
+		t.Fatalf("descendant job = %#v", record)
+	}
+	artifacts, err := manager.Artifacts(record.Owner, record.JobID)
+	if err != nil || len(artifacts) != 1 || artifacts[0].State != JobArtifactAvailable {
+		t.Fatalf("descendant artifacts = %#v, error %v", artifacts, err)
+	}
+	artifact, _, err := manager.OpenArtifact(record.Owner, record.JobID, artifacts[0].ArtifactRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := io.ReadAll(artifact)
+	_ = artifact.Close()
+	if readErr != nil || string(data) != "stable\n" {
+		t.Fatalf("snapshot after descendant cleanup = %q, error %v", data, readErr)
+	}
+	pidData, err := os.ReadFile(filepath.Join(root, "descendant.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(pidData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForProcessExit(t, pid)
+	time.Sleep(1100 * time.Millisecond)
+	source, err := os.ReadFile(filepath.Join(root, "artifact.out"))
+	if err != nil || string(source) != "stable\n" {
+		t.Fatalf("source mutated after terminal snapshot = %q, error %v", source, err)
+	}
+}
+
 func newTestDirectJobManager(
 	t *testing.T,
 	limits DirectJobLimits,
@@ -282,4 +341,17 @@ func waitForTerminalJob(t *testing.T, store *JobStore, jobID string) JobRecord {
 	record, _ := store.Lookup(jobID)
 	t.Fatalf("job did not become terminal: %#v", record)
 	return JobRecord{}
+}
+
+func waitForProcessExit(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		err := syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("descendant process %d remained alive", pid)
 }
