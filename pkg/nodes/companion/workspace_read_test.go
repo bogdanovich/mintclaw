@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -170,6 +171,61 @@ func TestWorkspaceSearchIsBoundedAndRespectsIgnoreFiles(t *testing.T) {
 	files := fileResult.(WorkspaceSearchResult)
 	if files.Matches != 1 || files.Result != "pkg/runtime.go" {
 		t.Fatalf("workspace file search = %#v", files)
+	}
+}
+
+func TestWorkspaceSearchCountModeEmitsEntryAtLimit(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("match\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resultJSON, err := runtime.Invoke(
+		t.Context(),
+		testRuntimePlan(t, runtime, nodes.WorkspaceCommandSearch, json.RawMessage(`{
+			"profile_revision":"project-v1",
+			"workspace_revision":"workspace-v1",
+			"working_scope":"project",
+			"pattern":"match",
+			"output_mode":"count",
+			"limit":1
+		}`)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result WorkspaceSearchResult
+	if err := json.Unmarshal(resultJSON, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Matches != 1 || result.Result != "a.txt:1" || !result.Truncated {
+		t.Fatalf("workspace count result = %#v", result)
+	}
+}
+
+func TestWorkspaceSearchChargesFilteredEntriesToGlobalBudget(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	for _, name := range []string{"a.skip", "b.skip"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("ignored\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := runtime.handlers[nodes.WorkspaceCommandSearch].(workspaceSearchHandler)
+	capability := handler.runtime.files.workspace["project-v1"].(*FileTransferRuntime)
+	profile := capability.profiles["project-v1"]
+	state := &workspaceSearchState{
+		ctx: t.Context(), profile: profile, root: profile.workspaceReadableRoot(root), workspace: root,
+		options: WorkspaceSearchOptions{
+			Pattern: "never", Target: "content", FileGlob: "*.go", OutputMode: "content", Limit: 100,
+		},
+		regex: regexp.MustCompile("never"), examined: nodes.MaxWorkspaceSearchFiles - 1,
+	}
+	if err := state.walk(root, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if state.examined != nodes.MaxWorkspaceSearchFiles || !state.truncated || state.visited != 0 {
+		t.Fatalf("examined = %d, visited = %d, truncated = %v", state.examined, state.visited, state.truncated)
 	}
 }
 

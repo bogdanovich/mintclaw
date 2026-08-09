@@ -9,6 +9,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -204,6 +205,24 @@ func TestRemoteWorkspaceReadToolRoutesOnlyExplicitAlias(t *testing.T) {
 	}
 	if _, leaked := remote.args["workspace"]; leaked {
 		t.Fatal("remote adapter received workspace as an ordinary tool argument")
+	}
+}
+
+func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
+	remote := &remoteWorkspaceReadSource{}
+	local := fstools.NewReadFileLinesTool(t.TempDir(), false, fstools.MaxReadFileSize)
+	tool, err := NewRemoteWorkspaceReadTool(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.Execute(context.Background(), map[string]any{
+		"path": "README.md", "workspace": "vpn",
+	})
+	if result.IsError || remote.calls != 1 || remote.args["start_line"] != float64(1) {
+		t.Fatalf("remote line read result = %#v; source = %#v", result, remote)
+	}
+	if _, sentOffset := remote.args["offset"]; sentOffset {
+		t.Fatalf("line-mode call gained byte offset: %#v", remote.args)
 	}
 }
 

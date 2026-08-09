@@ -3,18 +3,24 @@ package companion
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
-const workspaceSearchMaxFileBytes = 1024 * 1024
+const (
+	workspaceSearchMaxFileBytes = 1024 * 1024
+	workspaceSearchBatchSize    = 256
+	workspaceSearchMaxDepth     = 64
+)
 
 type WorkspaceSearchOptions struct {
 	Pattern        string
@@ -51,6 +57,8 @@ type workspaceSearchState struct {
 	result    strings.Builder
 	matches   int
 	visited   int
+	examined  int
+	counted   int
 	truncated bool
 }
 
@@ -108,7 +116,7 @@ func (runtime *FileTransferRuntime) SearchWorkspace(
 			return WorkspaceSearchResult{}, ErrFileAccessDenied
 		}
 	}
-	if err := state.walk(start, nil); err != nil {
+	if err := state.walk(start, nil, 0); err != nil {
 		return WorkspaceSearchResult{}, err
 	}
 	return WorkspaceSearchResult{
@@ -126,11 +134,19 @@ func (profile *fileProfileRuntime) workspaceReadableRoot(workspace string) *file
 	return nil
 }
 
-func (state *workspaceSearchState) walk(directory string, inherited []workspaceIgnoreRule) error {
+func (state *workspaceSearchState) walk(
+	directory string,
+	inherited []workspaceIgnoreRule,
+	depth int,
+) error {
 	if err := state.ctx.Err(); err != nil {
 		return err
 	}
-	entries, err := state.root.readDirectory(directory, state.profile.profile.CrossMounts)
+	if depth > workspaceSearchMaxDepth {
+		state.truncated = true
+		return nil
+	}
+	directoryHandle, err := state.root.openDirectory(directory, state.profile.profile.CrossMounts)
 	if err != nil {
 		if source, openErr := state.profile.openReadable(directory); openErr == nil {
 			defer func() { _ = source.file.Close() }()
@@ -138,42 +154,62 @@ func (state *workspaceSearchState) walk(directory string, inherited []workspaceI
 		}
 		return err
 	}
+	defer func() { _ = directoryHandle.Close() }()
 	rules := inherited
 	if !state.options.IncludeIgnored {
 		rules = append(append([]workspaceIgnoreRule(nil), inherited...), state.loadIgnore(directory)...)
 	}
-	for _, entry := range entries {
-		if err := state.ctx.Err(); err != nil {
-			return err
+	for {
+		entries, readErr := directoryHandle.ReadDir(workspaceSearchBatchSize)
+		slices.SortFunc(entries, func(left, right os.DirEntry) int {
+			return strings.Compare(left.Name(), right.Name())
+		})
+		for _, entry := range entries {
+			if err := state.ctx.Err(); err != nil {
+				return err
+			}
+			if state.truncated || state.examined >= nodes.MaxWorkspaceSearchFiles || state.limitReached() {
+				state.truncated = true
+				return nil
+			}
+			state.examined++
+			name := entry.Name()
+			path := filepath.Join(directory, name)
+			rel, relErr := filepath.Rel(state.workspace, path)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return ErrFileAccessDenied
+			}
+			if entry.Type()&os.ModeSymlink != 0 || name == ".git" ||
+				(!state.options.IncludeIgnored && (name == "node_modules" || name == ".cache" || name == "vendor")) ||
+				(!state.options.IncludeIgnored && workspaceIgnored(filepath.ToSlash(rel), entry.IsDir(), rules)) {
+				continue
+			}
+			if entry.IsDir() {
+				if err := state.walk(path, rules, depth+1); err != nil {
+					return err
+				}
+				continue
+			}
+			if entry.Type().IsRegular() {
+				if err := state.visitFile(path, name, rules); err != nil {
+					return err
+				}
+			}
 		}
-		if state.truncated || state.visited >= nodes.MaxWorkspaceSearchFiles || state.matches >= state.options.Limit {
-			state.truncated = true
+		if errors.Is(readErr, io.EOF) {
 			return nil
 		}
-		name := entry.Name()
-		path := filepath.Join(directory, name)
-		rel, relErr := filepath.Rel(state.workspace, path)
-		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if readErr != nil {
 			return ErrFileAccessDenied
 		}
-		if entry.Type()&os.ModeSymlink != 0 || name == ".git" ||
-			(!state.options.IncludeIgnored && (name == "node_modules" || name == ".cache" || name == "vendor")) ||
-			(!state.options.IncludeIgnored && workspaceIgnored(filepath.ToSlash(rel), entry.IsDir(), rules)) {
-			continue
-		}
-		if entry.IsDir() {
-			if err := state.walk(path, rules); err != nil {
-				return err
-			}
-			continue
-		}
-		if entry.Type().IsRegular() {
-			if err := state.visitFile(path, name, rules); err != nil {
-				return err
-			}
-		}
 	}
-	return nil
+}
+
+func (state *workspaceSearchState) limitReached() bool {
+	if state.options.OutputMode == "count" {
+		return state.counted >= state.options.Limit
+	}
+	return state.matches >= state.options.Limit
 }
 
 func (state *workspaceSearchState) visitFile(path, name string, _ []workspaceIgnoreRule) error {
@@ -209,19 +245,24 @@ func (state *workspaceSearchState) visitFile(path, name string, _ []workspaceIgn
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
-	fileMatched := false
+	if state.options.OutputMode == "count" {
+		count := state.regexCount(lines)
+		if count > 0 {
+			state.matches += count
+			state.counted++
+			state.appendLine(fmt.Sprintf("%s:%d", rel, count))
+		}
+		return nil
+	}
 	for index, line := range lines {
 		if !state.regex.MatchString(line) {
 			continue
 		}
 		state.matches++
-		fileMatched = true
 		switch state.options.OutputMode {
 		case "files_only":
 			state.appendLine(rel)
 			return nil
-		case "count":
-			// Counts are rendered after scanning the file.
 		default:
 			start := max(0, index-state.options.Context)
 			end := min(len(lines), index+state.options.Context+1)
@@ -233,9 +274,6 @@ func (state *workspaceSearchState) visitFile(path, name string, _ []workspaceIgn
 			state.truncated = true
 			return nil
 		}
-	}
-	if fileMatched && state.options.OutputMode == "count" {
-		state.appendLine(fmt.Sprintf("%s:%d", rel, state.regexCount(lines)))
 	}
 	return nil
 }

@@ -54,9 +54,7 @@ func (*fileRoot) openRegular(string, int64, bool) (*resolvedFile, error) {
 	return nil, ErrFileAccessDenied
 }
 
-func (*fileRoot) readDirectory(string, bool) ([]os.DirEntry, error) {
-	return nil, ErrFileAccessDenied
-}
+func (*fileRoot) openDirectory(string, bool) (*os.File, error) { return nil, ErrFileAccessDenied }
 
 func (*fileRoot) resolveParent(string, bool) (*resolvedParent, error) {
 	return nil, ErrFileAccessDenied

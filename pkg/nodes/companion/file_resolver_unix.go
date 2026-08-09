@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"unicode"
@@ -270,22 +269,6 @@ func (root *fileRoot) resolveParent(
 		basename:    basename,
 		crossMounts: crossMounts,
 	}, nil
-}
-
-func (root *fileRoot) readDirectory(path string, crossMounts bool) ([]os.DirEntry, error) {
-	directory, err := root.openDirectory(path, crossMounts)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = directory.Close() }()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return nil, classifyFileAccessError(err)
-	}
-	slices.SortFunc(entries, func(left, right os.DirEntry) int {
-		return strings.Compare(left.Name(), right.Name())
-	})
-	return entries, nil
 }
 
 func (root *fileRoot) openDirectory(path string, crossMounts bool) (*os.File, error) {

@@ -26,9 +26,10 @@ type RemoteWorkspaceReadSource interface {
 // RemoteWorkspaceReadTool preserves one agent-specific local tool and routes
 // only calls that explicitly carry a configured workspace alias.
 type RemoteWorkspaceReadTool struct {
-	local   toolshared.Tool
-	remote  RemoteWorkspaceReadSource
-	aliases []string
+	local    toolshared.Tool
+	remote   RemoteWorkspaceReadSource
+	aliases  []string
+	lineRead bool
 }
 
 func NewRemoteWorkspaceReadTool(
@@ -47,7 +48,10 @@ func NewRemoteWorkspaceReadTool(
 	if len(aliases) == 0 {
 		return nil, fmt.Errorf("remote workspace source has no aliases")
 	}
-	return &RemoteWorkspaceReadTool{local: local, remote: remote, aliases: aliases}, nil
+	return &RemoteWorkspaceReadTool{
+		local: local, remote: remote, aliases: aliases,
+		lineRead: local.Name() == "read_file" && toolHasParameter(local, "start_line"),
+	}, nil
 }
 
 func (tool *RemoteWorkspaceReadTool) Name() string { return tool.local.Name() }
@@ -93,7 +97,20 @@ func (tool *RemoteWorkspaceReadTool) Execute(
 	}
 	remoteArgs := cloneToolArguments(args)
 	delete(remoteArgs, "workspace")
+	if tool.lineRead {
+		if _, hasStart := remoteArgs["start_line"]; !hasStart {
+			if _, hasLimit := remoteArgs["max_lines"]; !hasLimit {
+				remoteArgs["start_line"] = float64(1)
+			}
+		}
+	}
 	return tool.remote.ExecuteRemoteWorkspace(ctx, tool.Name(), workspace, remoteArgs)
+}
+
+func toolHasParameter(tool toolshared.Tool, name string) bool {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	_, exists := properties[name]
+	return exists
 }
 
 func (*RemoteWorkspaceReadTool) ToolLoopSemantics() loopguard.Semantics {
