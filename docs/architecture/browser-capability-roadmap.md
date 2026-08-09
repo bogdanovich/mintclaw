@@ -8,6 +8,8 @@ deployed, and live-validated. The B3 authority and scope are recorded in
 [Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md).
 The first BF1 shared-action slice is admitted in
 [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md).
+The next selected slice is admitted in
+[Browser Capability BF1 Click Parity Admission](browser-capability-bf1-click-admission.md).
 The selected six-phase continuation is governed by
 [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md).
 B2 completion evidence is recorded in
