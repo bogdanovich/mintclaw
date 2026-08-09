@@ -15,6 +15,7 @@ type fakeBrowserCommandHost struct {
 	opened         int
 	observed       int
 	navigated      int
+	scrolled       int
 	closed         int
 	navigateError  error
 	invalidAction  bool
@@ -73,6 +74,16 @@ func (host *fakeBrowserCommandHost) Navigate(
 		result.SnapshotGeneration = 0
 	}
 	return result, nil
+}
+
+func (host *fakeBrowserCommandHost) Scroll(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.scrolled++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	return result, host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Close(
@@ -164,6 +175,22 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecutesTypedBrowserScroll(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	runtime := newBrowserRuntimeFixture(t, host)
+	invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_scroll_1",
+		Action:             nodes.BrowserAction{Kind: "scroll", Direction: "down", Amount: 2},
+		Effect:             "read", CurrentOrigin: "about:blank",
+		PreparedActionHash:    strings.Repeat("c", 64),
+		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+	})
+	if host.scrolled != 1 || host.navigated != 0 {
+		t.Fatalf("browser host calls = navigate %d scroll %d", host.navigated, host.scrolled)
+	}
+}
+
 func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -211,7 +238,7 @@ func browserRuntimeHostFixture() *fakeBrowserCommandHost {
 	return &fakeBrowserCommandHost{profiles: []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}}}
 }
 

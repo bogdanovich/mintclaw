@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -66,13 +67,32 @@ func (worker *fakeWorker) Close(context.Context) error {
 }
 
 type fakeWorkerFactory struct {
-	mu             sync.Mutex
-	openErr        error
-	cleanupWorker  *fakeWorker
-	requests       []WorkerOpenRequest
-	workers        []*fakeWorker
-	readiness      DriverReadiness
-	readinessCalls int
+	mu              sync.Mutex
+	openErr         error
+	cleanupWorker   *fakeWorker
+	requests        []WorkerOpenRequest
+	workers         []*fakeWorker
+	readiness       DriverReadiness
+	readinessCalls  int
+	diagnostics     TargetDiagnostics
+	diagnosticCalls int
+}
+
+func (factory *fakeWorkerFactory) PassiveTargetDiagnostics(
+	_ context.Context,
+	_ string,
+	profiles []string,
+) (TargetDiagnostics, error) {
+	factory.diagnosticCalls++
+	if factory.diagnostics.Profiles != nil {
+		return factory.diagnostics, nil
+	}
+	driver := factory.PassiveReadiness()
+	result := TargetDiagnostics{Profiles: make(map[string]DriverReadiness, len(profiles))}
+	for _, profile := range profiles {
+		result.Profiles[profile] = driver
+	}
+	return result, nil
 }
 
 func (factory *fakeWorkerFactory) PassiveReadiness() DriverReadiness {
@@ -244,6 +264,33 @@ func TestBrokerPassiveReadinessDoesNotProbeOrRenewWorker(t *testing.T) {
 	if err != nil || degraded.Status != ReadinessDegraded || degraded.Code != "recovery_required" ||
 		degraded.Action != "close_or_recover_session" || factory.workers[0].statusCalls != 0 {
 		t.Fatalf("degraded readiness = %#v, %v", degraded, err)
+	}
+}
+
+func TestBrokerPassiveTargetDiagnosticsUsesOneFactorySnapshot(t *testing.T) {
+	ready := DriverReadiness{
+		Status: ReadinessReady, Driver: ReadinessReady, Browser: ReadinessReady,
+		Proxy: ReadinessReady, Compatibility: CompatibilityCompatible,
+	}
+	factory := &fakeWorkerFactory{
+		readiness: DriverReadiness{
+			Status: ReadinessUnavailable, Driver: ReadinessUnavailable,
+			Browser: ReadinessUnavailable, Proxy: ReadinessUnavailable,
+			Compatibility: CompatibilityUnchecked,
+		},
+		diagnostics: TargetDiagnostics{
+			Actions:  []ActionKind{ActionNavigate, ActionScroll},
+			Profiles: map[string]DriverReadiness{"managed": ready},
+		},
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+	actions, profiles, err := broker.PassiveTargetDiagnostics(
+		context.Background(), "gateway", []string{"managed"},
+	)
+	if err != nil || !slices.Equal(actions, []ActionKind{ActionNavigate, ActionScroll}) ||
+		profiles["managed"].Status != ReadinessReady || factory.diagnosticCalls != 1 ||
+		factory.readinessCalls != 0 {
+		t.Fatalf("diagnostics = %#v, %#v, %v; factory = %#v", actions, profiles, err, factory)
 	}
 }
 

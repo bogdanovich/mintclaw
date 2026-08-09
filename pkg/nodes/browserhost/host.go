@@ -370,9 +370,41 @@ func (host *BrowserHost) Navigate(
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" ||
+		request.Action.Kind != "navigate" || request.Action.URL == "" ||
+		request.Action.Ref != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
+	return host.executeAction(ctx, request, "navigate", browserworker.DriverAction{
+		Kind: browserworker.DriverNavigate, URL: request.Action.URL,
+	})
+}
+
+func (host *BrowserHost) Scroll(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "read" ||
+		request.Action.Kind != "scroll" ||
+		(request.Action.Direction != "up" && request.Action.Direction != "down") ||
+		request.Action.Amount < 1 || request.Action.Amount > nodes.MaxBrowserScrollAmount ||
+		request.Action.URL != "" || request.Action.Ref != "" ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "scroll", browserworker.DriverAction{
+		Kind: browserworker.DriverScroll, Direction: request.Action.Direction, Amount: request.Action.Amount,
+	})
+}
+
+func (host *BrowserHost) executeAction(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+	action string,
+	driverAction browserworker.DriverAction,
+) (BrowserHostObservation, error) {
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
 		RoutedSessionID: request.RoutedSessionID,
@@ -391,7 +423,7 @@ func (host *BrowserHost) Navigate(
 	}
 	if request.TabID != session.tabID || request.SnapshotGeneration != session.snapshotGeneration ||
 		request.BrowserPolicyRevision != session.browserPolicyRevision ||
-		!slices.Contains(session.profile.AllowedActions, "navigate") {
+		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
 	if existingHash, reserved := session.actionInvocations[request.ActionInvocationID]; reserved {
@@ -416,9 +448,7 @@ func (host *BrowserHost) Navigate(
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
-	if executeErr := session.worker.Execute(actionCtx, browserworker.DriverAction{
-		Kind: browserworker.DriverNavigate, URL: request.Action.URL,
-	}); executeErr != nil {
+	if executeErr := session.worker.Execute(actionCtx, driverAction); executeErr != nil {
 		cancelAction()
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost

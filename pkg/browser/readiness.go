@@ -1,5 +1,7 @@
 package browser
 
+import "context"
+
 const (
 	ReadinessReady       = "ready"
 	ReadinessConfigured  = "configured"
@@ -39,6 +41,17 @@ type PassiveReadiness struct {
 	Code          string              `json:"code,omitempty"`
 	Action        string              `json:"action,omitempty"`
 	Passive       bool                `json:"passive"`
+}
+
+// TargetDiagnostics is one immutable worker-factory capability snapshot for a
+// target and its configured profiles.
+type TargetDiagnostics struct {
+	Actions  []ActionKind
+	Profiles map[string]DriverReadiness
+}
+
+type targetDiagnosticsFactory interface {
+	PassiveTargetDiagnostics(context.Context, string, []string) (TargetDiagnostics, error)
 }
 
 type readinessFactory interface {

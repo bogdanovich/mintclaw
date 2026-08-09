@@ -24,7 +24,8 @@ const (
 	BrowserNetworkAnyHTTP      = "any_http"
 
 	MaxBrowserProfiles         = 8
-	MaxBrowserActions          = 2
+	MaxBrowserActions          = 3
+	MaxBrowserScrollAmount     = 5
 	MaxBrowserSessions         = 1
 	MaxBrowserTabs             = 4
 	MaxBrowserSessionSeconds   = 60 * 60
@@ -252,9 +253,36 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 }
 
 type BrowserAction struct {
-	Kind string `json:"kind"`
-	URL  string `json:"url,omitempty"`
-	Ref  string `json:"ref,omitempty"`
+	Kind      string `json:"kind"`
+	URL       string `json:"url,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Amount    int    `json:"amount,omitempty"`
+}
+
+func (action *BrowserAction) UnmarshalJSON(data []byte) error {
+	var value struct {
+		Kind      string          `json:"kind"`
+		URL       string          `json:"url,omitempty"`
+		Ref       string          `json:"ref,omitempty"`
+		Direction string          `json:"direction,omitempty"`
+		Amount    json.RawMessage `json:"amount,omitempty"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	amount, err := decodeCanonicalBrowserGeneration(value.Amount)
+	if err != nil || amount > MaxBrowserScrollAmount {
+		return fmt.Errorf(
+			"%w: browser scroll amount must be an integer from 1 to %d",
+			ErrInvalidCapability,
+			MaxBrowserScrollAmount,
+		)
+	}
+	*action = BrowserAction{
+		Kind: value.Kind, URL: value.URL, Ref: value.Ref, Direction: value.Direction, Amount: int(amount),
+	}
+	return nil
 }
 
 type BrowserActInput struct {
@@ -513,7 +541,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "download" && action != "navigate" {
+		if action != "download" && action != "navigate" && action != "scroll" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -622,6 +650,8 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 			effect := "navigation"
 			if action == "download" {
 				effect = "download"
+			} else if action == "scroll" {
+				effect = "read"
 			}
 			required := []string{"profile_revision", "action", "effect"}
 			if action == "download" {
@@ -674,7 +704,7 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("action_invocation_id", identifier)
 		add("action", browserActionSchema(actions))
-		add("effect", map[string]any{"enum": []string{"navigation", "download"}})
+		add("effect", map[string]any{"enum": []string{"read", "navigation", "download"}})
 		add("current_origin", map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		})
@@ -830,6 +860,18 @@ func browserActionSchema(actions []string) map[string]any {
 				"properties": map[string]any{
 					"kind": map[string]any{"const": "download"},
 					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
+		case "scroll":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "direction", "amount"},
+				"properties": map[string]any{
+					"kind":      map[string]any{"const": "scroll"},
+					"direction": map[string]any{"enum": []string{"up", "down"}},
+					"amount": map[string]any{
+						"type": "integer", "minimum": 1, "maximum": MaxBrowserScrollAmount,
+					},
 				},
 			})
 		}

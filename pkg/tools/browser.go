@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ type BrowserToolSource interface {
 // unavailable readiness.
 type BrowserTargetDiagnostics struct {
 	Profiles   map[string]browser.PassiveReadiness
+	Actions    []browser.ActionKind
 	Screenshot bool
 	Upload     bool
 	Download   bool
@@ -255,18 +257,19 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				targetStatus, targetReason, targetRank = profile.Readiness.Status, profile.Readiness.Code, rank
 			}
 		}
-		actions := []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
-			browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+		actions := []browser.ActionKind(nil)
+		if capabilitiesAvailable {
+			actions = append(actions, diagnostics.Actions...)
 		}
 		uploadAvailable := capabilitiesAvailable && diagnostics.Upload
 		downloadAvailable := uploadAvailable && diagnostics.Download
-		if uploadAvailable {
+		if uploadAvailable && !slices.Contains(actions, browser.ActionUpload) {
 			actions = append(actions, browser.ActionUpload)
 		}
-		if downloadAvailable {
+		if downloadAvailable && !slices.Contains(actions, browser.ActionDownload) {
 			actions = append(actions, browser.ActionDownload)
 		}
+		sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
