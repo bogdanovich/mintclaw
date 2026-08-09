@@ -145,6 +145,94 @@ func (m *scriptedToolProvider) GetDefaultModel() string {
 	return "scripted-tool-model"
 }
 
+type nodeInvocationRedactionTool struct{}
+
+func (*nodeInvocationRedactionTool) Name() string { return "nodes_invoke" }
+func (*nodeInvocationRedactionTool) Description() string {
+	return "Test node invocation audit redaction"
+}
+
+func (*nodeInvocationRedactionTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": true,
+	}
+}
+
+func (*nodeInvocationRedactionTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	return toolshared.SilentResult("invoked")
+}
+
+func TestAgentLoopRedactsNodeInvocationToolStartEvent(t *testing.T) {
+	const secret = "sentinel-node-job-event-secret"
+	arguments := map[string]any{
+		"target":             "private-build-node",
+		"command":            "job.start.v1",
+		"discovery_revision": "private-discovery-revision",
+		"input": map[string]any{
+			"argv": []any{"build", "--token=" + secret},
+			"env":  map[string]any{"ACCESS_TOKEN": secret},
+			"artifacts": []any{
+				map[string]any{"name": "report", "path": "private/output/report.json"},
+			},
+		},
+	}
+	provider := &toolCallProvider{
+		toolCalls: []providers.ToolCall{{
+			ID:        "call-node-job-redaction",
+			Name:      "nodes_invoke",
+			Arguments: arguments,
+		}},
+		finalResp: "done",
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = provider.GetDefaultModel()
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	al.RegisterTool(&nodeInvocationRedactionTool{})
+
+	events, closeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentToolExecStart,
+	)
+	defer closeEvents()
+	if _, err := al.ProcessDirectWithChannel(
+		t.Context(),
+		"start the job",
+		"node-job-redaction-session",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	event := waitForRuntimeEvent(t, events, 2*time.Second, func(event runtimeevents.Event) bool {
+		return event.Kind == runtimeevents.KindAgentToolExecStart
+	})
+	payload, ok := event.Payload.(ToolExecStartPayload)
+	if !ok {
+		t.Fatalf("tool start payload = %T", event.Payload)
+	}
+	if payload.Tool != "nodes_invoke" ||
+		payload.Arguments["redacted"] != true ||
+		payload.Arguments["argument_count"] != len(arguments) ||
+		len(payload.Arguments) != 2 {
+		t.Fatalf("redacted node invocation event = %#v", payload)
+	}
+	for _, forbidden := range []string{"target", "command", "input", secret} {
+		if _, present := payload.Arguments[forbidden]; present {
+			t.Fatalf("node invocation event retained %q: %#v", forbidden, payload.Arguments)
+		}
+	}
+}
+
 func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-eventbus-*")
 	if err != nil {

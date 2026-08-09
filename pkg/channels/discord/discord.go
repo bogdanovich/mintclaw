@@ -547,7 +547,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		inboundCtx.ReplyToMessageID = m.MessageReference.MessageID
 	}
 
-	c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender)
 }
 
 // startTyping starts a continuous typing indicator loop for the given chatID.
@@ -738,7 +738,7 @@ func (c *DiscordChannel) listenVoiceControl(ctx context.Context) {
 					guildID := strings.TrimPrefix(ctrl.SessionID, "discord_vc_")
 					vc, exists := c.session.VoiceConnections[guildID]
 					if exists && vc != nil {
-						vc.Disconnect(ctx)
+						_ = vc.Disconnect(ctx)
 					}
 				}
 			}
@@ -780,7 +780,7 @@ func (c *DiscordChannel) playTTS(ctx context.Context, vc *discordgo.VoiceConnect
 			select {
 			case result := <-prefetch:
 				if result.stream != nil {
-					result.stream.Close()
+					_ = result.stream.Close()
 				}
 			case <-time.After(100 * time.Millisecond):
 				// Timed out waiting for a prefetched result; avoid blocking on exit.
@@ -834,7 +834,7 @@ func (c *DiscordChannel) playTTS(ctx context.Context, vc *discordgo.VoiceConnect
 
 		if err != nil {
 			if stream != nil {
-				stream.Close()
+				_ = stream.Close()
 			}
 			logger.ErrorCF("discord", "TTS synthesize failed", map[string]any{"error": err.Error(), "sentence": i})
 			prefetch = nextPrefetch
@@ -844,7 +844,7 @@ func (c *DiscordChannel) playTTS(ctx context.Context, vc *discordgo.VoiceConnect
 		if err := streamOggOpusToDiscord(ctx, vc, stream); err != nil {
 			logger.ErrorCF("discord", "TTS playback failed", map[string]any{"error": err.Error(), "sentence": i})
 		}
-		stream.Close()
+		_ = stream.Close()
 
 		prefetch = nextPrefetch
 	}

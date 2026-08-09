@@ -1,12 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -85,10 +86,8 @@ func GetSessionNames(conv map[string]json.RawMessage) []string {
 			names = append(names, k)
 		}
 	}
-	sort.Slice(names, func(i, j int) bool {
-		ni := sessionNum(names[i])
-		nj := sessionNum(names[j])
-		return ni < nj
+	slices.SortFunc(names, func(a, b string) int {
+		return cmp.Compare(sessionNum(a), sessionNum(b))
 	})
 	return names
 }
@@ -136,7 +135,7 @@ func GetTurnByDiaID(sample *LocomoSample, diaID string) *LocomoTurn {
 // GetSpeakers returns the two speaker names from conversation metadata.
 func GetSpeakers(conv map[string]json.RawMessage) (string, string) {
 	var a, b string
-	json.Unmarshal(conv["speaker_a"], &a)
-	json.Unmarshal(conv["speaker_b"], &b)
+	_ = json.Unmarshal(conv["speaker_a"], &a)
+	_ = json.Unmarshal(conv["speaker_b"], &b)
 	return a, b
 }

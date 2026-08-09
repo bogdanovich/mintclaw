@@ -448,7 +448,7 @@ func (c *FeishuChannel) sendMediaPart(
 		})
 		return nil // skip this part
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	switch part.Type {
 	case "image":
@@ -592,7 +592,7 @@ func (c *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		inboundCtx.SpaceID = *sender.TenantKey
 	}
 
-	c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo)
+	_ = c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo)
 	return nil
 }
 
@@ -780,7 +780,7 @@ func (c *FeishuChannel) downloadResource(
 		return ""
 	}
 	if closer, ok := file.(io.Closer); ok {
-		defer closer.Close()
+		defer func() { _ = closer.Close() }()
 	}
 
 	if filename == "" {
@@ -899,7 +899,7 @@ func (c *FeishuChannel) storeResourceFile(
 	}
 
 	if _, copyErr := io.Copy(out, file); copyErr != nil {
-		out.Close()
+		_ = out.Close()
 		os.Remove(localPath)
 		logger.ErrorCF("feishu", "Failed to write resource to file", map[string]any{
 			"error": copyErr.Error(),

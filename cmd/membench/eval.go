@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -147,8 +149,8 @@ func EvalSeahorse(
 			for id := range bestRank {
 				messageIDs = append(messageIDs, id)
 			}
-			sort.Slice(messageIDs, func(i, j int) bool {
-				return bestRank[messageIDs[i]] < bestRank[messageIDs[j]]
+			slices.SortFunc(messageIDs, func(a, b int64) int {
+				return cmp.Compare(bestRank[a], bestRank[b])
 			})
 
 			// Expand messages to get full content

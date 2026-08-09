@@ -65,7 +65,7 @@ func run(args []string) error {
 		return err
 	}
 	if managed {
-		defer coordinatorClient.Close()
+		defer func() { _ = coordinatorClient.Close() }()
 	}
 	identity, err := companion.LoadOrCreateIdentity(cfg.StateDir)
 	if err != nil {
@@ -98,8 +98,26 @@ func run(args []string) error {
 			}
 		}()
 	}
+	if cfg.SystemExec != nil {
+		runtimeOptions = append(runtimeOptions, companion.WithSystemExec(*cfg.SystemExec))
+	}
+	var jobRuntime *companion.JobRuntime
+	if companion.HasEnabledJobProfile(cfg.JobProfiles) {
+		jobRuntime, err = companion.NewJobRuntime(cfg.StateDir, cfg.JobProfiles, *cfg.SystemExec)
+		if err != nil {
+			return fmt.Errorf("configure companion job runtime: %w", err)
+		}
+		runtimeOptions = append(runtimeOptions, companion.WithJobRuntime(jobRuntime))
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelShutdown()
+			if shutdownErr := jobRuntime.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion job cleanup failed", "error", shutdownErr)
+			}
+		}()
+	}
 	fileCapabilities := make([]companion.FileTransferCapability, 0, 2)
-	if companion.HasEnabledFilePolicy(cfg.FilePolicies) {
+	if companion.HasEnabledFilePolicy(cfg.FilePolicies) || jobRuntime != nil {
 		transferLedger, transferLedgerErr := companion.NewFileTransferLedger(
 			companion.FileTransferLedgerPath(cfg.StateDir),
 			companion.DefaultFileTransferLedgerLimit,
@@ -109,15 +127,16 @@ func run(args []string) error {
 			return transferLedgerErr
 		}
 		defer transferLedger.Close()
-		fileTransfers, transferRuntimeErr := companion.NewFileTransferRuntime(
+		fileTransferRuntime, transferRuntimeErr := companion.NewFileTransferRuntimeWithJobs(
 			cfg.FilePolicies,
 			transferLedger,
+			jobRuntime,
 		)
 		if transferRuntimeErr != nil {
 			return transferRuntimeErr
 		}
-		defer fileTransfers.Close()
-		fileCapabilities = append(fileCapabilities, fileTransfers)
+		defer fileTransferRuntime.Close()
+		fileCapabilities = append(fileCapabilities, fileTransferRuntime)
 	}
 	if cfg.FileHelper != nil {
 		snapshotContext, cancelSnapshot := context.WithTimeout(context.Background(), 5*time.Second)
@@ -129,7 +148,7 @@ func run(args []string) error {
 		if helperErr != nil {
 			return fmt.Errorf("load file helper snapshot: %w", helperErr)
 		}
-		defer fileHelper.Close()
+		defer func() { _ = fileHelper.Close() }()
 		fileCapabilities = append(fileCapabilities, fileHelper)
 	}
 	var fileTransfers *companion.FileTransferRouter
@@ -138,28 +157,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		runtimeOptions = append(runtimeOptions, companion.WithFileCapabilities(fileTransfers))
-	}
-	if cfg.SystemExec != nil {
-		runtimeOptions = append(runtimeOptions, companion.WithSystemExec(*cfg.SystemExec))
-	}
-	if companion.HasEnabledJobProfile(cfg.JobProfiles) {
-		jobRuntime, jobRuntimeErr := companion.NewJobRuntime(
-			cfg.StateDir,
-			cfg.JobProfiles,
-			*cfg.SystemExec,
-		)
-		if jobRuntimeErr != nil {
-			return fmt.Errorf("configure companion job runtime: %w", jobRuntimeErr)
+		if len(fileTransfers.Descriptors()) > 0 {
+			runtimeOptions = append(runtimeOptions, companion.WithFileCapabilities(fileTransfers))
 		}
-		runtimeOptions = append(runtimeOptions, companion.WithJobRuntime(jobRuntime))
-		defer func() {
-			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancelShutdown()
-			if shutdownErr := jobRuntime.Shutdown(shutdownContext); shutdownErr != nil {
-				slog.Error("companion job cleanup failed", "error", shutdownErr)
-			}
-		}()
 	}
 	if cfg.OwnerShell != nil && cfg.OwnerShell.Enabled {
 		broker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)
@@ -184,7 +184,7 @@ func run(args []string) error {
 		if helperErr != nil {
 			return fmt.Errorf("load service helper snapshot: %w", helperErr)
 		}
-		defer serviceHelper.Close()
+		defer func() { _ = serviceHelper.Close() }()
 		runtimeOptions = append(runtimeOptions, companion.WithServiceManager(serviceHelper))
 	} else if companion.HasEnabledServicePolicy(cfg.ServicePolicies) {
 		serviceManager, managerErr := companion.NewSystemdServiceManager(cfg.ServicePolicies)

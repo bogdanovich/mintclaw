@@ -2,12 +2,14 @@ package nodes
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -95,7 +97,7 @@ func (registry *FileRegistry) List(filter Filter) ([]Snapshot, error) {
 		}
 		result = append(result, cloneSnapshot(record.Snapshot))
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	slices.SortFunc(result, func(a, b Snapshot) int { return cmp.Compare(a.ID, b.ID) })
 	return result, nil
 }
 
@@ -580,7 +582,7 @@ func normalizeAliases(aliases []Alias) ([]Alias, error) {
 		}
 		seen[alias] = struct{}{}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result, nil
 }
 

@@ -651,7 +651,7 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 			Raw:       metadata,
 		}
 
-		c.HandleInboundContext(c.ctx, senderID, content, mediaPaths, inboundCtx, sender)
+		_ = c.HandleInboundContext(c.ctx, senderID, content, mediaPaths, inboundCtx, sender)
 
 		return nil
 	}
@@ -730,7 +730,7 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 			Raw:       metadata,
 		}
 
-		c.HandleInboundContext(c.ctx, data.GroupID, content, mediaPaths, inboundCtx, sender)
+		_ = c.HandleInboundContext(c.ctx, data.GroupID, content, mediaPaths, inboundCtx, sender)
 
 		return nil
 	}

@@ -15,19 +15,44 @@ import (
 )
 
 // onConnect is called after a successful connection (and on reconnect).
-func (c *IRCChannel) onConnect(conn *ircevent.Connection) {
+// It returns the first setup error so the initial connection can fail
+// closed; reconnect setup failures are logged without the success message.
+func (c *IRCChannel) onConnect(conn *ircevent.Connection) error {
+	var setupErr error
+
 	// NickServ auth (only if SASL is not configured)
 	if c.config.NickServPassword.String() != "" && c.config.SASLUser == "" {
-		conn.Privmsg("NickServ", "IDENTIFY "+c.config.NickServPassword.String())
+		if err := conn.Privmsg(
+			"NickServ",
+			"IDENTIFY "+c.config.NickServPassword.String(),
+		); err != nil {
+			logger.ErrorCF("irc", "Failed to authenticate with NickServ", map[string]any{
+				"error": err,
+			})
+			if setupErr == nil {
+				setupErr = fmt.Errorf("irc nickserv identify failed: %w", err)
+			}
+		}
 	}
 
 	// Join configured channels
 	for _, ch := range c.config.Channels {
-		conn.Join(ch)
+		if err := conn.Join(ch); err != nil {
+			logger.ErrorCF("irc", "Failed to join IRC channel", map[string]any{
+				"channel": ch,
+				"error":   err,
+			})
+			if setupErr == nil {
+				setupErr = fmt.Errorf("irc join %s failed: %w", ch, err)
+			}
+			continue
+		}
 		logger.InfoCF("irc", "Joined IRC channel", map[string]any{
 			"channel": ch,
 		})
 	}
+
+	return setupErr
 }
 
 // onPrivmsg handles incoming PRIVMSG events.
@@ -113,7 +138,7 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 		inboundCtx.ChatType = "group"
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
 }
 
 // nickMentionedAt returns the byte index where botNick is mentioned in content

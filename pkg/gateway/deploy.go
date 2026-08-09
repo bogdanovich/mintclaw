@@ -83,7 +83,7 @@ func (s *DeploySentinelStore) DeliverContinuationIfCurrent(
 	if err != nil {
 		return false, err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 
 	sentinel, err := s.Read()
 	if err != nil {
@@ -196,7 +196,7 @@ func (r *DeployRunner) run(
 	if err != nil {
 		return "", -1, err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	now := time.Now().UTC()
 	sentinel := DeploySentinel{
 		Kind:        "deploy",

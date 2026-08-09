@@ -32,7 +32,7 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	if !ready.Enabled || !filepath.IsAbs(ready.DriverExecutable) ||
 		!filepath.IsAbs(ready.ProfileDirectory) || !filepath.IsAbs(ready.LockFile) ||
 		strings.Join(ready.AllowedAgents, ",") != "browser,marketplace" ||
-		strings.Join(ready.AllowedActions, ",") != "download,navigate" {
+		strings.Join(ready.AllowedActions, ",") != "click,download,navigate" {
 		t.Fatalf("normalized browser profile = %#v", ready)
 	}
 	if strings.Join(profile.AllowedAgents, ",") != strings.Join(originalAgents, ",") ||
@@ -66,6 +66,31 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 }
 
+func TestConfigAcceptsExplicitApprovedActionBrowserProfile(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatalf("Normalize() approved-action mode error = %v", err)
+	}
+	ready := cfg.BrowserProfiles["managed"]
+	if ready.DryRun || !ready.AllowApprovedActions {
+		t.Fatalf("normalized approved-action profile = %#v", ready)
+	}
+	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
+	if err != nil || len(descriptors) != 1 || descriptors[0].DryRun ||
+		!descriptors[0].AllowApprovedActions {
+		t.Fatalf("approved-action descriptors = %#v, %v", descriptors, err)
+	}
+}
+
 func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	tests := []struct {
@@ -76,7 +101,14 @@ func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 		{
 			name:   "non dry run",
 			mutate: func(profile *BrowserProfilePolicy, _ string) { profile.DryRun = false },
-			want:   "dry_run=true",
+			want:   "exactly one of dry_run or allow_approved_actions",
+		},
+		{
+			name: "conflicting action modes",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.AllowApprovedActions = true
+			},
+			want: "exactly one of dry_run or allow_approved_actions",
 		},
 		{
 			name:   "attached mode",
@@ -264,7 +296,7 @@ func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfile
 		DriverArguments:  []string{"--browser=chrome"},
 		ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, AllowedActions: []string{"navigate", "download"}, Headed: true,
+		DryRun: true, AllowedActions: []string{"navigate", "click", "download"}, Headed: true,
 	}
 }
 

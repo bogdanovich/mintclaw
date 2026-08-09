@@ -201,14 +201,15 @@
           "driver": {"const": "playwright_mcp"},
           "mode": {"const": "managed"},
           "network_mode": {"enum": ["exact_origins", "public_web", "any_http"]},
-          "dry_run": {"const": true},
+          "dry_run": {"type": "boolean"},
+          "allow_approved_actions": {"type": "boolean"},
           "headed": {"type": "boolean"},
           "actions": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 2,
+            "maxItems": 4,
             "uniqueItems": true,
-            "items": {"enum": ["download", "navigate"]}
+            "items": {"enum": ["click", "download", "navigate", "scroll"]}
           },
           "limits": {
             "type": "object",

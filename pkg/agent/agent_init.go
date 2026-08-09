@@ -74,6 +74,7 @@ func newAgentLoopWithRegistry(
 		agentTurnAdmissions: newAgentTurnAdmissionController(registry),
 		ownsRuntimeEvents:   true,
 		interactionCatalog:  interactions.NewWorkspaceCatalog(config.GetHome()),
+		startupResult:       make(chan error, 1),
 	}
 	al.compactionRunner = &backgroundCompactionRunner{
 		contextManager: func() ContextManager {

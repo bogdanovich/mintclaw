@@ -2,6 +2,7 @@ package browser
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -109,7 +110,7 @@ func (store *FileStore) load() error {
 	if err != nil {
 		return fmt.Errorf("open browser state store: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	limited := io.LimitReader(file, int64(store.maxBytes)+1)
 	raw, err := io.ReadAll(limited)
 	if err != nil {
@@ -321,7 +322,7 @@ func (store *FileStore) ListSessions(_ context.Context) ([]Session, error) {
 	for _, session := range store.sessions {
 		result = append(result, session)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	slices.SortFunc(result, func(a, b Session) int { return cmp.Compare(a.ID, b.ID) })
 	return result, nil
 }
 
@@ -469,7 +470,7 @@ func (store *FileStore) ListInvocations(_ context.Context, sessionID string) ([]
 			result = append(result, invocation)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	slices.SortFunc(result, func(a, b Invocation) int { return cmp.Compare(a.ID, b.ID) })
 	return result, nil
 }
 

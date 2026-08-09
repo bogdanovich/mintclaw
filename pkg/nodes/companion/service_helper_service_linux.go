@@ -64,7 +64,7 @@ func LoadServiceHelperServiceConfig(path string) (ServiceHelperServiceConfig, er
 		_ = unix.Close(descriptor)
 		return ServiceHelperServiceConfig{}, errors.New("open service helper config: invalid descriptor")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return ServiceHelperServiceConfig{}, err
@@ -121,7 +121,7 @@ func RunServiceHelper(ctx context.Context, config ServiceHelperServiceConfig) er
 	if err != nil {
 		return err
 	}
-	defer runner.close()
+	defer func() { _ = runner.close() }()
 	manager, err := newSystemdServiceManagerWithEnforcement(
 		config.Profiles,
 		runner,
@@ -135,7 +135,7 @@ func RunServiceHelper(ctx context.Context, config ServiceHelperServiceConfig) er
 	if err != nil {
 		return err
 	}
-	defer identity.Close()
+	defer func() { _ = identity.Close() }()
 	server, err := newServiceHelperServer(config, manager, identity, time.Now)
 	if err != nil {
 		return err
@@ -144,7 +144,7 @@ func RunServiceHelper(ctx context.Context, config ServiceHelperServiceConfig) er
 	if err != nil {
 		return fmt.Errorf("open service helper socket directory: %w", err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if prepareErr := directory.prepare(); prepareErr != nil {
 		return fmt.Errorf("prepare service helper socket: %w", prepareErr)
 	}
@@ -155,7 +155,7 @@ func RunServiceHelper(ctx context.Context, config ServiceHelperServiceConfig) er
 		return fmt.Errorf("listen service helper socket: %w", err)
 	}
 	listener.SetUnlinkOnClose(false)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	defer func() { _ = directory.unlink() }()
 	if err := unix.Fchownat(
 		directory.descriptor,
@@ -213,7 +213,7 @@ func (server *serviceHelperServer) Serve(ctx context.Context, listener *net.Unix
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 			server.handleConnection(ctx, connection)
 		}()
 	}

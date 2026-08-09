@@ -533,6 +533,39 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 	}
 }
 
+func TestPlaywrightWorkerFactoryBindsExplicitApprovedActionMode(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatalf("NewPlaywrightWorkerFactory() approved-action mode error = %v", err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	if _, err = factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "wrong_mode", Target: "gateway", Profile: "managed", DryRun: true,
+		Limits: config.BrowserLimitsConfig{},
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Open() mismatched dry-run mode error = %v", err)
+	}
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "approved_mode", Target: "gateway", Profile: "managed", DryRun: false,
+		Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatalf("Open() approved-action mode error = %v", err)
+	}
+	if err = opened.Owner.Close(t.Context()); err != nil {
+		t.Fatalf("Close() approved-action worker error = %v", err)
+	}
+}
+
 func TestPlaywrightWorkerFactoryConfiguresPublicWebWithoutDriverAllowlist(t *testing.T) {
 	t.Setenv("PLAYWRIGHT_MCP_CDP_ENDPOINT", "http://127.0.0.1:9222")
 	t.Setenv("PLAYWRIGHT_MCP_ENDPOINT", "ws://127.0.0.1:3000")

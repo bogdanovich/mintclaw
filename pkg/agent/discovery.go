@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -44,17 +46,20 @@ func (r *AgentRegistry) ListAgents(workspace string) []AgentDescriptor {
 		return descriptors
 	}
 
-	sort.SliceStable(descriptors, func(i, j int) bool {
+	slices.SortStableFunc(descriptors, func(a, b AgentDescriptor) int {
 		leftSelf := cleanWorkspacePath(
-			r.workspaceForAgentIDLocked(descriptors[i].ID),
+			r.workspaceForAgentIDLocked(a.ID),
 		) == selfWorkspace
 		rightSelf := cleanWorkspacePath(
-			r.workspaceForAgentIDLocked(descriptors[j].ID),
+			r.workspaceForAgentIDLocked(b.ID),
 		) == selfWorkspace
 		if leftSelf != rightSelf {
-			return leftSelf
+			if leftSelf {
+				return -1
+			}
+			return 1
 		}
-		return descriptors[i].ID < descriptors[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	return descriptors

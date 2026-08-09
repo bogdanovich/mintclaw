@@ -323,7 +323,7 @@ func (s *FileMediaStore) promoteManagedTempFile(
 	if err != nil {
 		return "", nil, err
 	}
-	defer sourceFile.Close()
+	defer func() { _ = sourceFile.Close() }()
 	promotion := &mediaPromotion{
 		sourceRoot: sourceRoot,
 		sourceRel:  sourceRel,
@@ -814,7 +814,7 @@ func (s *FileMediaStore) cleanOrphanedPromotionFiles(
 		})
 		return 0
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 
 	entries, err := os.ReadDir(managedDir)
 	if err != nil {

@@ -188,7 +188,7 @@ func EnableFileLogging(filePath string) error {
 
 	// Close old file if exists
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 	}
 
 	logFile = newFile
@@ -208,7 +208,7 @@ func DisableFileLogging() {
 	defer mu.Unlock()
 
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 		logFile = nil
 	}
 	if len(writers) > 1 {

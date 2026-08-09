@@ -52,7 +52,7 @@ func (t *ElevenLabsTranscriber) Transcribe(ctx context.Context, audioFilePath st
 		logger.ErrorCF("voice", "Failed to open audio file", map[string]any{"path": audioFilePath, "error": err})
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
 	}
-	defer audioFile.Close()
+	defer func() { _ = audioFile.Close() }()
 
 	fileInfo, err := audioFile.Stat()
 	if err != nil {
@@ -109,7 +109,7 @@ func (t *ElevenLabsTranscriber) Transcribe(ctx context.Context, audioFilePath st
 		logger.ErrorCF("voice", "Failed to send request", map[string]any{"error": err})
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -1,7 +1,8 @@
 package providers
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 )
 
@@ -11,8 +12,8 @@ func ModelProviderOptions() []ModelProviderOption {
 	for _, option := range modelProviderOptionsByName {
 		options = append(options, option)
 	}
-	sort.Slice(options, func(i, j int) bool {
-		return options[i].ID < options[j].ID
+	slices.SortFunc(options, func(a, b ModelProviderOption) int {
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return options
 }

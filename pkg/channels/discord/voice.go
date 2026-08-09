@@ -126,8 +126,8 @@ func streamOggOpusToDiscord(ctx context.Context, vc *discordgo.VoiceConnection, 
 	}()
 
 	// Wait for the speaking transition to register
-	vc.Speaking(true)
-	defer vc.Speaking(false)
+	_ = vc.Speaking(true)
+	defer func() { _ = vc.Speaking(false) }()
 
 	return audio.DecodeOggOpus(r, func(frame []byte) error {
 		select {
@@ -180,8 +180,8 @@ func (c *DiscordChannel) receiveVoice(vc *discordgo.VoiceConnection, guildID str
 		default:
 		}
 
-		vc.Speaking(true)
-		defer vc.Speaking(false)
+		_ = vc.Speaking(true)
+		defer func() { _ = vc.Speaking(false) }()
 
 		silenceFrame := []byte{0xF8, 0xFF, 0xFE}
 		for i := 0; i < 5; i++ {
@@ -197,7 +197,7 @@ func (c *DiscordChannel) receiveVoice(vc *discordgo.VoiceConnection, guildID str
 	}(c.ctx, vc)
 	sessionID := fmt.Sprintf("discord_vc_%s", guildID)
 
-	c.bus.PublishVoiceControl(c.ctx, bus.VoiceControl{
+	_ = c.bus.PublishVoiceControl(c.ctx, bus.VoiceControl{
 		SessionID: sessionID,
 		Type:      "state",
 		Action:    "listening",

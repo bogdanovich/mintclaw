@@ -338,7 +338,7 @@ func (c *ClawHubRegistry) doGet(ctx context.Context, urlStr string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Limit response body read to prevent memory issues.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(c.maxResponseSize)))
@@ -375,7 +375,7 @@ func (c *ClawHubRegistry) downloadToTempFileWithRetry(ctx context.Context, urlSt
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody := make([]byte, 512)

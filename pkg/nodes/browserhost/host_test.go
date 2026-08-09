@@ -158,7 +158,8 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	})
 	if err != nil || navigated.SnapshotGeneration != 2 || navigated.Title != "Example" ||
-		len(navigated.Elements) != 1 || navigated.Elements[0].Ref != "e1" {
+		len(navigated.Elements) != 1 || navigated.Elements[0].Ref == "e1" ||
+		strings.Contains(navigated.Snapshot, "[ref=e1]") {
 		t.Fatalf("Navigate() = %#v, %v", navigated, err)
 	}
 	if len(worker.actions) != 1 || worker.actions[0].Kind != browserworker.DriverNavigate ||
@@ -242,6 +243,125 @@ func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
 	}) {
 		t.Fatalf("driver actions = %#v", worker.actions)
 	}
+}
+
+func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
+	newFixture := func(t *testing.T, dryRun bool) (*BrowserHost, *fakeBrowserHostWorker, BrowserHostNavigateRequest) {
+		t.Helper()
+		element := browserworker.DriverElement{Target: "driver_ref_1", Role: "button", Name: "Save"}
+		observation := browserworker.DriverObservation{
+			URL: "https://example.com/", Origin: "https://example.com", Title: "Fixture",
+			Snapshot: "- button Save", Elements: []browserworker.DriverElement{element},
+		}
+		worker := &fakeBrowserHostWorker{
+			status:       browserworker.WorkerReady,
+			observations: []browserworker.DriverObservation{observation, observation, observation},
+		}
+		profile := browserHostProfileFixture()
+		profile.AllowedActions = []string{"click", "download", "navigate", "scroll"}
+		profile.DryRun = dryRun
+		profile.AllowApprovedActions = !dryRun
+		host, err := newBrowserHost(
+			map[string]companion.BrowserProfilePolicy{"managed": profile},
+			map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+		host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+		open := browserHostOpenFixture()
+		open.DryRun = dryRun
+		if _, err = host.Open(t.Context(), open); err != nil {
+			t.Fatal(err)
+		}
+		initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		})
+		if err != nil || len(initial.Elements) != 1 || initial.Elements[0].Ref == "driver_ref_1" ||
+			strings.Contains(initial.Snapshot, "driver_ref_1") {
+			t.Fatalf("initial safe observation = %#v, %v", initial, err)
+		}
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_click_1",
+			Action:             nodes.BrowserAction{Kind: "click", Ref: initial.Elements[0].Ref},
+			Effect:             "external_commit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return host, worker, request
+	}
+
+	t.Run("success", func(t *testing.T) {
+		host, worker, request := newFixture(t, false)
+		result, err := host.Click(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Click() = %#v, %v", result, err)
+		}
+		if len(worker.actions) != 1 || worker.actions[0] != (browserworker.DriverAction{
+			Kind: browserworker.DriverClick, Target: "driver_ref_1", Element: "Save",
+		}) {
+			t.Fatalf("driver actions = %#v", worker.actions)
+		}
+	})
+
+	t.Run("semantic drift", func(t *testing.T) {
+		host, worker, request := newFixture(t, false)
+		request.ExpectedName = "Delete"
+		var err error
+		request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+			t.Fatalf("Click() semantic drift error = %v, want stale", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("semantic drift dispatched %d actions", len(worker.actions))
+		}
+	})
+
+	t.Run("duplicate target", func(t *testing.T) {
+		host, worker, request := newFixture(t, false)
+		worker.observations[1].Elements = append(
+			worker.observations[1].Elements,
+			browserworker.DriverElement{Target: "driver_ref_1", Role: "button", Name: "Save"},
+		)
+		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+			t.Fatalf("Click() duplicate target error = %v, want stale", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("duplicate target dispatched %d actions", len(worker.actions))
+		}
+	})
+
+	t.Run("digest mismatch", func(t *testing.T) {
+		host, worker, request := newFixture(t, false)
+		request.ApprovalDigest = strings.Repeat("f", 64)
+		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Click() digest mismatch error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("digest mismatch dispatched %d actions", len(worker.actions))
+		}
+	})
+
+	t.Run("dry run", func(t *testing.T) {
+		host, worker, request := newFixture(t, true)
+		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Click() dry-run error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("dry-run click dispatched %d actions", len(worker.actions))
+		}
+	})
 }
 
 func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
@@ -748,6 +868,32 @@ func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
 	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
 	return host
+}
+
+func TestBrowserHostOpensExplicitApprovedActionProfile(t *testing.T) {
+	profile := browserHostProfileFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	request := browserHostOpenFixture()
+	request.DryRun = false
+	opened, err := host.Open(t.Context(), request)
+	if err != nil || opened.State != "ready" {
+		t.Fatalf("Open() approved-action profile = %#v, %v", opened, err)
+	}
+	request.DryRun = true
+	request.SessionID = "browser_session_wrong_mode"
+	if _, err = host.Open(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Open() mismatched dry-run mode error = %v", err)
+	}
 }
 
 func browserHostProfileFixture() companion.BrowserProfilePolicy {

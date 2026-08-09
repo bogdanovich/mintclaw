@@ -36,7 +36,7 @@ func LoadAuthorityBrokerConfig(path string) (AuthorityBrokerConfig, error) {
 		_ = unix.Close(descriptor)
 		return AuthorityBrokerConfig{}, errors.New("open authority broker config: invalid descriptor")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return AuthorityBrokerConfig{}, err
@@ -124,7 +124,7 @@ func RunAuthorityBroker(
 	if err != nil {
 		return err
 	}
-	defer identity.Close()
+	defer func() { _ = identity.Close() }()
 	server, err := newAuthorityBrokerServer(config, runner, identity)
 	if err != nil {
 		return err
@@ -133,7 +133,7 @@ func RunAuthorityBroker(
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if prepareErr := directory.prepare(); prepareErr != nil {
 		return prepareErr
 	}
@@ -145,7 +145,7 @@ func RunAuthorityBroker(
 		return fmt.Errorf("listen authority broker socket: %w", err)
 	}
 	listener.SetUnlinkOnClose(false)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	defer func() { _ = directory.unlink() }()
 	if chownErr := unix.Fchownat(
 		directory.descriptor,
@@ -266,7 +266,7 @@ func prepareAuthorityBrokerSocket(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if err := directory.prepare(); err != nil {
 		return err
 	}

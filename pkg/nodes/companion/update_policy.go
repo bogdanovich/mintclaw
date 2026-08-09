@@ -1,11 +1,13 @@
 package companion
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/url"
 	pathpkg "path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -248,7 +250,7 @@ func updateProfileDescriptors(policies UpdatePolicies) ([]nodes.UpdateProfileDes
 				Alias: alias, Version: release.Version, Description: release.Description,
 			})
 		}
-		sort.Slice(releases, func(left, right int) bool { return releases[left].Alias < releases[right].Alias })
+		slices.SortFunc(releases, func(a, b nodes.UpdateReleaseDescriptor) int { return cmp.Compare(a.Alias, b.Alias) })
 		profiles = append(profiles, nodes.UpdateProfileDescriptor{
 			Alias:     policy.normalizedAlias,
 			Revision:  policy.Revision,
@@ -258,7 +260,7 @@ func updateProfileDescriptors(policies UpdatePolicies) ([]nodes.UpdateProfileDes
 			Downgrade: policy.AllowDowngrade,
 		})
 	}
-	sort.Slice(profiles, func(left, right int) bool { return profiles[left].Alias < profiles[right].Alias })
+	slices.SortFunc(profiles, func(a, b nodes.UpdateProfileDescriptor) int { return cmp.Compare(a.Alias, b.Alias) })
 	for _, profile := range profiles {
 		if err := profile.Validate(); err != nil {
 			return nil, err

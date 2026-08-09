@@ -129,7 +129,7 @@ func (h *Handler) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(skillSupportResponse{
+	_ = json.NewEncoder(w).Encode(skillSupportResponse{
 		Skills: items,
 	})
 }
@@ -159,7 +159,7 @@ func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(skillDetailResponse{
+		_ = json.NewEncoder(w).Encode(skillDetailResponse{
 			skillSupportItem: skillItem,
 			Content:          content,
 		})
@@ -209,7 +209,7 @@ func (h *Handler) handleSearchSkills(w http.ResponseWriter, r *http.Request) {
 
 	if query == "" {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(skillSearchResponse{
+		_ = json.NewEncoder(w).Encode(skillSearchResponse{
 			Results: []skillSearchResultItem{},
 			Limit:   limit,
 			Offset:  offset,
@@ -273,7 +273,7 @@ func (h *Handler) handleSearchSkills(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		nextOffset = end
 	}
-	json.NewEncoder(w).Encode(skillSearchResponse{
+	_ = json.NewEncoder(w).Encode(skillSearchResponse{
 		Results:    response,
 		Limit:      limit,
 		Offset:     offset,
@@ -428,7 +428,7 @@ func (h *Handler) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(installSkillResponse{
+	_ = json.NewEncoder(w).Encode(installSkillResponse{
 		Status:         "ok",
 		Slug:           req.Slug,
 		Registry:       registry.Name(),
@@ -457,7 +457,7 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file is required", http.StatusBadRequest)
 		return
 	}
-	defer uploadedFile.Close()
+	defer func() { _ = uploadedFile.Close() }()
 
 	content, err := io.ReadAll(io.LimitReader(uploadedFile, maxImportedSkillSize+1))
 	if err != nil {
@@ -478,7 +478,7 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(importedSkill)
+	_ = json.NewEncoder(w).Encode(importedSkill)
 }
 
 func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
@@ -507,7 +507,7 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 	if matchedNonWorkspace {

@@ -59,7 +59,7 @@ func (h *Handler) handleGetLauncherConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(launcherConfigPayload{
+	_ = json.NewEncoder(w).Encode(launcherConfigPayload{
 		Port:                 cfg.Port,
 		Public:               cfg.Public,
 		AllowedCIDRs:         append([]string(nil), cfg.AllowedCIDRs...),
@@ -99,7 +99,7 @@ func (h *Handler) handleUpdateLauncherConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(launcherConfigPayload{
+	_ = json.NewEncoder(w).Encode(launcherConfigPayload{
 		Port:                 cfg.Port,
 		Public:               cfg.Public,
 		AllowedCIDRs:         append([]string(nil), cfg.AllowedCIDRs...),

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,8 +38,8 @@ func startGatewayOutboundReconciler(
 	}
 
 	pending := append([]outbox.Admission(nil), admissions...)
-	sort.SliceStable(pending, func(i, j int) bool {
-		return recoveryDispatchAt(pending[i].Intent).Before(recoveryDispatchAt(pending[j].Intent))
+	slices.SortStableFunc(pending, func(a, b outbox.Admission) int {
+		return recoveryDispatchAt(a.Intent).Compare(recoveryDispatchAt(b.Intent))
 	})
 	reconcileCtx, cancel := context.WithCancel(parent)
 	now := time.Now().UTC()

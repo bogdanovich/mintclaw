@@ -247,7 +247,7 @@ func fetchGoogleUserEmail(ctx context.Context, accessToken string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -356,7 +356,9 @@ func authLogoutCmd(provider string) error {
 					}
 				}
 			}
-			config.SaveConfig(internal.GetConfigPath(), appCfg)
+			if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
+				return fmt.Errorf("could not save config: %w", err)
+			}
 		}
 
 		fmt.Printf("Logged out from %s\n", provider)
@@ -374,7 +376,9 @@ func authLogoutCmd(provider string) error {
 		for i := range appCfg.ModelList {
 			appCfg.ModelList[i].AuthMethod = ""
 		}
-		config.SaveConfig(internal.GetConfigPath(), appCfg)
+		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
+			return fmt.Errorf("could not save config: %w", err)
+		}
 	}
 
 	fmt.Println("Logged out from all providers")

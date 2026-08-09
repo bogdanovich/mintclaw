@@ -1,7 +1,9 @@
 package cliui
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -183,7 +185,7 @@ func visibleSubcommands(c *cobra.Command) []*cobra.Command {
 		}
 		out = append(out, sub)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	slices.SortFunc(out, func(a, b *cobra.Command) int { return cmp.Compare(a.Name(), b.Name()) })
 	return out
 }
 

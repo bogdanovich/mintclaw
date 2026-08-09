@@ -1,18 +1,20 @@
 package companion
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 )
 
@@ -61,28 +63,38 @@ func (state FileTransferState) terminal() bool {
 }
 
 type FileTransferRecord struct {
-	TransferID     string                     `json:"transfer_id"`
-	Direction      protocol.TransferDirection `json:"direction"`
-	Operation      string                     `json:"operation"`
-	ProfileAlias   string                     `json:"profile_alias"`
-	PolicyRevision string                     `json:"policy_revision"`
-	Path           string                     `json:"path"`
-	Publication    string                     `json:"publication,omitempty"`
-	TotalSize      uint64                     `json:"total_size"`
-	SHA256         string                     `json:"sha256"`
-	ExpiresAt      int64                      `json:"expires_at"`
-	State          FileTransferState          `json:"state"`
-	Sequence       uint64                     `json:"sequence,omitempty"`
-	ObservedBytes  uint64                     `json:"observed_bytes,omitempty"`
-	StageName      string                     `json:"stage_name,omitempty"`
-	StageIdentity  fileIdentity               `json:"stage_identity,omitempty"`
-	SourceIdentity fileIdentity               `json:"source_identity,omitempty"`
-	SourceModified int64                      `json:"source_modified,omitempty"`
-	Result         json.RawMessage            `json:"result,omitempty"`
-	FailureCode    string                     `json:"failure_code,omitempty"`
-	CreatedAt      int64                      `json:"created_at"`
-	UpdatedAt      int64                      `json:"updated_at"`
-	CompletedAt    int64                      `json:"completed_at,omitempty"`
+	TransferID     string                      `json:"transfer_id"`
+	Direction      protocol.TransferDirection  `json:"direction"`
+	Operation      string                      `json:"operation"`
+	ProfileAlias   string                      `json:"profile_alias"`
+	PolicyRevision string                      `json:"policy_revision"`
+	Path           string                      `json:"path"`
+	Publication    string                      `json:"publication,omitempty"`
+	TotalSize      uint64                      `json:"total_size"`
+	SHA256         string                      `json:"sha256"`
+	ExpiresAt      int64                       `json:"expires_at"`
+	State          FileTransferState           `json:"state"`
+	Sequence       uint64                      `json:"sequence,omitempty"`
+	ObservedBytes  uint64                      `json:"observed_bytes,omitempty"`
+	StageName      string                      `json:"stage_name,omitempty"`
+	StageIdentity  fileIdentity                `json:"stage_identity,omitempty"`
+	SourceIdentity fileIdentity                `json:"source_identity,omitempty"`
+	SourceModified int64                       `json:"source_modified,omitempty"`
+	Result         json.RawMessage             `json:"result,omitempty"`
+	FailureCode    string                      `json:"failure_code,omitempty"`
+	CreatedAt      int64                       `json:"created_at"`
+	UpdatedAt      int64                       `json:"updated_at"`
+	CompletedAt    int64                       `json:"completed_at,omitempty"`
+	JobArtifact    *JobArtifactTransferBinding `json:"job_artifact,omitempty"`
+}
+
+// JobArtifactTransferBinding makes a retained job artifact transfer immutable
+// to the exact companion-visible job owner. Paths remain private to the job
+// store; only the opaque artifact reference crosses the transfer boundary.
+type JobArtifactTransferBinding struct {
+	Owner       JobOwner `json:"owner"`
+	JobID       string   `json:"job_id"`
+	ArtifactRef string   `json:"artifact_ref"`
 }
 
 type fileTransferLedgerDocument struct {
@@ -195,7 +207,8 @@ func (ledger *FileTransferLedger) Accept(
 		return FileTransferRecord{}, false, err
 	}
 	if record.State != FileTransferAccepted &&
-		(record.Operation != fileOperationInfo ||
+		((record.Operation != fileOperationInfo &&
+			record.Operation != fileOperationJobArtifactInfo) ||
 			record.State != FileTransferCommitted) {
 		return FileTransferRecord{}, false, ErrFileTransferConflict
 	}
@@ -243,8 +256,8 @@ func (ledger *FileTransferLedger) Records() []FileTransferRecord {
 	for _, record := range ledger.records {
 		records = append(records, cloneFileTransferRecord(record))
 	}
-	sort.Slice(records, func(left, right int) bool {
-		return records[left].TransferID < records[right].TransferID
+	slices.SortFunc(records, func(a, b FileTransferRecord) int {
+		return cmp.Compare(a.TransferID, b.TransferID)
 	})
 	return records
 }
@@ -403,7 +416,7 @@ func (ledger *FileTransferLedger) load() error {
 	if err != nil {
 		return fmt.Errorf("open node file transfer ledger: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, int64(ledger.maxBytes)+1))
 	decoder.DisallowUnknownFields()
 	var document fileTransferLedgerDocument
@@ -558,7 +571,6 @@ func validateFileTransferRecord(record FileTransferRecord) error {
 	if err := frame.Validate(); err != nil ||
 		record.Operation == "" ||
 		record.ProfileAlias == "" ||
-		record.Path == "" ||
 		record.ExpiresAt <= 0 ||
 		record.CreatedAt <= 0 ||
 		record.UpdatedAt < record.CreatedAt ||
@@ -590,23 +602,34 @@ func validateFileTransferRecord(record FileTransferRecord) error {
 	case fileOperationInfo:
 		if record.Direction != protocol.TransferDownload ||
 			record.Publication != "" ||
-			record.StageName != "" {
+			record.StageName != "" ||
+			record.Path == "" || record.JobArtifact != nil {
 			return ErrFileTransferConflict
 		}
 	case fileOperationDownload:
 		if record.Direction != protocol.TransferDownload ||
 			record.Publication != "" ||
-			record.StageName != "" {
+			record.StageName != "" ||
+			record.Path == "" || record.JobArtifact != nil {
 			return ErrFileTransferConflict
 		}
 	case fileOperationUpload:
 		if record.Direction != protocol.TransferUpload ||
+			record.Path == "" || record.JobArtifact != nil ||
 			(record.Publication != filePublicationCreate &&
 				record.Publication != filePublicationReplace) ||
 			record.StageName == "" ||
 			record.StageIdentity.Device == 0 ||
 			record.StageIdentity.Inode == 0 ||
 			record.StageIdentity.Links != 1 {
+			return ErrFileTransferConflict
+		}
+	case fileOperationJobArtifactInfo, fileOperationJobArtifactDownload:
+		if record.Direction != protocol.TransferDownload || record.Path != "" ||
+			record.Publication != "" || record.StageName != "" ||
+			record.JobArtifact == nil || record.JobArtifact.Owner.validate() != nil ||
+			nodes.ID(record.JobArtifact.JobID).Validate() != nil ||
+			nodes.ID(record.JobArtifact.ArtifactRef).Validate() != nil {
 			return ErrFileTransferConflict
 		}
 	default:
@@ -628,11 +651,23 @@ func sameFileTransferBinding(left, right FileTransferRecord) bool {
 		left.Publication == right.Publication &&
 		left.TotalSize == right.TotalSize &&
 		left.SHA256 == right.SHA256 &&
-		left.ExpiresAt == right.ExpiresAt
+		left.ExpiresAt == right.ExpiresAt &&
+		sameJobArtifactTransferBinding(left.JobArtifact, right.JobArtifact)
+}
+
+func sameJobArtifactTransferBinding(left, right *JobArtifactTransferBinding) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func cloneFileTransferRecord(record FileTransferRecord) FileTransferRecord {
 	record.Result = append(json.RawMessage(nil), record.Result...)
+	if record.JobArtifact != nil {
+		binding := *record.JobArtifact
+		record.JobArtifact = &binding
+	}
 	return record
 }
 

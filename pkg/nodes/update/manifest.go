@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,7 +14,7 @@ import (
 	"math/big"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -327,10 +328,8 @@ func ParsePublicKey(value string) (TrustedKey, error) {
 }
 
 func SortArtifacts(artifacts []Artifact) {
-	sort.Slice(artifacts, func(left, right int) bool {
-		leftTuple := artifacts[left].Platform + "/" + artifacts[left].Architecture
-		rightTuple := artifacts[right].Platform + "/" + artifacts[right].Architecture
-		return leftTuple < rightTuple
+	slices.SortFunc(artifacts, func(a, b Artifact) int {
+		return cmp.Compare(a.Platform+"/"+a.Architecture, b.Platform+"/"+b.Architecture)
 	})
 }
 

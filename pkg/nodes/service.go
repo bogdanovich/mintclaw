@@ -1,8 +1,10 @@
 package nodes
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -75,8 +77,8 @@ func (service ServiceDescriptor) Validate() error {
 		(!service.Status && !service.Logs && len(service.Actions) == 0) {
 		return fmt.Errorf("%w: malformed service descriptor", ErrInvalidCapability)
 	}
-	if len(service.Actions) > 6 || !sort.SliceIsSorted(service.Actions, func(i, j int) bool {
-		return service.Actions[i] < service.Actions[j]
+	if len(service.Actions) > 6 || !slices.IsSortedFunc(service.Actions, func(a, b ServiceAction) int {
+		return cmp.Compare(a, b)
 	}) {
 		return fmt.Errorf("%w: malformed service actions", ErrInvalidCapability)
 	}
@@ -256,7 +258,7 @@ func ServiceCommandInputSchema(
 		for action := range actionSet {
 			actions = append(actions, action)
 		}
-		sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
+		slices.Sort(actions)
 		actionBranches = append(actionBranches, map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,

@@ -388,7 +388,7 @@ func (c *OneBotChannel) Stop(ctx context.Context) error {
 
 	c.mu.Lock()
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 	}
 	c.mu.Unlock()
@@ -624,7 +624,7 @@ func (c *OneBotChannel) listen() {
 				})
 				c.mu.Lock()
 				if c.conn == conn {
-					c.conn.Close()
+					_ = c.conn.Close()
 					c.conn = nil
 				}
 				c.mu.Unlock()
@@ -1093,7 +1093,7 @@ func (c *OneBotChannel) handleMessage(raw *oneBotRawEvent) {
 		Raw:              metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, parsed.Media, inboundCtx, senderInfo)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, parsed.Media, inboundCtx, senderInfo)
 }
 
 func (c *OneBotChannel) isDuplicate(messageID string) bool {

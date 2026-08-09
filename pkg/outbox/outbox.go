@@ -2,6 +2,7 @@
 package outbox
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -389,11 +390,11 @@ func (s *Store) list() ([]Intent, error) {
 		}
 		records = append(records, intent)
 	}
-	sort.Slice(records, func(i, j int) bool {
-		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
-			return records[i].ID < records[j].ID
+	slices.SortFunc(records, func(a, b Intent) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
 		}
-		return records[i].CreatedAt.Before(records[j].CreatedAt)
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return records, nil
 }

@@ -177,7 +177,7 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		Provider string `json:"provider"`
@@ -469,7 +469,7 @@ func (h *Handler) handleOAuthLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		Provider string `json:"provider"`
@@ -828,7 +828,7 @@ func fetchGoogleUserEmail(ctx context.Context, accessToken string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {

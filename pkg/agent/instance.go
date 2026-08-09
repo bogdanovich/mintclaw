@@ -894,7 +894,7 @@ func initSessionStore(dir string) session.SessionStore {
 		// some sessions are in JSONL and others remain in JSON.
 		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
 			map[string]any{"error": merr.Error()})
-		store.Close()
+		_ = store.Close()
 		return session.NewSessionManager(dir)
 	} else if n > 0 {
 		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})

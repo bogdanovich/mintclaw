@@ -13,7 +13,8 @@ P3 completion evidence is recorded in
 [`node-companion-p3-deployment-evidence.md`](../operations/node-companion-p3-deployment-evidence.md).
 P4 completion evidence is recorded in
 [`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). The
-bounded P5a durable-jobs slice is admitted under
+bounded P5a durable-jobs slice is implemented through its model-facing
+vertical slice and is completing platform/deployment proof under
 [`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
 The remainder of P5, P8 remote workspace routing, and later milestones remain
 unadmitted.
@@ -754,12 +755,20 @@ Telegram message or an inbound node port.
 
 ## P5: Additional Executors And Long-Running Work
 
-The first bounded slice, P5a durable node jobs, is admitted under
+The first bounded slice, P5a durable node jobs, is implemented through the
+domain, companion profile, and model-facing gateway layers under
 [`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
 It deliberately implements process lifecycle rather than remote workspace or
 coding-task ownership. Its job identity, logs, cancellation, and artifact
 contracts are designed for later reuse by P8 without creating a second job
 API.
+
+The closeout proof is tracked in
+[`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
+P5a is not complete until its real Linux/macOS evidence, merged-main
+validation, deny-by-default deployment, and rollback record are present there.
+Docker, sandbox executors, live log streaming, companion-restart process
+survival, scheduling, and the remainder of P5 remain unadmitted.
 
 Add isolation and durable work as independent capabilities:
 

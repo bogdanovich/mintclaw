@@ -51,6 +51,9 @@ type nodeFileTransferPlanInput struct {
 	TopicID           string  `json:"topic_id,omitempty"`
 	RouteID           string  `json:"route_id"`
 	DiscoveryRevision string  `json:"discovery_revision"`
+	SourceKind        string  `json:"source_kind,omitempty"`
+	JobProfile        string  `json:"job_profile,omitempty"`
+	JobID             string  `json:"job_id,omitempty"`
 }
 
 type nodeFileTransferPrepare struct {
@@ -58,6 +61,12 @@ type nodeFileTransferPrepare struct {
 	Path        string `json:"path"`
 	Publication string `json:"publication,omitempty"`
 	ExpiresAt   int64  `json:"expires_at"`
+	JobProfile  string `json:"job_profile,omitempty"`
+	JobID       string `json:"job_id,omitempty"`
+	ArtifactRef string `json:"artifact_ref,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	ActorID     string `json:"actor_id,omitempty"`
 }
 
 type idempotentNodeTransferMediaStore interface {
@@ -81,7 +90,7 @@ func newNodeFileTransferSource(
 	cfg *config.Config,
 	runtime *nodeAdmissionRuntime,
 ) (*nodeFileTransferSource, error) {
-	if cfg == nil || !cfg.Nodes.Enabled || !configuredNodeFileTarget(cfg) {
+	if cfg == nil || !cfg.Nodes.Enabled || !configuredNodeTransferTarget(cfg) {
 		return nil, nil
 	}
 	invocations, err := newNodeInvocationSource(cfg, runtime)
@@ -129,12 +138,12 @@ func newNodeFileTransferRecoverySource(
 	}, nil
 }
 
-func configuredNodeFileTarget(cfg *config.Config) bool {
+func configuredNodeTransferTarget(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
 	for _, target := range cfg.Execution.Targets {
-		if strings.TrimSpace(target.FileProfile) != "" {
+		if strings.TrimSpace(target.FileProfile) != "" || strings.TrimSpace(target.JobProfile) != "" {
 			return true
 		}
 	}
@@ -168,7 +177,7 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 	if openErr != nil {
 		return nodes.TransferArtifactRecord{}, openErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	digest := sha256.New()
 	size, copyErr := io.Copy(digest, io.LimitReader(file, maxBytes+1))
 	if copyErr != nil || size > maxBytes {
@@ -281,12 +290,18 @@ func (source *nodeFileTransferSource) InspectFile(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, openErr
 	}
-	defer stream.Close()
-	payload, marshalErr := json.Marshal(nodeFileTransferPrepare{
-		Operation: "info",
-		Path:      binding.Path,
-		ExpiresAt: binding.ExpiresAt,
-	})
+	defer func() { _ = stream.Close() }()
+	prepare := nodeFileTransferPrepare{
+		Operation: "info", Path: binding.Path, ExpiresAt: binding.ExpiresAt,
+	}
+	if binding.SourceKind == nodes.JobArtifactTransferSourceKind {
+		prepare = nodeFileTransferPrepare{
+			Operation: "job_artifact_info", ExpiresAt: binding.ExpiresAt,
+			JobProfile: binding.JobProfile, JobID: binding.JobID, ArtifactRef: binding.JobArtifactRef,
+			AgentID: binding.AgentID, SessionID: binding.SessionID, ActorID: binding.ActorID,
+		}
+	}
+	payload, marshalErr := json.Marshal(prepare)
 	if marshalErr != nil {
 		return tools.NodeFileTransferResult{}, marshalErr
 	}
@@ -325,7 +340,7 @@ func (source *nodeFileTransferSource) DispatchFileTransfer(
 		return source.dispatchFileInfo(ctx, owner, record, input, binding)
 	case "file.upload.v1":
 		return source.dispatchFileUpload(ctx, owner, record, input, binding)
-	case "file.download.v1":
+	case "file.download.v1", nodes.InternalJobArtifactDownloadCommand:
 		return source.dispatchFileDownload(ctx, owner, record, input, binding)
 	default:
 		return tools.NodeFileTransferResult{}, false, nodes.ErrGatewayInvocationConflict
@@ -343,7 +358,7 @@ func (source *nodeFileTransferSource) dispatchFileInfo(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
@@ -383,7 +398,7 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 	if resolveErr != nil {
 		return tools.NodeFileTransferResult{}, false, resolveErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if artifact.Spec.TransferID != record.Plan.InvocationID ||
 		artifact.Spec.Direction != nodes.TransferDirectionUpload ||
 		uint64(artifact.Spec.DeclaredSize) != binding.TotalSize ||
@@ -394,7 +409,7 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
@@ -487,6 +502,12 @@ func (source *nodeFileTransferSource) dispatchFileDownload(
 		SHA256:          input.SHA256,
 		ExpiresAt:       record.Plan.ExpiresAt,
 	}
+	if input.SourceKind == nodes.JobArtifactTransferSourceKind {
+		spec.SourceKind = nodes.JobArtifactTransferSourceKind
+		spec.SourceScope = input.JobID
+		spec.SourceID = input.ArtifactRef
+		spec.SourceRevision = 1
+	}
 	writer, retained, created, beginErr := source.spool.Begin(artifactOwner, spec)
 	if beginErr != nil {
 		return tools.NodeFileTransferResult{}, false, beginErr
@@ -505,15 +526,21 @@ func (source *nodeFileTransferSource) dispatchFileDownload(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
-	payload, marshalErr := json.Marshal(nodeFileTransferPrepare{
-		Operation: "download",
-		Path:      input.Source,
-		ExpiresAt: record.Plan.ExpiresAt,
-	})
+	prepare := nodeFileTransferPrepare{
+		Operation: "download", Path: input.Source, ExpiresAt: record.Plan.ExpiresAt,
+	}
+	if input.SourceKind == nodes.JobArtifactTransferSourceKind {
+		prepare = nodeFileTransferPrepare{
+			Operation: "job_artifact_download", ExpiresAt: record.Plan.ExpiresAt,
+			JobProfile: input.JobProfile, JobID: input.JobID, ArtifactRef: input.ArtifactRef,
+			AgentID: record.Plan.AgentID, SessionID: record.Plan.SessionID, ActorID: record.Plan.ActorID,
+		}
+	}
+	payload, marshalErr := json.Marshal(prepare)
 	if marshalErr != nil {
 		return tools.NodeFileTransferResult{}, true, marshalErr
 	}
@@ -593,7 +620,7 @@ func (source *nodeFileTransferSource) QueryFileTransfer(
 	if err != nil {
 		return tools.NodeFileTransferResult{}, err
 	}
-	if retained.Plan.Command == "file.download.v1" {
+	if toolsIsNodeDownloadTransferCommand(retained.Plan.Command) {
 		owner, ownerErr := transferArtifactOwnerFromRecord(retained, input.RouteID)
 		if ownerErr != nil {
 			return tools.NodeFileTransferResult{}, ownerErr
@@ -628,7 +655,7 @@ func (source *nodeFileTransferSource) CancelFileTransfer(
 	if planErr != nil {
 		return tools.NodeFileTransferResult{}, false, planErr
 	}
-	if retained.Plan.Command == "file.download.v1" {
+	if toolsIsNodeDownloadTransferCommand(retained.Plan.Command) {
 		owner, ownerErr := transferArtifactOwnerFromRecord(retained, input.RouteID)
 		if ownerErr != nil {
 			return tools.NodeFileTransferResult{}, false, ownerErr
@@ -648,7 +675,7 @@ func (source *nodeFileTransferSource) CancelFileTransfer(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameCancel
 	frame.Payload = nil
 	if sendErr := stream.Send(ctx, frame); sendErr != nil {
@@ -680,7 +707,7 @@ func (source *nodeFileTransferSource) HandoffDownloadedArtifact(
 	if resolveErr != nil {
 		return "", false, resolveErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	deliveryKey := nodeFileDeliveryKey(owner, artifact)
 	localPath, copyErr := copyNodeTransferDelivery(
 		ctx,
@@ -750,7 +777,7 @@ func (source *nodeFileTransferSource) queryRemoteFileTransfer(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameStatus
 	frame.Payload = nil
 	if sendErr := stream.Send(ctx, frame); sendErr != nil {
@@ -773,7 +800,7 @@ func (source *nodeFileTransferSource) cancelFileTransferBestEffort(
 	if err != nil {
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameCancel
 	frame.Payload = nil
 	if stream.Send(ctx, frame) == nil {
@@ -819,7 +846,8 @@ func retainedNodeFileTransfer(
 	if err := record.Plan.ValidateAgainstHash(record.ExpectedPlanHash); err != nil {
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{}, err
 	}
-	if len(record.Descriptor.FileProfiles) != 1 {
+	jobArtifact := record.Plan.Command == nodes.InternalJobArtifactDownloadCommand
+	if !jobArtifact && len(record.Descriptor.FileProfiles) != 1 {
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{},
 			nodes.ErrGatewayInvocationConflict
 	}
@@ -848,14 +876,25 @@ func retainedNodeFileTransfer(
 		path = input.Destination
 	case "file.download.v1":
 		path = input.Source
+	case nodes.InternalJobArtifactDownloadCommand:
+		if input.SourceKind != nodes.JobArtifactTransferSourceKind || input.JobProfile == "" ||
+			input.JobID == "" || input.ArtifactRef == "" || input.Source != "" {
+			return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{},
+				nodes.ErrGatewayInvocationConflict
+		}
+		path = ""
 	default:
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{},
 			nodes.ErrGatewayInvocationConflict
 	}
+	profileAlias := input.JobProfile
+	if !jobArtifact {
+		profileAlias = record.Descriptor.FileProfiles[0].Alias
+	}
 	return input, tools.NodeFileTransferBinding{
 		TransferID:     record.Plan.InvocationID,
 		Direction:      direction,
-		ProfileAlias:   record.Descriptor.FileProfiles[0].Alias,
+		ProfileAlias:   profileAlias,
 		PolicyRevision: record.Plan.PolicyRevision,
 		Path:           path,
 		Publication:    input.Publication,
@@ -864,7 +903,18 @@ func retainedNodeFileTransfer(
 		ExpiresAt:      record.Plan.ExpiresAt,
 		Filename:       input.Filename,
 		ContentType:    input.ContentType,
+		SourceKind:     input.SourceKind,
+		JobProfile:     input.JobProfile,
+		JobID:          input.JobID,
+		JobArtifactRef: input.ArtifactRef,
+		AgentID:        record.Plan.AgentID,
+		SessionID:      record.Plan.SessionID,
+		ActorID:        record.Plan.ActorID,
 	}, nil
+}
+
+func toolsIsNodeDownloadTransferCommand(command string) bool {
+	return command == "file.download.v1" || command == nodes.InternalJobArtifactDownloadCommand
 }
 
 func exactNodeFileTransferSize(value float64) (uint64, error) {

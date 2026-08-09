@@ -279,7 +279,7 @@ func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]str
 		if !ok {
 			return []string{ts}, nil
 		}
-		c.api.AddReaction("white_check_mark", slack.ItemRef{
+		_ = c.api.AddReaction("white_check_mark", slack.ItemRef{
 			Channel:   msgRef.ChannelID,
 			Timestamp: msgRef.Timestamp,
 		})
@@ -413,13 +413,13 @@ func (c *SlackChannel) ReactToMessage(ctx context.Context, chatID, messageID str
 		return func() {}, nil
 	}
 
-	c.api.AddReaction("eyes", slack.ItemRef{
+	_ = c.api.AddReaction("eyes", slack.ItemRef{
 		Channel:   channelID,
 		Timestamp: messageID,
 	})
 
 	return func() {
-		c.api.RemoveReaction("eyes", slack.ItemRef{
+		_ = c.api.RemoveReaction("eyes", slack.ItemRef{
 			Channel:   channelID,
 			Timestamp: messageID,
 		})
@@ -442,7 +442,7 @@ func (c *SlackChannel) eventLoop() {
 				c.handleSlashCommand(event)
 			case socketmode.EventTypeInteractive:
 				if event.Request != nil {
-					c.socketClient.Ack(*event.Request)
+					_ = c.socketClient.Ack(*event.Request)
 				}
 			}
 		}
@@ -451,7 +451,7 @@ func (c *SlackChannel) eventLoop() {
 
 func (c *SlackChannel) handleEventsAPI(event socketmode.Event) {
 	if event.Request != nil {
-		c.socketClient.Ack(*event.Request)
+		_ = c.socketClient.Ack(*event.Request)
 	}
 
 	eventsAPIEvent, ok := event.Data.(slackevents.EventsAPIEvent)
@@ -597,7 +597,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		inboundCtx.TopicID = threadTS
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
 func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
@@ -681,7 +681,7 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender)
 }
 
 func (c *SlackChannel) markInboundEventHandled(eventKind, channelID, messageTS string) bool {
@@ -727,7 +727,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 	}
 
 	if event.Request != nil {
-		c.socketClient.Ack(*event.Request)
+		_ = c.socketClient.Ack(*event.Request)
 	}
 
 	cmdSender := bus.SenderInfo{
@@ -786,7 +786,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender)
 }
 
 func (c *SlackChannel) downloadSlackFile(file slack.File) string {

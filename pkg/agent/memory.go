@@ -59,7 +59,7 @@ func newMemoryStore(
 	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
 
 	// Ensure memory directory exists
-	os.MkdirAll(memoryDir, 0o755)
+	_ = os.MkdirAll(memoryDir, 0o755)
 
 	return &MemoryStore{
 		workspace:  workspace,

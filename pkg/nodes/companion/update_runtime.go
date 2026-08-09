@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,7 +13,7 @@ import (
 	"net/url"
 	pathpkg "path"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -360,12 +361,12 @@ func resolveUpdateProfiles(
 			}
 			profile.Releases = append(profile.Releases, resolved)
 		}
-		sort.Slice(profile.Releases, func(left, right int) bool {
-			return profile.Releases[left].Alias < profile.Releases[right].Alias
+		slices.SortFunc(profile.Releases, func(a, b nodes.UpdateReleaseDescriptor) int {
+			return cmp.Compare(a.Alias, b.Alias)
 		})
 		profiles = append(profiles, profile)
 	}
-	sort.Slice(profiles, func(left, right int) bool { return profiles[left].Alias < profiles[right].Alias })
+	slices.SortFunc(profiles, func(a, b nodes.UpdateProfileDescriptor) int { return cmp.Compare(a.Alias, b.Alias) })
 	if len(profiles) == 0 {
 		return nil, errors.New("node update policy grants no enabled profile")
 	}
@@ -464,7 +465,7 @@ func fetchUpdateMetadata(
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.ContentLength > maximum {
 		return nil, errors.New("update metadata is unavailable")
 	}

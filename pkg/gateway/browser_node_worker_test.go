@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ type browserNodeTestHandler struct {
 	mu            sync.Mutex
 	registration  nodes.Registration
 	commands      []string
+	actInputs     []nodes.BrowserActInput
 	invocations   map[string]nodes.InvocationRecord
 	currentURL    string
 	currentOrigin string
@@ -86,6 +88,7 @@ func (handler *browserNodeTestHandler) Invoke(
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
+		handler.actInputs = append(handler.actInputs, input)
 		if input.Action.Kind == "navigate" {
 			handler.currentURL, handler.currentOrigin = "https://example.com/", "https://example.com"
 		}
@@ -134,13 +137,16 @@ func browserNodeTestObservation(
 	generation uint64,
 	url, origin string,
 ) nodes.BrowserObservationResult {
-	title, snapshot := "Fixture", "fixture"
+	title, snapshot := "Fixture", "- button \"Save\" [ref=host_ref_1]"
+	elements := []nodes.BrowserElement{{Ref: "host_ref_1", Role: "button", Name: "Save"}}
 	if url == "about:blank" {
 		title, snapshot = "", ""
+		elements = []nodes.BrowserElement{}
 	}
 	return nodes.BrowserObservationResult{
 		SessionID: sessionID, TabID: tabID, SnapshotGeneration: generation,
-		URL: url, Origin: origin, Title: title, Snapshot: snapshot, Elements: []nodes.BrowserElement{},
+		URL: url, Origin: origin, Title: title, Snapshot: snapshot,
+		Elements: elements,
 	}
 }
 
@@ -220,6 +226,99 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	}
 }
 
+func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	profile := cfg.Tools.Browser.Targets["companion"].Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target := cfg.Tools.Browser.Targets["companion"]
+	target.Profiles["managed"] = profile
+	cfg.Tools.Browser.Targets["companion"] = target
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		for index := range catalog.Commands {
+			remote := &catalog.Commands[index].BrowserProfiles[0]
+			remote.DryRun = false
+			remote.AllowApprovedActions = true
+			remote.Actions = []string{"click", "navigate", "scroll"}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases:         []nodes.Alias{"ab-local-test"},
+		AllowedCommands: registration.AllowedCommands,
+		At:              registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+	if err != nil || !found {
+		t.Fatalf("approved click registration = %#v, %v, %v", registration, found, err)
+	}
+	handler.registration = registration
+	handler.currentURL = "https://example.com/"
+	handler.currentOrigin = "https://example.com"
+
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	)
+	if err != nil || !slices.Equal(diagnostics.Actions, []browser.ActionKind{
+		browser.ActionNavigate, browser.ActionClick, browser.ActionScroll,
+	}) {
+		t.Fatalf("click diagnostics = %#v, %v", diagnostics, err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	refStart := strings.Index(initial.Snapshot, "[ref=")
+	refEnd := strings.Index(initial.Snapshot, "]")
+	if err != nil || refStart < 0 || refEnd <= refStart+5 {
+		t.Fatalf("initial observation = %#v, %v", initial, err)
+	}
+	visibleRef := initial.Snapshot[refStart+5 : refEnd]
+	preparation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_click", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionClick, Ref: visibleRef},
+	})
+	if err != nil || !preparation.RequiresApproval || preparation.Action.Effect != browser.EffectExternalCommit {
+		t.Fatalf("click preparation = %#v, %v", preparation, err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, &preparation.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("ExecuteAction(click) = %#v, %v", invocation, err)
+	}
+	final, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || final.SnapshotGeneration != 2 {
+		t.Fatalf("post-click observation = %#v, %v", final, err)
+	}
+	handler.mu.Lock()
+	inputs := append([]nodes.BrowserActInput(nil), handler.actInputs...)
+	handler.mu.Unlock()
+	if len(inputs) != 1 || inputs[0].Action.Kind != "click" || inputs[0].Action.Ref != "host_ref_1" ||
+		inputs[0].ExpectedRole != "button" || inputs[0].ExpectedName != "Save" ||
+		!nodes.BrowserApprovalDigestMatches(inputs[0]) {
+		t.Fatalf("typed click inputs = %#v", inputs)
+	}
+}
+
 func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
@@ -287,6 +386,63 @@ func TestGatewayBrowserWorkerReadinessRejectsMismatchedCommandProfile(t *testing
 	if readiness.Status != browser.ReadinessUnavailable ||
 		readiness.Code != "profile_policy_mismatch" {
 		t.Fatalf("mismatched profile diagnostics = %#v", readiness)
+	}
+}
+
+func TestGatewayBrowserWorkerPinsCompleteProfileAcrossActiveCommands(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		for index := range catalog.Commands {
+			if catalog.Commands[index].Name != nodes.BrowserCommandAct {
+				continue
+			}
+			catalog.Commands[index].BrowserProfiles[0].DryRun = false
+			catalog.Commands[index].BrowserProfiles[0].AllowApprovedActions = true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases:         []nodes.Alias{"ab-local-test"},
+		AllowedCommands: registration.AllowedCommands,
+		At:              registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+	if err != nil || !found {
+		t.Fatalf("mixed-mode registration = %#v, %v, %v", registration, found, err)
+	}
+	handler.registration = registration
+
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, ok := opened.Owner.(*nodeBrowserWorker)
+	if !ok {
+		t.Fatalf("worker = %T", opened.Owner)
+	}
+	if _, _, err = worker.resolveAuthority(nodes.BrowserCommandAct); !errors.Is(err, browser.ErrDenied) {
+		t.Fatalf("mixed-mode act authority error = %v, want denied", err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
+		t.Fatalf("mixed-mode commands = %#v, want %#v", commands, want)
 	}
 }
 
@@ -513,4 +669,25 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	return cfg, runtime, handler
+}
+
+func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		AllowApprovedActions: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged,
+		NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
+	}
+	if !browserProfileIntersects(local, limits, remote) {
+		t.Fatal("matching approved-action profiles did not intersect")
+	}
+	local.DryRun = true
+	local.AllowApprovedActions = false
+	if browserProfileIntersects(local, limits, remote) {
+		t.Fatal("mismatched action modes intersected")
+	}
 }

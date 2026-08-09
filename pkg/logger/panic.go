@@ -25,7 +25,7 @@ func InitPanic(filePath string) (func(), error) {
 	panicWriter = writer
 	return func() {
 		defer func() {
-			writer.Close()
+			_ = writer.Close()
 			panicWriter = nil
 		}()
 		if err := recover(); err != nil {
@@ -50,5 +50,5 @@ func RecoverPanicNoExit(err any) {
 		stack,
 	)
 
-	panicWriter.Write([]byte(logMsg))
+	_, _ = panicWriter.Write([]byte(logMsg))
 }

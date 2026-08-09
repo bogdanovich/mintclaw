@@ -1,11 +1,12 @@
 package doctor
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -161,15 +162,14 @@ func summarize(findings []Finding) Summary {
 }
 
 func sortFindings(findings []Finding) {
-	sort.SliceStable(findings, func(i, j int) bool {
-		left, right := findings[i], findings[j]
-		if severityRank(left.Severity) != severityRank(right.Severity) {
-			return severityRank(left.Severity) < severityRank(right.Severity)
+	slices.SortStableFunc(findings, func(left, right Finding) int {
+		if c := cmp.Compare(severityRank(left.Severity), severityRank(right.Severity)); c != 0 {
+			return c
 		}
-		if left.ID != right.ID {
-			return left.ID < right.ID
+		if c := cmp.Compare(left.ID, right.ID); c != 0 {
+			return c
 		}
-		return firstEvidencePath(left) < firstEvidencePath(right)
+		return cmp.Compare(firstEvidencePath(left), firstEvidencePath(right))
 	})
 }
 

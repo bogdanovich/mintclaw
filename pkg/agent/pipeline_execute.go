@@ -419,7 +419,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			Content:    denyContent,
 			ToolCallID: tc.ID,
 		}
-		runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+		_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 		return true
 	}
 
@@ -447,7 +447,8 @@ func (runner *toolLoopRunner) admitToolCall(
 				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
 				runner.recordCommittedHookResponseDecision(tc, toolName)
 
-				argsJSON, _ := json.Marshal(tools.ToolLogArguments(toolName, toolArgs))
+				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+				argsJSON, _ := json.Marshal(auditArgs)
 				argsPreview := utils.Truncate(string(argsJSON), 200)
 				logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
 					map[string]any{
@@ -462,7 +463,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolExecStartPayload{
 						ToolCallID: tc.ID,
 						Tool:       toolName,
-						Arguments:  cloneEventArguments(toolArgs),
+						Arguments:  cloneEventArguments(auditArgs),
 					},
 				)
 
@@ -516,7 +517,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					hookResult.ForUser != "" &&
 					ts.opts.SendResponse
 				if shouldSendForUser {
-					p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
+					_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
 				}
 
 				if !hookResult.ResponseHandled {
@@ -586,7 +587,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				Content:    denyContent,
 				ToolCallID: tc.ID,
 			}
-			runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+			_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 			return skipToolCall()
 		case HookActionAbortTurn:
 			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHook})
@@ -612,7 +613,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			ts.eventMeta("runTurn", "turn.tool.skipped"),
 			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: loopDecision.Code},
 		)
-		runner.appendToolMessage(providers.Message{
+		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: blockedContent, ToolCallID: tc.ID,
 		}, toolMessagePersistAndIngest)
 		llm.toolResponseDisposition = toolResponseNeedsModel
@@ -752,7 +753,7 @@ func (runner *toolLoopRunner) approveToolCall(
 					Reason:     denyContent,
 				},
 			)
-			runner.appendToolMessage(providers.Message{
+			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 			}, toolMessagePersistOnly)
 			return skipToolCall()
@@ -854,7 +855,7 @@ func (runner *toolLoopRunner) approveToolCall(
 				ts.eventMeta("runTurn", "turn.tool.skipped"),
 				ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
 			)
-			runner.appendToolMessage(providers.Message{
+			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 			}, toolMessagePersistOnly)
 			return skipToolCall()
@@ -876,7 +877,7 @@ func (runner *toolLoopRunner) approveToolCall(
 				Content:    denyContent,
 				ToolCallID: tc.ID,
 			}
-			runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
+			_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 			return skipToolCall()
 		}
 	}
@@ -919,7 +920,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 		return skipToolCall()
 	}
 
-	argsJSON, _ := json.Marshal(tools.ToolLogArguments(toolName, toolArgs))
+	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	argsJSON, _ := json.Marshal(auditArgs)
 	argsPreview := utils.Truncate(string(argsJSON), 200)
 	logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", toolName, argsPreview),
 		map[string]any{
@@ -933,7 +935,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		ToolExecStartPayload{
 			ToolCallID: tc.ID,
 			Tool:       toolName,
-			Arguments:  cloneEventArguments(toolArgs),
+			Arguments:  cloneEventArguments(auditArgs),
 		},
 	)
 
@@ -1192,7 +1194,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		toolResult.ForUser != "" &&
 		ts.opts.SendResponse
 	if shouldSendForUser {
-		p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
+		_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
 		logger.DebugCF("agent", "Sent tool result to user",
 			map[string]any{
 				"tool":        toolName,
@@ -1362,7 +1364,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 			}
 		}
 		if !ts.opts.NoHistory && ts.opts.EnableSummary {
-			p.Context.Runtime.Compact(turnCtx, &CompactRequest{
+			_ = p.Context.Runtime.Compact(turnCtx, &CompactRequest{
 				Agent:      ts.agent,
 				SessionKey: ts.sessionKey,
 				Workspace:  ts.workspace,
@@ -1608,7 +1610,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	r.captureSteering(false)
 	if len(r.exec.pendingMessages) > 0 {
 		resolveCanceled()
-		r.appendToolMessage(providers.Message{
+		_ = r.appendToolMessage(providers.Message{
 			Role:       "tool",
 			Content:    queuedSteeringDeferredToolResult,
 			ToolCallID: toolCall.ID,
@@ -1788,5 +1790,5 @@ func (r *toolLoopRunner) appendSkippedToolMessage(
 		Content:    content,
 		ToolCallID: skippedTC.ID,
 	}
-	r.appendToolMessage(skippedMsg, toolMessagePersistOnly)
+	_ = r.appendToolMessage(skippedMsg, toolMessagePersistOnly)
 }

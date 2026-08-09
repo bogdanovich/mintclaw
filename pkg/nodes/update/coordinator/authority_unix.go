@@ -238,7 +238,7 @@ func readPinnedCompanionConfig(configPath string) ([]byte, error) {
 		return nil, errors.New("open companion config")
 	}
 	file := os.NewFile(uintptr(fd), configPath)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	after, err := file.Stat()
 	if err != nil || !os.SameFile(before, after) {
 		return nil, errors.New("companion config identity changed while opening")
