@@ -826,6 +826,86 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 	}
 }
 
+func TestStartAll_RetriesFailedChannelAfterPartialStartup(t *testing.T) {
+	m := newTestManager()
+	transientErr := errors.New("transient start failure")
+	var goodStarts atomic.Int32
+	var retryStarts atomic.Int32
+	m.lifecycle.storeChannel("good", &mockChannel{
+		startFn: func(context.Context) error {
+			goodStarts.Add(1)
+			return nil
+		},
+	})
+	m.lifecycle.storeChannel("retry", &mockChannel{
+		startFn: func(context.Context) error {
+			if retryStarts.Add(1) == 1 {
+				return transientErr
+			}
+			return nil
+		},
+	})
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("first StartAll() error = %v", err)
+	}
+	if !m.delivery.hasActiveWorker("good") || m.delivery.hasActiveWorker("retry") {
+		t.Fatal("first startup did not preserve the expected partial owner state")
+	}
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("retry StartAll() error = %v", err)
+	}
+	if !m.delivery.hasActiveWorker("good") || !m.delivery.hasActiveWorker("retry") {
+		t.Fatal("retry startup did not create both active owners")
+	}
+	if got := goodStarts.Load(); got != 1 {
+		t.Fatalf("successful channel Start calls = %d, want 1", got)
+	}
+	if got := retryStarts.Load(); got != 2 {
+		t.Fatalf("retried channel Start calls = %d, want 2", got)
+	}
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+}
+
+func TestStartAll_RestartFailureDoesNotCountStoppedOwner(t *testing.T) {
+	m := newTestManager()
+	restartErr := errors.New("restart failed")
+	var failRestart atomic.Bool
+	m.lifecycle.storeChannel("test", &mockChannel{
+		startFn: func(context.Context) error {
+			if failRestart.Load() {
+				return restartErr
+			}
+			return nil
+		},
+	})
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("initial StartAll() error = %v", err)
+	}
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+	if owner := m.delivery.owner("test"); owner == nil || owner.active() {
+		t.Fatal("StopAll() should retain the drained owner as inactive")
+	}
+
+	failRestart.Store(true)
+	err := m.StartAll(context.Background())
+	if !errors.Is(err, restartErr) {
+		t.Fatalf("restart StartAll() error = %v, want %v", err, restartErr)
+	}
+	if got := m.delivery.workerCount(); got != 0 {
+		t.Fatalf("active worker count = %d, want 0", got)
+	}
+	if m.delivery.dispatcherRunning() {
+		t.Fatal("dispatcher remained active after all restart attempts failed")
+	}
+}
+
 func TestStartAll_CreatesDeliveryOwnerForStartedChannel(t *testing.T) {
 	m := newTestManager()
 	ch := &mockChannel{}

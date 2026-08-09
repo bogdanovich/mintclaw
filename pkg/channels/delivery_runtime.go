@@ -67,6 +67,7 @@ type deliveryRuntimeHost interface {
 type DeliveryRuntime struct {
 	mu             sync.RWMutex
 	owners         map[string]*deliveryOwner
+	dispatchCtx    context.Context
 	dispatchCancel context.CancelFunc
 	host           deliveryRuntimeHost
 }
@@ -100,14 +101,20 @@ func (r *DeliveryRuntime) install(owner *deliveryOwner) {
 func (r *DeliveryRuntime) workerCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return len(r.owners)
+	count := 0
+	for _, owner := range r.owners {
+		if owner.active() {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *DeliveryRuntime) hasActiveWorker(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	owner := r.owners[name]
-	return owner != nil && owner.Worker() != nil
+	return owner.active()
 }
 
 func (r *DeliveryRuntime) snapshot() []*deliveryOwner {
@@ -141,8 +148,26 @@ func (r *DeliveryRuntime) startDispatcher(parent context.Context) context.Contex
 		r.dispatchCancel()
 	}
 	dispatchCtx, cancel := context.WithCancel(parent)
+	r.dispatchCtx = dispatchCtx
 	r.dispatchCancel = cancel
 	return dispatchCtx
+}
+
+func (r *DeliveryRuntime) ensureDispatcher(parent context.Context) (context.Context, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dispatchCtx != nil && r.dispatchCancel != nil {
+		select {
+		case <-r.dispatchCtx.Done():
+			r.dispatchCancel()
+		default:
+			return r.dispatchCtx, false
+		}
+	}
+	dispatchCtx, cancel := context.WithCancel(parent)
+	r.dispatchCtx = dispatchCtx
+	r.dispatchCancel = cancel
+	return dispatchCtx, true
 }
 
 func (r *DeliveryRuntime) stopDispatcher() {
@@ -155,6 +180,7 @@ func (r *DeliveryRuntime) stopDispatcher() {
 		return
 	}
 	r.dispatchCancel()
+	r.dispatchCtx = nil
 	r.dispatchCancel = nil
 }
 

@@ -1545,9 +1545,6 @@ func (l *ChannelLifecycle) startAll(
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.started {
-		return nil
-	}
 	l.shutdownComplete = false
 
 	if len(l.channels) == 0 {
@@ -1556,11 +1553,14 @@ func (l *ChannelLifecycle) startAll(
 
 	logger.InfoC("channels", "Starting all channels")
 
-	dispatchCtx := delivery.startDispatcher(ctx)
+	dispatchCtx, dispatcherStarted := delivery.ensureDispatcher(ctx)
 	failedStarts := make([]error, 0, len(l.channels))
 	failedNames := make([]string, 0, len(l.channels))
 
 	for name, channel := range l.channels {
+		if delivery.hasActiveWorker(name) {
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
@@ -1625,11 +1625,13 @@ func (l *ChannelLifecycle) startAll(
 	}
 
 	// Start the dispatcher that reads from the bus and routes to workers
-	go delivery.dispatchOutbound(dispatchCtx)
-	go delivery.dispatchOutboundMedia(dispatchCtx)
+	if dispatcherStarted {
+		go delivery.dispatchOutbound(dispatchCtx)
+		go delivery.dispatchOutboundMedia(dispatchCtx)
 
-	// Start the TTL janitor that cleans up stale typing/placeholder entries
-	go l.runTTLJanitor(dispatchCtx, stream)
+		// Start the TTL janitor that cleans up stale typing/placeholder entries.
+		go l.runTTLJanitor(dispatchCtx, stream)
+	}
 
 	// Capture the HTTP runtime while lifecycle state is locked. Shutdown may
 	// clear the owner fields as soon as this transition completes.
@@ -1690,7 +1692,6 @@ func (l *ChannelLifecycle) startAll(
 		"failed":  len(failedNames),
 		"total":   len(l.channels),
 	})
-	l.started = true
 	return nil
 }
 
@@ -1721,7 +1722,6 @@ func (l *ChannelLifecycle) stopAll(
 	l.shutdownRunning = true
 	defer func() {
 		l.mu.Lock()
-		l.started = false
 		l.shutdownRunning = false
 		l.shutdownComplete = true
 		l.mu.Unlock()
@@ -1822,6 +1822,15 @@ func (o *deliveryOwner) Worker() *channelWorker {
 		return nil
 	}
 	return o.worker
+}
+
+func (o *deliveryOwner) active() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return !o.closed && o.worker != nil
 }
 
 func (o *deliveryOwner) borrowWorkerForSend() (*channelWorker, func(), error) {

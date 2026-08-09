@@ -29,7 +29,6 @@ type ChannelLifecycle struct {
 	httpListeners    []net.Listener
 	channelHashes    map[string]string
 	restartRequired  map[string]string
-	started          bool
 	shutdownRunning  bool
 	shutdownComplete bool
 }
