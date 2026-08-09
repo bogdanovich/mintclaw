@@ -14,48 +14,70 @@ import (
 )
 
 type Adapter struct {
-	projector    *frontend.Projector
-	subscription runtimeevents.Subscription
+	projector  *frontend.Projector
+	sessionKey string
 }
 
-func Subscribe(
-	ctx context.Context,
-	channel runtimeevents.EventChannel,
+// WrapBus synchronously projects coding lifecycle observations before
+// forwarding them to the ordinary runtime bus. The projector does no I/O and
+// its frontend watches are non-blocking, so this preserves event order without
+// making a lossy event-bus subscription authoritative.
+func WrapBus(
+	delegate runtimeevents.Bus,
 	projector *frontend.Projector,
 	sessionKey string,
-) (*Adapter, error) {
-	if channel == nil {
-		return nil, fmt.Errorf("coding frontend runtime event channel is required")
+) (runtimeevents.Bus, error) {
+	if delegate == nil {
+		return nil, fmt.Errorf("coding frontend runtime event bus is required")
 	}
 	if projector == nil {
 		return nil, fmt.Errorf("coding frontend projector is required")
 	}
-	adapter := &Adapter{projector: projector}
-	filtered := channel.Source("agent")
-	if strings.TrimSpace(sessionKey) != "" {
-		filtered = filtered.Scope(runtimeevents.ScopeFilter{SessionKey: sessionKey})
-	}
-	subscription, err := filtered.Subscribe(ctx, runtimeevents.SubscribeOptions{
-		Name:         "coding-frontend-projector",
-		Buffer:       128,
-		Concurrency:  runtimeevents.Locked,
-		Backpressure: runtimeevents.DropOldest,
-	}, adapter.handle)
-	if err != nil {
-		return nil, err
-	}
-	adapter.subscription = subscription
-	return adapter, nil
+	return &projectingBus{
+		delegate: delegate,
+		adapter: &Adapter{
+			projector:  projector,
+			sessionKey: strings.TrimSpace(sessionKey),
+		},
+	}, nil
 }
 
-func (a *Adapter) Close() error {
-	if a == nil || a.subscription == nil {
-		return nil
-	}
-	return a.subscription.Close()
+type projectingBus struct {
+	delegate runtimeevents.Bus
+	adapter  *Adapter
 }
 
-func (a *Adapter) handle(_ context.Context, event runtimeevents.Event) error {
+var _ runtimeevents.Bus = (*projectingBus)(nil)
+
+func (b *projectingBus) Publish(ctx context.Context, event runtimeevents.Event) runtimeevents.PublishResult {
+	b.adapter.project(event)
+	return b.delegate.Publish(ctx, event)
+}
+
+func (b *projectingBus) PublishNonBlocking(event runtimeevents.Event) runtimeevents.PublishResult {
+	b.adapter.project(event)
+	return b.delegate.PublishNonBlocking(event)
+}
+
+func (b *projectingBus) Channel() runtimeevents.EventChannel {
+	return b.delegate.Channel()
+}
+
+func (b *projectingBus) Close() error {
+	return b.delegate.Close()
+}
+
+func (b *projectingBus) Stats() runtimeevents.Stats {
+	return b.delegate.Stats()
+}
+
+func (a *Adapter) project(event runtimeevents.Event) {
+	if a == nil || a.projector == nil || event.Source.Component != "agent" {
+		return
+	}
+	if a.sessionKey != "" && event.Scope.SessionKey != a.sessionKey {
+		return
+	}
 	turnID := event.Scope.TurnID
 	switch event.Kind {
 	case runtimeevents.KindAgentTurnStart:
@@ -99,7 +121,6 @@ func (a *Adapter) handle(_ context.Context, event runtimeevents.Event) error {
 	case runtimeevents.KindAgentError:
 		a.projector.TurnFailed("agent error")
 	}
-	return nil
 }
 
 func (a *Adapter) projectTurnEnd(turnID string, value any) {

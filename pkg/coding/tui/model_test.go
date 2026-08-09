@@ -78,6 +78,9 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 			controller.hardCancels.Load(),
 		)
 	}
+	model = updateModel(t, model, DeltaMsg{
+		Delta: controller.AssistantAccumulated("turn-1", "still streaming", false),
+	})
 	updated, second := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = updated.(*Model)
 	if second == nil {

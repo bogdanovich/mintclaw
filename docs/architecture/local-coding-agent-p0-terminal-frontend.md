@@ -101,16 +101,19 @@ transcript resynchronization does not overwrite text being composed.
 
 The retained adapters reuse two existing seams without changing turn behavior:
 
-- `agentadapter` consumes the runtime event channel for turn, tool, interrupt,
-  error, and completed compaction observations; and
+- `agentadapter` wraps the dedicated coding runtime event bus and projects
+  turn, tool, interrupt, error, and completed compaction observations
+  synchronously before forwarding them to ordinary subscribers; and
 - `frontend.StreamDelegate` implements the existing message-bus streaming
   interface for accumulated assistant/reasoning content and final context
   usage.
 
-The event adapter scopes subscriptions to the coding session. Tool argument
-values are not copied into the frontend projection; only sorted field names
-are exposed at this stage. Large content is bounded independently of canonical
-history.
+The wrapper is installed only on a dedicated coding runtime and filters exact
+coding-session identity. It makes lifecycle ordering lossless even if a later
+diagnostic subscriber drops events; frontend watches remain bounded and cannot
+block the turn. Tool argument values are not copied into the frontend
+projection; only sorted field names are exposed at this stage. Large content
+is bounded independently of canonical history.
 
 ## Feasibility evidence
 

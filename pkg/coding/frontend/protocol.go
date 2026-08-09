@@ -41,6 +41,7 @@ const (
 
 type TranscriptEntry struct {
 	ID        string    `json:"id"`
+	TurnID    string    `json:"turn_id"`
 	Kind      EntryKind `json:"kind"`
 	Text      string    `json:"text"`
 	Complete  bool      `json:"complete"`

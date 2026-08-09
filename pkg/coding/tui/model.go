@@ -81,6 +81,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = message.Err
 		if message.Err == nil {
 			m.err = m.reducer.ApplySnapshot(message.Snapshot)
+			if m.err == nil && !activeWork(m.reducer.State().Activity) {
+				m.interruptPending = false
+			}
 			m.refreshViewport()
 		}
 		return m, nil
@@ -93,7 +96,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		m.interruptPending = false
+		if !activeWork(m.reducer.State().Activity) {
+			m.interruptPending = false
+		}
 		m.refreshViewport()
 		return m, nil
 	case CommandErrorMsg:
@@ -168,8 +173,7 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	activity := m.reducer.State().Activity
-	if activity == frontend.ActivityRunning || activity == frontend.ActivityCompacting ||
-		activity == frontend.ActivityInterrupting {
+	if activeWork(activity) {
 		if m.interruptPending || activity == frontend.ActivityInterrupting {
 			return m, commandCmd("hard_cancel", m.controller.HardCancel)
 		}
@@ -177,6 +181,11 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 		return m, commandCmd("interrupt", m.controller.Interrupt)
 	}
 	return m, tea.Sequence(commandCmd("close", m.controller.Close), tea.Quit)
+}
+
+func activeWork(activity frontend.Activity) bool {
+	return activity == frontend.ActivityRunning || activity == frontend.ActivityCompacting ||
+		activity == frontend.ActivityInterrupting
 }
 
 func snapshotCmd(controller frontend.Controller) tea.Cmd {

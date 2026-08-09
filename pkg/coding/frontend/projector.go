@@ -168,6 +168,7 @@ func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 		}
 		entry := p.boundedEntry(TranscriptEntry{
 			ID:       entryID(turnID, "user"),
+			TurnID:   normalizeTurnID(turnID),
 			Kind:     EntryUser,
 			Text:     userMessage,
 			Complete: true,
@@ -178,22 +179,28 @@ func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 }
 
 func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) Delta {
-	return p.upsertStreamEntry(DeltaAssistant, entryID(turnID, "assistant"), EntryAssistant, content, complete)
+	return p.upsertStreamEntry(DeltaAssistant, turnID, EntryAssistant, content, complete)
 }
 
 func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) Delta {
-	return p.upsertStreamEntry(DeltaReasoning, entryID(turnID, "reasoning"), EntryReasoning, content, complete)
+	return p.upsertStreamEntry(DeltaReasoning, turnID, EntryReasoning, content, complete)
 }
 
 func (p *Projector) upsertStreamEntry(
 	kind DeltaKind,
-	id string,
+	turnID string,
 	entryKind EntryKind,
 	content string,
 	complete bool,
 ) Delta {
 	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
-		entry := p.boundedEntry(TranscriptEntry{ID: id, Kind: entryKind, Text: content, Complete: complete})
+		entry := p.boundedEntry(TranscriptEntry{
+			ID:       entryID(turnID, string(entryKind)),
+			TurnID:   normalizeTurnID(turnID),
+			Kind:     entryKind,
+			Text:     content,
+			Complete: complete,
+		})
 		p.upsertEntry(state, delta, entry)
 		delta.Entry = &entry
 	})
@@ -307,6 +314,14 @@ func (p *Projector) mutate(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) 
 		select {
 		case watcher <- cloneDelta(delta):
 		default:
+			select {
+			case <-watcher:
+			default:
+			}
+			select {
+			case watcher <- cloneDelta(delta):
+			default:
+			}
 		}
 	}
 	return cloneDelta(delta)
@@ -345,7 +360,20 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry Trans
 			return
 		}
 	}
-	state.Entries = append(state.Entries, entry)
+	insertAt := len(state.Entries)
+	if entry.Kind == EntryUser {
+		for i := range state.Entries {
+			candidate := state.Entries[i]
+			if candidate.TurnID == entry.TurnID &&
+				(candidate.Kind == EntryAssistant || candidate.Kind == EntryReasoning) {
+				insertAt = i
+				break
+			}
+		}
+	}
+	state.Entries = append(state.Entries, TranscriptEntry{})
+	copy(state.Entries[insertAt+1:], state.Entries[insertAt:])
+	state.Entries[insertAt] = entry
 	if overflow := len(state.Entries) - p.limits.Entries; overflow > 0 {
 		state.HasOlderEntries = true
 		state.Entries = slices.Clone(state.Entries[overflow:])
@@ -368,11 +396,14 @@ func (p *Projector) upsertTool(state *ThreadSnapshot, delta *Delta, tool ToolSta
 }
 
 func entryID(turnID, suffix string) string {
-	turnID = strings.TrimSpace(turnID)
-	if turnID == "" {
-		turnID = "current"
+	return normalizeTurnID(turnID) + ":" + suffix
+}
+
+func normalizeTurnID(turnID string) string {
+	if turnID = strings.TrimSpace(turnID); turnID != "" {
+		return turnID
 	}
-	return turnID + ":" + suffix
+	return "current"
 }
 
 func toolByID(tools []ToolState, callID string) ToolState {

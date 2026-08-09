@@ -142,20 +142,31 @@ func TestSlowWatcherDetectsDroppedBoundedDelta(t *testing.T) {
 	for range 5 {
 		projector.Open(false)
 	}
-	for range 3 { // Watch capacity is the retained window plus one.
-		if err = reducer.Apply(<-watch); err != nil {
-			t.Fatal(err)
-		}
-	}
-	projector.Open(false)
 	if err = reducer.Apply(<-watch); !errors.Is(err, ErrRevisionGap) {
 		t.Fatalf("post-overflow delta error = %v, want ErrRevisionGap", err)
 	}
 	if err = reducer.CatchUp(t.Context(), projector); err != nil {
 		t.Fatal(err)
 	}
-	if got := reducer.State().Revision; got != 6 {
-		t.Fatalf("resynchronized revision = %d, want 6", got)
+	if got := reducer.State().Revision; got != 5 {
+		t.Fatalf("resynchronized revision = %d, want 5", got)
+	}
+}
+
+func TestLateTurnStartOrdersUserBeforeStreamedAssistant(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "already streaming", false)
+	projector.TurnStarted("turn-1", "fix it")
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryUser ||
+		snapshot.Entries[1].Kind != EntryAssistant {
+		t.Fatalf("late turn-start ordering = %+v", snapshot.Entries)
 	}
 }
 
