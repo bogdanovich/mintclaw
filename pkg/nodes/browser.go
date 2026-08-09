@@ -629,6 +629,22 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"})
+}
+
+// legacyBrowserCommandInputSchema returns the exact browser input contract
+// emitted before scroll was admitted. It is used only while validating a
+// persisted companion catalog during a rolling upgrade; fresh discovery is
+// always generated through BrowserCommandInputSchema.
+func legacyBrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"})
+}
+
+func browserCommandInputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+	actEffects []string,
+) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	actionBranches := make([]any, 0, len(profiles))
 	profileRevisions := make([]string, 0, len(profiles))
@@ -704,7 +720,7 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("action_invocation_id", identifier)
 		add("action", browserActionSchema(actions))
-		add("effect", map[string]any{"enum": []string{"read", "navigation", "download"}})
+		add("effect", map[string]any{"enum": actEffects})
 		add("current_origin", map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		})

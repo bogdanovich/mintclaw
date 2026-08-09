@@ -175,6 +175,34 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	}
 }
 
+func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"navigate"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		descriptors[index].InputSchema = legacyBrowserCommandInputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("pre-scroll catalog rejected during rolling upgrade: %v", err)
+	}
+
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandAct {
+			descriptors[index].BrowserProfiles[0].Actions = []string{"navigate", "scroll"}
+			break
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("pre-scroll action schema accepted scroll authority")
+	}
+}
+
 func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
