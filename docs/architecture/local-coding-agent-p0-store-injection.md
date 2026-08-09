@@ -49,6 +49,7 @@ the first store. It also rejects a symlink or non-regular existing
 ## Construction and Rollback
 
 Store factories are injected into the profile before registry construction.
+Nil and typed-nil factories are rejected at profile admission.
 Each agent receives its canonical store before it can enter the registry. A
 failure while opening a later owner closes every earlier instance. The runtime
 profile itself is installed on the loop before context-manager resolution, so

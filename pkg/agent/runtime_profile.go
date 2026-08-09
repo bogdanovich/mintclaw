@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -56,7 +57,7 @@ func NewRuntimeProfileWithStoreFactory(
 	storeFactory RuntimeStoreFactory,
 	bindings ...RuntimeProfileBinding,
 ) (RuntimeProfile, error) {
-	if storeFactory == nil {
+	if runtimeStoreFactoryIsNil(storeFactory) {
 		return RuntimeProfile{}, fmt.Errorf("runtime profile: store factory is required")
 	}
 	profile := RuntimeProfile{
@@ -159,6 +160,19 @@ func NewRuntimeProfileWithStoreFactory(
 		}
 	}
 	return profile, nil
+}
+
+func runtimeStoreFactoryIsNil(storeFactory RuntimeStoreFactory) bool {
+	if storeFactory == nil {
+		return true
+	}
+	value := reflect.ValueOf(storeFactory)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // AgentLayout returns the layout bound to a canonical configured agent ID.

@@ -40,6 +40,28 @@ type trackingRuntimeStoreFactory struct {
 	engines        []*seahorse.Engine
 }
 
+func TestNewRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-typed-nil"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	var factory *trackingRuntimeStoreFactory
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err == nil || !strings.Contains(err.Error(), "store factory is required") {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() = %#v, %v, want typed-nil rejection", profile, err)
+	}
+}
+
 func (f *trackingRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
 	f.sessionCalls++
 	if f.sessionCalls == f.failSessionAt {
