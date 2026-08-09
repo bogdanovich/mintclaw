@@ -45,6 +45,7 @@ type AgentInstance struct {
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
+	trustedToolRegistry       *tools.ToolRegistry
 	Definition                AgentContextDefinition
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
@@ -69,6 +70,16 @@ type AgentInstance struct {
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
+}
+
+func (a *AgentInstance) admitTrustedToolRegistry() {
+	if a != nil {
+		a.trustedToolRegistry = a.Tools
+	}
+}
+
+func (a *AgentInstance) usesAdmittedTrustedToolRegistry() bool {
+	return a != nil && a.trustedToolRegistry != nil && a.Tools == a.trustedToolRegistry
 }
 
 type providerOwnership struct {

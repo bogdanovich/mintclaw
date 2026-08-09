@@ -367,14 +367,14 @@ func preflightRuntimeOperationalFiles(paths RuntimeStatePaths) error {
 		return fmt.Errorf("runtime state: inspect file: %w", statErr)
 	}
 	if _, statErr := os.Lstat(paths.TaskRegistryFile); statErr == nil {
-		if loadErr := taskregistry.NewRegistry(paths.TaskRegistryFile).LastLoadError(); loadErr != nil {
+		if loadErr := taskregistry.ValidateSnapshot(paths.TaskRegistryFile); loadErr != nil {
 			return fmt.Errorf("task registry: %w", loadErr)
 		}
 	} else if !os.IsNotExist(statErr) {
 		return fmt.Errorf("task registry: inspect file: %w", statErr)
 	}
 	if _, statErr := os.Lstat(paths.InteractionFile); statErr == nil {
-		if loadErr := interactions.NewRegistry(paths.InteractionFile).LastLoadError(); loadErr != nil {
+		if loadErr := interactions.ValidateSnapshot(paths.InteractionFile); loadErr != nil {
 			return fmt.Errorf("interaction registry: %w", loadErr)
 		}
 	} else if !os.IsNotExist(statErr) {

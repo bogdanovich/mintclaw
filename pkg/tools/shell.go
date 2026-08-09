@@ -175,13 +175,7 @@ func (t *ExecTool) Close() error {
 	if t == nil || !t.ownsSessionManager || t.sessionManager == nil {
 		return nil
 	}
-	for _, info := range t.sessionManager.List() {
-		if session, err := t.sessionManager.Get(info.ID); err == nil && !session.IsDone() {
-			_ = session.Kill()
-		}
-	}
-	t.sessionManager.Stop()
-	return nil
+	return t.sessionManager.Close()
 }
 
 func newExecToolWithConfig(
@@ -687,7 +681,17 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 
 	session.PID = cmd.Process.Pid
-	t.sessionManager.Add(session)
+	if !t.sessionManager.Add(session) {
+		terminateErr := terminateProcessTree(cmd)
+		waitErr := cmd.Wait()
+		if session.ptyMaster != nil {
+			_ = session.ptyMaster.Close()
+		}
+		return toolshared.ErrorResult(fmt.Sprintf(
+			"runtime exec closed during process admission: %v",
+			errors.Join(terminateErr, waitErr),
+		))
+	}
 
 	session.outputBuffer = &bytes.Buffer{}
 

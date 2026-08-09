@@ -237,6 +237,15 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if gotExec, ok := agent.Tools.Get("exec"); !ok || gotExec != originalExec {
 		t.Fatal("sealed coding registry replaced its trusted exec tool")
 	}
+	admittedRegistry := agent.Tools
+	agent.Tools = admittedRegistry.Clone()
+	if agent.usesAdmittedTrustedToolRegistry() {
+		t.Fatal("cloned replacement registry retained coding trust")
+	}
+	agent.Tools = admittedRegistry
+	if !agent.usesAdmittedTrustedToolRegistry() {
+		t.Fatal("restored admitted registry lost coding trust")
+	}
 	if err := loop.RegisterRuntimeTool("extra", nil); err == nil {
 		t.Fatal("coding runtime admitted a dynamic runtime tool")
 	}

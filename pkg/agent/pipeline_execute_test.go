@@ -308,6 +308,39 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	}
 }
 
+func TestCodingTrustRejectsReplacementRegistry(t *testing.T) {
+	admitted := tools.NewToolRegistry()
+	tool := &fixedToolResultTool{name: "trusted-tool", result: toolshared.NewToolResult("unexpected")}
+	admitted.Register(tool)
+	admitted.Seal()
+	agent := &AgentInstance{ID: "main", Tools: admitted, Sessions: session.NewSessionManager("")}
+	agent.admitTrustedToolRegistry()
+	agent.Tools = admitted.Clone()
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "replacement-turn", sessionKey: "replacement-session",
+		opts: processOptions{NoHistory: true, Dispatch: DispatchRequest{SessionKey: "replacement-session"}},
+	}
+	llm := newLLMIterationState(1)
+	runner := &toolLoopRunner{
+		p:       &Pipeline{Config: PipelineConfigServices{TrustAllToolExecution: true}},
+		turnCtx: t.Context(),
+		ts:      ts,
+		exec:    newTurnExecution(agent, ts.opts, nil, "", nil),
+		llm:     llm,
+	}
+	call := &toolCallState{
+		request: providers.ToolCall{ID: "replacement-call", Name: tool.Name(), Arguments: map[string]any{}},
+		name:    tool.Name(), arguments: map[string]any{},
+	}
+	result := runner.approveToolCall(t.Context(), call)
+	if result.disposition != toolCallSkip || tool.executions != 0 {
+		t.Fatalf("replacement registry result = %+v, executions = %d", result, tool.executions)
+	}
+	if len(runner.messages) != 1 || !strings.Contains(runner.messages[0].Content, "registry does not match") {
+		t.Fatalf("replacement denial messages = %#v", runner.messages)
+	}
+}
+
 func TestPipelineToolResultJournalFailureLeavesDurableUnresolvedIntent(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	tool := &steeringSafetyTestTool{name: "side-effect", safety: toolshared.SteeringSafetyNonCancellable}

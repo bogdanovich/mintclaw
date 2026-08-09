@@ -287,6 +287,22 @@ func WorkspaceStorePath(workspace string) string {
 	return filepath.Join(workspace, "state", "task_registry.json")
 }
 
+// ValidateSnapshot reads and validates a registry snapshot without pruning or writing it.
+func ValidateSnapshot(storePath string) error {
+	r := &Registry{
+		store: strings.TrimSpace(storePath),
+		options: Options{
+			TerminalRetention: DefaultTerminalRetention,
+			MaxRecords:        DefaultMaxRecords,
+			MaxEvents:         DefaultMaxEvents,
+			MaxSnapshotBytes:  DefaultMaxSnapshotBytes,
+		},
+		records: make(map[string]Record),
+		events:  make([]TaskEvent, 0),
+	}
+	return r.load()
+}
+
 func (r *Registry) LastLoadError() error {
 	if r == nil {
 		return nil

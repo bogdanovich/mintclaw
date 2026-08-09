@@ -63,6 +63,18 @@ func TestNewManagerAtCheckedRejectsCorruptState(t *testing.T) {
 	}
 }
 
+func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
+	root := t.TempDir()
+	blockedParent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManagerAtChecked(filepath.Join(blockedParent, "runtime", "state.json"))
+	if err == nil || manager != nil {
+		t.Fatalf("NewManagerAtChecked() = (%T, %v), want nil manager and error", manager, err)
+	}
+}
+
 func TestSetLastChatID(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "state-test-*")
 	if err != nil {

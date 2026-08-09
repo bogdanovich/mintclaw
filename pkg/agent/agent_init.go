@@ -124,6 +124,7 @@ func newAgentLoopWithRegistry(
 		for _, agentID := range registry.ListAgentIDs() {
 			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
 				instance.Tools.Seal()
+				instance.admitTrustedToolRegistry()
 			}
 		}
 	}

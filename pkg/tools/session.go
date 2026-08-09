@@ -171,16 +171,21 @@ func (s *ProcessSession) ToSessionInfo() toolshared.SessionInfo {
 }
 
 type SessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*ProcessSession
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	mu        sync.RWMutex
+	sessions  map[string]*ProcessSession
+	closing   bool
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	closeOnce sync.Once
+	closeDone chan struct{}
+	closeErr  error
 }
 
 func NewSessionManager() *SessionManager {
 	sm := &SessionManager{
-		sessions: make(map[string]*ProcessSession),
-		stopCh:   make(chan struct{}),
+		sessions:  make(map[string]*ProcessSession),
+		stopCh:    make(chan struct{}),
+		closeDone: make(chan struct{}),
 	}
 
 	// Start cleaner goroutine - runs every 5 minutes, cleans up sessions done for >30 minutes
@@ -222,10 +227,42 @@ func (sm *SessionManager) cleanupOldSessions() {
 	}
 }
 
-func (sm *SessionManager) Add(session *ProcessSession) {
+func (sm *SessionManager) Add(session *ProcessSession) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.closing {
+		return false
+	}
 	sm.sessions[session.ID] = session
+	return true
+}
+
+// Close rejects new sessions, terminates admitted processes, and stops cleanup.
+func (sm *SessionManager) Close() error {
+	sm.closeOnce.Do(func() {
+		sm.mu.Lock()
+		sm.closing = true
+		sessions := make([]*ProcessSession, 0, len(sm.sessions))
+		for _, session := range sm.sessions {
+			sessions = append(sessions, session)
+		}
+		sm.mu.Unlock()
+
+		sm.Stop()
+		var closeErrors []error
+		for _, session := range sessions {
+			if session == nil || session.IsDone() {
+				continue
+			}
+			if err := session.Kill(); err != nil && !errors.Is(err, ErrSessionDone) {
+				closeErrors = append(closeErrors, err)
+			}
+		}
+		sm.closeErr = errors.Join(closeErrors...)
+		close(sm.closeDone)
+	})
+	<-sm.closeDone
+	return sm.closeErr
 }
 
 func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {

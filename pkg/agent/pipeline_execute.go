@@ -647,6 +647,22 @@ func (runner *toolLoopRunner) approveToolCall(
 	tc := call.request
 	toolName := call.name
 	toolArgs := call.arguments
+	if p.Config.TrustAllToolExecution && !ts.agent.usesAdmittedTrustedToolRegistry() {
+		llm.toolResponseDisposition = toolResponseNeedsModel
+		denyContent := hookDeniedToolContent(
+			"Tool execution denied because the trusted coding catalog was replaced",
+			"runtime tool registry does not match the admitted profile",
+		)
+		p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
+		)
+		runner.appendToolMessage(providers.Message{
+			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
+		}, toolMessagePersistOnly)
+		return skipToolCall()
+	}
 
 	execCtx := toolshared.WithToolInboundContext(
 		turnCtx,

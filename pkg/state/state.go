@@ -164,10 +164,7 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 	stateFile = filepath.Clean(strings.TrimSpace(stateFile))
 	stateDir := filepath.Dir(stateFile)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		logger.WarnCF("state", "failed to create state directory", map[string]any{
-			"dir":   stateDir,
-			"error": err.Error(),
-		})
+		return nil, fmt.Errorf("create state directory %q: %w", stateDir, err)
 	}
 	sm := &Manager{
 		workspace: stateDir,

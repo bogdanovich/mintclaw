@@ -73,6 +73,18 @@ func TestSessionManager_List(t *testing.T) {
 	require.True(t, ids["test-3"])
 }
 
+func TestSessionManager_CloseRejectsLateAdmissionAndReturnsKillErrors(t *testing.T) {
+	sm := NewSessionManager()
+	sm.Add(&ProcessSession{ID: "unreachable", PID: -1, Status: "running"})
+	require.ErrorIs(t, sm.Close(), ErrSessionNotFound)
+
+	admitted := sm.Add(&ProcessSession{ID: "late", PID: -1, Status: "running"})
+	require.False(t, admitted)
+	_, err := sm.Get("late")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	require.ErrorIs(t, sm.Close(), ErrSessionNotFound)
+}
+
 func TestProcessSession_IsDone(t *testing.T) {
 	session := &ProcessSession{Status: "running"}
 	require.False(t, session.IsDone())
