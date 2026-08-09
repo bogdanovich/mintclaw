@@ -63,6 +63,7 @@ type CronService struct {
 	loadErr    error
 	onJob      JobHandler
 	mu         sync.RWMutex
+	dispatchMu sync.Mutex
 	running    bool
 	stopChan   chan struct{}
 	wakeChan   chan struct{}
@@ -214,6 +215,23 @@ func (cs *CronService) checkJobs() {
 	}
 
 	cs.mu.Unlock()
+
+	cs.dispatchDueJobs(dueJobIDs)
+}
+
+// dispatchDueJobs serializes the final loadErr check and handler invocation
+// against reloads: a reload that fails after selection must cancel dispatch,
+// so work is never executed while the authoritative store is unreadable.
+func (cs *CronService) dispatchDueJobs(dueJobIDs []string) {
+	cs.dispatchMu.Lock()
+	defer cs.dispatchMu.Unlock()
+
+	cs.mu.RLock()
+	blocked := cs.loadErr != nil
+	cs.mu.RUnlock()
+	if blocked {
+		return
+	}
 
 	// Execute jobs outside lock.
 	for _, jobID := range dueJobIDs {
@@ -382,6 +400,12 @@ func (cs *CronService) recomputeNextRuns() {
 }
 
 func (cs *CronService) getNextWakeMS() *int64 {
+	// Suspend the scheduler while the store is unavailable: an overdue job
+	// would otherwise keep the wake timer at zero and busy-spin the loop.
+	if cs.loadErr != nil {
+		return nil
+	}
+
 	var nextWake *int64
 	for _, job := range cs.store.Jobs {
 		if job.Enabled && job.State.NextRunAtMS != nil {
@@ -394,9 +418,17 @@ func (cs *CronService) getNextWakeMS() *int64 {
 }
 
 func (cs *CronService) Load() error {
+	cs.dispatchMu.Lock()
+	defer cs.dispatchMu.Unlock()
+
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	return cs.loadStore()
+
+	err := cs.loadStore()
+	// Re-evaluate the scheduler wake time after every reload outcome so a
+	// repaired store resumes promptly and a failed one suspends.
+	cs.notify()
+	return err
 }
 
 func (cs *CronService) SetOnJob(handler JobHandler) {

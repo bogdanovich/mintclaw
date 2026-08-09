@@ -709,3 +709,199 @@ func TestCheckJobsSkipsDueJobsAfterFailedReload(t *testing.T) {
 		t.Fatalf("corrupt store was overwritten by scheduler: got %q, want original %q", got, malformed)
 	}
 }
+
+func TestDispatchRecheckCancelsWhenReloadFailed(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	handlerCalled := false
+	cs := NewCronService(storePath, func(job *CronJob) (string, error) {
+		handlerCalled = true
+		return "ok", nil
+	})
+
+	job, err := cs.AddJob(
+		"due",
+		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+	cs.running = true
+
+	// Simulate a reload that failed after selection but before dispatch: the
+	// dispatch recheck must cancel execution.
+	cs.mu.Lock()
+	cs.loadErr = fmt.Errorf("simulated reload failure")
+	cs.mu.Unlock()
+
+	cs.dispatchDueJobs([]string{job.ID})
+
+	if handlerCalled {
+		t.Fatal("job dispatched after a failed reload was latched")
+	}
+}
+
+func TestLoadWaitsForInFlightDispatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	released := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	var startedOnce sync.Once
+	var handlerCalls int
+	var cs *CronService
+	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+		cs.mu.Lock()
+		handlerCalls++
+		cs.mu.Unlock()
+		startedOnce.Do(func() { close(handlerStarted) })
+		<-released
+		return "ok", nil
+	})
+
+	job, err := cs.AddJob(
+		"due",
+		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+	cs.running = true
+
+	dispatchDone := make(chan struct{})
+	go func() {
+		cs.checkJobs()
+		close(dispatchDone)
+	}()
+
+	// Selection and dispatch are in flight (the handler is blocked), so a
+	// reload issued now must wait for dispatch to finish.
+	<-handlerStarted
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- cs.Load()
+	}()
+
+	select {
+	case err := <-loadDone:
+		t.Fatalf("Load completed during in-flight dispatch: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(released)
+	<-dispatchDone
+
+	if err := <-loadDone; err != nil {
+		t.Fatalf("Load after dispatch failed: %v", err)
+	}
+
+	cs.mu.RLock()
+	calls := handlerCalls
+	cs.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("job dispatched %d times, want 1", calls)
+	}
+}
+
+func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	handlerCalls := make(chan string, 4)
+	cs := NewCronService(storePath, func(job *CronJob) (string, error) {
+		handlerCalls <- job.Name
+		return "ok", nil
+	})
+
+	// Long-interval job so the loop parks on a distant wake and cannot fire
+	// during the failure/repair sequence.
+	if _, err := cs.AddJob(
+		"tick",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60_000)},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	// Corrupt the authoritative store and latch the load error.
+	malformed := []byte("{not valid json")
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("corrupt store: %v", err)
+	}
+	if err := cs.Load(); err == nil {
+		t.Fatal("Load over corrupted store succeeded, want error")
+	}
+
+	// While unavailable the scheduler must not wake for the due job (no
+	// busy-spin), must not execute it, and must not overwrite the corrupt file.
+	cs.mu.RLock()
+	wake := cs.getNextWakeMS()
+	cs.mu.RUnlock()
+	if wake != nil {
+		t.Fatalf("expected suspended scheduler, got wake %v", wake)
+	}
+	select {
+	case name := <-handlerCalls:
+		t.Fatalf("job %q ran while the store is unavailable", name)
+	case <-time.After(200 * time.Millisecond):
+	}
+	got, readErr := os.ReadFile(storePath)
+	if readErr != nil {
+		t.Fatalf("read store: %v", readErr)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("corrupt store was overwritten: got %q, want original %q", got, malformed)
+	}
+
+	// Repair: restore a valid store containing the overdue job and reload; the
+	// scheduler must rearm and run it.
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		cs.store.Jobs[i].State.NextRunAtMS = &past
+	}
+	cs.mu.Unlock()
+	if err := cs.saveStoreUnsafe(); err != nil {
+		t.Fatalf("repair store: %v", err)
+	}
+	if err := cs.Load(); err != nil {
+		t.Fatalf("Load after repair failed: %v", err)
+	}
+	select {
+	case <-handlerCalls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the overdue job to run after repair")
+	}
+}
