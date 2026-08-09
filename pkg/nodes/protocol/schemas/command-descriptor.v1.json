@@ -115,6 +115,65 @@
         }
       }
     },
+    "job_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alias", "revision", "executor", "authority_digest",
+          "timeout_seconds_max", "concurrent_jobs", "stdout_bytes_max",
+          "stderr_bytes_max", "artifact_count_max", "artifact_bytes_max",
+          "artifacts_total_bytes_max", "retention_seconds",
+          "cancel_guarantee", "executable_aliases", "working_scopes",
+          "environment_names", "approval"
+        ],
+        "properties": {
+          "alias": {"type": "string", "minLength": 1, "maxLength": 64},
+          "revision": {"type": "string", "minLength": 1, "maxLength": 128},
+          "executor": {"const": "system_exec"},
+          "authority_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "timeout_seconds_max": {"type": "integer", "minimum": 1, "maximum": 86400},
+          "concurrent_jobs": {"type": "integer", "minimum": 1, "maximum": 32},
+          "stdout_bytes_max": {"type": "integer", "minimum": 1, "maximum": 67108864},
+          "stderr_bytes_max": {"type": "integer", "minimum": 1, "maximum": 67108864},
+          "artifact_count_max": {"type": "integer", "minimum": 1, "maximum": 16},
+          "artifact_bytes_max": {"type": "integer", "minimum": 1, "maximum": 536870912},
+          "artifacts_total_bytes_max": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+          "retention_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000},
+          "cancel_guarantee": {"enum": ["direct_process", "process_group"]},
+          "executable_aliases": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {"type": "string", "minLength": 1, "maxLength": 64}
+          },
+          "working_scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {"type": "string", "minLength": 1, "maxLength": 64}
+          },
+          "environment_names": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {"type": "string", "minLength": 1, "maxLength": 128}
+          },
+          "approval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "read", "cancel"],
+            "properties": {
+              "start": {"enum": ["none", "required"]},
+              "read": {"enum": ["none", "required"]},
+              "cancel": {"enum": ["none", "required"]}
+            }
+          }
+        }
+      }
+    },
     "browser_profiles": {
       "type": "array",
       "minItems": 1,

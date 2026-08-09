@@ -135,6 +135,67 @@ func TestValidateInvocationApprovalProjectsServiceProfile(t *testing.T) {
 	}
 }
 
+func TestValidateInvocationApprovalProjectsJobProfile(t *testing.T) {
+	_, _, nodeID, _ := testInvocationAdmission(t, "")
+	profiles := []nodes.JobProfileDescriptor{
+		{
+			Alias: "builds", Revision: "builds-v1", Executor: "system_exec",
+			AuthorityDigest: strings.Repeat("a", 64), TimeoutSecondsMax: 7200,
+			ConcurrentJobs: 2, StdoutBytesMax: 1024, StderrBytesMax: 1024,
+			ArtifactCountMax: 2, ArtifactBytesMax: 1024, ArtifactsTotalBytesMax: 2048,
+			RetentionSeconds: 3600, CancelGuarantee: "process_group",
+			ExecutableAliases: []string{"go"}, WorkingScopes: []string{"repo"},
+			Approval: nodes.JobProfileApproval{Start: "required", Read: "none", Cancel: "required"},
+		},
+		{
+			Alias: "tests", Revision: "tests-v1", Executor: "system_exec",
+			AuthorityDigest: strings.Repeat("b", 64), TimeoutSecondsMax: 3600,
+			ConcurrentJobs: 2, StdoutBytesMax: 1024, StderrBytesMax: 1024,
+			ArtifactCountMax: 2, ArtifactBytesMax: 1024, ArtifactsTotalBytesMax: 2048,
+			RetentionSeconds: 3600, CancelGuarantee: "process_group",
+			ExecutableAliases: []string{"go"}, WorkingScopes: []string{"repo"},
+			Approval: nodes.JobProfileApproval{Start: "required", Read: "none", Cancel: "required"},
+		},
+	}
+	descriptors, err := nodes.JobCommandDescriptors(profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := descriptors[0]
+	projected, ok := nodes.ProjectJobDescriptorForProfile(descriptor, "tests")
+	if !ok {
+		t.Fatal("project job descriptor")
+	}
+	catalogHash := strings.Repeat("c", 64)
+	plan, err := nodes.PrepareExecutionPlan(
+		nodes.InvocationRequest{
+			InvocationID: "inv_job", IdempotencyKey: "idem_job", NodeID: nodeID,
+			CatalogHash: catalogHash, Command: descriptor.Name, JobProfile: "tests",
+			Input: json.RawMessage(
+				`{"argv":["go","test","./..."],"cwd":"repo","timeout_seconds":120,"env":{}}`,
+			),
+			AgentID: "main", SessionID: "session_job", ActorID: "user_job",
+			TimeoutSeconds: 30, OutputLimitBytes: 4096,
+		},
+		projected,
+		"local",
+		"policy-job",
+		time.Unix(10, 0),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := nodes.CommandApproval{Descriptor: descriptor, CatalogHash: catalogHash}
+	if err := validateInvocationApproval(approval, nodeID, plan); err != nil {
+		t.Fatalf("profile-projected job approval rejected: %v", err)
+	}
+	plan.JobProfile = "builds"
+	if err := validateInvocationApproval(approval, nodeID, plan); !errors.Is(err, nodes.ErrCommandDenied) {
+		t.Fatalf("changed job profile error = %v", err)
+	}
+}
+
 func TestAdmissionRevocationWaitsForDispatchWrite(t *testing.T) {
 	registry, handler, nodeID, plan := testInvocationAdmission(t, "")
 	connection := newStubPeerConnection()

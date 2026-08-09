@@ -105,6 +105,7 @@ type runtimeOptions struct {
 	update          *updateCommandHandler
 	updateRecovery  UpdateCoordinator
 	browserHost     BrowserCommandHost
+	jobs            *JobRuntime
 }
 
 func WithBrowserHost(host BrowserCommandHost) RuntimeOption {
@@ -167,6 +168,16 @@ func WithServiceManager(manager ServiceManager) RuntimeOption {
 			return errors.New("node service manager has no capabilities")
 		}
 		options.serviceManager = manager
+		return nil
+	}
+}
+
+func WithJobRuntime(runtime *JobRuntime) RuntimeOption {
+	return func(options *runtimeOptions) error {
+		if runtime == nil || len(runtime.Descriptors()) == 0 {
+			return errors.New("node job runtime is required")
+		}
+		options.jobs = runtime
 		return nil
 	}
 }
@@ -265,6 +276,13 @@ func NewRuntime(
 	if settings.update != nil {
 		handlers = append(handlers, settings.update)
 	}
+	if settings.jobs != nil {
+		jobHandlers, err := settings.jobs.handlers(policy)
+		if err != nil {
+			return nil, fmt.Errorf("configure node job runtime: %w", err)
+		}
+		handlers = append(handlers, jobHandlers...)
+	}
 	if err := nodeID.Validate(); err != nil {
 		return nil, err
 	}
@@ -295,7 +313,8 @@ func NewRuntime(
 			modelContract.OutputBytesMax = min(modelContract.OutputBytesMax, 4096)
 			descriptor.ModelContract = modelContract
 			update.descriptorValue.ModelContract = cloneModelContract(modelContract)
-		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) {
+		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) &&
+			!nodes.IsJobCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)
 		}
 		catalog.Commands = append(catalog.Commands, descriptor)

@@ -183,6 +183,9 @@ func cloneCatalog(catalog nodes.CapabilityCatalog) nodes.CapabilityCatalog {
 		result.Commands[index].UpdateProfiles = nodes.CloneUpdateProfileDescriptors(
 			catalog.Commands[index].UpdateProfiles,
 		)
+		result.Commands[index].JobProfiles = nodes.CloneJobProfileDescriptors(
+			catalog.Commands[index].JobProfiles,
+		)
 	}
 	return result
 }
