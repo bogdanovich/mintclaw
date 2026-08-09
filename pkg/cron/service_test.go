@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,47 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRecoveryWakeIsNotDroppedWhileSchedulerSuspended(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	cs := NewCronService(storePath, func(job *CronJob) (string, error) {
+		return "ok", nil
+	})
+
+	// Simulate the loop having just snapshotted a suspended state (failed
+	// load latched) and about to sleep for an hour: a recovery notify sent in
+	// this snapshot-to-select window must queue a wake rather than be dropped.
+	cs.mu.Lock()
+	cs.loadErr = errors.New("simulated load failure")
+	cs.mu.Unlock()
+
+	cs.notify()
+
+	cs.mu.RLock()
+	pending := len(cs.wakeChan)
+	cs.mu.RUnlock()
+	if pending != 1 {
+		t.Fatalf("recovery wake dropped while scheduler suspended: %d pending, want 1", pending)
+	}
+
+	// A repaired store must rearm the scheduler: the pending wake is consumed
+	// on the next select and triggers a re-snapshot of the scheduler state.
+	cs.mu.Lock()
+	cs.loadErr = nil
+	cs.running = true
+	cs.stopChan = make(chan struct{})
+	cs.mu.Unlock()
+	go cs.runLoop(cs.stopChan)
+	defer cs.Stop()
+
+	select {
+	case <-cs.wakeChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("pending recovery wake was not consumed by the scheduler")
+	}
+}
 
 func TestSaveStore_FilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {

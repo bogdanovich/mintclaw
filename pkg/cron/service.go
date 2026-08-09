@@ -78,7 +78,10 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		storePath: storePath,
 		onJob:     onJob,
 		gronx:     gronx.New(),
-		wakeChan:  make(chan struct{}),
+		// Capacity-one coalescing wake channel: a notification sent while the
+		// loop is not yet in its select stays pending until consumed, so a
+		// recovery signal is never dropped.
+		wakeChan: make(chan struct{}, 1),
 	}
 	// Initialize and load store on creation
 	_ = cs.loadStore()
@@ -104,7 +107,7 @@ func (cs *CronService) Start() error {
 
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		cs.wakeChan = make(chan struct{})
+		cs.wakeChan = make(chan struct{}, 1)
 	}
 	cs.running = true
 	go cs.runLoop(cs.stopChan)
