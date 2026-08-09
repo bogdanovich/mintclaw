@@ -13,6 +13,7 @@ linters:
     - fatcontext
     - gocheckcompilerdirectives
     - gochecksumtype
+    - errcheck
     - govet
     - ineffassign
     - makezero
@@ -43,14 +44,23 @@ linters:
     # Module policy.
     - gomoddirectives
 
-  # Valuable checks that currently have a substantial existing backlog:
-  # errcheck (50+). Enable after its findings are fixed or narrowly baselined.
   # staticcheck is enabled with its remaining intentional findings baselined
   # via targeted //nolint:staticcheck comments (legacy cfg.Github migration
   # shims and deliberate empty-critical-section test assertions). Gosec is
   # better maintained as a separately tuned security job because its default
   # rules are noisy for this CLI/server codebase.
   settings:
+    errcheck:
+      # Genuinely benign write/cleanup calls whose errors carry no actionable
+      # signal for this codebase. The remaining Close-family noise is excluded
+      # by message pattern below; everything else is fixed in code.
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - fmt.Scanln
+        - os.Remove
+        - os.RemoveAll
     gomoddirectives:
       replace-allow-list:
         - github.com/bwmarrin/discordgo
@@ -68,6 +78,14 @@ linters:
       - linters:
           - nolintlint
         path: 'pkg/tools/(i2c\.go|spi\.go)$'
+      # errcheck: defer test-file backlog (deferred from the maintenance pass).
+      - linters:
+          - errcheck
+        path: '.*_test\.go'
+      # errcheck: benign Close-family / write-deadline cleanup calls.
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.(Close|close|SetWriteDeadline|SetReadDeadline)`'
 
 issues:
   max-issues-per-linter: 0

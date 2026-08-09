@@ -660,7 +660,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 					session.mu.Unlock()
 				}
 			}()
-			cmd.Wait() // Wait for process to exit
+			_ = cmd.Wait() // Wait for process to exit
 			session.mu.Lock()
 			if cmd.ProcessState != nil {
 				session.ExitCode = cmd.ProcessState.ExitCode()
@@ -764,7 +764,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			if stdinWriter != nil {
 				_ = stdinWriter.Close()
 			}
-			cmd.Wait()
+			_ = cmd.Wait()
 
 			session.mu.Lock()
 			if cmd.ProcessState != nil {

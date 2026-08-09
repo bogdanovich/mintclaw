@@ -153,7 +153,7 @@ func (c *IRCChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]strin
 		if line == "" {
 			continue
 		}
-		c.conn.Privmsg(target, line)
+		_ = c.conn.Privmsg(target, line)
 	}
 
 	logger.DebugCF("irc", "Message sent", map[string]any{
@@ -177,11 +177,11 @@ func (c *IRCChannel) StartTyping(ctx context.Context, chatID string) (func(), er
 		return noop, nil
 	}
 
-	c.conn.SendWithTags(map[string]string{"+typing": "active"}, "TAGMSG", chatID)
+	_ = c.conn.SendWithTags(map[string]string{"+typing": "active"}, "TAGMSG", chatID)
 
 	return func() {
 		if c.IsRunning() && c.conn != nil {
-			c.conn.SendWithTags(map[string]string{"+typing": "done"}, "TAGMSG", chatID)
+			_ = c.conn.SendWithTags(map[string]string{"+typing": "done"}, "TAGMSG", chatID)
 		}
 	}, nil
 }

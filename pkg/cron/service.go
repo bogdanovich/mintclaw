@@ -77,7 +77,7 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		wakeChan:  make(chan struct{}),
 	}
 	// Initialize and load store on creation
-	cs.loadStore()
+	_ = cs.loadStore()
 	return cs
 }
 

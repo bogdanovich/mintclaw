@@ -290,7 +290,7 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 		needsUpdate = true
 	}
 	if needsUpdate {
-		t.cronService.UpdateJob(job)
+		_ = t.cronService.UpdateJob(job)
 	}
 
 	return toolshared.SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))

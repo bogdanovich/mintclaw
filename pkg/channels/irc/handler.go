@@ -18,12 +18,12 @@ import (
 func (c *IRCChannel) onConnect(conn *ircevent.Connection) {
 	// NickServ auth (only if SASL is not configured)
 	if c.config.NickServPassword.String() != "" && c.config.SASLUser == "" {
-		conn.Privmsg("NickServ", "IDENTIFY "+c.config.NickServPassword.String())
+		_ = conn.Privmsg("NickServ", "IDENTIFY "+c.config.NickServPassword.String())
 	}
 
 	// Join configured channels
 	for _, ch := range c.config.Channels {
-		conn.Join(ch)
+		_ = conn.Join(ch)
 		logger.InfoCF("irc", "Joined IRC channel", map[string]any{
 			"channel": ch,
 		})

@@ -738,7 +738,7 @@ func (c *DiscordChannel) listenVoiceControl(ctx context.Context) {
 					guildID := strings.TrimPrefix(ctrl.SessionID, "discord_vc_")
 					vc, exists := c.session.VoiceConnections[guildID]
 					if exists && vc != nil {
-						vc.Disconnect(ctx)
+						_ = vc.Disconnect(ctx)
 					}
 				}
 			}

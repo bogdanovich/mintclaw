@@ -756,7 +756,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 								outboundMessageEditPayload(msg, msg.Content),
 							)
 						} else {
-							editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
+						_ = editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
 						}
 					}
 				}
@@ -972,6 +972,7 @@ func (m *Manager) streamSplitOnMarker() bool {
 
 func (m *Manager) streamResponseFooterEnabled() bool {
 	return m.lifecycle.config != nil && m.lifecycle.config.Agents.Defaults.IsResponseFooterEnabled()
+}
 }
 
 func reasoningStreamerFrom(streamer bus.Streamer) bus.ReasoningStreamer {

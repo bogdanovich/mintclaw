@@ -92,7 +92,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "ping":
 			pong := mintclawMessage{Type: "pong", ID: msg.ID, Timestamp: time.Now().UnixMilli()}
-			conn.WriteJSON(pong)
+			_ = conn.WriteJSON(pong)
 
 		case "message.send":
 			content, _ := msg.Payload["content"].(string)

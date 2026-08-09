@@ -75,7 +75,7 @@ func initTermuxSSL() {
 	for _, caPath := range caPaths {
 		expanded := os.ExpandEnv(caPath)
 		if _, err := os.Stat(expanded); err == nil {
-			os.Setenv("SSL_CERT_FILE", expanded)
+			_ = os.Setenv("SSL_CERT_FILE", expanded)
 			return
 		}
 	}
