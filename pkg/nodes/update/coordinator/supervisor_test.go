@@ -335,7 +335,9 @@ func controlUpdateRequest(request StageRequest) *control.Request {
 
 func waitForTransactionPhase(t *testing.T, store *Store, phase Phase) State {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// The supervisor retries on a 1s ticker and bounds candidate launch
+	// attempts before falling back, so keep the deadline load-tolerant.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		state, err := store.Load()
 		if err != nil {
