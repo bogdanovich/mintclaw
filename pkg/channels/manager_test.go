@@ -78,7 +78,7 @@ func sendWithRetryTuple(
 	w *channelWorker,
 	msg bus.OutboundMessage,
 ) ([]string, bool, bool, error) {
-	result := m.sendWithRetry(ctx, name, w, msg)
+	result := m.deliveryRuntime().sendWithRetry(ctx, name, w, msg)
 	return result.MessageIDs, result.Delivered(), !result.Delivered() && result.MayHaveDelivered(), result.Err
 }
 
@@ -89,7 +89,7 @@ func sendMediaWithRetryTuple(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) ([]string, error) {
-	result := m.sendMediaWithRetry(ctx, name, w, msg)
+	result := m.deliveryRuntime().sendMediaWithRetry(ctx, name, w, msg)
 	return result.MessageIDs, result.Err
 }
 
@@ -239,13 +239,15 @@ func (m *mockStreamingChannel) ResolveOutboundChatID(
 
 // newTestManager creates a minimal Manager suitable for unit tests.
 func newTestManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		channels:               make(map[string]Channel),
 		delivery:               newDeliveryRuntime(),
 		bus:                    bus.NewMessageBus(),
 		channelHashes:          make(map[string]string),
 		channelRestartRequired: make(map[string]string),
 	}
+	m.delivery.bindHost(m)
+	return m
 }
 
 func installTestDeliveryWorker(m *Manager, name string, worker *channelWorker) *deliveryOwner {
@@ -648,7 +650,7 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 	m.channels["test"] = ch
 	m.delivery.install(owner)
 	m.channelHashes = toChannelHashes(oldCfg)
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -831,7 +833,7 @@ func TestDeliveryOwner_CloseDeliveryDrainsAndRejectsNewWork(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	owner.StartDelivery(ctx, m)
+	owner.StartDelivery(ctx, m.deliveryRuntime())
 
 	msg := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -1006,7 +1008,7 @@ func TestDeliveryOwner_CloseDeliveryAndWaitIsWaitIdempotent(t *testing.T) {
 	}
 	m := newTestManager()
 	owner := newDeliveryOwner("test", ch, "test")
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -1087,7 +1089,7 @@ func TestDeliveryOwnerCancellationFailsEveryAcceptedMessage(t *testing.T) {
 			m.runtimeEvents = eventBus
 			owner := newDeliveryOwner("test", channel, "test")
 			ctx, cancel := context.WithCancel(context.Background())
-			owner.StartDelivery(ctx, m)
+			owner.StartDelivery(ctx, m.deliveryRuntime())
 
 			wantScopes := []runtimeevents.TraceScope{
 				runtimeevents.NewTraceScope("/workspace/main", "turn-1"),
@@ -1171,7 +1173,7 @@ func TestDispatchOutbound_ClosedOwnerPublishesFailureAndContinues(t *testing.T) 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		m.dispatchOutbound(ctx)
+		m.deliveryRuntime().dispatchOutbound(ctx)
 	}()
 	defer func() {
 		cancel()
@@ -1217,7 +1219,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
 	m.delivery.install(owner)
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -1288,7 +1290,7 @@ func TestUnregisterChannel_RetiresToolFeedbackBeforeReplacement(t *testing.T) {
 	owner := newDeliveryOwner("test", oldChannel, "test")
 	m.channels["test"] = oldChannel
 	m.delivery.install(owner)
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -1347,7 +1349,7 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
 	m.delivery.install(owner)
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -1624,13 +1626,13 @@ func TestOutboundRuntimeEventsPreserveTraceScopes(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	textWorker := &channelWorker{ch: &mockChannel{}, limiter: rate.NewLimiter(0, 0)}
-	textResult := m.sendWithRetry(canceled, "test", textWorker, text)
+	textResult := m.deliveryRuntime().sendWithRetry(canceled, "test", textWorker, text)
 	if textResult.Err == nil || textResult.Delivered() || textResult.MayHaveDelivered() ||
 		len(textResult.MessageIDs) != 0 {
 		t.Fatalf("canceled text send = %#v, want definite pre-send failure", textResult)
 	}
 	mediaWorker := &channelWorker{ch: &mockMediaChannel{}, limiter: rate.NewLimiter(0, 0)}
-	mediaResult := m.sendMediaWithRetry(canceled, "test", mediaWorker, media)
+	mediaResult := m.deliveryRuntime().sendMediaWithRetry(canceled, "test", mediaWorker, media)
 	if mediaResult.Err == nil || mediaResult.Delivered() || mediaResult.MayHaveDelivered() ||
 		len(mediaResult.MessageIDs) != 0 {
 		t.Fatalf("canceled media send = %#v, want definite pre-send failure", mediaResult)
@@ -2363,7 +2365,7 @@ func TestWorkerRateLimiter(t *testing.T) {
 
 	ctx := t.Context()
 
-	go m.runWorker(ctx, "test", w)
+	go m.deliveryRuntime().runWorker(ctx, "test", w)
 
 	// Enqueue 4 messages
 	for i := range 4 {
@@ -2450,7 +2452,7 @@ func TestRunWorker_MessageSplitting(t *testing.T) {
 
 	ctx := t.Context()
 
-	go m.runWorker(ctx, "test", w)
+	go m.deliveryRuntime().runWorker(ctx, "test", w)
 
 	// Send a message that should be split
 	w.queue <- testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello world"})
@@ -2501,7 +2503,7 @@ func TestRunWorkerCancellationBeforeFirstSendPublishesTerminalFailure(t *testing
 	m := newTestManager()
 	m.runtimeEvents = eventBus
 	ctx, cancel := context.WithCancel(context.Background())
-	go m.runWorker(ctx, "test", worker)
+	go m.deliveryRuntime().runWorker(ctx, "test", worker)
 
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	worker.queue <- testOutboundMessage(bus.OutboundMessage{
@@ -2885,7 +2887,7 @@ func TestLogicalSplitFailureKeepsProgressEditable(t *testing.T) {
 				w.done = make(chan struct{})
 				w.queue <- final
 				close(w.queue)
-				m.runWorker(context.Background(), "test", w)
+				m.deliveryRuntime().runWorker(context.Background(), "test", w)
 			}
 
 			feedback.Content = "retry"
@@ -5558,7 +5560,7 @@ func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go m.runWorker(ctx, "test", w)
+	go m.deliveryRuntime().runWorker(ctx, "test", w)
 
 	content := "🔧 `read_file`\nRead current config first.<|[SPLIT]|>Then update the example."
 	w.queue <- testOutboundMessage(bus.OutboundMessage{
@@ -5618,7 +5620,7 @@ func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go m.runWorker(ctx, "test", w)
+	go m.deliveryRuntime().runWorker(ctx, "test", w)
 
 	streamKey := streamSuppressionKey("test", "123", "session-1", runtimeevents.TraceScope{})
 	m.streams.streamActive.Store(streamKey, true)
@@ -5944,9 +5946,9 @@ func TestDispatcherPublishesTerminalRejection(t *testing.T) {
 				go func() {
 					defer close(done)
 					if media {
-						m.dispatchOutboundMedia(ctx)
+						m.deliveryRuntime().dispatchOutboundMedia(ctx)
 					} else {
-						m.dispatchOutbound(ctx)
+						m.deliveryRuntime().dispatchOutbound(ctx)
 					}
 				}()
 				t.Cleanup(func() {
@@ -6014,9 +6016,9 @@ func TestDispatcherRejectsOnlySettlingInternalOutbounds(t *testing.T) {
 				go func() {
 					defer close(done)
 					if mediaMessage {
-						m.dispatchOutboundMedia(ctx)
+						m.deliveryRuntime().dispatchOutboundMedia(ctx)
 					} else {
-						m.dispatchOutbound(ctx)
+						m.deliveryRuntime().dispatchOutbound(ctx)
 					}
 				}()
 				t.Cleanup(func() {
@@ -6081,7 +6083,7 @@ func TestDispatcherExitsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		m.dispatchOutbound(ctx)
+		m.deliveryRuntime().dispatchOutbound(ctx)
 		close(done)
 	}()
 
@@ -6110,7 +6112,7 @@ func TestDispatcherMediaExitsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		m.dispatchOutboundMedia(ctx)
+		m.deliveryRuntime().dispatchOutboundMedia(ctx)
 		close(done)
 	}()
 
@@ -6758,7 +6760,7 @@ func TestSendToChannel_QueuesThroughDeliveryOwner(t *testing.T) {
 	owner := newDeliveryOwner("test", ch, "test")
 	m.channels["test"] = ch
 	m.delivery.install(owner)
-	owner.StartDelivery(context.Background(), m)
+	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 	t.Cleanup(owner.CloseDeliveryAndWait)
 
 	if err := m.SendToChannel(context.Background(), "test", "chat-1", "hello"); err != nil {
