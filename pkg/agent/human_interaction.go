@@ -350,7 +350,22 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 	if runtime.al.channelManager == nil {
 		return fmt.Errorf("channel manager unavailable")
 	}
-	content := renderInteractionPrompt(record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	if runtime.al.registry != nil {
+		if agent, ok := runtime.al.registry.GetAgent(record.Route.AgentID); ok && agent != nil {
+			traceScope := runtimeevents.NewTraceScope(agent.Workspace, record.Origin.TurnID)
+			if traceScope.Complete() {
+				if err := bus.SetOutboundTraceScopes(&message, []runtimeevents.TraceScope{traceScope}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return runtime.al.sendInteractionMessage(ctx, message)
+}
+
+func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 	outboundContext := bus.InboundContext{
 		Channel:   record.Route.Channel,
 		Account:   record.Route.AccountID,
@@ -400,26 +415,14 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 		metadata = metadata.WithInteractionChoices(choices)
 		metadata.ApplyToContext(&outboundContext)
 	}
-	message := bus.OutboundMessage{
+	return bus.OutboundMessage{
 		Channel:          record.Route.Channel,
 		ChatID:           record.Route.ChatID,
 		Context:          outboundContext,
 		AgentID:          record.Route.AgentID,
 		SessionKey:       record.Route.SessionKey,
-		Content:          content,
 		ReplyToMessageID: replyToMessageID,
 	}
-	if runtime.al.registry != nil {
-		if agent, ok := runtime.al.registry.GetAgent(record.Route.AgentID); ok && agent != nil {
-			traceScope := runtimeevents.NewTraceScope(agent.Workspace, record.Origin.TurnID)
-			if traceScope.Complete() {
-				if err := bus.SetOutboundTraceScopes(&message, []runtimeevents.TraceScope{traceScope}); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return runtime.al.sendInteractionMessage(ctx, message)
 }
 
 func (al *AgentLoop) sendInteractionMessage(ctx context.Context, msg bus.OutboundMessage) error {

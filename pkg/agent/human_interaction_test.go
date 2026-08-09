@@ -25,8 +25,9 @@ import (
 
 type interactionChannelManager struct {
 	*recordingChannelManager
-	sent    chan bus.OutboundMessage
-	sendErr error
+	sent     chan bus.OutboundMessage
+	restored chan bus.OutboundMessage
+	sendErr  error
 }
 
 type blockingInteractionProvider struct {
@@ -314,7 +315,13 @@ func newInteractionChannelManager() *interactionChannelManager {
 	return &interactionChannelManager{
 		recordingChannelManager: &recordingChannelManager{},
 		sent:                    make(chan bus.OutboundMessage, 16),
+		restored:                make(chan bus.OutboundMessage, 16),
 	}
+}
+
+func (m *interactionChannelManager) RestoreInteractionControls(msg bus.OutboundMessage) error {
+	m.restored <- msg
+	return nil
 }
 
 func (m *interactionChannelManager) SendMessage(_ context.Context, msg bus.OutboundMessage) error {
@@ -3953,6 +3960,51 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	result := agent.Sessions.GetHistory(sessionKey)[resultIndex]
 	if !strings.Contains(result.Content, `"outcome":"canceled"`) {
 		t.Fatalf("recovered cancellation result = %q", result.Content)
+	}
+}
+
+func TestRecoveryRestoresWaitingQuestionControlsWithoutRepublishingPrompt(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	request := testToolSuspensionRequest(agent.Workspace)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 0 durable transitions", recovered)
+	}
+	select {
+	case restored := <-manager.restored:
+		metadata := bus.OutboundMetadataFromMessage(restored)
+		if restored.Channel != "telegram" || restored.Context.SenderID != "user-1" ||
+			!metadata.IsQuestionPrompt() || !reflect.DeepEqual(
+			metadata.InteractionChoices(),
+			[]string{"Canary", "All"},
+		) {
+			t.Fatalf("restored controls = %#v", restored)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting question controls were not restored")
+	}
+	select {
+	case duplicate := <-manager.sent:
+		t.Fatalf("recovery republished prompt: %#v", duplicate)
+	default:
 	}
 }
 

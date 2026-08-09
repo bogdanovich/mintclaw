@@ -343,7 +343,7 @@ option layout, and `/answer` command templates. It does not detect languages,
 translate content, or invoke a model after suspension.
 
 On Telegram, option labels are rendered as one-time reply-keyboard buttons.
-Every question also offers a `Cancel turn` button, while the normal message
+Every question also offers a `⛔ Cancel turn` button, while the normal message
 composer remains available for an arbitrary free-text answer. Replying to the
 question passes only the reply text to the interaction parser, excluding the
 quoted bot prompt. The keyboard is removed after an answer or cancellation;

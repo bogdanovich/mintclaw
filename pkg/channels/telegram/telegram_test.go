@@ -1432,7 +1432,7 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	require.Len(t, keyboard, 3)
 	assert.Equal(t, "Generate it", keyboard[0].([]any)[0].(map[string]any)["text"])
 	assert.Equal(t, "Enter manually", keyboard[1].([]any)[0].(map[string]any)["text"])
-	assert.Equal(t, "Cancel turn", keyboard[2].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
 }
 
 func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
@@ -1456,7 +1456,7 @@ func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
 	keyboard := payload["reply_markup"].(map[string]any)["keyboard"].([]any)
 	require.Len(t, keyboard, 1)
-	assert.Equal(t, "Cancel turn", keyboard[0].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[0].([]any)[0].(map[string]any)["text"])
 }
 
 func TestSend_ApprovalFinalRemovesKeyboard(t *testing.T) {
@@ -3364,6 +3364,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			},
 		},
 		{name: "question option", text: "Generate it", seed: true},
+		{name: "question option matching former cancel label", text: "Cancel turn", seed: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -3381,7 +3382,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			}
 			if test.seed {
 				ch.questionControls = map[telegramQuestionControlKey]map[string]struct{}{
-					{chatID: -100123, senderID: "15"}: {"Generate it": {}},
+					{chatID: -100123, senderID: "15"}: {test.text: {}},
 				}
 			}
 			msg := &telego.Message{
@@ -3426,11 +3427,27 @@ func TestQuestionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *test
 	assert.Empty(t, ch.telegramQuestionControlResponse(message, "15"))
 }
 
+func TestRestoreInteractionControlsRebuildsQuestionRouting(t *testing.T) {
+	ch := &TelegramChannel{}
+	ctx := bus.InboundContext{SenderID: "15", TopicID: "1771"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
+	require.NoError(t, ch.RestoreInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
+	}))
+	assert.Equal(t, "Generate it", ch.telegramQuestionControlResponse(&telego.Message{
+		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
+	}, "15"))
+}
+
 func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.T) {
 	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
 	assert.Equal(t, bus.InboundInteractionChoiceCancel, ch.telegramInteractionChoice(&telego.Message{
-		Text: "Cancel turn",
+		Text: bus.InboundInteractionCancelLabel,
 	}))
+	assert.Empty(t, ch.telegramInteractionChoice(&telego.Message{Text: "Cancel turn"}))
 	assert.Equal(t, bus.InboundInteractionChoiceDeny, ch.telegramInteractionChoice(&telego.Message{
 		Text: "Deny", ReplyToMessage: &telego.Message{
 			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
@@ -3442,7 +3459,7 @@ func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.
 	}{
 		{
 			name:    "cancel with whitespace",
-			message: &telego.Message{Text: " Cancel turn"},
+			message: &telego.Message{Text: " " + bus.InboundInteractionCancelLabel},
 		},
 		{
 			name: "reply to user",

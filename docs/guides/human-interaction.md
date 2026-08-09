@@ -63,7 +63,7 @@ The short interaction ID, option layout, and `/answer` syntax are runtime-owned
 machine structure. A normal message reply remains sufficient.
 
 On Telegram, each predefined option appears as a one-time reply-keyboard
-button, followed by `Cancel turn`. The message composer remains available, so
+button, followed by `⛔ Cancel turn`. The message composer remains available, so
 you can always type any free-text answer, such as `generate it yourself`, even
 when the model supplied options. Replying to the prompt strips Telegram's
 quoted-message decoration before parsing the answer. The keyboard is removed
@@ -79,7 +79,7 @@ An ordinary answer, including a negative answer such as `no` or
 `/answer <short-id> no`, supplies that answer and resumes the agent. It does not
 cancel the operation.
 
-`Cancel turn` on Telegram or `/stop` on any channel terminates the pending
+`⛔ Cancel turn` on Telegram or `/stop` on any channel terminates the pending
 foreground turn or background task. MintClaw
 durably records the cancellation, completes the suspended tool call with a
 cancellation result, and does not resume the model. `/new`, `/reset`, and

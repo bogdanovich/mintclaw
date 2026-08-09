@@ -384,6 +384,17 @@ func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID
 	c.questionControls[key] = allowed
 }
 
+// RestoreInteractionControls rebuilds ephemeral question routing from a
+// durable waiting interaction without delivering the prompt a second time.
+func (c *TelegramChannel) RestoreInteractionControls(msg bus.OutboundMessage) error {
+	chatID, threadID, err := resolveTelegramOutboundTarget(msg.ChatID, &msg.Context)
+	if err != nil {
+		return err
+	}
+	c.updateQuestionControls(msg, chatID, threadID)
+	return nil
+}
+
 func (c *TelegramChannel) telegramQuestionControlResponse(
 	message *telego.Message,
 	senderID string,
@@ -435,7 +446,7 @@ func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyM
 		for _, choice := range choices {
 			keyboard = append(keyboard, []telego.KeyboardButton{{Text: choice}})
 		}
-		keyboard = append(keyboard, []telego.KeyboardButton{{Text: "Cancel turn"}})
+		keyboard = append(keyboard, []telego.KeyboardButton{{Text: bus.InboundInteractionCancelLabel}})
 		return &telego.ReplyKeyboardMarkup{
 			Keyboard:        keyboard,
 			ResizeKeyboard:  true,
@@ -2034,7 +2045,7 @@ func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
 }
 
 func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) string {
-	if message != nil && message.Text == "Cancel turn" {
+	if message != nil && message.Text == bus.InboundInteractionCancelLabel {
 		return bus.InboundInteractionChoiceCancel
 	}
 	if message == nil || message.ReplyToMessage == nil ||

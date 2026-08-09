@@ -14,6 +14,10 @@ import (
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
+type interactionControlRestoreManager interface {
+	RestoreInteractionControls(bus.OutboundMessage) error
+}
+
 func (al *AgentLoop) scheduleHumanInteractionRecovery(ctx context.Context) {
 	if al == nil {
 		return
@@ -87,6 +91,8 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				} else if al.retryInteractionPrompt(ctx, registry, record) {
 					recovered++
 				}
+			case interactions.StatusWaiting:
+				al.restoreInteractionControls(workspace, record)
 			case interactions.StatusResuming:
 				if record.FinalDeliveryState == interactions.DeliveryStateSending ||
 					record.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
@@ -156,6 +162,24 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 		return true
 	})
 	return recovered
+}
+
+func (al *AgentLoop) restoreInteractionControls(workspace string, record interactions.Record) {
+	if record.Kind != interactions.KindQuestion || al.channelManager == nil {
+		return
+	}
+	restorer, ok := al.channelManager.(interactionControlRestoreManager)
+	if !ok {
+		return
+	}
+	if err := restorer.RestoreInteractionControls(interactionPromptMessage(record)); err != nil {
+		logger.WarnCF("agent", "Failed to restore human interaction controls", map[string]any{
+			"workspace":      workspace,
+			"interaction_id": record.ID,
+			"channel":        record.Route.Channel,
+			"error":          err.Error(),
+		})
+	}
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(

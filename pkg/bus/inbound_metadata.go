@@ -12,4 +12,5 @@ const (
 	InboundInteractionChoiceAllowOnce = "allow_once"
 	InboundInteractionChoiceDeny      = "deny"
 	InboundInteractionChoiceCancel    = "cancel"
+	InboundInteractionCancelLabel     = "⛔ Cancel turn"
 )
