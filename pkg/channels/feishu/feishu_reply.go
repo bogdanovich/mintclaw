@@ -136,7 +136,7 @@ func (c *FeishuChannel) fetchMessageByID(ctx context.Context, messageID string) 
 		MessageId(messageID).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Get(ctx, req)
+	resp, err := c.client.Im.Message.Get(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("feishu get message: %w", err)
 	}

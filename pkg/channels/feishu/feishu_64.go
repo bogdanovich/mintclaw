@@ -234,7 +234,7 @@ func (c *FeishuChannel) EditMessage(ctx context.Context, chatID, messageID, cont
 		Body(larkim.NewPatchMessageReqBodyBuilder().Content(cardContent).Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Patch(ctx, req)
+	resp, err := c.client.Im.Message.Patch(ctx, req)
 	if err != nil {
 		return fmt.Errorf("feishu edit: %w: %w", err, channels.ErrTemporary)
 	}
@@ -274,7 +274,7 @@ func (c *FeishuChannel) deleteMessageAPI(ctx context.Context, chatID, messageID 
 		MessageId(messageID).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Delete(ctx, req)
+	resp, err := c.client.Im.Message.Delete(ctx, req)
 	if err != nil {
 		return fmt.Errorf("feishu delete: %w", err)
 	}
@@ -311,7 +311,7 @@ func (c *FeishuChannel) SendPlaceholder(ctx context.Context, chatID string) (str
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Create(ctx, req)
+	resp, err := c.client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("feishu placeholder send: %w", err)
 	}
@@ -350,7 +350,7 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.MessageReaction.Create(ctx, req)
+	resp, err := c.client.Im.MessageReaction.Create(ctx, req)
 	if err != nil {
 		logger.ErrorCF("feishu", "Failed to add reaction", map[string]any{
 			"emoji":      chosenEmoji,
@@ -387,7 +387,7 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 			MessageId(messageID).
 			ReactionId(reactionID).
 			Build()
-		_, _ = c.client.Im.V1.MessageReaction.Delete(context.Background(), delReq)
+		_, _ = c.client.Im.MessageReaction.Delete(context.Background(), delReq)
 	}
 	return undo, nil
 }
@@ -805,7 +805,7 @@ func (c *FeishuChannel) fetchResourceData(
 		Type(resourceType).
 		Build()
 
-	resp, err := c.client.Im.V1.MessageResource.Get(ctx, req)
+	resp, err := c.client.Im.MessageResource.Get(ctx, req)
 	if err == nil && resp.Success() && resp.File != nil {
 		return resp.File, resp.FileName
 	}
@@ -845,7 +845,7 @@ func (c *FeishuChannel) fetchImageDirect(ctx context.Context, imageKey string) (
 		ImageKey(imageKey).
 		Build()
 
-	resp, err := c.client.Im.V1.Image.Get(ctx, req)
+	resp, err := c.client.Im.Image.Get(ctx, req)
 	if err != nil {
 		logger.ErrorCF("feishu", "Image.Get fallback failed", map[string]any{
 			"image_key": imageKey,
@@ -975,7 +975,7 @@ func (c *FeishuChannel) sendCard(ctx context.Context, chatID, cardContent string
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Create(ctx, req)
+	resp, err := c.client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("feishu send card: %w", channels.ErrTemporary)
 	}
@@ -1008,7 +1008,7 @@ func (c *FeishuChannel) sendText(ctx context.Context, chatID, text string) (stri
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Create(ctx, req)
+	resp, err := c.client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("feishu send text: %w", channels.ErrTemporary)
 	}
@@ -1037,7 +1037,7 @@ func (c *FeishuChannel) sendImage(ctx context.Context, chatID string, file *os.F
 			Build()).
 		Build()
 
-	uploadResp, err := c.client.Im.V1.Image.Create(ctx, uploadReq)
+	uploadResp, err := c.client.Im.Image.Create(ctx, uploadReq)
 	if err != nil {
 		return fmt.Errorf("feishu image upload: %w", err)
 	}
@@ -1062,7 +1062,7 @@ func (c *FeishuChannel) sendImage(ctx context.Context, chatID string, file *os.F
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Create(ctx, req)
+	resp, err := c.client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return fmt.Errorf("feishu image send: %w", err)
 	}
@@ -1093,7 +1093,7 @@ func (c *FeishuChannel) sendFile(ctx context.Context, chatID string, file *os.Fi
 			Build()).
 		Build()
 
-	uploadResp, err := c.client.Im.V1.File.Create(ctx, uploadReq)
+	uploadResp, err := c.client.Im.File.Create(ctx, uploadReq)
 	if err != nil {
 		return fmt.Errorf("feishu file upload: %w", err)
 	}
@@ -1118,7 +1118,7 @@ func (c *FeishuChannel) sendFile(ctx context.Context, chatID string, file *os.Fi
 			Build()).
 		Build()
 
-	resp, err := c.client.Im.V1.Message.Create(ctx, req)
+	resp, err := c.client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return fmt.Errorf("feishu file send: %w", err)
 	}
