@@ -92,7 +92,7 @@ type activeDirectJob struct {
 	stderr    *boundedJobLog
 	root      *fileRoot
 	artifacts []JobArtifactDeclaration
-	timeout   time.Duration
+	timeoutAt int64
 	cancel    chan struct{}
 	done      chan struct{}
 	once      sync.Once
@@ -228,8 +228,7 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 		}
 		return failed, nil
 	}
-	active, activeErr := manager.prepareActive(record.JobID, prepared)
-	prepared.root = nil
+	active, activeErr := manager.prepareActive(record.JobID, &prepared)
 	if activeErr != nil {
 		_ = manager.store.ReleasePayload(record.JobID)
 		manager.release(record.JobID)
@@ -280,6 +279,7 @@ func (manager *DirectJobManager) Start(plan nodes.ExecutionPlan) (JobRecord, err
 		active.launchMu.Unlock()
 		return JobRecord{}, fmt.Errorf("persist running node job: %w", err)
 	}
+	active.timeoutAt = running.TimeoutAt
 	go manager.wait(record.JobID, active)
 	active.launchMu.Unlock()
 	return running, nil
@@ -335,8 +335,11 @@ func (manager *DirectJobManager) prepare(plan nodes.ExecutionPlan) (preparedDire
 
 func (manager *DirectJobManager) prepareActive(
 	jobID string,
-	prepared preparedDirectJob,
+	prepared *preparedDirectJob,
 ) (*activeDirectJob, error) {
+	if prepared == nil {
+		return nil, errors.New("prepared node job is required")
+	}
 	stdoutName := jobLogFileName(jobID, false)
 	stderrName := jobLogFileName(jobID, true)
 	_ = manager.store.RemoveFile(stdoutName)
@@ -360,15 +363,17 @@ func (manager *DirectJobManager) prepareActive(
 	command.Stderr = stderr
 	command.WaitDelay = time.Second
 	prepareJobProcess(command)
-	return &activeDirectJob{
+	active := &activeDirectJob{
 		command: command, stdout: stdout, stderr: stderr, root: prepared.root,
-		artifacts: prepared.artifacts, timeout: prepared.timeout,
-		cancel: make(chan struct{}), done: make(chan struct{}),
-	}, nil
+		artifacts: prepared.artifacts,
+		cancel:    make(chan struct{}), done: make(chan struct{}),
+	}
+	prepared.root = nil
+	return active, nil
 }
 
 func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
-	timer := time.NewTimer(active.timeout)
+	timer := time.NewTimer(jobTimeoutDelay(active.timeoutAt, time.Now()))
 	defer timer.Stop()
 	observer := time.NewTicker(jobProcessObservationInterval)
 	defer observer.Stop()
@@ -407,6 +412,10 @@ func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
 	_ = manager.store.ReleasePayload(jobID)
 	manager.release(jobID)
 	close(active.done)
+}
+
+func jobTimeoutDelay(timeoutAt int64, now time.Time) time.Duration {
+	return max(time.Unix(0, timeoutAt).Sub(now), 0)
 }
 
 func jobCompletionForProcess(

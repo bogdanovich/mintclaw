@@ -158,6 +158,44 @@ func TestDirectJobManagerCancellationIsDurableAndBounded(t *testing.T) {
 	}
 }
 
+func TestJobTimeoutDelayUsesPersistedAbsoluteDeadline(t *testing.T) {
+	now := time.Unix(100, 0)
+	if delay := jobTimeoutDelay(now.Add(-time.Second).UnixNano(), now); delay != 0 {
+		t.Fatalf("expired deadline delay = %v", delay)
+	}
+	if delay := jobTimeoutDelay(now.Add(3*time.Second).UnixNano(), now); delay != 3*time.Second {
+		t.Fatalf("future deadline delay = %v", delay)
+	}
+}
+
+func TestPrepareActiveRetainsRootOwnershipOnFailure(t *testing.T) {
+	manager, store, root, executable := newTestDirectJobManager(t, DirectJobLimits{})
+	rootFile, err := os.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchored := &fileRoot{path: root, file: rootFile}
+	prepared := preparedDirectJob{
+		command: preparedSystemExec{
+			executable: executable,
+			cwd:        root,
+			env:        os.Environ(),
+		},
+		root: anchored,
+	}
+	store.Close()
+	active, err := manager.prepareActive("job_prepare_failure", &prepared)
+	if err == nil || active != nil {
+		t.Fatalf("prepareActive() = %#v, error %v", active, err)
+	}
+	if prepared.root != anchored || prepared.root.file == nil {
+		t.Fatalf("prepared root ownership was lost: %#v", prepared.root)
+	}
+	if err := prepared.root.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDirectJobManagerEnforcesTimeoutWithoutReplay(t *testing.T) {
 	manager, store, root, executable := newTestDirectJobManager(t, DirectJobLimits{})
 	plan := testDirectJobPlan(t, executable, root, "sleep", []JobArtifactDeclaration{}, 1)
