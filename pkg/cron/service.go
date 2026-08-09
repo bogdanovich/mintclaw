@@ -60,6 +60,7 @@ type JobHandler func(job *CronJob) (string, error)
 type CronService struct {
 	storePath  string
 	store      *CronStore
+	loadErr    error
 	onJob      JobHandler
 	mu         sync.RWMutex
 	running    bool
@@ -77,7 +78,7 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		wakeChan:  make(chan struct{}),
 	}
 	// Initialize and load store on creation
-	_ = cs.loadStore()
+	cs.loadErr = cs.loadStore()
 	return cs
 }
 
@@ -448,6 +449,10 @@ func (cs *CronService) AddJobWithPayload(
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	if cs.loadErr != nil {
+		return nil, fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	}
+
 	now := time.Now().UnixMilli()
 
 	// One-time tasks (at) should be deleted after execution
@@ -507,6 +512,10 @@ func (cs *CronService) GetJob(jobID string) (*CronJob, bool) {
 func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.loadErr != nil {
+		return fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	}
 
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == job.ID {
@@ -570,6 +579,10 @@ func sameInt64(a, b *int64) bool {
 func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.loadErr != nil {
+		return false
+	}
 
 	return cs.removeJobUnsafe(jobID)
 }

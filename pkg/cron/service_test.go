@@ -500,3 +500,27 @@ func TestAddJobWithPayload_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
 		t.Fatalf("live store still contains %d job(s) after failed persistence, want 0", len(jobs))
 	}
 }
+
+func TestAddJob_DoesNotOverwriteMalformedStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+	malformed := []byte("{not valid json")
+	if err := os.WriteFile(storePath, malformed, 0o600); err != nil {
+		t.Fatalf("write malformed store: %v", err)
+	}
+
+	cs := NewCronService(storePath, nil)
+
+	_, err := cs.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	if err == nil {
+		t.Fatal("AddJob succeeded, want load failure")
+	}
+
+	got, readErr := os.ReadFile(storePath)
+	if readErr != nil {
+		t.Fatalf("read store: %v", readErr)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("malformed store was overwritten: got %q, want original %q", got, malformed)
+	}
+}
