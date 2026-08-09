@@ -472,8 +472,16 @@ func (cs *CronService) AddJobWithPayload(
 
 	cs.store.Jobs = append(cs.store.Jobs, job)
 	if err := cs.saveStoreUnsafe(); err != nil {
-		// Roll back the in-memory append: a job reported as not added must not
-		// remain enabled in the live scheduler store for this process lifetime.
+		if fileutil.IsCommittedWriteError(err) {
+			// The atomic rename already installed the new store: the job is
+			// durable on disk (only its sync is unconfirmed). Keep it live so
+			// it cannot reappear unexpectedly after restart, and surface the
+			// uncertain durability so a retry cannot create a duplicate.
+			cs.notify()
+			return &job, fmt.Errorf("job %s added but durability was not confirmed: %w", job.ID, err)
+		}
+		// Pre-commit failure: roll back the in-memory append so a job reported
+		// as not added cannot run in the live scheduler for this process.
 		cs.store.Jobs = cs.store.Jobs[:len(cs.store.Jobs)-1]
 		return nil, err
 	}
