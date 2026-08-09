@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
@@ -39,6 +40,64 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[3].Name != BrowserCommandAct || descriptors[3].Risk != RiskWrite ||
 		descriptors[4].Name != BrowserCommandSessionClose || descriptors[4].Risk != RiskWrite {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
+	}
+}
+
+func TestBrowserSelectDispatchAcceptsWorstCaseJSONEscaping(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == BrowserCommandAct {
+			descriptor = candidate
+			break
+		}
+	}
+	if descriptor.Name == "" {
+		t.Fatal("browser action descriptor is unavailable")
+	}
+	value := strings.Repeat("\x01", MaxBrowserTextInputBytes)
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "select", "ref": "host_ref_1"}
+	input["effect"] = "local_edit"
+	input["current_origin"] = "https://example.com"
+	input["expected_role"] = "combobox"
+	input["expected_name"] = "State"
+	input["input_digest"] = BrowserInputDigest(value)
+	input["input_bytes"] = len(value)
+	inputRaw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareExecutionPlan(InvocationRequest{
+		InvocationID: "inv_browser_select_escape", IdempotencyKey: "idem_browser_select_escape",
+		NodeID: ID("node_test"), CatalogHash: catalogHash, Command: BrowserCommandAct,
+		Input: inputRaw, AgentID: "main", SessionID: "session_test", ActorID: "user_test",
+		TimeoutSeconds: 30, OutputLimitBytes: MaxBrowserToolResultBytes,
+	}, descriptor, "local", "policy-1", time.Unix(1, 0), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ephemeral, err := json.Marshal(struct {
+		Value string `json:"value"`
+	}{Value: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ephemeral) <= MaxBrowserTextInputBytes+128 || len(ephemeral) > MaxBrowserEphemeralInputBytes {
+		t.Fatalf("escaped envelope bytes = %d", len(ephemeral))
+	}
+	if err = (InvocationDispatch{Plan: plan, EphemeralInput: ephemeral}).Validate(); err != nil {
+		t.Fatalf("InvocationDispatch.Validate() error = %v", err)
 	}
 }
 

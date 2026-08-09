@@ -227,6 +227,7 @@ type workerSlot struct {
 	refs            map[string]DriverElement
 	inputs          map[string]string
 	uploads         map[string]UploadBinding
+	navigationID    string
 	safeFailure     string
 	cleanupComplete bool
 }

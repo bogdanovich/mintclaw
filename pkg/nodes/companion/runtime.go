@@ -576,10 +576,40 @@ func (runtime *Runtime) executeAccepted(
 	if err != nil {
 		return nil, runtime.completeInvalidOutput(plan, err)
 	}
-	if _, err := runtime.ledger.CompleteSuccess(plan.InvocationID, raw); err != nil {
+	durableResult, err := durableInvocationSuccess(plan, raw)
+	if err != nil {
+		return nil, runtime.completeInvalidOutput(plan, err)
+	}
+	if _, err := runtime.ledger.CompleteSuccess(plan.InvocationID, durableResult); err != nil {
 		return nil, fmt.Errorf("%w: persist successful result: %w", ErrInvocationOutcomeUnknown, err)
 	}
 	return raw, nil
+}
+
+func durableInvocationSuccess(
+	plan nodes.ExecutionPlan,
+	result json.RawMessage,
+) (json.RawMessage, error) {
+	if plan.Command != nodes.BrowserCommandAct {
+		return result, nil
+	}
+	var input nodes.BrowserActInput
+	if err := json.Unmarshal(plan.Input, &input); err != nil {
+		return nil, fmt.Errorf("decode browser action for durable result: %w", err)
+	}
+	if input.Action.Kind != "select" {
+		return result, nil
+	}
+	var actionResult nodes.BrowserActResult
+	if err := json.Unmarshal(result, &actionResult); err != nil {
+		return nil, fmt.Errorf("decode select result for durable receipt: %w", err)
+	}
+	actionResult.Observation = nil
+	durable, err := json.Marshal(actionResult)
+	if err != nil {
+		return nil, fmt.Errorf("encode select durable receipt: %w", err)
+	}
+	return durable, nil
 }
 
 func (runtime *Runtime) completeInvalidOutput(

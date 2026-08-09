@@ -71,6 +71,16 @@ transport loss, or ambiguous driver result quarantines the session and never
 replays an accepted action. The raw driver identity and generation are not
 exposed in tool output or persisted in either invocation ledger.
 
+Gateway-local Playwright sessions use the same driver-owned identity: the
+broker brackets the observation that mints snapshot authority, retains only
+its opaque identity in the live worker slot, and routes click, select, press,
+and scroll through the same final navigation check. Snapshot invalidation and
+session cleanup erase that identity. A companion select returns its fresh
+observation only in the initial transient response; the companion ledger
+stores a bounded success receipt without the observation so page-rendered
+option text cannot persist the ephemeral option identity. The gateway browser
+ledger likewise stores only its existing bounded completion receipt.
+
 The final action is issued through a private navigation-checked Playwright
 callback. That callback refreshes the CDP main-frame state, compares the exact
 expected frame, loader, and monotonic generation, and only then issues the

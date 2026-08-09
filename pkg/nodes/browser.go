@@ -26,26 +26,29 @@ const (
 	BrowserNetworkPublicWeb    = "public_web"
 	BrowserNetworkAnyHTTP      = "any_http"
 
-	MaxBrowserProfiles         = 8
-	MaxBrowserActions          = 6
-	MaxBrowserScrollAmount     = 5
-	MaxBrowserSessions         = 1
-	MaxBrowserTabs             = 4
-	MaxBrowserSessionSeconds   = 60 * 60
-	MaxBrowserIdleSeconds      = 10 * 60
-	MaxBrowserPreparedSeconds  = 5 * 60
-	MaxBrowserActionSeconds    = 60
-	MaxBrowserURLBytes         = 16 * 1024
-	MaxBrowserTitleBytes       = 4 * 1024
-	MaxBrowserSnapshotBytes    = 256 * 1024
-	MaxBrowserScreenshotBytes  = 8 * 1024 * 1024
-	MaxBrowserUploadBytes      = 32 * 1024 * 1024
-	MaxBrowserDownloadBytes    = 32 * 1024 * 1024
-	MaxBrowserSnapshotRefs     = 500
-	MaxBrowserTextInputBytes   = 16 * 1024
-	MaxBrowserToolResultBytes  = 320 * 1024
-	MaxBrowserRetentionSeconds = 7 * 24 * 60 * 60
-	MinBrowserToolResultBytes  = 64 * 1024
+	MaxBrowserProfiles        = 8
+	MaxBrowserActions         = 6
+	MaxBrowserScrollAmount    = 5
+	MaxBrowserSessions        = 1
+	MaxBrowserTabs            = 4
+	MaxBrowserSessionSeconds  = 60 * 60
+	MaxBrowserIdleSeconds     = 10 * 60
+	MaxBrowserPreparedSeconds = 5 * 60
+	MaxBrowserActionSeconds   = 60
+	MaxBrowserURLBytes        = 16 * 1024
+	MaxBrowserTitleBytes      = 4 * 1024
+	MaxBrowserSnapshotBytes   = 256 * 1024
+	MaxBrowserScreenshotBytes = 8 * 1024 * 1024
+	MaxBrowserUploadBytes     = 32 * 1024 * 1024
+	MaxBrowserDownloadBytes   = 32 * 1024 * 1024
+	MaxBrowserSnapshotRefs    = 500
+	MaxBrowserTextInputBytes  = 16 * 1024
+	// JSON can encode one accepted input byte as a six-byte Unicode escape.
+	// The fixed allowance covers the transport-only {"value": ...} wrapper.
+	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserToolResultBytes     = 320 * 1024
+	MaxBrowserRetentionSeconds    = 7 * 24 * 60 * 60
+	MinBrowserToolResultBytes     = 64 * 1024
 )
 
 const (

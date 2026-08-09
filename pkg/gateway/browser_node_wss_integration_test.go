@@ -764,10 +764,13 @@ func (host *wssBrowserHost) Select(
 		request.Effect != "local_edit" || request.ApprovalDigest != "" {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}
-	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+	result := wssBrowserObservation(nodes.BrowserHostObserveRequest{
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
-	}, url), nil
+	}, url)
+	result.Snapshot += `
+- text "CA"`
+	return result, nil
 }
 
 func (host *wssBrowserHost) Press(

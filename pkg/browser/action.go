@@ -66,7 +66,7 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	if err != nil {
 		return Observation{}, err
 	}
-	driverObservation, err := worker.Observe(ctx)
+	driverObservation, navigationID, err := observeWithNavigationCheck(ctx, worker)
 	if err != nil {
 		if errors.Is(err, ErrWorkerLost) {
 			quarantineErr := broker.quarantineWorkerSessionLocked(
@@ -111,6 +111,7 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	slot.refs = refs
 	slot.inputs = nil
 	slot.uploads = nil
+	slot.navigationID = navigationID
 	return Observation{
 		SessionID: session.ID, TabID: session.TabID, SnapshotID: snapshotID,
 		SnapshotGeneration: session.SnapshotGeneration, URL: driverObservation.URL,
@@ -313,6 +314,20 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				if executeErr := preparedWorker.ExecutePrepared(executeCtx, WorkerPreparedAction{
 					InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
 				}); executeErr != nil {
+					return nil, executeErr
+				}
+				return json.RawMessage(`{"status":"completed"}`), nil
+			}
+			if checkedWorker, ok := worker.(NavigationCheckedActionWorker); ok &&
+				navigationCheckedAction(prepared.Action.Kind) {
+				if slot.navigationID == "" {
+					return nil, ErrStale
+				}
+				if executeErr := checkedWorker.ExecuteAfterNavigationCheck(
+					executeCtx,
+					slot.navigationID,
+					driverAction,
+				); executeErr != nil {
 					return nil, executeErr
 				}
 				return json.RawMessage(`{"status":"completed"}`), nil
@@ -627,6 +642,7 @@ func (broker *Broker) invalidateSnapshotLocked(ctx context.Context, sessionID st
 		slot.refs = nil
 		slot.inputs = nil
 		slot.uploads = nil
+		slot.navigationID = ""
 	}
 	session.SnapshotID = ""
 	session.SnapshotOrigin = ""
@@ -659,6 +675,42 @@ func (broker *Broker) invalidateSnapshotLocked(ctx context.Context, sessionID st
 		return errors.Join(ErrSnapshotInvalidation, err, quarantineErr)
 	}
 	return nil
+}
+
+func observeWithNavigationCheck(
+	ctx context.Context,
+	worker ActionWorker,
+) (DriverObservation, string, error) {
+	checkedWorker, ok := worker.(NavigationCheckedActionWorker)
+	if !ok {
+		observation, err := worker.Observe(ctx)
+		return observation, "", err
+	}
+	before, err := checkedWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	observation, err := worker.Observe(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	after, err := checkedWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	if before == "" || before != after {
+		return DriverObservation{}, "", ErrStale
+	}
+	return observation, after, nil
+}
+
+func navigationCheckedAction(kind ActionKind) bool {
+	switch kind {
+	case ActionClick, ActionSelect, ActionPress, ActionScroll:
+		return true
+	default:
+		return false
+	}
 }
 
 func preparationView(prepared PreparedAction) Preparation {

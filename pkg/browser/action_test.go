@@ -26,6 +26,8 @@ type actionTestWorker struct {
 	resolveCalls   int
 	actions        []DriverAction
 	onExecute      func(DriverAction)
+	navigationID   string
+	beforeNavCheck func()
 	executeErr     error
 	screenshot     DriverScreenshot
 	screenshotErr  error
@@ -86,6 +88,31 @@ func (worker *actionTestWorker) Execute(_ context.Context, action DriverAction) 
 		worker.onExecute(action)
 	}
 	return worker.executeErr
+}
+
+func (worker *actionTestWorker) NavigationIdentity(context.Context) (string, error) {
+	if worker.navigationID == "" {
+		return "navigation_1", nil
+	}
+	return worker.navigationID, nil
+}
+
+func (worker *actionTestWorker) ExecuteAfterNavigationCheck(
+	ctx context.Context,
+	expected string,
+	action DriverAction,
+) error {
+	if worker.beforeNavCheck != nil {
+		worker.beforeNavCheck()
+	}
+	current, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if expected == "" || expected != current {
+		return ErrStale
+	}
+	return worker.Execute(ctx, action)
 }
 
 func (worker *actionTestWorker) CatalogRevision() string {
@@ -1311,6 +1338,67 @@ func TestBrokerExecutesAdmittedSelectPressAndScrollActions(t *testing.T) {
 			if err != nil || invocation.State != InvocationSucceeded ||
 				!reflect.DeepEqual(worker.actions, []DriverAction{test.wantDriver}) {
 				t.Fatalf("execution = %+v, %v; driver actions = %+v", invocation, err, worker.actions)
+			}
+		})
+	}
+}
+
+func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T) {
+	for _, actionKind := range []ActionKind{ActionSelect, ActionPress} {
+		t.Run(string(actionKind), func(t *testing.T) {
+			root := admittedBrowserConfig()
+			target := root.Tools.Browser.Targets["gateway"]
+			profile := target.Profiles["managed"]
+			profile.DryRun = false
+			profile.AllowApprovedActions = true
+			target.Profiles["managed"] = profile
+			root.Tools.Browser.Targets["gateway"] = target
+			store := NewMemoryStore()
+			broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+			element := DriverElement{Target: "e1", Role: "combobox", Name: "State"}
+			worker.observation = driverObservationFixture(element)
+			worker.resolveElement = element
+			owner := testOwner()
+			observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			action := Action{Kind: actionKind}
+			if actionKind == ActionSelect {
+				action.Ref = onlyVisibleRef(t, observation.Snapshot)
+				action.Value = "CA"
+			} else {
+				action.Target = "document"
+				action.Key = "Tab"
+			}
+			prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_checked_" + string(actionKind),
+				SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+				Action: action,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.beforeNavCheck = func() { worker.navigationID = "navigation_2" }
+			var approval *ApprovalBinding
+			if prepared.RequiresApproval {
+				approval = &prepared.Approval
+			}
+			invocation, executeErr := broker.ExecuteAction(
+				t.Context(), owner, prepared.Action.ID, approval,
+			)
+			if executeErr != nil || invocation.State != InvocationUnknown || len(worker.actions) != 0 {
+				t.Fatalf(
+					"ExecuteAction() = %+v, %v; actions = %+v",
+					invocation,
+					executeErr,
+					worker.actions,
+				)
+			}
+			stored, err := store.GetSession(t.Context(), session.ID)
+			if err != nil || stored.State != SessionLost || stored.SafeFailure != "outcome_unknown" {
+				t.Fatalf("quarantined session = %+v, %v", stored, err)
 			}
 		})
 	}

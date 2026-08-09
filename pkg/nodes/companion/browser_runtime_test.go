@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ type fakeBrowserCommandHost struct {
 	closed         int
 	navigateError  error
 	invalidAction  bool
+	selectSnapshot string
 	routedSessions []string
 }
 
@@ -105,7 +107,11 @@ func (host *fakeBrowserCommandHost) Select(
 ) (nodes.BrowserObservationResult, error) {
 	host.selected++
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1), host.navigateError
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	if host.selectSnapshot != "" {
+		result.Snapshot = host.selectSnapshot
+	}
+	return result, host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Press(
@@ -284,6 +290,7 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	selectHost.profiles[0].DryRun = false
 	selectHost.profiles[0].AllowApprovedActions = true
 	selectHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	selectHost.selectSnapshot = `- combobox "State CA" [ref=host_ref_1]`
 	selectRuntime := newBrowserRuntimeFixture(t, selectHost)
 	selectInput := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
@@ -302,10 +309,21 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	if strings.Contains(string(selectPlan.Input), "CA") {
 		t.Fatalf("durable select plan exposed option identity: %s", selectPlan.Input)
 	}
-	if _, err = selectRuntime.InvokeWithEphemeral(
+	selectResult, err := selectRuntime.InvokeWithEphemeral(
 		t.Context(), selectPlan, json.RawMessage(`{"value":"CA"}`),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("InvokeWithEphemeral(select) error = %v", err)
+	}
+	if !strings.Contains(string(selectResult), `State CA`) {
+		t.Fatalf("transient select result omitted fresh observation: %s", selectResult)
+	}
+	durable, found, err := selectRuntime.Invocation(selectPlan.InvocationID)
+	if err != nil || !found || durable.State != nodes.InvocationSucceeded {
+		t.Fatalf("durable select invocation = %+v, %v, %v", durable, found, err)
+	}
+	if bytes.Contains(durable.Result, []byte("CA")) {
+		t.Fatalf("durable select receipt exposed option identity: %s", durable.Result)
 	}
 	if selectHost.selected != 1 {
 		t.Fatalf("select calls = %d", selectHost.selected)
