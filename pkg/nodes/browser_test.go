@@ -303,6 +303,11 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	if err = validateInvocationInput(act.InputSchema, input); err != nil {
 		t.Fatalf("approved button click rejected: %v", err)
 	}
+	delete(input, "expected_name")
+	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+		t.Fatalf("approved unnamed button click rejected: %v", err)
+	}
+	input["expected_name"] = "Save"
 	input["effect"] = "unknown"
 	if err = validateInvocationInput(act.InputSchema, input); err == nil {
 		t.Fatal("button click with lowered effect was accepted")

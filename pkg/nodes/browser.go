@@ -745,7 +745,7 @@ func browserCommandInputSchema(
 				"effect":           map[string]any{"const": effect},
 			}
 			if action == "click" {
-				required = append(required, "expected_role", "expected_name")
+				required = append(required, "expected_role")
 				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
