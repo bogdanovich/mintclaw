@@ -83,7 +83,7 @@ func (r *RawNode) UnmarshalJSON(data []byte) error {
 	if len(trimmed) > 0 {
 		first := trimmed[0]
 		if first != '{' && first != '[' && first != '"' && first != '-' &&
-			!(first >= '0' && first <= '9') && first != 'n' && first != 't' && first != 'f' {
+			(first < '0' || first > '9') && first != 'n' && first != 't' && first != 'f' {
 			// Looks like YAML, not JSON. Parse as YAML and convert to JSON.
 			var v any
 			if err := yaml.Unmarshal(data, &v); err != nil {
@@ -747,9 +747,8 @@ func InitChannelList(channels ChannelsConfig) error {
 				return fmt.Errorf("channel %q failed to decode settings: %w", name, err)
 			}
 			// Apply env overrides for channel-specific fields via struct tags
-			if err := env.Parse(target); err != nil {
-				// Non-fatal: some env vars may not apply
-			}
+			// Non-fatal: some env vars may not apply
+			_ = env.Parse(target)
 			applyTelegramStreamingEnvCompat(target)
 			if err := validateChannelStreamingConfig(name, target); err != nil {
 				return err

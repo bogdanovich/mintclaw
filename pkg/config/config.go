@@ -193,7 +193,7 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 		Primary   string   `json:"primary,omitempty"`
 		Fallbacks []string `json:"fallbacks,omitempty"`
 	}
-	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks})
+	return json.Marshal(raw(m))
 }
 
 type AgentConfig struct {

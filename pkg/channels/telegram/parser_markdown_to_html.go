@@ -147,9 +147,7 @@ func extractRawURLs(text string) rawURLMatch {
 	matches := reRawURL.FindAllString(text, -1)
 
 	urls := make([]string, 0, len(matches))
-	for _, match := range matches {
-		urls = append(urls, match)
-	}
+	urls = append(urls, matches...)
 
 	i := 0
 	text = reRawURL.ReplaceAllStringFunc(text, func(string) string {

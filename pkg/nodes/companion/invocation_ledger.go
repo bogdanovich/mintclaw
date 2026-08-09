@@ -446,8 +446,8 @@ func (ledger *InvocationLedger) recoverUnfinished() error {
 	now := nowTime.UnixNano()
 	changed := ledger.expireAcceptedLocked(nowTime)
 	for id, record := range ledger.records {
-		switch {
-		case record.State == nodes.InvocationRunning:
+		switch record.State {
+		case nodes.InvocationRunning:
 			record.State = nodes.InvocationUnknown
 			record.UpdatedAt = now
 		default:

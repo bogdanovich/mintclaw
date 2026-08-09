@@ -131,7 +131,7 @@ func claimBrowserScreenshotDelivery(
 	record, claimed, claimErr := spool.ClaimDelivery(
 		owner, artifactRef, mediaRef, nodeFileDeliveryKey(owner, retained),
 	)
-	if claimErr != nil && !(claimed && record.DeliveryAt != 0 && fileutil.IsCommittedWriteError(claimErr)) {
+	if claimErr != nil && (!claimed || record.DeliveryAt == 0 || !fileutil.IsCommittedWriteError(claimErr)) {
 		return claimErr
 	}
 	// An exact duplicate claim is idempotent so a durable outbox intent can
@@ -231,7 +231,7 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 		}
 	} else {
 		writer, record, created, err = spool.Begin(owner, spec)
-		if err != nil && !(created && writer != nil && fileutil.IsCommittedWriteError(err)) {
+		if err != nil && (!created || writer == nil || !fileutil.IsCommittedWriteError(err)) {
 			if writer != nil {
 				_ = writer.Abort()
 			}
@@ -254,8 +254,7 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 			offset = end
 		}
 		record, err = writer.Commit()
-		if err != nil && !(record.State == nodes.TransferArtifactCommitted &&
-			fileutil.IsCommittedWriteError(err)) {
+		if err != nil && (record.State != nodes.TransferArtifactCommitted || !fileutil.IsCommittedWriteError(err)) {
 			_ = writer.Abort()
 			return browser.ScreenshotArtifact{}, err
 		}

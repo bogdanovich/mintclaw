@@ -498,13 +498,9 @@ func TestMigration_Integration_EmptyAgentsDefaults(t *testing.T) {
 	// Note: When fields are explicitly set in config (even to zero values),
 	// they override defaults. This is correct JSON unmarshaling behavior.
 	// Users should set values they want; defaults are for unspecified fields.
-	if cfg.Agents.Defaults.MaxTokens == 0 {
-		// This is expected when users don't set max_tokens in their config
-		// The zero value (0) from the legacy config is preserved
-	}
-	if cfg.Agents.Defaults.MaxToolIterations == 0 {
-		// Same as above - zero value is preserved if it was in the config
-	}
+	// This is expected when users don't set max_tokens in their config:
+	// the zero value (0) from the legacy config is preserved.
+	// Same applies to max_tool_iterations - zero value preserved if set.
 }
 
 // TestMigration_Integration_ModelNameField tests migration using new model_name field

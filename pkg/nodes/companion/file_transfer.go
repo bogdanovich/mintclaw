@@ -758,7 +758,7 @@ func (runtime *FileTransferRuntime) streamDownload(
 		active.record.TransferID,
 		func(record *FileTransferRecord, _ time.Time) error {
 			if record.State != FileTransferStreaming &&
-				!(record.State == FileTransferAccepted && record.TotalSize == 0) {
+				(record.State != FileTransferAccepted || record.TotalSize != 0) {
 				return ErrFileTransferConflict
 			}
 			record.State = FileTransferReceived
@@ -832,8 +832,8 @@ func (runtime *FileTransferRuntime) commitUploadLocked(
 		return runtime.sendExisting(frame, active.record, send)
 	}
 	if active.record.State != FileTransferStreaming &&
-		!(active.record.State == FileTransferAccepted &&
-			active.record.TotalSize == 0) {
+		(active.record.State != FileTransferAccepted ||
+			active.record.TotalSize != 0) {
 		return runtime.sendFailure(frame, send, "TRANSFER_NOT_STAGED")
 	}
 	if active.record.ObservedBytes != active.record.TotalSize ||

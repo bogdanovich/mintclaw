@@ -738,9 +738,7 @@ func (c *WeComChannel) uploadOutboundMedia(
 	finishEnv, err := c.sendCommandAck(wecomCommand{
 		Cmd:     wecomCmdUploadMediaEnd,
 		Headers: wecomHeaders{ReqID: randomID(10)},
-		Body: wecomUploadMediaFinishBody{
-			UploadID: initResp.UploadID,
-		},
+		Body:    wecomUploadMediaFinishBody(initResp),
 	}, wecomUploadTimeout)
 	if err != nil {
 		return nil, err
