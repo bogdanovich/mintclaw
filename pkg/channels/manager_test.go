@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +31,37 @@ type mockChannel struct {
 	placeholdersSent  int
 	editedMessages    int
 	lastPlaceholderID string
+}
+
+type countingListener struct {
+	accepts      atomic.Int32
+	secondAccept chan struct{}
+	closed       chan struct{}
+	closeOnce    sync.Once
+}
+
+func newCountingListener() *countingListener {
+	return &countingListener{
+		secondAccept: make(chan struct{}),
+		closed:       make(chan struct{}),
+	}
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	if l.accepts.Add(1) == 2 {
+		close(l.secondAccept)
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *countingListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *countingListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
 func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
@@ -393,7 +425,7 @@ func TestSetMediaStorePropagatesToExistingChannels(t *testing.T) {
 
 	m := newTestManager()
 	m.lifecycle.mediaStore = oldStore
-	m.lifecycle.channels["telegram"] = ch
+	m.lifecycle.storeChannel("telegram", ch)
 
 	m.SetMediaStore(newStore)
 
@@ -408,7 +440,7 @@ func TestSetMediaStorePropagatesToExistingChannels(t *testing.T) {
 func TestReloadPreservesDispatcherOwnership(t *testing.T) {
 	m := newTestManager()
 	m.lifecycle.config = config.DefaultConfig()
-	m.lifecycle.channelHashes = toChannelHashes(m.lifecycle.config)
+	m.lifecycle.setInitialHashes(toChannelHashes(m.lifecycle.config))
 	dispatchCtx := m.delivery.startDispatcher(context.Background())
 
 	if err := m.Reload(t.Context(), config.DefaultConfig()); err != nil {
@@ -446,10 +478,10 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 
 	m := newTestManager()
 	m.lifecycle.config = oldCfg
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", newChannelWorker("test", ch, "test"))
-	m.lifecycle.channelHashes = toChannelHashes(oldCfg)
-	oldHash := m.lifecycle.channelHashes["test"]
+	m.lifecycle.setInitialHashes(toChannelHashes(oldCfg))
+	oldHash := m.lifecycle.channelHash("test")
 	newHash := toChannelHashes(newCfg)["test"]
 	if oldHash == newHash {
 		t.Fatal("test setup expected channel hash to change")
@@ -462,13 +494,13 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 	if stopCalls != 0 {
 		t.Fatalf("changed channel was stopped during reload, calls = %d", stopCalls)
 	}
-	if got := m.lifecycle.channels["test"]; got != ch {
+	if got, _ := m.lifecycle.channel("test"); got != ch {
 		t.Fatal("changed channel instance was replaced during reload")
 	}
 	if got := m.delivery.owner("test").Worker().ch; got != ch {
 		t.Fatal("changed channel worker was replaced during reload")
 	}
-	if got := m.lifecycle.channelHashes["test"]; got != oldHash {
+	if got := m.lifecycle.channelHash("test"); got != oldHash {
 		t.Fatalf("active channel hash = %q, want old active hash %q", got, oldHash)
 	}
 
@@ -534,8 +566,8 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 
 	m := newTestManager()
 	m.lifecycle.config = oldCfg
-	m.lifecycle.channels["test"] = stale
-	m.lifecycle.channelHashes = toChannelHashes(oldCfg)
+	m.lifecycle.storeChannel("test", stale)
+	m.lifecycle.setInitialHashes(toChannelHashes(oldCfg))
 
 	if err := m.Reload(t.Context(), newCfg); err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -544,7 +576,7 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 	if staleStopCalls != 1 {
 		t.Fatalf("stale inactive channel stop calls = %d, want 1", staleStopCalls)
 	}
-	if got := m.lifecycle.channels["test"]; got != recreated {
+	if got, _ := m.lifecycle.channel("test"); got != recreated {
 		t.Fatal("inactive changed channel was not recreated")
 	}
 	if got := m.delivery.owner("test").Worker().ch; got != recreated {
@@ -556,7 +588,7 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 	if _, ok := m.GetStatus()["test"].(map[string]any)["restart_required"]; ok {
 		t.Fatal("inactive changed channel should not require restart after recreation")
 	}
-	if got, want := m.lifecycle.channelHashes["test"], toChannelHashes(newCfg)["test"]; got != want {
+	if got, want := m.lifecycle.channelHash("test"), toChannelHashes(newCfg)["test"]; got != want {
 		t.Fatalf("channel hash = %q, want recreated hash %q", got, want)
 	}
 }
@@ -591,21 +623,21 @@ func TestReload_ChangedInactiveChannelPreservedWhenReplacementInitFails(t *testi
 
 	m := newTestManager()
 	m.lifecycle.config = oldCfg
-	m.lifecycle.channels["test"] = stale
-	m.lifecycle.channelHashes = toChannelHashes(oldCfg)
-	oldHash := m.lifecycle.channelHashes["test"]
+	m.lifecycle.storeChannel("test", stale)
+	m.lifecycle.setInitialHashes(toChannelHashes(oldCfg))
+	oldHash := m.lifecycle.channelHash("test")
 
 	err := m.Reload(t.Context(), newCfg)
 	if err == nil || !strings.Contains(err.Error(), "replacement channel test was not initialized") {
 		t.Fatalf("Reload() error = %v, want replacement init failure", err)
 	}
-	if got := m.lifecycle.channels["test"]; got != stale {
+	if got, _ := m.lifecycle.channel("test"); got != stale {
 		t.Fatal("stale inactive channel was not preserved after replacement init failure")
 	}
 	if staleStopCalls != 0 {
 		t.Fatalf("stale inactive channel stop calls = %d, want 0", staleStopCalls)
 	}
-	if got := m.lifecycle.channelHashes["test"]; got != oldHash {
+	if got := m.lifecycle.channelHash("test"); got != oldHash {
 		t.Fatalf("channel hash = %q, want old hash %q", got, oldHash)
 	}
 	if m.lifecycle.config != oldCfg {
@@ -625,6 +657,7 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 	proceedSend := make(chan struct{})
 	stopCalled := make(chan struct{})
 	var stopOnce sync.Once
+	var stopCalls atomic.Int32
 	var sendFinished atomic.Bool
 	var stopBeforeDrain atomic.Bool
 	ch := &mockChannel{
@@ -635,6 +668,7 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 			return nil
 		},
 		stopFn: func(context.Context) error {
+			stopCalls.Add(1)
 			if !sendFinished.Load() {
 				stopBeforeDrain.Store(true)
 			}
@@ -646,9 +680,9 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 
 	m := newTestManager()
 	m.lifecycle.config = oldCfg
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
-	m.lifecycle.channelHashes = toChannelHashes(oldCfg)
+	m.lifecycle.setInitialHashes(toChannelHashes(oldCfg))
 	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
 	queued, err := owner.Enqueue(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -665,30 +699,62 @@ func TestReload_RemovedChannelDrainsDeliveryBeforeStop(t *testing.T) {
 		t.Fatal("worker did not start sending queued message")
 	}
 
-	if err := m.Reload(t.Context(), newCfg); err != nil {
-		t.Fatalf("Reload() error = %v", err)
-	}
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- m.Reload(t.Context(), newCfg)
+	}()
 	waitForDeliveryOwnerClosed(t, owner)
 	select {
 	case <-stopCalled:
 		t.Fatal("removed channel stopped before delivery drained")
 	default:
 	}
+	select {
+	case err := <-reloadDone:
+		t.Fatalf("Reload() returned before delivery drained: %v", err)
+	default:
+	}
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- m.StopAll(context.Background())
+	}()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("StopAll() returned during reload transition: %v", err)
+	default:
+	}
 
 	close(proceedSend)
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("Reload() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reload() did not return after delivery drained")
+	}
 	select {
 	case <-stopCalled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("removed channel was not stopped after delivery drained")
 	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("StopAll() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopAll() did not return after reload transition")
+	}
 	if stopBeforeDrain.Load() {
 		t.Fatal("removed channel Stop ran before queued delivery completed")
 	}
+	if got := stopCalls.Load(); got != 1 {
+		t.Fatalf("removed channel Stop calls = %d, want 1", got)
+	}
 
-	m.lifecycle.mu.RLock()
 	ownerExists := m.delivery.owner("test") != nil
-	_, channelExists := m.lifecycle.channels["test"]
-	m.lifecycle.mu.RUnlock()
+	_, channelExists := m.lifecycle.channel("test")
 	if ownerExists || channelExists {
 		t.Fatalf(
 			"removed channel left state populated after reload: owner=%v channel=%v",
@@ -703,12 +769,12 @@ func TestStartAll_AllChannelsFail_ReturnsJoinedError(t *testing.T) {
 	errA := errors.New("channel-a start failed")
 	errB := errors.New("channel-b start failed")
 
-	m.lifecycle.channels["a"] = &mockChannel{
+	m.lifecycle.storeChannel("a", &mockChannel{
 		startFn: func(_ context.Context) error { return errA },
-	}
-	m.lifecycle.channels["b"] = &mockChannel{
+	})
+	m.lifecycle.storeChannel("b", &mockChannel{
 		startFn: func(_ context.Context) error { return errB },
-	}
+	})
 
 	err := m.StartAll(t.Context())
 	if err == nil {
@@ -736,7 +802,7 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 	errBad := errors.New("bad channel start failed")
 	processed := make(chan struct{}, 1)
 
-	m.lifecycle.channels["good"] = &mockChannel{
+	m.lifecycle.storeChannel("good", &mockChannel{
 		sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
 			if msg.Channel == "good" {
 				select {
@@ -746,10 +812,10 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 			}
 			return nil
 		},
-	}
-	m.lifecycle.channels["bad"] = &mockChannel{
+	})
+	m.lifecycle.storeChannel("bad", &mockChannel{
 		startFn: func(_ context.Context) error { return errBad },
-	}
+	})
 
 	err := m.StartAll(t.Context())
 	if err != nil {
@@ -792,10 +858,90 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 	}
 }
 
+func TestStartAll_RetriesFailedChannelAfterPartialStartup(t *testing.T) {
+	m := newTestManager()
+	transientErr := errors.New("transient start failure")
+	var goodStarts atomic.Int32
+	var retryStarts atomic.Int32
+	m.lifecycle.storeChannel("good", &mockChannel{
+		startFn: func(context.Context) error {
+			goodStarts.Add(1)
+			return nil
+		},
+	})
+	m.lifecycle.storeChannel("retry", &mockChannel{
+		startFn: func(context.Context) error {
+			if retryStarts.Add(1) == 1 {
+				return transientErr
+			}
+			return nil
+		},
+	})
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("first StartAll() error = %v", err)
+	}
+	if !m.delivery.hasActiveWorker("good") || m.delivery.hasActiveWorker("retry") {
+		t.Fatal("first startup did not preserve the expected partial owner state")
+	}
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("retry StartAll() error = %v", err)
+	}
+	if !m.delivery.hasActiveWorker("good") || !m.delivery.hasActiveWorker("retry") {
+		t.Fatal("retry startup did not create both active owners")
+	}
+	if got := goodStarts.Load(); got != 1 {
+		t.Fatalf("successful channel Start calls = %d, want 1", got)
+	}
+	if got := retryStarts.Load(); got != 2 {
+		t.Fatalf("retried channel Start calls = %d, want 2", got)
+	}
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+}
+
+func TestStartAll_RestartFailureDoesNotCountStoppedOwner(t *testing.T) {
+	m := newTestManager()
+	restartErr := errors.New("restart failed")
+	var failRestart atomic.Bool
+	m.lifecycle.storeChannel("test", &mockChannel{
+		startFn: func(context.Context) error {
+			if failRestart.Load() {
+				return restartErr
+			}
+			return nil
+		},
+	})
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("initial StartAll() error = %v", err)
+	}
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+	if owner := m.delivery.owner("test"); owner == nil || owner.active() {
+		t.Fatal("StopAll() should retain the drained owner as inactive")
+	}
+
+	failRestart.Store(true)
+	err := m.StartAll(context.Background())
+	if !errors.Is(err, restartErr) {
+		t.Fatalf("restart StartAll() error = %v, want %v", err, restartErr)
+	}
+	if got := m.delivery.workerCount(); got != 0 {
+		t.Fatalf("active worker count = %d, want 0", got)
+	}
+	if m.delivery.dispatcherRunning() {
+		t.Fatal("dispatcher remained active after all restart attempts failed")
+	}
+}
+
 func TestStartAll_CreatesDeliveryOwnerForStartedChannel(t *testing.T) {
 	m := newTestManager()
 	ch := &mockChannel{}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	if err := m.StartAll(t.Context()); err != nil {
 		t.Fatalf("StartAll() error = %v", err)
@@ -1165,7 +1311,7 @@ func TestDispatchOutbound_ClosedOwnerPublishesFailureAndContinues(t *testing.T) 
 	m.runtimeEvents = eventBus
 	owner := newDeliveryOwner("test", &mockChannel{}, "test")
 	owner.closed = true
-	m.lifecycle.channels["test"] = owner.ch
+	m.lifecycle.storeChannel("test", owner.ch)
 	m.delivery.install(owner)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1216,7 +1362,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 		},
 	}
 	owner := newDeliveryOwner("test", ch, "test")
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
@@ -1242,10 +1388,8 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}()
 
 	waitForDeliveryOwnerClosed(t, owner)
-	m.lifecycle.mu.RLock()
 	visibleOwner := m.delivery.owner("test")
-	visibleChannel := m.lifecycle.channels["test"]
-	m.lifecycle.mu.RUnlock()
+	visibleChannel, _ := m.lifecycle.channel("test")
 	if visibleOwner != owner {
 		t.Fatal("UnregisterChannel removed delivery owner before drain completed")
 	}
@@ -1269,10 +1413,8 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 		t.Fatal("UnregisterChannel deadlocked while draining delivery")
 	}
 
-	m.lifecycle.mu.RLock()
 	ownerExists := m.delivery.owner("test") != nil
-	_, channelExists := m.lifecycle.channels["test"]
-	m.lifecycle.mu.RUnlock()
+	_, channelExists := m.lifecycle.channel("test")
 	if ownerExists || channelExists {
 		t.Fatalf(
 			"UnregisterChannel left state populated after drain: owner=%v channel=%v",
@@ -1287,7 +1429,7 @@ func TestUnregisterChannel_RetiresToolFeedbackBeforeReplacement(t *testing.T) {
 	enableTestToolFeedbackCoordinator(t, m, false)
 	oldChannel := &toolFeedbackTestChannel{}
 	owner := newDeliveryOwner("test", oldChannel, "test")
-	m.lifecycle.channels["test"] = oldChannel
+	m.lifecycle.storeChannel("test", oldChannel)
 	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
@@ -1346,7 +1488,7 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 		},
 	}
 	owner := newDeliveryOwner("test", ch, "test")
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 
@@ -1395,6 +1537,125 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}
 }
 
+func TestStopAll_ConcurrentCallsShareOneShutdown(t *testing.T) {
+	m := newTestManager()
+	stopStarted := make(chan struct{})
+	releaseStop := make(chan struct{})
+	var stopCalls atomic.Int32
+	m.lifecycle.storeChannel("test", &mockChannel{
+		stopFn: func(context.Context) error {
+			if stopCalls.Add(1) == 1 {
+				close(stopStarted)
+			}
+			<-releaseStop
+			return nil
+		},
+	})
+
+	results := make(chan error, 2)
+	go func() { results <- m.StopAll(context.Background()) }()
+	select {
+	case <-stopStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first StopAll did not reach channel stop")
+	}
+	go func() { results <- m.StopAll(context.Background()) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !m.lifecycle.shutdownInProgress() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseStop)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("StopAll() error = %v", err)
+		}
+	}
+	if stopCalls.Load() != 1 {
+		t.Fatalf("channel Stop calls = %d, want 1", stopCalls.Load())
+	}
+}
+
+func TestStartAll_ConcurrentCallsShareOneStartup(t *testing.T) {
+	m := newTestManager()
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	var startCalls atomic.Int32
+	m.lifecycle.storeChannel("test", &mockChannel{
+		startFn: func(context.Context) error {
+			if startCalls.Add(1) == 1 {
+				close(startEntered)
+			}
+			<-releaseStart
+			return nil
+		},
+	})
+
+	results := make(chan error, 2)
+	go func() { results <- m.StartAll(context.Background()) }()
+	select {
+	case <-startEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first StartAll did not reach channel start")
+	}
+	go func() { results <- m.StartAll(context.Background()) }()
+	close(releaseStart)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("StartAll() error = %v", err)
+		}
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("channel Start calls = %d, want 1", got)
+	}
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("second StopAll() error = %v", err)
+	}
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("restart StartAll() error = %v", err)
+	}
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("restart StopAll() error = %v", err)
+	}
+	if got := startCalls.Load(); got != 2 {
+		t.Fatalf("channel Start calls after restart = %d, want 2", got)
+	}
+}
+
+func TestStartAll_RepeatedCallsStartHTTPListenerOnce(t *testing.T) {
+	m := newTestManager()
+	listener := newCountingListener()
+	m.SetupHTTPServerListeners([]net.Listener{listener}, listener.Addr().String(), nil)
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("first StartAll() error = %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for listener.accepts.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := listener.accepts.Load(); got != 1 {
+		t.Fatalf("listener Accept calls after first startup = %d, want 1", got)
+	}
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("second StartAll() error = %v", err)
+	}
+	select {
+	case <-listener.secondAccept:
+		t.Fatal("second StartAll launched another HTTP Serve loop")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("StopAll() error = %v", err)
+	}
+}
+
 func waitForDeliveryOwnerClosed(t *testing.T, owner *deliveryOwner) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1431,10 +1692,10 @@ func TestStartAllPublishesLifecycleRuntimeEvents(t *testing.T) {
 	m := newTestManager()
 	m.runtimeEvents = eventBus
 	m.lifecycle.config = &config.Config{Channels: config.ChannelsConfig{}}
-	m.lifecycle.channels["good"] = &mockChannel{}
-	m.lifecycle.channels["bad"] = &mockChannel{
+	m.lifecycle.storeChannel("good", &mockChannel{})
+	m.lifecycle.storeChannel("bad", &mockChannel{
 		startFn: func(_ context.Context) error { return errors.New("bad start") },
-	}
+	})
 
 	if err := m.StartAll(t.Context()); err != nil {
 		t.Fatalf("StartAll() error = %v", err)
@@ -1711,7 +1972,7 @@ func TestProvisionalSendPublishesSuccessButSuppressesFailure(t *testing.T) {
 					}
 					m := newTestManager()
 					m.runtimeEvents = eventBus
-					m.lifecycle.channels["test"] = channel
+					m.lifecycle.storeChannel("test", channel)
 					installTestDeliveryWorker(m, "test", &channelWorker{
 						ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 					})
@@ -1783,7 +2044,7 @@ func TestProvisionalAmbiguousFailureRemainsTerminal(t *testing.T) {
 			}
 			m := newTestManager()
 			m.runtimeEvents = eventBus
-			m.lifecycle.channels["test"] = channel
+			m.lifecycle.storeChannel("test", channel)
 			installTestDeliveryWorker(m, "test", &channelWorker{ch: channel, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 			err = tc.send(ctx, m)
@@ -1826,7 +2087,7 @@ func TestSynchronousPreWorkerRejectionPublishesOnlyDefinitiveOutcome(t *testing.
 					m.runtimeEvents = eventBus
 					channel := &mockMediaChannel{}
 					if condition != "unknown" {
-						m.lifecycle.channels["test"] = channel
+						m.lifecycle.storeChannel("test", channel)
 					}
 					if condition == "closed" {
 						owner := newDeliveryOwner("test", channel, "test")
@@ -1914,7 +2175,7 @@ func TestSendMessagePublishesOneLogicalChunkOutcome(t *testing.T) {
 			}
 			m := newTestManager()
 			m.runtimeEvents = eventBus
-			m.lifecycle.channels["test"] = channel
+			m.lifecycle.storeChannel("test", channel)
 			installTestDeliveryWorker(m, "test", &channelWorker{ch: channel, limiter: rate.NewLimiter(rate.Inf, 1)})
 			traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 			msg := testOutboundMessage(bus.OutboundMessage{
@@ -2126,7 +2387,7 @@ func TestSendMedia_Success(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
@@ -2153,7 +2414,7 @@ func TestSendMedia_PropagatesFailure(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
@@ -2190,7 +2451,7 @@ func TestSendMedia_UnsupportedChannelReturnsError(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 	traceScopes := []runtimeevents.TraceScope{
 		runtimeevents.NewTraceScope("/workspace/main", "turn-1"),
@@ -2228,7 +2489,7 @@ func TestSendMedia_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 
 	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
@@ -2257,7 +2518,7 @@ func TestSendMedia_DeletesPlaceholderBeforeSending(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 	m.RecordPlaceholder("test", "chat1", "placeholder-1")
 
@@ -2850,7 +3111,7 @@ func TestLogicalSplitFailureKeepsProgressEditable(t *testing.T) {
 			enableTestToolFeedbackCoordinator(t, m, false)
 			ch := &toolFeedbackTestChannel{maxLen: 5}
 			w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
-			m.lifecycle.channels["test"] = ch
+			m.lifecycle.storeChannel("test", ch)
 			installTestDeliveryWorker(m, "test", w)
 			traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 			feedback := testOutboundMessage(bus.OutboundMessage{
@@ -3093,7 +3354,7 @@ func TestToolFeedbackLifecycle_IsolatedByTurnScope(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)
 	ch := &toolFeedbackTestChannel{}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
@@ -3145,7 +3406,7 @@ func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)
 	ch := &toolFeedbackTestChannel{}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	feedback := testOutboundMessage(bus.OutboundMessage{
@@ -3200,7 +3461,7 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 			m := newTestManager()
 			enableTestToolFeedbackCoordinator(t, m, false)
 			ch := &toolFeedbackTestChannel{}
-			m.lifecycle.channels["test"] = ch
+			m.lifecycle.storeChannel("test", ch)
 			w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 			for _, turnID := range tt.turnIDs {
 				feedback := testOutboundMessage(bus.OutboundMessage{
@@ -3261,7 +3522,7 @@ func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testin
 			m := newTestManager()
 			enableTestToolFeedbackCoordinator(t, m, false)
 			ch := &toolFeedbackTestChannel{}
-			m.lifecycle.channels["test"] = ch
+			m.lifecycle.storeChannel("test", ch)
 			w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 			for _, turnID := range tt.turnIDs {
 				feedback := testOutboundMessage(bus.OutboundMessage{
@@ -3312,7 +3573,7 @@ func TestGetStreamer_FinalizedStateIsTurnScoped(t *testing.T) {
 		toolFeedbackTestChannel: transport,
 		streamer:                &mockStreamer{},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
@@ -3362,7 +3623,7 @@ func TestGetStreamer_UnscopedFallbackMatchesSingleScopedStreamWithoutSession(t *
 		toolFeedbackTestChannel: transport,
 		streamer:                &mockStreamer{},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 
@@ -3496,7 +3757,7 @@ func TestGetStreamer_FinalizeBlocksLateFeedbackUntilQueuedFinal(t *testing.T) {
 		toolFeedbackTestChannel: transport,
 		streamer:                &mockStreamer{},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
@@ -4209,7 +4470,7 @@ func TestSendMessageWithRetryPolicy_AppliesResponseFooterBeforeSend(t *testing.T
 	m.lifecycle.config = config.DefaultConfig()
 
 	ch := &mockChannel{}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(
 		m,
 		"test",
@@ -4744,7 +5005,7 @@ func TestGetStreamer_FinalizeDismissesTrackedToolFeedback(t *testing.T) {
 			},
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4773,7 +5034,7 @@ func TestGetStreamer_FinalizeAppendsResponseFooter(t *testing.T) {
 			},
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4825,7 +5086,7 @@ func TestGetStreamer_FinalizeCleansPlaceholderImmediately(t *testing.T) {
 		},
 		streamer: &mockStreamer{},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4910,7 +5171,7 @@ func TestGetStreamer_FinalizeCleansPlaceholderWithSessionKey(t *testing.T) {
 		},
 		streamer: &mockStreamer{},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4941,7 +5202,7 @@ func TestGetStreamer_PreservesContextUsageStreamer(t *testing.T) {
 			},
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4969,7 +5230,7 @@ func TestGetStreamer_PreservesReasoningStreamer(t *testing.T) {
 	ch := &mockStreamingChannel{
 		streamer: inner,
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -4999,7 +5260,7 @@ func TestGetStreamer_PreservesModelNameSetter(t *testing.T) {
 	ch := &mockStreamingChannel{
 		streamer: inner,
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5047,7 +5308,7 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 			return segment, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5113,7 +5374,7 @@ func TestGetStreamer_SplitOnMarkerFooterOnlyOnFinalSegment(t *testing.T) {
 			return segment, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5158,7 +5419,7 @@ func TestGetStreamer_SplitOnMarkerTerminalMarkerFooterAfterUsage(t *testing.T) {
 			return segment, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5201,7 +5462,7 @@ func TestGetStreamer_SplitOnMarkerConsecutiveTerminalMarkersFooterAfterUsage(t *
 			return segment, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5253,7 +5514,7 @@ func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) 
 			return next, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5303,7 +5564,7 @@ func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 			return next, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5349,7 +5610,7 @@ func TestGetStreamer_SplitOnMarkerPreservesAgentIDAcrossSegments(t *testing.T) {
 			return segment, nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5396,7 +5657,7 @@ func TestGetStreamer_FinalizeWithConfigDoesNotInvokeAdapterLifecycle(t *testing.
 			},
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5438,7 +5699,7 @@ func TestGetStreamer_FinalizeDismissesResolvedTrackedToolFeedback(t *testing.T) 
 			return outboundCtx.ChatID
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "-100123/42", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5507,7 +5768,7 @@ func TestGetStreamer_FinalizeFailureDoesNotDismissTrackedToolFeedback(t *testing
 			},
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "", "", runtimeevents.TraceScope{})
 	if !ok {
@@ -5938,7 +6199,7 @@ func TestDispatcherPublishesTerminalRejection(t *testing.T) {
 				t.Cleanup(m.bus.Close)
 				m.runtimeEvents = eventBus
 				if registered {
-					m.lifecycle.channels["test"] = &mockMediaChannel{}
+					m.lifecycle.storeChannel("test", &mockMediaChannel{})
 				}
 				ctx, cancel := context.WithCancel(context.Background())
 				done := make(chan struct{})
@@ -6216,10 +6477,8 @@ func TestLazyWorkerCreation(t *testing.T) {
 	// RegisterChannel should NOT create a worker
 	m.RegisterChannel("lazy", ch)
 
-	m.lifecycle.mu.RLock()
-	_, chExists := m.lifecycle.channels["lazy"]
+	_, chExists := m.lifecycle.channel("lazy")
 	wExists := m.delivery.hasActiveWorker("lazy")
-	m.lifecycle.mu.RUnlock()
 
 	if !chExists {
 		t.Fatal("expected channel to be registered")
@@ -6275,7 +6534,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 		},
 	}
 	worker := newChannelWorker("mock", mockCh, "mock")
-	mgr.lifecycle.channels["mock"] = mockCh
+	mgr.lifecycle.storeChannel("mock", mockCh)
 	installTestDeliveryWorker(mgr, "mock", worker)
 
 	ctx := context.Background()
@@ -6337,7 +6596,7 @@ func TestSendMessage_Synchronous(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	msg := testOutboundMessage(bus.OutboundMessage{
@@ -6390,7 +6649,7 @@ func TestSendMessage_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 
 	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -6412,7 +6671,7 @@ func TestSendMessage_NoWorker(t *testing.T) {
 	ch := &mockChannel{
 		sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil },
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	// No worker registered
 
 	msg := testOutboundMessage(bus.OutboundMessage{
@@ -6448,7 +6707,7 @@ func TestSendMessage_WithRetry(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	msg := testOutboundMessage(bus.OutboundMessage{
@@ -6479,7 +6738,7 @@ func TestSendMessageDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
 			return nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 	err := m.SendMessageDefiniteRetryOnly(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -6508,7 +6767,7 @@ func TestSendMessagePreservesAmbiguityBeforeDefiniteRejection(t *testing.T) {
 			return fmt.Errorf("definitely rejected: %w", ErrSendFailed)
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -6531,7 +6790,7 @@ func TestSendMediaDoesNotRetryAfterPartialDelivery(t *testing.T) {
 		callCount++
 		return []string{"sent-1"}, fmt.Errorf("second part failed: %w", ErrSendFailed)
 	}}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
@@ -6558,7 +6817,7 @@ func TestSendMessage_ReturnsErrorAfterDeliveryFailure(t *testing.T) {
 			return fmt.Errorf("permanent: %w", ErrSendFailed)
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -6585,7 +6844,7 @@ func TestSendMessage_PartialChunkFailureIsAmbiguous(t *testing.T) {
 		}},
 		maxLen: 5,
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
 	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
@@ -6614,7 +6873,7 @@ func TestSendMessage_ContextOnlyUsesContextAddressing(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	msg := testOutboundMessage(bus.OutboundMessage{
@@ -6657,7 +6916,7 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	msg := testOutboundMessage(bus.OutboundMessage{
@@ -6691,7 +6950,7 @@ func TestSendMedia_ContextOnlyUsesContextAddressing(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	msg := testOutboundMediaMessage(bus.OutboundMediaMessage{
@@ -6728,7 +6987,7 @@ func TestSendMessage_PreservesOrdering(t *testing.T) {
 		ch:      ch,
 		limiter: rate.NewLimiter(rate.Inf, 1),
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", w)
 
 	// Send two messages sequentially — they must arrive in order
@@ -6757,7 +7016,7 @@ func TestSendToChannel_QueuesThroughDeliveryOwner(t *testing.T) {
 		},
 	}
 	owner := newDeliveryOwner("test", ch, "test")
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 	owner.StartDelivery(context.Background(), m.deliveryRuntime())
 	t.Cleanup(owner.CloseDeliveryAndWait)
@@ -6787,7 +7046,7 @@ func TestSendToChannel_ClosedDeliveryOwnerReturnsError(t *testing.T) {
 	}
 	owner := newDeliveryOwner("test", ch, "test")
 	owner.closed = true
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 	m.delivery.install(owner)
 
 	err := m.SendToChannel(context.Background(), "test", "chat-1", "hello")
@@ -6808,7 +7067,7 @@ func TestSendToChannel_FallbackUsesLockedChannelSnapshot(t *testing.T) {
 			return nil
 		},
 	}
-	m.lifecycle.channels["test"] = ch
+	m.lifecycle.storeChannel("test", ch)
 
 	if err := m.SendToChannel(context.Background(), "test", "chat-1", "hello"); err != nil {
 		t.Fatalf("SendToChannel() error = %v", err)
@@ -6832,7 +7091,7 @@ func TestManager_SendPlaceholder(t *testing.T) {
 			return nil
 		},
 	}
-	mgr.lifecycle.channels["mock"] = mockCh
+	mgr.lifecycle.storeChannel("mock", mockCh)
 
 	ctx := context.Background()
 
