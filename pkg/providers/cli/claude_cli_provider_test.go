@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 // --- Compile-time interface check ---
@@ -175,9 +177,7 @@ func TestChat_IsErrorResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("Chat() expected error when is_error=true")
 	}
-	if !strings.Contains(err.Error(), "Rate limit exceeded") {
-		t.Errorf("error = %q, want to contain 'Rate limit exceeded'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindRateLimit)
 }
 
 func TestChat_WithToolCallsInResponse(t *testing.T) {
@@ -220,9 +220,7 @@ func TestChat_StderrError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Chat() expected error")
 	}
-	if !strings.Contains(err.Error(), "rate limited") {
-		t.Errorf("error = %q, want to contain 'rate limited'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindRateLimit)
 }
 
 func TestChat_NonZeroExitNoStderr(t *testing.T) {
@@ -238,9 +236,7 @@ func TestChat_NonZeroExitNoStderr(t *testing.T) {
 	if err == nil {
 		t.Fatal("Chat() expected error for non-zero exit")
 	}
-	if !strings.Contains(err.Error(), "claude cli error") {
-		t.Errorf("error = %q, want to contain 'claude cli error'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindUnknown)
 }
 
 func TestChat_CommandNotFound(t *testing.T) {
@@ -269,9 +265,7 @@ func TestChat_InvalidResponseJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("Chat() expected error for invalid JSON")
 	}
-	if !strings.Contains(err.Error(), "failed to parse claude cli response") {
-		t.Errorf("error = %q, want to contain 'failed to parse claude cli response'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindUnknown)
 }
 
 func TestChat_ContextCancellation(t *testing.T) {
@@ -292,6 +286,7 @@ func TestChat_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Chat() expected error on context cancellation")
 	}
+	assertProviderError(t, err, context.DeadlineExceeded, providererrors.KindTimeout)
 	// Should fail well before the full 2s sleep completes
 	if elapsed > 3*time.Second {
 		t.Errorf("Chat() took %v, expected to fail faster via context cancellation", elapsed)
@@ -674,9 +669,7 @@ func TestParseClaudeCliResponse_IsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when is_error=true")
 	}
-	if !strings.Contains(err.Error(), "Something went wrong") {
-		t.Errorf("error = %q, want to contain 'Something went wrong'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindUnknown)
 }
 
 func TestParseClaudeCliResponse_NoUsage(t *testing.T) {
@@ -698,9 +691,7 @@ func TestParseClaudeCliResponse_InvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
-	if !strings.Contains(err.Error(), "failed to parse claude cli response") {
-		t.Errorf("error = %q, want to contain 'failed to parse claude cli response'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindUnknown)
 }
 
 func TestParseClaudeCliResponse_WithToolCalls(t *testing.T) {

@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 // CodexCliProvider implements LLMProvider by wrapping the codex CLI as a subprocess.
@@ -65,24 +67,39 @@ func (p *CodexCliProvider) Chat(
 	// Parse JSONL from stdout even if exit code is non-zero,
 	// because codex writes diagnostic noise to stderr (e.g. rollout errors)
 	// but still produces valid JSONL output.
+	var parsedResp *LLMResponse
+	var parsedErr error
 	if stdoutStr := stdout.String(); stdoutStr != "" {
-		resp, parseErr := p.parseJSONLEvents(stdoutStr)
-		if parseErr == nil && resp != nil && (resp.Content != "" || len(resp.ToolCalls) > 0) {
-			return resp, nil
+		parsedResp, parsedErr = p.parseJSONLEvents(stdoutStr)
+		if parsedErr == nil && parsedResp != nil &&
+			(parsedResp.Content != "" || len(parsedResp.ToolCalls) > 0) {
+			return parsedResp, nil
 		}
 	}
 
 	if err != nil {
-		if ctx.Err() == context.Canceled {
-			return nil, ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, normalizeCLIError(errors.Join(ctxErr, err), stderr.String())
+		}
+		var providerErr *providererrors.ProviderError
+		if errors.As(parsedErr, &providerErr) && providerErr != nil {
+			providerErrCopy := *providerErr
+			providerErrCopy.Cause = errors.Join(providerErr.Cause, err)
+			return nil, &providerErrCopy
 		}
 		if stderrStr := stderr.String(); stderrStr != "" {
-			return nil, fmt.Errorf("codex cli error: %s", stderrStr)
+			return nil, normalizeCLIError(err, stderrStr)
 		}
-		return nil, fmt.Errorf("codex cli error: %w", err)
+		return nil, normalizeCLIError(err, "")
 	}
 
-	return p.parseJSONLEvents(stdout.String())
+	if parsedErr != nil {
+		return nil, parsedErr
+	}
+	if parsedResp != nil {
+		return parsedResp, nil
+	}
+	return p.parseJSONLEvents("")
 }
 
 // GetDefaultModel returns the default model identifier.
@@ -140,6 +157,7 @@ type codexEvent struct {
 	Item     *codexEventItem `json:"item,omitempty"`
 	Usage    *codexUsage     `json:"usage,omitempty"`
 	Error    *codexEventErr  `json:"error,omitempty"`
+	Code     string          `json:"code,omitempty"`
 }
 
 type codexEventItem struct {
@@ -160,6 +178,7 @@ type codexUsage struct {
 
 type codexEventErr struct {
 	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
 }
 
 // parseJSONLEvents processes the JSONL output from codex exec --json.
@@ -167,8 +186,10 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 	var lastAgentMessage string
 	var usage *UsageInfo
 	var lastError string
+	var lastErrorCode string
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -196,15 +217,24 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 			}
 		case "error":
 			lastError = event.Message
+			if event.Code != "" {
+				lastErrorCode = event.Code
+			}
 		case "turn.failed":
 			if event.Error != nil {
 				lastError = event.Error.Message
+				if event.Error.Code != "" {
+					lastErrorCode = event.Error.Code
+				}
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, normalizeCLIError(fmt.Errorf("scan codex CLI events: %w", err), "")
+	}
 
 	if lastError != "" && lastAgentMessage == "" {
-		return nil, fmt.Errorf("codex cli: %s", lastError)
+		return nil, normalizeCodedCLIError(lastErrorCode, lastError, errors.New(lastError))
 	}
 
 	content := lastAgentMessage

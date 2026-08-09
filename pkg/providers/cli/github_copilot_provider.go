@@ -3,6 +3,7 @@ package cliprovider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -14,9 +15,15 @@ type GitHubCopilotProvider struct {
 	connectMode string // "stdio" or "grpc"
 
 	client  *copilot.Client
-	session *copilot.Session
+	session copilotSession
 
-	mu sync.Mutex
+	mu     sync.Mutex
+	chatMu sync.Mutex
+}
+
+type copilotSession interface {
+	On(handler copilot.SessionEventHandler) func()
+	SendAndWait(ctx context.Context, options copilot.MessageOptions) (*copilot.SessionEvent, error)
 }
 
 func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*GitHubCopilotProvider, error) {
@@ -34,10 +41,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 			CLIUrl: uri,
 		})
 		if err := client.Start(context.Background()); err != nil {
-			return nil, fmt.Errorf(
-				"can't connect to Github Copilot: %w; `https://github.com/github/copilot-sdk/blob/main/docs/getting-started.md#connecting-to-an-external-cli-server` for details",
-				err,
-			)
+			return nil, normalizeCopilotError(err, nil)
 		}
 
 		session, err := client.CreateSession(context.Background(), &copilot.SessionConfig{
@@ -47,7 +51,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 		})
 		if err != nil {
 			client.Stop()
-			return nil, fmt.Errorf("create session failed: %w", err)
+			return nil, normalizeCopilotError(err, nil)
 		}
 
 		return &GitHubCopilotProvider{
@@ -78,6 +82,9 @@ func (p *GitHubCopilotProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
+	p.chatMu.Lock()
+	defer p.chatMu.Unlock()
+
 	type tempMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -99,21 +106,37 @@ func (p *GitHubCopilotProvider) Chat(
 	p.mu.Unlock()
 
 	if session == nil {
-		return nil, fmt.Errorf("provider closed")
+		return nil, normalizeCopilotError(errors.New("provider closed"), nil)
 	}
+
+	var sessionError *copilot.SessionEvent
+	var sessionErrorMu sync.Mutex
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		if event.Type != copilot.SessionEventTypeSessionError {
+			return
+		}
+		eventCopy := event
+		sessionErrorMu.Lock()
+		sessionError = &eventCopy
+		sessionErrorMu.Unlock()
+	})
+	defer unsubscribe()
 
 	resp, err := session.SendAndWait(ctx, copilot.MessageOptions{
 		Prompt: string(fullcontent),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to send message to copilot: %w", err)
+		sessionErrorMu.Lock()
+		errorEvent := sessionError
+		sessionErrorMu.Unlock()
+		return nil, normalizeCopilotError(err, errorEvent)
 	}
 
 	if resp == nil {
-		return nil, fmt.Errorf("empty response from copilot")
+		return nil, normalizeCopilotError(errors.New("empty response from copilot"), nil)
 	}
 	if resp.Data.Content == nil {
-		return nil, fmt.Errorf("no content in copilot response")
+		return nil, normalizeCopilotError(errors.New("no content in copilot response"), nil)
 	}
 	content := *resp.Data.Content
 

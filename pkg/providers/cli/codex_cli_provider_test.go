@@ -3,6 +3,7 @@ package cliprovider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 // --- JSONL Event Parsing Tests ---
@@ -45,6 +48,26 @@ func TestParseJSONLEvents_AgentMessage(t *testing.T) {
 	}
 	if len(resp.ToolCalls) != 0 {
 		t.Errorf("ToolCalls should be empty, got %d", len(resp.ToolCalls))
+	}
+}
+
+func TestParseJSONLEvents_LargeAgentMessage(t *testing.T) {
+	p := &CodexCliProvider{}
+	want := strings.Repeat("x", 128*1024)
+	event, err := json.Marshal(codexEvent{
+		Type: "item.completed",
+		Item: &codexEventItem{Type: "agent_message", Text: want},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := p.parseJSONLEvents(string(event))
+	if err != nil {
+		t.Fatalf("parseJSONLEvents() error: %v", err)
+	}
+	if resp.Content != want {
+		t.Fatalf("Content length = %d, want %d", len(resp.Content), len(want))
 	}
 }
 
@@ -142,9 +165,7 @@ func TestParseJSONLEvents_ErrorEvent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "token expired") {
-		t.Errorf("error = %q, want to contain 'token expired'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindAuthentication)
 }
 
 func TestParseJSONLEvents_TurnFailed(t *testing.T) {
@@ -156,9 +177,7 @@ func TestParseJSONLEvents_TurnFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "rate limit exceeded") {
-		t.Errorf("error = %q, want to contain 'rate limit exceeded'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindRateLimit)
 }
 
 func TestParseJSONLEvents_ErrorWithContent(t *testing.T) {
@@ -400,6 +419,10 @@ func TestCodexCliProvider_GetDefaultModel(t *testing.T) {
 // --- Mock CLI Integration Test ---
 
 func createMockCodexCLI(t *testing.T, events []string) string {
+	return createMockCodexCLIWithExit(t, events, 0)
+}
+
+func createMockCodexCLIWithExit(t *testing.T, events []string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("mock CLI scripts not supported on Windows")
@@ -412,11 +435,26 @@ func createMockCodexCLI(t *testing.T, events []string) string {
 	for _, event := range events {
 		fmt.Fprintf(&sb, "echo '%s'\n", event)
 	}
+	fmt.Fprintf(&sb, "exit %d\n", exitCode)
 
 	if err := os.WriteFile(scriptPath, []byte(sb.String()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return scriptPath
+}
+
+func TestCodexCliProvider_NonZeroExitPreservesCodedEvent(t *testing.T) {
+	scriptPath := createMockCodexCLIWithExit(t, []string{
+		`{"type":"turn.failed","error":{"code":"insufficient_quota","message":"rate limit exceeded"}}`,
+	}, 1)
+	provider := &CodexCliProvider{command: scriptPath}
+
+	_, err := provider.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, nil, "", nil)
+	providerErr := assertProviderErrorKind(t, err, providererrors.KindBilling)
+	var exitErr *exec.ExitError
+	if !errors.As(providerErr, &exitErr) {
+		t.Fatal("ProviderError does not preserve the process exit error")
+	}
 }
 
 func TestCodexCliProvider_MockCLI_Success(t *testing.T) {
@@ -469,9 +507,7 @@ func TestCodexCliProvider_MockCLI_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "auth token expired") {
-		t.Errorf("error = %q, want to contain 'auth token expired'", err.Error())
-	}
+	assertProviderErrorKind(t, err, providererrors.KindAuthentication)
 }
 
 func TestCodexCliProvider_MockCLI_WithModel(t *testing.T) {
@@ -549,6 +585,7 @@ func TestCodexCliProvider_MockCLI_ContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on canceled context")
 	}
+	assertProviderError(t, err, context.Canceled, providererrors.KindCanceled)
 }
 
 func TestCodexCliProvider_EmptyCommand(t *testing.T) {
