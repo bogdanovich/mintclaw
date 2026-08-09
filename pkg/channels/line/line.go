@@ -339,12 +339,7 @@ func (c *LINEChannel) processEvent(event webhook.EventInterface) {
 		}
 	}
 
-	if err := c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender); err != nil {
-		logger.ErrorCF("line", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message.

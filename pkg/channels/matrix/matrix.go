@@ -780,12 +780,7 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 		inboundCtx.ReplyToMessageID = replyTo.String()
 	}
 
-	if err := c.HandleInboundContext(c.baseContext(), roomID, content, mediaPaths, inboundCtx, sender); err != nil {
-		logger.ErrorCF("matrix", "Inbound dispatch failed", map[string]any{
-			"chat_id": roomID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.baseContext(), roomID, content, mediaPaths, inboundCtx, sender)
 }
 
 // decryptEvent decrypts an encrypted event and returns the decrypted message event content.

@@ -592,12 +592,7 @@ func (c *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		inboundCtx.SpaceID = *sender.TenantKey
 	}
 
-	if err := c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo); err != nil {
-		logger.ErrorCF("feishu", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(ctx, chatID, content, mediaRefs, inboundCtx, senderInfo)
 	return nil
 }
 

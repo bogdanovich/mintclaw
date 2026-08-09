@@ -651,12 +651,7 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 			Raw:       metadata,
 		}
 
-		if err := c.HandleInboundContext(c.ctx, senderID, content, mediaPaths, inboundCtx, sender); err != nil {
-			logger.ErrorCF("qq", "Inbound dispatch failed", map[string]any{
-				"chat_id": senderID,
-				"error":   err.Error(),
-			})
-		}
+		_ = c.HandleInboundContext(c.ctx, senderID, content, mediaPaths, inboundCtx, sender)
 
 		return nil
 	}
@@ -735,12 +730,7 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 			Raw:       metadata,
 		}
 
-		if err := c.HandleInboundContext(c.ctx, data.GroupID, content, mediaPaths, inboundCtx, sender); err != nil {
-			logger.ErrorCF("qq", "Inbound dispatch failed", map[string]any{
-				"chat_id": data.GroupID,
-				"error":   err.Error(),
-			})
-		}
+		_ = c.HandleInboundContext(c.ctx, data.GroupID, content, mediaPaths, inboundCtx, sender)
 
 		return nil
 	}

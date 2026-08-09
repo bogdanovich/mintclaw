@@ -1413,12 +1413,7 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		Raw:       metadata,
 	}
 
-	if err := c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender); err != nil {
-		logger.ErrorCF("mintclaw", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
 }
 
 // truncate truncates a string to maxLen runes.

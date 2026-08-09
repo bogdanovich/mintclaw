@@ -291,12 +291,7 @@ func (c *MintClawClientChannel) handleServerMessage(pc *mintclawConn, msg MintCl
 		},
 	}
 
-	if err := c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender); err != nil {
-		logger.ErrorCF("mintclaw", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
 }
 
 // Send sends a message to the remote server.

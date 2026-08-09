@@ -389,12 +389,7 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		}
 	}
 
-	if err := c.HandleInboundContext(ctx, fromUserID, content, mediaRefs, inboundCtx, sender); err != nil {
-		logger.ErrorCF("weixin", "Inbound dispatch failed", map[string]any{
-			"chat_id": fromUserID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(ctx, fromUserID, content, mediaRefs, inboundCtx, sender)
 }
 
 // Send implements channels.Channel by sending a text message to the WeChat user.

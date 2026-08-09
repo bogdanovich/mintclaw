@@ -113,12 +113,7 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 		inboundCtx.ChatType = "group"
 	}
 
-	if err := c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender); err != nil {
-		logger.ErrorCF("irc", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
 }
 
 // nickMentionedAt returns the byte index where botNick is mentioned in content

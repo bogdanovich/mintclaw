@@ -547,12 +547,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		inboundCtx.ReplyToMessageID = m.MessageReference.MessageID
 	}
 
-	if err := c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender); err != nil {
-		logger.ErrorCF("discord", "Inbound dispatch failed", map[string]any{
-			"chat_id": m.ChannelID,
-			"error":   err.Error(),
-		})
-	}
+	_ = c.HandleInboundContext(c.ctx, m.ChannelID, content, mediaPaths, inboundCtx, sender)
 }
 
 // startTyping starts a continuous typing indicator loop for the given chatID.

@@ -184,7 +184,7 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 		"is_group": fmt.Sprintf("%t", isGroupChat),
 	}
 
-	if err := c.HandleInboundContext(c.ctx, chatID, text, nil, bus.InboundContext{
+	_ = c.HandleInboundContext(c.ctx, chatID, text, nil, bus.InboundContext{
 		Channel:   "vk",
 		ChatID:    chatID,
 		ChatType:  chatType,
@@ -192,12 +192,7 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 		MessageID: messageID,
 		Mentioned: isGroupChat && c.isMentioned(msg),
 		Raw:       metadata,
-	}, sender); err != nil {
-		logger.ErrorCF("vk", "Inbound dispatch failed", map[string]any{
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
-	}
+	}, sender)
 }
 
 func (c *VKChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
