@@ -211,7 +211,7 @@ func TestIsSafeSlug(t *testing.T) {
 
 func TestLegacyGithubBaseURLOverridesDefaultRegistryBaseURL(t *testing.T) {
 	cfg := config.DefaultConfig().Tools.Skills
-	cfg.Github.BaseURL = "https://ghe.example.com/git"
+	cfg.Github.BaseURL = "https://ghe.example.com/git" //nolint:staticcheck // legacy cfg.Github compat test
 
 	registry := LookupRegistryFromToolsConfig(cfg, "github")
 	assert.NotNil(t, registry)
@@ -223,7 +223,7 @@ func TestLegacyGithubBaseURLOverridesDefaultRegistryBaseURL(t *testing.T) {
 
 func TestExplicitGithubRegistryBaseURLBeatsLegacyCompat(t *testing.T) {
 	cfg := config.DefaultConfig().Tools.Skills
-	cfg.Github.BaseURL = "https://ghe-legacy.example.com/git"
+	cfg.Github.BaseURL = "https://ghe-legacy.example.com/git" //nolint:staticcheck // legacy cfg.Github compat test
 	cfg.Registries.Set("github", config.SkillRegistryConfig{
 		Name:    "github",
 		Enabled: true,

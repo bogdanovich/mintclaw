@@ -1187,7 +1187,7 @@ func TestUnregisterChannel_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 			close(sendStarted)
 			<-proceedSend
 			m.mu.RLock()
-			m.mu.RUnlock()
+			m.mu.RUnlock() //nolint:staticcheck // deliberate empty critical section asserts send runs outside the manager lock
 			return nil
 		},
 	}
@@ -1321,7 +1321,7 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 			close(sendStarted)
 			<-proceedSend
 			m.mu.RLock()
-			m.mu.RUnlock()
+			m.mu.RUnlock() //nolint:staticcheck // deliberate empty critical section asserts send runs outside the manager lock
 			return nil
 		},
 	}

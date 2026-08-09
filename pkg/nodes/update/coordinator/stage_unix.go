@@ -351,7 +351,7 @@ func (store *Store) extractCandidate(
 	reader := tar.NewReader(compressed)
 	header, err := reader.Next()
 	if err != nil || header.Name != "mintclaw-node" ||
-		(header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) || header.Linkname != "" ||
+		header.Typeflag != tar.TypeReg || header.Linkname != "" ||
 		header.Size <= 0 || header.Size > MaxPayloadBytes || header.Mode&0o7000 != 0 || header.Mode&0o111 == 0 {
 		return "", Payload{}, errors.New("candidate archive does not contain one bounded executable")
 	}
