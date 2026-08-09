@@ -274,7 +274,7 @@ func TestProvider_ChatRoundTrip(t *testing.T) {
 		}
 
 		var reqBody map[string]any
-		json.NewDecoder(r.Body).Decode(&reqBody)
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
 		resp := map[string]any{
 			"id":          "msg_test",
@@ -291,7 +291,7 @@ func TestProvider_ChatRoundTrip(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -341,7 +341,7 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 		}
 
 		var reqBody map[string]any
-		json.NewDecoder(r.Body).Decode(&reqBody)
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
 		resp := map[string]any{
 			"id":          "msg_test",
@@ -358,7 +358,7 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -407,7 +407,7 @@ func TestProvider_ChatStreamingRoundTrip(t *testing.T) {
 			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 		}
 		for _, e := range events {
-			w.Write([]byte(e))
+			_, _ = w.Write([]byte(e))
 			if flusher != nil {
 				flusher.Flush()
 			}

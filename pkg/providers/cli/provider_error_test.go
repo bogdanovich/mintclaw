@@ -37,7 +37,7 @@ func TestNormalizeCLIErrorCompatibilityContracts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cause := errors.New("process exited")
 			err := normalizeCLIError(cause, tt.diagnostic+" secret-token-123")
-			assertProviderError(t, err, cause, tt.want)
+			_ = assertProviderError(t, err, cause, tt.want)
 			if strings.Contains(err.Error(), "secret-token-123") {
 				t.Fatal("ProviderError exposed raw CLI diagnostics")
 			}
@@ -62,13 +62,13 @@ func TestNormalizeCLIErrorStructuredAndTransportPrecedence(t *testing.T) {
 	}
 
 	err := normalizeCLIError(context.DeadlineExceeded, "rate limit exceeded")
-	assertProviderError(t, err, context.DeadlineExceeded, providererrors.KindTimeout)
+	_ = assertProviderError(t, err, context.DeadlineExceeded, providererrors.KindTimeout)
 }
 
 func TestNormalizeCodedCLIErrorCodePrecedesText(t *testing.T) {
 	cause := errors.New("CLI event failure")
 	err := normalizeCodedCLIError("insufficient_quota", "rate limit exceeded", cause)
-	assertProviderError(t, err, cause, providererrors.KindBilling)
+	_ = assertProviderError(t, err, cause, providererrors.KindBilling)
 }
 
 func assertProviderError(t *testing.T, err, cause error, want providererrors.Kind) *providererrors.ProviderError {

@@ -86,7 +86,7 @@ func testServer(t *testing.T, token string) *httptest.Server {
 			t.Logf("upgrade error: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		for {
 			_, raw, err := conn.ReadMessage()
@@ -141,7 +141,7 @@ func TestClientChannel_ConnectAndSend(t *testing.T) {
 	if err = ch.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	// Send a message
 	_, err = ch.Send(ctx, bus.OutboundMessage{
@@ -175,7 +175,7 @@ func TestClientChannel_AuthFailure(t *testing.T) {
 
 	err = ch.Start(ctx)
 	if err == nil {
-		ch.Stop(ctx)
+		_ = ch.Stop(ctx)
 		t.Fatal("expected auth failure")
 	}
 }
@@ -206,7 +206,7 @@ func TestClientChannel_ReceivesServerMessage(t *testing.T) {
 	if err = ch.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	// Send a message; the echo server replies with message.create
 	_, err = ch.Send(ctx, bus.OutboundMessage{
@@ -253,7 +253,7 @@ func TestClientChannel_StartTyping(t *testing.T) {
 	if err = ch.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	stop, err := ch.StartTyping(ctx, "mintclaw_client:sess-type")
 	if err != nil {
@@ -300,7 +300,7 @@ func TestSend_ClosedConnection(t *testing.T) {
 		t.Fatalf("expected ErrSendFailed, got %v", err)
 	}
 
-	ch.Stop(ctx)
+	_ = ch.Stop(ctx)
 }
 
 func TestParseInlineImageMedia_Valid(t *testing.T) {
@@ -351,7 +351,7 @@ func TestMintClawChannel_HandleMessageSend_AllowsMediaOnly(t *testing.T) {
 	if err := ch.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(ctx)
+	defer func() { _ = ch.Stop(ctx) }()
 
 	pc := &mintclawConn{id: "conn-1", sessionID: "sess-1"}
 	ch.handleMessageSend(pc, MintClawMessage{
