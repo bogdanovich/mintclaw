@@ -453,7 +453,7 @@ func (runtime *FileTransferRuntime) prepareJobArtifactInfo(
 	if err != nil {
 		return runtime.sendDenial(frame, send, "JOB_ARTIFACT_DENIED")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if validationErr := validateOpenedJobArtifact(file, artifact); validationErr != nil {
 		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
 	}
