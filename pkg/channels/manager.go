@@ -87,19 +87,19 @@ type deliveryOwner struct {
 }
 
 type Manager struct {
-	channels      map[string]Channel
-	bus           *bus.MessageBus
-	runtimeEvents runtimeevents.Bus
-	config        *config.Config
-	mediaStore    media.MediaStore
-	dispatchTask  *asyncTask
-	mux           *dynamicServeMux
-	httpServer    *http.Server
-	httpListeners []net.Listener
-	mu            sync.RWMutex
-	deliveryRegistry
-	deliveryInteractionState
-	streamDeliveryState
+	channels               map[string]Channel
+	bus                    *bus.MessageBus
+	runtimeEvents          runtimeevents.Bus
+	config                 *config.Config
+	mediaStore             media.MediaStore
+	dispatchTask           *asyncTask
+	mux                    *dynamicServeMux
+	httpServer             *http.Server
+	httpListeners          []net.Listener
+	mu                     sync.RWMutex
+	deliveries             deliveryRegistry
+	interactions           deliveryInteractionState
+	streams                streamDeliveryState
 	outboundOutbox         *outbox.Coordinator
 	channelHashes          map[string]string // channel name → config hash
 	channelRestartRequired map[string]string // channel name → desired config hash that needs process restart
@@ -395,7 +395,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.StopTyping {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.typingStops.LoadAndDelete(name + ":" + cleanupChatID); loaded {
+			if v, loaded := m.interactions.typingStops.LoadAndDelete(name + ":" + cleanupChatID); loaded {
 				if entry, ok := v.(typingEntry); ok {
 					entry.stop()
 				}
@@ -405,7 +405,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.UndoReaction {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.reactionUndos.LoadAndDelete(name + ":" + cleanupChatID); loaded {
+			if v, loaded := m.interactions.reactionUndos.LoadAndDelete(name + ":" + cleanupChatID); loaded {
 				if entry, ok := v.(reactionEntry); ok {
 					entry.undo()
 				}
@@ -418,7 +418,7 @@ func (m *Manager) cleanupDeliveryState(
 			streamKey := streamSuppressionKey(
 				name, cleanupChatID, opts.SessionKey, primaryTraceScope(opts.TraceScopes),
 			)
-			m.clear(streamKey)
+			m.streams.clear(streamKey)
 		}
 	}
 
@@ -430,7 +430,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.DeletePlaceholder {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.placeholders.LoadAndDelete(name + ":" + cleanupChatID); loaded {
+			if v, loaded := m.interactions.placeholders.LoadAndDelete(name + ":" + cleanupChatID); loaded {
 				if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 					if deleter, ok := ch.(MessageDeleter); ok {
 						deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
@@ -520,13 +520,13 @@ func (m *Manager) beginToolFeedbackTerminals(
 	traceScopes []runtimeevents.TraceScope,
 	transient bool,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.hasToolFeedback() {
+	if m == nil || !m.interactions.hasToolFeedback() {
 		return nil
 	}
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.deliveryInteractionState.beginToolFeedbackTerminals(keys, scoped, transient)
+	return m.interactions.beginToolFeedbackTerminals(keys, scoped, transient)
 }
 
 func (m *Manager) completeToolFeedbackTerminals(
@@ -534,7 +534,7 @@ func (m *Manager) completeToolFeedbackTerminals(
 	terminals []*toolFeedbackTerminal,
 	success bool,
 ) {
-	m.deliveryInteractionState.completeToolFeedbackTerminals(ctx, terminals, success)
+	m.interactions.completeToolFeedbackTerminals(ctx, terminals, success)
 }
 
 func (m *Manager) beginOutboundToolFeedbackTerminals(
@@ -542,7 +542,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 	ch Channel,
 	msg bus.OutboundMessage,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
+	if m == nil || !m.interactions.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
 		!OutboundMessageDismissesTrackedToolFeedback(msg) {
 		return nil
 	}
@@ -574,7 +574,7 @@ func (m *Manager) deliverToolFeedback(
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
 	operations := toolFeedbackOperationsFor(ch)
-	return m.deliveryInteractionState.deliverToolFeedback(
+	return m.interactions.deliverToolFeedback(
 		ctx,
 		key,
 		deliveryChatID,
@@ -595,7 +595,7 @@ func (m *Manager) deliverToolFeedback(
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
 func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.hasToolFeedback() {
+	if m == nil || !m.interactions.hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -626,7 +626,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.dismissToolFeedback(ctx, keys, scoped)
+	m.interactions.dismissToolFeedback(ctx, keys, scoped)
 }
 
 func (m *Manager) resolveToolFeedbackTargets(
@@ -641,7 +641,7 @@ func (m *Manager) resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
 	if !scoped && len(keys) == 1 {
-		if key, ok := m.singleActiveScopedToolFeedbackKey(keys[0]); ok {
+		if key, ok := m.interactions.singleActiveScopedToolFeedbackKey(keys[0]); ok {
 			return []string{key}, true
 		}
 	}
@@ -665,7 +665,7 @@ func prepareToolFeedbackMessageContent(ch Channel, content string) string {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	key := channel + ":" + chatID
-	m.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
+	m.interactions.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
 }
 
 // SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
@@ -694,7 +694,7 @@ func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) b
 func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 	key := channel + ":" + chatID
 	entry := typingEntry{stop: stop, createdAt: time.Now()}
-	if previous, loaded := m.typingStops.Swap(key, entry); loaded {
+	if previous, loaded := m.interactions.typingStops.Swap(key, entry); loaded {
 		if oldEntry, ok := previous.(typingEntry); ok && oldEntry.stop != nil {
 			oldEntry.stop()
 		}
@@ -707,7 +707,7 @@ func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 // regardless of whether an outbound message is published.
 func (m *Manager) InvokeTypingStop(channel, chatID string) {
 	key := channel + ":" + chatID
-	if v, loaded := m.typingStops.LoadAndDelete(key); loaded {
+	if v, loaded := m.interactions.typingStops.LoadAndDelete(key); loaded {
 		if entry, ok := v.(typingEntry); ok {
 			entry.stop()
 		}
@@ -718,7 +718,7 @@ func (m *Manager) InvokeTypingStop(channel, chatID string) {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 	key := channel + ":" + chatID
-	m.reactionUndos.Store(key, reactionEntry{undo: undo, createdAt: time.Now()})
+	m.interactions.reactionUndos.Store(key, reactionEntry{undo: undo, createdAt: time.Now()})
 }
 
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
@@ -728,7 +728,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	traceScope := primaryTraceScope(msg.TraceScopes)
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey, traceScope)
-	activeStreamKey, streamActive := m.activeKey(name, chatID, msg.SessionKey, traceScope)
+	activeStreamKey, streamActive := m.streams.activeKey(name, chatID, msg.SessionKey, traceScope)
 
 	m.cleanupDeliveryState(ctx, name, chatID, &msg.Context, ch, deliveryCleanupOptions{
 		StopTyping:   true,
@@ -750,7 +750,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if streamActive {
 			return nil, true
 		}
-		if m.tombstoneActiveForMessage(
+		if m.streams.tombstoneActiveForMessage(
 			name, chatID, msg.SessionKey, traceScope,
 			time.Now(),
 		) {
@@ -762,10 +762,10 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// outbound. Earlier queued visible messages must still be delivered.
 	if isFinalMessage {
 		if streamActive {
-			if !m.consumeActive(activeStreamKey) {
+			if !m.streams.consumeActive(activeStreamKey) {
 				streamActive = false
 			} else {
-				if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
+				if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
 					if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 						// Prefer deleting the placeholder (cleaner UX than editing to same content)
 						if deleter, ok := ch.(MessageDeleter); ok {
@@ -784,11 +784,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 						}
 					}
 				}
-				if m.hasToolFeedback() {
+				if m.interactions.hasToolFeedback() {
 					keys, _ := toolFeedbackTargets(
 						name, ch, chatID, &msg.Context, msg.SessionKey, msg.TraceScopes,
 					)
-					m.releaseToolFeedbackTerminals(keys)
+					m.interactions.releaseToolFeedbackTerminals(keys)
 				}
 				return nil, true
 			}
@@ -798,16 +798,16 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if streamActive {
 		return nil, false
 	}
-	if m.activeForChat(name, chatID) {
+	if m.streams.activeForChat(name, chatID) {
 		return nil, false
 	}
 
 	if !isAuxiliaryMessage {
-		m.clearTombstone(streamKey)
+		m.streams.clearTombstone(streamKey)
 	}
 
 	// 5. Try editing placeholder
-	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
+	if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 			logger.InfoCF("channels", "Evaluating placeholder edit bypass",
 				map[string]any{
@@ -879,7 +879,7 @@ func NewManager(
 ) (*Manager, error) {
 	m := &Manager{
 		channels:               make(map[string]Channel),
-		deliveryRegistry:       newDeliveryRegistry(),
+		deliveries:             newDeliveryRegistry(),
 		bus:                    messageBus,
 		config:                 cfg,
 		mediaStore:             store,
@@ -887,7 +887,7 @@ func NewManager(
 		channelRestartRequired: make(map[string]string),
 	}
 	if cfg != nil {
-		m.initializeToolFeedback(
+		m.interactions.initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -937,7 +937,7 @@ func (m *Manager) installDeliveryOwnerLocked(
 	channelType string,
 ) *deliveryOwner {
 	owner := newDeliveryOwner(name, channel, channelType)
-	m.install(owner)
+	m.deliveries.install(owner)
 	owner.StartDelivery(ctx, m)
 	return owner
 }
@@ -992,7 +992,7 @@ func (m *Manager) GetStreamer(
 	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
 	placeholderKey := channelName + ":" + chatID
 	clearMarker := func() {
-		m.consumeActive(streamKey)
+		m.streams.consumeActive(streamKey)
 	}
 	onFinalize := func(finalizeCtx context.Context, finalContent string) {
 		m.dismissToolFeedbackTargets(
@@ -1004,7 +1004,7 @@ func (m *Manager) GetStreamer(
 			sessionKey,
 			[]runtimeevents.TraceScope{traceScope},
 		)
-		if v, loaded := m.placeholders.LoadAndDelete(placeholderKey); loaded {
+		if v, loaded := m.interactions.placeholders.LoadAndDelete(placeholderKey); loaded {
 			if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 				if deleter, ok := ch.(MessageDeleter); ok {
 					deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
@@ -1013,7 +1013,7 @@ func (m *Manager) GetStreamer(
 				}
 			}
 		}
-		m.markFinalized(streamKey, time.Now())
+		m.streams.markFinalized(streamKey, time.Now())
 	}
 
 	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
@@ -1756,7 +1756,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		)
 	}
 
-	if len(m.channels) > 0 && m.workerCount() == 0 {
+	if len(m.channels) > 0 && m.deliveries.workerCount() == 0 {
 		if m.dispatchTask != nil {
 			m.dispatchTask.cancel()
 			m.dispatchTask = nil
@@ -1780,7 +1780,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		sort.Strings(failedNames)
 		logger.WarnCF("channels", "Some channels failed to start", map[string]any{
 			"failed":          len(failedNames),
-			"started":         m.workerCount(),
+			"started":         m.deliveries.workerCount(),
 			"total":           len(m.channels),
 			"failed_channels": failedNames,
 		})
@@ -1845,7 +1845,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	logger.InfoCF("channels", "Channel startup completed", map[string]any{
-		"started": m.workerCount(),
+		"started": m.deliveries.workerCount(),
 		"failed":  len(failedNames),
 		"total":   len(m.channels),
 	})
@@ -1869,7 +1869,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.dispatchTask = nil
 	}
 
-	deliveries := m.snapshot()
+	deliveries := m.deliveries.snapshot()
 
 	channels := make([]channelStopTarget, 0, len(m.channels))
 	for name, channel := range m.channels {
@@ -1902,7 +1902,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		}
 		closeWorkerAndWait(delivery.worker)
 	}
-	m.stopToolFeedback()
+	m.interactions.stopToolFeedback()
 
 	// Stop all channels
 	for _, target := range channels {
@@ -2183,7 +2183,7 @@ func (m *Manager) deliverQueuedMessage(
 		}
 		messageIDs = append(messageIDs, result.MessageIDs...)
 	}
-	m.completeToolFeedbackTerminals(ctx, terminals, delivered)
+	m.interactions.completeToolFeedbackTerminals(ctx, terminals, delivered)
 	if !delivered {
 		return
 	}
@@ -2225,7 +2225,7 @@ func (m *Manager) finalizedStreamActiveForMessage(channelName string, msg bus.Ou
 	if strings.TrimSpace(channelName) == "" || strings.TrimSpace(chatID) == "" {
 		return false
 	}
-	_, active := m.activeKey(
+	_, active := m.streams.activeKey(
 		channelName, chatID, msg.SessionKey, primaryTraceScope(msg.TraceScopes),
 	)
 	return active
@@ -2267,7 +2267,7 @@ func (m *Manager) sendWithRetry(
 	result := m.sendWithRetryPolicy(
 		ctx, name, w, msg, true, publishDefinitiveOutcome,
 	)
-	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
+	m.interactions.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
 	return result
 }
 
@@ -2326,7 +2326,7 @@ func (m *Manager) sendWithRetryPolicy(
 			attemptMsg := pending[0]
 			var msgIDs []string
 			var err error
-			if isToolFeedback && m.hasToolFeedback() {
+			if isToolFeedback && m.interactions.hasToolFeedback() {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
 				msgIDs, err = m.deliverToolFeedback(ctx, name, w.ch, attemptMsg, w.ch.Send)
@@ -2655,7 +2655,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 
 	terminalSucceeded := false
 	var terminals []*toolFeedbackTerminal
-	if m.hasToolFeedback() {
+	if m.interactions.hasToolFeedback() {
 		terminals = m.beginToolFeedbackTerminals(
 			name,
 			w.ch,
@@ -2666,7 +2666,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 			bus.OutboundMetadataFromContext(msg.Context).IsInterim(),
 		)
 		defer func() {
-			m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+			m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 		}()
 	}
 
@@ -2731,8 +2731,8 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			m.deliveryInteractionState.expire(now)
-			m.streamDeliveryState.expire(now)
+			m.interactions.expire(now)
+			m.streams.expire(now)
 		}
 	}
 }
@@ -2745,7 +2745,7 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 }
 
 func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.owner(name, m.channels[name])
+	return m.deliveries.owner(name, m.channels[name])
 }
 
 func (m *Manager) GetStatus() map[string]any {
@@ -2811,7 +2811,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			added = append(added, name)
 			continue
 		}
-		if !m.hasActiveWorker(name) {
+		if !m.deliveries.hasActiveWorker(name) {
 			logger.InfoCF("channels", "Recreating inactive changed channel", map[string]any{
 				"channel": name,
 			})
@@ -2878,7 +2878,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			cancel()
 			return err
 		}
-		m.retireToolFeedbackChannel(ctx, name)
+		m.interactions.retireToolFeedbackChannel(ctx, name)
 		if err := oldChannel.Stop(ctx); err != nil {
 			logger.ErrorCF("channels", "Error stopping inactive changed channel", map[string]any{
 				"channel": name,
@@ -2928,7 +2928,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	// Commit hashes only on full success.
 	m.channelHashes = list
 	if cfg != nil {
-		m.configureToolFeedback(
+		m.interactions.configureToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -2968,9 +2968,9 @@ func (m *Manager) UnregisterChannel(name string) {
 	if ch != nil && m.mux != nil {
 		m.unregisterChannelHTTPHandler(name, ch)
 	}
-	owner, w := m.lookup(name)
+	owner, w := m.deliveries.lookup(name)
 	if owner == nil {
-		m.removeWorkerIfUnowned(name)
+		m.deliveries.removeWorkerIfUnowned(name)
 		delete(m.channels, name)
 	}
 	m.mu.Unlock()
@@ -2980,10 +2980,10 @@ func (m *Manager) UnregisterChannel(name string) {
 	} else {
 		closeWorkerAndWait(w)
 	}
-	m.retireToolFeedbackChannel(context.Background(), name)
+	m.interactions.retireToolFeedbackChannel(context.Background(), name)
 
 	m.mu.Lock()
-	m.removeIfMatches(name, owner, w)
+	m.deliveries.removeIfMatches(name, owner, w)
 	if ch != nil && m.channels[name] == ch {
 		delete(m.channels, name)
 	}
@@ -3057,7 +3057,7 @@ func (m *Manager) sendMessageWithRetryPolicy(
 	terminals := m.beginOutboundToolFeedbackTerminals(channelName, w.ch, msg)
 	terminalSucceeded := false
 	defer func() {
-		m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+		m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 	}()
 
 	maxLen := 0
