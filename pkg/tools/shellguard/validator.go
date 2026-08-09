@@ -751,9 +751,9 @@ func looksLikeDomain(s string) bool {
 		return false
 	}
 	first := s[0]
-	if !((first >= 'a' && first <= 'z') ||
-		(first >= 'A' && first <= 'Z') ||
-		(first >= '0' && first <= '9')) {
+	if (first < 'a' || first > 'z') &&
+		(first < 'A' || first > 'Z') &&
+		(first < '0' || first > '9') {
 		return false
 	}
 	if idx := strings.LastIndexByte(s, '.'); idx >= 0 {

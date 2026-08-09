@@ -136,7 +136,7 @@ func (source *gatewayBrowserToolSource) retainBrowserDownload(
 	}
 	if !found {
 		writer, begun, created, beginErr := spool.Begin(owner, spec)
-		if beginErr != nil && !(created && writer != nil && fileutil.IsCommittedWriteError(beginErr)) {
+		if beginErr != nil && (!created || writer == nil || !fileutil.IsCommittedWriteError(beginErr)) {
 			if writer != nil {
 				_ = writer.Abort()
 			}
@@ -170,7 +170,7 @@ func (source *gatewayBrowserToolSource) retainBrowserDownload(
 				}
 			}
 			record, err = writer.Commit()
-			if err != nil && !(record.State == nodes.TransferArtifactCommitted && fileutil.IsCommittedWriteError(err)) {
+			if err != nil && (record.State != nodes.TransferArtifactCommitted || !fileutil.IsCommittedWriteError(err)) {
 				_ = writer.Abort()
 				return browser.DownloadArtifact{}, err
 			}
@@ -312,7 +312,7 @@ func (source *gatewayBrowserToolSource) ClaimDownloadDelivery(
 	claimedRecord, claimed, claimErr := spool.ClaimDelivery(
 		owner, request.Ref, request.MediaRef, nodeFileDeliveryKey(owner, record),
 	)
-	if claimErr != nil && !(claimed && claimedRecord.DeliveryAt != 0 && fileutil.IsCommittedWriteError(claimErr)) {
+	if claimErr != nil && (!claimed || claimedRecord.DeliveryAt == 0 || !fileutil.IsCommittedWriteError(claimErr)) {
 		return claimErr
 	}
 	return nil
@@ -342,7 +342,7 @@ func recoverBrowserDownloadDelivery(
 	claimedRecord, claimed, claimErr := spool.ClaimDelivery(
 		owner, recovery.ArtifactRef, recovery.MediaRef, nodeFileDeliveryKey(owner, record),
 	)
-	if claimErr != nil && !(claimed && claimedRecord.DeliveryAt != 0 && fileutil.IsCommittedWriteError(claimErr)) {
+	if claimErr != nil && (!claimed || claimedRecord.DeliveryAt == 0 || !fileutil.IsCommittedWriteError(claimErr)) {
 		return claimErr
 	}
 	return nil

@@ -416,7 +416,8 @@ func (broker *Broker) resolvePreparedActionLocked(
 		element = resolved
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
-		if request.Action.Kind == ActionUpload {
+		switch request.Action.Kind {
+		case ActionUpload:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
 				!validDigest(request.Upload.SHA256) || request.Upload.Path == "" || request.Upload.Filename == "" ||
@@ -428,19 +429,19 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.ArtifactFilename = request.Upload.Filename
 			prepared.ArtifactContentType = request.Upload.ContentType
 			prepared.Effect = EffectLocalEdit
-		} else if request.Action.Kind == ActionDownload {
+		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
-		} else if request.Action.Kind == ActionFill {
+		case ActionFill:
 			if !editableElementRole(element.Role) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
-		} else if request.Action.Kind == ActionSelect {
+		case ActionSelect:
 			if element.Role != "combobox" {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
-		} else {
+		default:
 			prepared.Effect = classifyClickEffect(element)
 		}
 	case ActionPress, ActionScroll:
@@ -761,7 +762,8 @@ func (broker *Broker) driverActionForPrepared(
 				return DriverAction{}, ErrStale
 			}
 		}
-		if prepared.Action.Kind == ActionUpload {
+		switch prepared.Action.Kind {
+		case ActionUpload:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]
 			if !exists || binding.Ref != prepared.Action.ArtifactRef || binding.SHA256 != prepared.ArtifactSHA256 ||
@@ -770,7 +772,7 @@ func (broker *Broker) driverActionForPrepared(
 				return DriverAction{}, ErrStale
 			}
 			value = binding.Path
-		} else if prepared.Action.Kind == ActionDownload {
+		case ActionDownload:
 			kind = DriverDownloadAction
 		}
 		return DriverAction{

@@ -288,7 +288,7 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 		!strings.Contains(code, `event.initiator.type === "other"`) ||
 		!strings.Contains(code, `state.attachmentCount++`) ||
 		!strings.Contains(code, `const encodeUTF8Base64 = value =>`) ||
-		strings.Index(code, `state.status = "claiming"`) < 0 ||
+		!strings.Contains(code, `state.status = "claiming"`) ||
 		strings.Index(code, `state.status = "claiming"`) >
 			strings.Index(code, `Fetch.takeResponseBodyAsStream`) {
 		t.Fatalf("private download calls = %#v", client.calls)

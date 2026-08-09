@@ -423,10 +423,11 @@ func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *t
 			errorCode != nodes.InvocationDispatchUnknown {
 			state := "rejected"
 			message := "the node rejected the invocation"
-			if errorCode == nodes.InvocationDispatchExecutionFailed {
+			switch errorCode {
+			case nodes.InvocationDispatchExecutionFailed:
 				state = string(nodes.InvocationFailed)
 				message = "the node reported a terminal invocation failure"
-			} else if errorCode == nodes.InvocationDispatchCanceled {
+			case nodes.InvocationDispatchCanceled:
 				state = string(nodes.InvocationCanceled)
 				message = "the node reported the invocation canceled"
 			}

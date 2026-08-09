@@ -744,9 +744,7 @@ func fetchUpstreamModels(ctx context.Context, provider, apiBase, apiKey string) 
 	case "ollama":
 		// Strip /v1 suffix if present to get the Ollama root
 		root := apiBase
-		if strings.HasSuffix(root, "/v1") {
-			root = root[:len(root)-3]
-		}
+		root = strings.TrimSuffix(root, "/v1")
 		root = strings.TrimRight(root, "/")
 		fetchURL = root + "/api/tags"
 		return fetchOllamaModels(ctx, fetchURL)
@@ -878,7 +876,7 @@ func fetchOpenAICompatibleModelsForProvider(
 		models := make([]upstreamModel, 0, len(envelope.Data))
 		for _, m := range envelope.Data {
 			if m.ID != "" {
-				models = append(models, upstreamModel{ID: m.ID, OwnedBy: m.OwnedBy})
+				models = append(models, upstreamModel(m))
 			}
 		}
 		return models, nil
@@ -889,7 +887,7 @@ func fetchOpenAICompatibleModelsForProvider(
 		models := make([]upstreamModel, 0, len(arr))
 		for _, m := range arr {
 			if m.ID != "" {
-				models = append(models, upstreamModel{ID: m.ID, OwnedBy: m.OwnedBy})
+				models = append(models, upstreamModel(m))
 			}
 		}
 		return models, nil

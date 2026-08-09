@@ -42,7 +42,8 @@ func (c *DiscordChannel) voiceUserID(guildID string, ssrc uint32) string {
 }
 
 func (c *DiscordChannel) handleVoiceCommand(s *discordgo.Session, m *discordgo.MessageCreate) bool {
-	if m.Content == "!vc join" {
+	switch m.Content {
+	case "!vc join":
 		vs, err := s.State.VoiceState(m.GuildID, m.Author.ID)
 		if err != nil || vs == nil {
 			if _, sendErr := s.ChannelMessageSend(
@@ -83,7 +84,7 @@ func (c *DiscordChannel) handleVoiceCommand(s *discordgo.Session, m *discordgo.M
 			})
 		}
 		return true
-	} else if m.Content == "!vc leave" {
+	case "!vc leave":
 		vc, exists := s.VoiceConnections[m.GuildID]
 		if exists && vc != nil {
 			if err := vc.Disconnect(c.ctx); err != nil {

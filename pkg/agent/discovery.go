@@ -139,9 +139,10 @@ func descriptorIdentity(agentID string, definition AgentContextDefinition) (stri
 
 	if description == "" &&
 		definition.Agent != nil {
-		if definition.Source == AgentDefinitionSourceAgent {
+		switch definition.Source {
+		case AgentDefinitionSourceAgent:
 			description = firstNonEmptyLine(definition.Agent.Body)
-		} else if definition.Source == AgentDefinitionSourceAgents {
+		case AgentDefinitionSourceAgents:
 			description = firstMeaningfulParagraph(definition.Agent.Body)
 		}
 	}

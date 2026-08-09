@@ -130,9 +130,9 @@ func newSystemdServiceManagerWithEnforcement(
 		}
 		services := make(map[string]ServicePolicyEntry)
 		for serviceAlias, service := range profile.Services {
-			if !(enforcement.status && service.Status) &&
-				!(enforcement.logs && service.Logs) &&
-				!(enforcement.actions && len(service.Actions) > 0) {
+			if (!enforcement.status || !service.Status) &&
+				(!enforcement.logs || !service.Logs) &&
+				(!enforcement.actions || len(service.Actions) <= 0) {
 				continue
 			}
 			services[serviceAlias] = service

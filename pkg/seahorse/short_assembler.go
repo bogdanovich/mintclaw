@@ -165,7 +165,6 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 func buildAssembleResult(final []resolvedItem, budget *AssembleBudgetReport) *AssembleResult {
 	var messages []Message
 	var summaries []Summary
-	var sourceIDs []string
 	totalTokens := 0
 	maxDepth := 0
 	condensedCount := 0
@@ -174,7 +173,6 @@ func buildAssembleResult(final []resolvedItem, budget *AssembleBudgetReport) *As
 		totalTokens += r.tokenCount
 		if r.itemType == "message" && r.message != nil {
 			messages = append(messages, *r.message)
-			sourceIDs = append(sourceIDs, fmt.Sprintf("msg:%d", r.message.ID))
 		} else if r.itemType == "summary" && r.summary != nil {
 			summaries = append(summaries, *r.summary)
 			if r.summary.Depth > maxDepth {

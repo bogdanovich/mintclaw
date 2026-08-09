@@ -161,7 +161,7 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bo
 func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bool) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Print(fmt.Sprintf("%s You: ", internal.Logo))
+		fmt.Printf("%s You: ", internal.Logo)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
