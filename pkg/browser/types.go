@@ -42,6 +42,7 @@ var (
 	ErrSnapshotInvalidation = errors.New("browser snapshot invalidation failed")
 	ErrStale                = errors.New("browser state revision is stale")
 	ErrWorkerUnavailable    = errors.New("browser worker is unavailable")
+	ErrWorkerLost           = fmt.Errorf("%w: terminal worker loss", ErrWorkerUnavailable)
 	identifierRegexp        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 	safeFailureRegexp       = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	elementRoleRegexp       = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)

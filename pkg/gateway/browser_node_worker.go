@@ -579,6 +579,9 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationSucceeded:
 				return json.Unmarshal(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				if remote.Failure != nil && remote.Failure.Code == "SESSION_LOST" {
+					return browser.ErrWorkerLost
+				}
 				return browser.ErrWorkerUnavailable
 			case nodes.InvocationUnknown:
 				return browser.ErrWorkerUnavailable

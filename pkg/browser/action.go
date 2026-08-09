@@ -68,6 +68,14 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	}
 	driverObservation, err := worker.Observe(ctx)
 	if err != nil {
+		if errors.Is(err, ErrWorkerLost) {
+			quarantineErr := broker.quarantineWorkerSessionLocked(
+				ctx,
+				session.ID,
+				"worker_lost",
+			)
+			return Observation{}, errors.Join(err, quarantineErr)
+		}
 		return Observation{}, err
 	}
 	if err = validateBlankObservation(driverObservation, ""); err != nil {
@@ -315,12 +323,21 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			return json.RawMessage(`{"status":"completed"}`), nil
 		},
 	)
+	var postActionErr error
 	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
-		if invalidateErr := broker.invalidateSnapshotLocked(ctx, prepared.SessionID); invalidateErr != nil {
-			return invocation, errors.Join(executeErr, invalidateErr)
-		}
+		postActionErr = broker.invalidateSnapshotLocked(ctx, prepared.SessionID)
 	}
-	return invocation, executeErr
+	if invocation.State == InvocationUnknown {
+		safeFailure := invocation.SafeFailure
+		if safeFailure == "" {
+			safeFailure = "outcome_unknown"
+		}
+		postActionErr = errors.Join(
+			postActionErr,
+			broker.quarantineWorkerSessionLocked(ctx, prepared.SessionID, safeFailure),
+		)
+	}
+	return invocation, errors.Join(executeErr, postActionErr)
 }
 
 func (broker *Broker) resolvePreparedActionLocked(
@@ -570,6 +587,30 @@ func (broker *Broker) actionSessionLocked(
 		return Session{}, nil, nil, ErrDriverIncompatible
 	}
 	return session, slot, worker, nil
+}
+
+func (broker *Broker) quarantineWorkerSessionLocked(
+	ctx context.Context,
+	sessionID string,
+	safeFailure string,
+) error {
+	limits := broker.config.Limits.Effective()
+	quarantineCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		time.Duration(limits.ActionSeconds)*time.Second,
+	)
+	defer cancel()
+	session, err := broker.store.GetSession(quarantineCtx, sessionID)
+	if err != nil || session.State.Terminal() {
+		return err
+	}
+	_, err = broker.finishSessionLocked(
+		quarantineCtx,
+		session,
+		SessionLost,
+		safeFailure,
+	)
+	return err
 }
 
 func (broker *Broker) invalidateSnapshotLocked(ctx context.Context, sessionID string) error {
