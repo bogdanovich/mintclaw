@@ -242,6 +242,7 @@ func newTestManager() *Manager {
 	m := &Manager{
 		channels:               make(map[string]Channel),
 		delivery:               newDeliveryRuntime(),
+		stream:                 newStreamCoordinator(),
 		bus:                    bus.NewMessageBus(),
 		channelHashes:          make(map[string]string),
 		channelRestartRequired: make(map[string]string),
@@ -380,10 +381,10 @@ func (c *toolFeedbackTestChannel) PrepareToolFeedbackMessageContent(content stri
 
 func enableTestToolFeedbackCoordinator(t *testing.T, m *Manager, separate bool) {
 	t.Helper()
-	m.interactions.toolFeedback = NewToolFeedbackCoordinator(ToolFeedbackAnimatorConfig{
+	m.streamCoordinator().initializeToolFeedback(ToolFeedbackAnimatorConfig{
 		AnimationInterval: time.Hour,
 	}, separate)
-	t.Cleanup(m.interactions.toolFeedback.StopAll)
+	t.Cleanup(m.streamCoordinator().stopToolFeedback)
 }
 
 func TestSetMediaStorePropagatesToExistingChannels(t *testing.T) {
@@ -1305,12 +1306,12 @@ func TestUnregisterChannel_RetiresToolFeedbackBeforeReplacement(t *testing.T) {
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", owner.Worker(), feedback); err != nil {
 		t.Fatalf("initial feedback error = %v", err)
 	}
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 1 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
 		t.Fatalf("ActiveCount() before unregister = %d, want 1", count)
 	}
 
 	m.UnregisterChannel("test")
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 0 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
 		t.Fatalf("ActiveCount() after unregister = %d, want 0", count)
 	}
 	replacement := &toolFeedbackTestChannel{}
@@ -2788,8 +2789,8 @@ func TestSendWithRetry_FinalSendsBeforeProgressDelete(t *testing.T) {
 	if len(ch.operations) != 3 || ch.operations[1] != "send:done" || ch.operations[2] != "delete:msg-1" {
 		t.Fatalf("operations = %v, want final send before progress delete", ch.operations)
 	}
-	if m.interactions.toolFeedback.ActiveCount() != 0 {
-		t.Fatalf("active coordinator entries = %d, want 0", m.interactions.toolFeedback.ActiveCount())
+	if m.streamCoordinator().activeToolFeedbackCount() != 0 {
+		t.Fatalf("active coordinator entries = %d, want 0", m.streamCoordinator().activeToolFeedbackCount())
 	}
 }
 
@@ -2895,7 +2896,7 @@ func TestLogicalSplitFailureKeepsProgressEditable(t *testing.T) {
 			if err != nil || !sent || !slices.Equal(ids, []string{"msg-1"}) {
 				t.Fatalf("resumed feedback = (%v, %v, %v), want msg-1 edit", ids, sent, err)
 			}
-			if count := m.interactions.toolFeedback.ActiveCount(); count != 1 {
+			if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
 				t.Fatalf("ActiveCount() = %d, want retained progress", count)
 			}
 			ch.mu.Lock()
@@ -2950,7 +2951,7 @@ func TestSendWithRetry_UneditableToolFeedbackSendsReplacement(t *testing.T) {
 	if !slices.Equal(transport.operations, want) {
 		t.Fatalf("operations = %v, want %v", transport.operations, want)
 	}
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 0 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
 		t.Fatalf("ActiveCount() = %d, want 0", count)
 	}
 }
@@ -3050,7 +3051,7 @@ func TestInterimOutboundAllowsLaterSameTurnFeedback(t *testing.T) {
 	if !slices.Equal(ch.operations, want) {
 		t.Fatalf("operations = %v, want %v", ch.operations, want)
 	}
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 1 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
 		t.Fatalf("ActiveCount() = %d, want later feedback active", count)
 	}
 }
@@ -3125,7 +3126,7 @@ func TestToolFeedbackLifecycle_IsolatedByTurnScope(t *testing.T) {
 		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
 		TraceScopes: []runtimeevents.TraceScope{turnOne},
 	})
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 1 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
 		t.Fatalf("ActiveCount() after turn one dismissal = %d, want 1", count)
 	}
 	if _, _, _, err := sendWithRetryTuple(m,
@@ -3167,7 +3168,7 @@ func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
 	})
 
-	if count := m.interactions.toolFeedback.ActiveCount(); count != 0 {
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
 		t.Fatalf("ActiveCount() = %d, want 0", count)
 	}
 	ch.mu.Lock()
@@ -3226,7 +3227,7 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 				Context: bus.InboundContext{Channel: "test", ChatID: "chat-1"},
 			})
 
-			if count := m.interactions.toolFeedback.ActiveCount(); count != tt.wantActive {
+			if count := m.streamCoordinator().activeToolFeedbackCount(); count != tt.wantActive {
 				t.Fatalf("ActiveCount() = %d, want %d", count, tt.wantActive)
 			}
 			ch.mu.Lock()
@@ -3293,7 +3294,7 @@ func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testin
 			); err != nil {
 				t.Fatalf("final error = %v", err)
 			}
-			if count := m.interactions.toolFeedback.ActiveCount(); count != tt.wantActive {
+			if count := m.streamCoordinator().activeToolFeedbackCount(); count != tt.wantActive {
 				t.Fatalf("ActiveCount() = %d, want %d", count, tt.wantActive)
 			}
 			ch.mu.Lock()
@@ -3416,10 +3417,10 @@ func TestStreamActiveKey_UnscopedFallbackRejectsAmbiguousTurns(t *testing.T) {
 	second, _ := traceScopedDeliveryKey(
 		base, runtimeevents.NewTraceScope("/workspace/main", "turn-2"),
 	)
-	m.streams.streamActive.Store(first, true)
-	m.streams.streamActive.Store(second, true)
+	m.streamCoordinator().markActive(first)
+	m.streamCoordinator().markActive(second)
 
-	if key, ok := m.streams.activeKey("test", "chat-1", "", runtimeevents.TraceScope{}); ok {
+	if key, ok := m.streamCoordinator().activeKey("test", "chat-1", "", runtimeevents.TraceScope{}); ok {
 		t.Fatalf("activeKey() = %q, want no ambiguous legacy match", key)
 	}
 }
@@ -3433,15 +3434,15 @@ func TestStreamAuxiliaryTombstone_UnscopedFallbackIgnoresExpiredScope(t *testing
 	active, _ := traceScopedDeliveryKey(
 		base, runtimeevents.NewTraceScope("/workspace/main", "turn-active"),
 	)
-	m.streams.streamAuxiliaryTombstones.Store(expired, time.Now().Add(-2*streamAuxiliaryTombstoneTTL))
-	m.streams.streamAuxiliaryTombstones.Store(active, time.Now())
+	m.streamCoordinator().storeTombstone(expired, time.Now().Add(-2*streamAuxiliaryTombstoneTTL))
+	m.streamCoordinator().storeTombstone(active, time.Now())
 
-	if !m.streams.tombstoneActiveForMessage(
+	if !m.streamCoordinator().tombstoneActiveForMessage(
 		"test", "chat-1", "", runtimeevents.TraceScope{}, time.Now(),
 	) {
 		t.Fatal("expected the single non-expired scoped tombstone to match")
 	}
-	if _, ok := m.streams.streamAuxiliaryTombstones.Load(expired); ok {
+	if m.streamCoordinator().tombstoneExists(expired) {
 		t.Fatal("expected expired scoped tombstone to be pruned")
 	}
 }
@@ -3547,7 +3548,7 @@ func TestGetStreamer_FinalizeBlocksLateFeedbackUntilQueuedFinal(t *testing.T) {
 	if err != nil || !sent {
 		t.Fatalf("queued final = (%v, %v), want handled", sent, err)
 	}
-	m.streams.streamAuxiliaryTombstones.Delete(streamSuppressionKey("test", "chat-1", "session-1", traceScope))
+	m.streamCoordinator().clearTombstone(streamSuppressionKey("test", "chat-1", "session-1", traceScope))
 	feedback.Context.MessageID = "turn-2"
 	feedback.Content = "next turn"
 	feedback.TraceScopes = []runtimeevents.TraceScope{
@@ -3646,7 +3647,7 @@ func TestPreSend_ApprovalPromptBypassesPlaceholderEdit(t *testing.T) {
 			editCalled,
 		)
 	}
-	if _, exists := m.interactions.placeholders.Load("test:123"); exists {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("approval prompt should consume the stale placeholder before normal Send")
 	}
 }
@@ -3972,7 +3973,7 @@ func TestPreSend_ThoughtPlaceholderDeleteAndSkipsEdit(t *testing.T) {
 	if ch.deletedChatID != "123" || ch.deletedMessageID != "456" {
 		t.Fatalf("unexpected placeholder deletion target: %s/%s", ch.deletedChatID, ch.deletedMessageID)
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); ok {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder to be consumed before structured thought send")
 	}
 }
@@ -4337,7 +4338,7 @@ func TestPreSend_NonToolFeedbackDoesNotInvokeAdapterLifecycle(t *testing.T) {
 
 func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	m := newTestManager()
-	m.streams.streamActive.Store("test:123", true)
+	m.streamCoordinator().markActive("test:123")
 	m.RecordPlaceholder("test", "123", "placeholder-1")
 
 	var editedContent string
@@ -4371,10 +4372,10 @@ func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T)
 	if len(msgIDs) != 0 {
 		t.Fatalf("expected no delivered message IDs for stale feedback, got %v", msgIDs)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to remain for the final outbound message")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); !ok {
+	if !m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder cleanup to remain deferred to the final outbound message")
 	}
 	if ch.editedMessages != 0 {
@@ -4398,10 +4399,10 @@ func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T)
 	if !handled {
 		t.Fatal("expected final outbound message to consume streamActive marker")
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); ok {
+	if m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be cleared by final outbound message")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); ok {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder to be cleaned up by final outbound message")
 	}
 	if editedContent != "final streamed reply" {
@@ -4411,8 +4412,8 @@ func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T)
 
 func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	m := newTestManager()
-	m.streams.streamActive.Store("test:123", true)
-	m.streams.streamAuxiliaryTombstones.Store("test:123", time.Now())
+	m.streamCoordinator().markActive("test:123")
+	m.streamCoordinator().storeTombstone("test:123", time.Now())
 	m.RecordPlaceholder("test", "123", "placeholder-1")
 
 	var editedContent string
@@ -4446,10 +4447,10 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	if len(msgIDs) != 0 {
 		t.Fatalf("expected no delivered message IDs for stale thought, got %v", msgIDs)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to remain for the final outbound message")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); !ok {
+	if !m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder cleanup to remain deferred to the final outbound message")
 	}
 	if ch.editedMessages != 0 {
@@ -4473,10 +4474,10 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	if !handled {
 		t.Fatal("expected final outbound message to consume streamActive marker")
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); ok {
+	if m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be cleared by final outbound message")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); ok {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder to be cleaned up by final outbound message")
 	}
 	if editedContent != "final streamed reply" {
@@ -4506,8 +4507,8 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 
 func TestPreSend_StreamActiveDoesNotConsumeEarlierVisibleMessage(t *testing.T) {
 	m := newTestManager()
-	m.streams.streamActive.Store("test:123", true)
-	m.streams.streamAuxiliaryTombstones.Store("test:123", time.Now())
+	m.streamCoordinator().markActive("test:123")
+	m.streamCoordinator().storeTombstone("test:123", time.Now())
 	m.RecordPlaceholder("test", "123", "placeholder-1")
 
 	editCalls := 0
@@ -4537,13 +4538,13 @@ func TestPreSend_StreamActiveDoesNotConsumeEarlierVisibleMessage(t *testing.T) {
 	if editCalls != 0 {
 		t.Fatalf("placeholder edits after earlier visible message = %d, want 0", editCalls)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to remain for final outbound")
 	}
-	if _, ok := m.streams.streamAuxiliaryTombstones.Load("test:123"); !ok {
+	if !m.streamCoordinator().tombstoneExists("test:123") {
 		t.Fatal("expected auxiliary tombstone to remain")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); !ok {
+	if !m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder cleanup to remain deferred to final outbound")
 	}
 
@@ -4563,7 +4564,7 @@ func TestPreSend_StreamActiveDoesNotConsumeEarlierVisibleMessage(t *testing.T) {
 	if !handled {
 		t.Fatal("expected final outbound message to consume streamActive marker")
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); ok {
+	if m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be cleared by final outbound message")
 	}
 	if editCalls != 1 {
@@ -4573,7 +4574,7 @@ func TestPreSend_StreamActiveDoesNotConsumeEarlierVisibleMessage(t *testing.T) {
 
 func TestPreSend_StreamActiveDoesNotConsumeOtherSessionFinal(t *testing.T) {
 	m := newTestManager()
-	m.streams.streamActive.Store("test:123", true)
+	m.streamCoordinator().markActive("test:123")
 	m.RecordPlaceholder("test", "123", "placeholder-1")
 
 	ch := &mockMessageEditor{
@@ -4601,10 +4602,10 @@ func TestPreSend_StreamActiveDoesNotConsumeOtherSessionFinal(t *testing.T) {
 	if handled {
 		t.Fatal("expected final outbound from a different session to be delivered normally")
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streaming marker to remain for the streaming session")
 	}
-	if _, ok := m.interactions.placeholders.Load("test:123"); !ok {
+	if !m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder cleanup to remain deferred to the streaming session")
 	}
 }
@@ -4757,7 +4758,7 @@ func TestGetStreamer_FinalizeDismissesTrackedToolFeedback(t *testing.T) {
 	if ch.dismissedChatID != "" {
 		t.Fatalf("expected coordinator-owned cleanup, got adapter call %q", ch.dismissedChatID)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be recorded after finalize")
 	}
 }
@@ -4838,10 +4839,10 @@ func TestGetStreamer_FinalizeCleansPlaceholderImmediately(t *testing.T) {
 	if editedContent != "final reply" {
 		t.Fatalf("edited placeholder content = %q, want final reply", editedContent)
 	}
-	if _, placeholderExists := m.interactions.placeholders.Load("test:123"); placeholderExists {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder to be cleaned up during finalize")
 	}
-	if _, streamActiveExists := m.streams.streamActive.Load("test:123"); !streamActiveExists {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be recorded after finalize")
 	}
 	cleaner, ok := streamer.(interface{ ClearFinalizedStreamMarker() })
@@ -4849,10 +4850,10 @@ func TestGetStreamer_FinalizeCleansPlaceholderImmediately(t *testing.T) {
 		t.Fatal("expected streamer to expose marker cleanup")
 	}
 	cleaner.ClearFinalizedStreamMarker()
-	if _, streamActiveExists := m.streams.streamActive.Load("test:123"); streamActiveExists {
+	if m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be cleared")
 	}
-	if _, ok := m.streams.streamAuxiliaryTombstones.Load("test:123"); !ok {
+	if !m.streamCoordinator().tombstoneExists("test:123") {
 		t.Fatal("expected auxiliary tombstone to remain after final marker cleanup")
 	}
 
@@ -4892,7 +4893,7 @@ func TestGetStreamer_FinalizeCleansPlaceholderImmediately(t *testing.T) {
 	if handled {
 		t.Fatal("expected cleared final marker to let normal outbound send")
 	}
-	if _, ok := m.streams.streamAuxiliaryTombstones.Load("test:123"); ok {
+	if m.streamCoordinator().tombstoneExists("test:123") {
 		t.Fatal("expected normal outbound to clear auxiliary tombstone")
 	}
 }
@@ -4920,10 +4921,10 @@ func TestGetStreamer_FinalizeCleansPlaceholderWithSessionKey(t *testing.T) {
 	if err := streamer.Finalize(context.Background(), "final reply"); err != nil {
 		t.Fatalf("Finalize() error = %v", err)
 	}
-	if _, placeholderExists := m.interactions.placeholders.Load("test:123"); placeholderExists {
+	if m.streamCoordinator().placeholderExists("test:123") {
 		t.Fatal("expected placeholder to be cleaned up during finalize")
 	}
-	if _, streamActiveExists := m.streams.streamActive.Load("test:123:session-1"); !streamActiveExists {
+	if !m.streamCoordinator().active("test:123:session-1") {
 		t.Fatal("expected session streamActive marker to be recorded after finalize")
 	}
 }
@@ -4959,7 +4960,7 @@ func TestGetStreamer_PreservesContextUsageStreamer(t *testing.T) {
 	if gotUsage != usage {
 		t.Fatalf("context usage = %#v, want original usage", gotUsage)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be recorded after finalize with context")
 	}
 }
@@ -5095,7 +5096,7 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 	if segments[1].finalUsage != usage {
 		t.Fatalf("final usage = %#v, want original usage", segments[1].finalUsage)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123:session-1"); !ok {
+	if !m.streamCoordinator().active("test:123:session-1") {
 		t.Fatal("expected streamActive marker to be recorded after split stream finalize")
 	}
 }
@@ -5412,7 +5413,7 @@ func TestGetStreamer_FinalizeWithConfigDoesNotInvokeAdapterLifecycle(t *testing.
 	if ch.dismissedChatID != "" {
 		t.Fatalf("expected tracked tool feedback message to be preserved, got dismissal for %q", ch.dismissedChatID)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); !ok {
+	if !m.streamCoordinator().active("test:123") {
 		t.Fatal("expected streamActive marker to be recorded after finalize")
 	}
 }
@@ -5451,7 +5452,7 @@ func TestGetStreamer_FinalizeDismissesResolvedTrackedToolFeedback(t *testing.T) 
 	if ch.dismissedChatID != "" {
 		t.Fatalf("expected coordinator-owned cleanup, got adapter call %q", ch.dismissedChatID)
 	}
-	if _, ok := m.streams.streamActive.Load("test:-100123/42"); !ok {
+	if !m.streamCoordinator().active("test:-100123/42") {
 		t.Fatal("expected streamActive marker to be recorded after finalize")
 	}
 }
@@ -5520,7 +5521,7 @@ func TestGetStreamer_FinalizeFailureDoesNotDismissTrackedToolFeedback(t *testing
 	if ch.dismissedChatID != "" {
 		t.Fatalf("expected no tool feedback dismissal on finalize failure, got %q", ch.dismissedChatID)
 	}
-	if _, ok := m.streams.streamActive.Load("test:123"); ok {
+	if m.streamCoordinator().active("test:123") {
 		t.Fatal("expected no streamActive marker after finalize failure")
 	}
 }
@@ -5623,7 +5624,7 @@ func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.
 	go m.deliveryRuntime().runWorker(ctx, "test", w)
 
 	streamKey := streamSuppressionKey("test", "123", "session-1", runtimeevents.TraceScope{})
-	m.streams.streamActive.Store(streamKey, true)
+	m.streamCoordinator().markActive(streamKey)
 	w.queue <- testOutboundMessage(bus.OutboundMessage{
 		Channel:    "test",
 		ChatID:     "123",
@@ -5645,7 +5646,7 @@ func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.
 	if len(received) != 0 {
 		t.Fatalf("received split duplicate messages = %v, want none", received)
 	}
-	if _, ok := m.streams.streamActive.Load(streamKey); ok {
+	if m.streamCoordinator().active(streamKey) {
 		t.Fatal("expected finalized stream marker to be consumed")
 	}
 }
@@ -6132,18 +6133,18 @@ func TestTypingStopJanitorEviction(t *testing.T) {
 	m := newTestManager()
 
 	var stopCalled atomic.Bool
-	m.interactions.typingStops.Store("test:123", typingEntry{
+	m.streamCoordinator().swapTyping("test:123", typingEntry{
 		stop:      func() { stopCalled.Store(true) },
 		createdAt: time.Now().Add(-10 * time.Minute),
 	})
 
-	m.interactions.expire(time.Now())
+	m.streamCoordinator().expireInteractions(time.Now())
 
 	if !stopCalled.Load() {
 		t.Fatal("expected typing stop function to be called by janitor eviction")
 	}
 
-	if _, loaded := m.interactions.typingStops.Load("test:123"); loaded {
+	if m.streamCoordinator().typingExists("test:123") {
 		t.Fatal("expected typing entry to be deleted after eviction")
 	}
 }
@@ -6151,14 +6152,14 @@ func TestTypingStopJanitorEviction(t *testing.T) {
 func TestPlaceholderJanitorEviction(t *testing.T) {
 	m := newTestManager()
 
-	m.interactions.placeholders.Store("test:456", placeholderEntry{
+	m.streamCoordinator().storePlaceholder("test:456", placeholderEntry{
 		id:        "msg_old",
 		createdAt: time.Now().Add(-20 * time.Minute),
 	})
 
-	m.interactions.expire(time.Now())
+	m.streamCoordinator().expireInteractions(time.Now())
 
-	if _, loaded := m.interactions.placeholders.Load("test:456"); loaded {
+	if m.streamCoordinator().placeholderExists("test:456") {
 		t.Fatal("expected placeholder entry to be deleted after eviction")
 	}
 }
@@ -6285,7 +6286,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 	// Simulate a placeholder recorded by base.go HandleMessage
 	mgr.RecordPlaceholder("mock", "chat-1", "ph-123")
 
-	if _, ok := mgr.interactions.placeholders.Load(key); !ok {
+	if !mgr.streamCoordinator().placeholderExists(key) {
 		t.Fatal("expected placeholder to be recorded")
 	}
 
@@ -6306,7 +6307,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 	}
 
 	// Placeholder should be gone now
-	if _, ok := mgr.interactions.placeholders.Load(key); ok {
+	if mgr.streamCoordinator().placeholderExists(key) {
 		t.Error("expected placeholder to be removed after being consumed")
 	}
 
@@ -6847,7 +6848,7 @@ func TestManager_SendPlaceholder(t *testing.T) {
 	}
 
 	key := "mock:chat-1"
-	if _, loaded := mgr.interactions.placeholders.Load(key); !loaded {
+	if !mgr.streamCoordinator().placeholderExists(key) {
 		t.Error("expected placeholder to be recorded in manager")
 	}
 

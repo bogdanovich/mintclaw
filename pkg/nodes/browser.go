@@ -1,6 +1,8 @@
 package nodes
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +26,7 @@ const (
 	BrowserNetworkAnyHTTP      = "any_http"
 
 	MaxBrowserProfiles         = 8
-	MaxBrowserActions          = 3
+	MaxBrowserActions          = 4
 	MaxBrowserScrollAmount     = 5
 	MaxBrowserSessions         = 1
 	MaxBrowserTabs             = 4
@@ -297,6 +299,8 @@ type BrowserActInput struct {
 	PreparedActionHash    string        `json:"prepared_action_hash"`
 	BrowserPolicyRevision string        `json:"browser_policy_revision"`
 	ProfileRevision       string        `json:"profile_revision"`
+	ExpectedRole          string        `json:"expected_role,omitempty"`
+	ExpectedName          string        `json:"expected_name,omitempty"`
 	ApprovalDigest        string        `json:"approval_digest,omitempty"`
 }
 
@@ -312,6 +316,8 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		PreparedActionHash    string          `json:"prepared_action_hash"`
 		BrowserPolicyRevision string          `json:"browser_policy_revision"`
 		ProfileRevision       string          `json:"profile_revision"`
+		ExpectedRole          string          `json:"expected_role,omitempty"`
+		ExpectedName          string          `json:"expected_name,omitempty"`
 		ApprovalDigest        string          `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -327,9 +333,46 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		Effect: value.Effect, CurrentOrigin: value.CurrentOrigin,
 		PreparedActionHash:    value.PreparedActionHash,
 		BrowserPolicyRevision: value.BrowserPolicyRevision,
-		ProfileRevision:       value.ProfileRevision, ApprovalDigest: value.ApprovalDigest,
+		ProfileRevision:       value.ProfileRevision,
+		ExpectedRole:          value.ExpectedRole, ExpectedName: value.ExpectedName,
+		ApprovalDigest: value.ApprovalDigest,
 	}
 	return nil
+}
+
+const browserApprovalDigestDomain = "mintclaw.browser.act.approval.v1\x00"
+
+// BrowserApprovalDigest binds one approval-gated companion action to its
+// complete typed input without forwarding human approval authority.
+func BrowserApprovalDigest(input BrowserActInput) (string, error) {
+	input.ApprovalDigest = ""
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(browserApprovalDigestDomain))
+	_, _ = hash.Write(encoded)
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+// BrowserApprovalDigestMatches verifies the action's supplied digest without
+// exposing or reconstructing human approval credentials.
+func BrowserApprovalDigestMatches(input BrowserActInput) bool {
+	if len(input.ApprovalDigest) != sha256.Size*2 {
+		return false
+	}
+	expected, err := BrowserApprovalDigest(input)
+	return err == nil && subtle.ConstantTimeCompare([]byte(expected), []byte(input.ApprovalDigest)) == 1
+}
+
+// BrowserClickEffect returns the conservative trusted effect for semantic
+// click revalidation on both sides of the companion boundary.
+func BrowserClickEffect(role string) string {
+	if role == "button" {
+		return "external_commit"
+	}
+	return "unknown"
 }
 
 type BrowserHostFeatures struct {
@@ -526,6 +569,8 @@ type BrowserHostActRequest struct {
 	BrowserPolicyRevision string
 	ProfileRevision       string
 	ApprovalDigest        string
+	ExpectedRole          string
+	ExpectedName          string
 	AgentID               string
 	ActorID               string
 }
@@ -542,7 +587,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "download" && action != "navigate" && action != "scroll" {
+		if action != "click" && action != "download" && action != "navigate" && action != "scroll" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -687,19 +732,41 @@ func browserCommandInputSchema(
 				effect = "download"
 			case "scroll":
 				effect = "read"
+			case "click":
+				effect = "unknown"
 			}
 			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" {
+			if action == "download" || action == "click" {
 				required = append(required, "approval_digest")
 			}
-			actionBranches = append(actionBranches, map[string]any{
-				"required": required,
-				"properties": map[string]any{
-					"profile_revision": map[string]any{"const": profile.Revision},
-					"action":           browserActionSchema([]string{action}),
-					"effect":           map[string]any{"const": effect},
-				},
-			})
+			properties := map[string]any{
+				"profile_revision": map[string]any{"const": profile.Revision},
+				"action":           browserActionSchema([]string{action}),
+				"effect":           map[string]any{"const": effect},
+			}
+			if action == "click" {
+				required = append(required, "expected_role")
+				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
+				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+			}
+			branch := map[string]any{
+				"required":   required,
+				"properties": properties,
+			}
+			if action == "click" {
+				branch["oneOf"] = []any{
+					map[string]any{"properties": map[string]any{
+						"expected_role": map[string]any{"const": "button"},
+						"effect":        map[string]any{"const": "external_commit"},
+					}},
+					map[string]any{"properties": map[string]any{
+						"expected_role": map[string]any{"not": map[string]any{"const": "button"}},
+						"effect":        map[string]any{"const": "unknown"},
+					}},
+				}
+			}
+			actionBranches = append(actionBranches, branch)
 		}
 	}
 	actions := make([]string, 0, len(allActions))
@@ -738,6 +805,9 @@ func browserCommandInputSchema(
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
 	case BrowserCommandAct:
+		if _, hasClick := allActions["click"]; hasClick {
+			actEffects = append(actEffects, "external_commit", "unknown")
+		}
 		add("session_id", identifier)
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
@@ -750,6 +820,10 @@ func browserCommandInputSchema(
 		add("prepared_action_hash", digest)
 		add("browser_policy_revision", digest)
 		add("profile_revision", identifier)
+		if _, hasClick := allActions["click"]; hasClick {
+			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		}
 		properties["approval_digest"] = digest
 		profileConstraint = map[string]any{"oneOf": actionBranches}
 	default:
@@ -913,6 +987,15 @@ func browserActionSchema(actions []string) map[string]any {
 					},
 				},
 			})
+		case "click":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "ref"},
+				"properties": map[string]any{
+					"kind": map[string]any{"const": "click"},
+					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
 		}
 	}
 	return map[string]any{"oneOf": branches}
@@ -985,6 +1068,15 @@ func validateBrowserInvocationInput(command string, input map[string]any) error 
 				return err
 			}
 			return validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true)
+		}
+		if action["kind"] == "click" {
+			if err := validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true); err != nil {
+				return err
+			}
+			if err := validateBrowserStringBytes(input, "expected_role", 128, true); err != nil {
+				return err
+			}
+			return validateBrowserStringBytes(input, "expected_name", 4096, false)
 		}
 	}
 	return nil

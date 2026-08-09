@@ -188,7 +188,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "navigate" || action == "scroll" {
+			if action == "click" || action == "navigate" || action == "scroll" {
 				current[action] = struct{}{}
 			}
 		}
@@ -204,7 +204,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	}
 	actions := make([]browser.ActionKind, 0, len(intersection))
 	if allProfilesReady {
-		for _, action := range []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll} {
+		for _, action := range []browser.ActionKind{
+			browser.ActionNavigate, browser.ActionClick, browser.ActionScroll,
+		} {
 			if _, available := intersection[string(action)]; available {
 				actions = append(actions, action)
 			}
@@ -310,6 +312,7 @@ type nodeBrowserWorker struct {
 	snapshotGeneration uint64
 	cachedObservation  *browser.DriverObservation
 	elements           map[string]browser.DriverElement
+	currentOrigin      string
 	statusSequence     uint64
 	closed             bool
 }
@@ -364,6 +367,7 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 	worker.closed = true
 	worker.cachedObservation = nil
 	worker.elements = make(map[string]browser.DriverElement)
+	worker.currentOrigin = ""
 	worker.mu.Unlock()
 	return nil
 }
@@ -412,7 +416,7 @@ func (worker *nodeBrowserWorker) Resolve(
 	if !ok {
 		return browser.DriverElement{}, "", browser.ErrStale
 	}
-	return element, target, nil
+	return element, worker.currentOrigin, nil
 }
 
 func (*nodeBrowserWorker) Execute(context.Context, browser.DriverAction) error {
@@ -423,6 +427,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 	switch kind {
 	case browser.ActionNavigate:
 		return slices.Contains(worker.actions, "navigate")
+	case browser.ActionClick:
+		return slices.Contains(worker.actions, "click")
 	case browser.ActionScroll:
 		return slices.Contains(worker.actions, "scroll")
 	default:
@@ -447,6 +453,10 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			Kind: "scroll", Direction: request.DriverAction.Direction, Amount: request.DriverAction.Amount,
 		}
 		effect = "read"
+	case request.Prepared.Action.Kind == browser.ActionClick &&
+		request.DriverAction.Kind == browser.DriverClick && slices.Contains(worker.actions, "click"):
+		action = nodes.BrowserAction{Kind: "click", Ref: request.DriverAction.Target}
+		effect = string(request.Prepared.Effect)
 	default:
 		return browser.ErrDenied
 	}
@@ -457,15 +467,24 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	if err != nil {
 		return err
 	}
-	var result nodes.BrowserActResult
-	err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, nodes.BrowserActInput{
+	input := nodes.BrowserActInput{
 		SessionID: worker.sessionID, TabID: worker.tabID,
 		SnapshotGeneration: generation, ActionInvocationID: request.InvocationID,
 		Action: action, Effect: effect, CurrentOrigin: request.Prepared.CurrentOrigin,
 		PreparedActionHash:    request.Prepared.ActionHash,
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
-	}, &result)
+	}
+	if action.Kind == "click" {
+		input.ExpectedRole = request.Prepared.ElementRole
+		input.ExpectedName = request.Prepared.ElementName
+		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+		if err != nil {
+			return browser.ErrDenied
+		}
+	}
+	var result nodes.BrowserActResult
+	err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, input, &result)
 	if err != nil {
 		return err
 	}
@@ -507,6 +526,7 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	}
 	worker.mu.Lock()
 	worker.snapshotGeneration = result.SnapshotGeneration
+	worker.currentOrigin = observation.Origin
 	worker.rememberElementsLocked(observation)
 	worker.mu.Unlock()
 	return observation, nil

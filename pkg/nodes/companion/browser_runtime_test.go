@@ -15,6 +15,7 @@ type fakeBrowserCommandHost struct {
 	opened         int
 	observed       int
 	navigated      int
+	clicked        int
 	scrolled       int
 	closed         int
 	navigateError  error
@@ -81,6 +82,16 @@ func (host *fakeBrowserCommandHost) Scroll(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
 	host.scrolled++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Click(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.clicked++
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
@@ -188,6 +199,63 @@ func TestRuntimeExecutesTypedBrowserScroll(t *testing.T) {
 	})
 	if host.scrolled != 1 || host.navigated != 0 {
 		t.Fatalf("browser host calls = navigate %d scroll %d", host.navigated, host.scrolled)
+	}
+}
+
+func TestRuntimeExecutesOnlyExactlyAttestedTypedBrowserClick(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	host.profiles[0].Actions = []string{"click", "navigate", "scroll"}
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_click_1",
+		Action:             nodes.BrowserAction{Kind: "click", Ref: "host_ref_1"},
+		Effect:             "external_commit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
+	}
+	var err error
+	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, input)
+	if host.clicked != 1 || host.navigated != 0 || host.scrolled != 0 {
+		t.Fatalf("browser host calls = click %d navigate %d scroll %d", host.clicked, host.navigated, host.scrolled)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*nodes.BrowserActInput)
+	}{
+		{name: "semantic drift", mutate: func(input *nodes.BrowserActInput) { input.ExpectedName = "Delete" }},
+		{name: "role drift", mutate: func(input *nodes.BrowserActInput) {
+			input.ExpectedRole = "link"
+			input.Effect = "unknown"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := input
+			candidate.ActionInvocationID = "browser_click_denied_" + strings.ReplaceAll(test.name, " ", "_")
+			candidate.ApprovalDigest, err = nodes.BrowserApprovalDigest(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&candidate)
+			raw, marshalErr := json.Marshal(candidate)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+			if _, invokeErr := runtime.Invoke(t.Context(), plan); invokeErr == nil {
+				t.Fatal("unattested click was accepted")
+			}
+		})
+	}
+	if host.clicked != 1 {
+		t.Fatalf("denied clicks reached host: %d", host.clicked)
 	}
 }
 
