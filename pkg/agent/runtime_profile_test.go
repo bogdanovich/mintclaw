@@ -510,6 +510,70 @@ func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T
 	}
 }
 
+func TestNewAgentLoopWithRuntimeProfileChecksLaterSessionsEnumeration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix directory mode bits")
+	}
+	root := t.TempDir()
+	mainExecution := filepath.Join(root, "main-project")
+	mainState := filepath.Join(root, "state-main")
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		mainExecution,
+		mainState,
+		[]string{mainExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportExecution := filepath.Join(root, "support-project")
+	supportState := filepath.Join(root, "state-support")
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		supportExecution,
+		supportState,
+		[]string{supportExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	supportSessions := supportLayout.StatePaths().SessionsRoot
+	if err := os.MkdirAll(supportSessions, 0o300); err != nil {
+		t.Fatalf("MkdirAll(support sessions) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(supportSessions, 0o700)
+		_ = os.Chmod(supportState, 0o700)
+	})
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want sessions-enumeration error")
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
+		t.Fatalf("failed sessions preflight created earlier owner state: %v", statErr)
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileRejectsCodingSeahorseBeforeConstruction(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")

@@ -192,10 +192,11 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		}
 		paths := layout.StatePaths()
 		for _, target := range []struct {
-			name string
-			path string
+			name      string
+			path      string
+			enumerate bool
 		}{
-			{name: "sessions", path: paths.SessionsRoot},
+			{name: "sessions", path: paths.SessionsRoot, enumerate: true},
 			{name: "memory", path: paths.MemoryRoot},
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
@@ -205,6 +206,16 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 					routing.NormalizeAgentID(agentID),
 					err,
 				)
+			}
+			if target.enumerate {
+				if err := preflightRuntimeDirectoryEnumeration(target.path); err != nil {
+					return fmt.Errorf(
+						"runtime profile: preflight %s state for agent %q: %w",
+						target.name,
+						routing.NormalizeAgentID(agentID),
+						err,
+					)
+				}
 			}
 		}
 	}
@@ -231,6 +242,13 @@ func preflightRuntimeDirectory(path string) error {
 			return fmt.Errorf("path %q has no existing directory ancestor", path)
 		}
 	}
+}
+
+func preflightRuntimeDirectoryEnumeration(path string) error {
+	if _, err := os.ReadDir(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("enumerate directory %q: %w", path, err)
+	}
+	return nil
 }
 
 func probeRuntimeDirectory(directory string) error {
