@@ -28,7 +28,7 @@ type placeholderEntry struct {
 }
 
 // deliveryInteractionState owns transient UI state associated with outbound
-// delivery. It is embedded in Manager while callers migrate to narrower APIs.
+// delivery.
 type deliveryInteractionState struct {
 	placeholders  sync.Map // "channel:chatID" -> placeholderEntry
 	typingStops   sync.Map // "channel:chatID" -> typingEntry

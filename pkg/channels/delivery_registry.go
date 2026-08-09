@@ -2,7 +2,6 @@ package channels
 
 // deliveryRegistry owns the worker and delivery-owner indexes. Manager's mutex
 // protects registry access while channel lifecycle operations are in progress.
-// The embedded maps remain promoted temporarily for package-test compatibility.
 type deliveryRegistry struct {
 	workers        map[string]*channelWorker
 	deliveryOwners map[string]*deliveryOwner
