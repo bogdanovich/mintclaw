@@ -115,6 +115,7 @@ func newAgentRegistryWithRuntimeProfile(
 			cfg,
 			provider,
 			layout,
+			profile.storeFactory,
 		)
 		if err != nil {
 			registry.Close()
