@@ -633,16 +633,16 @@ func kagiServerURL(baseURL string) string {
 func kagiStatusError(statusCode int) error {
 	switch statusCode {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("Kagi Search API authentication failed (status %d)", statusCode)
+		return fmt.Errorf("kagi Search API authentication failed (status %d)", statusCode)
 	case http.StatusForbidden:
-		return fmt.Errorf("Kagi Search API request forbidden (status %d)", statusCode)
+		return fmt.Errorf("kagi Search API request forbidden (status %d)", statusCode)
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("Kagi Search API rate limited (status %d)", statusCode)
+		return fmt.Errorf("kagi Search API rate limited (status %d)", statusCode)
 	default:
 		if statusCode >= 500 {
-			return fmt.Errorf("Kagi Search API server error (status %d)", statusCode)
+			return fmt.Errorf("kagi Search API server error (status %d)", statusCode)
 		}
-		return fmt.Errorf("Kagi Search API error (status %d)", statusCode)
+		return fmt.Errorf("kagi Search API error (status %d)", statusCode)
 	}
 }
 
@@ -911,7 +911,7 @@ func (p *SogouSearchProvider) Search(
 			return "", fmt.Errorf("failed to read response: %w", err)
 		}
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("Sogou returned status %d", resp.StatusCode)
+			return "", fmt.Errorf("sogou returned status %d", resp.StatusCode)
 		}
 
 		html := string(body)
@@ -1155,7 +1155,7 @@ func (p *PerplexitySearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Perplexity API error: %s", string(body))
+			lastErr = fmt.Errorf("perplexity API error: %s", string(body))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||

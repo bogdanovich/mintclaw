@@ -238,7 +238,7 @@ func playwrightOutputRoot(server config.MCPServerConfig) (config.MCPServerConfig
 
 func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFactory, error) {
 	if rootConfig == nil {
-		return nil, errors.New("Playwright worker factory requires a root config")
+		return nil, errors.New("playwright worker factory requires a root config")
 	}
 	if err := rootConfig.ValidateBrowserConfig(); err != nil {
 		return nil, err
