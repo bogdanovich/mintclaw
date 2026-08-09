@@ -372,7 +372,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 }
 
 func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.execute(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) execute(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) *toolshared.ToolResult {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		var denial *nodeSafeDenialError
 		if errors.As(err, &denial) {
@@ -983,6 +991,14 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 	ctx context.Context,
 	args map[string]any,
 ) (nodes.GatewayInvocationRecord, error) {
+	return runtime.prepareInternal(ctx, args, false)
+}
+
+func (runtime *nodeInvocationToolRuntime) prepareInternal(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) (nodes.GatewayInvocationRecord, error) {
 	if runtime == nil || runtime.source == nil || runtime.access == nil {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialTargetUnavailable,
@@ -1020,6 +1036,14 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
 			nodeActionRefreshDiscovery,
+			nil,
+		)
+	}
+	if nodes.IsWorkspaceCommand(command) && !allowWorkspace {
+		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+			nodeDenialCommandUnavailable,
+			nodeConstraintCommandPolicy,
+			nodeActionAskOperator,
 			nil,
 		)
 	}
@@ -1121,7 +1145,8 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nil,
 		)
 	}
-	if descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
@@ -1323,6 +1348,7 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 				command,
 				requestedRevision,
 				current,
+				allowWorkspace,
 			)
 		},
 	)
@@ -1371,6 +1397,7 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	command string,
 	requestedRevision string,
 	current NodeDiscoveryRecord,
+	allowWorkspace bool,
 ) error {
 	if current.Registration == nil || current.Snapshot.ID == "" {
 		return errDiscoveryStale
@@ -1440,8 +1467,8 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	if !current.Connected {
 		return errDiscoveryStale
 	}
-	if descriptor.ModelContract != nil &&
-		descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract != nil && descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return errDiscoveryStale
 	}
 	return nil
@@ -1898,6 +1925,20 @@ func validateNodeModelConstraints(
 		return validateSystemExecModelConstraints(descriptor, input, constraints)
 	case "shell.exec.v1":
 		return validateShellExecModelConstraints(descriptor, input, constraints)
+	case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
+		profile, profileOK := input["profile_revision"].(string)
+		scope, scopeOK := input["working_scope"].(string)
+		if !profileOK || !scopeOK ||
+			!containsSorted(constraints.ProfileAliases, profile) ||
+			!containsSorted(constraints.WorkingScopes, scope) {
+			return denyNodeInvocation(
+				nodeDenialConstraintViolation,
+				nodeConstraintProfile,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
+		return nil
 	default:
 		return nil
 	}

@@ -160,6 +160,9 @@ func run(args []string) error {
 		if len(fileTransfers.Descriptors()) > 0 {
 			runtimeOptions = append(runtimeOptions, companion.WithFileCapabilities(fileTransfers))
 		}
+		if cfg.SystemExec != nil && len(fileTransfers.WorkspaceProfileRevisions()) > 0 {
+			runtimeOptions = append(runtimeOptions, companion.WithWorkspaceRead(fileTransfers, *cfg.SystemExec))
+		}
 	}
 	if cfg.OwnerShell != nil && cfg.OwnerShell.Enabled {
 		broker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"unicode"
@@ -269,6 +270,112 @@ func (root *fileRoot) resolveParent(
 		basename:    basename,
 		crossMounts: crossMounts,
 	}, nil
+}
+
+func (root *fileRoot) readDirectory(path string, crossMounts bool) ([]os.DirEntry, error) {
+	directory, err := root.openDirectory(path, crossMounts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = directory.Close() }()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return nil, classifyFileAccessError(err)
+	}
+	slices.SortFunc(entries, func(left, right os.DirEntry) int {
+		return strings.Compare(left.Name(), right.Name())
+	})
+	return entries, nil
+}
+
+func (root *fileRoot) openDirectory(path string, crossMounts bool) (*os.File, error) {
+	if root == nil || root.file == nil {
+		return nil, ErrFileAccessDenied
+	}
+	relative := "."
+	if path != root.path {
+		var err error
+		relative, err = root.relativeDirectoryPath(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	descriptor, err := unix.Openat(
+		int(root.file.Fd()),
+		".",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reopen file policy root: %w", err)
+	}
+	current := os.NewFile(uintptr(descriptor), root.path)
+	if current == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("duplicate file policy root descriptor")
+	}
+	if relative == "." {
+		return current, nil
+	}
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if err := validateFilePathComponent(component); err != nil {
+			_ = current.Close()
+			return nil, err
+		}
+		nextDescriptor, openErr := unix.Openat(
+			int(current.Fd()),
+			component,
+			unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+			0,
+		)
+		if openErr != nil {
+			_ = current.Close()
+			return nil, classifyFileAccessError(openErr)
+		}
+		next := os.NewFile(uintptr(nextDescriptor), component)
+		if next == nil {
+			_ = unix.Close(nextDescriptor)
+			_ = current.Close()
+			return nil, errors.New("open workspace directory")
+		}
+		info, statErr := next.Stat()
+		mount, mountErr := descriptorMountIdentity(int(next.Fd()))
+		if statErr != nil || !info.IsDir() || mountErr != nil || (!crossMounts && mount != root.mount) {
+			_ = next.Close()
+			_ = current.Close()
+			return nil, ErrFileAccessDenied
+		}
+		if denied, deniedErr := deniedFileSystem(int(next.Fd())); deniedErr != nil || denied {
+			_ = next.Close()
+			_ = current.Close()
+			return nil, ErrFileAccessDenied
+		}
+		_ = current.Close()
+		current = next
+	}
+	return current, nil
+}
+
+func (root *fileRoot) relativeDirectoryPath(path string) (string, error) {
+	if path == root.path {
+		return ".", nil
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, 0) {
+		return "", ErrFileAccessDenied
+	}
+	prefix := root.path + string(filepath.Separator)
+	if root.path == string(filepath.Separator) {
+		prefix = root.path
+	}
+	if !strings.HasPrefix(path, prefix) {
+		return "", ErrFileAccessDenied
+	}
+	relative := strings.TrimPrefix(path, prefix)
+	if relative == "" || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", ErrFileAccessDenied
+	}
+	return relative, nil
 }
 
 func (root *fileRoot) relativePath(path string) (string, error) {

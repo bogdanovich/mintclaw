@@ -4,6 +4,7 @@ package agent
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -17,6 +18,15 @@ import (
 )
 
 type RuntimeToolFactory func(cfg *config.Config) (toolshared.Tool, error)
+
+// RuntimeToolDecoratorFactory wraps one already configured agent tool. Unlike
+// RuntimeToolFactory, it receives the agent-specific local implementation, so
+// routing can preserve each agent's workspace and filesystem policy.
+type RuntimeToolDecoratorFactory func(
+	cfg *config.Config,
+	agentID string,
+	local toolshared.Tool,
+) (toolshared.Tool, error)
 
 func (al *AgentLoop) RegisterTool(tool toolshared.Tool) {
 	if al == nil || al.hasCodingToolProfile() {
@@ -58,6 +68,37 @@ func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory
 	return nil
 }
 
+// RegisterRuntimeToolDecorator installs a per-agent wrapper around an existing
+// tool and remembers the factory for registry rebuilds after configuration
+// reload. It never creates a tool that the agent did not already have. A nil
+// result leaves the local tool unchanged.
+func (al *AgentLoop) RegisterRuntimeToolDecorator(name string, factory RuntimeToolDecoratorFactory) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	if al.hasCodingToolProfile() {
+		return fmt.Errorf("coding runtime profiles do not admit runtime tool decorators")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("runtime tool decorator name is required")
+	}
+	if factory == nil {
+		return fmt.Errorf("runtime tool decorator factory is required for %s", name)
+	}
+
+	al.mu.Lock()
+	if al.runtimeToolDecorators == nil {
+		al.runtimeToolDecorators = make(map[string]RuntimeToolDecoratorFactory)
+	}
+	al.runtimeToolDecorators[name] = factory
+	registry := al.registry
+	cfg := al.cfg
+	al.mu.Unlock()
+
+	return decorateRuntimeToolOnRegistry(cfg, registry, name, factory)
+}
+
 func (al *AgentLoop) registerRuntimeToolsForRegistry(cfg *config.Config, registry *AgentRegistry) error {
 	factories := al.runtimeToolFactories()
 	for _, name := range sortedRuntimeToolNames(factories) {
@@ -67,7 +108,76 @@ func (al *AgentLoop) registerRuntimeToolsForRegistry(cfg *config.Config, registr
 		}
 		registerToolOnRegistry(registry, tool)
 	}
+	decorators := al.runtimeToolDecoratorFactories()
+	for _, name := range sortedRuntimeToolDecoratorNames(decorators) {
+		if err := decorateRuntimeToolOnRegistry(cfg, registry, name, decorators[name]); err != nil {
+			return fmt.Errorf("decorate runtime tool %s: %w", name, err)
+		}
+	}
 	return nil
+}
+
+func (al *AgentLoop) runtimeToolDecoratorFactories() map[string]RuntimeToolDecoratorFactory {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	if len(al.runtimeToolDecorators) == 0 {
+		return nil
+	}
+	factories := make(map[string]RuntimeToolDecoratorFactory, len(al.runtimeToolDecorators))
+	for name, factory := range al.runtimeToolDecorators {
+		factories[name] = factory
+	}
+	return factories
+}
+
+func sortedRuntimeToolDecoratorNames(factories map[string]RuntimeToolDecoratorFactory) []string {
+	names := make([]string, 0, len(factories))
+	for name := range factories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func decorateRuntimeToolOnRegistry(
+	cfg *config.Config,
+	registry *AgentRegistry,
+	name string,
+	factory RuntimeToolDecoratorFactory,
+) error {
+	if registry == nil {
+		return nil
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok || agent == nil || agent.Tools == nil {
+			continue
+		}
+		local, ok := agent.Tools.Get(name)
+		if !ok || local == nil {
+			continue
+		}
+		decorated, err := factory(cfg, agentID, local)
+		if err != nil {
+			return fmt.Errorf("agent %s: %w", agentID, err)
+		}
+		if decorated == nil || sameRuntimeToolInstance(local, decorated) {
+			continue
+		}
+		if decorated.Name() != name {
+			return fmt.Errorf("agent %s: decorator returned invalid %s tool", agentID, name)
+		}
+		registerToolIfAllowed(agent, decorated)
+	}
+	return nil
+}
+
+func sameRuntimeToolInstance(left, right toolshared.Tool) bool {
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	return leftValue.IsValid() && rightValue.IsValid() &&
+		leftValue.Type() == rightValue.Type() && leftValue.Kind() == reflect.Pointer &&
+		leftValue.Pointer() == rightValue.Pointer()
 }
 
 func (al *AgentLoop) runtimeToolFactories() map[string]RuntimeToolFactory {
