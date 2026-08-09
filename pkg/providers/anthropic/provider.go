@@ -116,7 +116,7 @@ func (p *Provider) chatStreaming(
 	opts []option.RequestOption,
 ) (*LLMResponse, error) {
 	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var msg anthropic.Message
 	for stream.Next() {

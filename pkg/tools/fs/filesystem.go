@@ -452,7 +452,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// measure total size
 	totalSize := int64(-1) // -1 means unknown
@@ -600,7 +600,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
 		return ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
@@ -1161,7 +1161,7 @@ func (r *sandboxFs) execute(path string, fn func(root *os.Root, relPath string) 
 	if err != nil {
 		return fmt.Errorf("failed to open workspace: %w", err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 
 	relPath, err := getSafeRelPath(r.workspace, path)
 	if err != nil {

@@ -158,7 +158,7 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		})
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		logger.ErrorCF(opts.LoggerPrefix, "File download returned non-200 status", map[string]any{

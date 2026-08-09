@@ -155,7 +155,7 @@ func (t *WhisperTranscriber) Transcribe(ctx context.Context, audioFilePath strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file %s: %w", audioFilePath, err)
 	}
-	defer audioFile.Close()
+	defer func() { _ = audioFile.Close() }()
 
 	fileInfo, err := audioFile.Stat()
 	if err != nil {
@@ -225,7 +225,7 @@ func (t *WhisperTranscriber) doRequest(
 		logger.ErrorCF("voice", "Failed to send whisper request", map[string]any{"error": err})
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

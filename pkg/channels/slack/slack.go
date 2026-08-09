@@ -279,7 +279,7 @@ func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]str
 		if !ok {
 			return []string{ts}, nil
 		}
-		c.api.AddReaction("white_check_mark", slack.ItemRef{
+		_ = c.api.AddReaction("white_check_mark", slack.ItemRef{
 			Channel:   msgRef.ChannelID,
 			Timestamp: msgRef.Timestamp,
 		})
@@ -413,13 +413,13 @@ func (c *SlackChannel) ReactToMessage(ctx context.Context, chatID, messageID str
 		return func() {}, nil
 	}
 
-	c.api.AddReaction("eyes", slack.ItemRef{
+	_ = c.api.AddReaction("eyes", slack.ItemRef{
 		Channel:   channelID,
 		Timestamp: messageID,
 	})
 
 	return func() {
-		c.api.RemoveReaction("eyes", slack.ItemRef{
+		_ = c.api.RemoveReaction("eyes", slack.ItemRef{
 			Channel:   channelID,
 			Timestamp: messageID,
 		})
@@ -442,7 +442,7 @@ func (c *SlackChannel) eventLoop() {
 				c.handleSlashCommand(event)
 			case socketmode.EventTypeInteractive:
 				if event.Request != nil {
-					c.socketClient.Ack(*event.Request)
+					_ = c.socketClient.Ack(*event.Request)
 				}
 			}
 		}
@@ -451,7 +451,7 @@ func (c *SlackChannel) eventLoop() {
 
 func (c *SlackChannel) handleEventsAPI(event socketmode.Event) {
 	if event.Request != nil {
-		c.socketClient.Ack(*event.Request)
+		_ = c.socketClient.Ack(*event.Request)
 	}
 
 	eventsAPIEvent, ok := event.Data.(slackevents.EventsAPIEvent)
@@ -727,7 +727,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 	}
 
 	if event.Request != nil {
-		c.socketClient.Ack(*event.Request)
+		_ = c.socketClient.Ack(*event.Request)
 	}
 
 	cmdSender := bus.SenderInfo{

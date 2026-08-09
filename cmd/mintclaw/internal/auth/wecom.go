@@ -418,7 +418,7 @@ func doWeComJSONGet(ctx context.Context, client *http.Client, targetURL string, 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))

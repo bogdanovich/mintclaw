@@ -71,7 +71,7 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	if err != nil {
 		return nil, err
 	}
-	defer unixSerialClosePort(fd)
+	defer func() { _ = unixSerialClosePort(fd) }()
 
 	buf := make([]byte, length)
 	total := 0
@@ -109,7 +109,7 @@ func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout tim
 	if err != nil {
 		return 0, err
 	}
-	defer unixSerialClosePort(fd)
+	defer func() { _ = unixSerialClosePort(fd) }()
 
 	total := 0
 	deadline := unixSerialNow().Add(timeout)
@@ -143,12 +143,12 @@ func openAndConfigureSerialPort(cfg serialConfig) (int, error) {
 	}
 
 	if err := unix.SetNonblock(fd, false); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return -1, err
 	}
 
 	if err := configureUnixSerialPort(fd, cfg); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return -1, err
 	}
 

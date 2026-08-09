@@ -156,7 +156,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		result.Outcome = classifyLiveDialError(ctx, response)
 		return result, &liveRunError{cause: fmt.Errorf("connect to live gateway: %w", dialErr)}
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	stopCloseOnCancel := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCloseOnCancel()
 	connection.SetReadLimit(liveMaxOutputBytes + 64*1024)

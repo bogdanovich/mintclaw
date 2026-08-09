@@ -22,7 +22,7 @@ func (lifecycle *launchdLifecycle) Uninstall(
 	if err != nil {
 		return lifecycleStatus{}, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 
 	lock, err := acquireLaunchdInstallLock(ctx, directory, status.Service)
 	if err != nil {

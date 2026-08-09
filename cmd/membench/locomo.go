@@ -135,7 +135,7 @@ func GetTurnByDiaID(sample *LocomoSample, diaID string) *LocomoTurn {
 // GetSpeakers returns the two speaker names from conversation metadata.
 func GetSpeakers(conv map[string]json.RawMessage) (string, string) {
 	var a, b string
-	json.Unmarshal(conv["speaker_a"], &a)
-	json.Unmarshal(conv["speaker_b"], &b)
+	_ = json.Unmarshal(conv["speaker_a"], &a)
+	_ = json.Unmarshal(conv["speaker_b"], &b)
 	return a, b
 }

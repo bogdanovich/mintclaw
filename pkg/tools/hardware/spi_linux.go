@@ -44,21 +44,21 @@ func configureSPI(devPath string, mode uint8, bits uint8, speed uint32) (int, *T
 	// Set SPI mode
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrMode, uintptr(unsafe.Pointer(&mode)))
 	if errno != 0 {
-		syscall.Close(fd)
+		_ = syscall.Close(fd)
 		return -1, ErrorResult(fmt.Sprintf("failed to set SPI mode %d: %v", mode, errno))
 	}
 
 	// Set bits per word
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrBitsPerWord, uintptr(unsafe.Pointer(&bits)))
 	if errno != 0 {
-		syscall.Close(fd)
+		_ = syscall.Close(fd)
 		return -1, ErrorResult(fmt.Sprintf("failed to set bits per word %d: %v", bits, errno))
 	}
 
 	// Set max speed
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrMaxSpeedHz, uintptr(unsafe.Pointer(&speed)))
 	if errno != 0 {
-		syscall.Close(fd)
+		_ = syscall.Close(fd)
 		return -1, ErrorResult(fmt.Sprintf("failed to set SPI speed %d Hz: %v", speed, errno))
 	}
 
@@ -105,7 +105,7 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 	if errResult != nil {
 		return errResult
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	rxBuf := make([]byte, len(txBuf))
 
@@ -161,7 +161,7 @@ func (t *SPITool) readDevice(args map[string]any) *ToolResult {
 	if errResult != nil {
 		return errResult
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	txBuf := make([]byte, length) // zeros
 	rxBuf := make([]byte, length)

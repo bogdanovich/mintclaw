@@ -60,7 +60,7 @@ func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var header [12]byte
 	if _, err := io.ReadFull(file, header[:]); err != nil {
@@ -142,7 +142,7 @@ func qqOggDuration(localPath string) (time.Duration, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var firstPacket []byte
 	var codec string

@@ -225,7 +225,7 @@ func (store *Store) loadLocked() (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("open coordinator state: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return State{}, errors.New("inspect coordinator state")

@@ -126,8 +126,8 @@ func (runner *authorityBrokerProcessRunner) Terminal(
 	if err != nil {
 		return fmt.Errorf("create terminal worker control pipe: %w", err)
 	}
-	defer controlRead.Close()
-	defer controlWrite.Close()
+	defer func() { _ = controlRead.Close() }()
+	defer func() { _ = controlWrite.Close() }()
 	command := exec.Command(runner.executable, runner.arguments...)
 	if runner.environment != nil {
 		command.Env = append([]string(nil), runner.environment...)
@@ -284,7 +284,7 @@ func runAuthorityBrokerTerminalWorker(
 	if control == nil {
 		return errors.New("authority broker terminal control pipe is unavailable")
 	}
-	defer control.Close()
+	defer func() { _ = control.Close() }()
 	disconnected := make(chan struct{}, 1)
 	go func() {
 		var signal [1]byte
@@ -323,7 +323,7 @@ func runAuthorityBrokerTerminalWorker(
 	if startErr != nil {
 		return fmt.Errorf("start authority broker terminal: %w", startErr)
 	}
-	defer terminal.Close()
+	defer func() { _ = terminal.Close() }()
 	terminalFD := int(terminal.Fd())
 	if err := unix.SetNonblock(terminalFD, true); err != nil {
 		_ = unix.Kill(-command.Process.Pid, unix.SIGKILL)

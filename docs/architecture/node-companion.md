@@ -5,8 +5,10 @@ Status: MVP implemented on `main`; deployment remains operator-configured
 This document defines the implemented first-party MintClaw node architecture
 for running bounded capabilities on remote machines. The MVP companion targets
 Linux and macOS and exposes discovery plus synchronous typed execution.
-Windows, mobile devices, cameras, service-management commands, additional
-executors, and compatibility adapters remain post-MVP work.
+Windows, mobile devices, cameras, additional executors, and compatibility
+adapters remain post-MVP work. The bounded post-MVP P5a direct-job capability
+is specified separately in
+[`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
 
 The design follows the distributed node shape used by OpenClaw rather than the
 single selected terminal-backend shape used by Hermes. It does not adopt the
@@ -60,7 +62,8 @@ execution code.
 - Moving the LLM, channel gateway, memory, or session store onto companion
   nodes.
 - General distributed scheduling, clustering, or workload migration.
-- Durable background jobs in the first execution milestone.
+- Durable background jobs in the first execution milestone. The later bounded
+  P5a direct-job slice does not retroactively expand the MVP.
 - Windows support in the MVP.
 - Treating command scanners, prompts, or approvals as an OS sandbox.
 

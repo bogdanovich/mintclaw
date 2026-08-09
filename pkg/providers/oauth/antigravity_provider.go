@@ -119,7 +119,7 @@ func (p *AntigravityProvider) Chat(
 	if err != nil {
 		return nil, fmt.Errorf("antigravity API call: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
@@ -533,7 +533,7 @@ func FetchAntigravityProjectIDWithContext(ctx context.Context, accessToken strin
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
@@ -589,7 +589,7 @@ func FetchAntigravityModelsWithContext(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {

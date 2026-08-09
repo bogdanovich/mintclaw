@@ -136,7 +136,7 @@ func TestDurableMessageDispatchPersistsOutcomeBeforeReportingCompletion(t *testi
 	channel := &durableTextChannel{messageIDs: []string{"platform-dispatch-1"}}
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
-	manager.channels["test"] = channel
+	manager.lifecycle.storeChannel("test", channel)
 	if err := manager.StartAll(t.Context()); err != nil {
 		t.Fatalf("StartAll() error = %v", err)
 	}

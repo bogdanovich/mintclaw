@@ -296,7 +296,7 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 	if err != nil {
 		return fmt.Errorf("read driver_executable: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hasher := sha256.New()
 	if _, err = io.Copy(hasher, file); err != nil {
 		return fmt.Errorf("read driver_executable: %w", err)

@@ -300,7 +300,7 @@ func (source *gatewayBrowserToolSource) registerBrowserScreenshot(
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	deliveryKey := nodeFileDeliveryKey(owner, retained)
 	copyDelivery := copyNodeTransferDeliveryTracked
 	if source != nil && source.screenshotCopy != nil {
