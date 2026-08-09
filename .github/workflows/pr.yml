@@ -98,6 +98,35 @@ jobs:
           ./pkg/cron
           ./pkg/memory
 
+  platform_compile:
+    name: Compile ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Darwin ARM64
+            goos: darwin
+            goarch: arm64
+          - name: Windows AMD64
+            goos: windows
+            goarch: amd64
+    env:
+      CGO_ENABLED: 0
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Compile full Go test graph
+        run: go test -exec=true -run '^$' -tags goolm,stdjson ./...
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
