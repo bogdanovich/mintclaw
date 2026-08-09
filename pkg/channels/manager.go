@@ -92,12 +92,11 @@ type Manager struct {
 	runtimeEvents          runtimeevents.Bus
 	config                 *config.Config
 	mediaStore             media.MediaStore
-	dispatchTask           *asyncTask
 	mux                    *dynamicServeMux
 	httpServer             *http.Server
 	httpListeners          []net.Listener
 	mu                     sync.RWMutex
-	deliveries             deliveryRegistry
+	delivery               *DeliveryRuntime
 	interactions           deliveryInteractionState
 	streams                streamDeliveryState
 	outboundOutbox         *outbox.Coordinator
@@ -179,10 +178,6 @@ type toolFeedbackMessageEditor interface {
 
 type toolFeedbackMessageSender interface {
 	SendToolFeedbackMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool, error)
-}
-
-type asyncTask struct {
-	cancel context.CancelFunc
 }
 
 type deliveryCleanupOptions struct {
@@ -879,7 +874,7 @@ func NewManager(
 ) (*Manager, error) {
 	m := &Manager{
 		channels:               make(map[string]Channel),
-		deliveries:             newDeliveryRegistry(),
+		delivery:               newDeliveryRuntime(),
 		bus:                    messageBus,
 		config:                 cfg,
 		mediaStore:             store,
@@ -937,7 +932,7 @@ func (m *Manager) installDeliveryOwnerLocked(
 	channelType string,
 ) *deliveryOwner {
 	owner := newDeliveryOwner(name, channel, channelType)
-	m.deliveries.install(owner)
+	m.delivery.install(owner)
 	owner.StartDelivery(ctx, m)
 	return owner
 }
@@ -1704,8 +1699,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	logger.InfoC("channels", "Starting all channels")
 
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
+	dispatchCtx := m.delivery.startDispatcher(ctx)
 	failedStarts := make([]error, 0, len(m.channels))
 	failedNames := make([]string, 0, len(m.channels))
 
@@ -1746,11 +1740,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		)
 	}
 
-	if len(m.channels) > 0 && m.deliveries.workerCount() == 0 {
-		if m.dispatchTask != nil {
-			m.dispatchTask.cancel()
-			m.dispatchTask = nil
-		}
+	if len(m.channels) > 0 && m.delivery.workerCount() == 0 {
+		m.delivery.stopDispatcher()
 
 		sort.Strings(failedNames)
 		if len(failedStarts) == 0 {
@@ -1770,7 +1761,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		sort.Strings(failedNames)
 		logger.WarnCF("channels", "Some channels failed to start", map[string]any{
 			"failed":          len(failedNames),
-			"started":         m.deliveries.workerCount(),
+			"started":         m.delivery.workerCount(),
 			"total":           len(m.channels),
 			"failed_channels": failedNames,
 		})
@@ -1835,7 +1826,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	logger.InfoCF("channels", "Channel startup completed", map[string]any{
-		"started": m.deliveries.workerCount(),
+		"started": m.delivery.workerCount(),
 		"failed":  len(failedNames),
 		"total":   len(m.channels),
 	})
@@ -1854,12 +1845,9 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	m.httpServer = nil
 	m.httpListeners = nil
 
-	if m.dispatchTask != nil {
-		m.dispatchTask.cancel()
-		m.dispatchTask = nil
-	}
+	m.delivery.stopDispatcher()
 
-	deliveries := m.deliveries.snapshot()
+	deliveries := m.delivery.snapshot()
 
 	channels := make([]channelStopTarget, 0, len(m.channels))
 	for name, channel := range m.channels {
@@ -2720,7 +2708,7 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 }
 
 func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.deliveries.owner(name)
+	return m.delivery.owner(name)
 }
 
 func (m *Manager) GetStatus() map[string]any {
@@ -2786,7 +2774,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			added = append(added, name)
 			continue
 		}
-		if !m.deliveries.hasActiveWorker(name) {
+		if !m.delivery.hasActiveWorker(name) {
 			logger.InfoCF("channels", "Recreating inactive changed channel", map[string]any{
 				"channel": name,
 			})
@@ -2826,20 +2814,16 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			}
 		})
 	}
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
 		m.config = oldConfig
-		cancel()
 		return err
 	}
 	err = m.initChannels(cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		m.config = oldConfig
-		cancel()
 		return err
 	}
 	for name, oldChannel := range inactiveChanged {
@@ -2850,7 +2834,6 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 				"error":   err.Error(),
 			})
 			m.config = oldConfig
-			cancel()
 			return err
 		}
 		m.interactions.retireToolFeedbackChannel(ctx, name)
@@ -2887,7 +2870,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 				channelType = bc.Type
 			}
 		}
-		m.installDeliveryOwnerLocked(dispatchCtx, name, channel, channelType)
+		m.installDeliveryOwnerLocked(ctx, name, channel, channelType)
 		m.publishChannelEvent(
 			runtimeevents.KindChannelLifecycleStarted,
 			name,
@@ -2943,7 +2926,7 @@ func (m *Manager) UnregisterChannel(name string) {
 	if ch != nil && m.mux != nil {
 		m.unregisterChannelHTTPHandler(name, ch)
 	}
-	owner := m.deliveries.owner(name)
+	owner := m.delivery.owner(name)
 	if owner == nil {
 		delete(m.channels, name)
 	}
@@ -2955,7 +2938,7 @@ func (m *Manager) UnregisterChannel(name string) {
 	m.interactions.retireToolFeedbackChannel(context.Background(), name)
 
 	m.mu.Lock()
-	m.deliveries.removeIfMatches(name, owner)
+	m.delivery.removeIfMatches(name, owner)
 	if ch != nil && m.channels[name] == ch {
 		delete(m.channels, name)
 	}
