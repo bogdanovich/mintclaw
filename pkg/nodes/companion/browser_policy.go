@@ -249,7 +249,7 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "navigate" && action != "download" && action != "scroll" {
+		if action != "click" && action != "navigate" && action != "download" && action != "scroll" {
 			return errors.New("allowed_actions contains an unsupported action")
 		}
 		if _, duplicate := seen[action]; duplicate {

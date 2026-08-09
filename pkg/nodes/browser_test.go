@@ -220,6 +220,24 @@ func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *te
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
 		t.Fatal("pre-scroll action schema accepted scroll authority")
 	}
+
+	profile.Actions = []string{"click", "download", "navigate"}
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandAct {
+			descriptors[index].InputSchema = legacyBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+			break
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("pre-click action schema accepted click authority")
+	}
 }
 
 func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgrade(t *testing.T) {
@@ -258,9 +276,28 @@ func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgra
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
 		t.Fatal("legacy dry-run schema granted approved-action authority")
 	}
+
+	dryRunClick := browserProfileDescriptorFixture()
+	dryRunClick.Actions = []string{"click", "download", "navigate"}
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{dryRunClick})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+			break
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("legacy session-open schema accepted click authority")
+	}
 }
 
-func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
+func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
 	})
@@ -282,6 +319,61 @@ func TestBrowserActSchemaRequiresApprovalOnlyForDownloads(t *testing.T) {
 	input["approval_digest"] = strings.Repeat("c", 64)
 	if err = validateInvocationInput(act.InputSchema, input); err != nil {
 		t.Fatalf("approved download input rejected: %v", err)
+	}
+
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"click", "download", "navigate"}
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act = descriptors[3]
+	input = browserActInputFixture()
+	input["action"] = map[string]any{"kind": "click", "ref": "host_ref_1"}
+	input["effect"] = "external_commit"
+	input["expected_role"] = "button"
+	input["expected_name"] = "Save"
+	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+		t.Fatal("click input without approval_digest was accepted")
+	}
+	input["approval_digest"] = strings.Repeat("d", 64)
+	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+		t.Fatalf("approved button click rejected: %v", err)
+	}
+	delete(input, "expected_name")
+	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+		t.Fatalf("approved unnamed button click rejected: %v", err)
+	}
+	input["expected_name"] = "Save"
+	input["effect"] = "unknown"
+	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+		t.Fatal("button click with lowered effect was accepted")
+	}
+	input["expected_role"] = "link"
+	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+		t.Fatalf("unknown-effect link click rejected: %v", err)
+	}
+}
+
+func TestBrowserApprovalDigestBindsClickInput(t *testing.T) {
+	input := BrowserActInput{
+		SessionID: "session_1", TabID: "tab_1", SnapshotGeneration: 7,
+		ActionInvocationID: "invocation_1", Action: BrowserAction{Kind: "click", Ref: "host_ref_1"},
+		Effect: "external_commit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("a", 64), BrowserPolicyRevision: strings.Repeat("b", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
+	}
+	digest, err := BrowserApprovalDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ApprovalDigest = digest
+	if !BrowserApprovalDigestMatches(input) {
+		t.Fatal("exact click approval digest did not match")
+	}
+	input.ExpectedName = "Delete"
+	if BrowserApprovalDigestMatches(input) {
+		t.Fatal("changed click semantics retained approval digest authority")
 	}
 }
 
