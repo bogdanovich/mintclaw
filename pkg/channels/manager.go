@@ -973,84 +973,17 @@ func (m *Manager) GetStreamer(
 	channelName, chatID, sessionKey, requestID string,
 	traceScope runtimeevents.TraceScope,
 ) (bus.Streamer, bool) {
-	m.mu.RLock()
-	ch, exists := m.channels[channelName]
-	m.mu.RUnlock()
+	return m.streamCoordinator().getStreamer(
+		ctx, m, channelName, chatID, sessionKey, requestID, traceScope,
+	)
+}
 
-	if !exists {
-		return nil, false
-	}
+func (m *Manager) streamSplitOnMarker() bool {
+	return m.config != nil && m.config.Agents.Defaults.SplitOnMarker
+}
 
-	sc, ok := ch.(StreamingCapable)
-	if !ok {
-		return nil, false
-	}
-
-	beginStream := func(beginCtx context.Context) (Streamer, error) {
-		if scoped, ok := ch.(ScopedStreamingCapable); ok {
-			return scoped.BeginStreamForScope(beginCtx, chatID, sessionKey, requestID, traceScope)
-		}
-		return sc.BeginStream(beginCtx, chatID)
-	}
-	streamer, err := beginStream(ctx)
-	if err != nil {
-		logger.DebugCF("channels", "Streaming unavailable, falling back to placeholder", map[string]any{
-			"channel": channelName,
-			"error":   err.Error(),
-		})
-		return nil, false
-	}
-
-	// Mark streamActive on Finalize so preSend knows to clean up the placeholder
-	// and late auxiliary messages cannot leak after streaming produced a final.
-	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
-	placeholderKey := channelName + ":" + chatID
-	clearMarker := func() {
-		m.streamCoordinator().consumeActive(streamKey)
-	}
-	onFinalize := func(finalizeCtx context.Context, finalContent string) {
-		m.dismissToolFeedbackTargets(
-			finalizeCtx,
-			channelName,
-			ch,
-			chatID,
-			&bus.InboundContext{Channel: channelName, ChatID: chatID},
-			sessionKey,
-			[]runtimeevents.TraceScope{traceScope},
-		)
-		if entry, loaded := m.streamCoordinator().takePlaceholder(placeholderKey); loaded && entry.id != "" {
-			if deleter, ok := ch.(MessageDeleter); ok {
-				_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
-			} else if editor, ok := ch.(MessageEditor); ok {
-				editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent) // best effort fallback
-			}
-		}
-		m.streamCoordinator().markFinalized(streamKey, time.Now())
-	}
-
-	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
-		return &splitMarkerStreamer{
-			current:     streamer,
-			reasoning:   reasoningStreamerFrom(streamer),
-			begin:       beginStream,
-			onFinalize:  onFinalize,
-			clearMarker: clearMarker,
-			footer: responseFooterStreamState{
-				enabled: m.config != nil && m.config.Agents.Defaults.IsResponseFooterEnabled(),
-				channel: channelName,
-			},
-		}, true
-	}
-
-	return &finalizeHookStreamer{
-		Streamer:    streamer,
-		clearMarker: clearMarker,
-		onFinalize:  onFinalize,
-		footer: responseFooterStreamState{
-			enabled: m.config != nil && m.config.Agents.Defaults.IsResponseFooterEnabled(),
-			channel: channelName,
-		},
-	}, true
+func (m *Manager) streamResponseFooterEnabled() bool {
+	return m.config != nil && m.config.Agents.Defaults.IsResponseFooterEnabled()
 }
 
 func reasoningStreamerFrom(streamer bus.Streamer) bus.ReasoningStreamer {

@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 // typingEntry wraps a typing stop function with a creation timestamp for TTL eviction.
@@ -41,6 +43,100 @@ type StreamCoordinator struct {
 
 func newStreamCoordinator() *StreamCoordinator {
 	return &StreamCoordinator{}
+}
+
+type streamCoordinatorHost interface {
+	deliveryChannel(name string) (Channel, bool)
+	dismissToolFeedbackTargets(
+		ctx context.Context,
+		channelName string,
+		ch Channel,
+		chatID string,
+		outboundCtx *bus.InboundContext,
+		sessionKey string,
+		traceScopes []runtimeevents.TraceScope,
+	)
+	streamSplitOnMarker() bool
+	streamResponseFooterEnabled() bool
+}
+
+func (s *StreamCoordinator) getStreamer(
+	ctx context.Context,
+	host streamCoordinatorHost,
+	channelName, chatID, sessionKey, requestID string,
+	traceScope runtimeevents.TraceScope,
+) (bus.Streamer, bool) {
+	ch, exists := host.deliveryChannel(channelName)
+	if !exists {
+		return nil, false
+	}
+
+	streamingChannel, ok := ch.(StreamingCapable)
+	if !ok {
+		return nil, false
+	}
+
+	beginStream := func(beginCtx context.Context) (Streamer, error) {
+		if scoped, scopedOK := ch.(ScopedStreamingCapable); scopedOK {
+			return scoped.BeginStreamForScope(beginCtx, chatID, sessionKey, requestID, traceScope)
+		}
+		return streamingChannel.BeginStream(beginCtx, chatID)
+	}
+	streamer, err := beginStream(ctx)
+	if err != nil {
+		logger.DebugCF("channels", "Streaming unavailable, falling back to placeholder", map[string]any{
+			"channel": channelName,
+			"error":   err.Error(),
+		})
+		return nil, false
+	}
+
+	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
+	placeholderKey := channelName + ":" + chatID
+	clearMarker := func() {
+		s.consumeActive(streamKey)
+	}
+	onFinalize := func(finalizeCtx context.Context, finalContent string) {
+		host.dismissToolFeedbackTargets(
+			finalizeCtx,
+			channelName,
+			ch,
+			chatID,
+			&bus.InboundContext{Channel: channelName, ChatID: chatID},
+			sessionKey,
+			[]runtimeevents.TraceScope{traceScope},
+		)
+		if entry, loaded := s.takePlaceholder(placeholderKey); loaded && entry.id != "" {
+			if deleter, deleteOK := ch.(MessageDeleter); deleteOK {
+				_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id)
+			} else if editor, editOK := ch.(MessageEditor); editOK {
+				editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent)
+			}
+		}
+		s.markFinalized(streamKey, time.Now())
+	}
+
+	footer := responseFooterStreamState{
+		enabled: host.streamResponseFooterEnabled(),
+		channel: channelName,
+	}
+	if host.streamSplitOnMarker() {
+		return &splitMarkerStreamer{
+			current:     streamer,
+			reasoning:   reasoningStreamerFrom(streamer),
+			begin:       beginStream,
+			onFinalize:  onFinalize,
+			clearMarker: clearMarker,
+			footer:      footer,
+		}, true
+	}
+
+	return &finalizeHookStreamer{
+		Streamer:    streamer,
+		clearMarker: clearMarker,
+		onFinalize:  onFinalize,
+		footer:      footer,
+	}, true
 }
 
 func (s *StreamCoordinator) storePlaceholder(key string, entry placeholderEntry) {
