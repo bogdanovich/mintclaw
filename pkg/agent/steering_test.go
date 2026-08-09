@@ -226,7 +226,7 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 				providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)},
 				"",
 			); err != nil {
-				t.Fatal(err)
+				t.Errorf("pushScopeWithSender: %v", err)
 			}
 		}(i)
 	}
