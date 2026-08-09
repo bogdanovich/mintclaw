@@ -142,7 +142,7 @@ func TestCoordinatorCancellationIsDurableBeforeActivationAndTooLateAfter(t *test
 	coordinator, _ := testCoordinator(t, fixture, now)
 	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
-	staged, err := coordinator.Stage(t.Context(), request)
+	_, err := coordinator.Stage(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestCoordinatorCancellationIsDurableBeforeActivationAndTooLateAfter(t *test
 	second.Identity.InvocationID = "invocation_second"
 	second.Identity.ExecutionID = "execution_second"
 	second.Identity.PlanHash = digestOf([]byte("second-plan"))
-	staged, err = coordinator.Stage(t.Context(), second)
+	staged, err := coordinator.Stage(t.Context(), second)
 	if err != nil {
 		t.Fatal(err)
 	}

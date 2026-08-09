@@ -58,7 +58,9 @@ func TestRateLimiter_TokenRefill(t *testing.T) {
 
 	// Drain all tokens.
 	for i := 0; i < rpm; i++ {
-		rl.Wait(context.Background()) //nolint:errcheck
+		if err := rl.Wait(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Advance time via nowFunc: simulate 2 seconds passing (should give 2 tokens).

@@ -737,7 +737,7 @@ func (handler *parentCancellationHandler) execute(
 	<-ctx.Done()
 	close(handler.canceled)
 	<-handler.release
-	return nil, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, ctx.Err())
+	return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, ctx.Err())
 }
 
 func newCancelThenFailHandler() *cancelThenFailHandler {
@@ -791,7 +791,7 @@ func (handler *runtimeBlockingHandler) execute(
 ) (any, error) {
 	handler.started <- struct{}{}
 	<-ctx.Done()
-	return nil, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, ctx.Err())
+	return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, ctx.Err())
 }
 
 type ignoringCancellationHandler struct {

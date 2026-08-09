@@ -271,10 +271,11 @@ func TestReadTerminalSmokeOutputRequiresResizeAndCloseProof(t *testing.T) {
 			}))
 			defer server.Close()
 			endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-			connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+			connection, response, err := websocket.DefaultDialer.Dial(endpoint, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer func() { _ = response.Body.Close() }()
 			defer connection.Close()
 			_, err = readTerminalSmokeOutput(connection, options, terminalID)
 			if err == nil || !strings.Contains(err.Error(), "requested close") {
