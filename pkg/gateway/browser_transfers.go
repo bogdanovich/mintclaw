@@ -34,7 +34,7 @@ func (source *gatewayBrowserToolSource) resolveBrowserUpload(
 	if err != nil {
 		return browser.UploadBinding{}, browser.ErrDenied
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if record.Spec.DeclaredSize < 1 || record.Spec.DeclaredSize > int64(source.browserLimits().UploadBytes) ||
 		verifyNodeTransferDelivery(file, record) != nil {
 		return browser.UploadBinding{}, browser.ErrDenied
@@ -109,7 +109,7 @@ func (source *gatewayBrowserToolSource) retainBrowserDownload(
 	if err != nil {
 		return browser.DownloadArtifact{}, browser.ErrDriverIncompatible
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if !info.Mode().IsRegular() || info.Size() != download.Size {
 		return browser.DownloadArtifact{}, nodes.ErrTransferArtifactConflict
 	}
@@ -258,7 +258,7 @@ func (source *gatewayBrowserToolSource) registerBrowserDownload(
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	deliveryKey := nodeFileDeliveryKey(owner, retained)
 	localPath, _, err := copyNodeTransferDeliveryTracked(ctx, file, retained, source.workspace, deliveryKey+".data")
 	if err != nil {

@@ -21,7 +21,7 @@ func ExtractZipFile(zipPath string, targetDir string) error {
 	if err != nil {
 		return fmt.Errorf("invalid ZIP: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	logger.DebugCF("zip", "Extracting ZIP", map[string]any{
 		"zip_path":   zipPath,
@@ -89,7 +89,7 @@ func extractSingleFile(f *zip.File, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open zip entry %q: %w", f.Name, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	outFile, err := os.Create(destPath)
 	if err != nil {

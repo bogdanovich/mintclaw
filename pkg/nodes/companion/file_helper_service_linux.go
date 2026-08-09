@@ -34,7 +34,7 @@ func LoadFileHelperServiceConfig(path string) (FileHelperServiceConfig, error) {
 		_ = unix.Close(descriptor)
 		return FileHelperServiceConfig{}, errors.New("open file helper config: invalid descriptor")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return FileHelperServiceConfig{}, err
@@ -106,7 +106,7 @@ func RunFileHelper(
 	if err != nil {
 		return fmt.Errorf("open file helper socket directory: %w", err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if prepareErr := directory.prepare(); prepareErr != nil {
 		return fmt.Errorf("prepare file helper socket: %w", prepareErr)
 	}
@@ -118,7 +118,7 @@ func RunFileHelper(
 		return fmt.Errorf("listen file helper socket: %w", err)
 	}
 	listener.SetUnlinkOnClose(false)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	defer func() { _ = directory.unlink() }()
 	if chownErr := unix.Fchownat(
 		directory.descriptor,

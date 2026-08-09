@@ -104,7 +104,7 @@ func (pc *mintclawConn) write(ctx context.Context, writeFn func() error) error {
 	if err := pc.conn.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
-	defer pc.conn.SetWriteDeadline(time.Time{})
+	defer func() { _ = pc.conn.SetWriteDeadline(time.Time{}) }()
 
 	var writeState atomic.Uint32
 	writeFinished := make(chan struct{})
@@ -1048,7 +1048,7 @@ func (c *MintClawChannel) handleMediaDownload(w http.ResponseWriter, r *http.Req
 		http.Error(w, "failed to open media", http.StatusInternalServerError)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {

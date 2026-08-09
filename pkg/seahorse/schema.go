@@ -262,7 +262,7 @@ func tableHasColumn(db *sql.DB, tableName, columnName string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var (

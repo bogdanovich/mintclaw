@@ -59,7 +59,7 @@ func (lifecycle *systemdLifecycle) Install(
 	if err != nil {
 		return lifecycleStatus{}, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	lock, err := acquireSystemdUnitLock(ctx, directory, status.Service)
 	if err != nil {
 		return lifecycleStatus{}, err
@@ -402,7 +402,7 @@ func (directory *systemdUnitDirectory) matchesPath() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil {
 		return false, err
@@ -419,7 +419,7 @@ func captureSystemdUnitAt(directory *systemdUnitDirectory, name string) (systemd
 		return systemdUnitState{}, fmt.Errorf("inspect existing systemd unit: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), filepath.Join(directory.path, name))
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil {
 		return systemdUnitState{}, fmt.Errorf("inspect existing systemd unit: %w", err)
@@ -558,7 +558,7 @@ func publishedSystemdUnitMatches(publication publishedSystemdUnit) (bool, error)
 		return false, err
 	}
 	file := os.NewFile(uintptr(fd), filepath.Join(publication.directory.path, publication.name))
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil {
 		return false, err

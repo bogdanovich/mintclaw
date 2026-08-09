@@ -290,7 +290,12 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 		needsUpdate = true
 	}
 	if needsUpdate {
-		_ = t.cronService.UpdateJob(job)
+		if err := t.cronService.UpdateJob(job); err != nil {
+			// The job was persisted without its command; removing it avoids a
+			// partially configured job that runs until the next restart.
+			_ = t.cronService.RemoveJob(job.ID)
+			return toolshared.ErrorResult(fmt.Sprintf("Error updating job: %v", err))
+		}
 	}
 
 	return toolshared.SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))

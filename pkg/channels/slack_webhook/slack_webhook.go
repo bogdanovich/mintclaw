@@ -144,7 +144,7 @@ func (c *SlackWebhookChannel) Send(ctx context.Context, msg bus.OutboundMessage)
 		// Don't expose raw error - it may contain webhook URL secrets
 		return nil, fmt.Errorf("slack_webhook: network error: %w", channels.ErrTemporary)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

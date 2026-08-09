@@ -143,12 +143,12 @@ func openAndConfigureSerialPort(cfg serialConfig) (int, error) {
 	}
 
 	if err := unix.SetNonblock(fd, false); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return -1, err
 	}
 
 	if err := configureUnixSerialPort(fd, cfg); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return -1, err
 	}
 

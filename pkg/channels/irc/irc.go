@@ -153,7 +153,9 @@ func (c *IRCChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]strin
 		if line == "" {
 			continue
 		}
-		_ = c.conn.Privmsg(target, line)
+		if err := c.conn.Privmsg(target, line); err != nil {
+			return nil, fmt.Errorf("send IRC message to %s: %w", target, err)
+		}
 	}
 
 	logger.DebugCF("irc", "Message sent", map[string]any{

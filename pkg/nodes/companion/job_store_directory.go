@@ -95,7 +95,7 @@ func (directory *jobStoreDirectory) listNames() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	entries, err := root.ReadDir(-1)
 	if err != nil {
 		return nil, err
@@ -115,6 +115,6 @@ func (directory *jobStoreDirectory) sync() error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	return root.Sync()
 }

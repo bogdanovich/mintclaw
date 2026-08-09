@@ -70,7 +70,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 		log.Printf("[-] client disconnected (session=%s)", sessionID)
 	}()
 

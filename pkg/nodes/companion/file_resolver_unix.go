@@ -152,7 +152,7 @@ func (root *fileRoot) openRegular(
 	if err != nil {
 		return nil, err
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	descriptor, err := unix.Openat(
 		int(parent.file.Fd()),
 		parent.basename,
@@ -425,7 +425,7 @@ func (parent *resolvedParent) ensureFinalRegular() error {
 	if err != nil {
 		return classifyFileAccessError(err)
 	}
-	defer unix.Close(finalDescriptor)
+	defer func() { _ = unix.Close(finalDescriptor) }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(finalDescriptor, &stat); err != nil {
 		return classifyFileAccessError(err)

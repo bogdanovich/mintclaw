@@ -202,7 +202,7 @@ func (c *WeixinChannel) downloadCDNBufferOnce(ctx context.Context, downloadURL s
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -354,7 +354,7 @@ func writeManagedTempFile(prefix, filename string, data []byte) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Write(data); err != nil {
 		os.Remove(f.Name())
 		return "", err
@@ -664,7 +664,7 @@ func (c *WeixinChannel) downloadRemoteMediaToTemp(
 	if err != nil {
 		return "", "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -865,7 +865,7 @@ func (c *WeixinChannel) uploadBufferToCDN(
 			lastErr = doErr
 		} else {
 			func() {
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 					body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 					lastErr = fmt.Errorf(

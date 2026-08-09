@@ -95,7 +95,7 @@ func (p *CodexProvider) Chat(
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
 
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var resp *responses.Response
 	var streamedText strings.Builder

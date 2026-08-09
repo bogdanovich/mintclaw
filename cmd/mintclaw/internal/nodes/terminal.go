@@ -297,7 +297,7 @@ func runInteractiveTerminal(
 	if err != nil {
 		return err
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if attached.State != "live" {
 		return fmt.Errorf("terminal attachment entered unexpected state %q", attached.State)
 	}
@@ -536,7 +536,7 @@ func runTerminalSmoke(
 	if err != nil {
 		return terminalSmokeResult{}, err
 	}
-	defer operator.Close()
+	defer func() { _ = operator.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = operator.SetReadDeadline(deadline)
 		_ = operator.SetWriteDeadline(deadline)
@@ -634,7 +634,7 @@ func openOperatorTerminal(
 	if err != nil {
 		return terminalOperatorCredentials{}, nil, "", terminalOpenResult{}, fmt.Errorf("open terminal: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusCreated {
 		var failure terminalOpenError
 		_ = json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&failure)
@@ -689,7 +689,7 @@ func attachOperatorTerminal(
 	}
 	var attached terminalOperatorAttached
 	if err := operator.ReadJSON(&attached); err != nil {
-		operator.Close()
+		_ = operator.Close()
 		return nil, terminalOperatorAttached{}, fmt.Errorf("read terminal attachment: %w", err)
 	}
 	_ = operator.SetReadDeadline(time.Time{})
@@ -698,7 +698,7 @@ func attachOperatorTerminal(
 		attached.Type != "attached" ||
 		attached.TerminalID != terminalID ||
 		attached.State != "live" {
-		operator.Close()
+		_ = operator.Close()
 		return nil, terminalOperatorAttached{}, errors.New("gateway returned an invalid terminal attachment")
 	}
 	return operator, attached, nil

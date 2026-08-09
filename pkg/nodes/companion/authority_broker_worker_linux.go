@@ -74,8 +74,8 @@ func (runner *authorityBrokerProcessRunner) Execute(
 	if err != nil {
 		return ShellBrokerResult{}, fmt.Errorf("create authority broker control pipe: %w", err)
 	}
-	defer controlRead.Close()
-	defer controlWrite.Close()
+	defer func() { _ = controlRead.Close() }()
+	defer func() { _ = controlWrite.Close() }()
 	command := exec.Command(runner.executable, runner.arguments...)
 	if runner.environment != nil {
 		command.Env = append([]string(nil), runner.environment...)
@@ -207,7 +207,7 @@ func executeAuthorityBrokerWorker(
 	if control == nil {
 		return authorityBrokerWorkerResponse{}, errors.New("authority broker control pipe is unavailable")
 	}
-	defer control.Close()
+	defer func() { _ = control.Close() }()
 	go func() {
 		var signal [1]byte
 		_, _ = control.Read(signal[:])

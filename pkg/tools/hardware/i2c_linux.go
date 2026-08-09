@@ -85,7 +85,7 @@ func (t *I2CTool) scan(args map[string]any) *ToolResult {
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to open %s: %v (check permissions and i2c-dev module)", devPath, err))
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	// Query adapter capabilities to determine available probe methods.
 	// I2C_FUNCS writes an unsigned long, which is word-sized on Linux.
@@ -168,7 +168,7 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err))
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	// Set slave address
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr))
@@ -268,7 +268,7 @@ func (t *I2CTool) writeDevice(args map[string]any) *ToolResult {
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err))
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	// Set slave address
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr))

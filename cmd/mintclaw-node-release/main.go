@@ -188,7 +188,7 @@ func inspectArtifact(platform, architecture, path string) (nodeupdate.Artifact, 
 	if err != nil {
 		return nodeupdate.Artifact{}, fmt.Errorf("open artifact: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return nodeupdate.Artifact{}, errors.New("artifact must be a regular file")

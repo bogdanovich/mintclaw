@@ -102,7 +102,7 @@ func (c *ApiClient) post(ctx context.Context, endpoint string, body any, respons
 	if err != nil {
 		return fmt.Errorf("http POST %s failed: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -192,7 +192,7 @@ func (c *ApiClient) getQR(ctx context.Context, endpoint string, query map[string
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

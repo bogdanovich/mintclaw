@@ -52,8 +52,9 @@ linters:
   settings:
     errcheck:
       # Genuinely benign write/cleanup calls whose errors carry no actionable
-      # signal for this codebase. The remaining Close-family noise is excluded
-      # by message pattern below; everything else is fixed in code.
+      # signal for this codebase. Close-family cleanup is discarded explicitly
+      # at each call site (or handled where the close finalizes data); nothing
+      # is suppressed by message pattern here.
       exclude-functions:
         - fmt.Fprintf
         - fmt.Fprintln
@@ -82,10 +83,6 @@ linters:
       - linters:
           - errcheck
         path: '.*_test\.go'
-      # errcheck: benign Close-family / write-deadline cleanup calls.
-      - linters:
-          - errcheck
-        text: 'Error return value of `.*\.(Close|close|SetWriteDeadline|SetReadDeadline)`'
 
 issues:
   max-issues-per-linter: 0

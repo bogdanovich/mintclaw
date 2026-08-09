@@ -312,7 +312,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	type custom struct {
 		config.ModelConfig
@@ -375,7 +375,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var rawFields map[string]json.RawMessage
 	if err = json.Unmarshal(body, &rawFields); err != nil {
@@ -538,7 +538,7 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		ModelName string `json:"model_name"`
@@ -638,7 +638,7 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		Provider   string `json:"provider"`
@@ -794,7 +794,7 @@ func fetchNearAIModels(ctx context.Context, fetchURL, apiKey string) ([]upstream
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("nearai returned status %d", resp.StatusCode)
@@ -853,7 +853,7 @@ func fetchOpenAICompatibleModelsForProvider(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
@@ -915,7 +915,7 @@ func fetchOllamaModels(ctx context.Context, fetchURL string) ([]upstreamModel, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)

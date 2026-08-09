@@ -242,6 +242,13 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	defer cancel()
 
 	go func() { _ = agentLoop.Run(ctx) }()
+	// Wait for the agent loop to finish initialization (hooks/MCP). Run can
+	// return immediately on init failure; without this handshake the gateway
+	// would still mark /ready healthy while inbound messages are never
+	// processed.
+	if startupErr := agentLoop.WaitStartup(ctx); startupErr != nil {
+		return fmt.Errorf("agent loop startup failed: %w", startupErr)
+	}
 
 	runningServices, err := setupAndStartServices(ctx, cfg, agentLoop, msgBus, pidData.Token, listenResult)
 	if err != nil {

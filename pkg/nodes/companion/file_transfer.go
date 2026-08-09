@@ -577,7 +577,7 @@ func (runtime *FileTransferRuntime) prepareInfo(
 	if err != nil {
 		return runtime.sendFileAccessDenial(frame, send, err)
 	}
-	defer source.file.Close()
+	defer func() { _ = source.file.Close() }()
 	digest, err := hashOpenedFile(ctx, source.file)
 	if err != nil {
 		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
@@ -1570,7 +1570,7 @@ func (runtime *FileTransferRuntime) reconcileUpload(
 		)
 		return transitionErr
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	if record.State == FileTransferCommitRequested {
 		final, finalErr := parent.openFinalRegular()
 		if finalErr == nil &&

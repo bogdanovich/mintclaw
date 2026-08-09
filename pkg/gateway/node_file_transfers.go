@@ -177,7 +177,7 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 	if openErr != nil {
 		return nodes.TransferArtifactRecord{}, openErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	digest := sha256.New()
 	size, copyErr := io.Copy(digest, io.LimitReader(file, maxBytes+1))
 	if copyErr != nil || size > maxBytes {
@@ -290,7 +290,7 @@ func (source *nodeFileTransferSource) InspectFile(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	prepare := nodeFileTransferPrepare{
 		Operation: "info", Path: binding.Path, ExpiresAt: binding.ExpiresAt,
 	}
@@ -358,7 +358,7 @@ func (source *nodeFileTransferSource) dispatchFileInfo(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
@@ -398,7 +398,7 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 	if resolveErr != nil {
 		return tools.NodeFileTransferResult{}, false, resolveErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if artifact.Spec.TransferID != record.Plan.InvocationID ||
 		artifact.Spec.Direction != nodes.TransferDirectionUpload ||
 		uint64(artifact.Spec.DeclaredSize) != binding.TotalSize ||
@@ -409,7 +409,7 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
@@ -526,7 +526,7 @@ func (source *nodeFileTransferSource) dispatchFileDownload(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
 		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
@@ -675,7 +675,7 @@ func (source *nodeFileTransferSource) CancelFileTransfer(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameCancel
 	frame.Payload = nil
 	if sendErr := stream.Send(ctx, frame); sendErr != nil {
@@ -707,7 +707,7 @@ func (source *nodeFileTransferSource) HandoffDownloadedArtifact(
 	if resolveErr != nil {
 		return "", false, resolveErr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	deliveryKey := nodeFileDeliveryKey(owner, artifact)
 	localPath, copyErr := copyNodeTransferDelivery(
 		ctx,
@@ -777,7 +777,7 @@ func (source *nodeFileTransferSource) queryRemoteFileTransfer(
 	if openErr != nil {
 		return tools.NodeFileTransferResult{}, openErr
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameStatus
 	frame.Payload = nil
 	if sendErr := stream.Send(ctx, frame); sendErr != nil {
@@ -800,7 +800,7 @@ func (source *nodeFileTransferSource) cancelFileTransferBestEffort(
 	if err != nil {
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame.Type = protocol.TransferFrameCancel
 	frame.Payload = nil
 	if stream.Send(ctx, frame) == nil {
