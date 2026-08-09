@@ -710,7 +710,7 @@ func TestCheckJobsSkipsDueJobsAfterFailedReload(t *testing.T) {
 	}
 }
 
-func TestDispatchRecheckCancelsWhenReloadFailed(t *testing.T) {
+func TestCheckJobsDoesNotClaimWhenStoreUnavailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")
 
@@ -741,16 +741,22 @@ func TestDispatchRecheckCancelsWhenReloadFailed(t *testing.T) {
 	cs.mu.Unlock()
 	cs.running = true
 
-	// Simulate a reload that failed after selection but before dispatch: the
-	// dispatch recheck must cancel execution.
+	// A failed reload latched before the scheduler tick must not claim the
+	// due job: its next run must be preserved so the run is not lost.
 	cs.mu.Lock()
 	cs.loadErr = fmt.Errorf("simulated reload failure")
 	cs.mu.Unlock()
 
-	cs.dispatchDueJobs([]string{job.ID})
+	cs.checkJobs()
 
 	if handlerCalled {
-		t.Fatal("job dispatched after a failed reload was latched")
+		t.Fatal("job dispatched while the store is unavailable")
+	}
+	cs.mu.RLock()
+	preserved := cs.store.Jobs[0].State.NextRunAtMS
+	cs.mu.RUnlock()
+	if preserved == nil || *preserved != past {
+		t.Fatalf("due job was claimed despite unavailable store: next run %v, want %d", preserved, past)
 	}
 }
 

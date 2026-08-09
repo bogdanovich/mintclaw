@@ -173,6 +173,12 @@ func (cs *CronService) runLoop(stopChan chan struct{}) {
 }
 
 func (cs *CronService) checkJobs() {
+	// Hold dispatchMu across selection/claiming, persistence, and dispatch so
+	// a reload cannot interleave after a due job's next run has been cleared
+	// and persisted: a failed reload must never drop an already claimed run.
+	cs.dispatchMu.Lock()
+	defer cs.dispatchMu.Unlock()
+
 	cs.mu.Lock()
 
 	if !cs.running {
@@ -215,23 +221,6 @@ func (cs *CronService) checkJobs() {
 	}
 
 	cs.mu.Unlock()
-
-	cs.dispatchDueJobs(dueJobIDs)
-}
-
-// dispatchDueJobs serializes the final loadErr check and handler invocation
-// against reloads: a reload that fails after selection must cancel dispatch,
-// so work is never executed while the authoritative store is unreadable.
-func (cs *CronService) dispatchDueJobs(dueJobIDs []string) {
-	cs.dispatchMu.Lock()
-	defer cs.dispatchMu.Unlock()
-
-	cs.mu.RLock()
-	blocked := cs.loadErr != nil
-	cs.mu.RUnlock()
-	if blocked {
-		return
-	}
 
 	// Execute jobs outside lock.
 	for _, jobID := range dueJobIDs {
