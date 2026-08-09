@@ -51,7 +51,7 @@ The dependency mapping is:
 | B2 | Node P2 artifact contract for remote binary transfer; gateway media support may be proven earlier |
 | B3 | Node P7 admission for typed browser commands plus deployed P2 artifacts |
 | BF1-BF4 | Deployed B3 routing and the existing node update, artifact, policy, and audit contracts |
-| B4 | Stable B1-B3 and BF1-BF3 profile/session authority; no new node milestone |
+| B4 | Stable B1-B3 and BF1-BF2 profile/session authority; no new node milestone |
 | B5 | Stable B1 worker/driver seam and B2 artifact/lifecycle behavior |
 | B6 | Separate interactive-computer admission and, for workspace routing, node P8 |
 
@@ -128,7 +128,7 @@ policy name.
 | B1 | First-party local browser capability | Use a stable MintClaw session/observe/action contract against a gateway browser | B0 evidence and an admitted browser threat model |
 | B2 | Artifacts, diagnostics, and human handoff | Move screenshots and files safely, diagnose readiness, and let a person take over and resume | B1 and the relevant P2 artifact surface |
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
-| BF1-BF4 | Browser functional parity | Make gateway and companion targets reliable and functionally complete for ordinary Playwright workflows, with a separately enabled privileged escape hatch | Deployed B3 vertical slice |
+| BF1-BF4 | Browser functional parity | Complete ordinary gateway/companion workflows, add a separately enabled privileged escape hatch, and defer managed driver distribution until evidence requires it | Deployed B3 vertical slice |
 | B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit credential/profile policy | Stable B1-B3/BF lifecycle and human handoff |
 | B5 | Providers and repeatable workflow adapters | Add cloud browsers, alternative drivers, and cached site recipes without changing authority | Stable worker/driver seam and deployed lifecycle evidence |
 | B6 | Computer fallback and workspace routing | Handle non-DOM surfaces under separate authority and optionally bind browser placement to a remote workspace | Separate computer threat model and node P8 |
@@ -650,36 +650,7 @@ on every supporting placement. A target may omit a feature it cannot safely
 host, but it must report that omission through `browser_targets`; it must not
 advertise a feature and fail only after the model attempts to use it.
 
-### BF1: Managed Playwright runtime distribution
-
-#### Operator outcome
-
-A gateway or companion can start the pinned browser driver without depending
-on ambient shell state, an interactive Node.js installation, or an npm network
-fetch during session open.
-
-#### Proposed scope
-
-- package an exact stable Node.js runtime, `@playwright/mcp` version, lockfile,
-  and integrity manifest as a managed browser-driver component;
-- install and update that component through the existing gateway or companion
-  lifecycle with digest verification, atomic activation, retained rollback,
-  and bounded cleanup;
-- execute a resolved, trusted driver path instead of relying on ambient
-  `npx`, `PATH`, or a mutable global npm cache at session-open time;
-- report driver, browser, protocol, and catalog compatibility through passive
-  readiness without starting a browser or exposing local paths;
-- test cold start, repeated start, upgrade, rollback, corrupt installation,
-  missing browser, incompatible catalog, and process cleanup on Linux and
-  Darwin; and
-- retain the current pinned `npx` path until a separate admission proves the
-  managed distribution and its rollback on a deployed target.
-
-The initial managed component may still use Playwright MCP as its private
-driver protocol. BF1 improves packaging and lifecycle reliability; it does not
-require replacing Playwright or rewriting browser automation in Go.
-
-### BF2: Ordinary interaction and document parity
+### BF1: Ordinary interaction and document parity
 
 #### Operator outcome
 
@@ -701,11 +672,11 @@ first-party contract on gateway and companion targets.
   rule; and
 - advertise exact action and document-context support per target and profile.
 
-BF2 should prefer semantic accessibility and DOM references with Playwright
+BF1 should prefer semantic accessibility and DOM references with Playwright
 actionability and auto-waiting. Coordinate input remains a separate browser or
 computer fallback and does not silently replace a failed semantic action.
 
-### BF3: Media, transfer, diagnostics, and environment parity
+### BF2: Media, transfer, diagnostics, and environment parity
 
 #### Operator outcome
 
@@ -733,7 +704,7 @@ Raw response bodies, cookies, storage state, credentials, profile paths, CDP
 endpoints, and unbounded console or network streams remain unavailable to the
 model.
 
-### BF4: Opt-in privileged Playwright execution
+### BF3: Opt-in privileged Playwright execution
 
 #### Operator outcome
 
@@ -761,9 +732,51 @@ broadening ordinary browser authority.
 - support both gateway and companion placement only after each placement
   independently passes the same isolation and recovery tests.
 
-BF4 is a deliberate power-user feature, not a shortcut for missing common
+BF3 is a deliberate power-user feature, not a shortcut for missing common
 actions. A frequently used privileged script should become a reviewed typed
 action or workflow adapter with narrower authority.
+
+### BF4: Deferred managed Playwright runtime distribution
+
+The current pinned `npx @playwright/mcp@<version>` launch path is an acceptable
+baseline for the present personal deployment. Downloading or caching the npm
+package is not itself a demonstrated operator problem, and MintClaw should not
+take ownership of a second package-distribution lifecycle without evidence
+that the added machinery improves reliability enough to justify its cost.
+
+BF4 is deferred unless deployed evidence shows one of these triggers:
+
+- session startup repeatedly fails because npm or its cache is unavailable or
+  mutable;
+- offline companion operation becomes a concrete requirement;
+- driver startup latency is material in measured browser workflows;
+- Node.js, npm, or driver-version drift causes recurring compatibility bugs;
+- release, rollback, or supply-chain requirements cannot be met by the pinned
+  runtime dependency; or
+- a direct Playwright sidecar becomes necessary for capabilities that the MCP
+  adapter cannot expose reliably.
+
+If admitted later, managed distribution does not require committing
+`node_modules`, a Node.js runtime, or upstream package source to the MintClaw
+repository. Prefer an install- or update-time component under MintClaw runtime
+state, with an exact package version, lockfile or integrity metadata, atomic
+activation, retained rollback, and bounded cleanup. A release asset containing
+that component is another option. Vendoring generated dependency trees in the
+source repository should require a separate demonstrated need.
+
+An admitted BF4 slice may additionally:
+
+- execute a resolved driver path instead of relying on ambient `PATH` or a
+  mutable global npm cache;
+- report driver, browser, protocol, and catalog compatibility through passive
+  readiness without exposing local paths; and
+- test cold start, offline start, repeated start, upgrade, rollback, corrupt
+  installation, missing browser, incompatible catalog, and process cleanup on
+  Linux and Darwin.
+
+The managed component may still use Playwright MCP as its private driver
+protocol. BF4 would improve packaging and lifecycle reliability; it would not
+require replacing Playwright or rewriting browser automation in Go.
 
 ### Driver evolution after parity
 
@@ -781,29 +794,27 @@ driver may evolve independently:
   concrete use case and conformance evidence, not as an assumed equivalent to
   Playwright's cross-browser behavior and auto-waiting.
 
-This evolution belongs to the B5 driver seam unless BF1 evidence shows that a
+This evolution belongs to the B5 driver seam unless BF4 evidence shows that a
 driver-protocol change is required to make managed distribution viable.
 
 ### Suggested delivery sequence
 
-1. Admit and deliver BF1 managed runtime distribution on the already validated
-   gateway and companion targets.
-2. Admit BF2 in small vertical slices, beginning with companion parity for the
+1. Admit BF1 in small vertical slices, beginning with companion parity for the
    existing first-party actions before adding new action kinds.
-3. Deliver BF3 artifact and diagnostic features through existing P2/B2
+2. Deliver BF2 artifact and diagnostic features through existing P2/B2
    contracts, one artifact class at a time.
-4. Validate a real dry-run listing or form workflow that uses tabs or frames,
+3. Validate a real dry-run listing or form workflow that uses tabs or frames,
    form interaction, screenshot evidence, and upload or download on each
    placement.
-5. Admit BF4 only after ordinary parity is sufficient to distinguish a true
+4. Admit BF3 only after ordinary parity is sufficient to distinguish a true
    escape-hatch need from a missing typed action.
+5. Leave BF4 deferred until measured deployment evidence satisfies one of its
+   admission triggers.
 
 ### Completion evidence
 
 The post-B3 parity track is complete only when:
 
-- session open performs no npm network fetch and depends only on a verified,
-  rollback-capable managed driver installation;
 - gateway and companion return the same contract for every commonly
   advertised action and feature;
 - a real multi-page form workflow completes on both placements through only
@@ -814,7 +825,9 @@ The post-B3 parity track is complete only when:
 - every external commit, uncertain result, disconnect, and stale reference
   preserves the existing approval and no-replay invariants; and
 - privileged execution, if admitted, is disabled by default and proven unable
-  to escape its configured driver boundary.
+  to escape its configured driver boundary; and
+- managed driver distribution is not required for parity completion while BF4
+  remains deferred and the pinned `npx` baseline is operationally reliable.
 
 ### Mandatory stop conditions
 
@@ -826,8 +839,8 @@ Stop a parity slice if:
   and conformance contracts;
 - a feature cannot report an honest accepted, terminal, or unknown outcome;
 - large output or binary data bypasses bounded artifact storage;
-- driver installation requires an unverified network fetch during session
-  open; or
+- an admitted BF4 design requires vendoring mutable generated dependencies in
+  the source repository without a demonstrated need; or
 - privileged execution can reach credentials, profile storage, arbitrary host
   processes, or unapproved network authority outside its admitted boundary.
 
@@ -1044,8 +1057,8 @@ suite:
 - artifact digest, size, expiry, cross-session access, and cleanup;
 - human takeover, expiry, disconnect, and resume;
 - browser and provider version skew;
-- managed driver cold start, offline start, upgrade, corrupt activation, and
-  rollback;
+- when BF4 is admitted, managed driver cold start, offline start, upgrade,
+  corrupt activation, and rollback;
 - gateway/companion parity for actions, tabs, frames, popups, media, transfer,
   diagnostics, and capability discovery;
 - privileged execution denial, approval binding, isolation, timeout,
