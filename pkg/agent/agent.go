@@ -695,7 +695,7 @@ func agentMessageToolSentToTurnTarget(
 // Format: "pending-{sessionKey}-{sequence}"
 
 // isNativeSearchProvider reports whether the given LLM provider implements
-// NativeSearchCapable and returns true for SupportsNativeSearch.
+// provider capabilities and returns true for native search support.
 
 // filterClientWebSearch returns a copy of tools with the client-side
 // web_search tool removed. Used when native provider search is preferred.

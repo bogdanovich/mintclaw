@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -35,8 +36,9 @@ type Provider struct {
 	baseURL     string
 }
 
-// SupportsThinking implements providers.ThinkingCapable.
-func (p *Provider) SupportsThinking() bool { return true }
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{Thinking: true}
+}
 
 func NewProvider(token string) *Provider {
 	return NewProviderWithBaseURL(token, "")

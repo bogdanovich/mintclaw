@@ -144,8 +144,8 @@ func (p *nativeSearchCaptureProvider) GetDefaultModel() string {
 	return "native-search-model"
 }
 
-func (p *nativeSearchCaptureProvider) SupportsNativeSearch() bool {
-	return true
+func (p *nativeSearchCaptureProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{NativeSearch: true}
 }
 
 // toolCallRespProvider returns a tool call response

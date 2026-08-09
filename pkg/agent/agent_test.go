@@ -283,8 +283,8 @@ func (r *thinkingRecordingProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
-func (r *thinkingRecordingProvider) SupportsThinking() bool {
-	return true
+func (r *thinkingRecordingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{Thinking: true}
 }
 
 type thinkingOptionRecordingProvider struct {
@@ -1088,7 +1088,7 @@ func TestProcessMessage_PassesExplicitThinkingOffToProviderWithoutThinkingCapabi
 	}
 }
 
-func TestProcessMessage_PassesDeepSeekThinkingLevelToThinkingCapableProvider(t *testing.T) {
+func TestProcessMessagePassesDeepSeekThinkingLevelToCapableProvider(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -10041,7 +10041,9 @@ func (p *nativeSearchProvider) Chat(
 
 func (p *nativeSearchProvider) GetDefaultModel() string { return "test-model" }
 
-func (p *nativeSearchProvider) SupportsNativeSearch() bool { return p.supported }
+func (p *nativeSearchProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{NativeSearch: p.supported}
+}
 
 type plainProvider struct{}
 
@@ -10068,7 +10070,7 @@ func TestIsNativeSearchProvider_NotSupported(t *testing.T) {
 
 func TestIsNativeSearchProvider_NoInterface(t *testing.T) {
 	if isNativeSearchProvider(&plainProvider{}) {
-		t.Fatal("expected false for provider that does not implement NativeSearchCapable")
+		t.Fatal("expected false for provider that does not declare native search")
 	}
 }
 

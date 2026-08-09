@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -46,6 +47,12 @@ type Provider struct {
 	client         *bedrockruntime.Client
 	region         string
 	requestTimeout time.Duration
+}
+
+func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
+	return providercapabilities.ProviderCapabilities{
+		Streaming: providercapabilities.StreamingCapabilities{Supported: true},
+	}
 }
 
 // Option configures the Bedrock Provider.
