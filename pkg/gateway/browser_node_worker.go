@@ -88,61 +88,103 @@ func (factory *gatewayBrowserWorkerFactory) Open(
 	return factory.local.Open(ctx, request)
 }
 
-func (factory *gatewayBrowserWorkerFactory) TargetActions(
+func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	_ context.Context,
 	targetName string,
 	profileNames []string,
-) ([]browser.ActionKind, error) {
+) (browser.TargetDiagnostics, error) {
 	if factory == nil || factory.config == nil || len(profileNames) == 0 {
-		return nil, browser.ErrWorkerUnavailable
+		return browser.TargetDiagnostics{}, browser.ErrWorkerUnavailable
 	}
 	target, ok := factory.config.Tools.Browser.Targets[targetName]
 	if !ok || !target.Enabled {
-		return nil, browser.ErrDenied
+		return browser.TargetDiagnostics{}, browser.ErrDenied
 	}
 	if target.EffectivePlacement() != config.BrowserPlacementNode {
 		if factory.local == nil {
-			return nil, browser.ErrWorkerUnavailable
+			return browser.TargetDiagnostics{}, browser.ErrWorkerUnavailable
 		}
-		return []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
-			browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
-		}, nil
+		driver := unavailableNodeBrowserReadiness("driver_unavailable", "contact_operator")
+		if local, available := factory.local.(interface {
+			PassiveReadiness() browser.DriverReadiness
+		}); available {
+			driver = local.PassiveReadiness()
+		}
+		profiles := make(map[string]browser.DriverReadiness, len(profileNames))
+		for _, profileName := range profileNames {
+			profiles[profileName] = driver
+		}
+		actions := []browser.ActionKind(nil)
+		if driver.Status != browser.ReadinessUnavailable {
+			actions = []browser.ActionKind{
+				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
+				browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+			}
+		}
+		return browser.TargetDiagnostics{Actions: actions, Profiles: profiles}, nil
+	}
+	profiles := make(map[string]browser.DriverReadiness, len(profileNames))
+	unavailable := func(readiness browser.DriverReadiness) (browser.TargetDiagnostics, error) {
+		for _, profileName := range profileNames {
+			profiles[profileName] = readiness
+		}
+		return browser.TargetDiagnostics{Profiles: profiles}, nil
 	}
 	if factory.node == nil || factory.node.source == nil {
-		return nil, browser.ErrWorkerUnavailable
+		return unavailable(unavailableNodeBrowserReadiness("node_unavailable", "connect_node"))
 	}
 	executionTarget, ok := factory.config.Execution.Targets[target.NodeTarget]
 	if !ok || executionTarget.Type != "node" {
-		return nil, browser.ErrDenied
+		return unavailable(unavailableNodeBrowserReadiness("target_unavailable", "configure_target"))
 	}
 	record, found, err := factory.node.source.Lookup(executionTarget.Node)
 	if err != nil || !found || !record.Connected || record.Registration == nil ||
 		record.Snapshot.State != nodes.StateConnected {
-		return nil, browser.ErrWorkerUnavailable
+		return unavailable(unavailableNodeBrowserReadiness("node_unavailable", "connect_node"))
 	}
 	var intersection map[string]struct{}
+	allProfilesReady := true
 	for _, profileName := range profileNames {
 		localProfile, enabled := target.Profiles[profileName]
 		if !enabled || !localProfile.Enabled {
-			return nil, browser.ErrDenied
+			profiles[profileName] = unavailableNodeBrowserReadiness("profile_unavailable", "configure_profile")
+			allProfilesReady = false
+			continue
 		}
 		var remoteProfile nodes.BrowserProfileDescriptor
+		profileReady := true
 		for _, command := range []string{
 			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
 			nodes.BrowserCommandObserve, nodes.BrowserCommandAct, nodes.BrowserCommandSessionClose,
 		} {
 			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
 			if !approved {
-				return nil, browser.ErrDenied
+				profiles[profileName] = unavailableNodeBrowserReadiness(
+					"command_unapproved", "approve_browser_commands",
+				)
+				profileReady = false
+				break
 			}
 			candidate, available := browserDescriptorProfile(descriptor, profileName)
 			if !available || !browserProfileIntersects(
 				localProfile, factory.config.Tools.Browser.Limits, candidate,
 			) || (remoteProfile.Revision != "" && !browserProfilesEqual(remoteProfile, candidate)) {
-				return nil, browser.ErrDenied
+				profiles[profileName] = unavailableNodeBrowserReadiness(
+					"profile_policy_mismatch", "reconcile_profile",
+				)
+				profileReady = false
+				break
 			}
 			remoteProfile = candidate
+		}
+		if !profileReady {
+			allProfilesReady = false
+			continue
+		}
+		profiles[profileName] = browser.DriverReadiness{
+			Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
+			Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+			Compatibility: browser.CompatibilityCompatible,
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
@@ -161,75 +203,26 @@ func (factory *gatewayBrowserWorkerFactory) TargetActions(
 		}
 	}
 	actions := make([]browser.ActionKind, 0, len(intersection))
-	for _, action := range []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll} {
-		if _, available := intersection[string(action)]; available {
-			actions = append(actions, action)
+	if allProfilesReady {
+		for _, action := range []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll} {
+			if _, available := intersection[string(action)]; available {
+				actions = append(actions, action)
+			}
 		}
 	}
-	return actions, nil
+	return browser.TargetDiagnostics{Actions: actions, Profiles: profiles}, nil
 }
 
 func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
-	_ context.Context,
+	ctx context.Context,
 	targetName string,
 	profileName string,
 ) browser.DriverReadiness {
-	if factory == nil || factory.config == nil {
+	diagnostics, err := factory.PassiveTargetDiagnostics(ctx, targetName, []string{profileName})
+	if err != nil {
 		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
 	}
-	target, ok := factory.config.Tools.Browser.Targets[targetName]
-	if !ok || !target.Enabled {
-		return unavailableNodeBrowserReadiness("target_unavailable", "configure_target")
-	}
-	if target.EffectivePlacement() != config.BrowserPlacementNode {
-		if local, available := factory.local.(interface {
-			PassiveReadiness() browser.DriverReadiness
-		}); available {
-			return local.PassiveReadiness()
-		}
-		return unavailableNodeBrowserReadiness("driver_unavailable", "contact_operator")
-	}
-	if factory.node == nil || factory.node.source == nil {
-		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
-	}
-	executionTarget, ok := factory.config.Execution.Targets[target.NodeTarget]
-	if !ok || executionTarget.Type != "node" {
-		return unavailableNodeBrowserReadiness("target_unavailable", "configure_target")
-	}
-	record, found, err := factory.node.source.Lookup(executionTarget.Node)
-	if err != nil || !found || !record.Connected || record.Registration == nil ||
-		record.Snapshot.State != nodes.StateConnected {
-		return unavailableNodeBrowserReadiness("node_unavailable", "connect_node")
-	}
-	localProfile, ok := target.Profiles[profileName]
-	if !ok || !localProfile.Enabled {
-		return unavailableNodeBrowserReadiness("profile_unavailable", "configure_profile")
-	}
-	var remoteProfile nodes.BrowserProfileDescriptor
-	for _, command := range []string{
-		nodes.BrowserCommandSessionOpen,
-		nodes.BrowserCommandSessionStatus,
-		nodes.BrowserCommandObserve,
-		nodes.BrowserCommandAct,
-		nodes.BrowserCommandSessionClose,
-	} {
-		descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
-		if !approved {
-			return unavailableNodeBrowserReadiness("command_unapproved", "approve_browser_commands")
-		}
-		candidate, available := browserDescriptorProfile(descriptor, profileName)
-		if !available || !browserProfileIntersects(localProfile,
-			factory.config.Tools.Browser.Limits, candidate) ||
-			(remoteProfile.Revision != "" && !browserProfilesEqual(remoteProfile, candidate)) {
-			return unavailableNodeBrowserReadiness("profile_policy_mismatch", "reconcile_profile")
-		}
-		remoteProfile = candidate
-	}
-	return browser.DriverReadiness{
-		Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
-		Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
-		Compatibility: browser.CompatibilityCompatible,
-	}
+	return diagnostics.Profiles[profileName]
 }
 
 func unavailableNodeBrowserReadiness(code, action string) browser.DriverReadiness {

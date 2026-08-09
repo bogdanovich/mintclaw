@@ -232,11 +232,13 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	if readiness.Status != browser.ReadinessReady {
 		t.Fatalf("ready diagnostics = %#v", readiness)
 	}
-	actions, err := factory.(*gatewayBrowserWorkerFactory).TargetActions(
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
 		t.Context(), "companion", []string{"managed"},
 	)
-	if err != nil || !slices.Equal(actions, []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll}) {
-		t.Fatalf("target actions = %#v, %v", actions, err)
+	if err != nil || !slices.Equal(
+		diagnostics.Actions, []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll},
+	) || diagnostics.Profiles["managed"].Status != browser.ReadinessReady {
+		t.Fatalf("target diagnostics = %#v, %v", diagnostics, err)
 	}
 	handler.registration.AllowedCommands = handler.registration.AllowedCommands[1:]
 	if _, err = runtime.registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
@@ -252,10 +254,11 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	if readiness.Status != browser.ReadinessUnavailable || readiness.Code != "command_unapproved" {
 		t.Fatalf("unapproved diagnostics = %#v", readiness)
 	}
-	if actions, err = factory.(*gatewayBrowserWorkerFactory).TargetActions(
+	if diagnostics, err = factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
 		t.Context(), "companion", []string{"managed"},
-	); err == nil || len(actions) != 0 {
-		t.Fatalf("unapproved target actions = %#v, %v", actions, err)
+	); err != nil || len(diagnostics.Actions) != 0 ||
+		diagnostics.Profiles["managed"].Code != "command_unapproved" {
+		t.Fatalf("unapproved target diagnostics = %#v, %v", diagnostics, err)
 	}
 }
 

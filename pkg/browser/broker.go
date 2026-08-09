@@ -185,12 +185,6 @@ type WorkerFactory interface {
 	Open(context.Context, WorkerOpenRequest) (WorkerOpenResult, error)
 }
 
-// TargetActionFactory reports the exact model-facing actions supported by a
-// target/profile set in the current runtime generation.
-type TargetActionFactory interface {
-	TargetActions(context.Context, string, []string) ([]ActionKind, error)
-}
-
 type OpenRequest struct {
 	Owner   Owner
 	Target  string
@@ -231,18 +225,6 @@ type Broker struct {
 
 	mu    sync.Mutex
 	slots map[string]*workerSlot
-}
-
-func (broker *Broker) TargetActions(
-	ctx context.Context,
-	target string,
-	profiles []string,
-) ([]ActionKind, error) {
-	provider, ok := broker.factory.(TargetActionFactory)
-	if !ok {
-		return nil, ErrWorkerUnavailable
-	}
-	return provider.TargetActions(ctx, target, profiles)
 }
 
 func NewBroker(rootConfig *config.Config, store Store, factory WorkerFactory) (*Broker, error) {
@@ -421,6 +403,40 @@ func (broker *Broker) PassiveReadiness(
 	} else if factory, ok := broker.factory.(readinessFactory); ok {
 		driver = factory.PassiveReadiness()
 	}
+	return passiveReadiness(availability, driver), nil
+}
+
+// PassiveTargetDiagnostics combines one immutable factory snapshot with the
+// broker's durable profile lease projection.
+func (broker *Broker) PassiveTargetDiagnostics(
+	ctx context.Context,
+	targetName string,
+	profileNames []string,
+) ([]ActionKind, map[string]PassiveReadiness, error) {
+	factory, ok := broker.factory.(targetDiagnosticsFactory)
+	if !ok {
+		return nil, nil, ErrWorkerUnavailable
+	}
+	diagnostics, err := factory.PassiveTargetDiagnostics(ctx, targetName, profileNames)
+	if err != nil {
+		return nil, nil, err
+	}
+	profiles := make(map[string]PassiveReadiness, len(profileNames))
+	for _, profileName := range profileNames {
+		driver, found := diagnostics.Profiles[profileName]
+		if !found {
+			return nil, nil, ErrWorkerUnavailable
+		}
+		availability, availabilityErr := broker.ProfileAvailability(ctx, targetName, profileName)
+		if availabilityErr != nil {
+			return nil, nil, availabilityErr
+		}
+		profiles[profileName] = passiveReadiness(availability, driver)
+	}
+	return diagnostics.Actions, profiles, nil
+}
+
+func passiveReadiness(availability ProfileAvailability, driver DriverReadiness) PassiveReadiness {
 	result := PassiveReadiness{
 		Status: driver.Status, Broker: ReadinessReady, Worker: driver.Status,
 		Driver: driver.Driver, Browser: driver.Browser, Proxy: driver.Proxy,
@@ -428,7 +444,7 @@ func (broker *Broker) PassiveReadiness(
 		Code: driver.Code, Action: driver.Action, Passive: true,
 	}
 	if result.Code != "" {
-		return result, nil
+		return result
 	}
 	switch availability.Status {
 	case ReadinessBusy:
@@ -438,7 +454,7 @@ func (broker *Broker) PassiveReadiness(
 		result.Status, result.Worker = ReadinessDegraded, ReadinessDegraded
 		result.Code, result.Action = "recovery_required", "close_or_recover_session"
 	}
-	return result, nil
+	return result
 }
 
 func (broker *Broker) finishFailedOpen(
