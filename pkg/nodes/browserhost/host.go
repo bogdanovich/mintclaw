@@ -63,7 +63,7 @@ type browserHostSession struct {
 	safeFailure           string
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
-	navigationWorker      browserworker.NavigationBoundActionWorker
+	navigationWorker      browserworker.NavigationCheckedActionWorker
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
@@ -270,7 +270,7 @@ func (host *BrowserHost) Open(
 		Limits: browserConfigLimits(request.Limits),
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
-	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationBoundActionWorker)
+	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationCheckedActionWorker)
 	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
@@ -568,7 +568,7 @@ func (host *BrowserHost) executeAction(
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
-	if executeErr := session.navigationWorker.ExecuteAtNavigation(
+	if executeErr := session.navigationWorker.ExecuteAfterNavigationCheck(
 		actionCtx,
 		currentNavigationIdentity,
 		driverAction,

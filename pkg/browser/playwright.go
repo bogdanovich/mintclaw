@@ -58,7 +58,7 @@ var (
 
 const playwrightNavigationIdentityMarker = "MINTCLAW_NAV_V1"
 
-const playwrightNavigationDispatchMarker = "MINTCLAW_NAV_ACT_V1"
+const playwrightNavigationCheckedActionMarker = "MINTCLAW_NAV_ACT_V1"
 
 const playwrightNavigationIdentityCode = `async (page) => {
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
@@ -812,7 +812,7 @@ func parsePlaywrightNavigationIdentity(text string) (playwrightNavigationIdentit
 	return playwrightNavigationIdentity{frameID: frameID, loaderID: loaderID, generation: generation}, nil
 }
 
-func (worker *playwrightWorker) ExecuteAtNavigation(
+func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	ctx context.Context,
 	expectedToken string,
 	action DriverAction,
@@ -825,7 +825,7 @@ func (worker *playwrightWorker) ExecuteAtNavigation(
 	if expectedToken == "" || expectedToken != worker.navigationToken {
 		return ErrStale
 	}
-	code, err := playwrightNavigationBoundActionCode(worker.navigationID, action, worker.limits)
+	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
 	if err != nil {
 		return err
 	}
@@ -846,7 +846,7 @@ func (worker *playwrightWorker) ExecuteAtNavigation(
 	return err
 }
 
-func playwrightNavigationBoundActionCode(
+func playwrightNavigationCheckedActionCode(
 	identity playwrightNavigationIdentity,
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
@@ -876,7 +876,7 @@ func playwrightNavigationBoundActionCode(
 		}
 		dispatch = fmt.Sprintf("await page.mouse.wheel(0, %d);", delta)
 	default:
-		return "", fmt.Errorf("%w: navigation-bound action is unsupported", ErrInvalid)
+		return "", fmt.Errorf("%w: navigation-checked action is unsupported", ErrInvalid)
 	}
 	return fmt.Sprintf(`async (page) => {
   const expectedFrameID = %s;
@@ -917,9 +917,9 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		result = result[:end]
 	}
 	switch strings.Trim(result, "\r\"' ") {
-	case playwrightNavigationDispatchMarker + "|ok":
+	case playwrightNavigationCheckedActionMarker + "|ok":
 		return nil
-	case playwrightNavigationDispatchMarker + "|stale":
+	case playwrightNavigationCheckedActionMarker + "|stale":
 		return ErrStale
 	default:
 		return ErrDriverIncompatible

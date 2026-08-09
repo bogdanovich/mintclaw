@@ -59,11 +59,13 @@ type NavigationIdentityWorker interface {
 	NavigationIdentity(context.Context) (string, error)
 }
 
-// NavigationBoundActionWorker issues an action only if the driver-owned
-// navigation identity still matches at the private dispatch boundary.
-type NavigationBoundActionWorker interface {
+// NavigationCheckedActionWorker performs one final private navigation check
+// immediately before issuing a fixed typed action. The check is the authority
+// linearization point; the native input operation that follows is not atomic
+// with it.
+type NavigationCheckedActionWorker interface {
 	NavigationIdentityWorker
-	ExecuteAtNavigation(context.Context, string, DriverAction) error
+	ExecuteAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
 // PreparedActionWorker receives the gateway-owned durable authority for one

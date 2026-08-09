@@ -71,12 +71,18 @@ transport loss, or ambiguous driver result quarantines the session and never
 replays an accepted action. The raw driver identity and generation are not
 exposed in tool output or persisted in either invocation ledger.
 
-The final action is issued through a private navigation-bound Playwright
+The final action is issued through a private navigation-checked Playwright
 callback. That callback refreshes the CDP main-frame state, compares the exact
 expected frame, loader, and monotonic generation, and only then issues the
-fixed typed action in the same driver operation. A transition after host
-revalidation but before driver dispatch therefore returns stale without
-issuing input. This boundary applies to click, select, press, and scroll.
+fixed typed action. The check is the authority linearization point: a
+transition observed before it returns stale without issuing input. Playwright
+and CDP native input primitives do not accept a document-generation
+precondition, so the following native input is not atomic with the check. A
+navigation beginning after the linearization point is a concurrent browser
+event, not a condition this slice claims to reject before input. Successful
+dispatch is followed by a fresh observation; timeout, transport loss, or an
+ambiguous result quarantines the session and never replays the accepted
+invocation. This boundary applies to click, select, press, and scroll.
 
 ## Acceptance evidence
 
@@ -92,8 +98,10 @@ real-driver, and production-WSS tests prove:
 - byte-identical observations from different main documents or different
   same-document navigation generations fail stale before either press or
   select reaches the driver;
-- a navigation committed after host revalidation but before the private
-  dispatch boundary fails stale with zero input dispatch;
+- a navigation observed after host revalidation but before the private final
+  check fails stale with zero input dispatch;
+- tests do not claim atomicity between that final check and native input, and
+  ambiguous concurrent outcomes quarantine without replay;
 - gateway and companion catalogs advertise the same admitted action shapes;
 - reconnect cannot revive stale authority or replay an accepted action; and
 - live gateway and companion canaries execute `press` and `select`, observe a

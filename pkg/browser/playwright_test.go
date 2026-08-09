@@ -150,7 +150,7 @@ func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
 	}
 }
 
-func TestPlaywrightWorkerDispatchesOnlyAtExpectedNavigationIdentity(t *testing.T) {
+func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
@@ -163,23 +163,23 @@ func TestPlaywrightWorkerDispatchesOnlyAtExpectedNavigationIdentity(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = worker.ExecuteAtNavigation(t.Context(), token, DriverAction{
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
 		Kind: DriverSelect, Target: "e5", Element: "State", Value: "CA",
 	}); err != nil {
-		t.Fatalf("ExecuteAtNavigation(select) error = %v", err)
+		t.Fatalf("ExecuteAfterNavigationCheck(select) error = %v", err)
 	}
-	if err = worker.ExecuteAtNavigation(t.Context(), token, DriverAction{
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
 		Kind: DriverPress, Key: "Tab",
 	}); !errors.Is(err, ErrStale) {
-		t.Fatalf("ExecuteAtNavigation(stale press) error = %v", err)
+		t.Fatalf("ExecuteAfterNavigationCheck(stale press) error = %v", err)
 	}
 	if worker.lost {
 		t.Fatal("stale conditional dispatch retired worker")
 	}
-	if err = worker.ExecuteAtNavigation(t.Context(), strings.Repeat("0", sha256.Size*2), DriverAction{
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), strings.Repeat("0", sha256.Size*2), DriverAction{
 		Kind: DriverPress, Key: "Tab",
 	}); !errors.Is(err, ErrStale) {
-		t.Fatalf("ExecuteAtNavigation(unknown identity) error = %v", err)
+		t.Fatalf("ExecuteAfterNavigationCheck(unknown identity) error = %v", err)
 	}
 	if len(client.calls) != 3 {
 		t.Fatalf("conditional dispatch calls = %#v", client.calls)
@@ -1705,7 +1705,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		if navigationErr != nil {
 			return navigationErr
 		}
-		return worker.ExecuteAtNavigation(ctx, navigationID, action)
+		return worker.ExecuteAfterNavigationCheck(ctx, navigationID, action)
 	}
 	blankNavigation, err := worker.NavigationIdentity(ctx)
 	if err != nil {
@@ -1736,10 +1736,10 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	if err != nil || pushStateResult == nil || pushStateResult.IsError {
 		t.Fatalf("byte-identical pushState error = %v, result = %#v", err, pushStateResult)
 	}
-	if err = worker.ExecuteAtNavigation(ctx, fixtureNavigation, DriverAction{
+	if err = worker.ExecuteAfterNavigationCheck(ctx, fixtureNavigation, DriverAction{
 		Kind: DriverPress, Key: "Tab",
 	}); !errors.Is(err, ErrStale) {
-		t.Fatalf("dispatch-bound press after pushState error = %v, want stale", err)
+		t.Fatalf("navigation-checked press after pushState error = %v, want stale", err)
 	}
 	keydownResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => "MINTCLAW_RACE_V1|" +

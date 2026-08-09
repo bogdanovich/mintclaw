@@ -112,7 +112,7 @@ func (worker *fakeBrowserHostWorker) Execute(
 	return worker.executeErr
 }
 
-func (worker *fakeBrowserHostWorker) ExecuteAtNavigation(
+func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
 	ctx context.Context,
 	expectedNavigationID string,
 	action browserworker.DriverAction,
@@ -552,7 +552,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	}
 
 	for _, action := range []string{"press", "select"} {
-		t.Run(action+" rejects navigation at dispatch boundary", func(t *testing.T) {
+		t.Run(action+" rejects navigation before driver input", func(t *testing.T) {
 			element := browserworker.DriverElement{
 				Target: "driver_select_1", Role: "combobox", Name: "State",
 			}
