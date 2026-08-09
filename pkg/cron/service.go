@@ -407,17 +407,35 @@ func (cs *CronService) getNextWakeMS() *int64 {
 }
 
 func (cs *CronService) Load() error {
+	// Read and decode the reload candidate before serializing with dispatch:
+	// if the authoritative file is corrupt, latch the failure immediately so
+	// an in-flight handler completion suppresses its save instead of
+	// overwriting the malformed file with the live snapshot.
+	store, readErr := cs.readStore()
+	if readErr != nil {
+		cs.mu.Lock()
+		cs.loadErr = readErr
+		cs.notify()
+		cs.mu.Unlock()
+		return readErr
+	}
+
 	cs.dispatchMu.Lock()
 	defer cs.dispatchMu.Unlock()
 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	err := cs.loadStore()
+	if store == nil {
+		cs.ensureStore()
+	} else {
+		cs.store = store
+	}
+	cs.loadErr = nil
 	// Re-evaluate the scheduler wake time after every reload outcome so a
 	// repaired store resumes promptly and a failed one suspends.
 	cs.notify()
-	return err
+	return nil
 }
 
 func (cs *CronService) SetOnJob(handler JobHandler) {
@@ -427,34 +445,41 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 }
 
 func (cs *CronService) loadStore() error {
-	data, err := os.ReadFile(cs.storePath)
+	store, err := cs.readStore()
 	if err != nil {
-		if os.IsNotExist(err) {
-			cs.ensureStore()
-			cs.loadErr = nil
-			return nil
-		}
 		cs.ensureStore()
 		cs.loadErr = err
 		return err
 	}
+	if store == nil {
+		cs.ensureStore()
+		cs.loadErr = nil
+		return nil
+	}
+	cs.store = store
+	cs.loadErr = nil
+	return nil
+}
 
-	// Decode into a temporary store and publish it only after a successful
-	// read/unmarshal so a failed reload cannot replace known-good live state
-	// with an empty or partially decoded store.
+// readStore reads and decodes the authoritative store without mutating the
+// live state. It returns a nil store when the file does not exist.
+func (cs *CronService) readStore() (*CronStore, error) {
+	data, err := os.ReadFile(cs.storePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
 	store := &CronStore{
 		Version: 1,
 		Jobs:    []CronJob{},
 	}
 	if err := json.Unmarshal(data, store); err != nil {
-		cs.ensureStore()
-		cs.loadErr = err
-		return err
+		return nil, err
 	}
-
-	cs.store = store
-	cs.loadErr = nil
-	return nil
+	return store, nil
 }
 
 func (cs *CronService) ensureStore() {
