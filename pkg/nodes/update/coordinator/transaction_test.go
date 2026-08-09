@@ -57,7 +57,7 @@ func TestCoordinatorStagesAuthenticatedExactPlatformPayloadOnce(t *testing.T) {
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, root := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
 	state, err := coordinator.Stage(t.Context(), request)
 	if err != nil {
@@ -96,7 +96,7 @@ func TestCoordinatorReconcilesPublishedCandidateAfterStateCommitLoss(t *testing.
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
 	staged, err := coordinator.Stage(t.Context(), request)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestCoordinatorFailsClosedForUntrustedManifestAndUnsafeArchive(t *testing.T
 				test.mutate(fixture)
 			}
 			coordinator, _ := testCoordinator(t, fixture, now)
-			defer coordinator.Close()
+			defer func() { _ = coordinator.Close() }()
 			state, err := coordinator.Stage(t.Context(), fixture.stageRequest(now))
 			var stageErr *StageError
 			if !errors.As(err, &stageErr) || stageErr.Code != test.wantCode {
@@ -211,7 +211,7 @@ func TestCoordinatorRejectsPartialChangedAndStructurallyUnsafeArtifacts(t *testi
 			fixture := test.fixture(t)
 			defer fixture.server.Close()
 			coordinator, _ := testCoordinator(t, fixture, now)
-			defer coordinator.Close()
+			defer func() { _ = coordinator.Close() }()
 			state, err := coordinator.Stage(t.Context(), fixture.stageRequest(now))
 			var stageError *StageError
 			if !errors.As(err, &stageError) ||
@@ -234,7 +234,7 @@ func TestCoordinatorRejectsUnapprovedRedirectHost(t *testing.T) {
 	})
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	_, err := coordinator.Stage(t.Context(), fixture.stageRequest(now))
 	var stageErr *StageError
 	if !errors.As(err, &stageErr) || stageErr.Code != "manifest_unavailable" {
@@ -247,7 +247,7 @@ func TestCoordinatorFailsClosedAndCleansTemporaryOnFullDisk(t *testing.T) {
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, root := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	coordinator.store.fault = func(point string) error {
 		if point == "archive_write" {
 			return unix.ENOSPC

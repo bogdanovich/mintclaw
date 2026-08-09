@@ -205,7 +205,7 @@ func TestAdmissionRevocationWaitsForDispatchWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer releaseSession()
+	defer func() { _, _ = releaseSession() }()
 
 	commitStarted := make(chan struct{})
 	allowCommit := make(chan struct{})
@@ -270,7 +270,7 @@ func TestAdmissionWritesAfterCommittedDispatchError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer releaseSession()
+	defer func() { _, _ = releaseSession() }()
 	commitErr := &fileutil.CommittedWriteError{Err: errors.New("sync invocation directory")}
 
 	_, dispatched, err := handler.Invoke(
@@ -304,7 +304,7 @@ func TestAdmissionPreservesBoundedCompanionRejectionCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer releaseSession()
+	defer func() { _, _ = releaseSession() }()
 
 	type invokeResult struct {
 		dispatched bool
@@ -454,12 +454,12 @@ func TestAdmissionPersistsSignedIdentityOverWSS(t *testing.T) {
 		nil,
 	)
 	if handshakeResponse != nil && handshakeResponse.Body != nil {
-		defer handshakeResponse.Body.Close()
+		defer func() { _ = handshakeResponse.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	challenge := readChallenge(t, connection)
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -522,10 +522,10 @@ func TestAdmissionRejectsPlaintextByDefault(t *testing.T) {
 		"ws"+strings.TrimPrefix(server.URL, "http"), nil,
 	)
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if connection != nil {
-		connection.Close()
+		_ = connection.Close()
 	}
 	if err == nil {
 		t.Fatal("plaintext WebSocket admission succeeded")
@@ -543,12 +543,12 @@ func TestAdmissionAllowsExplicitLoopbackDevelopment(t *testing.T) {
 		"ws"+strings.TrimPrefix(server.URL, "http"), nil,
 	)
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	challenge := readChallenge(t, connection)
 	if challenge.Nonce == "" {
 		t.Fatal("development connection received empty challenge")
@@ -560,7 +560,7 @@ func TestAdmissionCloseDrainsInFlightHandshake(t *testing.T) {
 	server := httptest.NewTLSServer(handler)
 	defer server.Close()
 	connection := dialTestAdmission(t, server)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	_ = readChallenge(t, connection)
 
 	if err := handler.Close(t.Context()); err != nil {
@@ -680,7 +680,7 @@ func dialTestAdmission(t *testing.T, server *httptest.Server) *websocket.Conn {
 		nil,
 	)
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)

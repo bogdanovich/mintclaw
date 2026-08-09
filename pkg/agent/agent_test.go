@@ -4798,7 +4798,7 @@ func newChatCompletionTestServer(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -4839,7 +4839,7 @@ func newChatCompletionTestServerWithUsage(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -4882,7 +4882,7 @@ func newStrictChatCompletionTestServer(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -6923,7 +6923,7 @@ func TestProcessMessage_FallbackReceivesExplicitThinkingOff(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -7030,7 +7030,7 @@ func TestProcessMessage_PrimaryThinkingOffDoesNotLeakToFallback(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -7129,7 +7129,7 @@ func TestProcessMessage_FallbackThinkingOffUsesCandidateIdentity(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -9572,7 +9572,9 @@ func TestResolveMediaRefs_MultiToolCallPreservesOrdering(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	// Simulate: assistant called load_image + read_file, two tool results follow
@@ -9713,7 +9715,9 @@ func TestResolveMediaRefs_DoesNotMutateOriginal(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	original := []providers.Message{
@@ -9735,7 +9739,9 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	// File with JPEG content but stored with explicit content type
 	jpegPath := filepath.Join(dir, "photo")
 	jpegHeader := []byte{0xFF, 0xD8, 0xFF, 0xE0} // JPEG magic bytes
-	os.WriteFile(jpegPath, jpegHeader, 0o644)
+	if err := os.WriteFile(jpegPath, jpegHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(jpegPath, media.MediaMeta{ContentType: "image/jpeg"}, "test")
 
 	messages := []providers.Message{
@@ -9759,7 +9765,9 @@ func TestResolveMediaRefs_PDFInjectsFilePath(t *testing.T) {
 
 	pdfPath := filepath.Join(dir, "report.pdf")
 	// PDF magic bytes
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644)
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
 
 	messages := []providers.Message{
@@ -9781,7 +9789,9 @@ func TestResolveMediaRefs_AudioInjectsAudioPath(t *testing.T) {
 	dir := t.TempDir()
 
 	oggPath := filepath.Join(dir, "voice.ogg")
-	os.WriteFile(oggPath, []byte("fake audio"), 0o644)
+	if err := os.WriteFile(oggPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(oggPath, media.MediaMeta{ContentType: "audio/ogg"}, "test")
 
 	messages := []providers.Message{
@@ -9844,7 +9854,9 @@ func TestResolveMediaRefs_VideoInjectsVideoPath(t *testing.T) {
 	dir := t.TempDir()
 
 	mp4Path := filepath.Join(dir, "clip.mp4")
-	os.WriteFile(mp4Path, []byte("fake video"), 0o644)
+	if err := os.WriteFile(mp4Path, []byte("fake video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(mp4Path, media.MediaMeta{ContentType: "video/mp4"}, "test")
 
 	messages := []providers.Message{
@@ -9866,7 +9878,9 @@ func TestResolveMediaRefs_NoGenericTagAppendsPath(t *testing.T) {
 	dir := t.TempDir()
 
 	csvPath := filepath.Join(dir, "data.csv")
-	os.WriteFile(csvPath, []byte("a,b,c"), 0o644)
+	if err := os.WriteFile(csvPath, []byte("a,b,c"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(csvPath, media.MediaMeta{ContentType: "text/csv"}, "test")
 
 	messages := []providers.Message{
@@ -9957,7 +9971,9 @@ func TestResolveMediaRefs_JSONContentPrependsPathTag(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pngPath, media.MediaMeta{ContentType: "image/png"}, "test")
 
 	jsonContent := `{"schema":"2.0","body":{"elements":[{"tag":"img","img_key":"img_123"}]}}`
@@ -9977,7 +9993,9 @@ func TestResolveMediaRefs_EmptyContentGetsPathTag(t *testing.T) {
 	dir := t.TempDir()
 
 	docPath := filepath.Join(dir, "doc.docx")
-	os.WriteFile(docPath, []byte("fake docx"), 0o644)
+	if err := os.WriteFile(docPath, []byte("fake docx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	docxMIME := "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	ref, _ := store.Store(docPath, media.MediaMeta{ContentType: docxMIME}, "test")
 
@@ -10003,11 +10021,15 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	pdfPath := filepath.Join(dir, "report.pdf")
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644)
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
 
 	messages := []providers.Message{

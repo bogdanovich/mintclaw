@@ -2068,7 +2068,9 @@ func TestRunTurn_HardAbort(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		al.runTurn(context.Background(), ts, pipeline)
+		if _, err := al.runTurn(context.Background(), ts, pipeline); err != nil {
+			t.Errorf("runTurn() error = %v", err)
+		}
 		close(done)
 	}()
 

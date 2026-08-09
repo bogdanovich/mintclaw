@@ -100,7 +100,9 @@ func TestNeedsCompaction(t *testing.T) {
 	// Add messages to context, total tokens = 8000
 	for i := 0; i < 8; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "test message content", 1000)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Threshold = 0.75 × 10000 = 7500. We have 8000 tokens → needs compaction
@@ -113,10 +115,14 @@ func TestNeedsCompaction(t *testing.T) {
 	}
 
 	// Below threshold: 5000 / 10000 → no compaction
-	s.UpsertContextItems(ctx, convID, nil) // clear
+	if err := s.UpsertContextItems(ctx, convID, nil); err != nil { // clear
+		t.Fatal(err)
+	}
 	for i := 0; i < 5; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "test", 1000)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	needed, _ = ce.NeedsCompaction(ctx, convID, 10000)
 	if needed {
@@ -132,7 +138,9 @@ func TestCompactLeaf(t *testing.T) {
 	// Need > FreshTailCount(32) evictable messages with >= LeafMinFanout(8) contiguous
 	for i := 0; i < 40; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "message content for compaction test", 100)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Compact
@@ -174,7 +182,9 @@ func TestCompactLeafNoCandidate(t *testing.T) {
 
 	// Too few messages to trigger leaf compaction
 	m, _ := ce.store.AddMessage(ctx, convID, "user", "short", 10)
-	ce.store.AppendContextMessage(ctx, convID, m.ID)
+	if err := ce.store.AppendContextMessage(ctx, convID, m.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := ce.Compact(ctx, convID, CompactInput{})
 	if err != nil {
@@ -209,13 +219,17 @@ func TestCompactCondensed(t *testing.T) {
 			t.Fatalf("CreateSummary %d: %v", i, err)
 		}
 		leafIDs[i] = summary.SummaryID
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add enough fresh messages to have a fresh tail (>= FreshTailCount)
 	for i := 0; i < FreshTailCount; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh message", 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Compact with force to trigger condensation
@@ -269,13 +283,17 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 			t.Fatalf("CreateSummary: %v", err)
 		}
 		leafIDs = append(leafIDs, sum.SummaryID)
-		s.AppendContextSummary(ctx, convID, sum.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add fresh tail so leaf summaries are in evictable range
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Barrier: CompleteFn waits until test removes context_items, then returns
@@ -324,7 +342,9 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 			preserved = append(preserved, item)
 		}
 	}
-	s.UpsertContextItems(ctx, convID, preserved)
+	if err := s.UpsertContextItems(ctx, convID, preserved); err != nil {
+		t.Fatal(err)
+	}
 
 	// Let CompleteFn return
 	barrier2.Done()
@@ -375,7 +395,9 @@ func TestCompactUntilUnder(t *testing.T) {
 			EarliestAt:     &now,
 			LatestAt:       &now,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Force compact until under budget
@@ -456,13 +478,17 @@ func TestSelectShallowestCondensationCandidate(t *testing.T) {
 			Content:        "leaf",
 			TokenCount:     100,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add fresh tail messages so summaries are in evictable range
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	candidates, err := ce.selectShallowestCondensationCandidate(ctx, convID, false)
@@ -501,7 +527,7 @@ func TestCompactCondensedUsesSelectOldestChunk(t *testing.T) {
 	for i := 0; i < LeafMinFanout+2; i++ {
 		now := time.Now().UTC()
 
-		s.CreateSummary(ctx, CreateSummaryInput{
+		if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 			ConversationID: convID,
 			Kind:           SummaryKindLeaf,
 			Depth:          0,
@@ -509,7 +535,9 @@ func TestCompactCondensedUsesSelectOldestChunk(t *testing.T) {
 			TokenCount:     100,
 			EarliestAt:     &now,
 			LatestAt:       &now,
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Insert a message between first two summaries to break contiguity
@@ -517,7 +545,9 @@ func TestCompactCondensedUsesSelectOldestChunk(t *testing.T) {
 	// but selectOldestChunkAtDepth should only find sum1 + sum2 (not sum3)
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "interrupting message", 5)
-	s.AppendContextMessage(ctx, convID, msg.ID)
+	if err := s.AppendContextMessage(ctx, convID, msg.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Run compactCondensed
 	result, err := ce.compactCondensed(ctx, convID)
@@ -558,13 +588,17 @@ func TestCompactCondensedUsesOrdinalAwareSelection(t *testing.T) {
 			Content:        fmt.Sprintf("leaf summary %d", i),
 			TokenCount:     500, // 5 × 500 = 2500 >= CondensedTargetTokens (2000)
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add fresh tail
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
@@ -594,10 +628,14 @@ func TestSelectOldestChunkAtDepthBreaksOnMessage(t *testing.T) {
 			Content:        fmt.Sprintf("leaf %d", i),
 			TokenCount:     100,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	msg, _ := s.AddMessage(ctx, convID, "user", "break", 10)
-	s.AppendContextMessage(ctx, convID, msg.ID)
+	if err := s.AppendContextMessage(ctx, convID, msg.ID); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		summary, _ := s.CreateSummary(ctx, CreateSummaryInput{
 			ConversationID: convID,
@@ -606,11 +644,15 @@ func TestSelectOldestChunkAtDepthBreaksOnMessage(t *testing.T) {
 			Content:        fmt.Sprintf("leaf-after %d", i),
 			TokenCount:     100,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	chunk, _ := ce.selectOldestChunkAtDepth(ctx, convID, 0)
@@ -689,13 +731,17 @@ func TestSelectOldestChunkAtDepthMinTokens(t *testing.T) {
 			Content:        fmt.Sprintf("tiny summary %d", i),
 			TokenCount:     50, // very small
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add fresh tail to protect from compaction
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("tail %d", i), 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Should return nil because total tokens (250) < 2000 minimum
@@ -724,13 +770,17 @@ func TestSelectOldestChunkAtDepthPassesMinTokens(t *testing.T) {
 			),
 			TokenCount: 500, // 5 × 500 = 2500 >= 2000
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add fresh tail
 	for i := 0; i < FreshTailCount+1; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("tail %d", i), 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Should return chunk because total tokens (2500) >= 2000
@@ -1002,11 +1052,15 @@ func TestCompactAsyncReturnsBeforeCondensed(t *testing.T) {
 			EarliestAt:     &now,
 			LatestAt:       &now,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < FreshTailCount; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Compact with force — should return quickly, condensed runs async
@@ -1074,16 +1128,24 @@ func TestCompactAsyncDedup(t *testing.T) {
 			EarliestAt:     &now,
 			LatestAt:       &now,
 		})
-		s.AppendContextSummary(ctx, convID, summary.SummaryID)
+		if err := s.AppendContextSummary(ctx, convID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < FreshTailCount; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 10)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Call Compact twice rapidly
-	ce.Compact(ctx, convID, CompactInput{Force: true})
-	ce.Compact(ctx, convID, CompactInput{Force: true})
+	if _, err := ce.Compact(ctx, convID, CompactInput{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ce.Compact(ctx, convID, CompactInput{Force: true}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Wait for async to finish
 	time.Sleep(600 * time.Millisecond)
@@ -1108,7 +1170,9 @@ func TestCompactLeafForceBypassesFreshTail(t *testing.T) {
 	total := FreshTailCount + 4
 	for i := 0; i < total; i++ {
 		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("message %d for force test", i), 100)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Without force: should return nil (all in fresh tail)
@@ -1149,7 +1213,9 @@ func TestCompactLeafAccumulatesUpToLeafChunkTokens(t *testing.T) {
 			),
 			500,
 		)
-		s.AppendContextMessage(ctx, convID, m.ID)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	summaryID, err := ce.compactLeaf(ctx, convID)

@@ -53,7 +53,7 @@ func TestAuthorityBrokerCgroupIdentityRequiresSoleRootControlledProcess(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unclaimed.Close()
+	defer func() { _ = unclaimed.Close() }()
 	if unclaimed.Authorize(fixture.pid, authorityBrokerActionSnapshot) {
 		t.Fatal("non-sole process claimed companion authority")
 	}
@@ -72,7 +72,7 @@ func TestAuthorityBrokerCgroupIdentityRetainsMembershipDescriptor(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer identity.Close()
+	defer func() { _ = identity.Close() }()
 	moved := fixture.controlDirectory + "-moved"
 	if err := os.Rename(fixture.controlDirectory, moved); err != nil {
 		t.Fatal(err)

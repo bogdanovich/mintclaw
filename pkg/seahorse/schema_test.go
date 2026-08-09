@@ -25,7 +25,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -282,7 +282,7 @@ func TestMigrationSummaryFTSInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FTS query: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var found string
 	if rows.Next() {

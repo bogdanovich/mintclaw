@@ -23,13 +23,15 @@ func TestGrepSearchSummaries(t *testing.T) {
 	ctx := context.Background()
 	conv, _ := s.GetOrCreateConversation(ctx, "test:grep-tool")
 
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: conv.ConversationID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "database connection pool configuration",
 		TokenCount:     50,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	re := &RetrievalEngine{store: s}
 	results, err := re.Grep(ctx, GrepInput{
@@ -49,8 +51,12 @@ func TestGrepSearchMessages(t *testing.T) {
 	ctx := context.Background()
 	conv, _ := s.GetOrCreateConversation(ctx, "test:grep-msg")
 
-	s.AddMessage(ctx, conv.ConversationID, "user", "find this message about testing", 5)
-	s.AddMessage(ctx, conv.ConversationID, "user", "unrelated content", 3)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "find this message about testing", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "unrelated content", 3); err != nil {
+		t.Fatal(err)
+	}
 
 	re := &RetrievalEngine{store: s}
 	results, err := re.Grep(ctx, GrepInput{
@@ -90,8 +96,12 @@ func TestGrepToolScopesToCurrentSessionByDefault(t *testing.T) {
 	ctx := context.Background()
 	current, _ := s.GetOrCreateConversation(ctx, "session:current")
 	other, _ := s.GetOrCreateConversation(ctx, "session:other")
-	s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5)
-	s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5)
+	if _, err := s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	tool := NewGrepTool(&RetrievalEngine{store: s})
 	toolCtx := toolshared.WithToolSessionContext(ctx, "agent", "session:current", nil)
@@ -119,8 +129,12 @@ func TestGrepToolCanSearchRouteConversation(t *testing.T) {
 	ctx := context.Background()
 	current, _ := s.GetOrCreateConversation(ctx, "session:current")
 	other, _ := s.GetOrCreateConversation(ctx, "session:other")
-	s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5)
-	s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5)
+	if _, err := s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.SetConversationProvenance(ctx, "session:current", "route:a", "agent"); err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +173,12 @@ func TestGrepToolUnknownSessionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	current, _ := s.GetOrCreateConversation(ctx, "session:current")
 	other, _ := s.GetOrCreateConversation(ctx, "session:other")
-	s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5)
-	s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5)
+	if _, err := s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	tool := NewGrepTool(&RetrievalEngine{store: s})
 	toolCtx := toolshared.WithToolSessionContext(ctx, "agent", "session:missing", nil)
@@ -188,7 +206,9 @@ func TestGrepToolEmptySessionFailsClosed(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	conv, _ := s.GetOrCreateConversation(ctx, "session:current")
-	s.AddMessage(ctx, conv.ConversationID, "user", "shared needle from current topic", 5)
+	if _, err := s.AddMessage(ctx, conv.ConversationID, "user", "shared needle from current topic", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	tool := NewGrepTool(&RetrievalEngine{store: s})
 	result := tool.Execute(ctx, map[string]any{"pattern": "needle"})

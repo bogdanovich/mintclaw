@@ -103,7 +103,7 @@ func TestSeahorseReconciliationCleanRestartUsesDurableWatermark(t *testing.T) {
 	if reopenErr != nil {
 		t.Fatal(reopenErr)
 	}
-	defer engine2.Close()
+	defer func() { _ = engine2.Close() }()
 	mgr2 := newSingleRuntimeTestManager(engine2, backend)
 	if err := mgr2.ensureReconciled(ctx, key, backend); err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func BenchmarkSeahorseCleanRevisionCheck(b *testing.B) {
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
 	engine, _ := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, backend)
 	ctx := context.Background()
 	_ = canonical.AddMessage(ctx, "bench", "user", "hello")
@@ -336,7 +336,7 @@ func BenchmarkSeahorseForcedReconciliation100Messages(b *testing.B) {
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
 	engine, _ := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, backend)
 	ctx := context.Background()
 	for i := 0; i < 100; i++ {

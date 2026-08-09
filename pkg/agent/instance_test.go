@@ -280,7 +280,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 	}
 	mediaPath := mediaFile.Name()
 	if _, err := mediaFile.WriteString("attachment content"); err != nil {
-		mediaFile.Close()
+		_ = mediaFile.Close()
 		t.Fatalf("WriteString(mediaFile) error = %v", err)
 	}
 	if err := mediaFile.Close(); err != nil {

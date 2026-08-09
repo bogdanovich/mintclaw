@@ -261,7 +261,7 @@ func TestToolResultStatusPersistsAcrossStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.db.Close()
+	defer func() { _ = store.db.Close() }()
 	reloaded, err := store.GetMessageByID(ctx, message.ID)
 	if err != nil {
 		t.Fatal(err)

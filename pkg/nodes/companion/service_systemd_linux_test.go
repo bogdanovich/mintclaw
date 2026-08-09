@@ -346,7 +346,7 @@ func TestSystemdProcessRunnerExecutesPinnedDescriptorAfterPathReplacement(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pinned.Close()
+	defer func() { _ = pinned.Close() }()
 	if renameErr := os.Rename(path, path+".replaced"); renameErr != nil {
 		t.Fatal(renameErr)
 	}

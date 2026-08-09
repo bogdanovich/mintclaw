@@ -38,7 +38,7 @@ func TestFileResolverRejectsPseudoFilesystemsAndMountCrossing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.close()
+	defer func() { _ = root.close() }()
 	if file, err := root.openRegular("/proc/version", 1024*1024, false); !errors.Is(
 		err,
 		ErrFileAccessDenied,
@@ -73,7 +73,7 @@ func TestFileResolverRejectsSameDeviceMountIdentityChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.close()
+	defer func() { _ = root.close() }()
 
 	original := descriptorMountIdentity
 	descriptorMountIdentity = func(
@@ -115,12 +115,12 @@ func TestFileResolverPublishesPinnedStageAfterNameSubstitution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	stage, err := parent.createStage("transfer_stage_substitution")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stage.file.Close()
+	defer func() { _ = stage.file.Close() }()
 	if _, err := stage.file.Write([]byte("trusted")); err != nil {
 		t.Fatal(err)
 	}

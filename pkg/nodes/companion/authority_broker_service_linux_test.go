@@ -175,7 +175,7 @@ func TestAuthorityBrokerSocketDirectoryBindsByDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if err := directory.prepare(); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestAuthorityBrokerSocketDirectoryBindsByDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	listener.SetUnlinkOnClose(false)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	defer func() { _ = directory.unlink() }()
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSocket == 0 {

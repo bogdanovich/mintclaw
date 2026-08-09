@@ -289,7 +289,7 @@ func serveServiceHelperActionResponse(
 	respond func(net.Conn, serviceHelperRequest) error,
 	done chan<- error,
 ) {
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	connection, err := listener.AcceptUnix()
 	if err == nil {
 		var request serviceHelperRequest
