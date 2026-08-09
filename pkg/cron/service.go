@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -408,26 +409,26 @@ func (cs *CronService) getNextWakeMS() *int64 {
 }
 
 func (cs *CronService) Load() error {
-	// Probe the authoritative file before serializing with dispatch: if it is
-	// corrupt, latch the failure immediately so an in-flight handler
-	// completion suppresses its save instead of overwriting the malformed
-	// file with the live snapshot.
+	// Probe the authoritative file while holding cs.mu so the write barrier
+	// (loadErr/reloadWait) is latched atomically with the probe: an in-flight
+	// handler completion or CRUD caller cannot slip in between the probe and
+	// the latch and overwrite a corrupt or deleted file with the stale live
+	// snapshot. Release cs.mu before serializing with dispatch.
+	cs.mu.Lock()
 	probe, probeErr := cs.readStore()
 	if probeErr != nil {
-		cs.mu.Lock()
 		cs.loadErr = probeErr
 		cs.notify()
 		cs.mu.Unlock()
 		return probeErr
 	}
 	if probe == nil {
-		// The file is missing: suppress dispatch writes until the locked
-		// re-read is published so an in-flight handler cannot recreate the
-		// deleted file with stale jobs.
-		cs.mu.Lock()
+		// The file is missing: suppress dispatch writes and mutations until
+		// the locked re-read is published so the deleted file cannot be
+		// recreated with stale live state.
 		cs.reloadWait = true
-		cs.mu.Unlock()
 	}
+	cs.mu.Unlock()
 
 	cs.dispatchMu.Lock()
 	defer cs.dispatchMu.Unlock()
@@ -472,6 +473,16 @@ func (cs *CronService) Load() error {
 // an in-flight dispatch.
 func (cs *CronService) writesBlocked() bool {
 	return cs.loadErr != nil || cs.reloadWait
+}
+
+// storeUnavailableErr reports why mutations must be rejected while the
+// authoritative store cannot be written: either a failed load or a reload
+// that is pending serialization with an in-flight dispatch.
+func (cs *CronService) storeUnavailableErr() error {
+	if cs.loadErr != nil {
+		return fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	}
+	return errors.New("cron store unavailable: reload in progress")
 }
 
 func (cs *CronService) SetOnJob(handler JobHandler) {
@@ -568,8 +579,8 @@ func (cs *CronService) AddJobWithPayload(
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.loadErr != nil {
-		return nil, fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	if cs.writesBlocked() {
+		return nil, cs.storeUnavailableErr()
 	}
 
 	now := time.Now().UnixMilli()
@@ -632,8 +643,8 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.loadErr != nil {
-		return fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	if cs.writesBlocked() {
+		return cs.storeUnavailableErr()
 	}
 
 	for i := range cs.store.Jobs {
@@ -699,7 +710,7 @@ func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.loadErr != nil {
+	if cs.writesBlocked() {
 		return false
 	}
 
@@ -734,8 +745,8 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.loadErr != nil {
-		return nil, fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	if cs.writesBlocked() {
+		return nil, cs.storeUnavailableErr()
 	}
 
 	for i := range cs.store.Jobs {

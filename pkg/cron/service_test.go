@@ -1094,6 +1094,102 @@ func TestLoadMissingFileSuppressesInFlightDispatchWrites(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileBlocksMutationsDuringReload(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	released := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	var startedOnce sync.Once
+	var cs *CronService
+	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+		startedOnce.Do(func() { close(handlerStarted) })
+		<-released
+		return "ok", nil
+	})
+
+	job, err := cs.AddJob("tick", CronSchedule{Kind: "every", EveryMS: int64Ptr(50)}, "", "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+	cs.running = true
+
+	dispatchDone := make(chan struct{})
+	go func() {
+		cs.checkJobs()
+		close(dispatchDone)
+	}()
+
+	// Delete the authoritative file while the handler is in flight.
+	<-handlerStarted
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store: %v", err)
+	}
+
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- cs.Load()
+	}()
+	select {
+	case err := <-loadDone:
+		t.Fatalf("Load completed during in-flight dispatch: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The write barrier must be latched atomically with the probe, before
+	// Load blocks on dispatchMu; otherwise a mutation could recreate the
+	// deleted file with the stale live snapshot.
+	cs.mu.RLock()
+	pending := cs.reloadWait
+	cs.mu.RUnlock()
+	if !pending {
+		t.Fatalf("reloadWait was not latched while dispatch was in flight")
+	}
+
+	// While the missing-store reload is pending, public mutations must be
+	// rejected instead of persisting the stale live snapshot.
+	if _, err := cs.AddJob(
+		"late",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(50)},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	); err == nil {
+		t.Fatalf("AddJob succeeded while missing-store reload was pending")
+	}
+	if err := cs.UpdateJob(job); err == nil {
+		t.Fatalf("UpdateJob succeeded while missing-store reload was pending")
+	}
+	if cs.RemoveJob(job.ID) {
+		t.Fatalf("RemoveJob succeeded while missing-store reload was pending")
+	}
+	if _, err := cs.EnableJob(job.ID, false); err == nil {
+		t.Fatalf("EnableJob succeeded while missing-store reload was pending")
+	}
+
+	close(released)
+	<-dispatchDone
+
+	if err := <-loadDone; err != nil {
+		t.Fatalf("Load after dispatch failed: %v", err)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("deleted store was recreated during missing-store reload: %v", err)
+	}
+	if got := cs.ListJobs(true); len(got) != 0 {
+		t.Fatalf("stale or newly added job survived missing-store reload, %d job(s) live", len(got))
+	}
+}
+
 func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")
