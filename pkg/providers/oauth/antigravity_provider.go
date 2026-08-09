@@ -119,7 +119,7 @@ func (p *AntigravityProvider) Chat(
 	if err != nil {
 		return nil, fmt.Errorf("antigravity API call: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
@@ -497,8 +497,15 @@ func createAntigravityTokenSource() func() (string, string, error) {
 	}
 }
 
-// FetchAntigravityProjectID retrieves the Google Cloud project ID from the loadCodeAssist endpoint.
+// FetchAntigravityProjectID retrieves the Google Cloud project ID from the
+// loadCodeAssist endpoint using a background context.
 func FetchAntigravityProjectID(accessToken string) (string, error) {
+	return FetchAntigravityProjectIDWithContext(context.Background(), accessToken)
+}
+
+// FetchAntigravityProjectIDWithContext retrieves the Google Cloud project ID
+// from the loadCodeAssist endpoint, propagating ctx.
+func FetchAntigravityProjectIDWithContext(ctx context.Context, accessToken string) (string, error) {
 	reqBody, _ := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"ideType":    "IDE_UNSPECIFIED",
@@ -507,7 +514,12 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		},
 	})
 
-	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"POST",
+		antigravityBaseURL+"/v1internal:loadCodeAssist",
+		bytes.NewReader(reqBody),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -521,7 +533,7 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {
@@ -542,13 +554,28 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 	return result.CloudAICompanionProject, nil
 }
 
-// FetchAntigravityModels fetches available models from the Cloud Code Assist API.
+// FetchAntigravityModels fetches available models from the Cloud Code Assist
+// API using a background context.
 func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelInfo, error) {
+	return FetchAntigravityModelsWithContext(context.Background(), accessToken, projectID)
+}
+
+// FetchAntigravityModelsWithContext fetches available models from the Cloud
+// Code Assist API, propagating ctx.
+func FetchAntigravityModelsWithContext(
+	ctx context.Context,
+	accessToken, projectID string,
+) ([]AntigravityModelInfo, error) {
 	reqBody, _ := json.Marshal(map[string]any{
 		"project": projectID,
 	})
 
-	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:fetchAvailableModels", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"POST",
+		antigravityBaseURL+"/v1internal:fetchAvailableModels",
+		bytes.NewReader(reqBody),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +589,7 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := httperrors.ReadResponseBody(resp, antigravityBaseURL)
 	if err != nil {

@@ -14,7 +14,7 @@ package utils
 
 import (
 	"math"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -158,7 +158,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 		}
 	}
 
-	sort.Slice(heap, func(i, j int) bool { return heap[i].score > heap[j].score })
+	slices.SortFunc(heap, bm25ScoredDesc)
 
 	out := make([]BM25Result[T], len(heap))
 	for i, h := range heap {
@@ -168,6 +168,20 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 		}
 	}
 	return out
+}
+
+// bm25ScoredDesc orders scored documents by descending score, treating NaN as
+// a tie with every value (matching the historical `>` comparator) so that NaN
+// scores never leapfrog finite ones.
+func bm25ScoredDesc(a, b bm25ScoredDoc) int {
+	switch {
+	case a.score > b.score:
+		return -1
+	case a.score < b.score:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64) *bm25Index {

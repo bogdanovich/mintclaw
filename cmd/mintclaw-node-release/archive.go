@@ -16,13 +16,13 @@ func validateReleaseArchive(path string, platform string, architecture string) e
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
-	defer archive.Close()
+	defer func() { _ = archive.Close() }()
 
 	compressed, err := gzip.NewReader(archive)
 	if err != nil {
 		return errors.New("archive is not gzip")
 	}
-	defer compressed.Close()
+	defer func() { _ = compressed.Close() }()
 	compressed.Multistream(false)
 
 	reader := tar.NewReader(compressed)
@@ -40,7 +40,7 @@ func validateReleaseArchive(path string, platform string, architecture string) e
 	}
 	candidatePath := candidate.Name()
 	defer os.Remove(candidatePath)
-	defer candidate.Close()
+	defer func() { _ = candidate.Close() }()
 
 	written, err := io.Copy(candidate, io.LimitReader(reader, header.Size+1))
 	if err != nil || written != header.Size {

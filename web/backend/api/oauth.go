@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -69,7 +70,7 @@ var (
 	oauthDeleteCredential         = auth.DeleteCredential
 	oauthLoadConfig               = config.LoadConfig
 	oauthSaveConfig               = config.SaveConfig
-	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectID
+	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectIDWithContext
 	oauthFetchGoogleUserEmailFunc = fetchGoogleUserEmail
 )
 
@@ -176,7 +177,7 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		Provider string `json:"provider"`
@@ -217,7 +218,7 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 			Provider:    provider,
 			AuthMethod:  oauthMethodToken,
 		}
-		if err := h.persistCredentialAndConfig(provider, oauthMethodToken, cred); err != nil {
+		if err := h.persistCredentialAndConfig(r.Context(), provider, oauthMethodToken, cred); err != nil {
 			http.Error(w, fmt.Sprintf("token login failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -380,7 +381,12 @@ func (h *Handler) handlePollOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.persistCredentialAndConfig(flow.Provider, oauthMethodTokenOrOAuth(flow.Method), cred); err != nil {
+	if err := h.persistCredentialAndConfig(
+		r.Context(),
+		flow.Provider,
+		oauthMethodTokenOrOAuth(flow.Method),
+		cred,
+	); err != nil {
 		h.setOAuthFlowError(flowID, fmt.Sprintf("failed to save credential: %v", err))
 		updated, _ := h.getOAuthFlow(flowID)
 		w.Header().Set("Content-Type", "application/json")
@@ -442,7 +448,12 @@ func (h *Handler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.persistCredentialAndConfig(flow.Provider, oauthMethodTokenOrOAuth(flow.Method), cred); err != nil {
+	if err := h.persistCredentialAndConfig(
+		r.Context(),
+		flow.Provider,
+		oauthMethodTokenOrOAuth(flow.Method),
+		cred,
+	); err != nil {
 		h.setOAuthFlowError(flow.ID, fmt.Sprintf("failed to save credential: %v", err))
 		renderOAuthCallbackPage(w, flow.ID, oauthFlowError, "Failed to save credential", err.Error())
 		return
@@ -458,7 +469,7 @@ func (h *Handler) handleOAuthLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		Provider string `json:"provider"`
@@ -699,7 +710,11 @@ func (h *Handler) gcOAuthFlowsLocked(now time.Time) {
 	}
 }
 
-func (h *Handler) persistCredentialAndConfig(provider, authMethod string, cred *auth.AuthCredential) error {
+func (h *Handler) persistCredentialAndConfig(
+	ctx context.Context,
+	provider, authMethod string,
+	cred *auth.AuthCredential,
+) error {
 	if cred == nil {
 		return fmt.Errorf("empty credential")
 	}
@@ -712,7 +727,7 @@ func (h *Handler) persistCredentialAndConfig(provider, authMethod string, cred *
 
 	if provider == oauthProviderGoogleAntigravity {
 		if cp.Email == "" {
-			email, err := oauthFetchGoogleUserEmailFunc(cp.AccessToken)
+			email, err := oauthFetchGoogleUserEmailFunc(ctx, cp.AccessToken)
 			if err != nil {
 				logger.ErrorC("oauth", fmt.Sprintf("oauth warning: could not fetch google email: %v", err))
 			} else {
@@ -720,7 +735,7 @@ func (h *Handler) persistCredentialAndConfig(provider, authMethod string, cred *
 			}
 		}
 		if cp.ProjectID == "" {
-			projectID, err := oauthFetchAntigravityProject(cp.AccessToken)
+			projectID, err := oauthFetchAntigravityProject(ctx, cp.AccessToken)
 			if err != nil {
 				logger.ErrorC("oauth", fmt.Sprintf("oauth warning: could not fetch antigravity project id: %v", err))
 			} else {
@@ -801,8 +816,8 @@ func defaultModelConfigForProvider(provider, authMethod string) *config.ModelCon
 	}
 }
 
-func fetchGoogleUserEmail(accessToken string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+func fetchGoogleUserEmail(ctx context.Context, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
 		return "", err
 	}
@@ -813,7 +828,7 @@ func fetchGoogleUserEmail(accessToken string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {

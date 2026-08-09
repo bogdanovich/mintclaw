@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -203,10 +204,11 @@ func (store *JobStore) Records() []JobRecord {
 	for _, record := range store.records {
 		records = append(records, cloneJobRecord(record))
 	}
-	sort.Slice(records, func(left, right int) bool {
-		return records[left].CreatedAt < records[right].CreatedAt ||
-			records[left].CreatedAt == records[right].CreatedAt &&
-				records[left].JobID < records[right].JobID
+	slices.SortFunc(records, func(a, b JobRecord) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.JobID, b.JobID)
 	})
 	return records
 }
@@ -486,7 +488,7 @@ func (store *JobStore) load() error {
 	if err != nil {
 		return fmt.Errorf("open node job index: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, int64(store.maxBytes)+1))
 	decoder.DisallowUnknownFields()
 	var document jobStoreDocument

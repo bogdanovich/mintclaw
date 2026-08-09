@@ -13,6 +13,7 @@ integration_tests='^('\
 'TestNodeInvocationVerticalSliceWithApprovalAndRealCompanion|'\
 'TestCompanionBrowserLifecycleAndReconnectOverProductionWSS|'\
 'TestNodeFileTransferVerticalSliceWithApprovalAndDelivery|'\
+'TestNodeJobVerticalSliceWithRestartArtifactAndCancellation|'\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice'\
 ')$'
 

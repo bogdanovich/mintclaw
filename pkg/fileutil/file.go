@@ -171,7 +171,7 @@ func writeFileAtomic(
 
 	defer func() {
 		if cleanup {
-			tmpFile.Close()
+			_ = tmpFile.Close()
 			_ = os.Remove(tmpPath)
 		}
 	}()

@@ -27,6 +27,12 @@ const (
 	MaxJobTimeoutSeconds     = 24 * 60 * 60
 	maxJobArtifactNameLength = 64
 	maxJobArtifactPathLength = 4096
+
+	// InternalJobArtifactDownloadCommand identifies the gateway-retained plan
+	// behind nodes_download for an immutable job artifact. It is never
+	// advertised as a companion invocation command or exposed as a model tool.
+	InternalJobArtifactDownloadCommand = "job.artifact.download.v1"
+	JobArtifactTransferSourceKind      = "node_job_artifact"
 )
 
 type JobProfileApproval struct {

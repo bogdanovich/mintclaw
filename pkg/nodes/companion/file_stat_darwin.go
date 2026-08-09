@@ -32,7 +32,8 @@ func platformDescriptorMountIdentity(
 		return fileMountIdentity{}, err
 	}
 	return fileMountIdentity{
-		primary:   uint64(uint32(stat.Fsid.Val[0])),
-		secondary: uint64(uint32(stat.Fsid.Val[1])),
+		// Pack both fsid words into a single identity so darwin keeps the
+		// same mount-pair precision as the two-field representation.
+		primary: uint64(uint32(stat.Fsid.Val[0]))<<32 | uint64(uint32(stat.Fsid.Val[1])),
 	}, nil
 }

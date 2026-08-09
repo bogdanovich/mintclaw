@@ -146,7 +146,7 @@ func getGatewayHealthByURL(url string, timeout time.Duration) (*health.StatusRes
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var healthResponse health.StatusResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&healthResponse); decErr != nil {
@@ -1187,7 +1187,7 @@ func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 			gateway.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":  "precondition_failed",
 				"message": reason,
 			})
@@ -1204,7 +1204,7 @@ func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 		gateway.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "ok",
 			"pid":    pid,
 		})
@@ -1231,7 +1231,7 @@ func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 	if !ready {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":  "precondition_failed",
 			"message": reason,
 		})
@@ -1245,7 +1245,7 @@ func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"pid":    pid,
 	})
@@ -1262,7 +1262,7 @@ func (h *Handler) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
 
 	if gateway.cmd == nil || gateway.cmd.Process == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "not_running",
 		})
 		return
@@ -1275,7 +1275,7 @@ func (h *Handler) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"pid":    pid,
 	})
@@ -1370,7 +1370,7 @@ func (h *Handler) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &precondErr) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":  "precondition_failed",
 				"message": precondErr.reason,
 			})
@@ -1381,7 +1381,7 @@ func (h *Handler) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"pid":    pid,
 	})
@@ -1394,7 +1394,7 @@ func (h *Handler) handleGatewayClearLogs(w http.ResponseWriter, r *http.Request)
 	gateway.logs.Clear()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":     "cleared",
 		"log_total":  0,
 		"log_run_id": gateway.logs.RunID(),
@@ -1407,7 +1407,7 @@ func (h *Handler) handleGatewayClearLogs(w http.ResponseWriter, r *http.Request)
 func (h *Handler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	data := h.gatewayStatusData()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (h *Handler) gatewayStatusData() map[string]any {
@@ -1490,7 +1490,7 @@ func (h *Handler) gatewayStatusData() map[string]any {
 func (h *Handler) handleGatewayLogs(w http.ResponseWriter, r *http.Request) {
 	data := gatewayLogsData(r)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // gatewayLogsData reads log_offset and log_run_id query params from the request

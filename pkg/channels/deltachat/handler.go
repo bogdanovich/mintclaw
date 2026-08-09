@@ -301,14 +301,14 @@ func copyToMediaTemp(srcPath, filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		return "", err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		_ = os.Remove(dstPath)
 		return "", err
 	}

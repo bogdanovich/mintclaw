@@ -190,7 +190,7 @@ func (t *OpenAITTSProvider) doSpeechRequest(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			body = []byte(fmt.Sprintf("(failed to read error body: %v)", readErr))

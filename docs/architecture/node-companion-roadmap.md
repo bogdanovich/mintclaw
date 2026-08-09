@@ -13,10 +13,13 @@ P3 completion evidence is recorded in
 [`node-companion-p3-deployment-evidence.md`](../operations/node-companion-p3-deployment-evidence.md).
 P4 completion evidence is recorded in
 [`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). The
-bounded P5a durable-jobs slice is admitted under
-[`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
-The remainder of P5, P8 remote workspace routing, and later milestones remain
-unadmitted.
+bounded P5a durable-jobs slice is complete under
+[`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md),
+with merged-main, platform, deployment, recovery, and artifact evidence in
+[`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
+The remainder of P5 and later milestones remain unadmitted. The first bounded
+P8a remote-workspace slice is admitted under
+[`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -754,12 +757,21 @@ Telegram message or an inbound node port.
 
 ## P5: Additional Executors And Long-Running Work
 
-The first bounded slice, P5a durable node jobs, is admitted under
+The first bounded slice, P5a durable node jobs, is complete through the
+domain, companion profile, and model-facing gateway layers under
 [`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md).
 It deliberately implements process lifecycle rather than remote workspace or
 coding-task ownership. Its job identity, logs, cancellation, and artifact
 contracts are designed for later reuse by P8 without creating a second job
 API.
+
+The closeout proof is recorded in
+[`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
+It includes real Linux/macOS evidence, merged-main validation, deny-by-default
+deployment, gateway-restart recovery, declared artifact transfer, and a
+rollback record. Docker, sandbox executors, live log streaming,
+companion-restart process survival, scheduling, and the remainder of P5 remain
+unadmitted.
 
 Add isolation and durable work as independent capabilities:
 
@@ -819,11 +831,17 @@ Media output uses the artifact contract established by P2.
 
 ## P8: Remote Workspace Routing
 
-P8 remains unadmitted. P5a establishes only the durable job capability that a
-future remote workspace may route. The local coding-agent roadmap separately
-owns `CodingTask` and `CodingThread` semantics for repository-owning remote
-development; P8 must reuse that boundary rather than approximating a coding
-worker with remote file calls and shell jobs.
+The first bounded slice, P8a, is admitted under
+[`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
+It selects a stateless, explicit-per-call workspace alias and admits bounded
+read, search, write, patch, direct-argv foreground execution, and composition
+with existing P5a durable jobs. It does not admit a remote coding worker,
+sticky selection, generic proxy, shell jobs, or P7 routing.
+
+P5a establishes the durable job capability that P8a routes. The local
+coding-agent roadmap separately owns `CodingTask` and `CodingThread` semantics
+for repository-owning remote development; P8 must reuse that boundary rather
+than approximating a coding worker with remote file calls and shell jobs.
 
 After shell, filesystem, artifact, and selected application capabilities have
 proven their individual contracts, consider a remote workspace abstraction.

@@ -50,33 +50,28 @@ pre-construction admission boundary. Existing gateway loops retain their legacy
 hot-reload behavior.
 
 The existing `NewAgentLoop` and `NewAgentLoopChecked` gateway entry points are
-unchanged in P0.2. The deployed personal runtime switches to the new entry
-point only with the P0.3 storage migration. The public profile-aware loop entry
-therefore rejects personal-only profiles during P0.2; internal instance and
-registry construction helpers are not exposed as partially safe APIs.
+unchanged. P0.4 admits personal profiles through the strict entry point after
+their complete tool and operational-state cutover; internal instance and
+registry construction helpers remain implementation details.
 
-## Fail-closed Coding Bootstrap
+## Coding Bootstrap Handoff
 
-P0.2 does not admit a coding tool catalogue. A coding-thread owner is therefore
-constructed with an empty core tool registry and isolated shared-tool
-bootstrap. This prevents legacy constructors—including exec's workspace-local
-scratch initialization, personal memory tools, messaging, and MCP—from writing
-to or becoming visible in a source checkout before P0.4 defines the exact
-trusted-local coding profile.
+P0.2 initially constructed coding-thread owners with an empty core registry.
+P0.4 replaces that temporary guard with the exact trusted-local catalogue
+recorded in
+[`local-coding-agent-p0-tool-profiles.md`](local-coding-agent-p0-tool-profiles.md).
 
 Isolated tool bootstrap also makes deferred MCP initialization a no-op across
 startup, direct turns, and commands. Isolated skill bootstrap retains
 the execution root only for skill discovery while prompt memory continues to
 use the external state owner.
 
-P0.4 replaces this temporary empty catalogue with an explicit tested coding
-tool profile. It does not mutate persisted personal configuration.
+The explicit profile does not mutate persisted personal configuration.
 
-Coding profiles must select the `none` context manager during P0.2. The
-constructor rejects the default Seahorse manager before registry construction,
-because its legacy database path still points below `AgentInstance.Workspace`
-and it registers retrieval tools. P0.3 removes this temporary restriction by
-routing derived context through the external context root.
+Coding profiles had to select the `none` context manager when P0.2 landed.
+P0.3 removed that temporary restriction by routing derived context through the
+external context root. Retrieval tools remain the only context-owned additions
+to the fixed P0.4 coding catalogue.
 
 ## P0.3 Handoff
 
@@ -102,7 +97,7 @@ Focused tests prove that:
 - execution and state roots remain distinct through full loop construction;
 - sessions and prompt memory are created under the external state root;
 - the source execution root is not created;
-- coding tools fail closed to an empty registry until P0.4;
+- coding tools are admitted only through the exact P0.4 catalogue;
 - a missing later-agent binding fails before the first owner's roots are
   created;
 - unusable state targets on a later binding fail before an earlier owner's
@@ -112,8 +107,8 @@ Focused tests prove that:
 - duplicate bindings, overlapping state roots for distinct owners, duplicate
   configured IDs, extra bindings, mixed owner kinds, and mismatched personal
   identities are rejected;
-- a coding profile using Seahorse is rejected before either root is created;
-  and
+- before P0.3, a coding profile using Seahorse was rejected before either root
+  was created;
 - runtime-profile reload is rejected without replacing the registry or
   creating the execution root;
 - enabled configured MCP cannot start or register tools before or after a

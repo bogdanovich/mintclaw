@@ -389,7 +389,7 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		}
 	}
 
-	c.HandleInboundContext(ctx, fromUserID, content, mediaRefs, inboundCtx, sender)
+	_ = c.HandleInboundContext(ctx, fromUserID, content, mediaRefs, inboundCtx, sender)
 }
 
 // Send implements channels.Channel by sending a text message to the WeChat user.

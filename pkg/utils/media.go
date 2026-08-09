@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -133,7 +134,7 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		}
 	}
 
-	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, urlStr, nil)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create download request", map[string]any{
 			"error": err.Error(),
@@ -157,7 +158,7 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		})
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		logger.ErrorCF(opts.LoggerPrefix, "File download returned non-200 status", map[string]any{

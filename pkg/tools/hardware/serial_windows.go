@@ -3,8 +3,9 @@
 package hardwaretools
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -100,8 +101,8 @@ func serialListPorts() ([]serialPortInfo, error) {
 		})
 	}
 
-	sort.Slice(ports, func(i, j int) bool {
-		return ports[i].Path < ports[j].Path
+	slices.SortFunc(ports, func(a, b serialPortInfo) int {
+		return cmp.Compare(a.Path, b.Path)
 	})
 	return ports, nil
 }

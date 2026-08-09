@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ type modelsAPIResponse struct {
 
 // fetchOpenAIModels GETs <baseURL>/models with Bearer auth and accepts both the
 // {data:[…]} envelope and a bare array shape used by various OpenAI-compatible servers.
-func fetchOpenAIModels(baseURL, apiKey string) ([]modelEntry, error) {
+func fetchOpenAIModels(ctx context.Context, baseURL, apiKey string) ([]modelEntry, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, fmt.Errorf("api base is required")
 	}
@@ -32,7 +33,7 @@ func fetchOpenAIModels(baseURL, apiKey string) ([]modelEntry, error) {
 	url := strings.TrimRight(baseURL, "/") + "/models"
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -42,7 +43,7 @@ func fetchOpenAIModels(baseURL, apiKey string) ([]modelEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))

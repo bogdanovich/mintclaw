@@ -509,7 +509,7 @@ func (ledger *InvocationLedger) load() error {
 	if openErr != nil {
 		return fmt.Errorf("open node invocation ledger: %w", openErr)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, int64(ledger.maxBytes)+1))
 	decoder.DisallowUnknownFields()
 	var document invocationLedgerDocument

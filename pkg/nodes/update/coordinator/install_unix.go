@@ -195,7 +195,7 @@ func (store *Store) copyInitialPayload(
 	if err != nil {
 		return Payload{}, err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	if err = validateExecutableFile(source, installation.Platform, installation.Architecture); err != nil {
 		return Payload{}, err
 	}

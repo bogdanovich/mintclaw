@@ -2,12 +2,13 @@ package api
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	msgs := make([]providers.Message, 0)
 	scanner := bufio.NewScanner(f)
@@ -827,7 +828,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.ReadDir(dir); err != nil {
 		// Directory doesn't exist yet = no sessions
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]sessionListItem{})
+		_ = json.NewEncoder(w).Encode([]sessionListItem{})
 		return
 	}
 
@@ -860,8 +861,8 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sort by updated descending (most recent first)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Updated > items[j].Updated
+	slices.SortFunc(items, func(a, b sessionListItem) int {
+		return cmp.Compare(b.Updated, a.Updated)
 	})
 
 	// Pagination parameters
@@ -891,7 +892,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(items)
+	_ = json.NewEncoder(w).Encode(items)
 }
 
 // handleGetSession returns the full message history for a specific session.
@@ -946,7 +947,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	messages := detailSessionMessages(sess.Messages, toolFeedbackMaxArgsLength)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":       sessionID,
 		"messages": messages,
 		"summary":  sess.Summary,

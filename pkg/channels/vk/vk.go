@@ -184,7 +184,7 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 		"is_group": fmt.Sprintf("%t", isGroupChat),
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, text, nil, bus.InboundContext{
+	_ = c.HandleInboundContext(c.ctx, chatID, text, nil, bus.InboundContext{
 		Channel:   "vk",
 		ChatID:    chatID,
 		ChatType:  chatType,

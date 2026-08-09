@@ -863,7 +863,7 @@ func (client *Client) forwardTerminalEvents(
 ) {
 	defer workers.events.Done()
 	defer client.removeAttachment(terminalID, attachment)
-	defer attachment.Close()
+	defer func() { _ = attachment.Close() }()
 	for event := range attachment.Events() {
 		payload, err := json.Marshal(terminalTransportEvent{
 			TerminalID: terminalID,
@@ -1284,6 +1284,6 @@ func jitterDelay(delay time.Duration) time.Duration {
 
 func closeResponse(response *http.Response) {
 	if response != nil && response.Body != nil {
-		response.Body.Close()
+		_ = response.Body.Close()
 	}
 }

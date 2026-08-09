@@ -690,7 +690,7 @@ func (manager *DirectJobManager) ReadLog(
 	if err != nil {
 		return JobLogChunk{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if cursor > info.Size() {
 		return JobLogChunk{}, errors.New("node job log cursor is beyond retained data")
 	}

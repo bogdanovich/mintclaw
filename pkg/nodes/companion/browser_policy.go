@@ -55,6 +55,7 @@ type BrowserProfilePolicy struct {
 	NetworkMode            string              `json:"network_mode,omitempty"`
 	AllowedOrigins         []string            `json:"allowed_origins,omitempty"`
 	DryRun                 bool                `json:"dry_run"`
+	AllowApprovedActions   bool                `json:"allow_approved_actions,omitempty"`
 	AllowedActions         []string            `json:"allowed_actions,omitempty"`
 	Headed                 bool                `json:"headed"`
 	Limits                 nodes.BrowserLimits `json:"limits,omitempty"`
@@ -105,7 +106,7 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		profile.DriverExecutable == "" && profile.DriverExecutableSHA256 == "" &&
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
-		len(profile.AllowedOrigins) == 0 && !profile.DryRun &&
+		len(profile.AllowedOrigins) == 0 && !profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
 		profile.Limits == (nodes.BrowserLimits{})
 }
@@ -178,8 +179,10 @@ func normalizeBrowserProfile(
 		return BrowserProfilePolicy{}, fmt.Errorf("stat lock_file: %w", statErr)
 	}
 	profile.LockFile = lockFile
-	if profile.Mode != nodes.BrowserProfileManaged || !profile.DryRun {
-		return BrowserProfilePolicy{}, errors.New("profile requires managed mode and dry_run=true")
+	if profile.Mode != nodes.BrowserProfileManaged || profile.DryRun == profile.AllowApprovedActions {
+		return BrowserProfilePolicy{}, errors.New(
+			"profile requires managed mode and exactly one of dry_run or allow_approved_actions",
+		)
 	}
 	profile.Limits = profile.Limits.Effective()
 	if err = profile.Limits.Validate(); err != nil {
@@ -246,7 +249,7 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "navigate" && action != "download" && action != "scroll" {
+		if action != "click" && action != "navigate" && action != "download" && action != "scroll" {
 			return errors.New("allowed_actions contains an unsupported action")
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -292,7 +295,7 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 	if err != nil {
 		return fmt.Errorf("read driver_executable: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hasher := sha256.New()
 	if _, err = io.Copy(hasher, file); err != nil {
 		return fmt.Errorf("read driver_executable: %w", err)
@@ -402,7 +405,8 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 	return nodes.BrowserProfileDescriptor{
 		Alias: alias, Revision: profile.Revision, Driver: profile.Driver,
 		Mode: profile.Mode, NetworkMode: profile.NetworkMode,
-		DryRun: profile.DryRun, Headed: profile.Headed,
+		DryRun: profile.DryRun, AllowApprovedActions: profile.AllowApprovedActions,
+		Headed:  profile.Headed,
 		Actions: append([]string(nil), profile.AllowedActions...),
 		Limits:  profile.Limits,
 	}

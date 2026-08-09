@@ -20,6 +20,27 @@ type testClock struct {
 	now time.Time
 }
 
+func TestValidateSnapshotIsReadOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "interactions.json")
+	content := []byte(`{"schema_version":"interaction_snapshot.v1","records":[]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSnapshot(path); err != nil {
+		t.Fatalf("ValidateSnapshot() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("ValidateSnapshot() rewrote snapshot: %q", got)
+	}
+	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("ValidateSnapshot() created a lock file: %v", err)
+	}
+}
+
 func (c *testClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()

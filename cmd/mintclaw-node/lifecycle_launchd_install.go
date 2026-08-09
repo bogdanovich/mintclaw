@@ -54,7 +54,7 @@ func (lifecycle *launchdLifecycle) Install(
 	if err != nil {
 		return lifecycleStatus{}, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 
 	lock, err := acquireLaunchdInstallLock(ctx, directory, status.Service)
 	if err != nil {
@@ -365,7 +365,7 @@ func createLaunchdUserPlistDirectory(path string) error {
 	if err != nil {
 		return fmt.Errorf("open launchd plist parent directory: %w", err)
 	}
-	defer unix.Close(parentFD)
+	defer func() { _ = unix.Close(parentFD) }()
 	var stat unix.Stat_t
 	if err = unix.Fstat(parentFD, &stat); err != nil {
 		return fmt.Errorf("inspect launchd plist parent directory: %w", err)
@@ -412,7 +412,7 @@ func (directory *launchdPlistDirectory) matchesPath() (bool, error) {
 		return false, err
 	}
 	file := os.NewFile(uintptr(fd), directory.path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	identity, err := file.Stat()
 	if err != nil {
 		return false, err
@@ -448,7 +448,7 @@ func captureLaunchdPlistAt(
 		return launchdPlistState{}, fmt.Errorf("inspect existing launchd plist: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), filepath.Join(directory.path, name))
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil {
 		return launchdPlistState{}, fmt.Errorf("inspect existing launchd plist: %w", err)
@@ -566,7 +566,7 @@ func publishedLaunchdPlistMatches(publication publishedLaunchdPlist) (bool, erro
 		return false, err
 	}
 	file := os.NewFile(uintptr(fd), filepath.Join(publication.directory.path, publication.name))
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	stat, err := file.Stat()
 	if err != nil {
 		return false, err

@@ -339,7 +339,7 @@ func (hs *HeartbeatService) sendResponse(response string) {
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
-	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+	_ = msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.NewOutboundContext(platform, userID, ""),
 		Content: response,
 	})
@@ -388,7 +388,7 @@ func (hs *HeartbeatService) logf(level, format string, args ...any) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Fprintf(f, "[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))

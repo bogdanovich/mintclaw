@@ -1,11 +1,12 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -610,14 +611,14 @@ func (hm *HookManager) rebuildOrdered() {
 	for _, reg := range hm.hooks {
 		hm.ordered = append(hm.ordered, reg)
 	}
-	sort.SliceStable(hm.ordered, func(i, j int) bool {
-		if hm.ordered[i].Source != hm.ordered[j].Source {
-			return hm.ordered[i].Source < hm.ordered[j].Source
+	slices.SortStableFunc(hm.ordered, func(a, b HookRegistration) int {
+		if c := cmp.Compare(a.Source, b.Source); c != 0 {
+			return c
 		}
-		if hm.ordered[i].Priority == hm.ordered[j].Priority {
-			return hm.ordered[i].Name < hm.ordered[j].Name
+		if c := cmp.Compare(a.Priority, b.Priority); c != 0 {
+			return c
 		}
-		return hm.ordered[i].Priority < hm.ordered[j].Priority
+		return cmp.Compare(a.Name, b.Name)
 	})
 }
 

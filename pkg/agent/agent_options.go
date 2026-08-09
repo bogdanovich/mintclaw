@@ -31,6 +31,12 @@ func WithIsolatedToolBootstrap() AgentLoopOption {
 	}
 }
 
+func withRuntimeProfile(profile RuntimeProfile) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.runtimeProfile = &profile
+	}
+}
+
 // WithIsolatedSkillBootstrap restricts every agent's skill loader to its own
 // workspace. It prevents tests and evaluations from observing global or
 // built-in skills installed in the host process environment.

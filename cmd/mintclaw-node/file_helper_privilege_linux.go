@@ -27,7 +27,7 @@ func validateFileHelperProcessIdentity(cfg companion.Config) error {
 	if err != nil {
 		return fmt.Errorf("inspect node companion process capabilities: %w", err)
 	}
-	defer statusFile.Close()
+	defer func() { _ = statusFile.Close() }()
 	status, err := io.ReadAll(io.LimitReader(statusFile, maxProcessStatusBytes+1))
 	if err != nil {
 		return fmt.Errorf("inspect node companion process capabilities: %w", err)

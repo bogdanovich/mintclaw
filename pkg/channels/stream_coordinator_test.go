@@ -6,13 +6,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
-func TestDeliveryInteractionStateExpire(t *testing.T) {
+type streamCoordinatorTestHost struct {
+	channel        Channel
+	splitOnMarker  bool
+	footerEnabled  bool
+	dismissedCount atomic.Int32
+}
+
+func (h *streamCoordinatorTestHost) deliveryChannel(name string) (Channel, bool) {
+	return h.channel, name == "test" && h.channel != nil
+}
+
+func (h *streamCoordinatorTestHost) dismissToolFeedbackTargets(
+	context.Context,
+	string,
+	Channel,
+	string,
+	*bus.InboundContext,
+	string,
+	[]runtimeevents.TraceScope,
+) {
+	h.dismissedCount.Add(1)
+}
+
+func (h *streamCoordinatorTestHost) streamSplitOnMarker() bool {
+	return h.splitOnMarker
+}
+
+func (h *streamCoordinatorTestHost) streamResponseFooterEnabled() bool {
+	return h.footerEnabled
+}
+
+func TestStreamCoordinatorExpireInteractions(t *testing.T) {
 	var expiredStops atomic.Int32
 	var currentStops atomic.Int32
-	state := deliveryInteractionState{}
+	state := StreamCoordinator{}
 	now := time.Now()
 
 	state.typingStops.Store("expired-typing", typingEntry{
@@ -40,7 +72,7 @@ func TestDeliveryInteractionStateExpire(t *testing.T) {
 		createdAt: now,
 	})
 
-	state.expire(now)
+	state.expireInteractions(now)
 
 	if expiredStops.Load() != 2 {
 		t.Fatalf("expired callbacks = %d, want 2", expiredStops.Load())
@@ -60,8 +92,8 @@ func TestDeliveryInteractionStateExpire(t *testing.T) {
 	}
 }
 
-func TestDeliveryInteractionStateOwnsToolFeedbackCoordinator(t *testing.T) {
-	state := deliveryInteractionState{}
+func TestStreamCoordinatorOwnsToolFeedbackCoordinator(t *testing.T) {
+	state := StreamCoordinator{}
 	if state.hasToolFeedback() {
 		t.Fatal("zero interaction state unexpectedly has tool feedback")
 	}
@@ -92,8 +124,8 @@ func TestDeliveryInteractionStateOwnsToolFeedbackCoordinator(t *testing.T) {
 	}
 }
 
-func TestDeliveryInteractionStateToolFeedbackFallback(t *testing.T) {
-	state := deliveryInteractionState{}
+func TestStreamCoordinatorToolFeedbackFallback(t *testing.T) {
+	state := StreamCoordinator{}
 	messageIDs, err := state.deliverToolFeedback(
 		context.Background(),
 		"test:chat-1",
@@ -112,8 +144,8 @@ func TestDeliveryInteractionStateToolFeedbackFallback(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryStateExpire(t *testing.T) {
-	state := streamDeliveryState{}
+func TestStreamCoordinatorExpireStreams(t *testing.T) {
+	state := StreamCoordinator{}
 	now := time.Now()
 	state.streamActive.Store("active", true)
 	state.streamAuxiliaryTombstones.Store(
@@ -123,7 +155,7 @@ func TestStreamDeliveryStateExpire(t *testing.T) {
 	state.streamAuxiliaryTombstones.Store("current", now)
 	state.streamAuxiliaryTombstones.Store("malformed", "not-a-time")
 
-	state.expire(now)
+	state.expireStreams(now)
 
 	if _, ok := state.streamActive.Load("active"); !ok {
 		t.Fatal("stream activity must not be TTL-evicted with tombstones")
@@ -138,8 +170,8 @@ func TestStreamDeliveryStateExpire(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryStateFinalizationLifecycle(t *testing.T) {
-	state := streamDeliveryState{}
+func TestStreamCoordinatorFinalizationLifecycle(t *testing.T) {
+	state := StreamCoordinator{}
 	now := time.Now()
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	key := streamSuppressionKey("test", "chat-1", "session-1", traceScope)
@@ -172,8 +204,35 @@ func TestStreamDeliveryStateFinalizationLifecycle(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryStateScopedFallbackAndClear(t *testing.T) {
-	state := streamDeliveryState{}
+func TestStreamCoordinatorOwnsStreamerFinalization(t *testing.T) {
+	state := newStreamCoordinator()
+	underlying := &mockStreamer{}
+	host := &streamCoordinatorTestHost{
+		channel: &mockStreamingChannel{streamer: underlying},
+	}
+	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+
+	streamer, ok := state.getStreamer(
+		context.Background(), host, "test", "chat-1", "session-1", "request-1", traceScope,
+	)
+	if !ok {
+		t.Fatal("getStreamer() unavailable")
+	}
+	if err := streamer.Finalize(context.Background(), "done"); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+
+	key := streamSuppressionKey("test", "chat-1", "session-1", traceScope)
+	if !state.active(key) || !state.tombstoneExists(key) {
+		t.Fatal("finalization did not record active stream and auxiliary tombstone")
+	}
+	if host.dismissedCount.Load() != 1 {
+		t.Fatalf("tool feedback dismissals = %d, want 1", host.dismissedCount.Load())
+	}
+}
+
+func TestStreamCoordinatorScopedFallbackAndClear(t *testing.T) {
+	state := StreamCoordinator{}
 	now := time.Now()
 	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
 	key := streamSuppressionKey("test", "chat-1", "", traceScope)
@@ -199,7 +258,7 @@ func TestStreamDeliveryStateScopedFallbackAndClear(t *testing.T) {
 	}
 }
 
-func stateEntry(state *deliveryInteractionState, key string) (any, bool) {
+func stateEntry(state *StreamCoordinator, key string) (any, bool) {
 	if value, ok := state.typingStops.Load(key); ok {
 		return value, true
 	}

@@ -239,17 +239,25 @@ const (
 // transaction log and may arrive out of order. Command input, output, node
 // identity, and plan authority are intentionally excluded.
 type NodeInvocationEventPayload struct {
-	Observation  string                       `json:"observation"`
-	InvocationID string                       `json:"invocation_id"`
-	Target       string                       `json:"target"`
-	Command      string                       `json:"command"`
-	Risk         nodes.Risk                   `json:"risk"`
-	GatewayState nodes.GatewayInvocationState `json:"gateway_state"`
-	State        string                       `json:"state"`
-	ErrorCode    string                       `json:"error_code,omitempty"`
-	Service      string                       `json:"service,omitempty"`
-	Action       nodes.ServiceAction          `json:"action,omitempty"`
-	LogEntries   int                          `json:"log_entries,omitempty"`
+	Observation       string                       `json:"observation"`
+	InvocationID      string                       `json:"invocation_id"`
+	Target            string                       `json:"target"`
+	Command           string                       `json:"command"`
+	Risk              nodes.Risk                   `json:"risk"`
+	GatewayState      nodes.GatewayInvocationState `json:"gateway_state"`
+	State             string                       `json:"state"`
+	ErrorCode         string                       `json:"error_code,omitempty"`
+	Service           string                       `json:"service,omitempty"`
+	Action            nodes.ServiceAction          `json:"action,omitempty"`
+	LogEntries        int                          `json:"log_entries,omitempty"`
+	JobProfile        string                       `json:"job_profile,omitempty"`
+	JobID             string                       `json:"job_id,omitempty"`
+	JobState          string                       `json:"job_state,omitempty"`
+	JobLogStream      string                       `json:"job_log_stream,omitempty"`
+	JobLogBytes       int                          `json:"job_log_bytes,omitempty"`
+	JobLogCursor      int64                        `json:"job_log_cursor,omitempty"`
+	ArtifactCount     int                          `json:"artifact_count,omitempty"`
+	CancelDisposition string                       `json:"cancel_disposition,omitempty"`
 }
 
 func NewNodeInvokeTool(cfg *config.Config, source NodeInvocationSource) *NodeInvokeTool {
@@ -525,6 +533,7 @@ func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *t
 		record,
 		string(nodes.InvocationSucceeded),
 		"",
+		result,
 	)
 	return nodeJSONResult(nodeInvokeResult{
 		InvocationID: record.Plan.InvocationID,
@@ -612,6 +621,7 @@ func (tool *NodeStatusTool) Execute(ctx context.Context, args map[string]any) *t
 			record,
 			string(remote.State),
 			errorCode,
+			remote.Result,
 		)
 	}
 	view = remoteStatusResult(record, remote, available)
@@ -958,11 +968,15 @@ func isNodeFileTransferDescriptor(descriptor nodes.CommandDescriptor) bool {
 
 func isNodeFileTransferCommand(command string) bool {
 	switch command {
-	case "file.info.v1", "file.upload.v1", "file.download.v1":
+	case "file.info.v1", "file.upload.v1", "file.download.v1", nodes.InternalJobArtifactDownloadCommand:
 		return true
 	default:
 		return false
 	}
+}
+
+func isNodeDownloadTransferCommand(command string) bool {
+	return command == "file.download.v1" || command == nodes.InternalJobArtifactDownloadCommand
 }
 
 func (runtime *nodeInvocationToolRuntime) prepare(
@@ -1055,6 +1069,21 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			)
 		}
 	}
+	if len(descriptor.JobProfiles) > 0 {
+		var projected bool
+		descriptor, projected = nodes.ProjectJobDescriptorForProfile(
+			descriptor,
+			resolved.binding.JobProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialCommandUnavailable,
+				nodeConstraintCommandPolicy,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
+	}
 	currentRevision, err := runtime.access.discoveryRevision(
 		agentID,
 		resolved.name,
@@ -1124,6 +1153,16 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 		descriptor, projected = projectUpdateDescriptorForTarget(
 			descriptor,
 			resolved.binding.UpdateProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
+		}
+	}
+	if len(descriptor.JobProfiles) > 0 {
+		var projected bool
+		descriptor, projected = nodes.ProjectJobDescriptorForProfile(
+			descriptor,
+			resolved.binding.JobProfile,
 		)
 		if !projected {
 			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
@@ -1243,6 +1282,7 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 		CatalogHash:      resolved.snapshot.CatalogHash,
 		Command:          command,
 		ServiceProfile:   serviceProfileForInvocation(descriptor),
+		JobProfile:       jobProfileForInvocation(descriptor),
 		Update:           updateAuthority,
 		Input:            inputJSON,
 		AgentID:          principal.AgentID,
@@ -1371,6 +1411,20 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 			return errDiscoveryStale
 		}
 	}
+	if len(descriptor.JobProfiles) > 0 {
+		binding, exists := runtime.access.targets[target]
+		if !exists {
+			return errDiscoveryStale
+		}
+		var projected bool
+		descriptor, projected = nodes.ProjectJobDescriptorForProfile(
+			descriptor,
+			binding.JobProfile,
+		)
+		if !projected {
+			return errDiscoveryStale
+		}
+	}
 	revision, err := runtime.access.discoveryRevision(
 		agentID,
 		target,
@@ -1400,6 +1454,13 @@ func serviceProfileForInvocation(descriptor nodes.CommandDescriptor) string {
 	return ""
 }
 
+func jobProfileForInvocation(descriptor nodes.CommandDescriptor) string {
+	if len(descriptor.JobProfiles) == 1 {
+		return descriptor.JobProfiles[0].Alias
+	}
+	return ""
+}
+
 func nodeCatalogDescriptor(
 	catalog nodes.CapabilityCatalog,
 	command string,
@@ -1419,6 +1480,7 @@ func (runtime *nodeInvocationToolRuntime) publishInvocationEvent(
 	record nodes.GatewayInvocationRecord,
 	state string,
 	errorCode string,
+	result ...json.RawMessage,
 ) {
 	if runtime == nil {
 		return
@@ -1431,6 +1493,7 @@ func (runtime *nodeInvocationToolRuntime) publishInvocationEvent(
 		record,
 		state,
 		errorCode,
+		result...,
 	)
 }
 
@@ -1442,6 +1505,7 @@ func publishNodeInvocationEvent(
 	record nodes.GatewayInvocationRecord,
 	state string,
 	errorCode string,
+	result ...json.RawMessage,
 ) {
 	if eventBus == nil {
 		return
@@ -1465,6 +1529,7 @@ func publishNodeInvocationEvent(
 		ErrorCode:    errorCode,
 	}
 	payload.Service, payload.Action, payload.LogEntries = serviceInvocationObservation(record.Plan)
+	observeJobInvocation(&payload, record.Plan, result...)
 	severity := runtimeevents.SeverityInfo
 	if observation == NodeInvocationObservationUncertain ||
 		observation == NodeInvocationObservationRejected {
@@ -1491,6 +1556,26 @@ func publishNodeInvocationEvent(
 	if payload.LogEntries > 0 {
 		attrs["log_entries"] = payload.LogEntries
 	}
+	if payload.JobProfile != "" {
+		attrs["job_profile"] = payload.JobProfile
+	}
+	if payload.JobID != "" {
+		attrs["job_id"] = payload.JobID
+	}
+	if payload.JobState != "" {
+		attrs["job_state"] = payload.JobState
+	}
+	if payload.JobLogStream != "" {
+		attrs["job_log_stream"] = payload.JobLogStream
+		attrs["job_log_bytes"] = payload.JobLogBytes
+		attrs["job_log_cursor"] = payload.JobLogCursor
+	}
+	if payload.ArtifactCount > 0 {
+		attrs["artifact_count"] = payload.ArtifactCount
+	}
+	if payload.CancelDisposition != "" {
+		attrs["cancel_disposition"] = payload.CancelDisposition
+	}
 	eventBus.PublishNonBlocking(runtimeevents.Event{
 		Kind:   runtimeevents.KindNodeInvocationObserved,
 		Source: runtimeevents.Source{Component: "nodes", Name: sourceName},
@@ -1512,6 +1597,65 @@ func publishNodeInvocationEvent(
 		Payload:     payload,
 		Attrs:       attrs,
 	})
+}
+
+func observeJobInvocation(
+	payload *NodeInvocationEventPayload,
+	plan nodes.ExecutionPlan,
+	results ...json.RawMessage,
+) {
+	if payload == nil || (!nodes.IsJobCommand(plan.Command) &&
+		plan.Command != nodes.InternalJobArtifactDownloadCommand) {
+		return
+	}
+	payload.JobProfile = plan.JobProfile
+	var input struct {
+		JobID      string `json:"job_id"`
+		JobProfile string `json:"job_profile"`
+	}
+	if json.Unmarshal(plan.Input, &input) == nil {
+		if nodes.ID(input.JobID).Validate() == nil {
+			payload.JobID = input.JobID
+		}
+		if payload.JobProfile == "" && nodes.Alias(input.JobProfile).Validate() == nil {
+			payload.JobProfile = input.JobProfile
+		}
+	}
+	if len(results) == 0 || len(results[0]) == 0 {
+		return
+	}
+	var output struct {
+		JobID       string            `json:"job_id"`
+		State       string            `json:"state"`
+		Stream      string            `json:"stream"`
+		Data        string            `json:"data"`
+		NextCursor  int64             `json:"next_cursor"`
+		Artifacts   []json.RawMessage `json:"artifacts"`
+		Disposition string            `json:"disposition"`
+	}
+	if json.Unmarshal(results[0], &output) != nil {
+		return
+	}
+	if nodes.ID(output.JobID).Validate() == nil {
+		payload.JobID = output.JobID
+	}
+	if len(output.State) <= nodes.MaxIDLength && nodes.ID(output.State).Validate() == nil {
+		payload.JobState = output.State
+	}
+	if plan.Command == nodes.JobCommandLogs && (output.Stream == "stdout" || output.Stream == "stderr") {
+		payload.JobLogStream = output.Stream
+		payload.JobLogBytes = len([]byte(output.Data))
+		if output.NextCursor >= 0 && output.NextCursor <= nodes.MaxJobLogBytes {
+			payload.JobLogCursor = output.NextCursor
+		}
+	}
+	if plan.Command == nodes.JobCommandArtifacts && len(output.Artifacts) <= nodes.MaxJobArtifactCount {
+		payload.ArtifactCount = len(output.Artifacts)
+	}
+	if plan.Command == nodes.JobCommandCancel && len(output.Disposition) <= nodes.MaxIDLength &&
+		nodes.ID(output.Disposition).Validate() == nil {
+		payload.CancelDisposition = output.Disposition
+	}
 }
 
 func serviceInvocationObservation(

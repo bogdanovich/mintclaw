@@ -53,9 +53,13 @@ type AgentLoop struct {
 	hooks              *HookManager
 
 	// Runtime state
-	running                    atomic.Bool
+	running atomic.Bool
+	// startupResult carries the outcome of Run's initialization phase (hooks
+	// and MCP). Buffered so Run never blocks when no caller waits for startup.
+	startupResult              chan error
 	contextManager             ContextManager
 	contextManagerInitErr      error
+	runtimeProfileInitErr      error
 	fallback                   *providers.FallbackChain
 	modelExecution             *modelExecutionManager
 	channelManager             interfaces.ChannelManager
@@ -190,16 +194,20 @@ const (
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	if al.contextManagerInitErr != nil {
+		al.signalStartup(al.contextManagerInitErr)
 		return al.contextManagerInitErr
 	}
 	al.running.Store(true)
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
+		al.signalStartup(err)
 		return err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
+		al.signalStartup(err)
 		return err
 	}
+	al.signalStartup(nil)
 	if reconciler, ok := al.contextManager.(interface {
 		StartBackgroundReconciliation(context.Context)
 	}); ok {
@@ -233,6 +241,33 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 			al.observeMessage(ctx, msg)
 		}
+	}
+}
+
+// signalStartup records the outcome of Run's initialization phase. It is a
+// no-op when no startup waiter is configured (non-gateway callers) and never
+// blocks, so repeated Run invocations cannot stall.
+func (al *AgentLoop) signalStartup(err error) {
+	if al.startupResult == nil {
+		return
+	}
+	select {
+	case al.startupResult <- err:
+	default:
+	}
+}
+
+// WaitStartup blocks until Run completes initialization (hooks/MCP) or ctx is
+// canceled, returning the init outcome so callers can fail before readiness.
+func (al *AgentLoop) WaitStartup(ctx context.Context) error {
+	if al.startupResult == nil {
+		return nil
+	}
+	select {
+	case err := <-al.startupResult:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

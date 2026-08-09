@@ -2,6 +2,7 @@ package model
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -62,6 +63,7 @@ Sample interactive session (key shown masked):
 				modelType: strings.TrimSpace(modelType),
 				stdin:     cmd.InOrStdin(),
 				stdout:    cmd.OutOrStdout(),
+				ctx:       cmd.Context(),
 			})
 		},
 	}
@@ -89,9 +91,13 @@ type addOptions struct {
 	modelType string
 	stdin     io.Reader
 	stdout    io.Writer
+	ctx       context.Context
 }
 
 func runAdd(opt addOptions) error {
+	if opt.ctx == nil {
+		opt.ctx = context.Background()
+	}
 	if opt.modelType != "" && opt.modelType != "openai-compatible" {
 		return fmt.Errorf("unsupported --type %q (only 'openai-compatible' is supported)", opt.modelType)
 	}
@@ -101,7 +107,7 @@ func runAdd(opt addOptions) error {
 
 	selected := opt.modelID
 	if selected == "" {
-		entries, err := fetchOpenAIModels(opt.apiBase, opt.apiKey)
+		entries, err := fetchOpenAIModels(opt.ctx, opt.apiBase, opt.apiKey)
 		if err != nil {
 			return fmt.Errorf("fetch models: %w", err)
 		}

@@ -30,6 +30,7 @@ type ExecutionTarget struct {
 	FileProfile    string `json:"file_profile,omitempty"`
 	ServiceProfile string `json:"service_profile,omitempty"`
 	UpdateProfile  string `json:"update_profile,omitempty"`
+	JobProfile     string `json:"job_profile,omitempty"`
 }
 
 // TargetPolicy bounds the named execution targets visible to one agent.
@@ -69,6 +70,9 @@ func (c *Config) ValidateExecutionTargets() error {
 		}
 		if target.UpdateProfile != "" && !validNodeFileProfile(target.UpdateProfile) {
 			return fmt.Errorf("execution target %q has an invalid update profile", name)
+		}
+		if target.JobProfile != "" && !validNodeFileProfile(target.JobProfile) {
+			return fmt.Errorf("execution target %q has an invalid job profile", name)
 		}
 	}
 	if err := validateTargetPolicy(

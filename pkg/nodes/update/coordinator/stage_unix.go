@@ -204,7 +204,7 @@ func (coordinator *Coordinator) fetchBounded(
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.ContentLength > int64(maximum) {
 		return nil, errors.New("release metadata response was rejected")
 	}
@@ -275,7 +275,7 @@ func (coordinator *Coordinator) downloadArchive(
 	if err != nil {
 		return "", err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.ContentLength > artifact.Size ||
 		response.ContentLength > nodeupdate.MaxNodeArtifactBytes {
 		return "", errors.New("release artifact response was rejected")
@@ -332,7 +332,7 @@ func (store *Store) extractCandidate(
 	if err != nil {
 		return "", Payload{}, err
 	}
-	defer archive.Close()
+	defer func() { _ = archive.Close() }()
 	archiveInfo, err := archive.Stat()
 	if err != nil {
 		return "", Payload{}, err
@@ -346,7 +346,7 @@ func (store *Store) extractCandidate(
 	if err != nil {
 		return "", Payload{}, errors.New("candidate archive is not gzip")
 	}
-	defer compressed.Close()
+	defer func() { _ = compressed.Close() }()
 	compressed.Multistream(false)
 	reader := tar.NewReader(compressed)
 	header, err := reader.Next()
@@ -445,7 +445,7 @@ func (store *Store) verifyPayload(payload Payload, installation Installation) er
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return err

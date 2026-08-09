@@ -2,6 +2,10 @@ package browserhost
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -63,6 +67,8 @@ type browserHostSession struct {
 	tabID                 string
 	snapshotGeneration    uint64
 	actionInvocations     map[string]string
+	elementBindingKey     []byte
+	elementRefs           map[string]browserworker.DriverElement
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -97,7 +103,8 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 				ProfileConfig: config.BrowserProfileConfig{
 					Enabled: true, Mode: config.BrowserProfileManaged,
 					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
-					AllowedOrigins: append([]string(nil), profile.AllowedOrigins...),
+					AllowApprovedActions: profile.AllowApprovedActions,
+					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 				},
 				ServerConfig: server,
 			},
@@ -195,12 +202,13 @@ func (host *BrowserHost) Open(
 ) (BrowserHostSession, error) {
 	if host == nil || !browserHostIdentifier(request.SessionID) ||
 		!browserHostIdentifier(request.RoutedSessionID) ||
-		!browserHostDigest(request.BrowserPolicyRevision) || !request.DryRun ||
+		!browserHostDigest(request.BrowserPolicyRevision) ||
 		request.Limits.Validate() != nil {
 		return BrowserHostSession{}, ErrBrowserHostDenied
 	}
 	profile, ok := host.profiles[request.Profile]
-	if !ok || !authorizeBrowserProfile(profile, request.ProfileRevision, request.AgentID, request.ActorID) ||
+	if !ok || request.DryRun != profile.DryRun ||
+		!authorizeBrowserProfile(profile, request.ProfileRevision, request.AgentID, request.ActorID) ||
 		!browserLimitsWithin(request.Limits, profile.Limits) {
 		return BrowserHostSession{}, ErrBrowserHostDenied
 	}
@@ -233,6 +241,11 @@ func (host *BrowserHost) Open(
 		}
 	}
 	now := host.now().UTC()
+	elementBindingKey := make([]byte, sha256.Size)
+	if _, randomErr := rand.Read(elementBindingKey); randomErr != nil {
+		host.mu.Unlock()
+		return BrowserHostSession{}, ErrBrowserHostDenied
+	}
 	session := &browserHostSession{
 		sessionID: request.SessionID,
 		profile:   profile, browserPolicyRevision: request.BrowserPolicyRevision,
@@ -241,6 +254,8 @@ func (host *BrowserHost) Open(
 		limits:            request.Limits,
 		tabID:             "tab_primary",
 		actionInvocations: make(map[string]string),
+		elementBindingKey: elementBindingKey,
+		elementRefs:       make(map[string]browserworker.DriverElement),
 		expiresAt:         now.Add(time.Duration(request.Limits.SessionSeconds) * time.Second),
 		idleExpiresAt:     now.Add(time.Duration(request.Limits.IdleSeconds) * time.Second),
 	}
@@ -372,11 +387,32 @@ func (host *BrowserHost) Navigate(
 		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "navigation" ||
 		request.Action.Kind != "navigate" || request.Action.URL == "" ||
 		request.Action.Ref != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "navigate", browserworker.DriverAction{
 		Kind: browserworker.DriverNavigate, URL: request.Action.URL,
+	})
+}
+
+func (host *BrowserHost) Click(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) ||
+		request.Action.Kind != "click" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.URL != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
+		request.Effect != nodes.BrowserClickEffect(request.ExpectedRole) ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "click", browserworker.DriverAction{
+		Kind: browserworker.DriverClick,
 	})
 }
 
@@ -391,7 +427,8 @@ func (host *BrowserHost) Scroll(
 		(request.Action.Direction != "up" && request.Action.Direction != "down") ||
 		request.Action.Amount < 1 || request.Action.Amount > nodes.MaxBrowserScrollAmount ||
 		request.Action.URL != "" || request.Action.Ref != "" ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "scroll", browserworker.DriverAction{
@@ -426,6 +463,18 @@ func (host *BrowserHost) executeAction(
 		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
+	if action == "click" && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	var boundElement browserworker.DriverElement
+	if action == "click" {
+		var found bool
+		boundElement, found = session.elementRefs[request.Action.Ref]
+		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
+	}
 	if existingHash, reserved := session.actionInvocations[request.ActionInvocationID]; reserved {
 		if existingHash != request.PreparedActionHash {
 			return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -444,6 +493,24 @@ func (host *BrowserHost) executeAction(
 			return BrowserHostObservation{}, ErrBrowserHostLost
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	if action == "click" {
+		targets, matches := 0, 0
+		for _, element := range current.Elements {
+			if element.Target != boundElement.Target {
+				continue
+			}
+			targets++
+			if element.Role == request.ExpectedRole && element.Name == request.ExpectedName {
+				matches++
+			}
+		}
+		if targets != 1 || matches != 1 {
+			cancelAction()
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
+		driverAction.Target = boundElement.Target
+		driverAction.Element = boundElement.Name
 	}
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
@@ -470,6 +537,20 @@ func (host *BrowserHost) executeAction(
 	return browserHostObservation(request.SessionID, session, observation), nil
 }
 
+func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
+	return nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration,
+		ActionInvocationID: request.ActionInvocationID, Action: request.Action,
+		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash:    request.PreparedActionHash,
+		BrowserPolicyRevision: request.BrowserPolicyRevision,
+		ProfileRevision:       request.ProfileRevision,
+		ExpectedRole:          request.ExpectedRole, ExpectedName: request.ExpectedName,
+		ApprovalDigest: request.ApprovalDigest,
+	}
+}
+
 func (host *BrowserHost) actionContextLocked(
 	ctx context.Context,
 	session *browserHostSession,
@@ -489,6 +570,7 @@ func (host *BrowserHost) actionContextLocked(
 func (host *BrowserHost) quarantineActionLocked(session *browserHostSession) {
 	session.state = "lost"
 	session.safeFailure = "outcome_unknown"
+	session.elementRefs = make(map[string]browserworker.DriverElement)
 }
 
 func (host *BrowserHost) Close(
@@ -515,6 +597,7 @@ func (host *BrowserHost) Close(
 		}
 		session.state = "closed"
 		session.safeFailure = ""
+		session.elementRefs = make(map[string]browserworker.DriverElement)
 		return browserHostSessionView(session), nil
 	}
 	session.state = "closing"
@@ -526,6 +609,7 @@ func (host *BrowserHost) Close(
 	session.worker = nil
 	session.state = "closed"
 	session.safeFailure = ""
+	session.elementRefs = make(map[string]browserworker.DriverElement)
 	return browserHostSessionView(session), nil
 }
 
@@ -589,6 +673,7 @@ func (host *BrowserHost) expireSessionLocked(
 	}
 	session.state = "closed"
 	session.safeFailure = "session_expired"
+	session.elementRefs = make(map[string]browserworker.DriverElement)
 	return true
 }
 
@@ -664,17 +749,43 @@ func browserHostObservation(
 	observation browserworker.DriverObservation,
 ) BrowserHostObservation {
 	elements := make([]BrowserHostElement, len(observation.Elements))
+	snapshot := observation.Snapshot
+	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
 	for index, element := range observation.Elements {
+		ref := browserHostElementRef(session, index, element)
+		session.elementRefs[ref] = element
 		elements[index] = BrowserHostElement{
-			Ref: element.Target, Role: element.Role, Name: element.Name,
+			Ref: ref, Role: element.Role, Name: element.Name,
 		}
+		snapshot = strings.ReplaceAll(snapshot, "[ref="+element.Target+"]", "[ref="+ref+"]")
 	}
 	return BrowserHostObservation{
 		SessionID: sessionID, TabID: session.tabID,
 		SnapshotGeneration: session.snapshotGeneration,
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
-		Snapshot: observation.Snapshot, Elements: elements, Truncated: observation.Truncated,
+		Snapshot: snapshot, Elements: elements, Truncated: observation.Truncated,
 	}
+}
+
+func browserHostElementRef(
+	session *browserHostSession,
+	index int,
+	element browserworker.DriverElement,
+) string {
+	hash := hmac.New(sha256.New, session.elementBindingKey)
+	_, _ = fmt.Fprintf(
+		hash,
+		"mintclaw.browser.host-ref.v1\x00%d:%d:%d:%s%d:%s%d:%s",
+		session.snapshotGeneration,
+		index,
+		len(element.Target),
+		element.Target,
+		len(element.Role),
+		element.Role,
+		len(element.Name),
+		element.Name,
+	)
+	return "href_" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func authorizeBrowserProfile(

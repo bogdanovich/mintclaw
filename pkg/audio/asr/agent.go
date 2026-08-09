@@ -52,13 +52,17 @@ func (a *speechAccumulator) Push(chunk bus.AudioChunk) {
 	}
 }
 
-func (a *speechAccumulator) Close() {
+// Close finalizes the Ogg stream. The writer seeks back and writes the final
+// Ogg page and CRC, so a non-nil error means the recording is malformed and
+// must not be transcribed.
+func (a *speechAccumulator) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.closed {
-		a.writer.Close()
 		a.closed = true
+		return a.writer.Close()
 	}
+	return nil
 }
 
 type Agent struct {
@@ -87,7 +91,10 @@ func (a *Agent) Start(ctx context.Context) {
 		<-ctx.Done()
 		a.mu.Lock()
 		for key, acc := range a.sessions {
-			acc.Close()
+			if err := acc.Close(); err != nil {
+				logger.ErrorCF("voice-agent", "Failed to finalize Ogg recording on shutdown",
+					map[string]any{"file": acc.file, "error": err})
+			}
 			os.Remove(acc.file)
 			delete(a.sessions, key)
 		}
@@ -173,7 +180,13 @@ func (a *Agent) checkSilence(ctx context.Context) {
 		acc.mu.Unlock()
 
 		if now.Sub(last) > 1500*time.Millisecond {
-			acc.Close()
+			if err := acc.Close(); err != nil {
+				logger.ErrorCF("voice-agent", "Failed to finalize Ogg recording; skipping transcription",
+					map[string]any{"file": acc.file, "error": err})
+				os.Remove(acc.file)
+				delete(a.sessions, key)
+				continue
+			}
 			delete(a.sessions, key)
 			finished = append(finished, acc)
 		}

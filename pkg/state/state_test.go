@@ -50,6 +50,31 @@ func TestAtomicSave(t *testing.T) {
 	}
 }
 
+func TestNewManagerAtCheckedRejectsCorruptState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "runtime", "state.json")
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateFile, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewManagerAtChecked(stateFile); err == nil {
+		t.Fatal("NewManagerAtChecked() error = nil, want corrupt-state rejection")
+	}
+}
+
+func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
+	root := t.TempDir()
+	blockedParent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManagerAtChecked(filepath.Join(blockedParent, "runtime", "state.json"))
+	if err == nil || manager != nil {
+		t.Fatalf("NewManagerAtChecked() = (%T, %v), want nil manager and error", manager, err)
+	}
+}
+
 func TestSetLastChatID(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "state-test-*")
 	if err != nil {

@@ -449,17 +449,6 @@ func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyM
 	return nil
 }
 
-func (c *TelegramChannel) sendTextChunks(
-	ctx context.Context,
-	text string,
-	baseParams sendChunkParams,
-	useRich bool,
-	isToolFeedback bool,
-) ([]string, error) {
-	result := c.sendTextChunkQueue(ctx, []string{text}, baseParams, useRich, isToolFeedback)
-	return result.MessageIDs, result.Err
-}
-
 func (c *TelegramChannel) sendTextChunkQueue(
 	ctx context.Context,
 	queue []string,
@@ -1080,7 +1069,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 			tgResult, err = c.bot.SendPhoto(ctx, params)
 			if err != nil && telegramIsParseModeError(err) {
 				if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-					file.Close()
+					_ = file.Close()
 					return telegramMediaRewindFailure(
 						messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 					)
@@ -1091,7 +1080,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 			}
 			if err != nil && strings.Contains(err.Error(), "PHOTO_INVALID_DIMENSIONS") {
 				if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-					file.Close()
+					_ = file.Close()
 					return telegramMediaRewindFailure(
 						messageIDs, msg, partIndex, "photo failure", rewindErr,
 					)
@@ -1111,7 +1100,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 				tgResult, err = c.bot.SendDocument(ctx, docParams)
 				if err != nil && telegramIsParseModeError(err) {
 					if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-						file.Close()
+						_ = file.Close()
 						return telegramMediaRewindFailure(
 							messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 						)
@@ -1141,7 +1130,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 				tgResult, err = c.bot.SendVoice(ctx, vparams)
 				if err != nil && telegramIsParseModeError(err) {
 					if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-						file.Close()
+						_ = file.Close()
 						return telegramMediaRewindFailure(
 							messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 						)
@@ -1165,7 +1154,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 				tgResult, err = c.bot.SendAudio(ctx, params)
 				if err != nil && telegramIsParseModeError(err) {
 					if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-						file.Close()
+						_ = file.Close()
 						return telegramMediaRewindFailure(
 							messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 						)
@@ -1190,7 +1179,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 			tgResult, err = c.bot.SendVideo(ctx, params)
 			if err != nil && telegramIsParseModeError(err) {
 				if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-					file.Close()
+					_ = file.Close()
 					return telegramMediaRewindFailure(
 						messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 					)
@@ -1214,7 +1203,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 			tgResult, err = c.bot.SendDocument(ctx, params)
 			if err != nil && telegramIsParseModeError(err) {
 				if rewindErr := rewindTelegramUpload(file); rewindErr != nil {
-					file.Close()
+					_ = file.Close()
 					return telegramMediaRewindFailure(
 						messageIDs, msg, partIndex, "caption parse failure", rewindErr,
 					)
@@ -1228,7 +1217,7 @@ func (c *TelegramChannel) sendMediaAttempt(
 		if tgResult != nil {
 			messageIDs = append(messageIDs, strconv.Itoa(tgResult.MessageID))
 		}
-		file.Close()
+		_ = file.Close()
 
 		if err != nil {
 			logger.ErrorCF("telegram", "Failed to send media", map[string]any{
@@ -1297,7 +1286,7 @@ func (c *TelegramChannel) sendSingleImageMediaGroup(
 	opened := make([]*os.File, 0, len(parts))
 	defer func() {
 		for _, file := range opened {
-			file.Close()
+			_ = file.Close()
 		}
 	}()
 
@@ -1817,7 +1806,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		inboundCtx.ReplyToMessageID = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
 	}
 
-	c.HandleMessageWithContext(
+	_ = c.HandleMessageWithContext(
 		c.ctx,
 		compositeChatID,
 		content,

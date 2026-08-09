@@ -496,7 +496,7 @@ func (store *GatewayTerminalStore) loadLocked() error {
 	if err != nil {
 		return fmt.Errorf("open gateway terminal store without following links: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if info.Size() > int64(store.maxBytes) {
 		return ErrGatewayTerminalStoreFull
 	}

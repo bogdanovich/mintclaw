@@ -2,16 +2,140 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/seahorse"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
+
+var errInjectedRuntimeStore = errors.New("injected runtime store failure")
+
+var codingRuntimeToolNames = []string{
+	"apply_patch",
+	"exec",
+	"list_dir",
+	"read_file",
+	"search_files",
+	"update_plan",
+	"write_file",
+}
+
+type trackedRuntimeSessionStore struct {
+	session.SessionStore
+	closeCount int
+}
+
+type failingRuntimeCloser struct {
+	err        error
+	closeCount int
+}
+
+func (c *failingRuntimeCloser) Close() error {
+	c.closeCount++
+	return c.err
+}
+
+type failingRuntimeSessionStore struct {
+	session.SessionStore
+	err        error
+	closeCount int
+}
+
+func (s *failingRuntimeSessionStore) Close() error {
+	s.closeCount++
+	return s.err
+}
+
+func (s *trackedRuntimeSessionStore) Close() error {
+	s.closeCount++
+	return s.SessionStore.Close()
+}
+
+type trackingRuntimeStoreFactory struct {
+	delegate        defaultRuntimeStoreFactory
+	failSessionAt   int
+	failSeahorse    bool
+	failSeahorseAt  int
+	nilSession      bool
+	typedNilSession bool
+	nilSeahorse     bool
+	sessionCalls    int
+	seahorseCalls   int
+	sessions        []*trackedRuntimeSessionStore
+	seahorsePaths   []string
+	engines         []*seahorse.Engine
+}
+
+func TestNewRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-typed-nil"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	var factory *trackingRuntimeStoreFactory
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err == nil || !strings.Contains(err.Error(), "store factory is required") {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() = %#v, %v, want typed-nil rejection", profile, err)
+	}
+}
+
+func (f *trackingRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
+	f.sessionCalls++
+	if f.sessionCalls == f.failSessionAt {
+		return nil, errInjectedRuntimeStore
+	}
+	if f.nilSession {
+		return nil, nil
+	}
+	if f.typedNilSession {
+		var store *trackedRuntimeSessionStore
+		return store, nil
+	}
+	store, err := f.delegate.NewSessionStore(layout)
+	if err != nil {
+		return nil, err
+	}
+	tracked := &trackedRuntimeSessionStore{SessionStore: store}
+	f.sessions = append(f.sessions, tracked)
+	return tracked, nil
+}
+
+func (f *trackingRuntimeStoreFactory) NewSeahorseEngine(
+	config seahorse.Config,
+	complete seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	f.seahorseCalls++
+	f.seahorsePaths = append(f.seahorsePaths, config.DBPath)
+	if f.failSeahorse || f.seahorseCalls == f.failSeahorseAt {
+		return nil, errInjectedRuntimeStore
+	}
+	if f.nilSeahorse {
+		return nil, nil
+	}
+	engine, err := f.delegate.NewSeahorseEngine(config, complete)
+	if err == nil {
+		f.engines = append(f.engines, engine)
+	}
+	return engine, err
+}
 
 type countingStatefulProvider struct {
 	closeCount int
@@ -54,6 +178,25 @@ func TestAgentInstanceCloseOwnsOnlyInternallyCreatedProviders(t *testing.T) {
 	}
 }
 
+func TestAgentInstanceCloseAggregatesOwnedRuntimeErrors(t *testing.T) {
+	toolErr := errors.New("tool close failed")
+	sessionErr := errors.New("session close failed")
+	closer := &failingRuntimeCloser{err: toolErr}
+	store := &failingRuntimeSessionStore{err: sessionErr}
+	agent := &AgentInstance{Sessions: store, ownedToolClosers: []interface{ Close() error }{closer}}
+
+	err := agent.Close()
+	if !errors.Is(err, toolErr) || !errors.Is(err, sessionErr) {
+		t.Fatalf("Close() error = %v, want joined tool and session errors", err)
+	}
+	if secondErr := agent.Close(); !errors.Is(secondErr, toolErr) || !errors.Is(secondErr, sessionErr) {
+		t.Fatalf("second Close() error = %v, want stable joined error", secondErr)
+	}
+	if closer.closeCount != 1 || store.closeCount != 1 {
+		t.Fatalf("close counts = tool:%d session:%d, want one each", closer.closeCount, store.closeCount)
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -75,6 +218,20 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = filepath.Join(root, "ignored-default")
 	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.PermissionMode = "read_only"
+	cfg.Tools.Exec.CustomAllowPatterns = []string{"[invalid-project-policy"}
+	cfg.Tools.Exec.CustomDenyPatterns = []string{"project-policy-must-not-load"}
+	cfg.Tools.MCP.Enabled = true
+	cfg.Hooks.Enabled = true
+	hookMarker := filepath.Join(root, "configured-hook-ran")
+	cfg.Hooks.Processes = map[string]config.ProcessHookConfig{
+		"project-extension": {
+			Enabled: true,
+			Command: []string{"sh", "-c", `touch "$1"`, "hook", hookMarker},
+		},
+	}
 	loop, err := NewAgentLoopWithRuntimeProfile(
 		cfg,
 		bus.NewMessageBus(),
@@ -96,8 +253,56 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if agent.Layout.StateRoot() != layout.StateRoot() {
 		t.Fatalf("Layout.StateRoot() = %q, want %q", agent.Layout.StateRoot(), layout.StateRoot())
 	}
-	if got := agent.Tools.List(); len(got) != 0 {
-		t.Fatalf("P0.2 coding tools = %v, want fail-closed empty registry before P0.4", got)
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding tools = %v, want %v", got, codingRuntimeToolNames)
+	}
+	originalExec, ok := agent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("coding exec tool is missing")
+	}
+	if !NewPipeline(loop).Config.TrustAllToolExecution {
+		t.Fatal("coding pipeline did not select trusted tool execution")
+	}
+	if !cfg.Tools.Exec.EnableDenyPatterns || !cfg.Tools.Exec.AllowRemote ||
+		cfg.Tools.Exec.PermissionMode != "read_only" ||
+		!slices.Equal(cfg.Tools.Exec.CustomAllowPatterns, []string{"[invalid-project-policy"}) ||
+		!slices.Equal(cfg.Tools.Exec.CustomDenyPatterns, []string{"project-policy-must-not-load"}) {
+		t.Fatalf("coding construction mutated persisted exec config: %#v", cfg.Tools.Exec)
+	}
+	loop.RegisterTool(&echoTextTool{})
+	agent.Tools.Register(&allowlistTestTool{name: "exec"})
+	agent.Tools.RegisterHidden(&allowlistTestTool{name: "hidden-extra"})
+	agent.Tools.Unregister("read_file")
+	agent.Tools.SetAllowlist([]string{})
+	if gotExec, ok := agent.Tools.Get("exec"); !ok || gotExec != originalExec {
+		t.Fatal("sealed coding registry replaced its trusted exec tool")
+	}
+	admittedRegistry := agent.Tools
+	agent.Tools = admittedRegistry.Clone()
+	if agent.isAdmittedTrustedToolRegistry(agent.Tools) {
+		t.Fatal("cloned replacement registry retained coding trust")
+	}
+	agent.Tools = admittedRegistry
+	if !agent.isAdmittedTrustedToolRegistry(agent.Tools) {
+		t.Fatal("restored admitted registry lost coding trust")
+	}
+	if err := loop.RegisterRuntimeTool("extra", nil); err == nil {
+		t.Fatal("coding runtime admitted a dynamic runtime tool")
+	}
+	if err := loop.MountHook(HookRegistration{}); err == nil {
+		t.Fatal("coding runtime admitted an in-process hook")
+	}
+	if err := loop.MountProcessHook(context.Background(), "extra", ProcessHookOptions{}); err == nil {
+		t.Fatal("coding runtime admitted a process hook")
+	}
+	if err := loop.ensureHooksInitialized(context.Background()); err != nil {
+		t.Fatalf("coding hook initialization should be disabled: %v", err)
+	}
+	if _, err := os.Stat(hookMarker); !os.IsNotExist(err) {
+		t.Fatalf("coding runtime executed configured process hook: %v", err)
+	}
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding catalogue changed after dynamic injection: %v", got)
 	}
 	identity := agent.ContextBuilder.getIdentity(true)
 	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
@@ -213,6 +418,35 @@ func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testi
 	}
 }
 
+func TestNewRuntimeProfileRejectsSharedExecutionRootForDistinctOwners(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	first, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-one"},
+		executionRoot,
+		filepath.Join(root, "state-one"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+	}
+	second, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-two"},
+		executionRoot,
+		filepath.Join(root, "state-two"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+	}
+	if _, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: first},
+		RuntimeProfileBinding{AgentID: "support", Layout: second},
+	); err == nil || !strings.Contains(err.Error(), "share an execution root") {
+		t.Fatalf("NewRuntimeProfile(shared execution root) error = %v", err)
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -222,6 +456,12 @@ func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 			name: "sessions root",
 			blockPath: func(layout RuntimeLayout) string {
 				return layout.StatePaths().SessionsRoot
+			},
+		},
+		{
+			name: "context root",
+			blockPath: func(layout RuntimeLayout) string {
+				return layout.StatePaths().ContextRoot
 			},
 		},
 		{
@@ -460,6 +700,12 @@ func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T)
 			},
 		},
 		{
+			name: "context",
+			linkedPath: func(layout RuntimeLayout) string {
+				return layout.StatePaths().ContextRoot
+			},
+		},
+		{
 			name: "memory",
 			linkedPath: func(layout RuntimeLayout) string {
 				return layout.StatePaths().MemoryRoot
@@ -512,6 +758,124 @@ func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T)
 			}
 			if len(entries) != 0 {
 				t.Fatalf("failed preflight wrote redirected source state: %v", entries)
+			}
+		})
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileRejectsSeahorseDatabaseSymlink(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-db-symlink"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	if err := os.MkdirAll(layout.StatePaths().ContextRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(context root) error = %v", err)
+	}
+	target := filepath.Join(root, "outside.db")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	dbPath := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
+	if err := os.Symlink(target, dbPath); err != nil {
+		t.Skipf("Symlink() unavailable: %v", err)
+	}
+	cfg := config.DefaultConfig()
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want Seahorse symlink rejection")
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	info, statErr := os.Stat(target)
+	if statErr != nil || info.Size() != 0 {
+		t.Fatalf("rejected construction mutated symlink target: info=%v error=%v", info, statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileRejectsInvalidOperationalLeaves(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		path    func(RuntimeStatePaths) string
+		content []byte
+		link    bool
+	}{
+		{name: "runtime state symlink", path: func(paths RuntimeStatePaths) string {
+			return paths.RuntimeStateFile
+		}, link: true},
+		{name: "corrupt runtime state", path: func(paths RuntimeStatePaths) string {
+			return paths.RuntimeStateFile
+		}, content: []byte("{")},
+		{name: "corrupt task registry", path: func(paths RuntimeStatePaths) string {
+			return paths.TaskRegistryFile
+		}, content: []byte("{")},
+		{name: "corrupt interaction registry", path: func(paths RuntimeStatePaths) string {
+			return paths.InteractionFile
+		}, content: []byte("{")},
+		{name: "invalid interaction key", path: func(paths RuntimeStatePaths) string {
+			return paths.InteractionKeyFile
+		}, content: []byte("short")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			executionRoot := filepath.Join(root, "project")
+			layout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-operational"},
+				executionRoot,
+				filepath.Join(root, "state"),
+				[]string{executionRoot},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout() error = %v", err)
+			}
+			leaf := test.path(layout.StatePaths())
+			if err := os.MkdirAll(filepath.Dir(leaf), 0o700); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if test.link {
+				target := filepath.Join(root, "outside-state")
+				if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+					t.Fatalf("WriteFile(target) error = %v", err)
+				}
+				if err := os.Symlink(target, leaf); err != nil {
+					t.Skipf("Symlink() unavailable: %v", err)
+				}
+			} else if err := os.WriteFile(leaf, test.content, 0o600); err != nil {
+				t.Fatalf("WriteFile(leaf) error = %v", err)
+			}
+			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			if err != nil {
+				t.Fatalf("NewRuntimeProfile() error = %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.ContextManager = "none"
+			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			if err == nil {
+				if loop != nil {
+					loop.Close()
+				}
+				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want invalid-leaf rejection")
+			}
+			if loop != nil {
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+			}
+			if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("failed operational preflight created execution root: %v", statErr)
 			}
 		})
 	}
@@ -636,7 +1000,7 @@ func TestNewAgentLoopWithRuntimeProfileDoesNotMigrateLegacySessions(t *testing.T
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRejectsCodingSeahorseBeforeConstruction(t *testing.T) {
+func TestNewAgentLoopWithRuntimeProfileRoutesCodingSeahorseToStateRoot(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
@@ -659,21 +1023,408 @@ func TestNewAgentLoopWithRuntimeProfileRejectsCodingSeahorseBeforeConstruction(t
 	}
 
 	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil {
-		if loop != nil {
-			loop.Close()
-		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want context-manager rejection")
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	wantTools := append([]string(nil), codingRuntimeToolNames...)
+	wantTools = append(wantTools, "short_expand", "short_grep")
+	slices.Sort(wantTools)
+	if got := loop.GetRegistry().GetDefaultAgent().Tools.List(); !slices.Equal(got, wantTools) {
+		t.Fatalf("Seahorse coding tools = %v, want %v", got, wantTools)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected construction created execution root: %v", statErr)
+		t.Fatalf("strict construction created execution root: %v", statErr)
 	}
-	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected construction created state root: %v", statErr)
+	wantDB := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
+	if _, statErr := os.Stat(wantDB); statErr != nil {
+		t.Fatalf("Seahorse DB under state root: %v", statErr)
+	}
+	legacyDB := filepath.Join(executionRoot, "sessions", "seahorse.db")
+	if _, statErr := os.Stat(legacyDB); !os.IsNotExist(statErr) {
+		t.Fatalf("unexpected execution-root Seahorse DB: %v", statErr)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
+func TestRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
+	root := t.TempDir()
+	bindings := make([]RuntimeProfileBinding, 0, 2)
+	wantPaths := make([]string, 0, 2)
+	for _, spec := range []struct {
+		agentID string
+		thread  string
+	}{
+		{agentID: "main", thread: "thread-one"},
+		{agentID: "support", thread: "thread-two"},
+	} {
+		executionRoot := filepath.Join(root, "projects", spec.thread)
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: spec.thread},
+			executionRoot,
+			filepath.Join(root, "state", spec.thread),
+			[]string{executionRoot},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", spec.thread, err)
+		}
+		bindings = append(bindings, RuntimeProfileBinding{AgentID: spec.agentID, Layout: layout})
+		wantPaths = append(wantPaths, filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db"))
+	}
+	factory := &trackingRuntimeStoreFactory{}
+	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	if len(factory.seahorsePaths) != len(wantPaths) {
+		t.Fatalf("Seahorse paths = %v, want %v", factory.seahorsePaths, wantPaths)
+	}
+	gotPaths := make(map[string]struct{}, len(factory.seahorsePaths))
+	for _, gotPath := range factory.seahorsePaths {
+		gotPaths[gotPath] = struct{}{}
+	}
+	for index, wantPath := range wantPaths {
+		if _, ok := gotPaths[wantPath]; !ok {
+			t.Fatalf("Seahorse paths = %v, missing %q", factory.seahorsePaths, wantPath)
+		}
+		if _, statErr := os.Stat(wantPath); statErr != nil {
+			t.Fatalf("Seahorse DB %d: %v", index, statErr)
+		}
+	}
+	if wantPaths[0] == wantPaths[1] {
+		t.Fatalf("distinct coding threads share Seahorse DB %q", wantPaths[0])
+	}
+}
+
+func TestRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testing.T) {
+	root := t.TempDir()
+	bindings := make([]RuntimeProfileBinding, 0, 2)
+	for _, id := range []string{"main", "support"} {
+		executionRoot := filepath.Join(root, "projects", id)
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-" + id},
+			executionRoot,
+			filepath.Join(root, "state", id),
+			[]string{executionRoot},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+		}
+		bindings = append(bindings, RuntimeProfileBinding{AgentID: id, Layout: layout})
+	}
+	factory := &trackingRuntimeStoreFactory{failSessionAt: 2}
+	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if !errors.Is(err, errInjectedRuntimeStore) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
+		t.Fatalf("opened sessions = %#v, want one store closed exactly once", factory.sessions)
+	}
+}
+
+func TestRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*trackingRuntimeStoreFactory)
+	}{
+		{
+			name: "nil interface",
+			configure: func(factory *trackingRuntimeStoreFactory) {
+				factory.nilSession = true
+			},
+		},
+		{
+			name: "typed nil",
+			configure: func(factory *trackingRuntimeStoreFactory) {
+				factory.typedNilSession = true
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			executionRoot := filepath.Join(root, "project")
+			layout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-session"},
+				executionRoot,
+				filepath.Join(root, "state"),
+				[]string{executionRoot},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout() error = %v", err)
+			}
+			factory := &trackingRuntimeStoreFactory{}
+			test.configure(factory)
+			profile, err := NewRuntimeProfileWithStoreFactory(
+				factory,
+				RuntimeProfileBinding{AgentID: "main", Layout: layout},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.ContextManager = "none"
+
+			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			if err == nil || !strings.Contains(err.Error(), "nil session store") {
+				if loop != nil {
+					loop.Close()
+				}
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-store rejection", err)
+			}
+			if loop != nil {
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+			}
+		})
+	}
+}
+
+func TestRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-context-failure"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{failSeahorse: true}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if !errors.Is(err, errInjectedRuntimeStore) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
+		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
+	}
+	wantDB := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
+	if len(factory.seahorsePaths) != 1 || factory.seahorsePaths[0] != wantDB {
+		t.Fatalf("Seahorse paths = %v, want [%q]", factory.seahorsePaths, wantDB)
+	}
+}
+
+func TestRuntimeProfileNilSeahorseEngineClosesCanonicalStore(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-seahorse"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{nilSeahorse: true}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "nil Seahorse engine") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-engine rejection", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
+		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
+	}
+}
+
+func TestRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.T) {
+	root := t.TempDir()
+	bindings := make([]RuntimeProfileBinding, 0, 2)
+	for _, id := range []string{"main", "support"} {
+		executionRoot := filepath.Join(root, "projects", id)
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-context-" + id},
+			executionRoot,
+			filepath.Join(root, "state", id),
+			[]string{executionRoot},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+		}
+		bindings = append(bindings, RuntimeProfileBinding{AgentID: id, Layout: layout})
+	}
+	factory := &trackingRuntimeStoreFactory{failSeahorseAt: 2}
+	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if !errors.Is(err, errInjectedRuntimeStore) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if len(factory.sessions) != 2 {
+		t.Fatalf("opened sessions = %d, want 2", len(factory.sessions))
+	}
+	for index, store := range factory.sessions {
+		if store.closeCount != 1 {
+			t.Fatalf("session store %d close count = %d, want 1", index, store.closeCount)
+		}
+	}
+	if len(factory.engines) != 1 {
+		t.Fatalf("opened Seahorse engines = %d, want 1", len(factory.engines))
+	}
+	if _, assembleErr := factory.engines[0].Assemble(
+		t.Context(),
+		"closed-after-rollback",
+		seahorse.AssembleInput{Budget: 100},
+	); assembleErr == nil {
+		t.Fatal("partial Seahorse manager left its first engine open")
+	}
+}
+
+func TestRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-custom-db"},
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManagerConfig = []byte(`{"dbPath":"/tmp/not-owner-scoped.db"}`)
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "custom dbPath") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want custom-dbPath rejection", err)
+	}
+	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
+		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
+	}
+	if len(factory.seahorsePaths) != 0 {
+		t.Fatalf("Seahorse factory called with rejected path: %v", factory.seahorsePaths)
+	}
+}
+
+func TestRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-unsupported-context"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "custom"
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "no owner-scoped storage contract") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want unsupported-context rejection", err)
+	}
+	if factory.sessionCalls != 0 || len(factory.seahorsePaths) != 0 {
+		t.Fatalf(
+			"rejected context manager constructed stores: sessions=%d Seahorse=%v",
+			factory.sessionCalls,
+			factory.seahorsePaths,
+		)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected context manager created execution root: %v", statErr)
+	}
+	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected context manager created state root: %v", statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfilePreservesPersonalCatalogueAndExternalState(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "personal-project")
 	stateRoot := filepath.Join(root, "personal-state")
@@ -692,19 +1443,38 @@ func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
+	legacyWorkspace := filepath.Join(root, "legacy-workspace")
+	cfg.Agents.Defaults.Workspace = legacyWorkspace
+	legacy := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(legacy.Close)
+	wantTools := legacy.GetRegistry().GetDefaultAgent().Tools.List()
 
 	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil {
-		if loop != nil {
-			loop.Close()
-		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want deferred personal cutover")
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+	gotTools := loop.GetRegistry().GetDefaultAgent().Tools.List()
+	if !slices.Equal(gotTools, wantTools) {
+		t.Fatalf("strict personal tools = %v, want legacy catalogue %v", gotTools, wantTools)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected personal cutover created execution root: %v", statErr)
+		t.Fatalf("strict personal construction created execution-root state: %v", statErr)
 	}
-	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected personal cutover created state root: %v", statErr)
+	if err := loop.state.SetLastChannel("test"); err != nil {
+		t.Fatalf("persist strict personal state: %v", err)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("strict personal state persistence wrote under execution root: %v", statErr)
+	}
+	for _, path := range []string{
+		layout.StatePaths().SessionsRoot,
+		layout.StatePaths().RuntimeStateFile,
+		filepath.Join(layout.StatePaths().OperationalRoot, "tmp"),
+	} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("strict personal path %q missing: %v", path, statErr)
+		}
 	}
 }
 
@@ -748,8 +1518,8 @@ func TestRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 	if agent.Layout.Owner() != layout.Owner() || agent.Layout.StateRoot() != layout.StateRoot() {
 		t.Fatalf("layout after rejected reload = %#v, want %#v", agent.Layout, layout)
 	}
-	if got := agent.Tools.List(); len(got) != 0 {
-		t.Fatalf("coding tools after rejected reload = %v, want empty P0.2 registry", got)
+	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+		t.Fatalf("coding tools after rejected reload = %v, want %v", got, codingRuntimeToolNames)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected reload created execution root: %v", statErr)
@@ -793,8 +1563,8 @@ func TestCodingRuntimeProfileKeepsMCPIsolatedWhenReloadRejected(t *testing.T) {
 			t.Fatalf("%s initialized MCP manager", stage)
 		}
 		agent := loop.GetRegistry().GetDefaultAgent()
-		if got := agent.Tools.List(); len(got) != 0 {
-			t.Fatalf("%s coding tools = %v, want empty registry", stage, got)
+		if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+			t.Fatalf("%s coding tools = %v, want %v", stage, got, codingRuntimeToolNames)
 		}
 	}
 	assertIsolated("startup")
@@ -920,5 +1690,42 @@ func TestRuntimeProfileRequiresExactConfiguredAgentSet(t *testing.T) {
 	cfg.Agents.List = []config.AgentConfig{{ID: "main"}, {ID: " MAIN "}}
 	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
 		t.Fatal("newAgentRegistryWithRuntimeProfile(duplicate configured ID) error = nil")
+	}
+}
+
+func TestStrictPersonalRuntimeRejectsMultipleOwnersBeforeConstruction(t *testing.T) {
+	root := t.TempDir()
+	bindings := make([]RuntimeProfileBinding, 0, 2)
+	for _, agentID := range []string{"main", "support"} {
+		executionRoot := filepath.Join(root, agentID+"-project")
+		layout, err := NewRuntimeLayout(
+			RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: agentID},
+			executionRoot,
+			filepath.Join(root, agentID+"-state"),
+			[]string{executionRoot},
+		)
+		if err != nil {
+			t.Fatalf("NewRuntimeLayout(%s) error = %v", agentID, err)
+		}
+		bindings = append(bindings, RuntimeProfileBinding{AgentID: agentID, Layout: layout})
+	}
+	profile, err := NewRuntimeProfile(bindings...)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}, {ID: "support"}}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "exactly one owner") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile(multi-personal) error = %v", err)
+	}
+	for _, binding := range bindings {
+		if _, statErr := os.Stat(binding.Layout.StateRoot()); !os.IsNotExist(statErr) {
+			t.Fatalf("rejected strict personal profile created state root %q: %v", binding.Layout.StateRoot(), statErr)
+		}
 	}
 }

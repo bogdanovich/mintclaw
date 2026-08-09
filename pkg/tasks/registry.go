@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -285,6 +287,22 @@ func WorkspaceStorePath(workspace string) string {
 		return ""
 	}
 	return filepath.Join(workspace, "state", "task_registry.json")
+}
+
+// ValidateSnapshot reads and validates a registry snapshot without pruning or writing it.
+func ValidateSnapshot(storePath string) error {
+	r := &Registry{
+		store: strings.TrimSpace(storePath),
+		options: Options{
+			TerminalRetention: DefaultTerminalRetention,
+			MaxRecords:        DefaultMaxRecords,
+			MaxEvents:         DefaultMaxEvents,
+			MaxSnapshotBytes:  DefaultMaxSnapshotBytes,
+		},
+		records: make(map[string]Record),
+		events:  make([]TaskEvent, 0),
+	}
+	return r.load()
 }
 
 func (r *Registry) LastLoadError() error {
@@ -699,11 +717,11 @@ func (r *Registry) List() []Record {
 	for _, rec := range r.records {
 		out = append(out, cloneTaskRecord(rec))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].CreatedAt != out[j].CreatedAt {
-			return out[i].CreatedAt < out[j].CreatedAt
+	slices.SortFunc(out, func(a, b Record) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
 		}
-		return out[i].TaskID < out[j].TaskID
+		return cmp.Compare(a.TaskID, b.TaskID)
 	})
 	return out
 }
@@ -721,14 +739,14 @@ func (r *Registry) ListEvents(taskID string) []TaskEvent {
 			out = append(out, cloneTaskEvent(evt))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].EmittedAt != out[j].EmittedAt {
-			return out[i].EmittedAt < out[j].EmittedAt
+	slices.SortFunc(out, func(a, b TaskEvent) int {
+		if c := cmp.Compare(a.EmittedAt, b.EmittedAt); c != 0 {
+			return c
 		}
-		if out[i].Seq != out[j].Seq {
-			return out[i].Seq < out[j].Seq
+		if c := cmp.Compare(a.Seq, b.Seq); c != 0 {
+			return c
 		}
-		return out[i].EventID < out[j].EventID
+		return cmp.Compare(a.EventID, b.EventID)
 	})
 	return out
 }
@@ -936,8 +954,8 @@ func (r *Registry) pruneLocked(now int64) bool {
 				terminal = append(terminal, rec)
 			}
 		}
-		sort.Slice(terminal, func(i, j int) bool {
-			return recordReferenceAt(terminal[i]) < recordReferenceAt(terminal[j])
+		slices.SortFunc(terminal, func(a, b Record) int {
+			return cmp.Compare(recordReferenceAt(a), recordReferenceAt(b))
 		})
 		for len(r.records) > r.options.MaxRecords && len(terminal) > 0 {
 			victim := terminal[0]
@@ -1028,8 +1046,8 @@ func (r *Registry) pruneSnapshotBytesLocked() bool {
 			candidates = append(candidates, rec)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return recordReferenceAt(candidates[i]) < recordReferenceAt(candidates[j])
+	slices.SortFunc(candidates, func(a, b Record) int {
+		return cmp.Compare(recordReferenceAt(a), recordReferenceAt(b))
 	})
 	for _, rec := range candidates {
 		if r.snapshotSizeLocked() <= r.options.MaxSnapshotBytes {
@@ -1231,11 +1249,11 @@ func (r *Registry) snapshotLocked() Snapshot {
 	for _, rec := range r.records {
 		tasks = append(tasks, rec)
 	}
-	sort.Slice(tasks, func(i, j int) bool {
-		if tasks[i].CreatedAt != tasks[j].CreatedAt {
-			return tasks[i].CreatedAt < tasks[j].CreatedAt
+	slices.SortFunc(tasks, func(a, b Record) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
 		}
-		return tasks[i].TaskID < tasks[j].TaskID
+		return cmp.Compare(a.TaskID, b.TaskID)
 	})
 	events := append([]TaskEvent(nil), r.events...)
 	return Snapshot{Tasks: tasks, Events: events}

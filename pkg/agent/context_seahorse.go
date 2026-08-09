@@ -99,12 +99,22 @@ func newSeahorseAgentRuntime(
 	if len(al.registry.ListAgentIDs()) > 1 && seahorseConfig.DBPath != dbPath {
 		return nil, fmt.Errorf("custom dbPath is not supported with multiple agents")
 	}
-	engine, err := seahorse.NewEngine(
+	storeFactory := RuntimeStoreFactory(defaultRuntimeStoreFactory{})
+	if al.runtimeProfile != nil {
+		storeFactory = al.runtimeProfile.storeFactory
+		if seahorseConfig.DBPath != dbPath {
+			return nil, fmt.Errorf("custom dbPath is not supported with a runtime profile")
+		}
+	}
+	engine, err := storeFactory.NewSeahorseEngine(
 		seahorseConfig,
 		providerToCompleteFn(agent.Provider, agent.Model),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
+	}
+	if engine == nil {
+		return nil, fmt.Errorf("create engine: runtime store factory returned a nil Seahorse engine")
 	}
 	return &seahorseAgentRuntime{
 		engine:    engine,
@@ -115,6 +125,9 @@ func newSeahorseAgentRuntime(
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
+	if agent.Layout.StateRoot() != "" {
+		return filepath.Join(agent.Layout.StatePaths().ContextRoot, "seahorse.db")
+	}
 	filename := "seahorse.db"
 	if agent.ID != defaultAgentID {
 		filename = fmt.Sprintf("seahorse-%s.db", agent.ID)

@@ -2,12 +2,14 @@ package nodes
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -446,6 +448,14 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
 	inputMatches := err == nil && bytes.Equal(actualInput, expectedInput)
+	if !inputMatches && descriptor.Name == BrowserCommandSessionOpen &&
+		browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) {
+		legacyInput, legacyErr := canonicalJSON(legacyDryRunBrowserCommandInputSchema(
+			descriptor.Name,
+			descriptor.BrowserProfiles,
+		))
+		inputMatches = legacyErr == nil && bytes.Equal(actualInput, legacyInput)
+	}
 	if !inputMatches && descriptor.Name == BrowserCommandAct &&
 		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
 		legacyInput, legacyErr := canonicalJSON(legacyBrowserCommandInputSchema(
@@ -474,7 +484,21 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 func browserProfilesUseOnlyLegacyActions(profiles []BrowserProfileDescriptor) bool {
 	for _, profile := range profiles {
 		for _, action := range profile.Actions {
-			if action == "scroll" {
+			if action == "click" || action == "scroll" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func browserProfilesUseLegacyDryRunMode(profiles []BrowserProfileDescriptor) bool {
+	for _, profile := range profiles {
+		if !profile.DryRun || profile.AllowApprovedActions {
+			return false
+		}
+		for _, action := range profile.Actions {
+			if action == "click" {
 				return false
 			}
 		}
@@ -675,7 +699,7 @@ func (catalog CapabilityCatalog) Hash() (string, error) {
 	if commands == nil {
 		commands = make([]CommandDescriptor, 0)
 	}
-	sort.Slice(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	slices.SortFunc(commands, func(a, b CommandDescriptor) int { return cmp.Compare(a.Name, b.Name) })
 	for i := range commands {
 		var err error
 		commands[i].InputSchema, err = canonicalJSON(commands[i].InputSchema)

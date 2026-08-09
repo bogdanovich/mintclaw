@@ -17,6 +17,7 @@ type BrowserCommandHost interface {
 	Status(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Navigate(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Click(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
@@ -119,10 +120,14 @@ func (handler *browserCommandHandler) executeAct(
 	if err := json.Unmarshal(invocation.Input, &input); err != nil {
 		return nil, browserCommandFailure(err)
 	}
-	if input.ApprovalDigest != "" ||
-		(input.Action.Kind != "navigate" && input.Action.Kind != "scroll") ||
+	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
-		(input.Action.Kind == "scroll" && input.Effect != "read") {
+		(input.Action.Kind == "scroll" && input.Effect != "read") ||
+		(input.Action.Kind == "click" &&
+			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
+				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
+		(input.Action.Kind != "click" &&
+			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
 		)
@@ -135,13 +140,18 @@ func (handler *browserCommandHandler) executeAct(
 		Effect: input.Effect, CurrentOrigin: input.CurrentOrigin,
 		PreparedActionHash:    input.PreparedActionHash,
 		BrowserPolicyRevision: input.BrowserPolicyRevision, ProfileRevision: input.ProfileRevision,
-		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		ExpectedRole: input.ExpectedRole, ExpectedName: input.ExpectedName,
+		ApprovalDigest: input.ApprovalDigest,
+		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
 	var observation nodes.BrowserObservationResult
 	var err error
-	if input.Action.Kind == "scroll" {
+	switch input.Action.Kind {
+	case "scroll":
 		observation, err = handler.host.Scroll(ctx, request)
-	} else {
+	case "click":
+		observation, err = handler.host.Click(ctx, request)
+	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}
 	if err != nil {

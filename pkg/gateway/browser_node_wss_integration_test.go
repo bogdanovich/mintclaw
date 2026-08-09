@@ -142,9 +142,41 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
 		t.Fatalf("final observation = %#v, %v", final, err)
 	}
+	refStart := strings.Index(final.Snapshot, "[ref=")
+	refEnd := strings.Index(final.Snapshot, "]")
+	if refStart < 0 || refEnd <= refStart+5 {
+		t.Fatalf("click fixture has no bounded ref: %q", final.Snapshot)
+	}
+	click, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-click", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionClick, Ref: final.Snapshot[refStart+5 : refEnd]},
+	})
+	if err != nil || !click.RequiresApproval || click.Action.Effect != browser.EffectExternalCommit {
+		t.Fatalf("click preparation = %#v, %v", click, err)
+	}
+	if _, err = broker.ExecuteAction(
+		t.Context(),
+		owner,
+		click.Action.ID,
+		nil,
+	); !errors.Is(
+		err,
+		browser.ErrApprovalRequired,
+	) {
+		t.Fatalf("unapproved click error = %v, want approval required", err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, click.Action.ID, &click.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("click invocation = %#v, %v", invocation, err)
+	}
+	afterClick, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterClick.URL != "https://example.com/" || afterClick.SnapshotGeneration != 3 {
+		t.Fatalf("click observation = %#v, %v", afterClick, err)
+	}
 	scroll, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-scroll", SessionID: first.ID, TabID: first.TabID,
-		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		SnapshotID: afterClick.SnapshotID, SnapshotGeneration: afterClick.SnapshotGeneration,
 		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 2},
 	})
 	if err != nil || scroll.RequiresApproval || scroll.Action.Effect != browser.EffectRead {
@@ -155,7 +187,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("scroll invocation = %#v, %v", invocation, err)
 	}
 	afterScroll, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 3 {
+	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 4 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
 	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
@@ -344,7 +376,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "observe", "scroll", "close",
+		"open", "observe", "navigate", "click", "observe", "scroll", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
@@ -352,6 +384,112 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"open", "close",
 	}; !slices.Equal(got, want) {
 		t.Fatalf("browser host sequence = %#v, want %#v", got, want)
+	}
+}
+
+func TestCompanionBrowserClickDryRunDeniedOverProductionWSS(t *testing.T) {
+	workspace := t.TempDir()
+	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
+	server := httptest.NewTLSServer(admission)
+	defer server.Close()
+	defer closeVerticalSliceAdmission(t, admission)
+
+	profile := wssBrowserProfile()
+	profile.DryRun = true
+	profile.AllowApprovedActions = false
+	host := &wssBrowserHost{profile: profile}
+	identity, err := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := browserRuntimeCommands()
+	policy := nodes.LocalCommandPolicy{
+		Revision: "browser-wss-dry-run-policy", AllowedCommands: commands,
+		MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: nodes.MaxBrowserActionSeconds,
+		MaxOutputBytes: nodes.MaxBrowserToolResultBytes,
+	}
+	ledger, err := companion.NewFileInvocationLedger(
+		companion.InvocationLedgerPath(filepath.Join(t.TempDir(), "runtime")),
+		companion.DefaultInvocationLedgerLimit,
+		companion.DefaultInvocationLedgerBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	runtime, err := companion.NewRuntime(
+		identity.ID, "browser-wss-test", policy, ledger, companion.WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig := wssBrowserCompanionConfig(t, server, policy)
+	client := wssBrowserClient(t, clientConfig, identity, runtime)
+	result, err := client.Authenticate(t.Context())
+	if err != nil || result.State != nodes.StatePendingPairing {
+		t.Fatalf("bootstrap admission = %#v, %v", result, err)
+	}
+	if _, err = registry.Approve(identity.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := startWSSBrowserClient(t, client)
+	defer run.stop(t)
+	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+
+	cfg := wssBrowserGatewayConfig(t, workspace)
+	target := cfg.Tools.Browser.Targets["companion"]
+	localProfile := target.Profiles["managed"]
+	localProfile.DryRun = true
+	localProfile.AllowApprovedActions = false
+	target.Profiles["managed"] = localProfile
+	cfg.Tools.Browser.Targets["companion"] = target
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtimeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "browser-wss-dry-run", ExecutionID: "browser-wss-dry-run-execution",
+	}
+	session := openWSSBrowserSession(t, broker, owner)
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigate := prepareWSSBrowserNavigate(t, broker, owner, session, initial, "dry-run-navigate")
+	if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	page, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refStart := strings.Index(page.Snapshot, "[ref=")
+	refEnd := strings.Index(page.Snapshot, "]")
+	if refStart < 0 || refEnd <= refStart+5 {
+		t.Fatalf("click fixture has no bounded ref: %q", page.Snapshot)
+	}
+	click, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-dry-run-click", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: page.SnapshotID, SnapshotGeneration: page.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionClick, Ref: page.Snapshot[refStart+5 : refEnd]},
+	})
+	if err != nil || !click.RequiresApproval {
+		t.Fatalf("dry-run click preparation = %#v, %v", click, err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, click.Action.ID, &click.Approval)
+	if !errors.Is(err, browser.ErrDenied) || invocation.State != browser.InvocationCanceled ||
+		invocation.SafeFailure != "dry_run_denied" {
+		t.Fatalf("dry-run click invocation = %#v, %v", invocation, err)
+	}
+	if slices.Contains(host.commandSequence(), "click") {
+		t.Fatalf("dry-run click reached companion host: %#v", host.commandSequence())
 	}
 }
 
@@ -513,6 +651,37 @@ func (host *wssBrowserHost) Scroll(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) Click(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "click")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	input := nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration,
+		ActionInvocationID: request.ActionInvocationID, Action: request.Action,
+		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash:    request.PreparedActionHash,
+		BrowserPolicyRevision: request.BrowserPolicyRevision, ProfileRevision: request.ProfileRevision,
+		ExpectedRole: request.ExpectedRole, ExpectedName: request.ExpectedName,
+		ApprovalDigest: request.ApprovalDigest,
+	}
+	if request.Action.Ref != "host_ref_1" || request.ExpectedRole != "button" ||
+		request.ExpectedName != "Save" || !nodes.BrowserApprovalDigestMatches(input) {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) failNextNavigate() {
 	host.mu.Lock()
 	defer host.mu.Unlock()
@@ -558,9 +727,11 @@ func wssBrowserObservation(
 	request nodes.BrowserHostObserveRequest,
 	url string,
 ) nodes.BrowserObservationResult {
-	origin, title, snapshot := url, "Example Domain", "example"
+	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]"
+	elements := []nodes.BrowserElement{{Ref: "host_ref_1", Role: "button", Name: "Save"}}
 	if url == "about:blank" {
 		title, snapshot = "", ""
+		elements = []nodes.BrowserElement{}
 	} else if parsed, err := urlpkg.Parse(url); err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		origin = parsed.Scheme + "://" + parsed.Host
 	}
@@ -568,7 +739,7 @@ func wssBrowserObservation(
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration,
 		URL:                url, Origin: origin, Title: title, Snapshot: snapshot,
-		Elements: []nodes.BrowserElement{},
+		Elements: elements,
 	}
 }
 
@@ -576,7 +747,8 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
+		AllowApprovedActions: true, Actions: []string{"click", "navigate", "scroll"},
+		Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
 
@@ -673,7 +845,7 @@ func wssBrowserGatewayConfig(t *testing.T, workspace string) *config.Config {
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged,
-						NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+						NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
 					},
 				},
 			},

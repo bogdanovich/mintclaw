@@ -1,8 +1,9 @@
 package events
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -229,11 +230,11 @@ func (b *EventBus) rebuildOrderedSubscribersLocked() {
 }
 
 func sortSubscriptions(subs []*eventSubscription) {
-	sort.Slice(subs, func(i, j int) bool {
-		if subs[i].opts.Priority == subs[j].opts.Priority {
-			return subs[i].id < subs[j].id
+	slices.SortFunc(subs, func(a, b *eventSubscription) int {
+		if c := cmp.Compare(b.opts.Priority, a.opts.Priority); c != 0 {
+			return c
 		}
-		return subs[i].opts.Priority > subs[j].opts.Priority
+		return cmp.Compare(a.id, b.id)
 	})
 }
 

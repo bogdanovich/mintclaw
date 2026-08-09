@@ -542,7 +542,7 @@ func (p *KagiSearchProvider) Search(
 		authCtx := context.WithValue(ctx, kagiopenapi.ContextAccessToken, apiKey)
 		searchResp, httpResp, err := apiClient.SearchAPI.Search(authCtx).SearchRequest(*searchReq).Execute()
 		if httpResp != nil && httpResp.Body != nil {
-			defer httpResp.Body.Close()
+			defer func() { _ = httpResp.Body.Close() }()
 		}
 		if err != nil {
 			if httpResp != nil {
@@ -815,7 +815,7 @@ func (p *GeminiSearchProvider) Search(
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
@@ -994,7 +994,7 @@ func (p *DuckDuckGoSearchProvider) Search(
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1225,7 +1225,7 @@ func (p *SearXNGSearchProvider) Search(
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
@@ -1319,7 +1319,7 @@ func (p *GLMSearchProvider) Search(
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -1415,7 +1415,7 @@ func (p *BaiduSearchProvider) Search(
 	if err != nil {
 		return "", fmt.Errorf("baidu search request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -2148,7 +2148,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	resp, body, err := doFetch(userAgent)
 	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 
 	if err != nil {
@@ -2173,7 +2173,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		honestUA := fmt.Sprintf(userAgentHonest, config.Version)
 		resp2, body2, err2 := doFetch(honestUA)
 		if resp2 != nil && resp2.Body != nil {
-			defer resp2.Body.Close()
+			defer func() { _ = resp2.Body.Close() }()
 		}
 
 		if err2 == nil {

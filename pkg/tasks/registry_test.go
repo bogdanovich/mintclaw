@@ -48,6 +48,24 @@ func TestRegistryCreateAtomicallyRejectsDuplicateTaskID(t *testing.T) {
 	}
 }
 
+func TestValidateSnapshotIsReadOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.json")
+	content := []byte(`{"tasks":[]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSnapshot(path); err != nil {
+		t.Fatalf("ValidateSnapshot() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("ValidateSnapshot() rewrote snapshot: %q", got)
+	}
+}
+
 func TestRegistryCreateDoesNotReplaceExistingGeneration(t *testing.T) {
 	registry := NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
 	if err := registry.Create(Record{

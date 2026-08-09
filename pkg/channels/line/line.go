@@ -339,7 +339,7 @@ func (c *LINEChannel) processEvent(event webhook.EventInterface) {
 		}
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message.

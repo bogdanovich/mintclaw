@@ -273,7 +273,7 @@ func (directory *anchoredDirectory) listNames() ([]string, error) {
 		_ = unix.Close(descriptor)
 		return nil, errors.New("enumerate anchored directory: invalid descriptor")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	entries, err := file.ReadDir(-1)
 	if err != nil {
 		return nil, err

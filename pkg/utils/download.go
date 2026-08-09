@@ -36,7 +36,7 @@ func DownloadToFile(ctx context.Context, client *http.Client, req *http.Request,
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Read a small amount for the error message.

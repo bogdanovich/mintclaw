@@ -209,9 +209,44 @@ contract tests cover the required failure taxonomy and capability invariants.
 
 ### R6: Complete Channel Runtime Ownership
 
-`channels.Manager` still owns channel lifecycle, HTTP listeners, workers, queueing, retry, stream state,
-placeholders, and tool feedback. Narrow state owners exist, but compatibility maps remain promoted into the manager
-and are mutated directly by package tests.
+Status: implemented. `channels.Manager` is now a composition facade over `ChannelLifecycle`, `DeliveryRuntime`, and
+`StreamCoordinator`, plus routing dependencies such as the bus, runtime events, and durable outbox. It has no
+promoted worker, queue, retry, listener, stream, placeholder, or interaction maps.
+
+`DeliveryRuntime` owns delivery registration, dispatcher lifetime, workers, queue admission, retry decisions, and
+delivery outcomes. `StreamCoordinator` owns stream lifecycle, final-stream metadata, placeholders, typing/reaction
+state, and the `ToolFeedbackCoordinator`. `ChannelLifecycle` owns the channel/config registry, shared HTTP runtime,
+restart-required hashes, and serialized start, stop, reload, registration, and shutdown transitions.
+
+The extraction landed incrementally in PRs 595, 599, 605, 607, 609, 610, 612, 613, and 615. Focused tests cover
+owner registration, queue admission and drain, retry outcomes, stream finalization and cancellation, placeholder and
+tool-feedback cleanup, restart-required reload, concurrent/repeated startup and shutdown, reload-versus-shutdown
+serialization, and one HTTP serve loop per lifecycle generation. The final merged-main audit passed channel race
+tests, affected package tests, tagged tests, and repository lint.
+
+#### Completion Audit (2026-08-09)
+
+1. **Manager is a facade.** Its fields are limited to the message bus, runtime events, durable outbox, and references
+   to the three owners. Static searches find no promoted or duplicate mutable delivery, stream, interaction, HTTP, or
+   lifecycle state.
+2. **Tests use owner boundaries.** Channel tests install and inspect state through package-private owner operations and
+   narrow fixtures. Static searches find no direct mutation of Manager-owned or promoted registry, stream,
+   interaction, hash, or restart-required maps.
+3. **Every runtime resource has one named owner.** `DeliveryRuntime` and per-channel `deliveryOwner` own dispatch,
+   workers, queue admission, retries, and outcomes; `StreamCoordinator` and `ToolFeedbackCoordinator` own streams and
+   transient interactions; `ChannelLifecycle` owns listeners, channel/config state, and lifecycle transitions.
+4. **Transitions are deterministic.** One lifecycle transition mutex serializes setup, start, stop, reload, register,
+   and unregister. Repeated start retries incomplete channels without duplicating dispatch or HTTP serving; repeated
+   stop shares one drain; reload actions finish before return; restart-required behavior remains conservative.
+5. **Regression coverage is explicit.** Focused tests cover delivery admission, draining, retry and ambiguous outcomes;
+   stream update/finalize/cancel and final metadata; placeholder, typing, reaction, and tool-feedback cleanup; partial
+   startup recovery; repeated/concurrent start and stop; HTTP serving; reload drain and shutdown ordering.
+6. **The PR sequence is merged.** PRs 595, 599, 605, 607, 609, 610, 612, 613, and 615 each landed as merge commits
+   after their required local validation, CI, current-head review, feedback resolution, and repository-owner approval.
+7. **Merged main is clean.** The code-bearing merged-main tree at `ecc45a1a`, unchanged by the docs-only completion
+   merge, passes `make lint`, `go test ./pkg/channels`, `go test -race ./pkg/channels`, and
+   `go test -tags goolm,stdjson ./pkg/channels ./pkg/gateway ./pkg/agent` pass. Documentation validation passes with
+   `make lint-docs`. No obsolete compatibility ownership path remains. R7 is intentionally out of scope.
 
 #### Direction
 
@@ -229,13 +264,51 @@ and are mutated directly by package tests.
 
 ### R7: Expand Reliability Verification
 
-Pull-request CI currently runs lint, tests, vulnerability scanning, and Docker-backed integration on Ubuntu. It does
-not run race detection or macOS/Windows tests. Lint intentionally excludes tests and retains known `errcheck`,
-`errorlint`, and `staticcheck` backlogs.
+Status: implemented. Pull-request CI now compiles the full tagged Go test graph for Darwin ARM64 and Windows AMD64,
+runs targeted race coverage in a separate Ubuntu job, and executes a focused native macOS portability suite with
+package parallelism capped at four. The original default-parallelism macOS timeout is replaced by a bounded command
+that has passed locally and in CI without an unexplained timeout.
 
-The audit's default-parallelism test run on macOS caused multiple independent packages to reach the global timeout.
-The same packages passed individually, and the complete `pkg/...` suite passed with `go test -p=4`. This should be
-treated as a test-infrastructure portability signal until its shared resource or fan-out limit is identified.
+The implementation landed in PRs 623, 625, and 627. PR 623 also fixed missing Unix build constraints that the new
+Windows full-graph compile check exposed in the launchd implementation and tests. PR 625 moved the existing
+agent/cron/memory race regressions off the serial test path and added full race suites for bus, events, channels,
+tasks, interactions, and node WebSocket transport. PR 627 added native filesystem, process, path, symlink, lifecycle,
+atomic-write, updater, and workspace coverage on `macos-latest`.
+
+Observed CI timings confirm that the new jobs remain outside the pull-request critical path. Cross-platform compile
+jobs completed in about 2 minutes 36 seconds to 2 minutes 53 seconds while the full Tests job took about 5 minutes 30
+seconds. The final Race job completed in about 2 minutes 13 seconds against a 4 minute 9 second Tests job, and macOS
+Portability completed in about 1 minute 21 seconds against a 4 minute 8 second Tests job.
+
+Production lint already enables `errcheck`, `errorlint`, and `staticcheck`; the remaining broad test-file `errcheck`
+exclusion is a separate maintenance backlog, not an R7 runtime-verification gap. `govulncheck` remains required in
+CI. A separately tuned additional security scanner remains deferred until its rules and baseline are admitted; R7
+does not add an untuned `gosec` warning flood.
+
+#### Completion Audit (2026-08-09)
+
+1. **Supported targets compile before merge.** Native Ubuntu tests plus full-graph `CGO_ENABLED=0` compile checks for
+   Darwin ARM64 and Windows AMD64 are required PR jobs. Launchd implementation and tests are constrained to Linux and
+   Darwin, while retaining both Linux CI and native Darwin coverage.
+2. **Concurrency-critical paths run under the race detector.** The parallel Race job covers the retained
+   agent/cron/memory regressions and complete bus, events, channels, tasks, interactions, and node WebSocket suites.
+3. **macOS behavior executes natively with bounded fan-out.** The documented command is:
+
+   ```sh
+   go test -count=1 -p=4 -tags goolm,stdjson \
+     ./pkg/fileutil ./pkg/tools/fs ./pkg/tools/shellguard ./pkg/tools \
+     ./cmd/mintclaw-node ./pkg/updater ./pkg/workspace
+   ```
+
+   It covers atomic replacement, filesystem and path handling, symlink confinement, process/session termination,
+   launchd lifecycle, updater behavior, and workspace paths. It passed locally in about 28 seconds and in CI without
+   timeout.
+4. **Added verification is parallel and focused.** Compile, Race, and macOS Portability are independent jobs. Their
+   observed durations remained below the existing Tests critical path, so R7 increased runner work without increasing
+   observed pull-request wall-clock time.
+5. **Merged main satisfies the checks.** At `cd70faeb`, both cross-compiles, both race commands, and the documented
+   native macOS command pass. PRs 623, 625, and 627 were merged only after green CI, current-head automated review,
+   no unresolved feedback, and repository-owner rocket approval.
 
 #### Direction
 

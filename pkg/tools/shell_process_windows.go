@@ -3,8 +3,9 @@
 package tools
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
-	"strconv"
 )
 
 func prepareCommandForTermination(cmd *exec.Cmd) {
@@ -21,7 +22,17 @@ func terminateProcessTree(cmd *exec.Cmd) error {
 		return nil
 	}
 
-	_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
-	_ = cmd.Process.Kill()
-	return nil
+	treeErr := killProcessGroup(pid)
+	if treeErr == nil {
+		return nil
+	}
+	processErr := cmd.Process.Kill()
+	return errors.Join(treeErr, wrapCommandKillError(pid, processErr))
+}
+
+func wrapCommandKillError(pid int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("kill process %d: %w", pid, err)
 }

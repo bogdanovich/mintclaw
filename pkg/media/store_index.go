@@ -1,11 +1,12 @@
 package media
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -70,7 +71,7 @@ func loadMediaIndex(path string) ([]persistentMediaEntry, error) {
 }
 
 func (i mediaIndex) save(entries []persistentMediaEntry) error {
-	sort.Slice(entries, func(a, b int) bool { return entries[a].Ref < entries[b].Ref })
+	slices.SortFunc(entries, func(a, b persistentMediaEntry) int { return cmp.Compare(a.Ref, b.Ref) })
 	data, err := json.Marshal(mediaIndexSnapshot{
 		Version: mediaIndexVersion,
 		Entries: entries,

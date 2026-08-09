@@ -233,7 +233,7 @@ func (s *Store) conversationIDs(ctx context.Context, clause string, args ...any)
 	if err != nil {
 		return nil, fmt.Errorf("list scoped conversations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var id int64
@@ -281,7 +281,7 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var statuses []SessionStatus
 	for rows.Next() {
@@ -427,7 +427,7 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
 	if storedCreatedAt.IsZero() {
@@ -518,7 +518,7 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 	if err != nil {
 		return nil, fmt.Errorf("get messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []Message
 	for rows.Next() {
@@ -584,7 +584,7 @@ func (s *Store) loadMessagePartsChunk(
 	if err != nil {
 		return fmt.Errorf("load message parts batch: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var part MessagePart
 		var ordinal int
@@ -706,7 +706,7 @@ func (s *Store) loadMessageParts(ctx context.Context, msgID int64) ([]MessagePar
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var parts []MessagePart
 	for rows.Next() {
@@ -743,7 +743,7 @@ func (s *Store) CreateSummary(ctx context.Context, input CreateSummaryInput) (*S
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count,
@@ -811,7 +811,7 @@ func (s *Store) GetSummariesByConversation(ctx context.Context, convID int64) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return s.scanSummaries(rows)
 }
 
@@ -824,7 +824,7 @@ func (s *Store) GetSummaryChildren(ctx context.Context, summaryID string) ([]str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []string
 	for rows.Next() {
@@ -854,7 +854,7 @@ func (s *Store) GetSummaryParents(ctx context.Context, summaryID string) ([]Summ
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return s.scanSummaries(rows)
 }
 
@@ -864,7 +864,7 @@ func (s *Store) LinkSummaryToMessages(ctx context.Context, summaryID string, mes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for i, msgID := range messageIDs {
 		_, err = tx.ExecContext(ctx,
@@ -892,7 +892,7 @@ func (s *Store) GetSummarySourceMessages(ctx context.Context, summaryID string) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []Message
 	for rows.Next() {
@@ -934,7 +934,7 @@ func (s *Store) GetRootSummaries(ctx context.Context, convID int64) ([]Summary, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return s.scanSummaries(rows)
 }
 
@@ -950,7 +950,7 @@ func (s *Store) GetContextItems(ctx context.Context, convID int64) ([]ContextIte
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var items []ContextItem
 	for rows.Next() {
@@ -992,7 +992,7 @@ func (s *Store) UpsertContextItems(ctx context.Context, convID int64, items []Co
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id = ?", convID)
 	if err != nil {
@@ -1028,7 +1028,7 @@ func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Get message IDs to delete for cleaning up related tables
 	rows, err := tx.QueryContext(ctx,
@@ -1036,7 +1036,7 @@ func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgIDs []int64
 	for rows.Next() {
@@ -1086,7 +1086,7 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Delete in child→parent order. FTS tables (messages_fts, summaries_fts) are
 	// kept in sync by DELETE triggers, so we just delete from the parent tables.
@@ -1156,7 +1156,7 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	maxOrd, err := s.GetMaxOrdinalTx(ctx, tx, convID)
 	if err != nil {
@@ -1224,7 +1224,7 @@ func (s *Store) ReplaceContextRangeWithSummary(
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Delete the range
 	_, err = tx.ExecContext(ctx,
@@ -1286,7 +1286,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Find the ordinals of items to delete and calculate midpoint
 	placeholders := make([]string, len(summaryIDs))
@@ -1305,7 +1305,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ordinals []int
 	for rows.Next() {
@@ -1379,7 +1379,7 @@ func (s *Store) resequenceContextItemsTx(ctx context.Context, tx *sql.Tx, convID
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type item struct {
 		ordinal    int
@@ -1531,7 +1531,7 @@ func (s *Store) GetDistinctDepthsInContext(ctx context.Context, convID int64, ma
 	if err != nil {
 		return nil, fmt.Errorf("get distinct depths: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var depths []int
 	for rows.Next() {
@@ -1566,7 +1566,7 @@ func (s *Store) GetSummarySubtree(ctx context.Context, summaryID string) ([]Summ
 	if err != nil {
 		return nil, fmt.Errorf("get summary subtree: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nodes []SummarySubtreeNode
 	for rows.Next() {
@@ -1651,7 +1651,7 @@ func (s *Store) searchSummariesFTS(ctx context.Context, input SearchInput) ([]Se
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	results, err := s.scanSearchResults(rows, true)
 	if err != nil {
@@ -1728,7 +1728,7 @@ func (s *Store) searchSummariesLike(ctx context.Context, input SearchInput) ([]S
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return s.scanSearchResults(rows, false)
 }
@@ -1835,7 +1835,7 @@ func (s *Store) searchMessagesFTS(ctx context.Context, input SearchInput) ([]Sea
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	results, err := s.scanMessageSearchResults(rows, true)
 	if err != nil {
@@ -1876,7 +1876,7 @@ func (s *Store) searchMessagesLike(ctx context.Context, input SearchInput) ([]Se
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return s.scanMessageSearchResults(rows, false)
 }

@@ -86,15 +86,15 @@ func publishIdentityFile(
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if chmodErr := temporary.Chmod(0o600); chmodErr != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("secure temporary node identity: %w", chmodErr)
 	}
 	if _, copyErr := io.Copy(temporary, bytes.NewReader(data)); copyErr != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("write temporary node identity: %w", copyErr)
 	}
 	if syncErr := temporary.Sync(); syncErr != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("sync temporary node identity: %w", syncErr)
 	}
 	if closeErr := temporary.Close(); closeErr != nil {
@@ -107,7 +107,7 @@ func publishIdentityFile(
 	if err != nil {
 		return fmt.Errorf("open node state directory for sync: %w", err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if syncErr := directory.Sync(); syncErr != nil {
 		return fmt.Errorf("sync node state directory: %w", syncErr)
 	}
@@ -119,7 +119,7 @@ func loadIdentity(path string) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Identity{}, fmt.Errorf("stat node identity: %w", err)

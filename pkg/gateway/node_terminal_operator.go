@@ -376,7 +376,7 @@ func (hub *nodeTerminalOperatorHub) serveConnection(
 	terminalID string,
 	claim *nodeTerminalOperatorClaim,
 ) {
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if !claim.beginAttach() {
 		claim.cleanupTerminal()
 		return
@@ -958,6 +958,6 @@ func writeTerminalOperatorJSON(connection *websocket.Conn, value any) error {
 	if err := connection.SetWriteDeadline(time.Now().Add(nodeTerminalOperatorWriteWait)); err != nil {
 		return err
 	}
-	defer connection.SetWriteDeadline(time.Time{})
+	defer func() { _ = connection.SetWriteDeadline(time.Time{}) }()
 	return connection.WriteJSON(value)
 }

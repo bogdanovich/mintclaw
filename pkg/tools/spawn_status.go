@@ -1,9 +1,10 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -147,11 +148,11 @@ func (t *SpawnStatusTool) Execute(ctx context.Context, args map[string]any) *too
 
 	// Order by creation time (ascending) so spawning order is preserved.
 	// Fall back to ID string for tasks created in the same millisecond.
-	sort.Slice(tasks, func(i, j int) bool {
-		if tasks[i].Created != tasks[j].Created {
-			return tasks[i].Created < tasks[j].Created
+	slices.SortFunc(tasks, func(a, b *SubagentTask) int {
+		if c := cmp.Compare(a.Created, b.Created); c != 0 {
+			return c
 		}
-		return tasks[i].ID < tasks[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	counts := map[string]int{}

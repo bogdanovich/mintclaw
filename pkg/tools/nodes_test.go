@@ -23,7 +23,7 @@ type fakeNodeDiscoverySource struct {
 
 func TestGenericNodeDiscoveryHidesInternalBrowserCommands(t *testing.T) {
 	descriptor := nodes.CommandDescriptor{Name: nodes.BrowserCommandObserve}
-	if projected, visible := projectDescriptorForTarget(descriptor, "", ""); visible ||
+	if projected, visible := projectDescriptorForTarget(descriptor, "", "", "", ""); visible ||
 		projected.Name != "" {
 		t.Fatalf("projectDescriptorForTarget() = %#v, %t", projected, visible)
 	}

@@ -251,7 +251,7 @@ func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFac
 		return nil, ErrDenied
 	}
 	profile, ok := target.Profiles[config.BrowserDefaultProfile]
-	if !ok || !profile.Enabled || !profile.DryRun {
+	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return nil, ErrDenied
 	}
 	server, ok := rootConfig.Tools.MCP.Servers[target.DriverServer]
@@ -289,7 +289,7 @@ func newPlaywrightManagedHostFactory(
 	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
 		!host.ProfileConfig.Enabled ||
 		host.ProfileConfig.Mode != config.BrowserProfileManaged ||
-		!host.ProfileConfig.DryRun {
+		host.ProfileConfig.DryRun == host.ProfileConfig.AllowApprovedActions {
 		return nil, ErrDenied
 	}
 	networkMode := host.ProfileConfig.EffectiveNetworkMode()
@@ -494,7 +494,8 @@ func (factory *PlaywrightWorkerFactory) Open(
 	request WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
 	if factory == nil || factory.clientFactory == nil || request.Target != factory.target ||
-		request.Profile != factory.profileName || !request.DryRun || !validIdentifier(request.SessionID) {
+		request.Profile != factory.profileName || request.DryRun != factory.profileConfig.DryRun ||
+		!validIdentifier(request.SessionID) {
 		return WorkerOpenResult{}, ErrDenied
 	}
 	client := factory.clientFactory()

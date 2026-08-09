@@ -117,7 +117,7 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bo
 		simpleInteractiveMode(agentLoop, sessionKey, stateless)
 		return
 	}
-	defer rl.Close()
+	defer func() { _ = rl.Close() }()
 
 	for {
 		line, err := rl.Readline()

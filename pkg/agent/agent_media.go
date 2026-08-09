@@ -205,7 +205,7 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		})
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	prefix := "data:" + mime + ";base64,"
 	encodedLen := base64.StdEncoding.EncodedLen(int(info.Size()))

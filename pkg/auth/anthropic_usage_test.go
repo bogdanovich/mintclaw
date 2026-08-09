@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,7 +26,7 @@ func TestFetchAnthropicUsage_Success(t *testing.T) {
 	defer func() { setAnthropicUsageURL(origURL) }()
 	setAnthropicUsageURL(srv.URL)
 
-	usage, err := FetchAnthropicUsage("test-token")
+	usage, err := FetchAnthropicUsageWithContext(context.Background(), "test-token")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestFetchAnthropicUsage_Forbidden(t *testing.T) {
 	defer func() { setAnthropicUsageURL(origURL) }()
 	setAnthropicUsageURL(srv.URL)
 
-	_, err := FetchAnthropicUsage("test-token")
+	_, err := FetchAnthropicUsageWithContext(context.Background(), "test-token")
 	if err == nil {
 		t.Fatal("expected error for 403, got nil")
 	}
@@ -68,7 +69,7 @@ func TestFetchAnthropicUsage_ServerError(t *testing.T) {
 	defer func() { setAnthropicUsageURL(origURL) }()
 	setAnthropicUsageURL(srv.URL)
 
-	_, err := FetchAnthropicUsage("test-token")
+	_, err := FetchAnthropicUsageWithContext(context.Background(), "test-token")
 	if err == nil {
 		t.Fatal("expected error for 500, got nil")
 	}
@@ -88,7 +89,7 @@ func TestFetchAnthropicUsage_MalformedJSON(t *testing.T) {
 	defer func() { setAnthropicUsageURL(origURL) }()
 	setAnthropicUsageURL(srv.URL)
 
-	_, err := FetchAnthropicUsage("test-token")
+	_, err := FetchAnthropicUsageWithContext(context.Background(), "test-token")
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}

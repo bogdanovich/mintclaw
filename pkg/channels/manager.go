@@ -87,22 +87,12 @@ type deliveryOwner struct {
 }
 
 type Manager struct {
-	channels               map[string]Channel
-	bus                    *bus.MessageBus
-	runtimeEvents          runtimeevents.Bus
-	config                 *config.Config
-	mediaStore             media.MediaStore
-	dispatchTask           *asyncTask
-	mux                    *dynamicServeMux
-	httpServer             *http.Server
-	httpListeners          []net.Listener
-	mu                     sync.RWMutex
-	deliveries             deliveryRegistry
-	interactions           deliveryInteractionState
-	streams                streamDeliveryState
-	outboundOutbox         *outbox.Coordinator
-	channelHashes          map[string]string // channel name → config hash
-	channelRestartRequired map[string]string // channel name → desired config hash that needs process restart
+	bus            *bus.MessageBus
+	runtimeEvents  runtimeevents.Bus
+	lifecycle      *ChannelLifecycle
+	delivery       *DeliveryRuntime
+	stream         *StreamCoordinator
+	outboundOutbox *outbox.Coordinator
 }
 
 type mediaStoreSetter interface {
@@ -181,10 +171,6 @@ type toolFeedbackMessageSender interface {
 	SendToolFeedbackMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool, error)
 }
 
-type asyncTask struct {
-	cancel context.CancelFunc
-}
-
 type deliveryCleanupOptions struct {
 	StopTyping          bool
 	UndoReaction        bool
@@ -235,7 +221,7 @@ func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[str
 }
 
 func (m *Manager) decorateOutboundResponseFooter(msg bus.OutboundMessage) bus.OutboundMessage {
-	if m == nil || m.config == nil || !m.config.Agents.Defaults.IsResponseFooterEnabled() {
+	if m == nil || !m.lifecycle.responseFooterEnabled() {
 		return msg
 	}
 	if !outboundMessageIsFinal(msg) || outboundMessageIsToolFeedback(msg) || outboundMessageIsToolCalls(msg) {
@@ -395,20 +381,16 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.StopTyping {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.typingStops.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(typingEntry); ok {
-					entry.stop()
-				}
+			if entry, loaded := m.streamCoordinator().takeTyping(name + ":" + cleanupChatID); loaded {
+				entry.stop()
 			}
 		}
 	}
 
 	if opts.UndoReaction {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.reactionUndos.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(reactionEntry); ok {
-					entry.undo()
-				}
+			if entry, loaded := m.streamCoordinator().takeReaction(name + ":" + cleanupChatID); loaded {
+				entry.undo()
 			}
 		}
 	}
@@ -418,7 +400,7 @@ func (m *Manager) cleanupDeliveryState(
 			streamKey := streamSuppressionKey(
 				name, cleanupChatID, opts.SessionKey, primaryTraceScope(opts.TraceScopes),
 			)
-			m.streams.clear(streamKey)
+			m.streamCoordinator().clear(streamKey)
 		}
 	}
 
@@ -430,11 +412,11 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.DeletePlaceholder {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.placeholders.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-					if deleter, ok := ch.(MessageDeleter); ok {
-						deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
-					}
+			if entry, loaded := m.streamCoordinator().
+				takePlaceholder(name + ":" + cleanupChatID); loaded &&
+				entry.id != "" {
+				if deleter, ok := ch.(MessageDeleter); ok {
+					_ = deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
 				}
 			}
 		}
@@ -520,13 +502,13 @@ func (m *Manager) beginToolFeedbackTerminals(
 	traceScopes []runtimeevents.TraceScope,
 	transient bool,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.interactions.hasToolFeedback() {
+	if m == nil || !m.streamCoordinator().hasToolFeedback() {
 		return nil
 	}
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.interactions.beginToolFeedbackTerminals(keys, scoped, transient)
+	return m.streamCoordinator().beginToolFeedbackTerminals(keys, scoped, transient)
 }
 
 func (m *Manager) completeToolFeedbackTerminals(
@@ -534,7 +516,7 @@ func (m *Manager) completeToolFeedbackTerminals(
 	terminals []*toolFeedbackTerminal,
 	success bool,
 ) {
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, success)
+	m.streamCoordinator().completeToolFeedbackTerminals(ctx, terminals, success)
 }
 
 func (m *Manager) beginOutboundToolFeedbackTerminals(
@@ -542,7 +524,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 	ch Channel,
 	msg bus.OutboundMessage,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.interactions.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
+	if m == nil || !m.streamCoordinator().hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
 		!OutboundMessageDismissesTrackedToolFeedback(msg) {
 		return nil
 	}
@@ -574,7 +556,7 @@ func (m *Manager) deliverToolFeedback(
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
 	operations := toolFeedbackOperationsFor(ch)
-	return m.interactions.deliverToolFeedback(
+	return m.streamCoordinator().deliverToolFeedback(
 		ctx,
 		key,
 		deliveryChatID,
@@ -595,7 +577,7 @@ func (m *Manager) deliverToolFeedback(
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
 func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.interactions.hasToolFeedback() {
+	if m == nil || !m.streamCoordinator().hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -626,7 +608,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.interactions.dismissToolFeedback(ctx, keys, scoped)
+	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped)
 }
 
 func (m *Manager) resolveToolFeedbackTargets(
@@ -641,7 +623,7 @@ func (m *Manager) resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
 	if !scoped && len(keys) == 1 {
-		if key, ok := m.interactions.singleActiveScopedToolFeedbackKey(keys[0]); ok {
+		if key, ok := m.streamCoordinator().singleActiveScopedToolFeedbackKey(keys[0]); ok {
 			return []string{key}, true
 		}
 	}
@@ -665,15 +647,13 @@ func prepareToolFeedbackMessageContent(ch Channel, content string) string {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	key := channel + ":" + chatID
-	m.interactions.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
+	m.streamCoordinator().storePlaceholder(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
 }
 
 // SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
 // and records it for later editing. Returns true if a placeholder was sent.
 func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) bool {
-	m.mu.RLock()
-	ch, ok := m.channels[channel]
-	m.mu.RUnlock()
+	ch, ok := m.lifecycle.channel(channel)
 	if !ok {
 		return false
 	}
@@ -694,10 +674,8 @@ func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) b
 func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 	key := channel + ":" + chatID
 	entry := typingEntry{stop: stop, createdAt: time.Now()}
-	if previous, loaded := m.interactions.typingStops.Swap(key, entry); loaded {
-		if oldEntry, ok := previous.(typingEntry); ok && oldEntry.stop != nil {
-			oldEntry.stop()
-		}
+	if previous, loaded := m.streamCoordinator().swapTyping(key, entry); loaded && previous.stop != nil {
+		previous.stop()
 	}
 }
 
@@ -707,10 +685,8 @@ func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 // regardless of whether an outbound message is published.
 func (m *Manager) InvokeTypingStop(channel, chatID string) {
 	key := channel + ":" + chatID
-	if v, loaded := m.interactions.typingStops.LoadAndDelete(key); loaded {
-		if entry, ok := v.(typingEntry); ok {
-			entry.stop()
-		}
+	if entry, loaded := m.streamCoordinator().takeTyping(key); loaded {
+		entry.stop()
 	}
 }
 
@@ -718,7 +694,7 @@ func (m *Manager) InvokeTypingStop(channel, chatID string) {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 	key := channel + ":" + chatID
-	m.interactions.reactionUndos.Store(key, reactionEntry{undo: undo, createdAt: time.Now()})
+	m.streamCoordinator().storeReaction(key, reactionEntry{undo: undo, createdAt: time.Now()})
 }
 
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
@@ -728,7 +704,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	traceScope := primaryTraceScope(msg.TraceScopes)
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey, traceScope)
-	activeStreamKey, streamActive := m.streams.activeKey(name, chatID, msg.SessionKey, traceScope)
+	activeStreamKey, streamActive := m.streamCoordinator().activeKey(name, chatID, msg.SessionKey, traceScope)
 
 	m.cleanupDeliveryState(ctx, name, chatID, &msg.Context, ch, deliveryCleanupOptions{
 		StopTyping:   true,
@@ -750,7 +726,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if streamActive {
 			return nil, true
 		}
-		if m.streams.tombstoneActiveForMessage(
+		if m.streamCoordinator().tombstoneActiveForMessage(
 			name, chatID, msg.SessionKey, traceScope,
 			time.Now(),
 		) {
@@ -762,33 +738,31 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// outbound. Earlier queued visible messages must still be delivered.
 	if isFinalMessage {
 		if streamActive {
-			if !m.streams.consumeActive(activeStreamKey) {
+			if !m.streamCoordinator().consumeActive(activeStreamKey) {
 				streamActive = false
 			} else {
-				if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
-					if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-						// Prefer deleting the placeholder (cleaner UX than editing to same content)
-						if deleter, ok := ch.(MessageDeleter); ok {
-							deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-						} else if editor, ok := ch.(MessageEditor); ok {
-							if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
-								_ = payloadEditor.EditMessageWithPayload(
-									ctx,
-									chatID,
-									entry.id,
-									outboundMessageEditPayload(msg, msg.Content),
-								)
-							} else {
-								editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
-							}
+				if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+					// Prefer deleting the placeholder (cleaner UX than editing to same content)
+					if deleter, ok := ch.(MessageDeleter); ok {
+						_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+					} else if editor, ok := ch.(MessageEditor); ok {
+						if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
+							_ = payloadEditor.EditMessageWithPayload(
+								ctx,
+								chatID,
+								entry.id,
+								outboundMessageEditPayload(msg, msg.Content),
+							)
+						} else {
+							_ = editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
 						}
 					}
 				}
-				if m.interactions.hasToolFeedback() {
+				if m.streamCoordinator().hasToolFeedback() {
 					keys, _ := toolFeedbackTargets(
 						name, ch, chatID, &msg.Context, msg.SessionKey, msg.TraceScopes,
 					)
-					m.interactions.releaseToolFeedbackTerminals(keys)
+					m.streamCoordinator().releaseToolFeedbackTerminals(keys)
 				}
 				return nil, true
 			}
@@ -798,56 +772,54 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if streamActive {
 		return nil, false
 	}
-	if m.streams.activeForChat(name, chatID) {
+	if m.streamCoordinator().activeForChat(name, chatID) {
 		return nil, false
 	}
 
 	if !isAuxiliaryMessage {
-		m.streams.clearTombstone(streamKey)
+		m.streamCoordinator().clearTombstone(streamKey)
 	}
 
 	// 5. Try editing placeholder
-	if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
-		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-			logger.InfoCF("channels", "Evaluating placeholder edit bypass",
-				map[string]any{
-					"channel":          name,
-					"chat_id":          chatID,
-					"placeholder_id":   entry.id,
-					"message_kind":     bus.OutboundMetadataFromMessage(msg).MessageKind,
-					"is_tool_feedback": isToolFeedback,
-					"bypass":           outboundMessageBypassesPlaceholderEdit(msg),
-				})
-			if isToolFeedback {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-				}
-				return nil, false
+	if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+		logger.InfoCF("channels", "Evaluating placeholder edit bypass",
+			map[string]any{
+				"channel":          name,
+				"chat_id":          chatID,
+				"placeholder_id":   entry.id,
+				"message_kind":     bus.OutboundMetadataFromMessage(msg).MessageKind,
+				"is_tool_feedback": isToolFeedback,
+				"bypass":           outboundMessageBypassesPlaceholderEdit(msg),
+			})
+		if isToolFeedback {
+			if deleter, ok := ch.(MessageDeleter); ok {
+				_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 			}
-			if outboundMessageBypassesPlaceholderEdit(msg) {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-				}
-				return nil, false
+			return nil, false
+		}
+		if outboundMessageBypassesPlaceholderEdit(msg) {
+			if deleter, ok := ch.(MessageDeleter); ok {
+				_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 			}
-			if editor, ok := ch.(MessageEditor); ok {
-				content := msg.Content
-				err := func() error {
-					if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
-						return payloadEditor.EditMessageWithPayload(
-							ctx,
-							chatID,
-							entry.id,
-							outboundMessageEditPayload(msg, content),
-						)
-					}
-					return editor.EditMessage(ctx, chatID, entry.id, content)
-				}()
-				if err == nil {
-					return []string{entry.id}, true
+			return nil, false
+		}
+		if editor, ok := ch.(MessageEditor); ok {
+			content := msg.Content
+			err := func() error {
+				if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
+					return payloadEditor.EditMessageWithPayload(
+						ctx,
+						chatID,
+						entry.id,
+						outboundMessageEditPayload(msg, content),
+					)
 				}
-				// edit failed → fall through to normal Send
+				return editor.EditMessage(ctx, chatID, entry.id, content)
+			}()
+			if err == nil {
+				return []string{entry.id}, true
 			}
+			// edit failed → fall through to normal Send
 		}
 	}
 
@@ -878,16 +850,14 @@ func NewManager(
 	opts ...ManagerOption,
 ) (*Manager, error) {
 	m := &Manager{
-		channels:               make(map[string]Channel),
-		deliveries:             newDeliveryRegistry(),
-		bus:                    messageBus,
-		config:                 cfg,
-		mediaStore:             store,
-		channelHashes:          make(map[string]string),
-		channelRestartRequired: make(map[string]string),
+		bus:       messageBus,
+		lifecycle: newChannelLifecycle(cfg, store),
+		delivery:  newDeliveryRuntime(),
+		stream:    newStreamCoordinator(),
 	}
+	m.delivery.bindHost(m)
 	if cfg != nil {
-		m.interactions.initializeToolFeedback(
+		m.streamCoordinator().initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -904,14 +874,59 @@ func NewManager(
 	// Register as streaming delegate so the agent loop can obtain streamers
 	messageBus.SetStreamDelegate(m)
 
-	if err := m.initChannels(&cfg.Channels); err != nil {
+	if err := m.lifecycle.initChannels(m, &cfg.Channels); err != nil {
 		return nil, err
 	}
 
 	// Store initial config hashes for all channels
-	m.channelHashes = toChannelHashes(cfg)
+	m.lifecycle.setInitialHashes(toChannelHashes(cfg))
 
 	return m, nil
+}
+
+func (m *Manager) deliveryRuntime() *DeliveryRuntime {
+	if m.delivery == nil {
+		m.delivery = newDeliveryRuntime()
+	}
+	if m.delivery.host == nil {
+		m.delivery.bindHost(m)
+	}
+	return m.delivery
+}
+
+func (m *Manager) streamCoordinator() *StreamCoordinator {
+	if m.stream == nil {
+		m.stream = newStreamCoordinator()
+	}
+	return m.stream
+}
+
+func (m *Manager) deliveryChannel(name string) (Channel, bool) {
+	return m.lifecycle.channel(name)
+}
+
+func (m *Manager) deliveryTextSource() <-chan bus.OutboundMessage {
+	return m.bus.OutboundChan()
+}
+
+func (m *Manager) deliveryMediaSource() <-chan bus.OutboundMediaMessage {
+	return m.bus.OutboundMediaChan()
+}
+
+func (m *Manager) deliverySplitOnMarker() bool {
+	return m.lifecycle.splitOnMarker()
+}
+
+func (m *Manager) deliveryToolFeedbackEnabled() bool {
+	return m.streamCoordinator().hasToolFeedback()
+}
+
+func (m *Manager) lifecycleBus() *bus.MessageBus {
+	return m.bus
+}
+
+func (m *Manager) lifecyclePlaceholderRecorder() PlaceholderRecorder {
+	return m
 }
 
 // SetMediaStore updates the store used by the manager and every channel that
@@ -919,37 +934,20 @@ func NewManager(
 // keeping existing channels on the same store as the agent is required for
 // inbound media refs to remain resolvable after reload.
 func (m *Manager) SetMediaStore(store media.MediaStore) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.mediaStore = store
-	for _, ch := range m.channels {
-		if setter, ok := ch.(mediaStoreSetter); ok {
-			setter.SetMediaStore(store)
-		}
-	}
+	m.lifecycle.setMediaStore(store)
 }
 
-func (m *Manager) installDeliveryOwnerLocked(
+func (l *ChannelLifecycle) installDeliveryOwnerLocked(
 	ctx context.Context,
+	delivery *DeliveryRuntime,
 	name string,
 	channel Channel,
 	channelType string,
 ) *deliveryOwner {
 	owner := newDeliveryOwner(name, channel, channelType)
-	m.deliveries.install(owner)
-	owner.StartDelivery(ctx, m)
+	delivery.install(owner)
+	owner.StartDelivery(ctx, delivery)
 	return owner
-}
-
-func closeWorkerAndWait(w *channelWorker) {
-	if w == nil {
-		return
-	}
-	close(w.queue)
-	<-w.done
-	close(w.mediaQueue)
-	<-w.mediaDone
 }
 
 // GetStreamer implements bus.StreamDelegate.
@@ -959,86 +957,17 @@ func (m *Manager) GetStreamer(
 	channelName, chatID, sessionKey, requestID string,
 	traceScope runtimeevents.TraceScope,
 ) (bus.Streamer, bool) {
-	m.mu.RLock()
-	ch, exists := m.channels[channelName]
-	m.mu.RUnlock()
+	return m.streamCoordinator().getStreamer(
+		ctx, m, channelName, chatID, sessionKey, requestID, traceScope,
+	)
+}
 
-	if !exists {
-		return nil, false
-	}
+func (m *Manager) streamSplitOnMarker() bool {
+	return m.lifecycle.splitOnMarker()
+}
 
-	sc, ok := ch.(StreamingCapable)
-	if !ok {
-		return nil, false
-	}
-
-	beginStream := func(beginCtx context.Context) (Streamer, error) {
-		if scoped, ok := ch.(ScopedStreamingCapable); ok {
-			return scoped.BeginStreamForScope(beginCtx, chatID, sessionKey, requestID, traceScope)
-		}
-		return sc.BeginStream(beginCtx, chatID)
-	}
-	streamer, err := beginStream(ctx)
-	if err != nil {
-		logger.DebugCF("channels", "Streaming unavailable, falling back to placeholder", map[string]any{
-			"channel": channelName,
-			"error":   err.Error(),
-		})
-		return nil, false
-	}
-
-	// Mark streamActive on Finalize so preSend knows to clean up the placeholder
-	// and late auxiliary messages cannot leak after streaming produced a final.
-	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
-	placeholderKey := channelName + ":" + chatID
-	clearMarker := func() {
-		m.streams.consumeActive(streamKey)
-	}
-	onFinalize := func(finalizeCtx context.Context, finalContent string) {
-		m.dismissToolFeedbackTargets(
-			finalizeCtx,
-			channelName,
-			ch,
-			chatID,
-			&bus.InboundContext{Channel: channelName, ChatID: chatID},
-			sessionKey,
-			[]runtimeevents.TraceScope{traceScope},
-		)
-		if v, loaded := m.interactions.placeholders.LoadAndDelete(placeholderKey); loaded {
-			if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
-				} else if editor, ok := ch.(MessageEditor); ok {
-					editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent) // best effort fallback
-				}
-			}
-		}
-		m.streams.markFinalized(streamKey, time.Now())
-	}
-
-	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
-		return &splitMarkerStreamer{
-			current:     streamer,
-			reasoning:   reasoningStreamerFrom(streamer),
-			begin:       beginStream,
-			onFinalize:  onFinalize,
-			clearMarker: clearMarker,
-			footer: responseFooterStreamState{
-				enabled: m.config != nil && m.config.Agents.Defaults.IsResponseFooterEnabled(),
-				channel: channelName,
-			},
-		}, true
-	}
-
-	return &finalizeHookStreamer{
-		Streamer:    streamer,
-		clearMarker: clearMarker,
-		onFinalize:  onFinalize,
-		footer: responseFooterStreamState{
-			enabled: m.config != nil && m.config.Agents.Defaults.IsResponseFooterEnabled(),
-			channel: channelName,
-		},
-	}, true
+func (m *Manager) streamResponseFooterEnabled() bool {
+	return m.lifecycle.responseFooterEnabled()
 }
 
 func reasoningStreamerFrom(streamer bus.Streamer) bus.ReasoningStreamer {
@@ -1423,7 +1352,7 @@ func (s *finalizeHookStreamer) ClearFinalizedStreamMarker() {
 // initChannel is a helper that looks up a factory by type name and creates the channel.
 // typeName is the channel type used for factory lookup (e.g., "telegram").
 // channelName is the config map key used as the channel's runtime name (e.g., "my_telegram").
-func (m *Manager) initChannel(typeName, channelName string) {
+func (l *ChannelLifecycle) initChannel(host channelLifecycleHost, typeName, channelName string) {
 	f, ok := getFactory(typeName)
 	if !ok {
 		logger.WarnCF("channels", "Factory not registered", map[string]any{
@@ -1436,7 +1365,7 @@ func (m *Manager) initChannel(typeName, channelName string) {
 		"channel": channelName,
 		"type":    typeName,
 	})
-	ch, err := f(channelName, typeName, m.config, m.bus)
+	ch, err := f(channelName, typeName, l.config, host.lifecycleBus())
 	if err != nil {
 		logger.ErrorCF("channels", "Failed to initialize channel", map[string]any{
 			"channel": channelName,
@@ -1445,21 +1374,21 @@ func (m *Manager) initChannel(typeName, channelName string) {
 		})
 	} else {
 		// Inject MediaStore if channel supports it
-		if m.mediaStore != nil {
+		if l.mediaStore != nil {
 			if setter, ok := ch.(mediaStoreSetter); ok {
-				setter.SetMediaStore(m.mediaStore)
+				setter.SetMediaStore(l.mediaStore)
 			}
 		}
 		// Inject PlaceholderRecorder if channel supports it
 		if setter, ok := ch.(interface{ SetPlaceholderRecorder(r PlaceholderRecorder) }); ok {
-			setter.SetPlaceholderRecorder(m)
+			setter.SetPlaceholderRecorder(host.lifecyclePlaceholderRecorder())
 		}
 		// Inject owner reference so BaseChannel.HandleMessage can auto-trigger typing/reaction
 		if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {
 			setter.SetOwner(ch)
 		}
-		m.channels[channelName] = ch
-		m.publishChannelEvent(
+		l.channels[channelName] = ch
+		host.publishChannelEvent(
 			runtimeevents.KindChannelLifecycleInitialized,
 			channelName,
 			runtimeevents.Scope{Channel: channelName},
@@ -1473,8 +1402,8 @@ func (m *Manager) initChannel(typeName, channelName string) {
 	}
 }
 
-func (m *Manager) getChannelConfigAndEnabled(channelName string) (*config.Channel, bool) {
-	bc, ok := m.config.Channels[channelName]
+func (l *ChannelLifecycle) getChannelConfigAndEnabled(channelName string) (*config.Channel, bool) {
+	bc, ok := l.config.Channels[channelName]
 	if !ok || bc == nil {
 		return nil, false
 	}
@@ -1547,14 +1476,14 @@ func (m *Manager) getChannelConfigAndEnabled(channelName string) (*config.Channe
 
 // initChannels initializes all enabled channels based on the configuration.
 // It iterates config entries and uses bc.Type to look up the appropriate factory.
-func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
+func (l *ChannelLifecycle) initChannels(host channelLifecycleHost, channels *config.ChannelsConfig) error {
 	logger.InfoC("channels", "Initializing channel manager")
 
 	for name, bc := range *channels {
 		if !bc.Enabled {
 			continue
 		}
-		_, ready := m.getChannelConfigAndEnabled(name)
+		_, ready := l.getChannelConfigAndEnabled(name)
 		if !ready {
 			continue
 		}
@@ -1562,11 +1491,11 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 		if typeName == "" {
 			typeName = name
 		}
-		m.initChannel(typeName, name)
+		l.initChannel(host, typeName, name)
 	}
 
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
-		"enabled_channels": len(m.channels),
+		"enabled_channels": len(l.channels),
 	})
 
 	return nil
@@ -1582,144 +1511,56 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 // SetupHTTPServerListeners creates a shared HTTP server on pre-opened listeners.
 // When listeners is empty it falls back to Addr-based ListenAndServe behavior.
 func (m *Manager) SetupHTTPServerListeners(listeners []net.Listener, addr string, healthServer *health.Server) {
-	m.mux = newDynamicServeMux()
-
-	// Register health endpoints
-	if healthServer != nil {
-		healthServer.RegisterOnMux(m.mux)
-	}
-
-	// Discover and register webhook handlers and health checkers
-	m.registerHTTPHandlersLocked()
-
-	m.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      m.mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-	m.httpListeners = append([]net.Listener(nil), listeners...)
+	m.lifecycle.setupHTTPServer(m, listeners, addr, healthServer)
 }
 
 // RegisterHTTPHandler adds a non-channel route to the shared gateway server.
 // It must be called after SetupHTTPServerListeners and rejects route collisions.
 func (m *Manager) RegisterHTTPHandler(pattern string, handler http.Handler) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.mux == nil {
-		return errors.New("shared HTTP server is not configured")
-	}
-	if pattern == "" || handler == nil {
-		return errors.New("HTTP handler pattern and implementation are required")
-	}
-	if err := m.mux.TryHandle(pattern, handler); err != nil {
-		return fmt.Errorf("register HTTP handler %q: %w", pattern, err)
-	}
-	return nil
+	return m.lifecycle.registerHTTPHandler(pattern, handler)
 }
 
 // ReplaceHTTPHandler atomically replaces an existing non-channel route.
 func (m *Manager) ReplaceHTTPHandler(pattern string, handler http.Handler) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.mux == nil {
-		return errors.New("shared HTTP server is not configured")
-	}
-	if pattern == "" || handler == nil {
-		return errors.New("HTTP handler pattern and implementation are required")
-	}
-	if err := m.mux.Replace(pattern, handler); err != nil {
-		return fmt.Errorf("replace HTTP handler %q: %w", pattern, err)
-	}
-	return nil
+	return m.lifecycle.replaceHTTPHandler(pattern, handler)
 }
 
 // UnregisterHTTPHandler removes a non-channel route from the shared gateway server.
 func (m *Manager) UnregisterHTTPHandler(pattern string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.mux != nil {
-		m.mux.Unhandle(pattern)
-	}
-}
-
-// registerHTTPHandlersLocked registers webhook and health-check handlers for
-// all channels currently in m.channels. Caller must hold m.mu (or ensure
-// exclusive access).
-func (m *Manager) registerHTTPHandlersLocked() {
-	for name, ch := range m.channels {
-		m.registerChannelHTTPHandler(name, ch)
-	}
-}
-
-// registerChannelHTTPHandler registers the webhook/health handlers for a
-// single channel onto m.mux.
-func (m *Manager) registerChannelHTTPHandler(name string, ch Channel) {
-	if wh, ok := ch.(WebhookHandler); ok {
-		m.mux.Handle(wh.WebhookPath(), wh)
-		m.publishChannelEvent(
-			runtimeevents.KindChannelWebhookRegistered,
-			name,
-			runtimeevents.Scope{Channel: name},
-			runtimeevents.SeverityInfo,
-			ChannelLifecyclePayload{Type: channelTypeForEvent(m, name)},
-		)
-		logger.InfoCF("channels", "Webhook handler registered", map[string]any{
-			"channel": name,
-			"path":    wh.WebhookPath(),
-		})
-	}
-	if hc, ok := ch.(HealthChecker); ok {
-		m.mux.HandleFunc(hc.HealthPath(), hc.HealthHandler)
-		logger.InfoCF("channels", "Health endpoint registered", map[string]any{
-			"channel": name,
-			"path":    hc.HealthPath(),
-		})
-	}
-}
-
-// unregisterChannelHTTPHandler removes the webhook/health handlers for a
-// single channel from m.mux.
-func (m *Manager) unregisterChannelHTTPHandler(name string, ch Channel) {
-	if wh, ok := ch.(WebhookHandler); ok {
-		m.mux.Unhandle(wh.WebhookPath())
-		m.publishChannelEvent(
-			runtimeevents.KindChannelWebhookUnregistered,
-			name,
-			runtimeevents.Scope{Channel: name},
-			runtimeevents.SeverityInfo,
-			ChannelLifecyclePayload{Type: channelTypeForEvent(m, name)},
-		)
-		logger.InfoCF("channels", "Webhook handler unregistered", map[string]any{
-			"channel": name,
-			"path":    wh.WebhookPath(),
-		})
-	}
-	if hc, ok := ch.(HealthChecker); ok {
-		m.mux.Unhandle(hc.HealthPath())
-		logger.InfoCF("channels", "Health endpoint unregistered", map[string]any{
-			"channel": name,
-			"path":    hc.HealthPath(),
-		})
-	}
+	m.lifecycle.unregisterHTTPHandler(pattern)
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.lifecycle.startAll(ctx, m, m.deliveryRuntime(), m.streamCoordinator())
+}
 
-	if len(m.channels) == 0 {
+func (l *ChannelLifecycle) startAll(
+	ctx context.Context,
+	publisher channelLifecycleEventPublisher,
+	delivery *DeliveryRuntime,
+	stream *StreamCoordinator,
+) error {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.shutdownComplete = false
+
+	if len(l.channels) == 0 {
 		logger.WarnC("channels", "No channels enabled")
 	}
 
 	logger.InfoC("channels", "Starting all channels")
 
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
-	failedStarts := make([]error, 0, len(m.channels))
-	failedNames := make([]string, 0, len(m.channels))
+	dispatchCtx, dispatcherStarted := delivery.ensureDispatcher(ctx)
+	failedStarts := make([]error, 0, len(l.channels))
+	failedNames := make([]string, 0, len(l.channels))
 
-	for name, channel := range m.channels {
+	for name, channel := range l.channels {
+		if delivery.hasActiveWorker(name) {
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
@@ -1728,12 +1569,12 @@ func (m *Manager) StartAll(ctx context.Context) error {
 				"channel": name,
 				"error":   err.Error(),
 			})
-			m.publishChannelEvent(
+			publisher.publishChannelEvent(
 				runtimeevents.KindChannelLifecycleStartFailed,
 				name,
 				runtimeevents.Scope{Channel: name},
 				runtimeevents.SeverityError,
-				ChannelLifecyclePayload{Type: channelTypeForEvent(m, name), Error: err.Error()},
+				ChannelLifecyclePayload{Type: l.channelType(name), Error: err.Error()},
 			)
 			failedStarts = append(failedStarts, fmt.Errorf("channel %s: %w", name, err))
 			failedNames = append(failedNames, name)
@@ -1741,13 +1582,13 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		}
 		// Lazily create worker only after channel starts successfully
 		channelType := name
-		if m.config != nil {
-			if bc := m.config.Channels.Get(name); bc != nil && bc.Type != "" {
+		if l.config != nil {
+			if bc := l.config.Channels.Get(name); bc != nil && bc.Type != "" {
 				channelType = bc.Type
 			}
 		}
-		m.installDeliveryOwnerLocked(dispatchCtx, name, channel, channelType)
-		m.publishChannelEvent(
+		l.installDeliveryOwnerLocked(dispatchCtx, delivery, name, channel, channelType)
+		publisher.publishChannelEvent(
 			runtimeevents.KindChannelLifecycleStarted,
 			name,
 			runtimeevents.Scope{Channel: name},
@@ -1756,11 +1597,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		)
 	}
 
-	if len(m.channels) > 0 && m.deliveries.workerCount() == 0 {
-		if m.dispatchTask != nil {
-			m.dispatchTask.cancel()
-			m.dispatchTask = nil
-		}
+	if len(l.channels) > 0 && delivery.workerCount() == 0 {
+		delivery.stopDispatcher()
 
 		sort.Strings(failedNames)
 		if len(failedStarts) == 0 {
@@ -1769,7 +1607,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 		logger.ErrorCF("channels", "All enabled channels failed to start", map[string]any{
 			"failed":          len(failedNames),
-			"total":           len(m.channels),
+			"total":           len(l.channels),
 			"failed_channels": failedNames,
 		})
 
@@ -1780,23 +1618,30 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		sort.Strings(failedNames)
 		logger.WarnCF("channels", "Some channels failed to start", map[string]any{
 			"failed":          len(failedNames),
-			"started":         m.deliveries.workerCount(),
-			"total":           len(m.channels),
+			"started":         delivery.workerCount(),
+			"total":           len(l.channels),
 			"failed_channels": failedNames,
 		})
 	}
 
 	// Start the dispatcher that reads from the bus and routes to workers
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
+	if dispatcherStarted {
+		go delivery.dispatchOutbound(dispatchCtx)
+		go delivery.dispatchOutboundMedia(dispatchCtx)
 
-	// Start the TTL janitor that cleans up stale typing/placeholder entries
-	go m.runTTLJanitor(dispatchCtx)
+		// Start the TTL janitor that cleans up stale typing/placeholder entries.
+		go l.runTTLJanitor(dispatchCtx, stream)
+	}
 
-	// Start shared HTTP server if configured
-	if m.httpServer != nil {
-		if len(m.httpListeners) > 0 {
-			for _, listener := range m.httpListeners {
+	// Capture the HTTP runtime while lifecycle state is locked. Shutdown may
+	// clear the owner fields as soon as this transition completes.
+	httpServer := l.httpServer
+	httpListeners := append([]net.Listener(nil), l.httpListeners...)
+	startHTTPServer := httpServer != nil && !l.httpServing
+	if startHTTPServer {
+		l.httpServing = true
+		if len(httpListeners) > 0 {
+			for _, listener := range httpListeners {
 				ln := listener
 				go func() {
 					defer func() {
@@ -1812,7 +1657,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 					logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
 						"addr": ln.Addr().String(),
 					})
-					if err := m.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+					if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 						logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
 							"addr":  ln.Addr().String(),
 							"error": err.Error(),
@@ -1826,16 +1671,16 @@ func (m *Manager) StartAll(ctx context.Context) error {
 					if r := recover(); r != nil {
 						logger.ErrorCF("channels", "HTTP server goroutine panic recovered",
 							map[string]any{
-								"addr":  m.httpServer.Addr,
+								"addr":  httpServer.Addr,
 								"panic": fmt.Sprintf("%v", r),
 								"stack": string(debug.Stack()),
 							})
 					}
 				}()
 				logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
-					"addr": m.httpServer.Addr,
+					"addr": httpServer.Addr,
 				})
-				if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
 						"error": err.Error(),
 					})
@@ -1845,41 +1690,62 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	logger.InfoCF("channels", "Channel startup completed", map[string]any{
-		"started": m.deliveries.workerCount(),
+		"started": delivery.workerCount(),
 		"failed":  len(failedNames),
-		"total":   len(m.channels),
+		"total":   len(l.channels),
 	})
 	return nil
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
+	return m.lifecycle.stopAll(ctx, m, m.deliveryRuntime(), m.streamCoordinator())
+}
+
+func (l *ChannelLifecycle) stopAll(
+	ctx context.Context,
+	publisher channelLifecycleEventPublisher,
+	delivery *DeliveryRuntime,
+	stream *StreamCoordinator,
+) error {
 	type channelStopTarget struct {
 		name        string
 		channel     Channel
 		channelType string
 	}
 
-	m.mu.Lock()
-	httpServer := m.httpServer
-	m.httpServer = nil
-	m.httpListeners = nil
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
 
-	if m.dispatchTask != nil {
-		m.dispatchTask.cancel()
-		m.dispatchTask = nil
+	l.mu.Lock()
+	if l.shutdownComplete {
+		l.mu.Unlock()
+		return nil
 	}
+	l.shutdownRunning = true
+	defer func() {
+		l.mu.Lock()
+		l.shutdownRunning = false
+		l.shutdownComplete = true
+		l.mu.Unlock()
+	}()
+	httpServer := l.httpServer
+	l.httpServer = nil
+	l.httpListeners = nil
+	l.httpServing = false
 
-	deliveries := m.deliveries.snapshot()
+	delivery.stopDispatcher()
 
-	channels := make([]channelStopTarget, 0, len(m.channels))
-	for name, channel := range m.channels {
+	deliveries := delivery.snapshot()
+
+	channels := make([]channelStopTarget, 0, len(l.channels))
+	for name, channel := range l.channels {
 		channels = append(channels, channelStopTarget{
 			name:        name,
 			channel:     channel,
-			channelType: channelTypeForEvent(m, name),
+			channelType: l.channelType(name),
 		})
 	}
-	m.mu.Unlock()
+	l.mu.Unlock()
 
 	logger.InfoC("channels", "Stopping all channels")
 
@@ -1895,14 +1761,10 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	}
 
 	// Close delivery queues and wait for accepted work to drain.
-	for _, delivery := range deliveries {
-		if delivery.owner != nil {
-			delivery.owner.CloseDeliveryAndWait()
-			continue
-		}
-		closeWorkerAndWait(delivery.worker)
+	for _, owner := range deliveries {
+		owner.CloseDeliveryAndWait()
 	}
-	m.interactions.stopToolFeedback()
+	stream.stopToolFeedback()
 
 	// Stop all channels
 	for _, target := range channels {
@@ -1916,7 +1778,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 			})
 			continue
 		}
-		m.publishChannelEvent(
+		publisher.publishChannelEvent(
 			runtimeevents.KindChannelLifecycleStopped,
 			target.name,
 			runtimeevents.Scope{Channel: target.name},
@@ -1958,22 +1820,20 @@ func newDeliveryOwner(name string, ch Channel, channelType string) *deliveryOwne
 	}
 }
 
-func deliveryOwnerFromWorker(name string, ch Channel, w *channelWorker) *deliveryOwner {
-	if ch == nil || w == nil {
-		return nil
-	}
-	return &deliveryOwner{
-		name: name, ch: ch, worker: w,
-		closedCh:  make(chan struct{}),
-		closeDone: make(chan struct{}),
-	}
-}
-
 func (o *deliveryOwner) Worker() *channelWorker {
 	if o == nil {
 		return nil
 	}
 	return o.worker
+}
+
+func (o *deliveryOwner) active() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return !o.closed && o.worker != nil
 }
 
 func (o *deliveryOwner) borrowWorkerForSend() (*channelWorker, func(), error) {
@@ -1988,12 +1848,12 @@ func (o *deliveryOwner) borrowWorkerForSend() (*channelWorker, func(), error) {
 	return o.worker, o.mu.Unlock, nil
 }
 
-func (o *deliveryOwner) StartDelivery(ctx context.Context, m *Manager) {
+func (o *deliveryOwner) StartDelivery(ctx context.Context, runtime *DeliveryRuntime) {
 	if o == nil || o.worker == nil {
 		return
 	}
-	go m.runWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
-	go m.runMediaWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
+	go runtime.runWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
+	go runtime.runMediaWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
 }
 
 func (o *deliveryOwner) Enqueue(ctx context.Context, msg bus.OutboundMessage) (bool, error) {
@@ -2103,11 +1963,11 @@ func (o *deliveryOwner) closeAdmission() {
 // Message processing follows this order:
 //  1. SplitByMarker (if enabled in config) - LLM semantic marker-based splitting
 //  2. SplitMessage - channel-specific length-based splitting (MaxMessageLength)
-func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
-	m.runWorkerOwned(ctx, name, w, nil)
+func (r *DeliveryRuntime) runWorker(ctx context.Context, name string, w *channelWorker) {
+	r.runWorkerOwned(ctx, name, w, nil)
 }
 
-func (m *Manager) runWorkerOwned(
+func (r *DeliveryRuntime) runWorkerOwned(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2120,23 +1980,24 @@ func (m *Manager) runWorkerOwned(
 			if !ok {
 				return
 			}
-			m.deliverQueuedMessage(ctx, name, w, msg)
+			r.deliverQueuedMessage(ctx, name, w, msg)
 		case <-ctx.Done():
 			if closeAdmission != nil {
 				closeAdmission()
 			}
-			m.failPendingOutbound(name, w.queue, ctx.Err())
+			r.failPendingOutbound(name, w.queue, ctx.Err())
 			return
 		}
 	}
 }
 
-func (m *Manager) deliverQueuedMessage(
+func (r *DeliveryRuntime) deliverQueuedMessage(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
 ) {
+	m := r.host
 	msg = m.decorateOutboundResponseFooter(msg)
 	maxLen := 0
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
@@ -2145,7 +2006,7 @@ func (m *Manager) deliverQueuedMessage(
 	var chunks []string
 	if m.finalizedStreamActiveForMessage(name, msg) {
 		chunks = []string{msg.Content}
-	} else if m.config != nil && m.config.Agents.Defaults.SplitOnMarker && !outboundMessageIsToolFeedback(msg) {
+	} else if m.deliverySplitOnMarker() && !outboundMessageIsToolFeedback(msg) {
 		if markerChunks := SplitByMarker(msg.Content); len(markerChunks) > 1 {
 			for _, chunk := range markerChunks {
 				chunkMsg := msg
@@ -2169,7 +2030,7 @@ func (m *Manager) deliverQueuedMessage(
 	for _, chunk := range chunks {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
-		result := m.sendWithRetryPolicy(
+		result := r.sendWithRetryPolicy(
 			ctx, name, w, chunkMsg, !durable, publishNoOutcome,
 		)
 		if !result.Delivered() {
@@ -2183,7 +2044,7 @@ func (m *Manager) deliverQueuedMessage(
 		}
 		messageIDs = append(messageIDs, result.MessageIDs...)
 	}
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, delivered)
+	m.completeToolFeedbackTerminals(ctx, terminals, delivered)
 	if !delivered {
 		return
 	}
@@ -2198,11 +2059,12 @@ func (m *Manager) deliverQueuedMessage(
 	m.publishOutboundSent(name, msg, messageIDs)
 }
 
-func (m *Manager) failPendingOutbound(
+func (r *DeliveryRuntime) failPendingOutbound(
 	name string,
 	queue <-chan bus.OutboundMessage,
 	err error,
 ) {
+	m := r.host
 	for {
 		select {
 		case msg, ok := <-queue:
@@ -2225,7 +2087,7 @@ func (m *Manager) finalizedStreamActiveForMessage(channelName string, msg bus.Ou
 	if strings.TrimSpace(channelName) == "" || strings.TrimSpace(chatID) == "" {
 		return false
 	}
-	_, active := m.streams.activeKey(
+	_, active := m.streamCoordinator().activeKey(
 		channelName, chatID, msg.SessionKey, primaryTraceScope(msg.TraceScopes),
 	)
 	return active
@@ -2257,21 +2119,22 @@ func splitOutboundMessageContent(msg bus.OutboundMessage, maxLen int) []string {
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(
+func (r *DeliveryRuntime) sendWithRetry(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
 ) DeliveryResult[bus.OutboundMessage] {
+	m := r.host
 	terminals := m.beginOutboundToolFeedbackTerminals(name, w.ch, msg)
-	result := m.sendWithRetryPolicy(
+	result := r.sendWithRetryPolicy(
 		ctx, name, w, msg, true, publishDefinitiveOutcome,
 	)
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
+	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
 	return result
 }
 
-func (m *Manager) sendWithRetryPolicy(
+func (r *DeliveryRuntime) sendWithRetryPolicy(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2279,6 +2142,7 @@ func (m *Manager) sendWithRetryPolicy(
 	retryAmbiguous bool,
 	outcome outcomePublication,
 ) DeliveryResult[bus.OutboundMessage] {
+	m := r.host
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
@@ -2326,7 +2190,7 @@ func (m *Manager) sendWithRetryPolicy(
 			attemptMsg := pending[0]
 			var msgIDs []string
 			var err error
-			if isToolFeedback && m.interactions.hasToolFeedback() {
+			if isToolFeedback && m.deliveryToolFeedbackEnabled() {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
 				msgIDs, err = m.deliverToolFeedback(ctx, name, w.ch, attemptMsg, w.ch.Send)
@@ -2411,7 +2275,7 @@ func classifySendError(err error) string {
 
 func dispatchLoop[M any](
 	ctx context.Context,
-	m *Manager,
+	runtime *DeliveryRuntime,
 	ch <-chan M,
 	getChannel func(M) string,
 	requiresOutcome func(M) bool,
@@ -2445,10 +2309,8 @@ func dispatchLoop[M any](
 				continue
 			}
 
-			m.mu.RLock()
-			_, exists := m.channels[channel]
-			owner := m.deliveryOwnerLocked(channel)
-			m.mu.RUnlock()
+			_, exists := runtime.host.deliveryChannel(channel)
+			owner := runtime.owner(channel)
 
 			if !exists {
 				logger.WarnCF("channels", unknownMsg, map[string]any{"channel": channel})
@@ -2468,10 +2330,11 @@ func dispatchLoop[M any](
 	}
 }
 
-func (m *Manager) dispatchOutbound(ctx context.Context) {
+func (r *DeliveryRuntime) dispatchOutbound(ctx context.Context) {
+	m := r.host
 	dispatchLoop(
-		ctx, m,
-		m.bus.OutboundChan(),
+		ctx, r,
+		m.deliveryTextSource(),
 		func(msg bus.OutboundMessage) string { return outboundMessageChannel(msg) },
 		func(msg bus.OutboundMessage) bool { return msg.TraceSettlement },
 		func(ctx context.Context, owner *deliveryOwner, msg bus.OutboundMessage) bool {
@@ -2498,10 +2361,11 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 	)
 }
 
-func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
+func (r *DeliveryRuntime) dispatchOutboundMedia(ctx context.Context) {
+	m := r.host
 	dispatchLoop(
-		ctx, m,
-		m.bus.OutboundMediaChan(),
+		ctx, r,
+		m.deliveryMediaSource(),
 		func(msg bus.OutboundMediaMessage) string { return outboundMediaChannel(msg) },
 		func(msg bus.OutboundMediaMessage) bool { return msg.TraceSettlement },
 		func(ctx context.Context, owner *deliveryOwner, msg bus.OutboundMediaMessage) bool {
@@ -2529,7 +2393,7 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 }
 
 // runMediaWorker processes outbound media messages for a single channel.
-func (m *Manager) runMediaWorkerOwned(
+func (r *DeliveryRuntime) runMediaWorkerOwned(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2542,29 +2406,30 @@ func (m *Manager) runMediaWorkerOwned(
 			if !ok {
 				return
 			}
-			m.deliverQueuedMedia(ctx, name, w, msg)
+			r.deliverQueuedMedia(ctx, name, w, msg)
 		case <-ctx.Done():
 			if closeAdmission != nil {
 				closeAdmission()
 			}
-			m.failPendingOutboundMedia(name, w.mediaQueue, ctx.Err())
+			r.failPendingOutboundMedia(name, w.mediaQueue, ctx.Err())
 			return
 		}
 	}
 }
 
-func (m *Manager) deliverQueuedMedia(
+func (r *DeliveryRuntime) deliverQueuedMedia(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) {
+	m := r.host
 	durable, err := m.beginDurableOutbound(msg.DeliveryID)
 	if err != nil {
 		m.publishOutboundMediaFailed(name, msg, err)
 		return
 	}
-	result := m.sendMediaWithRetryPolicy(
+	result := r.sendMediaWithRetryPolicy(
 		ctx, name, w, msg, publishNoOutcome, !durable,
 	)
 	outcome := durableOutcome(result, nil)
@@ -2578,11 +2443,12 @@ func (m *Manager) deliverQueuedMedia(
 	m.publishOutboundMediaFailed(name, msg, result.Err)
 }
 
-func (m *Manager) failPendingOutboundMedia(
+func (r *DeliveryRuntime) failPendingOutboundMedia(
 	name string,
 	queue <-chan bus.OutboundMediaMessage,
 	err error,
 ) {
+	m := r.host
 	for {
 		select {
 		case msg, ok := <-queue:
@@ -2600,18 +2466,18 @@ func (m *Manager) failPendingOutboundMedia(
 // sendMediaWithRetry sends a media message through the channel with rate limiting and
 // retry logic. It returns the message IDs and nil on success, or nil and the last error
 // after retries, including when the channel does not support MediaSender.
-func (m *Manager) sendMediaWithRetry(
+func (r *DeliveryRuntime) sendMediaWithRetry(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) DeliveryResult[bus.OutboundMediaMessage] {
-	return m.sendMediaWithRetryPolicy(
+	return r.sendMediaWithRetryPolicy(
 		ctx, name, w, msg, publishDefinitiveOutcome, true,
 	)
 }
 
-func (m *Manager) sendMediaWithRetryPolicy(
+func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2619,6 +2485,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 	outcome outcomePublication,
 	retryAmbiguous bool,
 ) DeliveryResult[bus.OutboundMediaMessage] {
+	m := r.host
 	ms, ok := w.ch.(MediaSender)
 	if !ok {
 		err := fmt.Errorf("channel %q does not support media sending", name)
@@ -2655,7 +2522,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 
 	terminalSucceeded := false
 	var terminals []*toolFeedbackTerminal
-	if m.interactions.hasToolFeedback() {
+	if m.deliveryToolFeedbackEnabled() {
 		terminals = m.beginToolFeedbackTerminals(
 			name,
 			w.ch,
@@ -2666,7 +2533,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 			bus.OutboundMetadataFromContext(msg.Context).IsInterim(),
 		)
 		defer func() {
-			m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+			m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 		}()
 	}
 
@@ -2722,7 +2589,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 // runTTLJanitor periodically scans the typingStops, placeholders, and stream
 // tombstone maps and evicts entries that have exceeded their TTL. This prevents
 // memory accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
-func (m *Manager) runTTLJanitor(ctx context.Context) {
+func (l *ChannelLifecycle) runTTLJanitor(ctx context.Context, stream *StreamCoordinator) {
 	ticker := time.NewTicker(janitorInterval)
 	defer ticker.Stop()
 
@@ -2731,112 +2598,101 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			m.interactions.expire(now)
-			m.streams.expire(now)
+			stream.expireInteractions(now)
+			stream.expireStreams(now)
 		}
 	}
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	channel, ok := m.channels[name]
-	return channel, ok
-}
-
-func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.deliveries.owner(name, m.channels[name])
+	return m.lifecycle.channel(name)
 }
 
 func (m *Manager) GetStatus() map[string]any {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	status := make(map[string]any)
-	for name, channel := range m.channels {
-		channelStatus := map[string]any{
-			"enabled": true,
-			"running": channel.IsRunning(),
-		}
-		if _, ok := m.channelRestartRequired[name]; ok {
-			channelStatus["restart_required"] = true
-			channelStatus["restart_reason"] = "channel config changed"
-		}
-		status[name] = channelStatus
-	}
-	return status
+	return m.lifecycle.status()
 }
 
 func (m *Manager) GetEnabledChannels() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	names := make([]string, 0, len(m.channels))
-	for name := range m.channels {
-		names = append(names, name)
-	}
-	return names
+	return m.lifecycle.enabledChannels()
 }
 
 // Reload updates the config reference without restarting channels.
 // This is used when channel config hasn't changed but other parts of the config have.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.lifecycle.reload(ctx, cfg, m, m.deliveryRuntime(), m.streamCoordinator())
+}
+
+func (l *ChannelLifecycle) reload(
+	ctx context.Context,
+	cfg *config.Config,
+	host channelLifecycleHost,
+	delivery *DeliveryRuntime,
+	stream *StreamCoordinator,
+) error {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
+
+	l.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			l.mu.Unlock()
+		}
+	}()
 
 	// Save old config so we can revert on error.
-	oldConfig := m.config
+	oldConfig := l.config
 
-	// Update config early: initChannel uses m.config via factory(m.config, m.bus).
-	m.config = cfg
+	// Update config early: initChannel uses l.config via factory(l.config, host.lifecycleBus()).
+	l.config = cfg
 
 	desiredHashes := toChannelHashes(cfg)
 	list := make(map[string]string, len(desiredHashes))
 	for name, hash := range desiredHashes {
 		list[name] = hash
 	}
-	if m.channelRestartRequired == nil {
-		m.channelRestartRequired = make(map[string]string)
+	if l.restartRequired == nil {
+		l.restartRequired = make(map[string]string)
 	}
-	added, removed := compareChannels(m.channelHashes, list)
+	added, removed := compareChannels(l.channelHashes, list)
 	inactiveChanged := make(map[string]Channel)
 	changed, added, removed := splitChangedChannels(added, removed)
 	for _, name := range changed {
-		currentHash, ok := m.channelHashes[name]
+		currentHash, ok := l.channelHashes[name]
 		if !ok {
 			added = append(added, name)
 			continue
 		}
-		if _, ok := m.channels[name]; !ok {
+		if _, ok := l.channels[name]; !ok {
 			added = append(added, name)
 			continue
 		}
-		if !m.deliveries.hasActiveWorker(name) {
+		if !delivery.hasActiveWorker(name) {
 			logger.InfoCF("channels", "Recreating inactive changed channel", map[string]any{
 				"channel": name,
 			})
-			inactiveChanged[name] = m.channels[name]
+			inactiveChanged[name] = l.channels[name]
 			added = append(added, name)
 			continue
 		}
-		m.channelRestartRequired[name] = list[name]
+		l.restartRequired[name] = list[name]
 		list[name] = currentHash
 		logger.WarnCF("channels", "Channel config changed; restart required", map[string]any{
 			"channel": name,
 		})
 	}
-	for name := range m.channelRestartRequired {
+	for name := range l.restartRequired {
 		desiredHash, ok := desiredHashes[name]
-		if !ok || desiredHash == m.channelHashes[name] {
-			delete(m.channelRestartRequired, name)
+		if !ok || desiredHash == l.channelHashes[name] {
+			delete(l.restartRequired, name)
 		}
 	}
 
 	deferFuncs := make([]func(), 0, len(removed)+len(added))
 	for _, name := range removed {
-		channel := m.channels[name]
+		channel := l.channels[name]
 		deferFuncs = append(deferFuncs, func() {
-			m.UnregisterChannel(name)
+			l.unregisterChannelDuringTransition(host, delivery, stream, name)
 			if channel == nil {
 				return
 			}
@@ -2851,34 +2707,29 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			}
 		})
 	}
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
-		m.config = oldConfig
-		cancel()
+		l.config = oldConfig
 		return err
 	}
-	err = m.initChannels(cc)
+	err = l.initChannels(host, cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
-		m.config = oldConfig
-		cancel()
+		l.config = oldConfig
 		return err
 	}
 	for name, oldChannel := range inactiveChanged {
-		if m.channels[name] == oldChannel {
+		if l.channels[name] == oldChannel {
 			err := fmt.Errorf("replacement channel %s was not initialized", name)
 			logger.ErrorCF("channels", "Failed to initialize replacement channel", map[string]any{
 				"channel": name,
 				"error":   err.Error(),
 			})
-			m.config = oldConfig
-			cancel()
+			l.config = oldConfig
 			return err
 		}
-		m.interactions.retireToolFeedbackChannel(ctx, name)
+		stream.retireToolFeedbackChannel(ctx, name)
 		if err := oldChannel.Stop(ctx); err != nil {
 			logger.ErrorCF("channels", "Error stopping inactive changed channel", map[string]any{
 				"channel": name,
@@ -2887,7 +2738,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 	for _, name := range added {
-		channel := m.channels[name]
+		channel := l.channels[name]
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
@@ -2896,24 +2747,24 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 				"channel": name,
 				"error":   err.Error(),
 			})
-			m.publishChannelEvent(
+			host.publishChannelEvent(
 				runtimeevents.KindChannelLifecycleStartFailed,
 				name,
 				runtimeevents.Scope{Channel: name},
 				runtimeevents.SeverityError,
-				ChannelLifecyclePayload{Type: channelTypeForEvent(m, name), Error: err.Error()},
+				ChannelLifecyclePayload{Type: l.channelType(name), Error: err.Error()},
 			)
 			continue
 		}
 		// Lazily create worker only after channel starts successfully
 		channelType := name
-		if m.config != nil {
-			if bc := m.config.Channels.Get(name); bc != nil && bc.Type != "" {
+		if l.config != nil {
+			if bc := l.config.Channels.Get(name); bc != nil && bc.Type != "" {
 				channelType = bc.Type
 			}
 		}
-		m.installDeliveryOwnerLocked(dispatchCtx, name, channel, channelType)
-		m.publishChannelEvent(
+		l.installDeliveryOwnerLocked(ctx, delivery, name, channel, channelType)
+		host.publishChannelEvent(
 			runtimeevents.KindChannelLifecycleStarted,
 			name,
 			runtimeevents.Scope{Channel: name},
@@ -2921,14 +2772,14 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			ChannelLifecyclePayload{Type: channelType},
 		)
 		deferFuncs = append(deferFuncs, func() {
-			m.RegisterChannel(name, channel)
+			l.registerChannelDuringTransition(host, name, channel)
 		})
 	}
 
 	// Commit hashes only on full success.
-	m.channelHashes = list
+	l.channelHashes = list
 	if cfg != nil {
-		m.interactions.configureToolFeedback(
+		stream.configureToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -2936,10 +2787,12 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			cfg.Agents.Defaults.IsToolFeedbackSeparateMessagesEnabled(),
 		)
 	}
-	go func() {
+	l.mu.Unlock()
+	locked = false
+	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.ErrorCF("channels", "channel registration goroutine panic recovered",
+				logger.ErrorCF("channels", "channel registration action panic recovered",
 					map[string]any{
 						"panic": fmt.Sprintf("%v", r),
 						"stack": string(debug.Stack()),
@@ -2954,40 +2807,76 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 }
 
 func (m *Manager) RegisterChannel(name string, channel Channel) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.channels[name] = channel
-	if m.mux != nil {
-		m.registerChannelHTTPHandler(name, channel)
+	m.lifecycle.registerChannel(m, name, channel)
+}
+
+func (l *ChannelLifecycle) registerChannel(
+	publisher channelLifecycleEventPublisher,
+	name string,
+	channel Channel,
+) {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
+	l.registerChannelDuringTransition(publisher, name, channel)
+}
+
+func (l *ChannelLifecycle) registerChannelDuringTransition(
+	publisher channelLifecycleEventPublisher,
+	name string,
+	channel Channel,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.channels[name] = channel
+	l.shutdownComplete = false
+	if l.mux != nil {
+		l.registerChannelHTTPHandler(publisher, name, channel)
 	}
 }
 
 func (m *Manager) UnregisterChannel(name string) {
-	m.mu.Lock()
-	ch := m.channels[name]
-	if ch != nil && m.mux != nil {
-		m.unregisterChannelHTTPHandler(name, ch)
+	m.lifecycle.unregisterChannel(m, m.deliveryRuntime(), m.streamCoordinator(), name)
+}
+
+func (l *ChannelLifecycle) unregisterChannel(
+	publisher channelLifecycleEventPublisher,
+	delivery *DeliveryRuntime,
+	stream *StreamCoordinator,
+	name string,
+) {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
+	l.unregisterChannelDuringTransition(publisher, delivery, stream, name)
+}
+
+func (l *ChannelLifecycle) unregisterChannelDuringTransition(
+	publisher channelLifecycleEventPublisher,
+	delivery *DeliveryRuntime,
+	stream *StreamCoordinator,
+	name string,
+) {
+	l.mu.Lock()
+	ch := l.channels[name]
+	if ch != nil && l.mux != nil {
+		l.unregisterChannelHTTPHandler(publisher, name, ch)
 	}
-	owner, w := m.deliveries.lookup(name)
+	owner := delivery.owner(name)
 	if owner == nil {
-		m.deliveries.removeWorkerIfUnowned(name)
-		delete(m.channels, name)
+		delete(l.channels, name)
 	}
-	m.mu.Unlock()
+	l.mu.Unlock()
 
 	if owner != nil {
 		owner.CloseDeliveryAndWait()
-	} else {
-		closeWorkerAndWait(w)
 	}
-	m.interactions.retireToolFeedbackChannel(context.Background(), name)
+	stream.retireToolFeedbackChannel(context.Background(), name)
 
-	m.mu.Lock()
-	m.deliveries.removeIfMatches(name, owner, w)
-	if ch != nil && m.channels[name] == ch {
-		delete(m.channels, name)
+	l.mu.Lock()
+	delivery.removeIfMatches(name, owner)
+	if ch != nil && l.channels[name] == ch {
+		delete(l.channels, name)
 	}
-	m.mu.Unlock()
+	l.mu.Unlock()
 }
 
 // SendMessage sends an outbound message synchronously through the channel
@@ -2995,14 +2884,14 @@ func (m *Manager) UnregisterChannel(name string) {
 // delivered (or all retries are exhausted), which preserves ordering when
 // a subsequent operation depends on the message having been sent.
 func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
 }
 
 // SendMessageProvisional suppresses a definitely-not-sent failure outcome so
 // the caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMessageProvisional(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
 }
 
 // SendMessageDefiniteRetryOnly retries only channel rejections known to occur
@@ -3012,15 +2901,16 @@ func (m *Manager) SendMessageDefiniteRetryOnly(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 ) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
 }
 
-func (m *Manager) sendMessageWithRetryPolicy(
+func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 	retryAmbiguous bool,
 	outcome outcomePublication,
 ) error {
+	m := r.host
 	var err error
 	msg, err = bus.NormalizeOutboundMessage(msg)
 	if err != nil {
@@ -3029,13 +2919,11 @@ func (m *Manager) sendMessageWithRetryPolicy(
 	msg = m.decorateOutboundResponseFooter(msg)
 	channelName := outboundMessageChannel(msg)
 
-	m.mu.RLock()
-	_, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	_, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
-		return m.rejectMessageBeforeSend(
+		return r.rejectMessageBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s not found", channelName),
 		)
 	}
@@ -3045,19 +2933,19 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		var borrowErr error
 		w, release, borrowErr = owner.borrowWorkerForSend()
 		if borrowErr != nil {
-			return m.rejectMessageBeforeSend(outcome, channelName, msg, borrowErr)
+			return r.rejectMessageBeforeSend(outcome, channelName, msg, borrowErr)
 		}
 		defer release()
 	}
 	if w == nil {
-		return m.rejectMessageBeforeSend(
+		return r.rejectMessageBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s has no active worker", channelName),
 		)
 	}
 	terminals := m.beginOutboundToolFeedbackTerminals(channelName, w.ch, msg)
 	terminalSucceeded := false
 	defer func() {
-		m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+		m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 	}()
 
 	maxLen := 0
@@ -3070,7 +2958,7 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		for _, chunk := range chunks {
 			chunkMsg := msg
 			chunkMsg.Content = chunk
-			result := m.sendWithRetryPolicy(
+			result := r.sendWithRetryPolicy(
 				ctx, channelName, w, chunkMsg, retryAmbiguous, publishNoOutcome,
 			)
 			if !result.Delivered() {
@@ -3094,7 +2982,7 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		if len(chunks) == 1 {
 			msg.Content = chunks[0]
 		}
-		result := m.sendWithRetryPolicy(
+		result := r.sendWithRetryPolicy(
 			ctx, channelName, w, msg, retryAmbiguous, outcome,
 		)
 		if !result.Delivered() {
@@ -3108,12 +2996,13 @@ func (m *Manager) sendMessageWithRetryPolicy(
 	return nil
 }
 
-func (m *Manager) rejectMessageBeforeSend(
+func (r *DeliveryRuntime) rejectMessageBeforeSend(
 	outcome outcomePublication,
 	channelName string,
 	msg bus.OutboundMessage,
 	err error,
 ) error {
+	m := r.host
 	if outcome.failure(false) {
 		m.publishOutboundFailed(channelName, msg, err, false)
 	}
@@ -3125,21 +3014,22 @@ func (m *Manager) rejectMessageBeforeSend(
 // retries are exhausted), which preserves ordering when later agent behavior
 // depends on actual media delivery.
 func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
-	return m.sendMedia(ctx, msg, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome)
 }
 
 // SendMediaProvisional suppresses a definitely-not-sent failure outcome so the
 // caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMediaMessage) error {
-	return m.sendMedia(ctx, msg, publishSuccessOnly)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly)
 }
 
-func (m *Manager) sendMedia(
+func (r *DeliveryRuntime) sendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
 ) error {
+	m := r.host
 	var err error
 	msg, err = bus.NormalizeOutboundMediaMessage(msg)
 	if err != nil {
@@ -3147,13 +3037,11 @@ func (m *Manager) sendMedia(
 	}
 	channelName := outboundMediaChannel(msg)
 
-	m.mu.RLock()
-	_, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	_, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
-		return m.rejectMediaBeforeSend(
+		return r.rejectMediaBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s not found", channelName),
 		)
 	}
@@ -3163,29 +3051,30 @@ func (m *Manager) sendMedia(
 		var borrowErr error
 		w, release, borrowErr = owner.borrowWorkerForSend()
 		if borrowErr != nil {
-			return m.rejectMediaBeforeSend(outcome, channelName, msg, borrowErr)
+			return r.rejectMediaBeforeSend(outcome, channelName, msg, borrowErr)
 		}
 		defer release()
 	}
 	if w == nil {
-		return m.rejectMediaBeforeSend(
+		return r.rejectMediaBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s has no active worker", channelName),
 		)
 	}
 
-	result := m.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, true)
+	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, true)
 	if !result.Delivered() {
 		return newDeliveryError(result.Err, result.MayHaveDelivered())
 	}
 	return nil
 }
 
-func (m *Manager) rejectMediaBeforeSend(
+func (r *DeliveryRuntime) rejectMediaBeforeSend(
 	outcome outcomePublication,
 	channelName string,
 	msg bus.OutboundMediaMessage,
 	err error,
 ) error {
+	m := r.host
 	if outcome.failure(false) {
 		m.publishOutboundMediaFailed(channelName, msg, err)
 	}
@@ -3193,10 +3082,18 @@ func (m *Manager) rejectMediaBeforeSend(
 }
 
 func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, content string) error {
-	m.mu.RLock()
-	channel, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	return m.deliveryRuntime().sendToChannel(ctx, channelName, chatID, content)
+}
+
+func (r *DeliveryRuntime) sendToChannel(
+	ctx context.Context,
+	channelName string,
+	chatID string,
+	content string,
+) error {
+	m := r.host
+	channel, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
 		return fmt.Errorf("channel %s not found", channelName)

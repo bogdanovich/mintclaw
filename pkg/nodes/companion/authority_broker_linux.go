@@ -363,7 +363,7 @@ func (client *AuthorityBrokerClient) call(
 	if err != nil {
 		return authorityBrokerResponseFrame{}, fmt.Errorf("connect authority broker: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	unixConnection, ok := connection.(*net.UnixConn)
 	if !ok {
 		return authorityBrokerResponseFrame{}, errors.New("authority broker connection is not Unix")
@@ -481,7 +481,7 @@ func (server *authorityBrokerServer) Serve(
 	if server == nil || listener == nil {
 		return errors.New("authority broker server is unavailable")
 	}
-	defer server.identity.Close()
+	defer func() { _ = server.identity.Close() }()
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	go func() {
@@ -499,7 +499,7 @@ func (server *authorityBrokerServer) Serve(
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 			server.handleConnection(ctx, connection)
 		}()
 	}

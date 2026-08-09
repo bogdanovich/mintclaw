@@ -19,7 +19,7 @@ func InspectExecutable(path string, platform string, architecture string) (strin
 	if err != nil {
 		return "", 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if err = validateExecutableFile(file, platform, architecture); err != nil {
 		return "", 0, err
 	}

@@ -2,11 +2,12 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -96,11 +97,11 @@ func readTimingSummary(reader io.Reader) (timingSummary, error) {
 }
 
 func sortTimings(timings []timing) {
-	sort.Slice(timings, func(i, j int) bool {
-		if timings[i].elapsed == timings[j].elapsed {
-			return timings[i].name < timings[j].name
+	slices.SortFunc(timings, func(a, b timing) int {
+		if c := cmp.Compare(b.elapsed, a.elapsed); c != 0 {
+			return c
 		}
-		return timings[i].elapsed > timings[j].elapsed
+		return cmp.Compare(a.name, b.name)
 	})
 }
 

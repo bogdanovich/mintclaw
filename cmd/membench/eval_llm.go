@@ -1,11 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -232,8 +233,8 @@ func buildSeahorseContext(
 	for id := range bestRank {
 		messageIDs = append(messageIDs, id)
 	}
-	sort.Slice(messageIDs, func(i, j int) bool {
-		return bestRank[messageIDs[i]] < bestRank[messageIDs[j]]
+	slices.SortFunc(messageIDs, func(a, b int64) int {
+		return cmp.Compare(bestRank[a], bestRank[b])
 	})
 
 	var contentParts []string

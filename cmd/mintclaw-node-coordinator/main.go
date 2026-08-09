@@ -71,7 +71,7 @@ func run(args []string) error {
 		_ = store.Close()
 		return err
 	}
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	supervisor, err := coordinator.NewSupervisor(updateCoordinator, coordinator.DefaultHealthTimeout)
 	if err != nil {
 		return err

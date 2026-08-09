@@ -165,12 +165,13 @@ type browserFeatureView struct {
 }
 
 type browserProfileView struct {
-	Profile     string                   `json:"profile"`
-	Status      string                   `json:"status"`
-	Reason      string                   `json:"reason,omitempty"`
-	NetworkMode string                   `json:"network_mode"`
-	DryRun      bool                     `json:"dry_run"`
-	Readiness   browser.PassiveReadiness `json:"readiness"`
+	Profile              string                   `json:"profile"`
+	Status               string                   `json:"status"`
+	Reason               string                   `json:"reason,omitempty"`
+	NetworkMode          string                   `json:"network_mode"`
+	DryRun               bool                     `json:"dry_run"`
+	AllowApprovedActions bool                     `json:"allow_approved_actions"`
+	Readiness            browser.PassiveReadiness `json:"readiness"`
 }
 
 type browserLimitsView struct {
@@ -248,7 +249,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			profiles = append(profiles, browserProfileView{
 				Profile: profileName, Status: status, Reason: reason,
 				NetworkMode: profile.EffectiveNetworkMode(), DryRun: profile.DryRun,
-				Readiness: readiness,
+				AllowApprovedActions: profile.AllowApprovedActions,
+				Readiness:            readiness,
 			})
 		}
 		targetStatus, targetReason, targetRank := browser.ReadinessReady, "", readinessRank(browser.ReadinessReady)
@@ -269,7 +271,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		if downloadAvailable && !slices.Contains(actions, browser.ActionDownload) {
 			actions = append(actions, browser.ActionDownload)
 		}
-		sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
+		slices.Sort(actions)
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,

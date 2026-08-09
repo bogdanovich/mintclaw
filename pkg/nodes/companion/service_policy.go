@@ -1,12 +1,14 @@
 package companion
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -216,7 +218,7 @@ func normalizeServicePolicyEntry(service ServicePolicyEntry) (ServicePolicyEntry
 		return ServicePolicyEntry{}, errors.New("service grants too many actions")
 	}
 	actions := append([]nodes.ServiceAction(nil), service.Actions...)
-	sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
+	slices.Sort(actions)
 	for index, action := range actions {
 		if !action.Valid() || (index > 0 && actions[index-1] == action) {
 			return ServicePolicyEntry{}, errors.New("actions must be unique supported operations")
@@ -275,8 +277,8 @@ func serviceCapabilityDescriptors(
 	if platform != "linux" || len(profiles) == 0 || enforcement.empty() {
 		return []nodes.CommandDescriptor{}, nil
 	}
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].normalizedAlias < profiles[j].normalizedAlias
+	slices.SortFunc(profiles, func(a, b ServicePolicyProfile) int {
+		return cmp.Compare(a.normalizedAlias, b.normalizedAlias)
 	})
 	authority, err := json.Marshal(profiles)
 	if err != nil {

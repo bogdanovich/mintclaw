@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,8 +61,11 @@ type JobHandler func(job *CronJob) (string, error)
 type CronService struct {
 	storePath  string
 	store      *CronStore
+	loadErr    error
+	reloadWait bool
 	onJob      JobHandler
 	mu         sync.RWMutex
+	dispatchMu sync.Mutex
 	running    bool
 	stopChan   chan struct{}
 	wakeChan   chan struct{}
@@ -74,10 +78,13 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		storePath: storePath,
 		onJob:     onJob,
 		gronx:     gronx.New(),
-		wakeChan:  make(chan struct{}),
+		// Capacity-one coalescing wake channel: a notification sent while the
+		// loop is not yet in its select stays pending until consumed, so a
+		// recovery signal is never dropped.
+		wakeChan: make(chan struct{}, 1),
 	}
 	// Initialize and load store on creation
-	cs.loadStore()
+	_ = cs.loadStore()
 	return cs
 }
 
@@ -100,7 +107,7 @@ func (cs *CronService) Start() error {
 
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		cs.wakeChan = make(chan struct{})
+		cs.wakeChan = make(chan struct{}, 1)
 	}
 	cs.running = true
 	go cs.runLoop(cs.stopChan)
@@ -171,9 +178,23 @@ func (cs *CronService) runLoop(stopChan chan struct{}) {
 }
 
 func (cs *CronService) checkJobs() {
+	// Hold dispatchMu across selection/claiming, persistence, and dispatch so
+	// a reload cannot interleave after a due job's next run has been cleared
+	// and persisted: a failed reload must never drop an already claimed run.
+	cs.dispatchMu.Lock()
+	defer cs.dispatchMu.Unlock()
+
 	cs.mu.Lock()
 
 	if !cs.running {
+		cs.mu.Unlock()
+		return
+	}
+
+	// A failed reload latches loadErr and a missing-store reload sets
+	// reloadWait; in both cases block selection/persistence/execution so the
+	// live snapshot cannot overwrite or recreate the authoritative file.
+	if cs.writesBlocked() {
 		cs.mu.Unlock()
 		return
 	}
@@ -298,8 +319,10 @@ func (cs *CronService) executeJobByID(jobID string) {
 		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
 	}
 
-	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+	if !cs.writesBlocked() {
+		if err := cs.saveStoreUnsafe(); err != nil {
+			log.Printf("[cron] failed to save store: %v", err)
+		}
 	}
 }
 
@@ -371,6 +394,12 @@ func (cs *CronService) recomputeNextRuns() {
 }
 
 func (cs *CronService) getNextWakeMS() *int64 {
+	// Suspend the scheduler while the store is unavailable: an overdue job
+	// would otherwise keep the wake timer at zero and busy-spin the loop.
+	if cs.loadErr != nil {
+		return nil
+	}
+
 	var nextWake *int64
 	for _, job := range cs.store.Jobs {
 		if job.Enabled && job.State.NextRunAtMS != nil {
@@ -383,9 +412,80 @@ func (cs *CronService) getNextWakeMS() *int64 {
 }
 
 func (cs *CronService) Load() error {
+	// Probe the authoritative file while holding cs.mu so the write barrier
+	// (loadErr/reloadWait) is latched atomically with the probe: an in-flight
+	// handler completion or CRUD caller cannot slip in between the probe and
+	// the latch and overwrite a corrupt or deleted file with the stale live
+	// snapshot. Release cs.mu before serializing with dispatch.
+	cs.mu.Lock()
+	probe, probeErr := cs.readStore()
+	if probeErr != nil {
+		cs.loadErr = probeErr
+		cs.notify()
+		cs.mu.Unlock()
+		return probeErr
+	}
+	if probe == nil {
+		// The file is missing: suppress dispatch writes and mutations until
+		// the locked re-read is published so the deleted file cannot be
+		// recreated with stale live state.
+		cs.reloadWait = true
+	}
+	cs.mu.Unlock()
+
+	cs.dispatchMu.Lock()
+	defer cs.dispatchMu.Unlock()
+
+	// Hold cs.mu across the authoritative re-read and publication so a CRUD
+	// mutation cannot commit between the read and the publish.
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	return cs.loadStore()
+
+	// Re-read after in-flight dispatch finishes and publish only that fresh
+	// snapshot: a handler may have committed deletion, disablement, or the
+	// next recurring run while we waited. Do not clear loadErr if this read
+	// fails.
+	store, readErr := cs.readStore()
+	if readErr != nil {
+		cs.reloadWait = false
+		cs.loadErr = readErr
+		cs.notify()
+		return readErr
+	}
+
+	if store == nil {
+		// A missing authoritative file is an empty store: replace the live
+		// state so jobs deleted from disk cannot run or recreate the file.
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
+	} else {
+		cs.store = store
+	}
+	cs.loadErr = nil
+	cs.reloadWait = false
+	// Re-evaluate the scheduler wake time after every reload outcome so a
+	// repaired store resumes promptly and a failed one suspends.
+	cs.notify()
+	return nil
+}
+
+// writesBlocked reports whether the live store must not be persisted: either
+// the authoritative store failed to load or a reload is being serialized with
+// an in-flight dispatch.
+func (cs *CronService) writesBlocked() bool {
+	return cs.loadErr != nil || cs.reloadWait
+}
+
+// storeUnavailableErr reports why mutations must be rejected while the
+// authoritative store cannot be written: either a failed load or a reload
+// that is pending serialization with an in-flight dispatch.
+func (cs *CronService) storeUnavailableErr() error {
+	if cs.loadErr != nil {
+		return fmt.Errorf("cron store unavailable: %w", cs.loadErr)
+	}
+	return errors.New("cron store unavailable: reload in progress")
 }
 
 func (cs *CronService) SetOnJob(handler JobHandler) {
@@ -395,20 +495,54 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 }
 
 func (cs *CronService) loadStore() error {
-	cs.store = &CronStore{
-		Version: 1,
-		Jobs:    []CronJob{},
+	store, err := cs.readStore()
+	if err != nil {
+		cs.ensureStore()
+		cs.loadErr = err
+		return err
 	}
+	if store == nil {
+		// A missing authoritative file is an empty store.
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
+		cs.loadErr = nil
+		return nil
+	}
+	cs.store = store
+	cs.loadErr = nil
+	return nil
+}
 
+// readStore reads and decodes the authoritative store without mutating the
+// live state. It returns a nil store when the file does not exist.
+func (cs *CronService) readStore() (*CronStore, error) {
 	data, err := os.ReadFile(cs.storePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 
-	return json.Unmarshal(data, cs.store)
+	store := &CronStore{
+		Version: 1,
+		Jobs:    []CronJob{},
+	}
+	if err := json.Unmarshal(data, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (cs *CronService) ensureStore() {
+	if cs.store == nil {
+		cs.store = &CronStore{
+			Version: 1,
+			Jobs:    []CronJob{},
+		}
+	}
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
@@ -428,15 +562,36 @@ func (cs *CronService) AddJob(
 	message string,
 	channel, to string,
 ) (*CronJob, error) {
+	return cs.AddJobWithPayload(name, schedule, CronPayload{
+		Kind:    payloadKind,
+		Message: message,
+		Channel: channel,
+		To:      to,
+	})
+}
+
+// AddJobWithPayload persists a fully populated payload atomically. Callers
+// that set optional fields (e.g. command jobs) must use this so a failed
+// follow-up write cannot leave a partial job on disk that reappears after
+// restart.
+func (cs *CronService) AddJobWithPayload(
+	name string,
+	schedule CronSchedule,
+	payload CronPayload,
+) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.writesBlocked() {
+		return nil, cs.storeUnavailableErr()
+	}
 
 	now := time.Now().UnixMilli()
 
 	// One-time tasks (at) should be deleted after execution
 	deleteAfterRun := (schedule.Kind == "at")
-	if payloadKind == "" {
-		payloadKind = "agent_turn"
+	if payload.Kind == "" {
+		payload.Kind = "agent_turn"
 	}
 
 	job := CronJob{
@@ -444,12 +599,7 @@ func (cs *CronService) AddJob(
 		Name:     name,
 		Enabled:  true,
 		Schedule: schedule,
-		Payload: CronPayload{
-			Kind:    payloadKind,
-			Message: message,
-			Channel: channel,
-			To:      to,
-		},
+		Payload:  payload,
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
 		},
@@ -460,6 +610,17 @@ func (cs *CronService) AddJob(
 
 	cs.store.Jobs = append(cs.store.Jobs, job)
 	if err := cs.saveStoreUnsafe(); err != nil {
+		if fileutil.IsCommittedWriteError(err) {
+			// The atomic rename already installed the new store: the job is
+			// durable on disk (only its sync is unconfirmed). Keep it live so
+			// it cannot reappear unexpectedly after restart, and surface the
+			// uncertain durability so a retry cannot create a duplicate.
+			cs.notify()
+			return &job, fmt.Errorf("job %s added but durability was not confirmed: %w", job.ID, err)
+		}
+		// Pre-commit failure: roll back the in-memory append so a job reported
+		// as not added cannot run in the live scheduler for this process.
+		cs.store.Jobs = cs.store.Jobs[:len(cs.store.Jobs)-1]
 		return nil, err
 	}
 
@@ -484,6 +645,10 @@ func (cs *CronService) GetJob(jobID string) (*CronJob, bool) {
 func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.writesBlocked() {
+		return cs.storeUnavailableErr()
+	}
 
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == job.ID {
@@ -548,6 +713,10 @@ func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	if cs.writesBlocked() {
+		return false
+	}
+
 	return cs.removeJobUnsafe(jobID)
 }
 
@@ -563,8 +732,10 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	removed := len(cs.store.Jobs) < before
 
 	if removed {
-		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store after remove: %v", err)
+		if !cs.writesBlocked() {
+			if err := cs.saveStoreUnsafe(); err != nil {
+				log.Printf("[cron] failed to save store after remove: %v", err)
+			}
 		}
 	}
 
@@ -573,13 +744,18 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	return removed
 }
 
-func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
+func (cs *CronService) EnableJob(jobID string, enabled bool) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	if cs.writesBlocked() {
+		return nil, cs.storeUnavailableErr()
+	}
 
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.ID == jobID {
+			previous := cs.store.Jobs[i]
 			job.Enabled = enabled
 			job.UpdatedAtMS = time.Now().UnixMilli()
 
@@ -590,16 +766,26 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 			}
 
 			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after enable: %v", err)
+				if fileutil.IsCommittedWriteError(err) {
+					// The atomic rename already installed the new store: keep
+					// the in-memory change so it matches durable state and
+					// surface the uncertain durability.
+					cs.notify()
+					return job, fmt.Errorf("job %s updated but durability was not confirmed: %w", jobID, err)
+				}
+				// Pre-commit failure: restore the previous state so a job
+				// reported as not updated cannot run in the live scheduler.
+				cs.store.Jobs[i] = previous
+				return nil, fmt.Errorf("failed to save store after enable: %w", err)
 			}
 
 			cs.notify()
 
-			return job
+			return job, nil
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("job %s not found", jobID)
 }
 
 func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {

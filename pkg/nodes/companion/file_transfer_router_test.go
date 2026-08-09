@@ -95,19 +95,56 @@ func TestFileTransferRouterRejectsAliasAndRevisionCollisions(t *testing.T) {
 	}
 }
 
+func TestFileTransferRouterRoutesDescriptorlessJobArtifactRevision(t *testing.T) {
+	handled := false
+	capability := &staticFileCapability{
+		transferRevisions: []string{"jobs-v1"}, handled: &handled,
+	}
+	router, err := NewFileTransferRouter(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(router.Descriptors()) != 0 {
+		t.Fatalf("descriptorless job source advertised file commands: %#v", router.Descriptors())
+	}
+	frame := protocol.TransferFrame{
+		Type: protocol.TransferFrameStatus, Direction: protocol.TransferDownload,
+		TransferID: "job_transfer", PolicyRevision: "jobs-v1", SHA256: emptyTransferDigest,
+	}
+	if err := router.HandleTransferFrame(
+		t.Context(),
+		frame,
+		func(protocol.TransferFrame) error { return nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("descriptorless job transfer revision was not routed")
+	}
+}
+
 type staticFileCapability struct {
-	descriptors []nodes.CommandDescriptor
+	descriptors       []nodes.CommandDescriptor
+	transferRevisions []string
+	handled           *bool
 }
 
 func (capability staticFileCapability) Descriptors() []nodes.CommandDescriptor {
 	return cloneFileCapabilityDescriptors(capability.descriptors)
 }
 
-func (staticFileCapability) HandleTransferFrame(
+func (capability staticFileCapability) TransferPolicyRevisions() []string {
+	return append([]string(nil), capability.transferRevisions...)
+}
+
+func (capability staticFileCapability) HandleTransferFrame(
 	context.Context,
 	protocol.TransferFrame,
 	func(protocol.TransferFrame) error,
 ) error {
+	if capability.handled != nil {
+		*capability.handled = true
+	}
 	return nil
 }
 

@@ -53,6 +53,7 @@ type ExecTool struct {
 	allowRemote         bool
 	permissionMode      string
 	sessionManager      *SessionManager
+	ownsSessionManager  bool
 	workspaceTempDir    string
 }
 
@@ -138,6 +139,52 @@ func NewExecToolWithConfig(
 	cfg *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
+	workspaceTempDir, err := workspaceutil.EnsureTempDir(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workspace tmp directory: %w", err)
+	}
+	return newExecToolWithConfig(workingDir, workspaceTempDir, restrict, cfg, allowPaths...)
+}
+
+// NewExecToolWithRuntimeConfig keeps MintClaw-owned scratch state outside the
+// execution root used as the subprocess working directory.
+func NewExecToolWithRuntimeConfig(
+	workingDir string,
+	scratchDir string,
+	restrict bool,
+	cfg *config.Config,
+	allowPaths ...[]*regexp.Regexp,
+) (*ExecTool, error) {
+	if strings.TrimSpace(scratchDir) == "" {
+		return nil, fmt.Errorf("exec scratch directory is required")
+	}
+	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create exec scratch directory: %w", err)
+	}
+	tool, err := newExecToolWithConfig(workingDir, scratchDir, restrict, cfg, allowPaths...)
+	if err != nil {
+		return nil, err
+	}
+	tool.sessionManager = NewSessionManager()
+	tool.ownsSessionManager = true
+	return tool, nil
+}
+
+// Close stops and terminates sessions owned by a runtime-scoped exec tool.
+func (t *ExecTool) Close() error {
+	if t == nil || !t.ownsSessionManager || t.sessionManager == nil {
+		return nil
+	}
+	return t.sessionManager.Close()
+}
+
+func newExecToolWithConfig(
+	workingDir string,
+	workspaceTempDir string,
+	restrict bool,
+	cfg *config.Config,
+	allowPaths ...[]*regexp.Regexp,
+) (*ExecTool, error) {
 	builtInDenyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
@@ -191,11 +238,6 @@ func NewExecToolWithConfig(
 	var timeout time.Duration
 	if cfg != nil && cfg.Tools.Exec.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
-	}
-
-	workspaceTempDir, err := workspaceutil.EnsureTempDir(workingDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create workspace tmp directory: %w", err)
 	}
 
 	return &ExecTool{
@@ -561,6 +603,15 @@ func validUTF8Suffix(s string, maxBytes int) string {
 }
 
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *toolshared.ToolResult {
+	admission, ok := t.sessionManager.beginAdmission()
+	if !ok {
+		return toolshared.ErrorResult("runtime exec closed before process admission")
+	}
+	var admissionErr error
+	defer func() {
+		admission.finish(admissionErr)
+	}()
+
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -570,6 +621,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		completion: make(chan struct{}),
 	}
 
 	var cmd *exec.Cmd
@@ -639,7 +691,26 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 
 	session.PID = cmd.Process.Pid
-	t.sessionManager.Add(session)
+	if !admission.admit(session) {
+		terminateErr := terminateProcessTree(cmd)
+		waitErr := cmd.Wait()
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			waitErr = nil
+		}
+		var ptyCloseErr error
+		if session.ptyMaster != nil {
+			ptyCloseErr = session.ptyMaster.Close()
+		}
+		admissionErr = errors.Join(terminateErr, waitErr, ptyCloseErr)
+		if admissionErr != nil {
+			return toolshared.ErrorResult(fmt.Sprintf(
+				"runtime exec closed during process admission cleanup: %v",
+				admissionErr,
+			))
+		}
+		return toolshared.ErrorResult("runtime exec closed during process admission")
+	}
 
 	session.outputBuffer = &bytes.Buffer{}
 
@@ -648,6 +719,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
 	if session.PTY && session.ptyMaster != nil {
 		go func() {
+			var waitErr error
 			defer func() {
 				if r := recover(); r != nil {
 					logger.ErrorCF("shell", "PTY cmd.Wait goroutine panic recovered",
@@ -655,18 +727,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
-					session.mu.Lock()
-					session.Status = "error"
-					session.mu.Unlock()
+					waitErr = fmt.Errorf("panic in PTY cmd.Wait: %v", r)
 				}
+				exitCode := -1
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				}
+				session.complete(exitCode, waitErr)
 			}()
-			cmd.Wait() // Wait for process to exit
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			}
-			session.Status = "done"
-			session.mu.Unlock()
+			waitErr = cmd.Wait()
 		}()
 
 		go func() {
@@ -709,6 +778,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		// When Read() returns EOF (pipe closed), we break.
 		// When process exits, OS closes pipe write end → Read() returns EOF → we exit.
 		go func() {
+			var waitErr error
 			defer func() {
 				if r := recover(); r != nil {
 					logger.ErrorCF("shell", "pipe read goroutine panic recovered",
@@ -716,7 +786,13 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
+					waitErr = fmt.Errorf("panic while collecting background output: %v", r)
 				}
+				exitCode := -1
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				}
+				session.complete(exitCode, waitErr)
 			}()
 			buf := make([]byte, 4096)
 
@@ -764,14 +840,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			if stdinWriter != nil {
 				_ = stdinWriter.Close()
 			}
-			cmd.Wait()
-
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			}
-			session.Status = "done"
-			session.mu.Unlock()
+			waitErr = cmd.Wait()
 		}()
 	}
 
@@ -933,6 +1002,9 @@ func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
 
 	if err = session.Kill(); err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
+	}
+	if err = session.waitForCompletion(); err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("failed to reap session: %v", err))
 	}
 
 	t.sessionManager.Remove(sessionID)

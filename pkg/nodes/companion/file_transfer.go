@@ -2,6 +2,7 @@ package companion
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -20,9 +22,11 @@ import (
 )
 
 const (
-	fileOperationInfo     = "info"
-	fileOperationUpload   = "upload"
-	fileOperationDownload = "download"
+	fileOperationInfo                = "info"
+	fileOperationUpload              = "upload"
+	fileOperationDownload            = "download"
+	fileOperationJobArtifactInfo     = "job_artifact_info"
+	fileOperationJobArtifactDownload = "job_artifact_download"
 
 	filePublicationCreate  = "create"
 	filePublicationReplace = "replace"
@@ -35,6 +39,12 @@ type fileTransferPrepare struct {
 	Path        string `json:"path"`
 	Publication string `json:"publication,omitempty"`
 	ExpiresAt   int64  `json:"expires_at"`
+	JobProfile  string `json:"job_profile,omitempty"`
+	JobID       string `json:"job_id,omitempty"`
+	ArtifactRef string `json:"artifact_ref,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	ActorID     string `json:"actor_id,omitempty"`
 }
 
 type fileTransferResult struct {
@@ -79,6 +89,8 @@ type FileTransferRuntime struct {
 	ledger      *FileTransferLedger
 	descriptors []nodes.CommandDescriptor
 	profiles    map[string]*fileProfileRuntime
+	jobs        *JobRuntime
+	jobProfiles map[string]string
 	now         func() time.Time
 
 	activeMu sync.Mutex
@@ -91,8 +103,16 @@ func NewFileTransferRuntime(
 	policies FilePolicies,
 	ledger *FileTransferLedger,
 ) (*FileTransferRuntime, error) {
-	if len(policies) == 0 {
-		return nil, errors.New("node file transfer policies are required")
+	return NewFileTransferRuntimeWithJobs(policies, ledger, nil)
+}
+
+func NewFileTransferRuntimeWithJobs(
+	policies FilePolicies,
+	ledger *FileTransferLedger,
+	jobs *JobRuntime,
+) (*FileTransferRuntime, error) {
+	if len(policies) == 0 && jobs == nil {
+		return nil, errors.New("node file transfer policies or job runtime are required")
 	}
 	if ledger == nil {
 		return nil, errors.New("node file transfer ledger is required")
@@ -101,15 +121,30 @@ func NewFileTransferRuntime(
 	if err != nil {
 		return nil, err
 	}
-	if len(descriptors) == 0 {
+	if len(descriptors) == 0 && jobs == nil {
 		return nil, errors.New("node file transfer policies grant no enabled profile")
 	}
 	runtime := &FileTransferRuntime{
 		ledger:      ledger,
 		descriptors: descriptors,
 		profiles:    make(map[string]*fileProfileRuntime),
+		jobs:        jobs,
+		jobProfiles: make(map[string]string),
 		active:      make(map[string]*activeFileTransfer),
 		now:         time.Now,
+	}
+	if jobs != nil {
+		for _, descriptor := range jobs.Descriptors() {
+			for _, profile := range descriptor.JobProfiles {
+				if prior, duplicate := runtime.jobProfiles[profile.Revision]; duplicate && prior != profile.Alias {
+					return nil, errors.New("duplicate node job profile revision")
+				}
+				runtime.jobProfiles[profile.Revision] = profile.Alias
+			}
+		}
+		if len(runtime.jobProfiles) == 0 {
+			return nil, errors.New("node job runtime has no artifact profiles")
+		}
 	}
 	aliases := make([]string, 0, len(policies))
 	for alias := range policies {
@@ -158,13 +193,11 @@ func openFileProfile(profile FilePolicyProfile) (*fileProfileRuntime, error) {
 		}
 		runtime.writableRoots = append(runtime.writableRoots, root)
 	}
-	sort.Slice(runtime.readableRoots, func(left, right int) bool {
-		return len(runtime.readableRoots[left].path) >
-			len(runtime.readableRoots[right].path)
+	slices.SortFunc(runtime.readableRoots, func(a, b *fileRoot) int {
+		return cmp.Compare(len(b.path), len(a.path))
 	})
-	sort.Slice(runtime.writableRoots, func(left, right int) bool {
-		return len(runtime.writableRoots[left].path) >
-			len(runtime.writableRoots[right].path)
+	slices.SortFunc(runtime.writableRoots, func(a, b *fileRoot) int {
+		return cmp.Compare(len(b.path), len(a.path))
 	})
 	return runtime, nil
 }
@@ -234,6 +267,18 @@ func (runtime *FileTransferRuntime) Descriptors() []nodes.CommandDescriptor {
 	return result
 }
 
+func (runtime *FileTransferRuntime) TransferPolicyRevisions() []string {
+	if runtime == nil {
+		return nil
+	}
+	revisions := make([]string, 0, len(runtime.jobProfiles))
+	for revision := range runtime.jobProfiles {
+		revisions = append(revisions, revision)
+	}
+	sort.Strings(revisions)
+	return revisions
+}
+
 func (runtime *FileTransferRuntime) HandleTransferFrame(
 	ctx context.Context,
 	frame protocol.TransferFrame,
@@ -260,11 +305,15 @@ func (runtime *FileTransferRuntime) HandleTransferFrame(
 		}
 	}
 	profile := runtime.profiles[frame.PolicyRevision]
-	if profile == nil {
+	jobProfile := runtime.jobProfiles[frame.PolicyRevision]
+	if profile == nil && jobProfile == "" {
 		return runtime.sendDenial(frame, send, "PROFILE_DENIED")
 	}
 	switch frame.Type {
 	case protocol.TransferFramePrepare:
+		if jobProfile != "" {
+			return runtime.prepareJobArtifact(ctx, jobProfile, frame, send)
+		}
 		return runtime.prepare(ctx, profile, frame, send)
 	case protocol.TransferFrameChunk:
 		return runtime.receiveUploadChunk(frame, send)
@@ -289,7 +338,9 @@ func (runtime *FileTransferRuntime) prepare(
 ) error {
 	var request fileTransferPrepare
 	if err := decodeStrictJSON(frame.Payload, &request); err != nil ||
-		request.ExpiresAt <= 0 {
+		request.ExpiresAt <= 0 || request.JobProfile != "" || request.JobID != "" ||
+		request.ArtifactRef != "" || request.AgentID != "" || request.SessionID != "" ||
+		request.ActorID != "" {
 		return runtime.sendDenial(frame, send, "INVALID_PREPARE")
 	}
 	if err := validateFilePath(request.Path); err != nil {
@@ -340,6 +391,175 @@ func (runtime *FileTransferRuntime) prepare(
 	}
 }
 
+func (runtime *FileTransferRuntime) prepareJobArtifact(
+	connectionContext context.Context,
+	profileAlias string,
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	var request fileTransferPrepare
+	if err := decodeStrictJSON(frame.Payload, &request); err != nil || request.ExpiresAt <= 0 ||
+		request.Path != "" || request.Publication != "" || request.JobProfile != profileAlias ||
+		request.JobID == "" || request.ArtifactRef == "" {
+		return runtime.sendDenial(frame, send, "INVALID_PREPARE")
+	}
+	owner := JobOwner{AgentID: request.AgentID, SessionID: request.SessionID, ActorID: request.ActorID}
+	if owner.validate() != nil || nodes.ID(request.JobID).Validate() != nil ||
+		nodes.ID(request.ArtifactRef).Validate() != nil {
+		return runtime.sendDenial(frame, send, "JOB_ARTIFACT_DENIED")
+	}
+	if request.Operation != fileOperationJobArtifactInfo &&
+		request.Operation != fileOperationJobArtifactDownload {
+		return runtime.sendDenial(frame, send, "OPERATION_DENIED")
+	}
+	candidate := runtime.recordForJobArtifactPrepare(profileAlias, frame, request, owner)
+	if existing, found, err := runtime.ledger.Lookup(frame.TransferID); err != nil {
+		return err
+	} else if found {
+		if !sameFileTransferBinding(existing, candidate) {
+			return runtime.sendDenial(frame, send, "TRANSFER_CONFLICT")
+		}
+		return runtime.sendExisting(frame, existing, send)
+	}
+	now := runtime.now()
+	if now.Unix() >= request.ExpiresAt || request.ExpiresAt > now.Add(time.Hour).Unix() {
+		return runtime.sendDenial(frame, send, "INVALID_PREPARE")
+	}
+	if request.Operation == fileOperationJobArtifactInfo {
+		return runtime.prepareJobArtifactInfo(profileAlias, frame, request, owner, send)
+	}
+	return runtime.prepareJobArtifactDownload(
+		connectionContext,
+		profileAlias,
+		frame,
+		request,
+		owner,
+		send,
+	)
+}
+
+func (runtime *FileTransferRuntime) prepareJobArtifactInfo(
+	profileAlias string,
+	frame protocol.TransferFrame,
+	request fileTransferPrepare,
+	owner JobOwner,
+	send func(protocol.TransferFrame) error,
+) error {
+	if frame.Direction != protocol.TransferDownload || frame.TotalSize != 0 ||
+		frame.SHA256 != emptyTransferDigest {
+		return runtime.sendDenial(frame, send, "INVALID_METADATA_BINDING")
+	}
+	file, artifact, err := runtime.jobs.OpenArtifact(owner, profileAlias, request.JobID, request.ArtifactRef)
+	if err != nil {
+		return runtime.sendDenial(frame, send, "JOB_ARTIFACT_DENIED")
+	}
+	defer func() { _ = file.Close() }()
+	if validationErr := validateOpenedJobArtifact(file, artifact); validationErr != nil {
+		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
+	}
+	result := fileTransferResult{
+		State: FileTransferCommitted, Type: "regular_file", Size: uint64(artifact.Size), SHA256: artifact.SHA256,
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	record := runtime.recordForJobArtifactPrepare(profileAlias, frame, request, owner)
+	record.State = FileTransferCommitted
+	record.Result = payload
+	record.CompletedAt = time.Now().UnixNano()
+	accepted, existing, err := runtime.ledger.Accept(record)
+	if err != nil {
+		return err
+	}
+	if existing {
+		return runtime.sendExisting(frame, accepted, send)
+	}
+	return send(responseTransferFrame(frame, protocol.TransferFrameCommitted, payload))
+}
+
+func (runtime *FileTransferRuntime) prepareJobArtifactDownload(
+	connectionContext context.Context,
+	profileAlias string,
+	frame protocol.TransferFrame,
+	request fileTransferPrepare,
+	owner JobOwner,
+	send func(protocol.TransferFrame) error,
+) error {
+	if frame.Direction != protocol.TransferDownload || frame.TotalSize > uint64(nodes.MaxJobArtifactBytes) {
+		return runtime.sendDenial(frame, send, "READ_DENIED")
+	}
+	if !runtime.hasActiveCapacity(frame.PolicyRevision) {
+		return runtime.sendDenial(frame, send, "CAPACITY_EXCEEDED")
+	}
+	file, artifact, err := runtime.jobs.OpenArtifact(owner, profileAlias, request.JobID, request.ArtifactRef)
+	if err != nil {
+		return runtime.sendDenial(frame, send, "JOB_ARTIFACT_DENIED")
+	}
+	if validationErr := validateOpenedJobArtifact(file, artifact); validationErr != nil ||
+		uint64(artifact.Size) != frame.TotalSize || artifact.SHA256 != hex.EncodeToString(frame.SHA256[:]) {
+		_ = file.Close()
+		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
+	}
+	identity, err := identityFromInfo(info)
+	if err != nil {
+		_ = file.Close()
+		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
+	}
+	source := &resolvedFile{file: file, info: info, identity: identity}
+	record := runtime.recordForJobArtifactPrepare(profileAlias, frame, request, owner)
+	record.SourceIdentity = identity
+	record.SourceModified = info.ModTime().UnixNano()
+	accepted, existing, err := runtime.ledger.Accept(record)
+	if err != nil || existing {
+		_ = file.Close()
+		if err != nil {
+			return err
+		}
+		return runtime.sendExisting(frame, accepted, send)
+	}
+	transferContext, cancel := context.WithCancel(connectionContext)
+	active := &activeFileTransfer{
+		record: accepted, source: source, hasher: sha256.New(), acknowledged: make(chan uint64, 1),
+		ctx: transferContext, cancel: cancel, received: make(chan struct{}), done: make(chan struct{}),
+	}
+	if err := runtime.addActive(active); err != nil {
+		runtime.cancelTransfer(active, FileTransferCanceled)
+		return runtime.sendDenial(frame, send, "CAPACITY_EXCEEDED")
+	}
+	if err := send(responseTransferFrame(
+		frame,
+		protocol.TransferFrameAccept,
+		mustFileTransferResult(fileTransferResult{State: FileTransferAccepted}),
+	)); err != nil {
+		runtime.cancelTransfer(active, FileTransferCanceled)
+		return err
+	}
+	go runtime.streamDownload(active, frame, send)
+	go runtime.watchConnection(active, accepted.ExpiresAt)
+	return nil
+}
+
+func validateOpenedJobArtifact(file *os.File, artifact JobArtifactRecord) error {
+	if file == nil || artifact.State != JobArtifactAvailable || artifact.Size < 0 ||
+		artifact.Size > nodes.MaxJobArtifactBytes || len(artifact.SHA256) != sha256.Size*2 {
+		return ErrJobConflict
+	}
+	if _, err := hex.DecodeString(artifact.SHA256); err != nil {
+		return ErrJobConflict
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != artifact.Size {
+		return ErrJobConflict
+	}
+	return nil
+}
+
 func (runtime *FileTransferRuntime) prepareInfo(
 	ctx context.Context,
 	profile *fileProfileRuntime,
@@ -357,7 +577,7 @@ func (runtime *FileTransferRuntime) prepareInfo(
 	if err != nil {
 		return runtime.sendFileAccessDenial(frame, send, err)
 	}
-	defer source.file.Close()
+	defer func() { _ = source.file.Close() }()
 	digest, err := hashOpenedFile(ctx, source.file)
 	if err != nil {
 		return runtime.sendDenial(frame, send, "SOURCE_CHANGED")
@@ -1288,7 +1508,10 @@ func (runtime *FileTransferRuntime) reconcile() error {
 			continue
 		}
 		profile := runtime.profiles[record.PolicyRevision]
-		if profile == nil || profile.profile.normalizedAlias != record.ProfileAlias {
+		jobProfile := runtime.jobProfiles[record.PolicyRevision]
+		profileCurrent := profile != nil && profile.profile.normalizedAlias == record.ProfileAlias
+		jobProfileCurrent := jobProfile != "" && jobProfile == record.ProfileAlias
+		if !profileCurrent && !jobProfileCurrent {
 			if _, err := runtime.ledger.Transition(
 				record.TransferID,
 				func(current *FileTransferRecord, _ time.Time) error {
@@ -1321,6 +1544,9 @@ func (runtime *FileTransferRuntime) reconcile() error {
 			}
 			continue
 		}
+		if !profileCurrent {
+			return ErrFileTransferConflict
+		}
 		if err := runtime.reconcileUpload(profile, record); err != nil {
 			return err
 		}
@@ -1344,7 +1570,7 @@ func (runtime *FileTransferRuntime) reconcileUpload(
 		)
 		return transitionErr
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	if record.State == FileTransferCommitRequested {
 		final, finalErr := parent.openFinalRegular()
 		if finalErr == nil &&
@@ -1478,6 +1704,24 @@ func (runtime *FileTransferRuntime) recordForPrepare(
 		SHA256:         hex.EncodeToString(frame.SHA256[:]),
 		ExpiresAt:      request.ExpiresAt,
 		State:          FileTransferAccepted,
+	}
+}
+
+func (runtime *FileTransferRuntime) recordForJobArtifactPrepare(
+	profileAlias string,
+	frame protocol.TransferFrame,
+	request fileTransferPrepare,
+	owner JobOwner,
+) FileTransferRecord {
+	return FileTransferRecord{
+		TransferID: frame.TransferID, Direction: frame.Direction,
+		Operation: request.Operation, ProfileAlias: profileAlias,
+		PolicyRevision: frame.PolicyRevision, TotalSize: frame.TotalSize,
+		SHA256: hex.EncodeToString(frame.SHA256[:]), ExpiresAt: request.ExpiresAt,
+		State: FileTransferAccepted,
+		JobArtifact: &JobArtifactTransferBinding{
+			Owner: owner, JobID: request.JobID, ArtifactRef: request.ArtifactRef,
+		},
 	}
 }
 

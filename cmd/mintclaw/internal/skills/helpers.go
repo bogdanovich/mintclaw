@@ -344,7 +344,7 @@ func copyDirectory(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		defer srcFile.Close()
+		defer func() { _ = srcFile.Close() }()
 
 		dstFile, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
 		if err != nil {

@@ -11,13 +11,13 @@ import (
 
 func TestProjectUpdateDescriptorRequiresExactTargetProfile(t *testing.T) {
 	descriptor := updateProjectionDescriptor(t)
-	if _, available := projectDescriptorForTarget(descriptor, "", "", ""); available {
+	if _, available := projectDescriptorForTarget(descriptor, "", "", "", ""); available {
 		t.Fatal("update descriptor was visible without a target profile")
 	}
-	if _, available := projectDescriptorForTarget(descriptor, "", "", "missing"); available {
+	if _, available := projectDescriptorForTarget(descriptor, "", "", "missing", ""); available {
 		t.Fatal("update descriptor was visible for an unknown target profile")
 	}
-	projected, available := projectDescriptorForTarget(descriptor, "", "", "stable")
+	projected, available := projectDescriptorForTarget(descriptor, "", "", "stable", "")
 	if !available {
 		t.Fatal("stable update descriptor was unavailable")
 	}
@@ -37,7 +37,7 @@ func TestProjectUpdateDescriptorRequiresExactTargetProfile(t *testing.T) {
 		t.Fatalf("projection leaked another profile: %s", encoded)
 	}
 	descriptor.ModelContract.Availability = nodes.ModelUnavailable
-	projected, available = projectDescriptorForTarget(descriptor, "", "", "stable")
+	projected, available = projectDescriptorForTarget(descriptor, "", "", "stable", "")
 	if !available || projected.ModelContract.Availability != nodes.ModelUnavailable {
 		t.Fatalf("target projection broadened local update policy: %#v, %v", projected.ModelContract, available)
 	}

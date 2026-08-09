@@ -32,7 +32,7 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		// Non-routable message (e.g. system) stays synchronous so it preserves
 		// the historical ordering guarantee and does not enter session steering.
 		admission := al.processMessageSync(ctx, msg)
-		al.settleInboundAdmission(ctx, msg, admission)
+		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
 	cancellation, err := al.cancelInteractionForControlMessage(ctx, msg, target)
@@ -43,7 +43,7 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 			target.SessionKey,
 			"The pending interaction could not be canceled; please retry.",
 		)
-		al.settleInboundAdmission(ctx, msg, admission)
+		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
 	if cancellation.CommandHandled {
@@ -59,7 +59,7 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 			commands.StopResult{Stopped: cancellation.Canceled},
 			nil,
 		)
-		al.settleInboundAdmission(ctx, msg, admission)
+		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
 	if c.routeExplicitInteractionAnswer(ctx, msg, target) {
@@ -134,7 +134,7 @@ func (c *inboundTurnCoordinator) handleBusySession(
 	}
 	scope := target.runtimeSessionScope()
 	if handled, admission := al.tryHandleStopCommand(ctx, msg, scope, target.Agent.ID); handled {
-		al.settleInboundAdmission(ctx, msg, admission)
+		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
 
@@ -212,7 +212,7 @@ func (c *inboundTurnCoordinator) runWorker(
 
 	turn := al.buildInboundMessageTurnForTarget(ctx, msg, target)
 	admission := al.runInboundTurnWithSteering(ctx, turn)
-	al.settleInboundAdmission(ctx, msg, admission)
+	_ = al.settleInboundAdmission(ctx, msg, admission)
 }
 
 func (c *inboundTurnCoordinator) acquireTurnCapacity(
@@ -283,7 +283,7 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 		if settleErr != nil {
 			admission = rejectedFinalResponseAdmission(settleErr)
 		}
-		al.settleInboundAdmission(ctx, msg, admission)
+		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
 	admission := finalResponseAdmission{status: finalResponseAdmissionNotRequired}
@@ -305,7 +305,7 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 	if settleErr := al.settleSteeringMessages(admission, steeringAggregate.messages); settleErr != nil {
 		admission = rejectedFinalResponseAdmission(settleErr)
 	}
-	al.settleInboundAdmission(ctx, msg, admission)
+	_ = al.settleInboundAdmission(ctx, msg, admission)
 }
 
 func (c *inboundTurnCoordinator) recoverWorkerPanic(sessionKey string, msg bus.InboundMessage) {

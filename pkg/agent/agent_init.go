@@ -74,6 +74,7 @@ func newAgentLoopWithRegistry(
 		agentTurnAdmissions: newAgentTurnAdmissionController(registry),
 		ownsRuntimeEvents:   true,
 		interactionCatalog:  interactions.NewWorkspaceCatalog(config.GetHome()),
+		startupResult:       make(chan error, 1),
 	}
 	al.compactionRunner = &backgroundCompactionRunner{
 		contextManager: func() ContextManager {
@@ -85,8 +86,16 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
-	if !al.isolatedToolBootstrap {
-		if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
+			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
+			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)
+			if err != nil {
+				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+			} else {
+				al.state = manager
+			}
+		} else if !al.isolatedToolBootstrap {
 			al.state = state.NewManager(defaultAgent.Workspace)
 		}
 	}
@@ -112,6 +121,14 @@ func newAgentLoopWithRegistry(
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
 	}
+	if al.hasCodingToolProfile() {
+		for _, agentID := range registry.ListAgentIDs() {
+			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
+				instance.Tools.Seal()
+				instance.admitTrustedToolRegistry()
+			}
+		}
+	}
 
 	return al
 }
@@ -133,9 +150,8 @@ func NewAgentLoopChecked(
 }
 
 // NewAgentLoopWithRuntimeProfile applies a resolved profile before registry and
-// agent construction. It is the P0.2 entry point for frontends that require
-// distinct execution and state roots; existing gateway constructors remain
-// unchanged until the P0.3 storage cutover.
+// agent construction. It is the strict entry point for frontends that require
+// distinct execution and state roots.
 func NewAgentLoopWithRuntimeProfile(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -143,25 +159,30 @@ func NewAgentLoopWithRuntimeProfile(
 	profile RuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	if !profile.hasCodingOwner() {
-		return nil, fmt.Errorf("personal runtime profiles require the P0.3 storage cutover")
+	if profile.toolProfile == RuntimeToolProfilePersonal && len(profile.agentLayouts) != 1 {
+		return nil, fmt.Errorf("strict personal runtime profiles currently require exactly one owner")
 	}
-	if contextManagerConfigName(cfg) != "none" {
+	contextManagerName := contextManagerConfigName(cfg)
+	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
-			"coding runtime profile requires context manager none until P0.3 routes derived state externally",
+			"runtime profile context manager %q has no owner-scoped storage contract",
+			contextManagerName,
 		)
 	}
 	registry, err := newAgentRegistryWithRuntimeProfile(cfg, provider, profile)
 	if err != nil {
 		return nil, err
 	}
+	opts = append([]AgentLoopOption{withRuntimeProfile(profile)}, opts...)
 	if profile.hasCodingOwner() {
-		// P0.4 replaces this fail-closed bootstrap with an explicit coding tool
-		// profile. Until then, a coding owner cannot inherit personal shared tools.
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
-	al.runtimeProfile = &profile
+	if al.runtimeProfileInitErr != nil {
+		err := al.runtimeProfileInitErr
+		al.Close()
+		return nil, err
+	}
 	if al.contextManagerInitErr != nil {
 		err := al.contextManagerInitErr
 		al.Close()
@@ -207,10 +228,14 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("memory") {
 			workspace := agent.Workspace
+			memoryRoot := workspace
+			if layout, ok := profileLayoutForAgent(al.runtimeProfile, agent.ID); ok {
+				memoryRoot = layout.StateRoot()
+			}
 			registerToolIfAllowed(
 				agent,
 				tools.NewMemoryTool(
-					workspace,
+					memoryRoot,
 					func() { registry.invalidateWorkspaceContextCaches(workspace) },
 					al.runtimeEvents,
 				),
@@ -497,4 +522,11 @@ func registerSharedTools(
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}
+}
+
+func profileLayoutForAgent(profile *RuntimeProfile, agentID string) (RuntimeLayout, bool) {
+	if profile == nil {
+		return RuntimeLayout{}, false
+	}
+	return profile.AgentLayout(agentID)
 }

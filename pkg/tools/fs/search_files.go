@@ -1,12 +1,15 @@
 package fstools
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -823,8 +826,8 @@ func walkSearchFilesWithIgnore(
 		ignoreState = ignoreState.withGitIgnore(sysFs, root)
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return cmp.Compare(a.Name(), b.Name())
 	})
 
 	for _, entry := range entries {

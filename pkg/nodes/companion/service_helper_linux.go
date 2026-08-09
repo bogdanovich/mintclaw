@@ -348,7 +348,7 @@ func (client *ServiceHelperClient) exchangeWithCancel(
 	if err != nil {
 		return serviceHelperResponse{}, &serviceHelperExchangeError{err: err}
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if deadlineErr := connection.SetDeadline(deadline); deadlineErr != nil {
 		return serviceHelperResponse{}, &serviceHelperExchangeError{err: deadlineErr}
 	}
@@ -375,7 +375,7 @@ func (client *ServiceHelperClient) exchange(
 	if err != nil {
 		return serviceHelperResponse{}, err
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if deadlineErr := connection.SetDeadline(deadline); deadlineErr != nil {
 		return serviceHelperResponse{}, deadlineErr
 	}

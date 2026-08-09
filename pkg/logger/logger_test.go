@@ -125,6 +125,30 @@ func TestSetGetLevel(t *testing.T) {
 	}
 }
 
+func TestSetTimeFormat(t *testing.T) {
+	EnableConsole()
+	mu.RLock()
+	original := consoleWriter.TimeFormat
+	mu.RUnlock()
+	defer SetTimeFormat(original)
+
+	SetTimeFormat("2006-01-02 15:04:05")
+
+	mu.RLock()
+	got := consoleWriter.TimeFormat
+	console, ok := writers[0].(zerolog.ConsoleWriter)
+	mu.RUnlock()
+	if !ok {
+		t.Fatal("active writer is not the console writer")
+	}
+	if got != "2006-01-02 15:04:05" {
+		t.Fatalf("consoleWriter.TimeFormat = %q, want %q", got, "2006-01-02 15:04:05")
+	}
+	if console.TimeFormat != "2006-01-02 15:04:05" {
+		t.Fatalf("active console TimeFormat = %q, want %q", console.TimeFormat, "2006-01-02 15:04:05")
+	}
+}
+
 func TestLoggerHelperFunctions(t *testing.T) {
 	initialLevel := GetLevel()
 	defer SetLevel(initialLevel)

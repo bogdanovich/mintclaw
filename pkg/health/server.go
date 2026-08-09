@@ -123,7 +123,7 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed, use POST"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed, use POST"})
 		return
 	}
 
@@ -137,7 +137,7 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 		if given == "" || subtle.ConstantTimeCompare([]byte(given), []byte(requiredToken)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 			return
 		}
 	}
@@ -149,14 +149,14 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if reloadFunc == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{"error": "reload not configured"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "reload not configured"})
 		return
 	}
 
 	if err := reloadFunc(); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 

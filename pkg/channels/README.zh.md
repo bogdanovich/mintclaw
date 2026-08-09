@@ -1248,8 +1248,9 @@ Manager 创建单一 `http.Server`，自动发现和注册：
 ### 5.3 并发安全约定
 
 - `BaseChannel.running`：使用 `atomic.Bool`，线程安全
-- `Manager.channels` / `Manager.workers`：使用 `sync.RWMutex` 保护
-- `Manager.placeholders` / `Manager.typingStops` / `Manager.reactionUndos`：使用 `sync.Map`
+- `Manager.channels`：使用 `sync.RWMutex` 保护
+- `DeliveryRuntime`：通过同步 registry 统一管理投递 worker 和队列
+- `StreamCoordinator`：统一管理占位消息、输入状态、reaction、工具反馈和流式抑制状态
 - `MessageBus.closed`：使用 `atomic.Bool`
 - `FileMediaStore`：使用 `sync.RWMutex`，两阶段操作减少持锁时间
 - Channel Worker queue：Go channel，天然并发安全

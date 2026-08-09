@@ -539,7 +539,7 @@ func readGatewayInvocationDocument(
 			err,
 		)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var document gatewayInvocationDocument
 	decoder := json.NewDecoder(io.LimitReader(file, int64(maxBytes)+1))
 	decoder.DisallowUnknownFields()

@@ -2068,8 +2068,9 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			}
 			select {
 			case final := <-manager.sent:
-				if final.Content != "approval flow finished" ||
-					!bus.OutboundMetadataFromMessage(final).RemovesInteractionControls() ||
+				metadata := bus.OutboundMetadataFromMessage(final)
+				if final.Content != "approval flow finished" || !metadata.IsFinalReply() || !metadata.IsFinal() ||
+					!metadata.RemovesInteractionControls() ||
 					final.ReplyToMessageID != "approval-answer" {
 					t.Fatalf("approval final = %#v", final)
 				}

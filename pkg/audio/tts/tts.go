@@ -112,7 +112,7 @@ func SynthesizeAndStore(
 	if err != nil {
 		return "", fmt.Errorf("tts synthesize failed: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	err = os.MkdirAll(media.TempDir(), 0o700)
 	if err != nil {

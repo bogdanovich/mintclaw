@@ -262,7 +262,7 @@ func tableHasColumn(db *sql.DB, tableName, columnName string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var (
@@ -299,7 +299,7 @@ func checkFTS5Support(db *sql.DB) error {
 		if testErr != nil {
 			return fmt.Errorf("SQLite FTS5 not available: %w (required for full-text search)", testErr)
 		}
-		db.Exec(sqlDropFTS5Check)
+		_, _ = db.Exec(sqlDropFTS5Check)
 	} else if fts5Enabled == 0 {
 		return fmt.Errorf("SQLite was compiled without FTS5 support (required for full-text search)")
 	}
@@ -313,7 +313,7 @@ func checkFTS5Support(db *sql.DB) error {
 		// Trigram is not strictly required, just better for CJK
 		// Don't return error, just log warning
 	} else {
-		db.Exec(sqlDropTrigramCheck)
+		_, _ = db.Exec(sqlDropTrigramCheck)
 	}
 
 	return nil

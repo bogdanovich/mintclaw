@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ var (
 	ErrSessionDone     = errors.New("session already completed")
 	ErrPTYNotSupported = errors.New("PTY is not supported on this platform")
 	ErrNoStdin         = errors.New("no stdin available")
+	ErrSessionWait     = errors.New("session completion is unavailable")
 )
 
 type ProcessSession struct {
@@ -50,6 +52,10 @@ type ProcessSession struct {
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
 	ptyMaster       *os.File
+	completion      chan struct{}
+	waitErr         error
+	completionOnce  sync.Once
+	terminate       func(int) error
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -58,7 +64,7 @@ type ProcessSession struct {
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited"
+	return s.Status == "done" || s.Status == "exited" || s.Status == "error"
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {
@@ -110,17 +116,68 @@ func (s *ProcessSession) killProcess() error {
 		return ErrSessionNotFound
 	}
 
-	if err := killProcessGroup(pid); err != nil {
+	terminate := s.terminate
+	if terminate == nil {
+		terminate = killProcessGroup
+	}
+	if err := terminate(pid); err != nil {
 		return err
 	}
 
-	s.Status = "done"
-	s.ExitCode = -1
 	return nil
 }
 
 func (s *ProcessSession) Kill() error {
 	return s.killProcess()
+}
+
+func (s *ProcessSession) complete(exitCode int, waitErr error) {
+	s.mu.Lock()
+	s.ExitCode = exitCode
+	s.waitErr = normalizeSessionWaitError(waitErr)
+	if s.waitErr != nil {
+		s.Status = "error"
+	} else {
+		s.Status = "done"
+	}
+	s.mu.Unlock()
+	if s.completion != nil {
+		s.completionOnce.Do(func() {
+			close(s.completion)
+		})
+	}
+}
+
+func normalizeSessionWaitError(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return nil
+	}
+	return err
+}
+
+func (s *ProcessSession) hasCompletion() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completion != nil
+}
+
+func (s *ProcessSession) waitForCompletion() error {
+	s.mu.Lock()
+	completion := s.completion
+	status := s.Status
+	waitErr := s.waitErr
+	s.mu.Unlock()
+	if completion == nil {
+		if status == "done" || status == "exited" || status == "error" {
+			return waitErr
+		}
+		return ErrSessionWait
+	}
+	<-completion
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.waitErr
 }
 
 func (s *ProcessSession) Write(data string) error {
@@ -171,16 +228,28 @@ func (s *ProcessSession) ToSessionInfo() toolshared.SessionInfo {
 }
 
 type SessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*ProcessSession
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	mu              sync.RWMutex
+	sessions        map[string]*ProcessSession
+	closing         bool
+	admissionWG     sync.WaitGroup
+	admissionErrors []error
+	stopCh          chan struct{}
+	stopOnce        sync.Once
+	closeOnce       sync.Once
+	closeDone       chan struct{}
+	closeErr        error
+}
+
+type sessionAdmission struct {
+	manager *SessionManager
+	once    sync.Once
 }
 
 func NewSessionManager() *SessionManager {
 	sm := &SessionManager{
-		sessions: make(map[string]*ProcessSession),
-		stopCh:   make(chan struct{}),
+		sessions:  make(map[string]*ProcessSession),
+		stopCh:    make(chan struct{}),
+		closeDone: make(chan struct{}),
 	}
 
 	// Start cleaner goroutine - runs every 5 minutes, cleans up sessions done for >30 minutes
@@ -222,10 +291,96 @@ func (sm *SessionManager) cleanupOldSessions() {
 	}
 }
 
-func (sm *SessionManager) Add(session *ProcessSession) {
+func (sm *SessionManager) Add(session *ProcessSession) bool {
+	admission, ok := sm.beginAdmission()
+	if !ok {
+		return false
+	}
+	admitted := admission.admit(session)
+	admission.finish(nil)
+	return admitted
+}
+
+// beginAdmission reserves startup work before a process is created. Close
+// seals this gate and waits for every reservation to commit or clean up.
+func (sm *SessionManager) beginAdmission() (*sessionAdmission, bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.sessions[session.ID] = session
+	if sm.closing {
+		return nil, false
+	}
+	sm.admissionWG.Add(1)
+	return &sessionAdmission{manager: sm}, true
+}
+
+func (a *sessionAdmission) admit(session *ProcessSession) bool {
+	if a == nil || a.manager == nil {
+		return false
+	}
+	a.manager.mu.Lock()
+	defer a.manager.mu.Unlock()
+	if a.manager.closing {
+		return false
+	}
+	a.manager.sessions[session.ID] = session
+	return true
+}
+
+func (a *sessionAdmission) finish(err error) {
+	if a == nil || a.manager == nil {
+		return
+	}
+	a.once.Do(func() {
+		if err != nil {
+			a.manager.mu.Lock()
+			a.manager.admissionErrors = append(a.manager.admissionErrors, err)
+			a.manager.mu.Unlock()
+		}
+		a.manager.admissionWG.Done()
+	})
+}
+
+// Close rejects new sessions, terminates admitted processes, and stops cleanup.
+func (sm *SessionManager) Close() error {
+	sm.closeOnce.Do(func() {
+		sm.mu.Lock()
+		sm.closing = true
+		sm.mu.Unlock()
+
+		sm.Stop()
+		sm.admissionWG.Wait()
+		sm.mu.Lock()
+		sessions := make([]*ProcessSession, 0, len(sm.sessions))
+		for _, session := range sm.sessions {
+			sessions = append(sessions, session)
+		}
+		closeErrors := append([]error(nil), sm.admissionErrors...)
+		sm.mu.Unlock()
+		for _, session := range sessions {
+			if session == nil {
+				continue
+			}
+			waitForCompletion := session.IsDone()
+			if !waitForCompletion {
+				killErr := session.Kill()
+				switch {
+				case killErr == nil, errors.Is(killErr, ErrSessionDone):
+					waitForCompletion = true
+				default:
+					closeErrors = append(closeErrors, killErr)
+				}
+			}
+			if waitForCompletion && session.hasCompletion() {
+				if err := session.waitForCompletion(); err != nil {
+					closeErrors = append(closeErrors, err)
+				}
+			}
+		}
+		sm.closeErr = errors.Join(closeErrors...)
+		close(sm.closeDone)
+	})
+	<-sm.closeDone
+	return sm.closeErr
 }
 
 func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {

@@ -88,7 +88,7 @@ func (source *nodeInvocationSource) PrepareInvocation(
 	_, err = handler.WithPreparationAuthority(
 		plan.NodeID,
 		nodeRef,
-		plan.Command,
+		nodePreparationAuthorityCommand(plan.Command),
 		func(
 			registration nodes.Registration,
 			_ nodes.CommandApproval,
@@ -145,6 +145,13 @@ func (source *nodeInvocationSource) PrepareInvocation(
 		)
 	}
 	return record, created, err
+}
+
+func nodePreparationAuthorityCommand(command string) string {
+	if command == nodes.InternalJobArtifactDownloadCommand {
+		return nodes.JobCommandArtifacts
+	}
+	return command
 }
 
 func (source *nodeInvocationSource) LookupInvocationByToolCall(

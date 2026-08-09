@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -45,6 +47,7 @@ type AgentInstance struct {
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
+	trustedToolRegistry       *tools.ToolRegistry
 	Definition                AgentContextDefinition
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
@@ -69,6 +72,23 @@ type AgentInstance struct {
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
+	ownedToolClosers   []interface{ Close() error }
+	closeState         *agentInstanceCloseState
+}
+
+type agentInstanceCloseState struct {
+	once sync.Once
+	err  error
+}
+
+func (a *AgentInstance) admitTrustedToolRegistry() {
+	if a != nil {
+		a.trustedToolRegistry = a.Tools
+	}
+}
+
+func (a *AgentInstance) isAdmittedTrustedToolRegistry(registry *tools.ToolRegistry) bool {
+	return a != nil && a.trustedToolRegistry != nil && registry == a.trustedToolRegistry
 }
 
 type providerOwnership struct {
@@ -120,6 +140,12 @@ type agentToolInitConfig struct {
 	allowWrite    []*regexp.Regexp
 	toolPolicy    *PatternPolicy
 	toolsRegistry *tools.ToolRegistry
+	execScratch   string
+}
+
+type runtimeInstanceDependencies struct {
+	storeFactory RuntimeStoreFactory
+	toolProfile  RuntimeToolProfile
 }
 
 type agentIdentityConfig struct {
@@ -155,7 +181,7 @@ func NewAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentInstance {
-	instance, _ := newAgentInstance(agentCfg, defaults, cfg, provider, nil)
+	instance, _ := newAgentInstance(agentCfg, defaults, cfg, provider, nil, nil)
 	return instance
 }
 
@@ -168,8 +194,13 @@ func newAgentInstanceWithRuntimeLayout(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout RuntimeLayout,
+	storeFactory RuntimeStoreFactory,
+	toolProfile RuntimeToolProfile,
 ) (*AgentInstance, error) {
-	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout)
+	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
+		storeFactory: storeFactory,
+		toolProfile:  toolProfile,
+	})
 }
 
 func newAgentInstance(
@@ -178,6 +209,7 @@ func newAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout *RuntimeLayout,
+	runtimeDeps *runtimeInstanceDependencies,
 ) (*AgentInstance, error) {
 	if cfg != nil {
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
@@ -200,6 +232,15 @@ func newAgentInstance(
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	agentToolPolicy := resolveAgentToolPolicy(definition)
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
+	toolProfile := RuntimeToolProfilePersonal
+	if runtimeDeps != nil {
+		toolProfile = runtimeDeps.toolProfile
+	}
+	if toolProfile == RuntimeToolProfileCoding {
+		// Repository frontmatter cannot mutate the admitted coding catalog.
+		agentToolPolicy = nil
+		agentMCPServerPolicy = &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
+	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	if layout != nil {
@@ -209,9 +250,16 @@ func newAgentInstance(
 	var contextBuilder *ContextBuilder
 	if layout != nil {
 		var err error
-		sessions, err = initRuntimeSessionStore(sessionsDir)
+		factory := RuntimeStoreFactory(defaultRuntimeStoreFactory{})
+		if runtimeDeps != nil && runtimeDeps.storeFactory != nil {
+			factory = runtimeDeps.storeFactory
+		}
+		sessions, err = factory.NewSessionStore(*layout)
 		if err != nil {
 			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+		if runtimeDependencyIsNil(sessions) {
+			return nil, fmt.Errorf("construct agent: runtime store factory returned a nil session store")
 		}
 		contextBuilder, err = newRuntimeContextBuilder(*layout)
 		if err != nil {
@@ -250,10 +298,15 @@ func newAgentInstance(
 	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, definition)
 
 	toolInit := newAgentToolInitConfig(defaults, cfg, agentToolPolicy)
-	// Coding owners stay intentionally tool-empty until P0.4 admits their exact
-	// trusted-local bootstrap profile. This also prevents legacy constructors
-	// such as exec from creating workspace-local scratch state during P0.2.
-	if layout == nil || layout.Owner().Kind == RuntimeOwnerPersonalAgent {
+	if layout != nil {
+		toolInit.execScratch = filepath.Join(layout.StatePaths().OperationalRoot, "tmp")
+	}
+	if toolProfile == RuntimeToolProfileCoding {
+		if err := initCodingAgentTools(workspace, cfg, toolInit); err != nil {
+			_ = sessions.Close()
+			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
@@ -298,6 +351,14 @@ func newAgentInstance(
 		CandidateProviders:        routingCfg.candidateProviders,
 		ToolLoopDetection:         loopGuardConfigFromConfig(cfg.Tools.LoopDetection),
 		ownedProviders:            providerOwnership.owned,
+		closeState:                &agentInstanceCloseState{},
+	}
+	if layout != nil {
+		if execTool, ok := toolInit.toolsRegistry.Get("exec"); ok {
+			if closer, ok := execTool.(interface{ Close() error }); ok {
+				instance.ownedToolClosers = append(instance.ownedToolClosers, closer)
+			}
+		}
 	}
 	if layout != nil {
 		instance.Layout = *layout
@@ -403,7 +464,19 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 		)
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, initCfg.restrict, cfg, initCfg.allowRead)
+		var execTool *tools.ExecTool
+		var err error
+		if initCfg.execScratch != "" {
+			execTool, err = tools.NewExecToolWithRuntimeConfig(
+				workspace,
+				initCfg.execScratch,
+				initCfg.restrict,
+				cfg,
+				initCfg.allowRead,
+			)
+		} else {
+			execTool, err = tools.NewExecToolWithConfig(workspace, initCfg.restrict, cfg, initCfg.allowRead)
+		}
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -414,6 +487,29 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 	if cfg.Tools.IsToolEnabled("apply_patch") {
 		registerTool(fstools.NewApplyPatchTool(workspace, initCfg.restrict, initCfg.allowWrite))
 	}
+}
+
+func initCodingAgentTools(workspace string, cfg *config.Config, initCfg agentToolInitConfig) error {
+	registerTool := func(tool toolshared.Tool) {
+		initCfg.toolsRegistry.Register(tool)
+	}
+	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
+	registerTool(fstools.NewReadFileBytesTool(workspace, false, maxReadFileSize, nil))
+	registerTool(fstools.NewWriteFileTool(workspace, false, nil))
+	registerTool(fstools.NewListDirTool(workspace, false, nil))
+	registerTool(fstools.NewSearchFilesTool(workspace, false, maxReadFileSize, nil))
+
+	execCfg := *cfg
+	execCfg.Tools = cfg.Tools
+	execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
+	execTool, err := tools.NewExecToolWithRuntimeConfig(workspace, initCfg.execScratch, false, &execCfg)
+	if err != nil {
+		return fmt.Errorf("initialize coding exec tool: %w", err)
+	}
+	registerTool(execTool)
+	registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
+	registerTool(tools.NewUpdatePlanTool())
+	return nil
 }
 
 func buildAgentIdentityConfig(
@@ -753,16 +849,31 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
-	var sessionErr error
-	if a.Sessions != nil {
-		sessionErr = a.Sessions.Close()
-		a.Sessions = nil
+	if a == nil {
+		return nil
 	}
-	for _, provider := range a.ownedProviders {
-		provider.Close()
+	if a.closeState == nil {
+		a.closeState = &agentInstanceCloseState{}
 	}
-	a.ownedProviders = nil
-	return sessionErr
+	a.closeState.once.Do(func() {
+		var closeErrors []error
+		for _, closer := range a.ownedToolClosers {
+			if closer != nil {
+				closeErrors = append(closeErrors, closer.Close())
+			}
+		}
+		a.ownedToolClosers = nil
+		if a.Sessions != nil {
+			closeErrors = append(closeErrors, a.Sessions.Close())
+			a.Sessions = nil
+		}
+		for _, provider := range a.ownedProviders {
+			provider.Close()
+		}
+		a.ownedProviders = nil
+		a.closeState.err = errors.Join(closeErrors...)
+	})
+	return a.closeState.err
 }
 
 // initSessionStore creates the session persistence backend.
@@ -783,7 +894,7 @@ func initSessionStore(dir string) session.SessionStore {
 		// some sessions are in JSONL and others remain in JSON.
 		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
 			map[string]any{"error": merr.Error()})
-		store.Close()
+		_ = store.Close()
 		return session.NewSessionManager(dir)
 	} else if n > 0 {
 		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})

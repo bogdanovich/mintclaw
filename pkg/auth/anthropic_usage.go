@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,8 +25,14 @@ type AnthropicUsage struct {
 	SevenDayUtilization float64
 }
 
+// FetchAnthropicUsage fetches OAuth usage stats with a background context.
 func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
-	req, err := http.NewRequest("GET", anthropicUsageURL, nil)
+	return FetchAnthropicUsageWithContext(context.Background(), token)
+}
+
+// FetchAnthropicUsageWithContext fetches OAuth usage stats, propagating ctx.
+func FetchAnthropicUsageWithContext(ctx context.Context, token string) (*AnthropicUsage, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", anthropicUsageURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +45,7 @@ func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

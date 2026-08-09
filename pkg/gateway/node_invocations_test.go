@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,27 +21,85 @@ import (
 )
 
 type fakeNodeAdmissionHandler struct {
-	beforeCommit  *sync.WaitGroup
-	invocation    nodes.InvocationRecord
-	invocationErr error
-	invokeCalls   atomic.Int32
-	writeCalls    atomic.Int32
-	queryCalls    atomic.Int32
-	cancelCalls   atomic.Int32
+	beforeCommit   *sync.WaitGroup
+	invocation     nodes.InvocationRecord
+	invocationErr  error
+	prepareCommand string
+	invokeCalls    atomic.Int32
+	writeCalls     atomic.Int32
+	queryCalls     atomic.Int32
+	cancelCalls    atomic.Int32
 }
 
 func (*fakeNodeAdmissionHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
 func (*fakeNodeAdmissionHandler) Close(context.Context) error { return nil }
 
-func (*fakeNodeAdmissionHandler) WithPreparationAuthority(
+func (handler *fakeNodeAdmissionHandler) WithPreparationAuthority(
 	_ nodes.ID,
 	_ string,
-	_ string,
+	command string,
 	operation func(nodes.Registration, nodes.CommandApproval) error,
 ) (nodes.CommandApproval, error) {
+	handler.prepareCommand = command
 	approval := nodes.CommandApproval{}
 	return approval, operation(nodes.Registration{}, approval)
+}
+
+func TestNodeInvocationSourceUsesPublicJobArtifactAuthorityForInternalDownload(t *testing.T) {
+	descriptor := nodes.CommandDescriptor{
+		Name:         nodes.InternalJobArtifactDownloadCommand,
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		Risk:         nodes.RiskRead,
+	}
+	plan, err := nodes.PrepareExecutionPlan(
+		nodes.InvocationRequest{
+			InvocationID: "job_artifact_transfer", IdempotencyKey: "job_artifact_idem",
+			NodeID: "node_test", CatalogHash: strings.Repeat("a", 64),
+			Command: nodes.InternalJobArtifactDownloadCommand, Input: json.RawMessage(`{}`),
+			AgentID: "agent_1", SessionID: "session_1", ActorID: "actor_1",
+			TimeoutSeconds: 30, OutputLimitBytes: 1024,
+		},
+		descriptor,
+		"local",
+		"builds-v1",
+		time.Now(),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := &fakeNodeAdmissionHandler{}
+	source := newTestNodeInvocationSource(t, handler)
+	record, created, err := source.PrepareInvocation(
+		"builder-node",
+		"build",
+		"call_1",
+		nodes.GatewayInvocationPrincipal{
+			AgentID: plan.AgentID, SessionID: plan.SessionID, ActorID: plan.ActorID,
+		},
+		plan,
+		descriptor,
+		true,
+		func(tools.NodeDiscoveryRecord) error { return nil },
+	)
+	if err != nil || !created {
+		t.Fatalf("PrepareInvocation() = (%#v, %v, %v)", record, created, err)
+	}
+	if handler.prepareCommand != nodes.JobCommandArtifacts {
+		t.Fatalf("preparation command = %q, want %q", handler.prepareCommand, nodes.JobCommandArtifacts)
+	}
+	if record.Plan.Command != nodes.InternalJobArtifactDownloadCommand {
+		t.Fatalf("stored command = %q, want internal transfer command", record.Plan.Command)
+	}
+}
+
+func TestNodePreparationAuthorityCommandLeavesOtherCommandsUnchanged(t *testing.T) {
+	const command = "file.download.v1"
+	if got := nodePreparationAuthorityCommand(command); got != command {
+		t.Fatalf("authority command = %q, want %q", got, command)
+	}
 }
 
 func (handler *fakeNodeAdmissionHandler) Invoke(

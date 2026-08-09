@@ -499,6 +499,35 @@ func TestNodeFileToolsRequireConfiguredTargetGrant(t *testing.T) {
 		}
 	}
 
+	jobOnly := config.DefaultConfig()
+	jobOnly.Agents.Defaults.Workspace = t.TempDir()
+	jobOnly.Agents.Defaults.ContextManager = "none"
+	jobOnly.Nodes.Enabled = true
+	jobOnly.Execution.Targets = map[string]config.ExecutionTarget{
+		"builder": {Type: "node", Node: "builder-node", JobProfile: "builds"},
+	}
+	jobOnly.Agents.Defaults.TargetPolicy = &config.TargetPolicy{
+		DefaultTarget: "builder", AllowedTargets: []string{"builder"},
+	}
+	jobLoop := agent.NewAgentLoop(jobOnly, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
+	jobRuntime := &nodeAdmissionRuntime{
+		registryPath: nodes.RegistryPath(jobOnly.WorkspacePath()),
+		handler:      &fakeNodeAdmissionHandler{}, generation: 1, mounted: true,
+	}
+	t.Cleanup(func() {
+		if jobRuntime.transferSpool != nil {
+			_ = jobRuntime.transferSpool.Close()
+		}
+	})
+	if err := setupNodeTools(jobOnly, jobLoop, jobRuntime); err != nil {
+		t.Fatal(err)
+	}
+	jobToolNames := jobLoop.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
+	if !slices.Contains(jobToolNames, "nodes_download") ||
+		slices.Contains(jobToolNames, "nodes_file_info") || slices.Contains(jobToolNames, "nodes_upload") {
+		t.Fatalf("job-only registered tools = %#v", jobToolNames)
+	}
+
 	withoutGrant := config.DefaultConfig()
 	withoutGrant.Agents.Defaults.Workspace = t.TempDir()
 	withoutGrant.Agents.Defaults.ContextManager = "none"

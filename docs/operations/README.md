@@ -20,6 +20,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Node Companion P3 deployment evidence](node-companion-p3-deployment-evidence.md):
   merged revisions, requirement matrix, live approved restart, no replay,
   checksums, rollback rehearsal, enabled authority, and mandatory stop.
+- [Node Companion P5a durable-jobs proof](node-companion-p5a-proof.md):
+  implementation matrix, real-process restart/log/artifact/cancellation proof,
+  deployment evidence, rollback, and mandatory stop before P8.
 - [Node terminal client and lifecycle smoke test](node-terminal-smoke.md):
   interactive use and automated verification of authenticated PTY open,
   attach, resize, input/output, and confirmed close.

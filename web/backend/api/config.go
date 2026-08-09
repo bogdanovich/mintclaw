@@ -55,7 +55,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var raw map[string]any
 	if err = json.Unmarshal(body, &raw); err != nil {
@@ -94,7 +94,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if errs := validateConfig(&cfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "validation_error",
 			"errors": errs,
 		})
@@ -110,7 +110,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("configuration updated successfully")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func execAllowRemoteOmitted(body []byte) bool {
@@ -137,7 +137,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// Validate the patch is valid JSON
 	var patch map[string]any
@@ -211,7 +211,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	if errs := validateConfig(&newCfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "validation_error",
 			"errors": errs,
 		})
@@ -227,7 +227,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("configuration updated successfully")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleResetConfig resets the configuration to factory defaults.
@@ -253,7 +253,7 @@ func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleTestCommandPatterns tests a command against whitelist and blacklist patterns.
@@ -265,7 +265,7 @@ func (h *Handler) handleTestCommandPatterns(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req struct {
 		AllowPatterns []string `json:"allow_patterns"`
@@ -298,7 +298,7 @@ func (h *Handler) handleTestCommandPatterns(w http.ResponseWriter, r *http.Reque
 			resp.Allowed = true
 			resp.MatchedWhitelist = &pattern
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 	}
@@ -317,7 +317,7 @@ func (h *Handler) handleTestCommandPatterns(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // validateConfig checks the config for common errors before saving.

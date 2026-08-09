@@ -19,11 +19,20 @@ import (
 type RuntimeToolFactory func(cfg *config.Config) (toolshared.Tool, error)
 
 func (al *AgentLoop) RegisterTool(tool toolshared.Tool) {
+	if al == nil || al.hasCodingToolProfile() {
+		return
+	}
 	registry := al.GetRegistry()
 	registerToolOnRegistry(registry, tool)
 }
 
 func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	if al.hasCodingToolProfile() {
+		return fmt.Errorf("coding runtime profiles do not admit runtime tools")
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("runtime tool name is required")

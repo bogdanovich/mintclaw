@@ -258,5 +258,5 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		inboundCtx.ChatType = "group"
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	_ = c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }

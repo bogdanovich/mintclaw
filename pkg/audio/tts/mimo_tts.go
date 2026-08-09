@@ -123,7 +123,7 @@ func (t *MimoTTSProvider) Synthesize(ctx context.Context, text string) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

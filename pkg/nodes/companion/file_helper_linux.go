@@ -138,7 +138,7 @@ func (client *FileHelperClient) snapshot(
 	if err != nil {
 		return nil, "", err
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	deadline := time.Now().Add(fileHelperHandshakeTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
@@ -392,7 +392,7 @@ func (server *fileHelperServer) Serve(
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 			server.handleConnection(ctx, connection)
 		}()
 	}

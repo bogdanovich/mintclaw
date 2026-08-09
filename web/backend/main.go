@@ -582,7 +582,7 @@ func main() {
 	var passwordStore api.PasswordStore
 	if authStoreErr == nil {
 		passwordStore = authStore
-		defer authStore.Close()
+		defer func() { _ = authStore.Close() }()
 	} else if errors.Is(authStoreErr, dashboardauth.ErrUnsupportedPlatform) {
 		logger.InfoC(
 			"web",

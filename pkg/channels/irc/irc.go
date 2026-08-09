@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -90,9 +92,16 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 		conn.SASLPassword = c.config.SASLPassword.String()
 	}
 
-	// Register event handlers
+	// Register event handlers. The connect callback runs when registration
+	// completes (376/422) both on the initial connection and on reconnects;
+	// only the first result is reported back so Start can fail closed.
+	setupDone := make(chan error, 1)
+	var setupOnce sync.Once
 	conn.AddConnectCallback(func(e ircmsg.Message) {
-		c.onConnect(conn)
+		err := c.onConnect(conn)
+		setupOnce.Do(func() {
+			setupDone <- err
+		})
 	})
 	conn.AddCallback("PRIVMSG", func(e ircmsg.Message) {
 		c.onPrivmsg(conn, e)
@@ -100,6 +109,23 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 
 	if err := conn.Connect(); err != nil {
 		return fmt.Errorf("irc connect failed: %w", err)
+	}
+
+	// AddConnectCallback fires on 376/422, which some servers omit after the
+	// 001 welcome; bound the wait so startup cannot hang, and honor context
+	// cancellation so gateway shutdown is not blocked.
+	select {
+	case err := <-setupDone:
+		if err != nil {
+			conn.Quit()
+			return fmt.Errorf("irc setup failed: %w", err)
+		}
+	case <-ctx.Done():
+		conn.Quit()
+		return fmt.Errorf("irc setup canceled: %w", ctx.Err())
+	case <-time.After(conn.Timeout):
+		conn.Quit()
+		return fmt.Errorf("irc setup timed out after %s", conn.Timeout)
 	}
 
 	c.conn = conn
@@ -153,7 +179,9 @@ func (c *IRCChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]strin
 		if line == "" {
 			continue
 		}
-		c.conn.Privmsg(target, line)
+		if err := c.conn.Privmsg(target, line); err != nil {
+			return nil, fmt.Errorf("send IRC message to %s: %w", target, err)
+		}
 	}
 
 	logger.DebugCF("irc", "Message sent", map[string]any{
@@ -177,11 +205,11 @@ func (c *IRCChannel) StartTyping(ctx context.Context, chatID string) (func(), er
 		return noop, nil
 	}
 
-	c.conn.SendWithTags(map[string]string{"+typing": "active"}, "TAGMSG", chatID)
+	_ = c.conn.SendWithTags(map[string]string{"+typing": "active"}, "TAGMSG", chatID)
 
 	return func() {
 		if c.IsRunning() && c.conn != nil {
-			c.conn.SendWithTags(map[string]string{"+typing": "done"}, "TAGMSG", chatID)
+			_ = c.conn.SendWithTags(map[string]string{"+typing": "done"}, "TAGMSG", chatID)
 		}
 	}, nil
 }

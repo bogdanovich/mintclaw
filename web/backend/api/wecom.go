@@ -234,7 +234,9 @@ func (h *Handler) saveWecomBinding(botID, secret string) error {
 	bc.Enabled = true
 
 	var wecomCfg config.WeComSettings
-	bc.Decode(&wecomCfg)
+	if err := bc.Decode(&wecomCfg); err != nil {
+		return fmt.Errorf("could not decode wecom channel config: %w", err)
+	}
 	wecomCfg.BotID = botID
 	wecomCfg.Secret = *config.NewSecureString(secret)
 	if strings.TrimSpace(wecomCfg.WebSocketURL) == "" {
@@ -354,7 +356,7 @@ func doWecomJSONGet(ctx context.Context, targetURL string, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))

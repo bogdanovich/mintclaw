@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,6 +114,17 @@ func WorkspaceStorePath(workspace string) string {
 		return ""
 	}
 	return filepath.Join(workspace, "state", "interaction_registry.json")
+}
+
+// ValidateSnapshot reads and validates a registry snapshot without locking,
+// pruning, or writing it.
+func ValidateSnapshot(storePath string) error {
+	r := &Registry{
+		storePath: strings.TrimSpace(storePath),
+		records:   make(map[string]Record),
+		events:    make([]Event, 0),
+	}
+	return r.load()
 }
 
 func (r *Registry) LastLoadError() error {
@@ -580,7 +592,7 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 	if drainNotifications {
 		r.drainNotifications()
 	}
-	sort.Slice(claimed, func(i, j int) bool { return claimed[i].ID < claimed[j].ID })
+	slices.SortFunc(claimed, func(a, b Record) int { return cmp.Compare(a.ID, b.ID) })
 	return claimed, nil
 }
 
@@ -1408,9 +1420,9 @@ func (r *Registry) pruneLocked(now int64) bool {
 				terminal = append(terminal, rec)
 			}
 		}
-		sort.Slice(
+		slices.SortFunc(
 			terminal,
-			func(i, j int) bool { return terminal[i].ResolvedAt < terminal[j].ResolvedAt },
+			func(a, b Record) int { return cmp.Compare(a.ResolvedAt, b.ResolvedAt) },
 		)
 		for len(r.records) > r.options.MaxRecords && len(terminal) > 0 {
 			delete(r.records, terminal[0].ID)
@@ -1755,10 +1767,10 @@ func cloneStringMap(values map[string]string) map[string]string {
 }
 
 func sortRecords(records []Record) {
-	sort.Slice(records, func(i, j int) bool {
-		if records[i].CreatedAt != records[j].CreatedAt {
-			return records[i].CreatedAt < records[j].CreatedAt
+	slices.SortFunc(records, func(a, b Record) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
 		}
-		return records[i].ID < records[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 }

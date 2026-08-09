@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -23,7 +24,7 @@ func TestFetchOpenAIModels_DataEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	entries, err := fetchOpenAIModels(srv.URL, "secret")
+	entries, err := fetchOpenAIModels(context.Background(), srv.URL, "secret")
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "gpt-foo", entries[0].ID)
@@ -38,7 +39,7 @@ func TestFetchOpenAIModels_BareArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	entries, err := fetchOpenAIModels(srv.URL, "secret")
+	entries, err := fetchOpenAIModels(context.Background(), srv.URL, "secret")
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "a", entries[0].ID)
@@ -53,7 +54,7 @@ func TestFetchOpenAIModels_TrimsTrailingSlash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchOpenAIModels(srv.URL+"/", "k")
+	_, err := fetchOpenAIModels(context.Background(), srv.URL+"/", "k")
 	require.NoError(t, err)
 	assert.Equal(t, "/models", gotPath)
 }
@@ -64,7 +65,7 @@ func TestFetchOpenAIModels_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchOpenAIModels(srv.URL, "bad")
+	_, err := fetchOpenAIModels(context.Background(), srv.URL, "bad")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 401")
 }
@@ -78,7 +79,7 @@ func TestFetchOpenAIModels_HTTPErrorReadFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchOpenAIModels(srv.URL, "bad")
+	_, err := fetchOpenAIModels(context.Background(), srv.URL, "bad")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read error response")
 	assert.Contains(t, err.Error(), "unexpected EOF")
@@ -90,7 +91,7 @@ func TestFetchOpenAIModels_EmptyDataEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	entries, err := fetchOpenAIModels(srv.URL, "k")
+	entries, err := fetchOpenAIModels(context.Background(), srv.URL, "k")
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -101,7 +102,7 @@ func TestFetchOpenAIModels_EmptyBareArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	entries, err := fetchOpenAIModels(srv.URL, "k")
+	entries, err := fetchOpenAIModels(context.Background(), srv.URL, "k")
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -112,17 +113,17 @@ func TestFetchOpenAIModels_UnrecognizedShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchOpenAIModels(srv.URL, "k")
+	_, err := fetchOpenAIModels(context.Background(), srv.URL, "k")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unrecognized shape")
 }
 
 func TestFetchOpenAIModels_RequiresInputs(t *testing.T) {
-	_, err := fetchOpenAIModels("", "k")
+	_, err := fetchOpenAIModels(context.Background(), "", "k")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api base")
 
-	_, err = fetchOpenAIModels("https://example.com", "")
+	_, err = fetchOpenAIModels(context.Background(), "https://example.com", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api key")
 }

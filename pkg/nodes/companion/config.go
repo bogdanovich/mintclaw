@@ -84,7 +84,7 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("open node config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, MaxCompanionConfigFileLen+1))
 	decoder.DisallowUnknownFields()
 	var cfg Config

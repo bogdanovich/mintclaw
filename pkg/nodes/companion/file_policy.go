@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -245,8 +247,8 @@ func fileCapabilityDescriptors(policies FilePolicies) ([]nodes.CommandDescriptor
 	if len(enabled) == 0 {
 		return nil, nil
 	}
-	sort.Slice(enabled, func(left, right int) bool {
-		return enabled[left].normalizedAlias < enabled[right].normalizedAlias
+	slices.SortFunc(enabled, func(a, b FilePolicyProfile) int {
+		return cmp.Compare(a.normalizedAlias, b.normalizedAlias)
 	})
 	authorityData, err := json.Marshal(enabled)
 	if err != nil {

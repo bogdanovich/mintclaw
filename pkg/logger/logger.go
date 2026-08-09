@@ -44,6 +44,10 @@ var (
 	consoleWriter zerolog.ConsoleWriter
 )
 
+// defaultTimeFormat is the console timestamp layout used until SetTimeFormat
+// overrides it.
+const defaultTimeFormat = "15:04:05"
+
 func init() {
 	once.Do(func() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
@@ -52,7 +56,7 @@ func init() {
 
 		consoleWriter = zerolog.ConsoleWriter{
 			Out:        os.Stdout,
-			TimeFormat: "15:04:05", // TODO: make it configurable???
+			TimeFormat: defaultTimeFormat,
 
 			// Custom formatter to handle multiline strings and JSON objects
 			FormatFieldValue: formatFieldValue,
@@ -123,6 +127,21 @@ func SetConsoleLevel(level LogLevel) {
 	logger = logger.Level(level)
 }
 
+// SetTimeFormat overrides the console timestamp layout used by the global
+// logger. The default is "15:04:05"; the change applies to subsequent writes
+// even after the logger is initialized, and a disabled console stays disabled.
+func SetTimeFormat(format string) {
+	mu.Lock()
+	defer mu.Unlock()
+	consoleWriter.TimeFormat = format
+	// writers[0] holds a value copy of consoleWriter, so reinstall it and
+	// rebuild the logger unless the console was explicitly disabled.
+	if _, ok := writers[0].(zerolog.ConsoleWriter); ok {
+		writers[0] = consoleWriter
+		logger = logger.Output(io.MultiWriter(writers...))
+	}
+}
+
 func DisableConsole() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -188,7 +207,7 @@ func EnableFileLogging(filePath string) error {
 
 	// Close old file if exists
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 	}
 
 	logFile = newFile
@@ -208,7 +227,7 @@ func DisableFileLogging() {
 	defer mu.Unlock()
 
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 		logFile = nil
 	}
 	if len(writers) > 1 {

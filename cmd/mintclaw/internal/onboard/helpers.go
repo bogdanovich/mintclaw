@@ -55,7 +55,7 @@ func onboard(encrypt bool) {
 		// os.Getenv by default) so that SaveConfig can encrypt api_keys.
 		// This process is a one-shot CLI tool; the env var is never exposed outside
 		// the current process and disappears when it exits.
-		os.Setenv(credential.PassphraseEnvVar, passphrase)
+		_ = os.Setenv(credential.PassphraseEnvVar, passphrase)
 
 		if err = setupSSHKey(); err != nil {
 			fmt.Printf("Error generating SSH key: %v\n", err)

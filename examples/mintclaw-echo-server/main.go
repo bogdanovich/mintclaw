@@ -70,7 +70,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 		log.Printf("[-] client disconnected (session=%s)", sessionID)
 	}()
 
@@ -92,7 +92,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "ping":
 			pong := mintclawMessage{Type: "pong", ID: msg.ID, Timestamp: time.Now().UnixMilli()}
-			conn.WriteJSON(pong)
+			_ = conn.WriteJSON(pong)
 
 		case "message.send":
 			content, _ := msg.Payload["content"].(string)

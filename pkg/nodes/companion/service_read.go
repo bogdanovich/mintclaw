@@ -2,9 +2,10 @@ package companion
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -169,8 +170,8 @@ func parseSystemdLogs(
 		}
 		logs = candidate
 	}
-	sort.SliceStable(logs.Records, func(i, j int) bool {
-		return logs.Records[i].Timestamp < logs.Records[j].Timestamp
+	slices.SortStableFunc(logs.Records, func(a, b ServiceLogRecord) int {
+		return cmp.Compare(a.Timestamp, b.Timestamp)
 	})
 	if !serviceLogsFit(logs, bytesMax) {
 		return ServiceLogs{}, &ServiceManagerError{Code: "output_limit_too_small"}

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,7 +104,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	cred.Provider = "google-antigravity"
 
 	// Fetch user email from Google userinfo
-	email, err := fetchGoogleUserEmail(cred.AccessToken)
+	email, err := fetchGoogleUserEmail(context.Background(), cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch email: %v\n", err)
 	} else {
@@ -112,7 +113,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	}
 
 	// Fetch Cloud Code Assist project ID
-	projectID, err := providers.FetchAntigravityProjectID(cred.AccessToken)
+	projectID, err := providers.FetchAntigravityProjectIDWithContext(context.Background(), cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch project ID: %v\n", err)
 		fmt.Println("You may need Google Cloud Code Assist enabled on your account.")
@@ -234,8 +235,8 @@ func authLoginAnthropicSetupToken() error {
 	return nil
 }
 
-func fetchGoogleUserEmail(accessToken string) (string, error) {
-	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+func fetchGoogleUserEmail(ctx context.Context, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +247,7 @@ func fetchGoogleUserEmail(accessToken string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -355,7 +356,9 @@ func authLogoutCmd(provider string) error {
 					}
 				}
 			}
-			config.SaveConfig(internal.GetConfigPath(), appCfg)
+			if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
+				return fmt.Errorf("could not save config: %w", err)
+			}
 		}
 
 		fmt.Printf("Logged out from %s\n", provider)
@@ -373,7 +376,9 @@ func authLogoutCmd(provider string) error {
 		for i := range appCfg.ModelList {
 			appCfg.ModelList[i].AuthMethod = ""
 		}
-		config.SaveConfig(internal.GetConfigPath(), appCfg)
+		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
+			return fmt.Errorf("could not save config: %w", err)
+		}
 	}
 
 	fmt.Println("Logged out from all providers")
@@ -420,7 +425,7 @@ func authStatusCmd() error {
 		}
 
 		if provider == "anthropic" && cred.AuthMethod == "oauth" {
-			usage, err := auth.FetchAnthropicUsage(cred.AccessToken)
+			usage, err := auth.FetchAnthropicUsageWithContext(context.Background(), cred.AccessToken)
 			if err != nil {
 				fmt.Printf("    Usage: unavailable (%v)\n", err)
 			} else {
@@ -458,7 +463,7 @@ func authModelsCmd() error {
 
 	fmt.Printf("Fetching models for project: %s\n\n", projectID)
 
-	models, err := providers.FetchAntigravityModels(cred.AccessToken, projectID)
+	models, err := providers.FetchAntigravityModelsWithContext(context.Background(), cred.AccessToken, projectID)
 	if err != nil {
 		return fmt.Errorf("error fetching models: %w", err)
 	}

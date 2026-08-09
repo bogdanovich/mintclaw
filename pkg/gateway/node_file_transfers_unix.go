@@ -75,10 +75,10 @@ func copyNodeTransferDeliveryTracked(
 	if err != nil {
 		return "", false, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	destination := filepath.Join(directory.Name(), name)
 	if existing, existingErr := openNodeTransferDeliveryFile(directory, name); existingErr == nil {
-		defer existing.Close()
+		defer func() { _ = existing.Close() }()
 		return destination, false, verifyNodeTransferDelivery(existing, artifact)
 	} else if !errors.Is(existingErr, os.ErrNotExist) {
 		return "", false, existingErr
@@ -141,7 +141,7 @@ func removeNodeTransferDelivery(workspace, name string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if err = unix.Unlinkat(int(directory.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}

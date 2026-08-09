@@ -292,7 +292,7 @@ func (proxy *browserNetworkProxy) serveHTTP(
 		proxy.fail(writer)
 		return
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	copyBrowserProxyHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(writer, response.Body)

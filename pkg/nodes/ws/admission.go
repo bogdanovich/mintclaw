@@ -94,7 +94,7 @@ func (handler *AdmissionHandler) ServeHTTP(writer http.ResponseWriter, request *
 	if upgradeErr != nil {
 		return
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	releaseTransport, trackErr := handler.sessions.TrackTransport(connection)
 	if trackErr != nil {
 		return
@@ -205,7 +205,7 @@ func (handler *AdmissionHandler) ServeHTTP(writer http.ResponseWriter, request *
 		}
 	}
 	if session != nil {
-		defer session.Close()
+		defer func() { _ = session.Close() }()
 	}
 	responseData, err := json.Marshal(result)
 	if err != nil {

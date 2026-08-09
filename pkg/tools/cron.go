@@ -271,26 +271,19 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
-	job, err := t.cronService.AddJob(
+	job, err := t.cronService.AddJobWithPayload(
 		messagePreview,
 		schedule,
-		payloadKind,
-		message,
-		channel,
-		chatID,
+		cron.CronPayload{
+			Kind:    payloadKind,
+			Message: message,
+			Channel: channel,
+			To:      chatID,
+			Command: command,
+		},
 	)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("Error adding job: %v", err))
-	}
-
-	// Apply optional payload fields and persist in a single UpdateJob call
-	needsUpdate := false
-	if command != "" {
-		job.Payload.Command = command
-		needsUpdate = true
-	}
-	if needsUpdate {
-		t.cronService.UpdateJob(job)
 	}
 
 	return toolshared.SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -647,9 +640,9 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 		return toolshared.ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
 	}
 
-	updatedJob := t.cronService.EnableJob(jobID, enable)
-	if updatedJob == nil {
-		return toolshared.ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	updatedJob, err := t.cronService.EnableJob(jobID, enable)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error())
 	}
 
 	status := "enabled"

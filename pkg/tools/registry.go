@@ -30,6 +30,7 @@ type ToolRegistry struct {
 	version    atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
 	mediaStore media.MediaStore
 	allowlist  map[string]struct{}
+	sealed     bool
 }
 
 type mediaStoreAware interface {
@@ -105,6 +106,9 @@ func NewToolRegistry() *ToolRegistry {
 func (r *ToolRegistry) SetAllowlist(names []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 
 	if names == nil {
 		r.allowlist = nil
@@ -125,6 +129,9 @@ func (r *ToolRegistry) SetAllowlist(names []string) {
 func (r *ToolRegistry) Register(tool toolshared.Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 	name := tool.Name()
 	if !r.toolAllowedLocked(name) {
 		logger.DebugCF(
@@ -154,6 +161,9 @@ func (r *ToolRegistry) Register(tool toolshared.Tool) {
 func (r *ToolRegistry) RegisterHidden(tool toolshared.Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 	name := tool.Name()
 	if !r.toolAllowedLocked(name) {
 		logger.DebugCF(
@@ -198,6 +208,9 @@ func (r *ToolRegistry) SetMediaStore(store media.MediaStore) {
 func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 	promoted := 0
 	for _, name := range names {
 		if entry, exists := r.tools[name]; exists {
@@ -218,6 +231,9 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 func (r *ToolRegistry) TickTTL() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 	for _, entry := range r.tools {
 		if !entry.IsCore && entry.TTL > 0 {
 			entry.TTL--
@@ -301,12 +317,25 @@ func (r *ToolRegistry) HasRegistered(name string) bool {
 func (r *ToolRegistry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.sealed {
+		return
+	}
 	if _, ok := r.tools[name]; !ok {
 		return
 	}
 	delete(r.tools, name)
 	r.version.Add(1)
 	logger.DebugCF("tools", "Unregistered tool", map[string]any{"name": name})
+}
+
+// Seal freezes catalog membership and visibility for a trusted runtime.
+func (r *ToolRegistry) Seal() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.sealed = true
+	r.mu.Unlock()
 }
 
 // HiddenToolSnapshot holds a consistent snapshot of hidden tools and the

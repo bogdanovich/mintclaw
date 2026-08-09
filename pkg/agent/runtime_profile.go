@@ -4,16 +4,51 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/seahorse"
+	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/state"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
 // RuntimeProfile is the immutable set of layouts admitted before registry construction.
-//
-// P0.2 deliberately keeps the profile limited to root and owner resolution.
-// Store and tool factories are added by the dependent P0.3 and P0.4 packets.
 type RuntimeProfile struct {
 	agentLayouts map[string]RuntimeLayout
+	storeFactory RuntimeStoreFactory
+	toolProfile  RuntimeToolProfile
+}
+
+// RuntimeToolProfile selects the complete pre-construction tool and trust
+// policy for a homogeneous runtime owner domain.
+type RuntimeToolProfile string
+
+const (
+	RuntimeToolProfilePersonal RuntimeToolProfile = "personal"
+	RuntimeToolProfileCoding   RuntimeToolProfile = "coding"
+)
+
+// RuntimeStoreFactory opens the canonical and derived stores owned by a
+// resolved runtime layout. Implementations must not fall back to legacy paths.
+type RuntimeStoreFactory interface {
+	NewSessionStore(layout RuntimeLayout) (session.SessionStore, error)
+	NewSeahorseEngine(config seahorse.Config, complete seahorse.CompleteFn) (*seahorse.Engine, error)
+}
+
+type defaultRuntimeStoreFactory struct{}
+
+func (defaultRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
+	return initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+}
+
+func (defaultRuntimeStoreFactory) NewSeahorseEngine(
+	config seahorse.Config,
+	complete seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	return seahorse.NewEngine(config, complete)
 }
 
 // RuntimeProfileBinding binds one configured runtime agent to its state owner.
@@ -26,8 +61,22 @@ type RuntimeProfileBinding struct {
 
 // NewRuntimeProfile validates and indexes bindings without creating filesystem state.
 func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error) {
+	return NewRuntimeProfileWithStoreFactory(defaultRuntimeStoreFactory{}, bindings...)
+}
+
+// NewRuntimeProfileWithStoreFactory creates a profile with construction-time
+// store injection. It is primarily useful for alternate frontends and fault
+// injection; normal callers should use NewRuntimeProfile.
+func NewRuntimeProfileWithStoreFactory(
+	storeFactory RuntimeStoreFactory,
+	bindings ...RuntimeProfileBinding,
+) (RuntimeProfile, error) {
+	if runtimeDependencyIsNil(storeFactory) {
+		return RuntimeProfile{}, fmt.Errorf("runtime profile: store factory is required")
+	}
 	profile := RuntimeProfile{
 		agentLayouts: make(map[string]RuntimeLayout, len(bindings)),
+		storeFactory: storeFactory,
 	}
 	var profileOwnerKind RuntimeOwnerKind
 	for index, binding := range bindings {
@@ -53,6 +102,12 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 		}
 		if profileOwnerKind == "" {
 			profileOwnerKind = owner.Kind
+			switch owner.Kind {
+			case RuntimeOwnerPersonalAgent:
+				profile.toolProfile = RuntimeToolProfilePersonal
+			case RuntimeOwnerCodingThread:
+				profile.toolProfile = RuntimeToolProfileCoding
+			}
 		} else if owner.Kind != profileOwnerKind {
 			return RuntimeProfile{}, fmt.Errorf(
 				"runtime profile: mixed owner kinds %q and %q are not supported",
@@ -98,6 +153,27 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 		left := bindings[leftIndex]
 		for rightIndex := leftIndex + 1; rightIndex < len(bindings); rightIndex++ {
 			right := bindings[rightIndex]
+			leftInsideRightExecution, err := runtimeLayoutPathWithin(
+				left.Layout.ExecutionRoot(),
+				right.Layout.ExecutionRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+			}
+			rightInsideLeftExecution, err := runtimeLayoutPathWithin(
+				right.Layout.ExecutionRoot(),
+				left.Layout.ExecutionRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+			}
+			if leftInsideRightExecution && rightInsideLeftExecution {
+				return RuntimeProfile{}, fmt.Errorf(
+					"runtime profile: agents %q and %q cannot share an execution root",
+					routing.NormalizeAgentID(left.AgentID),
+					routing.NormalizeAgentID(right.AgentID),
+				)
+			}
 			if left.Layout.Owner() == right.Layout.Owner() {
 				continue
 			}
@@ -127,10 +203,51 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 	return profile, nil
 }
 
+// ToolProfile returns the immutable tool/trust profile selected by the owner domain.
+func (p RuntimeProfile) ToolProfile() RuntimeToolProfile {
+	return p.toolProfile
+}
+
+func runtimeDependencyIsNil(dependency any) bool {
+	if dependency == nil {
+		return true
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // AgentLayout returns the layout bound to a canonical configured agent ID.
 func (p RuntimeProfile) AgentLayout(agentID string) (RuntimeLayout, bool) {
 	layout, ok := p.agentLayouts[routing.NormalizeAgentID(agentID)]
 	return layout, ok
+}
+
+func (al *AgentLoop) runtimeLayoutForWorkspace(workspace string) (RuntimeLayout, bool) {
+	if al == nil || al.runtimeProfile == nil {
+		return RuntimeLayout{}, false
+	}
+	want := normalizeRuntimeWorkspace(workspace)
+	agentIDs := make([]string, 0, len(al.runtimeProfile.agentLayouts))
+	for agentID := range al.runtimeProfile.agentLayouts {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
+		layout := al.runtimeProfile.agentLayouts[agentID]
+		if normalizeRuntimeWorkspace(layout.ExecutionRoot()) == want {
+			return layout, true
+		}
+	}
+	return RuntimeLayout{}, false
+}
+
+func (al *AgentLoop) hasCodingToolProfile() bool {
+	return al != nil && al.runtimeProfile != nil && al.runtimeProfile.toolProfile == RuntimeToolProfileCoding
 }
 
 func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
@@ -180,7 +297,7 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			Layout:  refreshedLayout,
 		})
 	}
-	refreshedProfile, err := NewRuntimeProfile(refreshedBindings...)
+	refreshedProfile, err := NewRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
 	if err != nil {
 		return fmt.Errorf("runtime profile: refresh physical root isolation: %w", err)
 	}
@@ -196,7 +313,10 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			path string
 		}{
 			{name: "sessions", path: paths.SessionsRoot},
+			{name: "context", path: paths.ContextRoot},
 			{name: "memory", path: paths.MemoryRoot},
+			{name: "operational", path: paths.OperationalRoot},
+			{name: "tool scratch", path: filepath.Join(paths.OperationalRoot, "tmp")},
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
 				return fmt.Errorf(
@@ -207,6 +327,85 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 				)
 			}
 		}
+		if err := preflightRuntimeFile(filepath.Join(paths.ContextRoot, "seahorse.db")); err != nil {
+			return fmt.Errorf(
+				"runtime profile: preflight Seahorse state for agent %q: %w",
+				routing.NormalizeAgentID(agentID),
+				err,
+			)
+		}
+		if err := preflightRuntimeOperationalFiles(paths); err != nil {
+			return fmt.Errorf(
+				"runtime profile: preflight operational state for agent %q: %w",
+				routing.NormalizeAgentID(agentID),
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func preflightRuntimeOperationalFiles(paths RuntimeStatePaths) error {
+	for _, target := range []struct {
+		name string
+		path string
+	}{
+		{name: "runtime state", path: paths.RuntimeStateFile},
+		{name: "task registry", path: paths.TaskRegistryFile},
+		{name: "interaction registry", path: paths.InteractionFile},
+		{name: "interaction key", path: paths.InteractionKeyFile},
+	} {
+		if err := preflightRuntimeFile(target.path); err != nil {
+			return fmt.Errorf("%s: %w", target.name, err)
+		}
+	}
+	if _, statErr := os.Lstat(paths.RuntimeStateFile); statErr == nil {
+		if _, loadErr := state.NewManagerAtChecked(paths.RuntimeStateFile); loadErr != nil {
+			return fmt.Errorf("runtime state: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("runtime state: inspect file: %w", statErr)
+	}
+	if _, statErr := os.Lstat(paths.TaskRegistryFile); statErr == nil {
+		if loadErr := taskregistry.ValidateSnapshot(paths.TaskRegistryFile); loadErr != nil {
+			return fmt.Errorf("task registry: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("task registry: inspect file: %w", statErr)
+	}
+	if _, statErr := os.Lstat(paths.InteractionFile); statErr == nil {
+		if loadErr := interactions.ValidateSnapshot(paths.InteractionFile); loadErr != nil {
+			return fmt.Errorf("interaction registry: %w", loadErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("interaction registry: inspect file: %w", statErr)
+	}
+	if err := interactions.ValidateArgumentHashKey(paths.InteractionKeyFile); err != nil {
+		return fmt.Errorf("interaction key: %w", err)
+	}
+	return nil
+}
+
+func preflightRuntimeFile(path string) error {
+	entry, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect file %q: %w", path, err)
+	}
+	if entry.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("path %q must not be a symbolic link", path)
+	}
+	if !entry.Mode().IsRegular() {
+		return fmt.Errorf("path %q is not a regular file", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open file %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close file %q: %w", path, err)
 	}
 	return nil
 }

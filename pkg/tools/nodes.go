@@ -1,12 +1,14 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -90,6 +92,21 @@ type nodeCommandContract struct {
 	File         *nodeFileCommandContract      `json:"file,omitempty"`
 	Service      *nodeServiceCommandContract   `json:"service,omitempty"`
 	Update       *nodeUpdateCommandContract    `json:"update,omitempty"`
+	Job          *nodeJobCommandContract       `json:"job,omitempty"`
+}
+
+type nodeJobCommandContract struct {
+	Profile                string                   `json:"profile"`
+	TimeoutSecondsMax      int                      `json:"timeout_seconds_max"`
+	ConcurrentJobs         int                      `json:"concurrent_jobs"`
+	StdoutBytesMax         int64                    `json:"stdout_bytes_max"`
+	StderrBytesMax         int64                    `json:"stderr_bytes_max"`
+	ArtifactCountMax       int                      `json:"artifact_count_max"`
+	ArtifactBytesMax       int64                    `json:"artifact_bytes_max"`
+	ArtifactsTotalBytesMax int64                    `json:"artifacts_total_bytes_max"`
+	RetentionSeconds       int                      `json:"retention_seconds"`
+	CancelGuarantee        string                   `json:"cancel_guarantee"`
+	Approval               nodes.JobProfileApproval `json:"approval"`
 }
 
 type nodeFileCommandContract struct {
@@ -263,6 +280,7 @@ func (tool *NodeDiscoveryTool) describe(
 		binding.FileProfile,
 		binding.ServiceProfile,
 		binding.UpdateProfile,
+		binding.JobProfile,
 		tool.access.bypassesApproval(target),
 	)
 	if command == "" {
@@ -277,6 +295,7 @@ func (tool *NodeDiscoveryTool) describe(
 		binding.FileProfile,
 		binding.ServiceProfile,
 		binding.UpdateProfile,
+		binding.JobProfile,
 	)
 	if !ok {
 		return toolshared.ErrorResult("command is unavailable on this target")
@@ -361,6 +380,7 @@ func (access *nodeTargetAccess) resolve(
 			binding.FileProfile,
 			binding.ServiceProfile,
 			binding.UpdateProfile,
+			binding.JobProfile,
 			access.bypassesApproval(target),
 		)
 		entry.CommandCount = len(commands)
@@ -393,6 +413,7 @@ func visibleNodeCommands(
 	fileProfile string,
 	serviceProfile string,
 	updateProfile string,
+	jobProfile string,
 	approvalBypass bool,
 ) []nodeCommandSummary {
 	if registration == nil || len(registration.AllowedCommands) == 0 {
@@ -417,6 +438,7 @@ func visibleNodeCommands(
 			fileProfile,
 			serviceProfile,
 			updateProfile,
+			jobProfile,
 		)
 		if !available {
 			continue
@@ -431,7 +453,7 @@ func visibleNodeCommands(
 			Approval:         descriptorApprovalMode(projected),
 		})
 	}
-	sort.Slice(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	slices.SortFunc(commands, func(a, b nodeCommandSummary) int { return cmp.Compare(a.Name, b.Name) })
 	return commands
 }
 
@@ -455,14 +477,11 @@ func projectDescriptorForTarget(
 	descriptor nodes.CommandDescriptor,
 	fileProfile string,
 	serviceProfile string,
-	updateProfiles ...string,
+	updateProfile string,
+	jobProfile string,
 ) (nodes.CommandDescriptor, bool) {
 	if nodes.IsBrowserCommand(descriptor.Name) {
 		return nodes.CommandDescriptor{}, false
-	}
-	updateProfile := ""
-	if len(updateProfiles) > 0 {
-		updateProfile = updateProfiles[0]
 	}
 	projected, available := projectFileDescriptorForTarget(descriptor, fileProfile)
 	if !available {
@@ -472,7 +491,11 @@ func projectDescriptorForTarget(
 	if !available {
 		return nodes.CommandDescriptor{}, false
 	}
-	return projectUpdateDescriptorForTarget(projected, updateProfile)
+	projected, available = projectUpdateDescriptorForTarget(projected, updateProfile)
+	if !available {
+		return nodes.CommandDescriptor{}, false
+	}
+	return nodes.ProjectJobDescriptorForProfile(projected, jobProfile)
 }
 
 func projectFileDescriptorForTarget(
@@ -643,6 +666,8 @@ func makeNodeCommandContract(
 		inputSchema = nodes.ServiceCommandInputSchema(descriptor.Name, descriptor.ServiceProfiles)
 	} else if len(descriptor.UpdateProfiles) == 1 {
 		inputSchema = nodes.NodeUpdateInputSchema(descriptor.UpdateProfiles)
+	} else if len(descriptor.JobProfiles) == 1 {
+		inputSchema = nodes.JobCommandInputSchema(descriptor.Name, descriptor.JobProfiles)
 	}
 	contract := nodeCommandContract{
 		Name:         descriptor.Name,
@@ -706,6 +731,19 @@ func makeNodeCommandContract(
 			Releases: releases, Downgrade: profile.Downgrade,
 		}
 		contract.Execution.Approval = profile.Approval
+	}
+	if len(descriptor.JobProfiles) == 1 {
+		profile := descriptor.JobProfiles[0]
+		contract.Constraints.ProfileAliases = nil
+		contract.Job = &nodeJobCommandContract{
+			Profile: profile.Alias, TimeoutSecondsMax: profile.TimeoutSecondsMax,
+			ConcurrentJobs: profile.ConcurrentJobs,
+			StdoutBytesMax: profile.StdoutBytesMax, StderrBytesMax: profile.StderrBytesMax,
+			ArtifactCountMax: profile.ArtifactCountMax, ArtifactBytesMax: profile.ArtifactBytesMax,
+			ArtifactsTotalBytesMax: profile.ArtifactsTotalBytesMax,
+			RetentionSeconds:       profile.RetentionSeconds, CancelGuarantee: profile.CancelGuarantee,
+			Approval: profile.Approval,
+		}
 	}
 	return contract
 }
@@ -788,6 +826,7 @@ type discoveryRevisionInput struct {
 	TargetFileProfile    string      `json:"target_file_profile,omitempty"`
 	TargetServiceProfile string      `json:"target_service_profile,omitempty"`
 	TargetUpdateProfile  string      `json:"target_update_profile,omitempty"`
+	TargetJobProfile     string      `json:"target_job_profile,omitempty"`
 	TargetApprovalBypass bool        `json:"target_approval_bypass,omitempty"`
 	TargetBindingDigest  string      `json:"target_binding_digest"`
 	NodeIdentityDigest   string      `json:"node_identity_digest"`
@@ -835,6 +874,7 @@ func (access *nodeTargetAccess) discoveryRevision(
 		TargetFileProfile:    binding.FileProfile,
 		TargetServiceProfile: binding.ServiceProfile,
 		TargetUpdateProfile:  binding.UpdateProfile,
+		TargetJobProfile:     binding.JobProfile,
 		TargetApprovalBypass: access.bypassesApproval(target),
 		TargetBindingDigest:  base64.RawURLEncoding.EncodeToString(bindingDigest[:]),
 		NodeIdentityDigest:   base64.RawURLEncoding.EncodeToString(nodeIdentityDigest[:]),
