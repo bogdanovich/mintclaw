@@ -98,6 +98,13 @@ type activeDirectJob struct {
 	once      sync.Once
 }
 
+type jobProcessDrainResult struct {
+	signalSent         bool
+	signaledLiveLeader bool
+	hadDescendants     bool
+	observationUnknown bool
+}
+
 type DirectJobManager struct {
 	store           *JobStore
 	policy          SystemExecPolicy
@@ -379,7 +386,7 @@ func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
 			}
 		}
 	}
-	signalSent, hadDescendants := drainJobProcessGroup(active.command, reason != "completed")
+	drain := drainJobProcessGroup(active.command, reason != "completed")
 	waitErr := active.command.Wait()
 	stdout := active.stdout.close()
 	stderr := active.stderr.close()
@@ -389,8 +396,7 @@ func (manager *DirectJobManager) wait(jobID string, active *activeDirectJob) {
 		active.command,
 		waitErr,
 		reason,
-		signalSent,
-		hadDescendants,
+		drain,
 	)
 	completion.Stdout = stdout
 	completion.Stderr = stderr
@@ -407,43 +413,62 @@ func jobCompletionForProcess(
 	command *exec.Cmd,
 	waitErr error,
 	reason string,
-	signalSent bool,
-	hadDescendants bool,
+	drain jobProcessDrainResult,
 ) JobCompletion {
-	completion := JobCompletion{CancellationSignal: signalSent}
+	completion := JobCompletion{}
+	var processState *os.ProcessState
 	if command != nil && command.ProcessState != nil {
-		exitCode := command.ProcessState.ExitCode()
+		processState = command.ProcessState
+		exitCode := processState.ExitCode()
 		completion.ExitCode = &exitCode
-		completion.Signal = jobProcessSignal(command.ProcessState)
+		completion.Signal = jobProcessSignal(processState)
+	}
+	terminationProven := !drain.observationUnknown &&
+		drain.signalSent &&
+		drain.signaledLiveLeader &&
+		jobProcessKilled(processState)
+	completion.CancellationSignal = drain.signalSent
+	if drain.observationUnknown {
+		if reason == "cancel" {
+			completion.State = JobCancelUnknown
+			completion.FailureCode = "CANCEL_OUTCOME_UNKNOWN"
+			return completion
+		}
+		completion.State = JobUnknown
+		completion.FailureCode = "PROCESS_OBSERVATION_FAILED"
+		return completion
 	}
 	switch reason {
 	case "timeout":
-		completion.State = JobTimedOut
-		completion.FailureCode = "TIMEOUT"
+		if terminationProven {
+			completion.State = JobTimedOut
+			completion.FailureCode = "TIMEOUT"
+			return completion
+		}
 	case "cancel":
-		if signalSent {
+		if terminationProven {
 			completion.State = JobCanceled
 			completion.FailureCode = "CANCELED"
-		} else {
-			completion.State = JobCancelUnknown
-			completion.FailureCode = "CANCEL_OUTCOME_UNKNOWN"
+			return completion
 		}
 	case "completed":
-		if hadDescendants {
-			completion.State = JobFailed
-			completion.FailureCode = "PROCESS_GROUP_OUTLIVED_LEADER"
-			return completion
-		}
-		if waitErr == nil {
-			completion.State = JobSucceeded
-			return completion
-		}
-		completion.State = JobFailed
-		completion.FailureCode = "PROCESS_FAILED"
+		// Fall through to the observed natural process result.
 	default:
 		completion.State = JobUnknown
 		completion.FailureCode = "PROCESS_OUTCOME_UNKNOWN"
+		return completion
 	}
+	if drain.hadDescendants {
+		completion.State = JobFailed
+		completion.FailureCode = "PROCESS_GROUP_OUTLIVED_LEADER"
+		return completion
+	}
+	if waitErr == nil {
+		completion.State = JobSucceeded
+		return completion
+	}
+	completion.State = JobFailed
+	completion.FailureCode = "PROCESS_FAILED"
 	return completion
 }
 
@@ -479,7 +504,7 @@ func (manager *DirectJobManager) snapshotArtifacts(active *activeDirectJob) []Jo
 			results = append(results, result)
 			continue
 		}
-		result = manager.snapshotArtifact(declaration.Name, source)
+		result = manager.snapshotArtifact(declaration.Name, source, limit)
 		_ = source.file.Close()
 		if result.State == JobArtifactAvailable {
 			remaining -= result.Size
@@ -492,6 +517,7 @@ func (manager *DirectJobManager) snapshotArtifacts(active *activeDirectJob) []Jo
 func (manager *DirectJobManager) snapshotArtifact(
 	name string,
 	source *resolvedFile,
+	limit int64,
 ) JobArtifactRecord {
 	result := JobArtifactRecord{Name: name, State: JobArtifactFailed}
 	ref, err := newJobArtifactRef()
@@ -515,9 +541,17 @@ func (manager *DirectJobManager) snapshotArtifact(
 		}
 	}()
 	hasher := sha256.New()
-	written, err := io.Copy(io.MultiWriter(destination, hasher), source.file)
-	if err != nil || written != source.info.Size() || destination.Sync() != nil {
+	written, overflow, err := copyBoundedJobArtifact(
+		io.MultiWriter(destination, hasher),
+		source.file,
+		limit,
+	)
+	if err != nil || destination.Sync() != nil {
 		result.FailureCode = "SNAPSHOT_FAILED"
+		return result
+	}
+	if overflow || written != source.info.Size() {
+		result.FailureCode = "SOURCE_CHANGED"
 		return result
 	}
 	after, err := source.file.Stat()
@@ -544,6 +578,20 @@ func (manager *DirectJobManager) snapshotArtifact(
 		Name: name, State: JobArtifactAvailable, ArtifactRef: ref, FileName: fileName,
 		Size: written, SHA256: hex.EncodeToString(hasher.Sum(nil)),
 	}
+}
+
+func copyBoundedJobArtifact(destination io.Writer, source io.Reader, limit int64) (int64, bool, error) {
+	limited := &io.LimitedReader{R: source, N: limit}
+	written, err := io.Copy(destination, limited)
+	if err != nil {
+		return written, false, err
+	}
+	var probe [1]byte
+	read, probeErr := source.Read(probe[:])
+	if probeErr != nil && !errors.Is(probeErr, io.EOF) {
+		return written, false, probeErr
+	}
+	return written, read > 0, nil
 }
 
 func (manager *DirectJobManager) Cancel(owner JobOwner, jobID string) (JobRecord, error) {

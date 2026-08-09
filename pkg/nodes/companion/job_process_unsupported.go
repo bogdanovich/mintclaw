@@ -18,6 +18,8 @@ func jobProcessLeaderExited(int) (bool, error) {
 	return false, ErrJobPlatformUnsupported
 }
 
-func drainJobProcessGroup(*exec.Cmd, bool) (bool, bool) { return false, false }
+func drainJobProcessGroup(*exec.Cmd, bool) jobProcessDrainResult { return jobProcessDrainResult{} }
 
 func jobProcessSignal(*os.ProcessState) string { return "" }
+
+func jobProcessKilled(*os.ProcessState) bool { return false }

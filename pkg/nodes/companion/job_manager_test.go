@@ -3,6 +3,7 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -189,6 +190,71 @@ func TestDirectJobManagerRejectsSymlinkArtifact(t *testing.T) {
 		record.Artifacts[0].State != JobArtifactFailed ||
 		record.Artifacts[0].ArtifactRef != "" {
 		t.Fatalf("symlink artifact record = %#v", record)
+	}
+}
+
+func TestCopyBoundedJobArtifactProbesOverflowWithoutWritingIt(t *testing.T) {
+	destination := &bytes.Buffer{}
+	written, overflow, err := copyBoundedJobArtifact(
+		destination,
+		bytes.NewReader([]byte("12345")),
+		4,
+	)
+	if err != nil || written != 4 || !overflow || destination.String() != "1234" {
+		t.Fatalf(
+			"copyBoundedJobArtifact() = written %d, overflow %t, data %q, error %v",
+			written,
+			overflow,
+			destination.String(),
+			err,
+		)
+	}
+}
+
+func TestDirectJobManagerRejectsArtifactGrowthAfterOpen(t *testing.T) {
+	manager, store, root, _ := newTestDirectJobManager(t, DirectJobLimits{})
+	path := filepath.Join(root, "growing.out")
+	if err := os.WriteFile(path, []byte("1234"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := identityFromInfo(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &resolvedFile{file: file, info: info, identity: identity}
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFile.WriteString("5"); err != nil {
+		_ = appendFile.Close()
+		t.Fatal(err)
+	}
+	if err := appendFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result := manager.snapshotArtifact("result", source, 4)
+	if result.State != JobArtifactFailed || result.FailureCode != "SOURCE_CHANGED" ||
+		result.ArtifactRef != "" {
+		t.Fatalf("growing artifact result = %#v", result)
+	}
+	entries, err := os.ReadDir(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".artifact") {
+			t.Fatalf("rejected snapshot was retained: %s", entry.Name())
+		}
 	}
 }
 
