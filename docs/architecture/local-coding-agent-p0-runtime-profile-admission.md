@@ -104,6 +104,8 @@ Focused tests prove that:
   created;
 - unusable state targets on a later binding fail before an earlier owner's
   state is created;
+- physical root isolation is revalidated immediately before construction, and
+  missing state targets are probed for creatability without persistent files;
 - duplicate bindings, overlapping state roots for distinct owners, duplicate
   configured IDs, extra bindings, mixed owner kinds, and mismatched personal
   identities are rejected;

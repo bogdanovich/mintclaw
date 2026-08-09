@@ -156,8 +156,37 @@ func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
 }
 
 func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
+	refreshedBindings := make([]RuntimeProfileBinding, 0, len(agentIDs))
 	for _, agentID := range agentIDs {
 		layout, ok := p.AgentLayout(agentID)
+		if !ok {
+			return fmt.Errorf("runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
+		}
+		refreshedLayout, err := NewRuntimeLayout(
+			layout.Owner(),
+			layout.ExecutionRoot(),
+			layout.StateRoot(),
+			layout.InstructionRoots(),
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"runtime profile: refresh layout for agent %q: %w",
+				routing.NormalizeAgentID(agentID),
+				err,
+			)
+		}
+		refreshedBindings = append(refreshedBindings, RuntimeProfileBinding{
+			AgentID: agentID,
+			Layout:  refreshedLayout,
+		})
+	}
+	refreshedProfile, err := NewRuntimeProfile(refreshedBindings...)
+	if err != nil {
+		return fmt.Errorf("runtime profile: refresh physical root isolation: %w", err)
+	}
+
+	for _, agentID := range agentIDs {
+		layout, ok := refreshedProfile.AgentLayout(agentID)
 		if !ok {
 			return fmt.Errorf("runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
 		}
@@ -193,7 +222,7 @@ func preflightRuntimeDirectory(path string) error {
 			if !info.IsDir() {
 				return fmt.Errorf("path %q is not a directory", current)
 			}
-			return nil
+			return probeRuntimeDirectory(current)
 		}
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect path %q: %w", current, err)
@@ -202,6 +231,17 @@ func preflightRuntimeDirectory(path string) error {
 			return fmt.Errorf("path %q has no existing directory ancestor", path)
 		}
 	}
+}
+
+func probeRuntimeDirectory(directory string) error {
+	probe, err := os.MkdirTemp(directory, ".mintclaw-preflight-")
+	if err != nil {
+		return fmt.Errorf("verify directory %q is creatable: %w", directory, err)
+	}
+	if err := os.Remove(probe); err != nil {
+		return fmt.Errorf("remove directory creatability probe %q: %w", probe, err)
+	}
+	return nil
 }
 
 func (p RuntimeProfile) hasCodingOwner() bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -380,6 +381,132 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsLaterStateBeforeConstruction(t 
 	}
 	if _, statErr := os.Stat(mainExecution); !os.IsNotExist(statErr) {
 		t.Fatalf("failed preflight created earlier execution root: %v", statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileRevalidatesPhysicalStateIsolation(t *testing.T) {
+	root := t.TempDir()
+	mainExecution := filepath.Join(root, "main-project")
+	mainState := filepath.Join(root, "state-main")
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		mainExecution,
+		mainState,
+		[]string{mainExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportExecution := filepath.Join(root, "support-project")
+	supportState := filepath.Join(root, "state-support")
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		supportExecution,
+		supportState,
+		[]string{supportExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	if err := os.MkdirAll(mainState, 0o755); err != nil {
+		t.Fatalf("MkdirAll(main state) error = %v", err)
+	}
+	if err := os.Symlink(mainState, supportState); err != nil {
+		t.Skipf("Symlink() unavailable: %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want physical-root isolation error")
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	for _, path := range []string{
+		mainLayout.StatePaths().SessionsRoot,
+		mainLayout.StatePaths().MemoryRoot,
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("failed physical-root preflight created %q: %v", path, statErr)
+		}
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix directory mode bits")
+	}
+	root := t.TempDir()
+	mainExecution := filepath.Join(root, "main-project")
+	mainState := filepath.Join(root, "state-main")
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		mainExecution,
+		mainState,
+		[]string{mainExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportExecution := filepath.Join(root, "support-project")
+	supportState := filepath.Join(root, "state-support")
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		supportExecution,
+		supportState,
+		[]string{supportExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	if err := os.MkdirAll(supportState, 0o500); err != nil {
+		t.Fatalf("MkdirAll(support state) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(supportState, 0o700)
+	})
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want state-creatability error")
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
+		t.Fatalf("failed creatability preflight created earlier owner state: %v", statErr)
 	}
 }
 
