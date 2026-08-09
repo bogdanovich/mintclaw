@@ -95,7 +95,6 @@ jq '
       or .kind == "model.retry"
       or .kind == "model.fallback_attempt"
       or .kind == "tool.loop_decision"
-      or .kind == "tool.steering_decision"
       or .kind == "delivery.outcome"
       or (.data.is_error? == true)
     )

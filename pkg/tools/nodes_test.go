@@ -1162,13 +1162,10 @@ func TestNodeDiscoveryToolReturnsRegistryErrors(t *testing.T) {
 	}
 }
 
-func TestNodeDiscoveryToolRuntimeClassification(t *testing.T) {
+func TestNodeDiscoveryToolLoopSemantics(t *testing.T) {
 	tool := NewNodeDiscoveryTool(nil, nil)
 	if got := tool.ToolLoopSemantics(); got != loopguard.SemanticsReadOnlyIdempotent {
 		t.Fatalf("loop semantics = %q", got)
-	}
-	if got := tool.ToolSteeringSafety(nil); got != toolshared.SteeringSafetyReadOnly {
-		t.Fatalf("steering safety = %q", got)
 	}
 }
 

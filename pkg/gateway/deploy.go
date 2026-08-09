@@ -274,10 +274,6 @@ type GatewayDeployTool struct {
 
 func (t *GatewayDeployTool) Name() string { return "gateway_deploy" }
 
-func (t *GatewayDeployTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
 func (t *GatewayDeployTool) Description() string {
 	return "Run the configured deploy script for an allowed target."
 }

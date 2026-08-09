@@ -5,6 +5,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Reliability and Refactoring Roadmap V2](reliability-refactoring-roadmap-v2.md): evidence-based follow-up work for
   turn-critical session mutation, transactional gateway generations, and versioned configuration writes.
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
+- [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.

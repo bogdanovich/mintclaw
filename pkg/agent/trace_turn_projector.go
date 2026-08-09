@@ -592,16 +592,6 @@ func runtimeEventRecord(
 			Count:        value.Count,
 			Threshold:    value.Threshold,
 		}
-	case runtimeevents.KindAgentToolSteeringDecision:
-		value, ok := event.Payload.(ToolSteeringDecisionPayload)
-		if !ok {
-			return diagnostictrace.Record{}, false, false
-		}
-		kind = diagnostictrace.RecordToolSteeringDecision
-		payload = diagnostictrace.ToolPayload{
-			Tool: value.Tool, Action: value.Decision, Classification: value.Classification, Cause: value.Cause,
-		}
-		toolCallID = value.ToolCallID
 	case runtimeevents.KindAgentSteeringInjected:
 		value, ok := event.Payload.(SteeringInjectedPayload)
 		if !ok {

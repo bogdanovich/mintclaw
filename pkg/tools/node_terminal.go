@@ -384,10 +384,6 @@ func (*NodeTerminalTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
-func (*NodeTerminalTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
 func (tool *NodeTerminalTool) discover(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	if _, err := terminalOperatorSessionID(ctx); err != nil {
 		return nodeTerminalDenial()
