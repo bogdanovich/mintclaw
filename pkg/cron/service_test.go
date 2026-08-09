@@ -920,6 +920,76 @@ func TestLoadLatchesCorruptionDuringInFlightDispatch(t *testing.T) {
 	}
 }
 
+func TestLoadPublishesFreshSnapshotAfterDispatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	released := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	var startedOnce sync.Once
+	var cs *CronService
+	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+		startedOnce.Do(func() { close(handlerStarted) })
+		<-released
+		return "ok", nil
+	})
+
+	// One-shot "at" job: DeleteAfterRun removes it from the store once run.
+	job, err := cs.AddJob(
+		"once",
+		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	if !job.DeleteAfterRun {
+		t.Fatal("expected DeleteAfterRun for at job")
+	}
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+	cs.running = true
+
+	dispatchDone := make(chan struct{})
+	go func() {
+		cs.checkJobs()
+		close(dispatchDone)
+	}()
+
+	// A reload issued while the handler is in flight must publish the state
+	// committed by the dispatch (the job is deleted), not the older snapshot.
+	<-handlerStarted
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- cs.Load()
+	}()
+	select {
+	case err := <-loadDone:
+		t.Fatalf("Load completed during in-flight dispatch: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(released)
+	<-dispatchDone
+
+	if err := <-loadDone; err != nil {
+		t.Fatalf("Load after dispatch failed: %v", err)
+	}
+
+	if _, ok := cs.GetJob(job.ID); ok {
+		t.Fatal("completed one-shot job was resurrected in live state by reload")
+	}
+}
+
 func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")

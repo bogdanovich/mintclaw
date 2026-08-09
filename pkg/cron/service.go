@@ -407,12 +407,11 @@ func (cs *CronService) getNextWakeMS() *int64 {
 }
 
 func (cs *CronService) Load() error {
-	// Read and decode the reload candidate before serializing with dispatch:
-	// if the authoritative file is corrupt, latch the failure immediately so
-	// an in-flight handler completion suppresses its save instead of
-	// overwriting the malformed file with the live snapshot.
-	store, readErr := cs.readStore()
-	if readErr != nil {
+	// Probe the authoritative file before serializing with dispatch: if it is
+	// corrupt, latch the failure immediately so an in-flight handler
+	// completion suppresses its save instead of overwriting the malformed
+	// file with the live snapshot.
+	if _, readErr := cs.readStore(); readErr != nil {
 		cs.mu.Lock()
 		cs.loadErr = readErr
 		cs.notify()
@@ -422,6 +421,19 @@ func (cs *CronService) Load() error {
 
 	cs.dispatchMu.Lock()
 	defer cs.dispatchMu.Unlock()
+
+	// Re-read after in-flight dispatch finishes and publish only that fresh
+	// snapshot: a handler may have committed deletion, disablement, or the
+	// next recurring run while we waited. Do not clear loadErr if this read
+	// fails.
+	store, readErr := cs.readStore()
+	if readErr != nil {
+		cs.mu.Lock()
+		cs.loadErr = readErr
+		cs.notify()
+		cs.mu.Unlock()
+		return readErr
+	}
 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
