@@ -571,7 +571,7 @@ func TestBrowserNetworkProxySupportsConnectAndUpgrade(t *testing.T) {
 	reader := bufio.NewReader(connection)
 	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
 	if response != nil {
-		defer func() { _ = response.Body.Close() }()
+		defer func(r *http.Response) { _ = r.Body.Close() }(response)
 	}
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("CONNECT response = %+v, %v", response, err)
@@ -597,7 +597,7 @@ func TestBrowserNetworkProxySupportsConnectAndUpgrade(t *testing.T) {
 	reader = bufio.NewReader(connection)
 	response, err = http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
 	if response != nil {
-		defer func() { _ = response.Body.Close() }()
+		defer func(r *http.Response) { _ = r.Body.Close() }(response)
 	}
 	if err != nil || response.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade response = %+v, %v", response, err)

@@ -241,7 +241,7 @@ func TestNodeTerminalOperatorRequiresAuthSessionAndOrigin(t *testing.T) {
 	badOriginHeader.Set("Origin", "https://attacker.example")
 	connection, response, dialErr := websocket.DefaultDialer.Dial(wsEndpoint, badOriginHeader)
 	if response != nil {
-		defer func() { _ = response.Body.Close() }()
+		defer func(r *http.Response) { _ = r.Body.Close() }(response)
 	}
 	if dialErr == nil {
 		_ = connection.Close()

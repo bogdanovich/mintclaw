@@ -54,7 +54,10 @@ func TestNormalizeCLIErrorStructuredAndTransportPrecedence(t *testing.T) {
 		"credits unavailable",
 		errors.New("billing"),
 	)
-	if got := normalizeCLIError(existing, "rate limit exceeded"); !errors.Is(got, existing) {
+	if got := normalizeCLIError(
+		existing,
+		"rate limit exceeded",
+	); got != existing { //nolint:errorlint // exact top-level identity is the contract under test
 		t.Fatalf("normalizeCLIError() = %#v, want existing structured error", got)
 	}
 

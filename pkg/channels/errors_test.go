@@ -19,15 +19,15 @@ func TestErrorsIs(t *testing.T) {
 func TestErrorsIsAllTypes(t *testing.T) {
 	sentinels := []error{ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed}
 
-	for _, sentinel := range sentinels {
+	for i, sentinel := range sentinels {
 		wrapped := fmt.Errorf("context: %w", sentinel)
 		if !errors.Is(wrapped, sentinel) {
 			t.Errorf("wrapped %v should match itself", sentinel)
 		}
 
 		// Verify it doesn't match other sentinel errors
-		for _, other := range sentinels {
-			if errors.Is(other, sentinel) {
+		for j, other := range sentinels {
+			if i == j {
 				continue
 			}
 			if errors.Is(wrapped, other) {
