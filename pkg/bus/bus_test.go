@@ -901,7 +901,7 @@ func TestConsumeInbound_ContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	mb.PublishInbound(ctx, InboundMessage{
+	_ = mb.PublishInbound(ctx, InboundMessage{
 		Context: InboundContext{
 			Channel:  "test",
 			ChatID:   "chat-cancel",

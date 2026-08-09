@@ -638,7 +638,7 @@ func TestHandleSearchSkills(t *testing.T) {
 		if got := r.URL.Query().Get("q"); got != "github" {
 			t.Fatalf("query = %q, want github", got)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{
 					"score":       0.95,
@@ -719,7 +719,7 @@ func TestHandleSearchSkillsUsesGitHubResultVersionInURL(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"items": []map[string]any{
 				{
 					"path":  "skills/pr-review/SKILL.md",
@@ -837,7 +837,7 @@ func TestHandleSearchSkillsPagination(t *testing.T) {
 		if got := r.URL.Query().Get("limit"); got != "5" {
 			t.Fatalf("limit = %q, want 5", got)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{
 					"score":       0.99,
@@ -932,7 +932,7 @@ func TestHandleSearchSkillsClampsRegistryFanout(t *testing.T) {
 		if got := r.URL.Query().Get("limit"); got != strconv.Itoa(maxRegistrySearchFanout) {
 			t.Fatalf("limit = %q, want %d", got, maxRegistrySearchFanout)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{
 					"score":       0.99,
@@ -990,7 +990,7 @@ func TestHandleInstallSkill(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/search":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{
 					{
 						"score":       0.95,
@@ -1002,7 +1002,7 @@ func TestHandleInstallSkill(t *testing.T) {
 				},
 			})
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",
@@ -1143,7 +1143,7 @@ func TestHandleInstallSkillForcePreservesExistingSkillOnFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",
@@ -1217,10 +1217,10 @@ func TestHandleInstallSkillDefaultsRegistryToGitHub(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/repos/foo/bar":
-			json.NewEncoder(w).Encode(map[string]any{"default_branch": "master"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "master"})
 		case "/api/v3/repos/foo/bar/contents/.agents/skills/pr-review":
 			assert.Equal(t, "ref=master", r.URL.RawQuery)
-			json.NewEncoder(w).Encode([]map[string]any{
+			_ = json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"type":         "file",
 					"name":         "SKILL.md",
@@ -1289,16 +1289,16 @@ func TestHandleInstallSkillTracksGitHubURLInstallsAsInstalled(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/repos/foo/bar":
-			json.NewEncoder(w).Encode(map[string]any{"default_branch": "master"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "master"})
 		case "/api/v3/repos/foo/bar/contents/.agents/skills/pr-review":
 			assert.Equal(t, "ref=master", r.URL.RawQuery)
-			json.NewEncoder(w).Encode([]map[string]any{{
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"type":         "file",
 				"name":         "SKILL.md",
 				"download_url": server.URL + "/raw/foo/bar/master/.agents/skills/pr-review/SKILL.md",
 			}})
 		case "/api/v3/search/code":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{{
 					"path":  ".agents/skills/pr-review/SKILL.md",
 					"score": 10,
@@ -1403,7 +1403,7 @@ func TestHandleSearchSkillsMarksDirectoryCollisionAsInstalled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/search":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{{
 					"slug":        "pr-review",
 					"displayName": "PR Review",
@@ -1467,7 +1467,7 @@ func TestHandleInstallSkillRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",
@@ -1550,7 +1550,7 @@ func TestHandleInstallSkillSerializesConcurrentRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",
@@ -1666,7 +1666,7 @@ func TestHandleImportSkillWaitsForConcurrentInstall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",
@@ -1785,7 +1785,7 @@ func TestHandleInstallSkillRejectsInvalidArchive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/github":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"slug":        "github",
 				"displayName": "GitHub",
 				"summary":     "GitHub registry skill",

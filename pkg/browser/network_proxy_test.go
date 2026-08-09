@@ -244,7 +244,7 @@ func TestBrowserNetworkProxyAnyHTTPCarriesLoopbackRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	defer func() { _ = proxy.Close() }()
 	proxyURL, err := url.Parse(proxy.URL())
 	if err != nil {
 		t.Fatal(err)
@@ -504,7 +504,7 @@ func TestBrowserNetworkProxySupportsConnectAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer echoListener.Close()
+	defer func() { _ = echoListener.Close() }()
 	go func() {
 		for {
 			connection, acceptErr := echoListener.Accept()
@@ -512,7 +512,7 @@ func TestBrowserNetworkProxySupportsConnectAndUpgrade(t *testing.T) {
 				return
 			}
 			go func() {
-				defer connection.Close()
+				defer func() { _ = connection.Close() }()
 				_, _ = io.Copy(connection, connection)
 			}()
 		}
@@ -528,7 +528,7 @@ func TestBrowserNetworkProxySupportsConnectAndUpgrade(t *testing.T) {
 			t.Error(hijackErr)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		_, _ = buffered.WriteString(
 			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
 		)

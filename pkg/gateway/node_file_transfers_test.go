@@ -318,7 +318,7 @@ func TestNodeFileTransferSnapshotsOnlyRetainedMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Close()
+	_ = file.Close()
 	if retained.Ref != record.Ref {
 		t.Fatalf("retained ref = %q, want %q", retained.Ref, record.Ref)
 	}
@@ -544,7 +544,7 @@ func TestCopyNodeTransferDeliveryRejectsSymlinkedWorkspaceAncestor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	digest := sha256.Sum256(content)
 	artifact := nodes.TransferArtifactRecord{Spec: nodes.TransferArtifactSpec{
 		DeclaredSize: int64(len(content)),

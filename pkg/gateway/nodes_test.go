@@ -165,11 +165,15 @@ func TestServiceShutdownClosesNodeAdmissionOutsideReload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stopAndCleanupServices(&services{NodeAdmission: runtime}, time.Second, true)
+	if err := stopAndCleanupServices(&services{NodeAdmission: runtime}, time.Second, true); err != nil {
+		t.Fatal(err)
+	}
 	if !runtime.mounted {
 		t.Fatal("service reload closed node admission")
 	}
-	stopAndCleanupServices(&services{NodeAdmission: runtime}, time.Second, false)
+	if err := stopAndCleanupServices(&services{NodeAdmission: runtime}, time.Second, false); err != nil {
+		t.Fatal(err)
+	}
 	if runtime.mounted || runtime.sessions != nil || routes.handler != nil {
 		t.Fatal("gateway shutdown left node admission active")
 	}

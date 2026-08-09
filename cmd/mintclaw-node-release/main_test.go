@@ -66,7 +66,7 @@ func writeNodeReleaseArchive(
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer executable.Close()
+	defer func() { _ = executable.Close() }()
 	info, err := executable.Stat()
 	if err != nil {
 		t.Fatal(err)

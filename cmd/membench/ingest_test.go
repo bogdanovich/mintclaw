@@ -33,14 +33,14 @@ func TestIngestSeahorseIdempotent(t *testing.T) {
 		t.Fatalf("first ingest failed: %v", err)
 	}
 	convCount1 := len(result1.ConvMap)
-	result1.Engine.Close()
+	_ = result1.Engine.Close()
 
 	// Second ingestion on same DB — should reuse existing data
 	result2, err := IngestSeahorse(ctx, samples, dbPath)
 	if err != nil {
 		t.Fatalf("second ingest failed: %v", err)
 	}
-	defer result2.Engine.Close()
+	defer func() { _ = result2.Engine.Close() }()
 
 	// ConvMap should have same number of entries (no duplicates)
 	if len(result2.ConvMap) != convCount1 {
