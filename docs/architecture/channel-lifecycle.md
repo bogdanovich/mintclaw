@@ -1,22 +1,26 @@
 # Channel Lifecycle Architecture
 
-This document records the intended direction for channel lifecycle work after
-the abandoned PR 88-91 refactor track. The goal is to avoid another broad
-rewrite that adds lifecycle machinery without a simpler delivery invariant.
+This document records the current conservative channel lifecycle architecture
+and the constraints on future lifecycle work. It supersedes the abandoned PR
+88-91 refactor track without adding a generic runtime supervisor.
 
 ## Why This Exists
 
-`channels.Manager` currently owns channel instances, outbound workers, shared
-HTTP handlers, config reload, shutdown, and delivery lookup maps. That makes
-small lifecycle changes risky because the same channel name can be represented
-in several places:
+Historically, `channels.Manager` owned channel instances, outbound workers,
+shared HTTP handlers, config reload, shutdown, and delivery lookup maps. The R6
+extraction replaced those overlapping mutable fields with three explicit
+owners:
 
-- `m.channels`
-- `m.workers`
-- shared HTTP handlers
-- config hashes
-- running channel goroutines
-- dispatcher goroutines consuming outbound bus messages
+- `DeliveryRuntime` owns the delivery registry, dispatcher lifetime, workers,
+  queue admission, retry policy, and delivery outcomes.
+- `StreamCoordinator` owns streams, final-stream metadata, placeholders,
+  typing/reaction state, and tool-feedback lifecycle.
+- `ChannelLifecycle` owns the channel/config registry, shared HTTP listeners and
+  handlers, restart-required state, and serialized lifecycle transitions.
+
+`Manager` retains the bus, runtime-event and durable-outbox dependencies and
+adapts calls between these owners. It does not retain compatibility maps for
+their state.
 
 The failed refactor track made useful problems visible:
 
@@ -40,7 +44,7 @@ needs one clear owner before hot reload can be made correct.
 
 ## Non-Goals
 
-- No durable outbound queue in this track.
+- No changes to the separately owned durable outbound outbox in this track.
 - No general runtime supervision framework unless a later PR proves the need.
 - No transparent zero-drop replacement for every channel type as a first step.
 - No channel-specific protocol rewrites.
@@ -65,22 +69,34 @@ worker. That path should be improved before full config hot-swap.
 
 ## Implementation Status
 
-This track has already landed the conservative baseline:
+R6 completed the conservative ownership baseline through PRs 595, 599, 605,
+607, 609, 610, 612, 613, and 615:
 
 - same-name active channel config changes are marked restart-required instead
   of replacing the running channel
-- dispatch resolves a delivery owner, and closed owners report explicit delivery
-  failures instead of silently dropping consumed bus messages
-- `StopAll` and `UnregisterChannel` close and drain delivery outside manager
-  locks
+- dispatch resolves a `DeliveryRuntime` owner; closed owners report explicit
+  delivery failures instead of silently dropping consumed bus messages
+- `StopAll` and `UnregisterChannel` close and drain delivery outside lifecycle
+  state locks
 - reload removal drains accepted delivery through `UnregisterChannel` before
   stopping the removed channel transport
 - synchronous delivery helpers reject closed owners instead of bypassing the
   delivery owner during unregister
+- stream and transient interaction maps live only in `StreamCoordinator`, whose
+  finalization path also owns placeholder and tool-feedback cleanup
+- startup, shutdown, reload, registration, and HTTP setup share one
+  `ChannelLifecycle` transition lock
+- repeated startup retries only channels without an active delivery owner and
+  launches one dispatcher and one HTTP serve loop per lifecycle generation
+- repeated/concurrent shutdown shares one drain and cannot interleave with a
+  reload transition
 
-That means the original Phase 1 and Phase 2 safety work is complete enough for
-the current restart-required policy. Further lifecycle work should start from a
-specific unmet runtime need, not from a general desire to refactor.
+Package tests use owner operations and fixtures rather than promoted Manager
+maps. Focused tests cover queue admission/outcomes/retries, stream lifecycle,
+transient cleanup, conservative reload, repeated/concurrent start and stop,
+reload-versus-shutdown ordering, and shared HTTP startup. Further lifecycle
+work must start from a specific unmet runtime need, not a general desire to
+refactor.
 
 ## Target Invariants
 
@@ -116,7 +132,7 @@ drain while holding locks needed by send paths.
 Minimum invariant:
 
 - detach/mark stopping under lock
-- drain outside manager locks
+- drain outside lifecycle state locks
 - stop transport after accepted queues are drained
 
 ### Inbound Registration
@@ -151,12 +167,13 @@ Costs:
   restart
 - no seamless replacement
 
-This is the preferred next step.
+This is the implemented current policy.
 
 ### Option B: Stable Per-Channel Delivery Owner
 
-Introduce a small `channelDelivery` owner per channel name. The manager and
-dispatch loops only talk to this owner, not directly to replaceable workers.
+A `deliveryOwner` now exists per channel name and is registered only through
+`DeliveryRuntime`. Dispatch and synchronous sends resolve this owner instead of
+looking up independently mutable worker maps.
 
 The owner holds:
 
@@ -186,8 +203,9 @@ Costs:
 - must carefully preserve existing send/media/placeholder behavior
 - still does not provide durable delivery across process crash
 
-This is worth doing only after Option A is landed and there is a concrete need
-for live channel config replacement.
+This ownership boundary is implemented. Live same-name transport replacement
+is not: the current policy remains restart-required, and any future replacement
+design must preserve the stable admission and ordering guarantees above.
 
 ### Option C: Full Supervisor Runtime Framework
 
@@ -235,21 +253,24 @@ Status: implemented for the current restart-required policy.
 
 Behavior:
 
-- avoid holding `m.mu` while waiting for worker goroutines
+- avoid holding lifecycle state locks while waiting for worker goroutines
 - make accepted-vs-rejected outbound behavior explicit during stop
 
 Acceptance criteria:
 
-- no worker drain happens while holding manager locks needed by send paths
+- no worker drain happens while holding lifecycle locks needed by send paths
 - tests cover in-flight send callbacks during `StopAll` and `UnregisterChannel`
 - reload removal drains accepted delivery before stopping the removed channel
 
-### Phase 3: Introduce Delivery Owner Only If Needed
+### Phase 3: Introduce Delivery Owner
 
-Trigger:
+Status: implemented as an ownership boundary, without broadening hot reload.
 
-- only start this if live same-name channel replacement is a real requirement
-- do not start this only to make the code look more architectural
+Scope:
+
+- dispatch and synchronous sends resolve a stable delivery owner
+- workers and queues are implementation details of that owner
+- same-name active config changes remain restart-required
 
 Behavior:
 
@@ -292,11 +313,11 @@ Acceptance criteria:
 
 ## Decision
 
-The next default action is to stop the channel lifecycle refactor track and keep
-the current conservative policy.
+R6 is complete. The default action is to stop the channel lifecycle refactor
+track and keep the current conservative policy.
 
-If later usage shows that seamless channel config replacement matters, build
-Option B with a stable per-channel delivery owner before attempting hot
-replacement. If runtime reconnect reliability becomes the concrete issue,
-prefer channel-local reconnect behavior first and only introduce Option C-style
-supervision if local reconnects cannot model the failure mode.
+If later usage shows that seamless channel config replacement matters, extend
+the existing stable delivery owner rather than bypassing it. If runtime
+reconnect reliability becomes the concrete issue, prefer channel-local
+reconnect behavior first and only introduce Option C-style supervision if local
+reconnects cannot model the failure mode.
