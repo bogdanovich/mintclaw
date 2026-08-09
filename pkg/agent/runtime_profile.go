@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
@@ -92,6 +94,36 @@ func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error
 			}
 		}
 	}
+	for leftIndex := 0; leftIndex < len(bindings); leftIndex++ {
+		left := bindings[leftIndex]
+		for rightIndex := leftIndex + 1; rightIndex < len(bindings); rightIndex++ {
+			right := bindings[rightIndex]
+			if left.Layout.Owner() == right.Layout.Owner() {
+				continue
+			}
+			leftInsideRight, err := runtimeLayoutPathWithin(
+				left.Layout.StateRoot(),
+				right.Layout.StateRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare owner state roots: %w", err)
+			}
+			rightInsideLeft, err := runtimeLayoutPathWithin(
+				right.Layout.StateRoot(),
+				left.Layout.StateRoot(),
+			)
+			if err != nil {
+				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare owner state roots: %w", err)
+			}
+			if leftInsideRight || rightInsideLeft {
+				return RuntimeProfile{}, fmt.Errorf(
+					"runtime profile: state roots for distinct owners %q and %q must not overlap",
+					left.Layout.Owner().ID,
+					right.Layout.Owner().ID,
+				)
+			}
+		}
+	}
 	return profile, nil
 }
 
@@ -121,6 +153,55 @@ func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
 		}
 	}
 	return nil
+}
+
+func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
+	for _, agentID := range agentIDs {
+		layout, ok := p.AgentLayout(agentID)
+		if !ok {
+			return fmt.Errorf("runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
+		}
+		paths := layout.StatePaths()
+		for _, target := range []struct {
+			name string
+			path string
+		}{
+			{name: "sessions", path: paths.SessionsRoot},
+			{name: "memory", path: paths.MemoryRoot},
+		} {
+			if err := preflightRuntimeDirectory(target.path); err != nil {
+				return fmt.Errorf(
+					"runtime profile: preflight %s state for agent %q: %w",
+					target.name,
+					routing.NormalizeAgentID(agentID),
+					err,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func preflightRuntimeDirectory(path string) error {
+	for current := path; ; current = filepath.Dir(current) {
+		_, err := os.Lstat(current)
+		if err == nil {
+			info, statErr := os.Stat(current)
+			if statErr != nil {
+				return fmt.Errorf("resolve path %q: %w", current, statErr)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("path %q is not a directory", current)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect path %q: %w", current, err)
+		}
+		if filepath.Dir(current) == current {
+			return fmt.Errorf("path %q has no existing directory ancestor", path)
+		}
+	}
 }
 
 func (p RuntimeProfile) hasCodingOwner() bool {

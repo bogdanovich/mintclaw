@@ -96,6 +96,9 @@ func newAgentRegistryWithRuntimeProfile(
 	if err := profile.validateAgentIDs(agentIDs); err != nil {
 		return nil, err
 	}
+	if err := profile.preflightStatePaths(agentIDs); err != nil {
+		return nil, err
+	}
 
 	registry := &AgentRegistry{
 		cfg:      cfg,

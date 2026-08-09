@@ -101,9 +101,12 @@ Focused tests prove that:
 - the source execution root is not created;
 - coding tools fail closed to an empty registry until P0.4;
 - a missing later-agent binding fails before the first owner's roots are
-  created; and
-- duplicate bindings, duplicate configured IDs, extra bindings, mixed owner
-  kinds, and mismatched personal identities are rejected;
+  created;
+- unusable state targets on a later binding fail before an earlier owner's
+  state is created;
+- duplicate bindings, overlapping state roots for distinct owners, duplicate
+  configured IDs, extra bindings, mixed owner kinds, and mismatched personal
+  identities are rejected;
 - a coding profile using Seahorse is rejected before either root is created;
   and
 - runtime-profile reload is rejected without replacing the registry or

@@ -158,6 +158,60 @@ func TestNewRuntimeProfileRejectsStateInsideAnotherExecutionRoot(t *testing.T) {
 	}
 }
 
+func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		secondState func(string) string
+	}{
+		{
+			name: "shared root",
+			secondState: func(firstState string) string {
+				return firstState
+			},
+		},
+		{
+			name: "nested root",
+			secondState: func(firstState string) string {
+				return filepath.Join(firstState, "support")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			firstState := filepath.Join(root, "state", "thread-a")
+			firstLayout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-a"},
+				filepath.Join(root, "project-a"),
+				firstState,
+				[]string{filepath.Join(root, "project-a")},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+			}
+			secondLayout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-b"},
+				filepath.Join(root, "project-b"),
+				test.secondState(firstState),
+				[]string{filepath.Join(root, "project-b")},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+			}
+
+			profile, err := NewRuntimeProfile(
+				RuntimeProfileBinding{AgentID: "main", Layout: firstLayout},
+				RuntimeProfileBinding{AgentID: "support", Layout: secondLayout},
+			)
+			if err == nil {
+				t.Fatalf("NewRuntimeProfile() = %#v, want overlapping-state rejection", profile)
+			}
+			if _, statErr := os.Stat(firstState); !os.IsNotExist(statErr) {
+				t.Fatalf("rejected profile created state root: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -264,6 +318,68 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 	}
 	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
 		t.Fatalf("failed preflight created state root: stat error = %v", statErr)
+	}
+}
+
+func TestNewAgentLoopWithRuntimeProfilePreflightsLaterStateBeforeConstruction(t *testing.T) {
+	root := t.TempDir()
+	mainExecution := filepath.Join(root, "main-project")
+	mainState := filepath.Join(root, "state", "main")
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		mainExecution,
+		mainState,
+		[]string{mainExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportExecution := filepath.Join(root, "support-project")
+	supportState := filepath.Join(root, "state", "support")
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		supportExecution,
+		supportState,
+		[]string{supportExecution},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	if err := os.MkdirAll(supportState, 0o755); err != nil {
+		t.Fatalf("MkdirAll(support state) error = %v", err)
+	}
+	if err := os.WriteFile(supportLayout.StatePaths().SessionsRoot, []byte("blocked"), 0o600); err != nil {
+		t.Fatalf("WriteFile(blocked sessions) error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want later-state preflight error")
+	}
+	if loop != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+	}
+	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
+		t.Fatalf("failed preflight created earlier owner state: %v", statErr)
+	}
+	if _, statErr := os.Stat(mainExecution); !os.IsNotExist(statErr) {
+		t.Fatalf("failed preflight created earlier execution root: %v", statErr)
 	}
 }
 
