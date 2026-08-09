@@ -171,6 +171,10 @@ archives:
     ids:
       - mintclaw-node
     formats: [tar.gz]
+    # GoReleaser otherwise adds README/LICENSE by default. The coordinator
+    # deliberately accepts exactly one bounded executable per slim archive.
+    files:
+      - none*
     name_template: >-
       mintclaw-node_
       {{- title .Os }}_
