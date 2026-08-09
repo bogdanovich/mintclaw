@@ -238,6 +238,32 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	host.failNextNavigate()
+	fifth := openWSSBrowserSession(t, broker, owner)
+	fifthInitial, err := broker.Observe(t.Context(), owner, fifth.ID, fifth.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fifthPrepared := prepareWSSBrowserNavigate(t, broker, owner, fifth, fifthInitial, "unknown")
+	fifthInvocation, err := broker.ExecuteAction(t.Context(), owner, fifthPrepared.Action.ID, nil)
+	if err != nil || fifthInvocation.State != browser.InvocationUnknown ||
+		fifthInvocation.SafeFailure != "outcome_unknown" {
+		t.Fatalf("unknown-outcome invocation = %#v, %v", fifthInvocation, err)
+	}
+	fifthStatus, err := broker.Status(t.Context(), owner, fifth.ID)
+	if err != nil || fifthStatus.State != browser.SessionLost ||
+		fifthStatus.SafeFailure != "outcome_unknown" {
+		t.Fatalf("unknown-outcome session = %#v, %v", fifthStatus, err)
+	}
+	availability, err := broker.ProfileAvailability(t.Context(), "companion", "managed")
+	if err != nil || availability.Status != "ready" {
+		t.Fatalf("profile availability after unknown outcome = %#v, %v", availability, err)
+	}
+	sixth := openWSSBrowserSession(t, broker, owner)
+	if _, err = broker.Close(t.Context(), owner, sixth.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	replacementRun.stop(t)
 	waitForVerticalSliceNodeState(t, registry, nodes.StateDisconnected)
 	restartPlan, restartDescriptor, restartPrincipal := prepareWSSBrowserRestartPlan(
@@ -306,6 +332,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
+		"open", "observe", "navigate", "close",
+		"open", "close",
 	}; !slices.Equal(got, want) {
 		t.Fatalf("browser host sequence = %#v, want %#v", got, want)
 	}
@@ -368,6 +396,7 @@ type wssBrowserHost struct {
 	urls            map[string]string
 	navigateEntered chan struct{}
 	navigateRelease chan struct{}
+	navigateFailure bool
 }
 
 func (host *wssBrowserHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -430,6 +459,11 @@ func (host *wssBrowserHost) Navigate(
 		host.mu.Unlock()
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostStale
 	}
+	if host.navigateFailure {
+		host.navigateFailure = false
+		host.mu.Unlock()
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostLost
+	}
 	entered, release := host.navigateEntered, host.navigateRelease
 	host.navigateEntered, host.navigateRelease = nil, nil
 	host.mu.Unlock()
@@ -444,6 +478,12 @@ func (host *wssBrowserHost) Navigate(
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
 	}, request.Action.URL), nil
+}
+
+func (host *wssBrowserHost) failNextNavigate() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.navigateFailure = true
 }
 
 func (host *wssBrowserHost) blockNextNavigate() (<-chan struct{}, chan struct{}) {

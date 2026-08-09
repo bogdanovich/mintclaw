@@ -26,6 +26,7 @@ type actionTestWorker struct {
 	resolveCalls   int
 	actions        []DriverAction
 	onExecute      func(DriverAction)
+	executeErr     error
 	screenshot     DriverScreenshot
 	screenshotErr  error
 	uploads        []DriverAction
@@ -84,7 +85,7 @@ func (worker *actionTestWorker) Execute(_ context.Context, action DriverAction) 
 	if worker.onExecute != nil {
 		worker.onExecute(action)
 	}
-	return nil
+	return worker.executeErr
 }
 
 func (worker *actionTestWorker) CatalogRevision() string {
@@ -145,6 +146,89 @@ func TestBrokerObservationScopesOpaqueReferencesToFreshGeneration(t *testing.T) 
 	}
 	if len(worker.actions) != 0 {
 		t.Fatalf("stale preparation dispatched actions: %+v", worker.actions)
+	}
+}
+
+func TestBrokerObservationWorkerLossQuarantinesSessionAndReleasesProfile(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	worker.observeErr = ErrWorkerLost
+
+	_, err := broker.Observe(context.Background(), testOwner(), session.ID, session.TabID)
+	if !errors.Is(err, ErrWorkerLost) {
+		t.Fatalf("Observe() error = %v, want ErrWorkerLost", err)
+	}
+	stored, getErr := store.GetSession(context.Background(), session.ID)
+	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "worker_lost" ||
+		worker.closed != 1 {
+		t.Fatalf("worker-loss quarantine = %+v, %v; worker = %+v", stored, getErr, worker)
+	}
+	availability, availabilityErr := broker.ProfileAvailability(
+		context.Background(),
+		"gateway",
+		"managed",
+	)
+	if availabilityErr != nil || availability.Status != "ready" {
+		t.Fatalf("ProfileAvailability() = %+v, %v, want ready", availability, availabilityErr)
+	}
+}
+
+func TestBrokerObservationTransientWorkerUnavailablePreservesSession(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	worker.observeErr = ErrWorkerUnavailable
+
+	_, err := broker.Observe(context.Background(), testOwner(), session.ID, session.TabID)
+	if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrWorkerLost) {
+		t.Fatalf("Observe() error = %v, want transient ErrWorkerUnavailable", err)
+	}
+	stored, getErr := store.GetSession(context.Background(), session.ID)
+	if getErr != nil || stored.State != SessionReady || worker.closed != 0 {
+		t.Fatalf("transient observation failure = %+v, %v; worker = %+v", stored, getErr, worker)
+	}
+	availability, availabilityErr := broker.ProfileAvailability(
+		context.Background(),
+		"gateway",
+		"managed",
+	)
+	if availabilityErr != nil || availability.Status != "busy" {
+		t.Fatalf("ProfileAvailability() = %+v, %v, want busy", availability, availabilityErr)
+	}
+}
+
+func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_unknown", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observed.Snapshot), Value: "Ada"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.executeErr = ErrWorkerUnavailable
+	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationUnknown || invocation.SafeFailure != "outcome_unknown" {
+		t.Fatalf("ExecuteAction() = %+v, %v, want unknown outcome", invocation, err)
+	}
+	stored, getErr := store.GetSession(context.Background(), session.ID)
+	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "outcome_unknown" ||
+		worker.closed != 1 {
+		t.Fatalf("unknown-outcome quarantine = %+v, %v; worker = %+v", stored, getErr, worker)
+	}
+	availability, availabilityErr := broker.ProfileAvailability(
+		context.Background(),
+		"gateway",
+		"managed",
+	)
+	if availabilityErr != nil || availability.Status != "ready" {
+		t.Fatalf("ProfileAvailability() = %+v, %v, want ready", availability, availabilityErr)
 	}
 }
 
