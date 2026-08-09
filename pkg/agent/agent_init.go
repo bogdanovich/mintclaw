@@ -145,6 +145,13 @@ func NewAgentLoopWithRuntimeProfile(
 	if !profile.hasCodingOwner() {
 		return nil, fmt.Errorf("personal runtime profiles require the P0.4 tool bootstrap cutover")
 	}
+	contextManagerName := contextManagerConfigName(cfg)
+	if contextManagerName != "none" && contextManagerName != "seahorse" {
+		return nil, fmt.Errorf(
+			"runtime profile context manager %q has no owner-scoped storage contract",
+			contextManagerName,
+		)
+	}
 	registry, err := newAgentRegistryWithRuntimeProfile(cfg, provider, profile)
 	if err != nil {
 		return nil, err

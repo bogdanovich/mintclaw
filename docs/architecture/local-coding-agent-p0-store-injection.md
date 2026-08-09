@@ -38,6 +38,10 @@ rejects a configured custom Seahorse `dbPath`; deployment is responsible for
 moving and verifying existing personal state once, without indefinite fallback
 reads.
 
+Strict profiles admit only the stateless `none` manager and the owner-scoped
+`seahorse` manager. Other registered context managers remain rejected before
+store construction until they define an equivalent state-root contract.
+
 The state preflight checks `sessions`, `context`, and `memory` before opening
 the first store. It also rejects a symlink or non-regular existing
 `context/seahorse.db`, preventing SQLite from escaping the admitted state root.
@@ -67,6 +71,7 @@ Focused tests prove that:
 - two coding-thread owners resolve to different `context/seahorse.db` files;
 - context directories and database targets are preflighted fail-closed;
 - a custom runtime-profile Seahorse path is rejected;
+- an unsupported context manager is rejected before any store is opened;
 - failure of a later session-store factory closes the earlier store exactly
   once and returns no partial loop; and
 - Seahorse factory failure closes the canonical store exactly once and returns

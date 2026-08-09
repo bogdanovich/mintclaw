@@ -1029,6 +1029,52 @@ func TestRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-unsupported-context"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	factory := &trackingRuntimeStoreFactory{}
+	profile, err := NewRuntimeProfileWithStoreFactory(
+		factory,
+		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "custom"
+
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "no owner-scoped storage contract") {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want unsupported-context rejection", err)
+	}
+	if factory.sessionCalls != 0 || len(factory.seahorsePaths) != 0 {
+		t.Fatalf(
+			"rejected context manager constructed stores: sessions=%d Seahorse=%v",
+			factory.sessionCalls,
+			factory.seahorsePaths,
+		)
+	}
+	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected context manager created execution root: %v", statErr)
+	}
+	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected context manager created state root: %v", statErr)
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfileDefersPersonalCutover(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "personal-project")
