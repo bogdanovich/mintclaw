@@ -154,7 +154,7 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Task status report (%d total):\n", len(filtered)))
+	fmt.Fprintf(&sb, "Task status report (%d total):\n", len(filtered))
 	for _, status := range []taskregistry.Status{
 		taskregistry.StatusQueued,
 		taskregistry.StatusRunning,
@@ -166,7 +166,7 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		taskregistry.StatusLost,
 	} {
 		if n := counts[status]; n > 0 {
-			sb.WriteString(fmt.Sprintf("  %-10s %d\n", status+":", n))
+			fmt.Fprintf(&sb, "  %-10s %d\n", status+":", n)
 		}
 	}
 	sb.WriteString("\n")
@@ -183,10 +183,8 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		sb.WriteString("\n")
 	}
 	if omitted := len(filtered) - len(visible); omitted > 0 {
-		sb.WriteString(fmt.Sprintf(
-			"... %d older task(s) omitted. Use task_id for a full task record or limit to show more.\n",
-			omitted,
-		))
+		fmt.Fprintf(&sb, "... %d older task(s) omitted. Use task_id for a full task record or limit to show more.\n",
+			omitted)
 	}
 	return toolshared.NewToolResult(strings.TrimSpace(sb.String()))
 }
@@ -270,107 +268,93 @@ func taskRecordVisibleToCaller(rec taskregistry.Record, channel, chatID, topicID
 
 func formatTaskRecord(rec taskregistry.Record) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Task %s [%s/%s]\n", rec.TaskID, rec.Runtime, rec.TaskKind))
-	sb.WriteString(fmt.Sprintf("  Status: %s\n", rec.Status))
-	sb.WriteString(fmt.Sprintf("  Delivery: %s", rec.DeliveryStatus))
+	fmt.Fprintf(&sb, "Task %s [%s/%s]\n", rec.TaskID, rec.Runtime, rec.TaskKind)
+	fmt.Fprintf(&sb, "  Status: %s\n", rec.Status)
+	fmt.Fprintf(&sb, "  Delivery: %s", rec.DeliveryStatus)
 	if rec.DeliveryMode != "" {
-		sb.WriteString(fmt.Sprintf(" (%s)", rec.DeliveryMode))
+		fmt.Fprintf(&sb, " (%s)", rec.DeliveryMode)
 	}
 	sb.WriteString("\n")
 	if rec.LastCompletionID != "" {
-		sb.WriteString(fmt.Sprintf("  Completion ID: %s\n", rec.LastCompletionID))
+		fmt.Fprintf(&sb, "  Completion ID: %s\n", rec.LastCompletionID)
 	}
 	if rec.DeliveredAt > 0 {
-		sb.WriteString(fmt.Sprintf("  Delivered: %s\n", formatTaskTime(rec.DeliveredAt)))
+		fmt.Fprintf(&sb, "  Delivered: %s\n", formatTaskTime(rec.DeliveredAt))
 	}
 	if rec.DeliveryError != "" {
-		sb.WriteString(fmt.Sprintf("  Delivery error: %s\n", truncateTaskText(rec.DeliveryError, 500)))
+		fmt.Fprintf(&sb, "  Delivery error: %s\n", truncateTaskText(rec.DeliveryError, 500))
 	}
 	if rec.AgentID != "" {
-		sb.WriteString(fmt.Sprintf("  Agent: %s\n", rec.AgentID))
+		fmt.Fprintf(&sb, "  Agent: %s\n", rec.AgentID)
 	}
 	if rec.Channel != "" || rec.ChatID != "" || rec.TopicID != "" {
-		sb.WriteString(fmt.Sprintf("  Scope: %s/%s", rec.Channel, rec.ChatID))
+		fmt.Fprintf(&sb, "  Scope: %s/%s", rec.Channel, rec.ChatID)
 		if rec.TopicID != "" {
-			sb.WriteString(fmt.Sprintf(" topic=%s", rec.TopicID))
+			fmt.Fprintf(&sb, " topic=%s", rec.TopicID)
 		}
 		sb.WriteString("\n")
 	}
 	if rec.CreatedAt > 0 {
-		sb.WriteString(fmt.Sprintf("  Created: %s\n", formatTaskTime(rec.CreatedAt)))
+		fmt.Fprintf(&sb, "  Created: %s\n", formatTaskTime(rec.CreatedAt))
 	}
 	if rec.EndedAt > 0 {
-		sb.WriteString(fmt.Sprintf("  Ended: %s\n", formatTaskTime(rec.EndedAt)))
+		fmt.Fprintf(&sb, "  Ended: %s\n", formatTaskTime(rec.EndedAt))
 	}
 	if rec.Task != "" {
-		sb.WriteString(fmt.Sprintf("  Task: %s\n", truncateTaskText(rec.Task, 240)))
+		fmt.Fprintf(&sb, "  Task: %s\n", truncateTaskText(rec.Task, 240))
 	}
 	appendTaskInteractionStatus(&sb, rec, "  ")
 	if rec.TerminalSummary != "" {
-		sb.WriteString(fmt.Sprintf("  Result: %s\n", truncateTaskText(rec.TerminalSummary, 500)))
+		fmt.Fprintf(&sb, "  Result: %s\n", truncateTaskText(rec.TerminalSummary, 500))
 	}
 	if rec.Error != "" {
-		sb.WriteString(fmt.Sprintf("  Error: %s\n", truncateTaskText(rec.Error, 500)))
+		fmt.Fprintf(&sb, "  Error: %s\n", truncateTaskText(rec.Error, 500))
 	}
 	if rec.Deliverable != nil {
-		sb.WriteString(
-			fmt.Sprintf(
-				"  Deliverable: text=%t artifacts=%d report=%t\n",
-				rec.Deliverable.Text != "",
-				len(rec.Deliverable.Artifacts),
-				rec.Deliverable.Report != nil,
-			),
-		)
+		fmt.Fprintf(&sb, "  Deliverable: text=%t artifacts=%d report=%t\n",
+			rec.Deliverable.Text != "",
+			len(rec.Deliverable.Artifacts),
+			rec.Deliverable.Report != nil)
 		if rec.Deliverable.Report != nil {
 			sb.WriteString(formatDeliverableReport(rec.Deliverable.Report))
 		}
 	}
 	if rec.Completion != nil && rec.Deliverable == nil {
-		sb.WriteString(
-			fmt.Sprintf(
-				"  Legacy completion: text=%t media=%d\n",
-				rec.Completion.Text != "",
-				len(rec.Completion.Media),
-			),
-		)
+		fmt.Fprintf(&sb, "  Legacy completion: text=%t media=%d\n",
+			rec.Completion.Text != "",
+			len(rec.Completion.Media))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
 func formatTaskListRecord(rec taskregistry.Record) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(
-		"Task %s [%s/%s] status=%s delivery=%s",
+	fmt.Fprintf(&sb, "Task %s [%s/%s] status=%s delivery=%s",
 		rec.TaskID,
 		rec.Runtime,
 		rec.TaskKind,
 		rec.Status,
-		rec.DeliveryStatus,
-	))
+		rec.DeliveryStatus)
 	if rec.AgentID != "" {
-		sb.WriteString(fmt.Sprintf(" agent=%s", rec.AgentID))
+		fmt.Fprintf(&sb, " agent=%s", rec.AgentID)
 	}
 	if rec.CreatedAt > 0 {
-		sb.WriteString(fmt.Sprintf(" created=%s", formatTaskTime(rec.CreatedAt)))
+		fmt.Fprintf(&sb, " created=%s", formatTaskTime(rec.CreatedAt))
 	}
 	if rec.Task != "" {
-		sb.WriteString(fmt.Sprintf("\n  Task: %s", truncateTaskText(rec.Task, 160)))
+		fmt.Fprintf(&sb, "\n  Task: %s", truncateTaskText(rec.Task, 160))
 	}
 	appendTaskInteractionStatus(&sb, rec, "\n  ")
 	if rec.TerminalSummary != "" {
-		sb.WriteString(fmt.Sprintf("\n  Result: %s", truncateTaskText(rec.TerminalSummary, 240)))
+		fmt.Fprintf(&sb, "\n  Result: %s", truncateTaskText(rec.TerminalSummary, 240))
 	} else if rec.Error != "" {
-		sb.WriteString(fmt.Sprintf("\n  Error: %s", truncateTaskText(rec.Error, 240)))
+		fmt.Fprintf(&sb, "\n  Error: %s", truncateTaskText(rec.Error, 240))
 	}
 	if rec.Deliverable != nil {
-		sb.WriteString(
-			fmt.Sprintf(
-				"\n  Deliverable: text=%t artifacts=%d report=%t",
-				rec.Deliverable.Text != "",
-				len(rec.Deliverable.Artifacts),
-				rec.Deliverable.Report != nil,
-			),
-		)
+		fmt.Fprintf(&sb, "\n  Deliverable: text=%t artifacts=%d report=%t",
+			rec.Deliverable.Text != "",
+			len(rec.Deliverable.Artifacts),
+			rec.Deliverable.Report != nil)
 	}
 	return sb.String()
 }
@@ -387,7 +371,7 @@ func appendTaskInteractionStatus(
 	if requestID == "" {
 		requestID = "unknown"
 	}
-	sb.WriteString(fmt.Sprintf("%sInput required: request=%s", prefix, requestID))
+	fmt.Fprintf(sb, "%sInput required: request=%s", prefix, requestID)
 	if summary := strings.TrimSpace(rec.InteractionSummary); summary != "" {
 		sb.WriteString(" summary=" + truncateTaskText(summary, 240))
 	}
@@ -405,32 +389,32 @@ func formatDeliverableReport(report *taskregistry.DeliverableReport) string {
 	if schema == "" {
 		schema = "unknown"
 	}
-	sb.WriteString(fmt.Sprintf("  Report: %s", schema))
+	fmt.Fprintf(&sb, "  Report: %s", schema)
 	if report.ReportID != "" {
-		sb.WriteString(fmt.Sprintf(" id=%s", truncateTaskText(report.ReportID, 96)))
+		fmt.Fprintf(&sb, " id=%s", truncateTaskText(report.ReportID, 96))
 	}
 	if report.ContentHash != "" {
-		sb.WriteString(fmt.Sprintf(" hash=%s", truncateTaskText(report.ContentHash, 12)))
+		fmt.Fprintf(&sb, " hash=%s", truncateTaskText(report.ContentHash, 12))
 	}
 	sb.WriteString("\n")
 	if report.Summary != "" {
-		sb.WriteString(fmt.Sprintf("    Summary: %s\n", truncateTaskText(report.Summary, 280)))
+		fmt.Fprintf(&sb, "    Summary: %s\n", truncateTaskText(report.Summary, 280))
 	}
 	if status := report.Metadata["result_status"]; status != "" {
-		sb.WriteString(fmt.Sprintf("    Status: %s\n", status))
+		fmt.Fprintf(&sb, "    Status: %s\n", status)
 	}
 	if len(report.Claims) > 0 {
-		sb.WriteString(fmt.Sprintf("    Claims: %d\n", len(report.Claims)))
+		fmt.Fprintf(&sb, "    Claims: %d\n", len(report.Claims))
 		for i, claim := range report.Claims {
 			if i >= 3 {
-				sb.WriteString(fmt.Sprintf("      ...and %d more\n", len(report.Claims)-i))
+				fmt.Fprintf(&sb, "      ...and %d more\n", len(report.Claims)-i)
 				break
 			}
-			sb.WriteString(fmt.Sprintf("      - %s\n", formatReportClaim(claim)))
+			fmt.Fprintf(&sb, "      - %s\n", formatReportClaim(claim))
 		}
 	}
 	if len(report.FieldDeltas) > 0 {
-		sb.WriteString(fmt.Sprintf("    Field deltas: %d\n", len(report.FieldDeltas)))
+		fmt.Fprintf(&sb, "    Field deltas: %d\n", len(report.FieldDeltas))
 	}
 	return sb.String()
 }
@@ -481,8 +465,7 @@ func formatRecentTaskEvents(events []taskregistry.TaskEvent, limit int) string {
 
 func formatTaskEventLine(evt taskregistry.TaskEvent) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(
-		"#%d %s runtime=%s producer=%s source=%s status=%s delivery=%s at=%s",
+	fmt.Fprintf(&sb, "#%d %s runtime=%s producer=%s source=%s status=%s delivery=%s at=%s",
 		evt.Seq,
 		evt.Type,
 		evt.Runtime,
@@ -490,23 +473,22 @@ func formatTaskEventLine(evt taskregistry.TaskEvent) string {
 		firstNonEmptyTaskStatus(evt.Source, "unknown"),
 		evt.Status,
 		evt.DeliveryStatus,
-		formatTaskTime(evt.EmittedAt),
-	))
+		formatTaskTime(evt.EmittedAt))
 	if payloadKind := strings.TrimSpace(evt.Payload["payload_kind"]); payloadKind != "" {
-		sb.WriteString(fmt.Sprintf(" payload_kind=%s", payloadKind))
+		fmt.Fprintf(&sb, " payload_kind=%s", payloadKind)
 	}
 	deliveryMode := firstNonEmptyTaskStatus(evt.Payload["delivery_mode"], evt.Payload["mode"])
 	if deliveryMode != "" {
-		sb.WriteString(fmt.Sprintf(" delivery_mode=%s", deliveryMode))
+		fmt.Fprintf(&sb, " delivery_mode=%s", deliveryMode)
 	}
 	if completionID := strings.TrimSpace(evt.Payload["completion_id"]); completionID != "" {
-		sb.WriteString(fmt.Sprintf(" completion_id=%s", completionID))
+		fmt.Fprintf(&sb, " completion_id=%s", completionID)
 	}
 	if evt.Fingerprint != "" {
-		sb.WriteString(fmt.Sprintf(" fingerprint=%s", truncateTaskText(evt.Fingerprint, 12)))
+		fmt.Fprintf(&sb, " fingerprint=%s", truncateTaskText(evt.Fingerprint, 12))
 	}
 	if len(evt.Payload) > 0 {
-		sb.WriteString(fmt.Sprintf(" payload=%s", formatTaskEventPayload(evt.Payload)))
+		fmt.Fprintf(&sb, " payload=%s", formatTaskEventPayload(evt.Payload))
 	}
 	return sb.String()
 }

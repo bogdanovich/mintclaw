@@ -105,12 +105,10 @@ func formatUserFacingAgentError(err error) string {
 		sb.WriteString(base)
 		sb.WriteString("\n\nFailover details:")
 		for i, attempt := range exhausted.Attempts {
-			sb.WriteString(fmt.Sprintf(
-				"\n%d. %s/%s",
+			fmt.Fprintf(&sb, "\n%d. %s/%s",
 				i+1,
 				strings.TrimSpace(attempt.Provider),
-				strings.TrimSpace(attempt.Model),
-			))
+				strings.TrimSpace(attempt.Model))
 			if attempt.Skipped {
 				sb.WriteString(" — skipped")
 				if attempt.Error != nil {
@@ -120,7 +118,7 @@ func formatUserFacingAgentError(err error) string {
 				continue
 			}
 			if attempt.Reason != "" {
-				sb.WriteString(fmt.Sprintf(" — classification: %s", attempt.Reason))
+				fmt.Fprintf(&sb, " — classification: %s", attempt.Reason)
 			}
 			if attempt.Error != nil {
 				rawErr := attempt.Error
@@ -139,13 +137,11 @@ func formatUserFacingAgentError(err error) string {
 	if errors.As(err, &failErr) && failErr != nil {
 		var sb strings.Builder
 		sb.WriteString(base)
-		sb.WriteString(fmt.Sprintf("\n\nFailover classification: %s", failErr.Reason))
+		fmt.Fprintf(&sb, "\n\nFailover classification: %s", failErr.Reason)
 		if failErr.Provider != "" || failErr.Model != "" {
-			sb.WriteString(fmt.Sprintf(
-				"\nFailover target: %s/%s",
+			fmt.Fprintf(&sb, "\nFailover target: %s/%s",
 				strings.TrimSpace(failErr.Provider),
-				strings.TrimSpace(failErr.Model),
-			))
+				strings.TrimSpace(failErr.Model))
 		}
 		if failErr.Wrapped != nil {
 			sb.WriteString("\nProvider error: ")
