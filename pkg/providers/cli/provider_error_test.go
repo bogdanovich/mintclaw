@@ -54,7 +54,7 @@ func TestNormalizeCLIErrorStructuredAndTransportPrecedence(t *testing.T) {
 		"credits unavailable",
 		errors.New("billing"),
 	)
-	if got := normalizeCLIError(existing, "rate limit exceeded"); got != existing {
+	if got := normalizeCLIError(existing, "rate limit exceeded"); !errors.Is(got, existing) {
 		t.Fatalf("normalizeCLIError() = %#v, want existing structured error", got)
 	}
 

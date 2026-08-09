@@ -38,7 +38,7 @@ func TestClassifySendError(t *testing.T) {
 				}
 			} else {
 				// Should return the raw error unchanged
-				if err != raw {
+				if !errors.Is(err, raw) {
 					t.Errorf("expected raw error to be returned unchanged for status %d, got %v", tt.statusCode, err)
 				}
 			}
