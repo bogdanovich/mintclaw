@@ -47,6 +47,7 @@ const (
 	nodeJobCancelMode      = "cancel-e2e-private-mode"
 	nodeJobArtifactPath    = "private-result-artifact.txt"
 	nodeJobArtifactContent = "artifact-from-durable-job\n"
+	nodeJobStdoutFirst     = "job-stdout-first\n"
 	nodeJobStdoutSecret    = "job-stdout-private-content"
 	nodeJobStderrSecret    = "job-stderr-private-content"
 	nodeJobEnvSecret       = "job-environment-private-content"
@@ -379,6 +380,7 @@ printf '%s\n' "$1" >> launches.log
 case "$1" in
   finish-e2e-private-mode)
     : > finish.started
+    printf 'job-stdout-first\n'
     printf 'job-stdout-private-content\n'
     printf 'job-stderr-private-content\n' >&2
     printf 'artifact-from-durable-job\n' > private-result-artifact.txt
@@ -746,7 +748,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 		if err != nil {
 			return nil, err
 		}
-		return provider.readLog("call-job-stdout", "stdout", 0), nil
+		return provider.readLog("call-job-stdout", "stdout", 0, len(nodeJobStdoutFirst)), nil
 	case 8:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandLogs)
 		if err != nil {
@@ -754,10 +756,10 @@ func (provider *nodeJobEvidenceProvider) Chat(
 		}
 		provider.stdout, _ = result["data"].(string)
 		provider.stdoutCursor, _ = result["next_cursor"].(float64)
-		if !strings.Contains(provider.stdout, nodeJobStdoutSecret) || provider.stdoutCursor <= 0 {
+		if provider.stdout != nodeJobStdoutFirst || provider.stdoutCursor != float64(len(nodeJobStdoutFirst)) {
 			return nil, fmt.Errorf("stdout result is incomplete: %#v", result)
 		}
-		return provider.readLog("call-job-stdout-replay", "stdout", 0), nil
+		return provider.readLog("call-job-stdout-replay", "stdout", 0, len(nodeJobStdoutFirst)), nil
 	case 9:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandLogs)
 		if err != nil {
@@ -766,8 +768,24 @@ func (provider *nodeJobEvidenceProvider) Chat(
 		if result["data"] != provider.stdout || result["next_cursor"] != provider.stdoutCursor {
 			return nil, fmt.Errorf("stdout cursor replay changed: %#v", result)
 		}
-		return provider.readLog("call-job-stderr", "stderr", 0), nil
+		return provider.readLog(
+			"call-job-stdout-continue",
+			"stdout",
+			int(provider.stdoutCursor),
+			4096,
+		), nil
 	case 10:
+		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandLogs)
+		if err != nil {
+			return nil, err
+		}
+		continuation, _ := result["data"].(string)
+		wantStdout := nodeJobStdoutFirst + nodeJobStdoutSecret + "\n"
+		if provider.stdout+continuation != wantStdout || result["next_cursor"] != float64(len(wantStdout)) {
+			return nil, fmt.Errorf("stdout cursor continuation is unordered: %#v", result)
+		}
+		return provider.readLog("call-job-stderr", "stderr", 0, 4096), nil
+	case 11:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandLogs)
 		if err != nil {
 			return nil, err
@@ -777,7 +795,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, fmt.Errorf("stderr result is incomplete: %#v", result)
 		}
 		return provider.describe("artifacts", nodes.JobCommandArtifacts), nil
-	case 11:
+	case 12:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -792,7 +810,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			provider.artifactsRevision,
 			map[string]any{"job_id": provider.jobID},
 		), nil
-	case 12:
+	case 13:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandArtifacts)
 		if err != nil {
 			return nil, err
@@ -812,7 +830,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, fmt.Errorf("job artifact authority is incomplete: %#v", artifact)
 		}
 		return provider.describe("artifact-download", nodes.JobCommandArtifacts), nil
-	case 13:
+	case 14:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -829,7 +847,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 				"discovery_revision": provider.artifactsRevision,
 			}),
 		), nil
-	case 14:
+	case 15:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -842,9 +860,9 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, fmt.Errorf("job artifact download is incomplete: %#v", payload)
 		}
 		return llmscenario.TextResponse("Recovered durable job and artifact."), nil
-	case 15:
-		return provider.describe("cancel-start", nodes.JobCommandStart), nil
 	case 16:
+		return provider.describe("cancel-start", nodes.JobCommandStart), nil
+	case 17:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -854,7 +872,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, err
 		}
 		return provider.startJob("call-cancel-job-start", provider.startRevision, nodeJobCancelMode, false), nil
-	case 17:
+	case 18:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandStart)
 		if err != nil {
 			return nil, err
@@ -864,9 +882,9 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, fmt.Errorf("cancellation job start is incomplete: %#v", result)
 		}
 		return llmscenario.TextResponse("Cancellation job accepted."), nil
-	case 18:
-		return provider.describe("cancel", nodes.JobCommandCancel), nil
 	case 19:
+		return provider.describe("cancel", nodes.JobCommandCancel), nil
+	case 20:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -881,7 +899,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			provider.cancelRevision,
 			map[string]any{"job_id": provider.cancelJobID},
 		), nil
-	case 20:
+	case 21:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandCancel)
 		if err != nil {
 			return nil, err
@@ -893,9 +911,9 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			return nil, fmt.Errorf("job cancellation request is incomplete: %#v", result)
 		}
 		return llmscenario.TextResponse("Cancellation requested."), nil
-	case 21:
-		return provider.describe("cancel-status", nodes.JobCommandStatus), nil
 	case 22:
+		return provider.describe("cancel-status", nodes.JobCommandStatus), nil
+	case 23:
 		payload, err := nodeP0LastToolPayload(call)
 		if err != nil {
 			return nil, err
@@ -910,7 +928,7 @@ func (provider *nodeJobEvidenceProvider) Chat(
 			provider.statusRevision,
 			map[string]any{"job_id": provider.cancelJobID},
 		), nil
-	case 23:
+	case 24:
 		_, result, err := nodeJobInvocationPayload(call, nodes.JobCommandStatus)
 		if err != nil {
 			return nil, err
@@ -958,9 +976,10 @@ func (provider *nodeJobEvidenceProvider) readLog(
 	callID string,
 	stream string,
 	cursor int,
+	limit int,
 ) *providers.LLMResponse {
 	return provider.invokeJob(callID, nodes.JobCommandLogs, provider.logsRevision, map[string]any{
-		"job_id": provider.jobID, "stream": stream, "cursor": cursor, "limit_bytes": 4096,
+		"job_id": provider.jobID, "stream": stream, "cursor": cursor, "limit_bytes": limit,
 	})
 }
 
@@ -1006,8 +1025,8 @@ func (provider *nodeJobEvidenceProvider) cancelJobIdentity() string {
 func (provider *nodeJobEvidenceProvider) AssertExhausted() error {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if provider.step != 24 {
-		return fmt.Errorf("node job evidence consumed %d model steps, want 24", provider.step)
+	if provider.step != 25 {
+		return fmt.Errorf("node job evidence consumed %d model steps, want 25", provider.step)
 	}
 	return nil
 }
@@ -1174,9 +1193,9 @@ func assertNodeJobApprovalPrompt(
 func assertNodeJobEvents(t *testing.T, events []runtimeevents.Event) {
 	t.Helper()
 	want := map[string]int{
-		tools.NodeInvocationObservationPrepared:   10,
-		tools.NodeInvocationObservationDispatched: 10,
-		tools.NodeInvocationObservationCompleted:  10,
+		tools.NodeInvocationObservationPrepared:   11,
+		tools.NodeInvocationObservationDispatched: 11,
+		tools.NodeInvocationObservationCompleted:  11,
 		tools.NodeInvocationObservationStatus:     1,
 	}
 	got := make(map[string]int, len(want))
