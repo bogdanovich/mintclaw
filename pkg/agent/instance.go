@@ -161,11 +161,21 @@ func newAgentInstance(
 	if layout != nil {
 		sessionsDir = layout.StatePaths().SessionsRoot
 	}
-	sessions := initSessionStore(sessionsDir)
+	var sessions session.SessionStore
 	var contextBuilder *ContextBuilder
 	if layout != nil {
-		contextBuilder = newRuntimeContextBuilder(*layout)
+		var err error
+		sessions, err = initRuntimeSessionStore(sessionsDir)
+		if err != nil {
+			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+		contextBuilder, err = newRuntimeContextBuilder(*layout)
+		if err != nil {
+			_ = sessions.Close()
+			return nil, fmt.Errorf("construct agent: %w", err)
+		}
 	} else {
+		sessions = initSessionStore(sessionsDir)
 		contextBuilder = NewContextBuilder(workspace)
 	}
 	contextBuilder = contextBuilder.
@@ -684,4 +694,22 @@ func initSessionStore(dir string) session.SessionStore {
 	}
 
 	return session.NewJSONLBackend(store)
+}
+
+func initRuntimeSessionStore(dir string) (session.SessionStore, error) {
+	store, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		return nil, fmt.Errorf("initialize runtime session store: %w", err)
+	}
+
+	n, err := memory.MigrateFromJSON(context.Background(), dir, store)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("migrate runtime sessions: %w", err)
+	}
+	if n > 0 {
+		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
+	}
+
+	return session.NewJSONLBackend(store), nil
 }

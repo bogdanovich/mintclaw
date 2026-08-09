@@ -37,6 +37,19 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	return newMemoryStore(workspace, config.PromptMemoryConfig{}, time.Now)
 }
 
+func newMemoryStoreChecked(workspace string) (*MemoryStore, error) {
+	memoryDir := filepath.Join(workspace, "memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create memory directory: %w", err)
+	}
+	return &MemoryStore{
+		workspace:  workspace,
+		memoryDir:  memoryDir,
+		memoryFile: filepath.Join(memoryDir, "MEMORY.md"),
+		now:        time.Now,
+	}, nil
+}
+
 func newMemoryStore(
 	workspace string,
 	prompt config.PromptMemoryConfig,

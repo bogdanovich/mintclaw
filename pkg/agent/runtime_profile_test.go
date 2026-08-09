@@ -68,6 +68,67 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 }
 
+func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		blockPath func(RuntimeLayout) string
+	}{
+		{
+			name: "sessions root",
+			blockPath: func(layout RuntimeLayout) string {
+				return layout.StatePaths().SessionsRoot
+			},
+		},
+		{
+			name: "memory root",
+			blockPath: func(layout RuntimeLayout) string {
+				return layout.StatePaths().MemoryRoot
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			executionRoot := filepath.Join(root, "project")
+			layout, err := NewRuntimeLayout(
+				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-state-error"},
+				executionRoot,
+				filepath.Join(root, "state"),
+				[]string{executionRoot},
+			)
+			if err != nil {
+				t.Fatalf("NewRuntimeLayout() error = %v", err)
+			}
+			blockedPath := test.blockPath(layout)
+			if err := os.MkdirAll(filepath.Dir(blockedPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(blockedPath, []byte("not a directory"), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			if err != nil {
+				t.Fatalf("NewRuntimeProfile() error = %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.ContextManager = "none"
+
+			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			if err == nil {
+				if loop != nil {
+					loop.Close()
+				}
+				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want unusable-state error")
+			}
+			if loop != nil {
+				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+			}
+			if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("failed construction created execution root: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
