@@ -978,8 +978,8 @@ func TestLoadPublishesFreshSnapshotAfterDispatch(t *testing.T) {
 	released := make(chan struct{})
 	handlerStarted := make(chan struct{})
 	var startedOnce sync.Once
-	var cs *CronService
-	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+	cs := NewCronService(storePath, nil)
+	cs.SetOnJob(func(job *CronJob) (string, error) {
 		startedOnce.Do(func() { close(handlerStarted) })
 		<-released
 		return "ok", nil
@@ -1152,8 +1152,8 @@ func TestLoadMissingFileBlocksMutationsDuringReload(t *testing.T) {
 	released := make(chan struct{})
 	handlerStarted := make(chan struct{})
 	var startedOnce sync.Once
-	var cs *CronService
-	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+	cs := NewCronService(storePath, nil)
+	cs.SetOnJob(func(job *CronJob) (string, error) {
 		startedOnce.Do(func() { close(handlerStarted) })
 		<-released
 		return "ok", nil
