@@ -102,6 +102,52 @@ func (client *fakePlaywrightClient) CallTool(
 	return playwrightTextResult("ok"), nil
 }
 
+func TestPlaywrightWorkerUsesCDPMainDocumentIdentity(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_DOC_V1|ok|frame-1|loader-1\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_DOC_V1|ok|frame-1|loader-2\""),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	first, err := worker.DocumentIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := worker.DocumentIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != sha256.Size*2 || len(second) != sha256.Size*2 || first == second {
+		t.Fatalf("document identities = %q, %q", first, second)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("document identity calls = %#v", client.calls)
+	}
+	for _, call := range client.calls {
+		code, ok := call.arguments["code"].(string)
+		if call.tool != "browser_run_code_unsafe" || !ok ||
+			!strings.Contains(code, `Page.getFrameTree`) ||
+			!strings.Contains(code, `frame.loaderId`) ||
+			!strings.Contains(code, `await cdp.detach()`) {
+			t.Fatalf("document identity call = %#v", call)
+		}
+	}
+}
+
+func TestPlaywrightWorkerRejectsMalformedDocumentIdentity(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult("MINTCLAW_DOC_V1|ok|frame-1|"),
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	if _, err := worker.DocumentIdentity(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("DocumentIdentity() error = %v", err)
+	}
+	if !worker.lost {
+		t.Fatal("malformed document identity did not retire the worker")
+	}
+}
+
 func TestPlaywrightWorkerDoesNotAttributeAmbientProxyDenialToSnapshot(t *testing.T) {
 	proxy := &browserNetworkProxy{}
 	client := &fakePlaywrightClient{
@@ -1604,6 +1650,10 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	}
 	worker := opened.Owner.(*playwrightWorker)
 	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	blankDocument, err := worker.DocumentIdentity(ctx)
+	if err != nil {
+		t.Fatalf("initial DocumentIdentity() error = %v", err)
+	}
 	initial, err := worker.Observe(ctx)
 	if err != nil || initial.URL != initialBlankOrigin || initial.Origin != initialBlankOrigin ||
 		initial.Snapshot != "" || len(initial.Elements) != 0 {
@@ -1611,6 +1661,10 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	}
 	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
 		t.Fatalf("navigate error = %v", err)
+	}
+	fixtureDocument, err := worker.DocumentIdentity(ctx)
+	if err != nil || fixtureDocument == blankDocument {
+		t.Fatalf("navigated DocumentIdentity() = %q, initial %q, error %v", fixtureDocument, blankDocument, err)
 	}
 	observation, err := worker.Observe(ctx)
 	if err != nil {

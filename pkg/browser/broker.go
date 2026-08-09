@@ -50,6 +50,14 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// DocumentIdentityWorker exposes a driver-owned identity for the current main
+// document. The identity is private runtime state: callers use it to reject a
+// document replacement that reproduces the same observable snapshot.
+type DocumentIdentityWorker interface {
+	ActionWorker
+	DocumentIdentity(context.Context) (string, error)
+}
+
 // PreparedActionWorker receives the gateway-owned durable authority for one
 // accepted action and must revalidate live driver state before dispatch.
 // Remote workers use it to bind a typed node invocation; local driver workers

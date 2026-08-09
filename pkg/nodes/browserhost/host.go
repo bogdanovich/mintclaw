@@ -63,6 +63,7 @@ type browserHostSession struct {
 	safeFailure           string
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
+	documentWorker        browserworker.DocumentIdentityWorker
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
@@ -269,7 +270,8 @@ func (host *BrowserHost) Open(
 		Limits: browserConfigLimits(request.Limits),
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
-	if openErr != nil || !workerOK || actionWorker == nil {
+	documentWorker, documentOK := opened.Owner.(browserworker.DocumentIdentityWorker)
+	if openErr != nil || !workerOK || actionWorker == nil || !documentOK || documentWorker == nil {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
@@ -301,6 +303,7 @@ func (host *BrowserHost) Open(
 		return host.sessionView(session), ErrBrowserHostLost
 	}
 	session.worker = actionWorker
+	session.documentWorker = documentWorker
 	session.state = "ready"
 	session.mu.Unlock()
 	return host.sessionView(session), nil
@@ -362,7 +365,7 @@ func (host *BrowserHost) Observe(
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	observation, observeErr := session.worker.Observe(actionCtx)
+	observation, documentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil {
@@ -376,7 +379,7 @@ func (host *BrowserHost) Observe(
 	}
 	session.snapshotGeneration = request.SnapshotGeneration
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation), nil
+	return browserHostObservation(request.SessionID, session, observation, documentIdentity), nil
 }
 
 func (host *BrowserHost) Navigate(
@@ -530,12 +533,15 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ctx.Err()
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
-	current, observeErr := session.worker.Observe(actionCtx)
-	currentDigest := browserHostObservationDigest(session, current)
+	current, currentDocumentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
+	currentDigest := browserHostObservationDigest(session, current, currentDocumentIdentity)
 	if observeErr != nil || actionCtx.Err() != nil || current.Origin != request.CurrentOrigin ||
 		len(session.observationDigest) != sha256.Size || !hmac.Equal(currentDigest, session.observationDigest) {
 		actionContextErr := actionCtx.Err()
 		cancelAction()
+		if errors.Is(observeErr, browserworker.ErrStale) {
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
 		if observeErr != nil || actionContextErr != nil {
 			return BrowserHostObservation{}, ErrBrowserHostLost
 		}
@@ -572,7 +578,7 @@ func (host *BrowserHost) executeAction(
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
-	observation, observeErr := session.worker.Observe(actionCtx)
+	observation, documentIdentity, observeErr := observeBrowserHostDocument(actionCtx, session)
 	actionContextErr := actionCtx.Err()
 	cancelAction()
 	if observeErr != nil || actionContextErr != nil || !host.now().UTC().Before(actionDeadline) {
@@ -581,7 +587,32 @@ func (host *BrowserHost) executeAction(
 	}
 	session.snapshotGeneration++
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation), nil
+	return browserHostObservation(request.SessionID, session, observation, documentIdentity), nil
+}
+
+func observeBrowserHostDocument(
+	ctx context.Context,
+	session *browserHostSession,
+) (browserworker.DriverObservation, string, error) {
+	if session.documentWorker == nil {
+		return browserworker.DriverObservation{}, "", browserworker.ErrDriverIncompatible
+	}
+	before, err := session.documentWorker.DocumentIdentity(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	observation, err := session.worker.Observe(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	after, err := session.documentWorker.DocumentIdentity(ctx)
+	if err != nil {
+		return browserworker.DriverObservation{}, "", err
+	}
+	if before == "" || before != after {
+		return browserworker.DriverObservation{}, "", browserworker.ErrStale
+	}
+	return observation, after, nil
 }
 
 func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
@@ -795,8 +826,9 @@ func browserHostObservation(
 	sessionID string,
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
+	documentIdentity string,
 ) BrowserHostObservation {
-	session.observationDigest = browserHostObservationDigest(session, observation)
+	session.observationDigest = browserHostObservationDigest(session, observation, documentIdentity)
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
@@ -819,11 +851,13 @@ func browserHostObservation(
 func browserHostObservationDigest(
 	session *browserHostSession,
 	observation browserworker.DriverObservation,
+	documentIdentity string,
 ) []byte {
 	hash := hmac.New(sha256.New, session.elementBindingKey)
 	_, _ = fmt.Fprintf(
 		hash,
-		"mintclaw.browser.host-observation.v1\x00%d:%s%d:%s%d:%s%d:%s:%t:%d",
+		"mintclaw.browser.host-observation.v2\x00%d:%s%d:%s%d:%s%d:%s%d:%s:%t:%d",
+		len(documentIdentity), documentIdentity,
 		len(observation.URL), observation.URL,
 		len(observation.Origin), observation.Origin,
 		len(observation.Title), observation.Title,

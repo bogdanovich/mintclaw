@@ -52,15 +52,17 @@ func (factory *fakeBrowserHostFactory) Open(
 }
 
 type fakeBrowserHostWorker struct {
-	status       browserworker.WorkerStatus
-	statusErr    error
-	observations []browserworker.DriverObservation
-	observeCalls int
-	actions      []browserworker.DriverAction
-	executeErr   error
-	executeFunc  func(context.Context, browserworker.DriverAction) error
-	closeErr     error
-	closeCalls   int
+	status                browserworker.WorkerStatus
+	statusErr             error
+	observations          []browserworker.DriverObservation
+	observeCalls          int
+	documentIdentities    []string
+	documentIdentityCalls int
+	actions               []browserworker.DriverAction
+	executeErr            error
+	executeFunc           func(context.Context, browserworker.DriverAction) error
+	closeErr              error
+	closeCalls            int
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -79,6 +81,15 @@ func (worker *fakeBrowserHostWorker) Observe(context.Context) (browserworker.Dri
 	observation := worker.observations[worker.observeCalls]
 	worker.observeCalls++
 	return observation, nil
+}
+
+func (worker *fakeBrowserHostWorker) DocumentIdentity(context.Context) (string, error) {
+	identity := "document_1"
+	if worker.documentIdentityCalls < len(worker.documentIdentities) {
+		identity = worker.documentIdentities[worker.documentIdentityCalls]
+	}
+	worker.documentIdentityCalls++
+	return identity, nil
 }
 
 func (*fakeBrowserHostWorker) Resolve(
@@ -480,14 +491,13 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	})
 
 	for _, action := range []string{"press", "select"} {
-		t.Run(action+" rejects same-origin document replacement", func(t *testing.T) {
+		t.Run(action+" rejects byte-identical same-origin document replacement", func(t *testing.T) {
 			element := browserworker.DriverElement{
 				Target: "driver_select_1", Role: "combobox", Name: "State",
 			}
 			host, worker, initial := newFixture(t, element)
-			worker.observations[1] = browserworker.DriverObservation{
-				URL: "https://example.com/form", Origin: "https://example.com", Title: "Replacement",
-				Snapshot: "- combobox State after reload", Elements: []browserworker.DriverElement{element},
+			worker.documentIdentities = []string{
+				"document_1", "document_1", "document_2", "document_2",
 			}
 			request := BrowserHostNavigateRequest{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
