@@ -661,7 +661,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			ts.eventMeta("runTurn", "turn.tool.skipped"),
 			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
 		)
-		runner.appendToolMessage(providers.Message{
+		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 		}, toolMessagePersistOnly)
 		return skipToolCall()
@@ -914,7 +914,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			ts.eventMeta("runTurn", "turn.tool.skipped"),
 			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: denyContent},
 		)
-		runner.appendToolMessage(providers.Message{
+		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
 		}, toolMessagePersistOnly)
 		return skipToolCall()
