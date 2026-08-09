@@ -324,7 +324,7 @@ func (t *CronTool) listJobs(ctx context.Context) *toolshared.ToolResult {
 		} else {
 			scheduleInfo = "unknown"
 		}
-		result.WriteString(fmt.Sprintf("- %s (id: %s, %s)\n", j.Name, j.ID, scheduleInfo))
+		fmt.Fprintf(&result, "- %s (id: %s, %s)\n", j.Name, j.ID, scheduleInfo)
 	}
 
 	return toolshared.SilentResult(result.String())

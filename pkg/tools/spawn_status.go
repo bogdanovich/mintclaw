@@ -160,11 +160,11 @@ func (t *SpawnStatusTool) Execute(ctx context.Context, args map[string]any) *too
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Subagent status report (%d total):\n", len(tasks)))
+	fmt.Fprintf(&sb, "Subagent status report (%d total):\n", len(tasks))
 	for _, status := range []string{"running", "waiting_for_input", "completed", "failed", "canceled"} {
 		if n := counts[status]; n > 0 {
 			label := spawnStatusSummaryLabel(status)
-			sb.WriteString(fmt.Sprintf("  %-10s %d\n", label, n))
+			fmt.Fprintf(&sb, "  %-10s %d\n", label, n)
 		}
 	}
 	sb.WriteString("\n")
@@ -209,11 +209,11 @@ func (t *SpawnStatusTool) executeFromRegistry(
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Subagent status report (%d total):\n", len(filtered)))
+	fmt.Fprintf(&sb, "Subagent status report (%d total):\n", len(filtered))
 	for _, status := range []string{"running", "waiting_for_input", "completed", "failed", "canceled"} {
 		if n := counts[status]; n > 0 {
 			label := spawnStatusSummaryLabel(status)
-			sb.WriteString(fmt.Sprintf("  %-10s %d\n", label, n))
+			fmt.Fprintf(&sb, "  %-10s %d\n", label, n)
 		}
 	}
 	sb.WriteString("\n")
@@ -316,7 +316,7 @@ func spawnStatusFormatTask(task *SubagentTask) string {
 	sb.WriteString(header)
 
 	if task.Task != "" {
-		sb.WriteString(fmt.Sprintf("\n  task:   %s", task.Task))
+		fmt.Fprintf(&sb, "\n  task:   %s", task.Task)
 	}
 	if task.Result != "" {
 		result := task.Result
@@ -325,7 +325,7 @@ func spawnStatusFormatTask(task *SubagentTask) string {
 		if len(runes) > maxResultLen {
 			result = string(runes[:maxResultLen]) + "…"
 		}
-		sb.WriteString(fmt.Sprintf("\n  result: %s", result))
+		fmt.Fprintf(&sb, "\n  result: %s", result)
 	}
 
 	return sb.String()
