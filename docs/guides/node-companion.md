@@ -8,8 +8,10 @@ The companion creates a durable device identity, authenticates it with a signed
 challenge over WSS, and keeps retrying while the gateway records an unknown
 node as `pending_pairing`. After explicit operator approval, the gateway can
 invoke only the commands allowed by both gateway policy and the node-local
-policy. The current command surface includes `node.info.v1`,
-`system.which.v1`, and optional synchronous `system.exec.v1`.
+policy. The current command surface includes `node.info.v1`, model-visible
+execution, file transfer, service administration, single-node update, and
+optional durable jobs. Every family remains disabled until its node-local
+profile exists and the exact commands are approved during pairing.
 
 ## Build
 
@@ -103,6 +105,93 @@ paths remain accepted by node-local enforcement for existing operators but
 are not shown to the model. Without at least one executable alias and one
 working-scope alias, the command remains `partially_described` and cannot be
 invoked by the model.
+
+### Durable direct jobs
+
+Durable jobs reuse the executable, working-scope, and environment aliases from
+`system_exec`. They run a non-interactive argv process without shell parsing,
+retain bounded stdout and stderr, expose truthful status and cancellation, and
+snapshot only declared regular-file artifacts. An enabled profile is explicit;
+an omitted or disabled `node_job_profiles` map advertises no job commands.
+
+```json
+{
+  "policy": {
+    "revision": "build-jobs-v1",
+    "allowed_commands": [
+      "job.start.v1",
+      "job.status.v1",
+      "job.logs.v1",
+      "job.artifacts.v1",
+      "job.cancel.v1"
+    ],
+    "maximum_risk": "write",
+    "max_timeout_seconds": 30,
+    "max_output_bytes": 65536
+  },
+  "system_exec": {
+    "working_roots": ["/srv/project"],
+    "executables": ["/srv/project/bin/build-job"],
+    "environment": ["BUILD_MODE"],
+    "discovery": {
+      "executable_aliases": {"build": "/srv/project/bin/build-job"},
+      "working_scope_aliases": {"project": "/srv/project"},
+      "environment_names": ["BUILD_MODE"]
+    }
+  },
+  "node_job_profiles": {
+    "project-builds": {
+      "enabled": true,
+      "revision": "project-builds-v1",
+      "executor": "system_exec",
+      "timeout_seconds_max": 14400,
+      "concurrent_jobs": 2,
+      "stdout_bytes_max": 8388608,
+      "stderr_bytes_max": 8388608,
+      "artifact_count_max": 8,
+      "artifact_bytes_max": 268435456,
+      "artifacts_total_bytes_max": 268435456,
+      "retention_seconds": 86400,
+      "cancel_guarantee": "process_group",
+      "approval": {"start": "required", "read": "none", "cancel": "required"}
+    }
+  }
+}
+```
+
+Bind the gateway target to that exact profile:
+
+```json
+{
+  "execution": {
+    "targets": {
+      "build": {
+        "type": "node",
+        "node": "linux-builder",
+        "executor": "local",
+        "job_profile": "project-builds"
+      }
+    }
+  }
+}
+```
+
+Approve all five advertised job commands only for a node intended to run the
+profile. The model uses `nodes describe` immediately before each call, invokes
+the commands through `nodes_invoke`, and keeps the returned opaque `job_id`.
+`job.logs.v1` reads repeatable bounded chunks by stream and cursor.
+`job.artifacts.v1` returns metadata and an opaque reference; `nodes_download`
+then copies the selected immutable snapshot through the existing transfer
+spool. A fresh `job.artifacts.v1` discovery revision is required for that
+download.
+
+Gateway restart or WSS disconnect does not stop a job accepted by a live
+companion. `nodes_status` recovers the original start invocation without
+redispatch, and a later routed turn can query the job itself. Companion or host
+restart does not relaunch or reattach the process: a previously nonterminal job
+becomes `unknown` or `interrupted`. Disable the profile and remove the target's
+`job_profile` binding to roll back exposure; after the catalog changes, renew
+pairing approval without the job commands.
 
 ## Run
 
