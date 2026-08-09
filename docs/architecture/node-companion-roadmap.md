@@ -7,13 +7,13 @@ Active post-MVP roadmap after the node companion MVP defined in
 deployed. This roadmap does not expand that MVP or authorize implementation of
 every item below.
 
-P0, P1, P2, and P3 are complete. P2 deployment evidence is recorded in
+P0, P1, P2, P3, and P4 are complete. P2 deployment evidence is recorded in
 [`node-companion-p2-deployment-evidence.md`](../operations/node-companion-p2-deployment-evidence.md).
 P3 completion evidence is recorded in
 [`node-companion-p3-deployment-evidence.md`](../operations/node-companion-p3-deployment-evidence.md).
-P4 safe single-node update is admitted for implementation under
-[`node-companion-p4-admission.md`](node-companion-p4-admission.md). P5 and
-later milestones remain unadmitted.
+P4 completion evidence is recorded in
+[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). P5
+and later milestones remain unadmitted.
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -146,9 +146,11 @@ P3 is complete under
 [`node-companion-p3-admission.md`](node-companion-p3-admission.md), with its
 merged and deployed proof recorded in
 [`node-companion-p3-deployment-evidence.md`](../operations/node-companion-p3-deployment-evidence.md).
-P4 is admitted under
-[`node-companion-p4-admission.md`](node-companion-p4-admission.md). P5 and
-later work remain unadmitted.
+P4 is complete under
+[`node-companion-p4-admission.md`](node-companion-p4-admission.md), with signed
+release, native proof, and live deployment evidence in
+[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). P5
+and later work remain unadmitted.
 
 ### Current limitation
 
@@ -683,7 +685,7 @@ fail-closed diagnostics, and reversible rollback. No P4 work is implied.
 
 ## P4: Safe Single-Node Companion Update
 
-P4 is admitted under the exact scope, platform decision, trust model, delivery
+P4 is complete under the exact scope, platform decision, trust model, delivery
 order, completion gates, and mandatory stop condition in
 [`node-companion-p4-admission.md`](node-companion-p4-admission.md).
 
@@ -698,10 +700,9 @@ P4 requires authenticated slim node release artifacts and a narrow stable
 local coordinator because the payload being replaced cannot prove its own
 failed startup. The deployed default remains deny-all.
 
-Implementation status: the trusted-release foundation, stable coordinator,
-and model-facing single-node slice are merged. Native Linux/macOS process
-proof, operations documentation, and deny-by-default deployment closeout are
-tracked in
+Implementation status: complete. The trusted-release foundation, stable
+coordinator, model-facing single-node slice, native Linux/macOS process proof,
+signed release, and deny-by-default live deployment are recorded in
 [`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md).
 
 Fleet inventory, group targeting, rolling or parallel rollout, scheduled
