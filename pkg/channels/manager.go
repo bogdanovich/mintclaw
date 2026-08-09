@@ -881,6 +881,7 @@ func NewManager(
 		channelHashes:          make(map[string]string),
 		channelRestartRequired: make(map[string]string),
 	}
+	m.delivery.bindHost(m)
 	if cfg != nil {
 		m.interactions.initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
@@ -909,6 +910,39 @@ func NewManager(
 	return m, nil
 }
 
+func (m *Manager) deliveryRuntime() *DeliveryRuntime {
+	if m.delivery == nil {
+		m.delivery = newDeliveryRuntime()
+	}
+	if m.delivery.host == nil {
+		m.delivery.bindHost(m)
+	}
+	return m.delivery
+}
+
+func (m *Manager) deliveryChannel(name string) (Channel, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	channel, exists := m.channels[name]
+	return channel, exists
+}
+
+func (m *Manager) deliveryTextSource() <-chan bus.OutboundMessage {
+	return m.bus.OutboundChan()
+}
+
+func (m *Manager) deliveryMediaSource() <-chan bus.OutboundMediaMessage {
+	return m.bus.OutboundMediaChan()
+}
+
+func (m *Manager) deliverySplitOnMarker() bool {
+	return m.config != nil && m.config.Agents.Defaults.SplitOnMarker
+}
+
+func (m *Manager) deliveryToolFeedbackEnabled() bool {
+	return m.interactions.hasToolFeedback()
+}
+
 // SetMediaStore updates the store used by the manager and every channel that
 // accepts media store injection. Gateway reload creates a fresh store, so
 // keeping existing channels on the same store as the agent is required for
@@ -933,7 +967,7 @@ func (m *Manager) installDeliveryOwnerLocked(
 ) *deliveryOwner {
 	owner := newDeliveryOwner(name, channel, channelType)
 	m.delivery.install(owner)
-	owner.StartDelivery(ctx, m)
+	owner.StartDelivery(ctx, m.deliveryRuntime())
 	return owner
 }
 
@@ -1768,8 +1802,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	// Start the dispatcher that reads from the bus and routes to workers
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
+	go m.deliveryRuntime().dispatchOutbound(dispatchCtx)
+	go m.deliveryRuntime().dispatchOutboundMedia(dispatchCtx)
 
 	// Start the TTL janitor that cleans up stale typing/placeholder entries
 	go m.runTTLJanitor(dispatchCtx)
@@ -1951,12 +1985,12 @@ func (o *deliveryOwner) borrowWorkerForSend() (*channelWorker, func(), error) {
 	return o.worker, o.mu.Unlock, nil
 }
 
-func (o *deliveryOwner) StartDelivery(ctx context.Context, m *Manager) {
+func (o *deliveryOwner) StartDelivery(ctx context.Context, runtime *DeliveryRuntime) {
 	if o == nil || o.worker == nil {
 		return
 	}
-	go m.runWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
-	go m.runMediaWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
+	go runtime.runWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
+	go runtime.runMediaWorkerOwned(ctx, o.name, o.worker, o.closeAdmission)
 }
 
 func (o *deliveryOwner) Enqueue(ctx context.Context, msg bus.OutboundMessage) (bool, error) {
@@ -2066,11 +2100,11 @@ func (o *deliveryOwner) closeAdmission() {
 // Message processing follows this order:
 //  1. SplitByMarker (if enabled in config) - LLM semantic marker-based splitting
 //  2. SplitMessage - channel-specific length-based splitting (MaxMessageLength)
-func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
-	m.runWorkerOwned(ctx, name, w, nil)
+func (r *DeliveryRuntime) runWorker(ctx context.Context, name string, w *channelWorker) {
+	r.runWorkerOwned(ctx, name, w, nil)
 }
 
-func (m *Manager) runWorkerOwned(
+func (r *DeliveryRuntime) runWorkerOwned(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2083,23 +2117,24 @@ func (m *Manager) runWorkerOwned(
 			if !ok {
 				return
 			}
-			m.deliverQueuedMessage(ctx, name, w, msg)
+			r.deliverQueuedMessage(ctx, name, w, msg)
 		case <-ctx.Done():
 			if closeAdmission != nil {
 				closeAdmission()
 			}
-			m.failPendingOutbound(name, w.queue, ctx.Err())
+			r.failPendingOutbound(name, w.queue, ctx.Err())
 			return
 		}
 	}
 }
 
-func (m *Manager) deliverQueuedMessage(
+func (r *DeliveryRuntime) deliverQueuedMessage(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
 ) {
+	m := r.host
 	msg = m.decorateOutboundResponseFooter(msg)
 	maxLen := 0
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
@@ -2108,7 +2143,7 @@ func (m *Manager) deliverQueuedMessage(
 	var chunks []string
 	if m.finalizedStreamActiveForMessage(name, msg) {
 		chunks = []string{msg.Content}
-	} else if m.config != nil && m.config.Agents.Defaults.SplitOnMarker && !outboundMessageIsToolFeedback(msg) {
+	} else if m.deliverySplitOnMarker() && !outboundMessageIsToolFeedback(msg) {
 		if markerChunks := SplitByMarker(msg.Content); len(markerChunks) > 1 {
 			for _, chunk := range markerChunks {
 				chunkMsg := msg
@@ -2132,7 +2167,7 @@ func (m *Manager) deliverQueuedMessage(
 	for _, chunk := range chunks {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
-		result := m.sendWithRetryPolicy(
+		result := r.sendWithRetryPolicy(
 			ctx, name, w, chunkMsg, !durable, publishNoOutcome,
 		)
 		if !result.Delivered() {
@@ -2146,7 +2181,7 @@ func (m *Manager) deliverQueuedMessage(
 		}
 		messageIDs = append(messageIDs, result.MessageIDs...)
 	}
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, delivered)
+	m.completeToolFeedbackTerminals(ctx, terminals, delivered)
 	if !delivered {
 		return
 	}
@@ -2161,11 +2196,12 @@ func (m *Manager) deliverQueuedMessage(
 	m.publishOutboundSent(name, msg, messageIDs)
 }
 
-func (m *Manager) failPendingOutbound(
+func (r *DeliveryRuntime) failPendingOutbound(
 	name string,
 	queue <-chan bus.OutboundMessage,
 	err error,
 ) {
+	m := r.host
 	for {
 		select {
 		case msg, ok := <-queue:
@@ -2220,21 +2256,22 @@ func splitOutboundMessageContent(msg bus.OutboundMessage, maxLen int) []string {
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(
+func (r *DeliveryRuntime) sendWithRetry(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
 ) DeliveryResult[bus.OutboundMessage] {
+	m := r.host
 	terminals := m.beginOutboundToolFeedbackTerminals(name, w.ch, msg)
-	result := m.sendWithRetryPolicy(
+	result := r.sendWithRetryPolicy(
 		ctx, name, w, msg, true, publishDefinitiveOutcome,
 	)
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
+	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
 	return result
 }
 
-func (m *Manager) sendWithRetryPolicy(
+func (r *DeliveryRuntime) sendWithRetryPolicy(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2242,6 +2279,7 @@ func (m *Manager) sendWithRetryPolicy(
 	retryAmbiguous bool,
 	outcome outcomePublication,
 ) DeliveryResult[bus.OutboundMessage] {
+	m := r.host
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
@@ -2289,7 +2327,7 @@ func (m *Manager) sendWithRetryPolicy(
 			attemptMsg := pending[0]
 			var msgIDs []string
 			var err error
-			if isToolFeedback && m.interactions.hasToolFeedback() {
+			if isToolFeedback && m.deliveryToolFeedbackEnabled() {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
 				msgIDs, err = m.deliverToolFeedback(ctx, name, w.ch, attemptMsg, w.ch.Send)
@@ -2374,7 +2412,7 @@ func classifySendError(err error) string {
 
 func dispatchLoop[M any](
 	ctx context.Context,
-	m *Manager,
+	runtime *DeliveryRuntime,
 	ch <-chan M,
 	getChannel func(M) string,
 	requiresOutcome func(M) bool,
@@ -2408,10 +2446,8 @@ func dispatchLoop[M any](
 				continue
 			}
 
-			m.mu.RLock()
-			_, exists := m.channels[channel]
-			owner := m.deliveryOwnerLocked(channel)
-			m.mu.RUnlock()
+			_, exists := runtime.host.deliveryChannel(channel)
+			owner := runtime.owner(channel)
 
 			if !exists {
 				logger.WarnCF("channels", unknownMsg, map[string]any{"channel": channel})
@@ -2431,10 +2467,11 @@ func dispatchLoop[M any](
 	}
 }
 
-func (m *Manager) dispatchOutbound(ctx context.Context) {
+func (r *DeliveryRuntime) dispatchOutbound(ctx context.Context) {
+	m := r.host
 	dispatchLoop(
-		ctx, m,
-		m.bus.OutboundChan(),
+		ctx, r,
+		m.deliveryTextSource(),
 		func(msg bus.OutboundMessage) string { return outboundMessageChannel(msg) },
 		func(msg bus.OutboundMessage) bool { return msg.TraceSettlement },
 		func(ctx context.Context, owner *deliveryOwner, msg bus.OutboundMessage) bool {
@@ -2461,10 +2498,11 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 	)
 }
 
-func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
+func (r *DeliveryRuntime) dispatchOutboundMedia(ctx context.Context) {
+	m := r.host
 	dispatchLoop(
-		ctx, m,
-		m.bus.OutboundMediaChan(),
+		ctx, r,
+		m.deliveryMediaSource(),
 		func(msg bus.OutboundMediaMessage) string { return outboundMediaChannel(msg) },
 		func(msg bus.OutboundMediaMessage) bool { return msg.TraceSettlement },
 		func(ctx context.Context, owner *deliveryOwner, msg bus.OutboundMediaMessage) bool {
@@ -2492,7 +2530,7 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 }
 
 // runMediaWorker processes outbound media messages for a single channel.
-func (m *Manager) runMediaWorkerOwned(
+func (r *DeliveryRuntime) runMediaWorkerOwned(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2505,29 +2543,30 @@ func (m *Manager) runMediaWorkerOwned(
 			if !ok {
 				return
 			}
-			m.deliverQueuedMedia(ctx, name, w, msg)
+			r.deliverQueuedMedia(ctx, name, w, msg)
 		case <-ctx.Done():
 			if closeAdmission != nil {
 				closeAdmission()
 			}
-			m.failPendingOutboundMedia(name, w.mediaQueue, ctx.Err())
+			r.failPendingOutboundMedia(name, w.mediaQueue, ctx.Err())
 			return
 		}
 	}
 }
 
-func (m *Manager) deliverQueuedMedia(
+func (r *DeliveryRuntime) deliverQueuedMedia(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) {
+	m := r.host
 	durable, err := m.beginDurableOutbound(msg.DeliveryID)
 	if err != nil {
 		m.publishOutboundMediaFailed(name, msg, err)
 		return
 	}
-	result := m.sendMediaWithRetryPolicy(
+	result := r.sendMediaWithRetryPolicy(
 		ctx, name, w, msg, publishNoOutcome, !durable,
 	)
 	outcome := durableOutcome(result, nil)
@@ -2541,11 +2580,12 @@ func (m *Manager) deliverQueuedMedia(
 	m.publishOutboundMediaFailed(name, msg, result.Err)
 }
 
-func (m *Manager) failPendingOutboundMedia(
+func (r *DeliveryRuntime) failPendingOutboundMedia(
 	name string,
 	queue <-chan bus.OutboundMediaMessage,
 	err error,
 ) {
+	m := r.host
 	for {
 		select {
 		case msg, ok := <-queue:
@@ -2563,18 +2603,18 @@ func (m *Manager) failPendingOutboundMedia(
 // sendMediaWithRetry sends a media message through the channel with rate limiting and
 // retry logic. It returns the message IDs and nil on success, or nil and the last error
 // after retries, including when the channel does not support MediaSender.
-func (m *Manager) sendMediaWithRetry(
+func (r *DeliveryRuntime) sendMediaWithRetry(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) DeliveryResult[bus.OutboundMediaMessage] {
-	return m.sendMediaWithRetryPolicy(
+	return r.sendMediaWithRetryPolicy(
 		ctx, name, w, msg, publishDefinitiveOutcome, true,
 	)
 }
 
-func (m *Manager) sendMediaWithRetryPolicy(
+func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 	ctx context.Context,
 	name string,
 	w *channelWorker,
@@ -2582,6 +2622,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 	outcome outcomePublication,
 	retryAmbiguous bool,
 ) DeliveryResult[bus.OutboundMediaMessage] {
+	m := r.host
 	ms, ok := w.ch.(MediaSender)
 	if !ok {
 		err := fmt.Errorf("channel %q does not support media sending", name)
@@ -2618,7 +2659,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 
 	terminalSucceeded := false
 	var terminals []*toolFeedbackTerminal
-	if m.interactions.hasToolFeedback() {
+	if m.deliveryToolFeedbackEnabled() {
 		terminals = m.beginToolFeedbackTerminals(
 			name,
 			w.ch,
@@ -2629,7 +2670,7 @@ func (m *Manager) sendMediaWithRetryPolicy(
 			bus.OutboundMetadataFromContext(msg.Context).IsInterim(),
 		)
 		defer func() {
-			m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+			m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 		}()
 	}
 
@@ -2705,10 +2746,6 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 	defer m.mu.RUnlock()
 	channel, ok := m.channels[name]
 	return channel, ok
-}
-
-func (m *Manager) deliveryOwnerLocked(name string) *deliveryOwner {
-	return m.delivery.owner(name)
 }
 
 func (m *Manager) GetStatus() map[string]any {
@@ -2950,14 +2987,14 @@ func (m *Manager) UnregisterChannel(name string) {
 // delivered (or all retries are exhausted), which preserves ordering when
 // a subsequent operation depends on the message having been sent.
 func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
 }
 
 // SendMessageProvisional suppresses a definitely-not-sent failure outcome so
 // the caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMessageProvisional(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
 }
 
 // SendMessageDefiniteRetryOnly retries only channel rejections known to occur
@@ -2967,15 +3004,16 @@ func (m *Manager) SendMessageDefiniteRetryOnly(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 ) error {
-	return m.sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
 }
 
-func (m *Manager) sendMessageWithRetryPolicy(
+func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 	retryAmbiguous bool,
 	outcome outcomePublication,
 ) error {
+	m := r.host
 	var err error
 	msg, err = bus.NormalizeOutboundMessage(msg)
 	if err != nil {
@@ -2984,13 +3022,11 @@ func (m *Manager) sendMessageWithRetryPolicy(
 	msg = m.decorateOutboundResponseFooter(msg)
 	channelName := outboundMessageChannel(msg)
 
-	m.mu.RLock()
-	_, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	_, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
-		return m.rejectMessageBeforeSend(
+		return r.rejectMessageBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s not found", channelName),
 		)
 	}
@@ -3000,19 +3036,19 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		var borrowErr error
 		w, release, borrowErr = owner.borrowWorkerForSend()
 		if borrowErr != nil {
-			return m.rejectMessageBeforeSend(outcome, channelName, msg, borrowErr)
+			return r.rejectMessageBeforeSend(outcome, channelName, msg, borrowErr)
 		}
 		defer release()
 	}
 	if w == nil {
-		return m.rejectMessageBeforeSend(
+		return r.rejectMessageBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s has no active worker", channelName),
 		)
 	}
 	terminals := m.beginOutboundToolFeedbackTerminals(channelName, w.ch, msg)
 	terminalSucceeded := false
 	defer func() {
-		m.interactions.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
+		m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)
 	}()
 
 	maxLen := 0
@@ -3025,7 +3061,7 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		for _, chunk := range chunks {
 			chunkMsg := msg
 			chunkMsg.Content = chunk
-			result := m.sendWithRetryPolicy(
+			result := r.sendWithRetryPolicy(
 				ctx, channelName, w, chunkMsg, retryAmbiguous, publishNoOutcome,
 			)
 			if !result.Delivered() {
@@ -3049,7 +3085,7 @@ func (m *Manager) sendMessageWithRetryPolicy(
 		if len(chunks) == 1 {
 			msg.Content = chunks[0]
 		}
-		result := m.sendWithRetryPolicy(
+		result := r.sendWithRetryPolicy(
 			ctx, channelName, w, msg, retryAmbiguous, outcome,
 		)
 		if !result.Delivered() {
@@ -3063,12 +3099,13 @@ func (m *Manager) sendMessageWithRetryPolicy(
 	return nil
 }
 
-func (m *Manager) rejectMessageBeforeSend(
+func (r *DeliveryRuntime) rejectMessageBeforeSend(
 	outcome outcomePublication,
 	channelName string,
 	msg bus.OutboundMessage,
 	err error,
 ) error {
+	m := r.host
 	if outcome.failure(false) {
 		m.publishOutboundFailed(channelName, msg, err, false)
 	}
@@ -3080,21 +3117,22 @@ func (m *Manager) rejectMessageBeforeSend(
 // retries are exhausted), which preserves ordering when later agent behavior
 // depends on actual media delivery.
 func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
-	return m.sendMedia(ctx, msg, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome)
 }
 
 // SendMediaProvisional suppresses a definitely-not-sent failure outcome so the
 // caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMediaMessage) error {
-	return m.sendMedia(ctx, msg, publishSuccessOnly)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly)
 }
 
-func (m *Manager) sendMedia(
+func (r *DeliveryRuntime) sendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
 ) error {
+	m := r.host
 	var err error
 	msg, err = bus.NormalizeOutboundMediaMessage(msg)
 	if err != nil {
@@ -3102,13 +3140,11 @@ func (m *Manager) sendMedia(
 	}
 	channelName := outboundMediaChannel(msg)
 
-	m.mu.RLock()
-	_, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	_, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
-		return m.rejectMediaBeforeSend(
+		return r.rejectMediaBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s not found", channelName),
 		)
 	}
@@ -3118,29 +3154,30 @@ func (m *Manager) sendMedia(
 		var borrowErr error
 		w, release, borrowErr = owner.borrowWorkerForSend()
 		if borrowErr != nil {
-			return m.rejectMediaBeforeSend(outcome, channelName, msg, borrowErr)
+			return r.rejectMediaBeforeSend(outcome, channelName, msg, borrowErr)
 		}
 		defer release()
 	}
 	if w == nil {
-		return m.rejectMediaBeforeSend(
+		return r.rejectMediaBeforeSend(
 			outcome, channelName, msg, fmt.Errorf("channel %s has no active worker", channelName),
 		)
 	}
 
-	result := m.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, true)
+	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, true)
 	if !result.Delivered() {
 		return newDeliveryError(result.Err, result.MayHaveDelivered())
 	}
 	return nil
 }
 
-func (m *Manager) rejectMediaBeforeSend(
+func (r *DeliveryRuntime) rejectMediaBeforeSend(
 	outcome outcomePublication,
 	channelName string,
 	msg bus.OutboundMediaMessage,
 	err error,
 ) error {
+	m := r.host
 	if outcome.failure(false) {
 		m.publishOutboundMediaFailed(channelName, msg, err)
 	}
@@ -3148,10 +3185,18 @@ func (m *Manager) rejectMediaBeforeSend(
 }
 
 func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, content string) error {
-	m.mu.RLock()
-	channel, exists := m.channels[channelName]
-	owner := m.deliveryOwnerLocked(channelName)
-	m.mu.RUnlock()
+	return m.deliveryRuntime().sendToChannel(ctx, channelName, chatID, content)
+}
+
+func (r *DeliveryRuntime) sendToChannel(
+	ctx context.Context,
+	channelName string,
+	chatID string,
+	content string,
+) error {
+	m := r.host
+	channel, exists := m.deliveryChannel(channelName)
+	owner := r.owner(channelName)
 
 	if !exists {
 		return fmt.Errorf("channel %s not found", channelName)
