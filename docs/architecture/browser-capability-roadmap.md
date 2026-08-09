@@ -3,8 +3,8 @@
 ## Status
 
 Work derived from [`browser-capability.md`](browser-capability.md). B0, B1, N1,
-N2, and B2 are merged, deployed, and live-validated. B3 and the browser slice
-of node P7 are admitted for one companion-hosted vertical slice in
+N2, B2, and the admitted B3/node P7 companion vertical slice are merged,
+deployed, and live-validated. The B3 authority and scope are recorded in
 [Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md).
 B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
@@ -14,8 +14,8 @@ conditions.
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
-`B0` through `B6` so they cannot be confused with node-companion priorities
-`P0` through `P9`.
+`B0` through `B6`; the post-B3 functional-parity work uses `BF1` through `BF4`
+so it cannot be confused with node-companion priorities `P0` through `P9`.
 
 ## Starting Point
 
@@ -50,7 +50,8 @@ The dependency mapping is:
 | B1 | Node P0 discovery principles and existing invocation semantics, even though B1 runs locally |
 | B2 | Node P2 artifact contract for remote binary transfer; gateway media support may be proven earlier |
 | B3 | Node P7 admission for typed browser commands plus deployed P2 artifacts |
-| B4 | B1-B3 profile/session authority; no new node milestone |
+| BF1-BF4 | Deployed B3 routing and the existing node update, artifact, policy, and audit contracts |
+| B4 | Stable B1-B3 and BF1-BF3 profile/session authority; no new node milestone |
 | B5 | Stable B1 worker/driver seam and B2 artifact/lifecycle behavior |
 | B6 | Separate interactive-computer admission and, for workspace routing, node P8 |
 
@@ -127,7 +128,8 @@ policy name.
 | B1 | First-party local browser capability | Use a stable MintClaw session/observe/action contract against a gateway browser | B0 evidence and an admitted browser threat model |
 | B2 | Artifacts, diagnostics, and human handoff | Move screenshots and files safely, diagnose readiness, and let a person take over and resume | B1 and the relevant P2 artifact surface |
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
-| B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit credential/profile policy | Stable B1-B3 lifecycle and human handoff |
+| BF1-BF4 | Browser functional parity | Make gateway and companion targets reliable and functionally complete for ordinary Playwright workflows, with a separately enabled privileged escape hatch | Deployed B3 vertical slice |
+| B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit credential/profile policy | Stable B1-B3/BF lifecycle and human handoff |
 | B5 | Providers and repeatable workflow adapters | Add cloud browsers, alternative drivers, and cached site recipes without changing authority | Stable worker/driver seam and deployed lifecycle evidence |
 | B6 | Computer fallback and workspace routing | Handle non-DOM surfaces under separate authority and optionally bind browser placement to a remote workspace | Separate computer threat model and node P8 |
 
@@ -633,6 +635,202 @@ Stop B3 if:
 - artifacts cannot use the deployed P2 contract;
 - browser placement becomes implicit remote workspace routing.
 
+## BF1-BF4: Post-B3 Browser Functional Parity
+
+The first B3 deployment proves placement and lifecycle with
+`open -> observe -> navigate -> observe -> close`. It does not yet claim that a
+companion exposes every first-party action and artifact already available on
+the gateway, or that either placement exposes the useful breadth of
+Playwright. Functional parity closes those gaps without making raw MCP tools,
+CDP, or unrestricted code execution the default model contract.
+
+Parity means that an advertised first-party feature has the same arguments,
+authority, approval, freshness, artifact, recovery, and safe-error semantics
+on every supporting placement. A target may omit a feature it cannot safely
+host, but it must report that omission through `browser_targets`; it must not
+advertise a feature and fail only after the model attempts to use it.
+
+### BF1: Managed Playwright runtime distribution
+
+#### Operator outcome
+
+A gateway or companion can start the pinned browser driver without depending
+on ambient shell state, an interactive Node.js installation, or an npm network
+fetch during session open.
+
+#### Proposed scope
+
+- package an exact stable Node.js runtime, `@playwright/mcp` version, lockfile,
+  and integrity manifest as a managed browser-driver component;
+- install and update that component through the existing gateway or companion
+  lifecycle with digest verification, atomic activation, retained rollback,
+  and bounded cleanup;
+- execute a resolved, trusted driver path instead of relying on ambient
+  `npx`, `PATH`, or a mutable global npm cache at session-open time;
+- report driver, browser, protocol, and catalog compatibility through passive
+  readiness without starting a browser or exposing local paths;
+- test cold start, repeated start, upgrade, rollback, corrupt installation,
+  missing browser, incompatible catalog, and process cleanup on Linux and
+  Darwin; and
+- retain the current pinned `npx` path until a separate admission proves the
+  managed distribution and its rollback on a deployed target.
+
+The initial managed component may still use Playwright MCP as its private
+driver protocol. BF1 improves packaging and lifecycle reliability; it does not
+require replacing Playwright or rewriting browser automation in Go.
+
+### BF2: Ordinary interaction and document parity
+
+#### Operator outcome
+
+The browser specialist can perform the ordinary interactions needed by real
+listing, messaging, search, booking, and purchasing workflows through the same
+first-party contract on gateway and companion targets.
+
+#### Proposed scope
+
+- complete companion parity for `navigate`, `click`, `fill`, `select`,
+  `press`, `scroll`, and `dialog`;
+- add typed hover, check, uncheck, drag-and-drop, and file-chooser actions;
+- add bounded tab, window, popup, and iframe discovery and selection;
+- bind every element action to a fresh session, tab, frame, snapshot, and
+  element reference rather than accepting a raw selector from the model;
+- define explicit popup, navigation, dialog, and page-close outcomes for each
+  action;
+- preserve one model-visible action per call and the existing no-blind-replay
+  rule; and
+- advertise exact action and document-context support per target and profile.
+
+BF2 should prefer semantic accessibility and DOM references with Playwright
+actionability and auto-waiting. Coordinate input remains a separate browser or
+computer fallback and does not silently replace a failed semantic action.
+
+### BF3: Media, transfer, diagnostics, and environment parity
+
+#### Operator outcome
+
+Gateway and companion sessions can use the browser features required to
+complete and diagnose real workflows without returning large or sensitive raw
+driver output to the model.
+
+#### Proposed scope
+
+- complete screenshot, upload, and bounded download parity over the existing
+  artifact contracts;
+- add page and element screenshots, PDF capture where supported, Playwright
+  traces, HAR, and optional video as retained artifact references;
+- add bounded, redacted console errors, failed-request summaries, download
+  metadata, and page-crash diagnostics;
+- add operator-configured viewport, device emulation, locale, timezone,
+  geolocation, clipboard, and browser permissions without accepting hidden
+  policy values from model arguments;
+- expose capability and limit differences through `browser_targets` before a
+  session starts; and
+- prove digest, size, ownership, expiry, cleanup, and cross-session isolation
+  for every new artifact type.
+
+Raw response bodies, cookies, storage state, credentials, profile paths, CDP
+endpoints, and unbounded console or network streams remain unavailable to the
+model.
+
+### BF4: Opt-in privileged Playwright execution
+
+#### Operator outcome
+
+An operator who needs a Playwright feature not yet represented by a typed
+first-party action can explicitly enable a full-power escape hatch on selected
+profiles and placements without exposing raw MCP administration or silently
+broadening ordinary browser authority.
+
+#### Proposed scope
+
+- define a separate privileged capability, such as `browser_execute`, rather
+  than adding arbitrary code to ordinary `browser_act`;
+- treat submitted Playwright code as equivalent to code execution in the
+  browser-driver process, not as a normal page interaction;
+- keep it disabled by default and require exact operator configuration for
+  each actor, agent, target, and profile allowed to use it;
+- require a bound approval for every execution, including dry-run deployments,
+  and never replay an accepted execution after timeout or disconnect;
+- run it in a dedicated restricted driver environment with bounded time,
+  output, memory, filesystem, network, and artifact access;
+- prevent access to MintClaw credentials, profile paths, node credentials,
+  arbitrary host processes, and raw remote-control endpoints;
+- retain the code digest, declared effect, approval binding, terminal or
+  unknown outcome, and bounded diagnostic evidence in audit state; and
+- support both gateway and companion placement only after each placement
+  independently passes the same isolation and recovery tests.
+
+BF4 is a deliberate power-user feature, not a shortcut for missing common
+actions. A frequently used privileged script should become a reviewed typed
+action or workflow adapter with narrower authority.
+
+### Driver evolution after parity
+
+The first-party broker and worker interfaces remain stable while the private
+driver may evolve independently:
+
+- keep the pinned official Playwright MCP adapter while it remains compatible
+  and operationally reliable;
+- evaluate a small MintClaw-owned Node.js sidecar using the Playwright library
+  directly when MCP catalog churn, cancellation, streaming, or lifecycle
+  semantics justify the maintenance cost;
+- retain the same typed gateway-to-worker contract if the private transport
+  changes from MCP to another local RPC protocol; and
+- evaluate Go-native Chromium/CDP drivers only as optional adapters with a
+  concrete use case and conformance evidence, not as an assumed equivalent to
+  Playwright's cross-browser behavior and auto-waiting.
+
+This evolution belongs to the B5 driver seam unless BF1 evidence shows that a
+driver-protocol change is required to make managed distribution viable.
+
+### Suggested delivery sequence
+
+1. Admit and deliver BF1 managed runtime distribution on the already validated
+   gateway and companion targets.
+2. Admit BF2 in small vertical slices, beginning with companion parity for the
+   existing first-party actions before adding new action kinds.
+3. Deliver BF3 artifact and diagnostic features through existing P2/B2
+   contracts, one artifact class at a time.
+4. Validate a real dry-run listing or form workflow that uses tabs or frames,
+   form interaction, screenshot evidence, and upload or download on each
+   placement.
+5. Admit BF4 only after ordinary parity is sufficient to distinguish a true
+   escape-hatch need from a missing typed action.
+
+### Completion evidence
+
+The post-B3 parity track is complete only when:
+
+- session open performs no npm network fetch and depends only on a verified,
+  rollback-capable managed driver installation;
+- gateway and companion return the same contract for every commonly
+  advertised action and feature;
+- a real multi-page form workflow completes on both placements through only
+  first-party tools;
+- tabs, popups, frames, dialogs, uploads, downloads, screenshots, and selected
+  diagnostics have real-process success and failure evidence;
+- capability discovery accurately omits unsupported target features;
+- every external commit, uncertain result, disconnect, and stale reference
+  preserves the existing approval and no-replay invariants; and
+- privileged execution, if admitted, is disabled by default and proven unable
+  to escape its configured driver boundary.
+
+### Mandatory stop conditions
+
+Stop a parity slice if:
+
+- it requires exposing raw MCP tools or CDP endpoints as the normal
+  model-visible contract;
+- gateway and companion implementations diverge instead of sharing the worker
+  and conformance contracts;
+- a feature cannot report an honest accepted, terminal, or unknown outcome;
+- large output or binary data bypasses bounded artifact storage;
+- driver installation requires an unverified network fetch during session
+  open; or
+- privileged execution can reach credentials, profile storage, arbitrary host
+  processes, or unapproved network authority outside its admitted boundary.
+
 ## B4: Browser Identity and Attached-User Profiles
 
 ### Operator outcome
@@ -749,7 +947,7 @@ Recipes cannot:
 
 ### Suggested delivery sequence
 
-1. Define driver conformance tests from the deployed B1-B4 contract.
+1. Define driver conformance tests from the deployed B1-B4 and BF contracts.
 2. Admit one provider or driver based on a real use case, not abstraction
    completeness.
 3. Prove session creation, observation, action, artifact, uncertain outcome,
@@ -846,6 +1044,12 @@ suite:
 - artifact digest, size, expiry, cross-session access, and cleanup;
 - human takeover, expiry, disconnect, and resume;
 - browser and provider version skew;
+- managed driver cold start, offline start, upgrade, corrupt activation, and
+  rollback;
+- gateway/companion parity for actions, tabs, frames, popups, media, transfer,
+  diagnostics, and capability discovery;
+- privileged execution denial, approval binding, isolation, timeout,
+  disconnect, and unknown-outcome handling;
 - bounded token, observation, artifact, session, and concurrency limits;
 - real-process tests through the same model-visible tools used in production.
 
