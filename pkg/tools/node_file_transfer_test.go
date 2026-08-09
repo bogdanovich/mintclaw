@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +32,7 @@ type fakeNodeFileTransferSource struct {
 	snapshotRecord nodes.TransferArtifactRecord
 	inspectResult  NodeFileTransferResult
 	inspectErr     error
+	inspectBinding NodeFileTransferBinding
 	handoffRef     string
 	handoffCalls   int
 }
@@ -71,10 +74,11 @@ func (source *fakeNodeFileTransferSource) SnapshotUploadArtifact(
 }
 
 func (source *fakeNodeFileTransferSource) InspectFile(
-	context.Context,
-	nodes.ID,
-	NodeFileTransferBinding,
+	_ context.Context,
+	_ nodes.ID,
+	binding NodeFileTransferBinding,
 ) (NodeFileTransferResult, error) {
+	source.inspectBinding = binding
 	if source.inspectErr != nil {
 		return NodeFileTransferResult{}, source.inspectErr
 	}
@@ -182,6 +186,65 @@ func TestNodeFileInfoReusesExactApprovalAndQueriesWithoutReplay(t *testing.T) {
 		source.queryCalls != 1 {
 		t.Fatalf("repeated result = %#v, dispatches=%d queries=%d",
 			repeatedPayload, source.dispatchCalls, source.queryCalls)
+	}
+}
+
+func TestNodeDownloadReusesJobArtifactAuthorityAndExactApproval(t *testing.T) {
+	source := newFakeNodeJobArtifactSource(t, "required")
+	tool := NewNodeDownloadTool(nodeJobArtifactTestConfig(), source)
+	ctx := nodeInvocationTestContext("actor-1", "job-artifact-call")
+	args := nodeJobArtifactDownloadTestArgs(t, source, ctx)
+
+	approval, err := tool.ApprovalArguments(ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval["operation"] != nodes.InternalJobArtifactDownloadCommand ||
+		approval["profile"] != "builds" || approval["profile_scope"] != "configured_job_artifacts" ||
+		approval["job_id"] != args["job_id"] || approval["artifact_ref"] != args["artifact_ref"] {
+		t.Fatalf("job artifact approval = %#v", approval)
+	}
+	binding := source.inspectBinding
+	if binding.SourceKind != nodes.JobArtifactTransferSourceKind || binding.JobProfile != "builds" ||
+		binding.JobID != args["job_id"] || binding.JobArtifactRef != args["artifact_ref"] ||
+		binding.AgentID == "" || binding.SessionID == "" || binding.ActorID == "" {
+		t.Fatalf("job artifact metadata binding = %#v", binding)
+	}
+	if result := tool.Execute(ctx, args); !strings.Contains(result.ForLLM, "APPROVAL_REQUIRED") {
+		t.Fatalf("unapproved result = %s", result.ForLLM)
+	}
+	approved := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), args)
+	if payload := decodeNodeResult(t, approved); payload["state"] != "committed" ||
+		source.dispatchCalls != 1 {
+		t.Fatalf("approved result = %#v, dispatches=%d", payload, source.dispatchCalls)
+	}
+	repeated := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), args)
+	if payload := decodeNodeResult(t, repeated); payload["state"] != "committed" ||
+		source.dispatchCalls != 1 || source.queryCalls != 1 {
+		t.Fatalf(
+			"repeated job artifact result = %#v, dispatches=%d queries=%d",
+			payload,
+			source.dispatchCalls,
+			source.queryCalls,
+		)
+	}
+	changed := maps.Clone(args)
+	changed["artifact_ref"] = "artifact_ffffffffffffffff"
+	if result := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), changed); !result.IsError ||
+		!strings.Contains(result.ForLLM, "DISCOVERY_STALE") {
+		t.Fatalf("changed artifact result = %#v", result)
+	}
+}
+
+func TestNodeDownloadSchemaRequiresExactlyOneSourceKind(t *testing.T) {
+	schema, err := json.Marshal(nodeDownloadParameters())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"source", "job_id", "artifact_ref", "oneOf"} {
+		if !bytes.Contains(schema, []byte(required)) {
+			t.Fatalf("nodes_download schema lacks %q: %s", required, schema)
+		}
 	}
 }
 
@@ -703,13 +766,13 @@ func TestNodeFileToolsRequireExplicitAgentGrant(t *testing.T) {
 		},
 	}
 	runtime := newNodeFileTransferToolRuntime(cfg, newFakeNodeFileTransferSource(t, "none"))
-	if !runtime.enabledForAgent("main") ||
-		runtime.enabledForAgent("inherited") ||
-		!runtime.enabledForAgent("explicit") {
+	if !runtime.enabledForAgent("main", false) ||
+		runtime.enabledForAgent("inherited", false) ||
+		!runtime.enabledForAgent("explicit", false) {
 		t.Fatalf("agent grants: main=%v inherited=%v explicit=%v",
-			runtime.enabledForAgent("main"),
-			runtime.enabledForAgent("inherited"),
-			runtime.enabledForAgent("explicit"))
+			runtime.enabledForAgent("main", false),
+			runtime.enabledForAgent("inherited", false),
+			runtime.enabledForAgent("explicit", false))
 	}
 }
 
@@ -787,6 +850,68 @@ func newFakeNodeFileTransferSourceForDescriptor(
 			Size:   12,
 			SHA256: strings.Repeat("a", sha256.Size*2),
 		},
+	}
+}
+
+func newFakeNodeJobArtifactSource(
+	t *testing.T,
+	readApproval string,
+) *fakeNodeFileTransferSource {
+	t.Helper()
+	profile := nodes.JobProfileDescriptor{
+		Alias: "builds", Revision: "builds-v1", Executor: "system_exec",
+		AuthorityDigest: strings.Repeat("b", sha256.Size*2), TimeoutSecondsMax: 600,
+		ConcurrentJobs: 2, StdoutBytesMax: 1024, StderrBytesMax: 1024,
+		ArtifactCountMax: 4, ArtifactBytesMax: 1024 * 1024,
+		ArtifactsTotalBytesMax: 2 * 1024 * 1024, RetentionSeconds: 3600,
+		CancelGuarantee: "direct_process", ExecutableAliases: []string{"go"},
+		WorkingScopes: []string{"workspace"}, EnvironmentNames: []string{"PATH"},
+		Approval: nodes.JobProfileApproval{Start: "required", Read: readApproval, Cancel: "required"},
+	}
+	descriptors, err := nodes.JobCommandDescriptors([]nodes.JobProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifacts nodes.CommandDescriptor
+	for _, descriptor := range descriptors {
+		if descriptor.Name == nodes.JobCommandArtifacts {
+			artifacts = descriptor
+			break
+		}
+	}
+	source := newFakeNodeFileTransferSourceForDescriptor(t, artifacts)
+	source.inspectResult = NodeFileTransferResult{
+		State: "committed", Type: "regular_file", Size: 12,
+		SHA256: strings.Repeat("a", sha256.Size*2),
+	}
+	return source
+}
+
+func nodeJobArtifactTestConfig() *config.Config {
+	cfg := nodeDiscoveryTestConfig()
+	target := cfg.Execution.Targets["build"]
+	target.JobProfile = "builds"
+	cfg.Execution.Targets["build"] = target
+	return cfg
+}
+
+func nodeJobArtifactDownloadTestArgs(
+	t *testing.T,
+	source NodeDiscoverySource,
+	ctx context.Context,
+) map[string]any {
+	t.Helper()
+	result := NewNodeDiscoveryTool(nodeJobArtifactTestConfig(), source).Execute(
+		ctx,
+		map[string]any{
+			"action": "describe", "target": "build", "command": nodes.JobCommandArtifacts,
+		},
+	)
+	payload := decodeNodeResult(t, result)
+	return map[string]any{
+		"target": "build", "job_id": "job_0123456789abcdef0123456789abcdef",
+		"artifact_ref": "artifact_0123456789abcdef", "deliver": false,
+		"discovery_revision": payload["discovery_revision"],
 	}
 }
 

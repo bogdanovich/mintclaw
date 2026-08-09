@@ -405,6 +405,182 @@ func TestFileTransferRuntimeDownloadUsesPinnedSourceAndExactDigest(t *testing.T)
 	}
 }
 
+func TestFileTransferRuntimeDownloadsExactOwnedJobArtifact(t *testing.T) {
+	jobRuntime, commandRuntime, _ := newTestJobCommandRuntime(t)
+	startPlan := testRuntimePlanAtWithOutputLimit(
+		t,
+		commandRuntime,
+		nodes.JobCommandStart,
+		json.RawMessage(
+			`{"argv":["helper","-test.run=^TestJobHelperProcess$"],"cwd":"project","timeout_seconds":5,`+
+				`"env":{"MINTCLAW_JOB_HELPER":"1","MINTCLAW_JOB_ACTION":"success"},`+
+				`"artifacts":[{"name":"result","path":"artifact.out"}]}`,
+		),
+		time.Now(),
+		time.Minute,
+		4096,
+	)
+	startedRaw, err := commandRuntime.Invoke(t.Context(), startPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(startedRaw, &started); err != nil {
+		t.Fatal(err)
+	}
+	record := waitForTerminalJob(t, jobRuntime.store, started.JobID)
+	if record.State != JobSucceeded || len(record.Artifacts) != 1 ||
+		record.Artifacts[0].State != JobArtifactAvailable {
+		t.Fatalf("terminal job artifacts = %#v", record)
+	}
+	artifact := record.Artifacts[0]
+	digestBytes, err := hex.DecodeString(artifact.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], digestBytes)
+	owner := JobOwner{AgentID: startPlan.AgentID, SessionID: startPlan.SessionID, ActorID: startPlan.ActorID}
+	ledgerPath := filepath.Join(t.TempDir(), "job-artifact-transfers.json")
+	ledger, err := NewFileTransferLedger(
+		ledgerPath,
+		DefaultFileTransferLedgerLimit,
+		DefaultFileTransferLedgerBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ledger.Close)
+	transferRuntime, err := NewFileTransferRuntimeWithJobs(nil, ledger, jobRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(transferRuntime.Close)
+	profileRevision := jobRuntime.Descriptors()[0].JobProfiles[0].Revision
+	infoFrame := protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
+		TransferID: "job_artifact_info", PolicyRevision: profileRevision,
+		SHA256: emptyTransferDigest,
+		Payload: mustPreparePayload(t, fileTransferPrepare{
+			Operation: fileOperationJobArtifactInfo, ExpiresAt: time.Now().Add(time.Minute).Unix(),
+			JobProfile: "test-jobs", JobID: started.JobID, ArtifactRef: artifact.ArtifactRef,
+			AgentID: owner.AgentID, SessionID: owner.SessionID, ActorID: owner.ActorID,
+		}),
+	}
+	infoResponses := collectTransferResponses(t, transferRuntime, infoFrame)
+	if len(infoResponses) != 1 || infoResponses[0].Type != protocol.TransferFrameCommitted ||
+		!bytes.Contains(infoResponses[0].Payload, []byte(artifact.SHA256)) {
+		t.Fatalf("job artifact info responses = %#v", infoResponses)
+	}
+	duplicateInfo := collectTransferResponses(t, transferRuntime, infoFrame)
+	if len(duplicateInfo) != 1 || duplicateInfo[0].Type != protocol.TransferFrameCommitted {
+		t.Fatalf("duplicate job artifact info responses = %#v", duplicateInfo)
+	}
+	prepare := protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
+		TransferID: "job_artifact_download", PolicyRevision: profileRevision,
+		TotalSize: uint64(artifact.Size), SHA256: digest,
+		Payload: mustPreparePayload(t, fileTransferPrepare{
+			Operation: fileOperationJobArtifactDownload, ExpiresAt: time.Now().Add(time.Minute).Unix(),
+			JobProfile: "test-jobs", JobID: started.JobID, ArtifactRef: artifact.ArtifactRef,
+			AgentID: owner.AgentID, SessionID: owner.SessionID, ActorID: owner.ActorID,
+		}),
+	}
+	var received bytes.Buffer
+	var responseMu sync.Mutex
+	send := func(frame protocol.TransferFrame) error {
+		responseMu.Lock()
+		if frame.Type == protocol.TransferFrameChunk {
+			_, _ = received.Write(frame.Payload)
+		}
+		responseMu.Unlock()
+		if frame.Type != protocol.TransferFrameChunk {
+			return nil
+		}
+		ack := transferFrameFromBinding(frame, protocol.TransferFrameAck)
+		ack.Sequence = frame.Sequence
+		return transferRuntime.HandleTransferFrame(t.Context(), ack, func(protocol.TransferFrame) error { return nil })
+	}
+	if err := transferRuntime.HandleTransferFrame(t.Context(), prepare, send); err != nil {
+		t.Fatal(err)
+	}
+	active := transferRuntime.getActive(prepare.TransferID)
+	if active == nil {
+		t.Fatal("job artifact download did not become active")
+	}
+	select {
+	case <-active.received:
+	case <-time.After(10 * time.Second):
+		t.Fatal("job artifact download did not reach received state")
+	}
+	receivedDigest := sha256.Sum256(received.Bytes())
+	if int64(received.Len()) != artifact.Size || hex.EncodeToString(receivedDigest[:]) != artifact.SHA256 {
+		t.Fatal("job artifact download bytes differ from retained artifact")
+	}
+	commit := transferFrameFromBinding(prepare, protocol.TransferFrameCommit)
+	if err := transferRuntime.HandleTransferFrame(t.Context(), commit, send); err != nil {
+		t.Fatal(err)
+	}
+	retained, found, err := ledger.Lookup(prepare.TransferID)
+	if err != nil || !found || retained.State != FileTransferCommitted || retained.Path != "" ||
+		retained.JobArtifact == nil || retained.JobArtifact.Owner != owner ||
+		retained.JobArtifact.JobID != started.JobID || retained.JobArtifact.ArtifactRef != artifact.ArtifactRef {
+		t.Fatalf("retained job transfer = %#v, found=%v, error=%v", retained, found, err)
+	}
+
+	wrongOwner := prepare
+	wrongOwner.TransferID = "job_artifact_wrong_owner"
+	var request fileTransferPrepare
+	if err := json.Unmarshal(wrongOwner.Payload, &request); err != nil {
+		t.Fatal(err)
+	}
+	request.ActorID = "actor_wrong"
+	wrongOwner.Payload = mustPreparePayload(t, request)
+	responses := collectTransferResponses(t, transferRuntime, wrongOwner)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameDeny ||
+		!bytes.Contains(responses[0].Payload, []byte(`"code":"JOB_ARTIFACT_DENIED"`)) {
+		t.Fatalf("wrong-owner artifact responses = %#v", responses)
+	}
+	restartRecord := transferRuntime.recordForJobArtifactPrepare(
+		"test-jobs",
+		protocol.TransferFrame{
+			TransferID: "job_artifact_restart", Direction: protocol.TransferDownload,
+			PolicyRevision: profileRevision, TotalSize: uint64(artifact.Size), SHA256: digest,
+		},
+		fileTransferPrepare{
+			Operation: fileOperationJobArtifactDownload, ExpiresAt: time.Now().Add(time.Minute).Unix(),
+			JobID: started.JobID, ArtifactRef: artifact.ArtifactRef,
+		},
+		owner,
+	)
+	if _, _, err := ledger.Accept(restartRecord); err != nil {
+		t.Fatal(err)
+	}
+	transferRuntime.Close()
+	ledger.Close()
+	reloadedLedger, err := NewFileTransferLedger(
+		ledgerPath,
+		DefaultFileTransferLedgerLimit,
+		DefaultFileTransferLedgerBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reloadedLedger.Close)
+	restarted, err := NewFileTransferRuntimeWithJobs(nil, reloadedLedger, jobRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restarted.Close)
+	reconciled, found, err := reloadedLedger.Lookup(restartRecord.TransferID)
+	if err != nil || !found || reconciled.State != FileTransferCanceled ||
+		reconciled.FailureCode != "RESTART_CANCELED" {
+		t.Fatalf("reconciled job transfer = %#v, found=%v, error=%v", reconciled, found, err)
+	}
+}
+
 func TestFileTransferRuntimeDisconnectCancelsBeforePublication(t *testing.T) {
 	runtime, root, ledger := newTestFileTransferRuntime(t)
 	content := []byte("not published")

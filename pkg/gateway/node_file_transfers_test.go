@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -108,6 +109,70 @@ func TestDecodeNodeFileTransferResponseRejectsUntrustedResultFields(t *testing.T
 	})
 	if err != nil || decoded.TransferID != "transfer-1" {
 		t.Fatalf("valid decode = (%#v, %v)", decoded, err)
+	}
+}
+
+func TestRetainedNodeFileTransferBindsExactJobArtifactOwner(t *testing.T) {
+	digest := strings.Repeat("a", sha256.Size*2)
+	input := json.RawMessage(
+		`{"artifact_ref":"jobart_0123456789abcdef","size":12,"sha256":"` + digest + `",` +
+			`"filename":"result.bin","deliver":false,"route_id":"route_1",` +
+			`"discovery_revision":"discovery_1","source_kind":"node_job_artifact",` +
+			`"job_profile":"builds","job_id":"job_0123456789abcdef0123456789abcdef"}`,
+	)
+	descriptor := nodes.CommandDescriptor{
+		Name:         nodes.InternalJobArtifactDownloadCommand,
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		Risk:         nodes.RiskRead, SupportsProgress: true, SupportsCancel: true,
+		ModelContract: &nodes.CommandModelContract{
+			Availability: nodes.ModelUnavailable, TimeoutSecondsMax: 300,
+			OutputBytesMax: 4096, ResultKind: "json", AuthorityDigest: strings.Repeat("b", sha256.Size*2),
+			Guidance: []string{}, Examples: []json.RawMessage{},
+		},
+	}
+	plan, err := nodes.PrepareExecutionPlan(
+		nodes.InvocationRequest{
+			InvocationID: "job_artifact_transfer", IdempotencyKey: "job_artifact_idem",
+			NodeID: "node_1", CatalogHash: strings.Repeat("c", sha256.Size*2),
+			Command: nodes.InternalJobArtifactDownloadCommand, Input: input,
+			AgentID: "agent_1", SessionID: "session_1", ActorID: "actor_1",
+			TimeoutSeconds: 300, OutputLimitBytes: 4096,
+		},
+		descriptor,
+		"local",
+		"builds-v1",
+		time.Now(),
+		5*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := nodes.GatewayInvocationRecord{
+		Target: "build", WorkspaceID: "workspace_1", ExecutionID: "execution_1", ToolCallID: "call_1",
+		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
+		State: nodes.GatewayInvocationPrepared,
+	}
+	retained, binding, err := retainedNodeFileTransfer(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained.SourceKind != nodes.JobArtifactTransferSourceKind || binding.Path != "" ||
+		binding.JobProfile != "builds" || binding.JobID != "job_0123456789abcdef0123456789abcdef" ||
+		binding.JobArtifactRef != "jobart_0123456789abcdef" || binding.AgentID != "agent_1" ||
+		binding.SessionID != "session_1" || binding.ActorID != "actor_1" {
+		t.Fatalf("retained job artifact binding = %#v, input=%#v", binding, retained)
+	}
+	mutated := record
+	mutated.Plan.Input = append(json.RawMessage(nil), input...)
+	mutated.Plan.Input = bytes.Replace(
+		mutated.Plan.Input,
+		[]byte("jobart_0123456789abcdef"),
+		[]byte("jobart_ffffffffffffffff"),
+		1,
+	)
+	if _, _, err := retainedNodeFileTransfer(mutated); err == nil {
+		t.Fatal("mutated job artifact retained authority was accepted")
 	}
 }
 

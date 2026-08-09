@@ -24,6 +24,36 @@ type recordingNodeEventBus struct {
 	events []runtimeevents.Event
 }
 
+func TestToolLogArgumentsRedactsNodeInvocationContent(t *testing.T) {
+	const secret = "sentinel-job-environment-secret"
+	arguments := map[string]any{
+		"target":             "private-build-node",
+		"command":            "job.start.v1",
+		"discovery_revision": "private-discovery-revision",
+		"input": map[string]any{
+			"argv": []any{"build", "--token=" + secret},
+			"env":  map[string]any{"ACCESS_TOKEN": secret},
+			"artifacts": []any{
+				map[string]any{"name": "report", "path": "private/output/report.json"},
+			},
+		},
+	}
+
+	got := ToolLogArguments("nodes_invoke", arguments)
+	if got["redacted"] != true || got["argument_count"] != len(arguments) || len(got) != 2 {
+		t.Fatalf("redacted node invocation arguments = %#v", got)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secret, "private-build-node", "report.json", "job.start.v1"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("redacted node invocation arguments leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func (bus *recordingNodeEventBus) Publish(
 	_ context.Context,
 	event runtimeevents.Event,
@@ -61,6 +91,7 @@ type fakeNodeInvocationSource struct {
 	store                   *nodes.GatewayInvocationStore
 	preDispatchErr          error
 	dispatchErr             error
+	dispatchResult          json.RawMessage
 	queryErr                error
 	queryErrors             []error
 	cancelErr               error
@@ -195,6 +226,9 @@ func (source *fakeNodeInvocationSource) DispatchInvocation(
 	source.dispatchCalls++
 	if source.dispatchErr != nil {
 		return nil, true, source.dispatchErr
+	}
+	if len(source.dispatchResult) > 0 {
+		return append(json.RawMessage(nil), source.dispatchResult...), true, nil
 	}
 	return json.RawMessage(`{"stdout":"ok","exit_code":0}`), true, nil
 }
@@ -360,6 +394,70 @@ func TestNodeUpdateInvocationBindsReleaseAuthorityAcrossApproval(t *testing.T) {
 	)
 	if source.dispatchCalls != 0 {
 		t.Fatalf("changed approved update dispatched %d times", source.dispatchCalls)
+	}
+}
+
+func TestNodeJobInvocationBindsTargetProfileAcrossApproval(t *testing.T) {
+	source := newFakeNodeInvocationSource(t)
+	command := nodeJobProjectionDescriptor(t)
+	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
+	catalogHash := mustCatalogHash(t, catalog)
+	snapshot := source.byRef["builder-node"]
+	snapshot.Catalog = catalog
+	snapshot.CatalogHash = catalogHash
+	source.byRef["builder-node"] = snapshot
+	source.registrations[snapshot.ID] = nodes.Registration{
+		Snapshot: snapshot, AllowedCommands: []string{command.Name},
+		ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+	}
+	source.dispatchResult = json.RawMessage(
+		`{"job_id":"job_0123456789abcdef0123456789abcdef","state":"running",` +
+			`"created_at":1,"started_at":1,"timeout_at":2,"cancel_guarantee":"direct_process"}`,
+	)
+	cfg := nodeDiscoveryTestConfig()
+	binding := cfg.Execution.Targets["build"]
+	binding.JobProfile = "tests"
+	cfg.Execution.Targets["build"] = binding
+	ctx := nodeInvocationTestContext("actor-1", "call-job-start")
+	discovery := NewNodeDiscoveryTool(cfg, source).Execute(ctx, map[string]any{
+		"action": "describe", "target": "build", "command": nodes.JobCommandStart,
+	})
+	revision := decodeNodeResult(t, discovery)["discovery_revision"]
+	args := map[string]any{
+		"target": "build", "command": nodes.JobCommandStart,
+		"input": map[string]any{
+			"argv": []any{"go", "test"}, "cwd": "workspace", "timeout_seconds": float64(60),
+			"env": map[string]any{},
+		},
+		"discovery_revision": revision,
+	}
+	tool := NewNodeInvokeTool(cfg, source)
+	approval, err := tool.ApprovalArguments(ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := mustFakeGatewayInvocation(t, source, ctx, approval["invocation_id"].(string))
+	if prepared.Plan.JobProfile != "tests" || len(prepared.Descriptor.JobProfiles) != 1 ||
+		prepared.Descriptor.JobProfiles[0].Alias != "tests" {
+		t.Fatalf("prepared job authority = %#v", prepared)
+	}
+	if result := tool.Execute(ctx, args); !result.IsError ||
+		!strings.Contains(result.ForLLM, nodeDenialApprovalRequired) {
+		t.Fatalf("unapproved job start = %#v", result)
+	}
+	approved := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), args)
+	if payload := decodeNodeResult(t, approved); payload["state"] != string(nodes.InvocationSucceeded) ||
+		source.dispatchCalls != 1 {
+		t.Fatalf("approved job start = %#v, dispatches=%d", payload, source.dispatchCalls)
+	}
+	changed := maps.Clone(args)
+	changed["input"] = map[string]any{
+		"argv": []any{"go", "test", "./..."}, "cwd": "workspace", "timeout_seconds": float64(60),
+		"env": map[string]any{},
+	}
+	if result := tool.Execute(toolshared.WithToolApprovalContinuation(ctx, true), changed); !result.IsError ||
+		!strings.Contains(result.ForLLM, nodeDenialDiscoveryStale) {
+		t.Fatalf("changed job start = %#v", result)
 	}
 }
 
@@ -942,6 +1040,60 @@ func TestServiceInvocationEventsExposeOnlyModelSafeObservation(t *testing.T) {
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("service event leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestNodeInvocationEventsExposeOnlyBoundedJobMetadata(t *testing.T) {
+	eventBus := &recordingNodeEventBus{}
+	record := nodes.GatewayInvocationRecord{
+		Target: "build", ToolCallID: "secret_tool_call", ExpectedPlanHash: "secret_plan_hash",
+		Plan: nodes.ExecutionPlan{InvocationRequest: nodes.InvocationRequest{
+			InvocationID: "inv_job_logs", Command: nodes.JobCommandLogs, JobProfile: "test-jobs",
+			Input: json.RawMessage(
+				`{"job_id":"job_0123456789abcdef0123456789abcdef","stream":"stdout",` +
+					`"cursor":0,"limit_bytes":1024}`,
+			),
+		}},
+		State: nodes.GatewayInvocationDispatched,
+	}
+	result := json.RawMessage(
+		`{"job_id":"job_0123456789abcdef0123456789abcdef","stream":"stdout",` +
+			`"data":"TOP_SECRET_JOB_LOG","next_cursor":18,"available_bytes":18,` +
+			`"truncated":false,"state":"succeeded","artifact_ref":"secret_artifact_ref",` +
+			`"sha256":"secret_digest"}`,
+	)
+	publishNodeInvocationEvent(
+		eventBus,
+		nodeInvocationTestContext("actor-1", "call-job-event"),
+		NodeInvocationObservationCompleted,
+		"nodes_invoke",
+		record,
+		string(nodes.InvocationSucceeded),
+		"",
+		result,
+	)
+	events := eventBus.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("job invocation events = %#v", events)
+	}
+	payload, ok := events[0].Payload.(NodeInvocationEventPayload)
+	if !ok || payload.JobProfile != "test-jobs" ||
+		payload.JobID != "job_0123456789abcdef0123456789abcdef" ||
+		payload.JobState != "succeeded" || payload.JobLogStream != "stdout" ||
+		payload.JobLogBytes != len("TOP_SECRET_JOB_LOG") || payload.JobLogCursor != 18 {
+		t.Fatalf("job event payload = %#v", events[0].Payload)
+	}
+	encoded, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"TOP_SECRET_JOB_LOG", "secret_artifact_ref", "secret_digest",
+		"secret_tool_call", "secret_plan_hash",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("job event leaked %q: %s", forbidden, encoded)
 		}
 	}
 }

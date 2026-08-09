@@ -79,6 +79,13 @@ type NodeFileTransferBinding struct {
 	ExpiresAt      int64
 	Filename       string
 	ContentType    string
+	SourceKind     string
+	JobProfile     string
+	JobID          string
+	JobArtifactRef string
+	AgentID        string
+	SessionID      string
+	ActorID        string
 }
 
 type NodeFileTransferResult struct {
@@ -118,6 +125,9 @@ type nodeFileTransferPlanInput struct {
 	TopicID           string  `json:"topic_id,omitempty"`
 	RouteID           string  `json:"route_id"`
 	DiscoveryRevision string  `json:"discovery_revision"`
+	SourceKind        string  `json:"source_kind,omitempty"`
+	JobProfile        string  `json:"job_profile,omitempty"`
+	JobID             string  `json:"job_id,omitempty"`
 }
 
 type NodeFileInfoTool struct {
@@ -146,9 +156,10 @@ type nodeFileTransferToolRuntime struct {
 }
 
 type preparedNodeFileTransfer struct {
-	record  nodes.GatewayInvocationRecord
-	profile nodes.FileProfileDescriptor
-	owner   nodes.TransferArtifactOwner
+	record     nodes.GatewayInvocationRecord
+	profile    nodes.FileProfileDescriptor
+	jobProfile *nodes.JobProfileDescriptor
+	owner      nodes.TransferArtifactOwner
 }
 
 type nodeFileSafeDenialError struct {
@@ -239,19 +250,19 @@ func configuredNodeFileAgents(cfg *config.Config) map[string]struct{} {
 			}
 		}
 	}
-	if targetPolicyHasFileGrant(cfg.Agents.Defaults.TargetPolicy, cfg.Execution.Targets) {
+	if targetPolicyHasTransferGrant(cfg.Agents.Defaults.TargetPolicy, cfg.Execution.Targets) {
 		permitted[defaultAgentID] = struct{}{}
 	}
 	for _, agentCfg := range cfg.Agents.List {
 		if agentCfg.TargetPolicy != nil &&
-			targetPolicyHasFileGrant(agentCfg.TargetPolicy, cfg.Execution.Targets) {
+			targetPolicyHasTransferGrant(agentCfg.TargetPolicy, cfg.Execution.Targets) {
 			permitted[routing.NormalizeAgentID(agentCfg.ID)] = struct{}{}
 		}
 	}
 	return permitted
 }
 
-func targetPolicyHasFileGrant(
+func targetPolicyHasTransferGrant(
 	policy *config.TargetPolicy,
 	targets map[string]config.ExecutionTarget,
 ) bool {
@@ -259,7 +270,8 @@ func targetPolicyHasFileGrant(
 		return false
 	}
 	for _, target := range policy.AllowedTargets {
-		if strings.TrimSpace(targets[target].FileProfile) != "" {
+		binding := targets[target]
+		if strings.TrimSpace(binding.FileProfile) != "" || strings.TrimSpace(binding.JobProfile) != "" {
 			return true
 		}
 	}
@@ -291,7 +303,8 @@ func (*NodeUploadTool) Parameters() map[string]any {
 func (*NodeDownloadTool) Name() string { return "nodes_download" }
 
 func (*NodeDownloadTool) Description() string {
-	return "Download one regular file from an authorized node target into the bounded gateway spool, " +
+	return "Download one regular file or one retained immutable job artifact from an authorized node target " +
+		"into the bounded gateway spool, " +
 		"optionally delivering it once to the originating routed conversation. If policy requires human approval, " +
 		"call this tool directly; the runtime requests and resumes approval."
 }
@@ -361,12 +374,33 @@ func nodeDownloadParameters() map[string]any {
 			"source": map[string]any{
 				"type": "string", "minLength": 1, "maxLength": 4096,
 			},
+			"job_id": map[string]any{
+				"type": "string", "minLength": 1, "maxLength": 128,
+			},
+			"artifact_ref": map[string]any{
+				"type": "string", "minLength": 1, "maxLength": 128,
+			},
 			"deliver": map[string]any{"type": "boolean"},
 			"discovery_revision": map[string]any{
 				"type": "string", "minLength": 1, "maxLength": 128,
 			},
 		},
-		"required":             []string{"target", "source", "deliver", "discovery_revision"},
+		"required": []string{"target", "deliver", "discovery_revision"},
+		"oneOf": []any{
+			map[string]any{
+				"required": []string{"source"},
+				"not": map[string]any{
+					"anyOf": []any{
+						map[string]any{"required": []string{"job_id"}},
+						map[string]any{"required": []string{"artifact_ref"}},
+					},
+				},
+			},
+			map[string]any{
+				"required": []string{"job_id", "artifact_ref"},
+				"not":      map[string]any{"required": []string{"source"}},
+			},
+		},
 		"additionalProperties": false,
 	}
 }
@@ -397,7 +431,7 @@ func (tool *NodeDownloadTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
 ) (map[string]any, error) {
-	prepared, err := tool.runtime.prepare(ctx, "file.download.v1", args, tool.mediaStore)
+	prepared, err := tool.runtime.prepareDownload(ctx, args, tool.mediaStore)
 	if err != nil {
 		return nil, safeNodeFileApprovalError(err)
 	}
@@ -416,12 +450,18 @@ func safeNodeFileApprovalError(err error) error {
 func nodeFileApprovalArguments(prepared preparedNodeFileTransfer) map[string]any {
 	var input nodeFileTransferPlanInput
 	_ = json.Unmarshal(prepared.record.Plan.Input, &input)
+	profileAlias := prepared.profile.Alias
+	profileScope := nodeFileProfileBlastRadius(prepared.profile)
+	if prepared.jobProfile != nil {
+		profileAlias = prepared.jobProfile.Alias
+		profileScope = "configured_job_artifacts"
+	}
 	result := map[string]any{
 		"target":        prepared.record.Target,
 		"transfer_id":   prepared.record.Plan.InvocationID,
 		"operation":     prepared.record.Plan.Command,
-		"profile":       prepared.profile.Alias,
-		"profile_scope": nodeFileProfileBlastRadius(prepared.profile),
+		"profile":       profileAlias,
+		"profile_scope": profileScope,
 		"expires_at":    prepared.record.Plan.ExpiresAt,
 		"plan_hash":     prepared.record.ExpectedPlanHash,
 	}
@@ -436,6 +476,12 @@ func nodeFileApprovalArguments(prepared preparedNodeFileTransfer) map[string]any
 		result["artifact_ref"] = input.ArtifactRef
 	case "file.download.v1":
 		result["source"] = input.Source
+		result["size"] = input.Size
+		result["sha256"] = input.SHA256
+		result["deliver"] = input.Deliver != nil && *input.Deliver
+	case nodes.InternalJobArtifactDownloadCommand:
+		result["job_id"] = input.JobID
+		result["artifact_ref"] = input.ArtifactRef
 		result["size"] = input.Size
 		result["sha256"] = input.SHA256
 		result["deliver"] = input.Deliver != nil && *input.Deliver
@@ -498,6 +544,32 @@ func NodeFileApprovalAction(toolName string, arguments map[string]any) (string, 
 			consequence,
 		), true, nil
 	case "nodes_download":
+		if operation == nodes.InternalJobArtifactDownloadCommand {
+			jobID, jobOK := arguments["job_id"].(string)
+			artifactRef, artifactOK := arguments["artifact_ref"].(string)
+			size, sizeOK := exactNodeFileApprovalSize(arguments["size"])
+			digest, digestOK := arguments["sha256"].(string)
+			deliver, deliverOK := arguments["deliver"].(bool)
+			if !jobOK || jobID == "" || !artifactOK || artifactRef == "" ||
+				!sizeOK || !digestOK || !validNodeFileApprovalDigest(digest) || !deliverOK {
+				return "", true, errors.New("job artifact download approval is incomplete")
+			}
+			delivery := "retain the bounded gateway artifact without chat delivery"
+			if deliver {
+				delivery = "deliver once to the originating authorized conversation"
+			}
+			return fmt.Sprintf(
+				"Download retained job artifact %s from job %s (%d bytes, SHA-256 %s) on target %s using profile %s (%s); %s",
+				artifactRef,
+				jobID,
+				size,
+				digest,
+				target,
+				profile,
+				blastRadius,
+				delivery,
+			), true, nil
+		}
 		source, sourceOK := arguments["source"].(string)
 		size, sizeOK := exactNodeFileApprovalSize(arguments["size"])
 		digest, digestOK := arguments["sha256"].(string)
@@ -537,7 +609,10 @@ func isNodeFileToolName(toolName string) bool {
 // ToolLogArguments returns bounded log fields without retaining file paths,
 // artifact references, transfer identities, or discovery authority.
 func ToolLogArguments(toolName string, arguments map[string]any) map[string]any {
-	if isNodeFileToolName(toolName) || toolName == "nodes_status" || toolName == "nodes_cancel" {
+	if isNodeFileToolName(toolName) ||
+		toolName == "nodes_invoke" ||
+		toolName == "nodes_status" ||
+		toolName == "nodes_cancel" {
 		return map[string]any{
 			"redacted":       true,
 			"argument_count": len(arguments),
@@ -615,15 +690,36 @@ func (tool *NodeDownloadTool) Execute(
 	ctx context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
-	prepared, err := tool.runtime.prepare(ctx, "file.download.v1", args, tool.mediaStore)
+	prepared, err := tool.runtime.prepareDownload(ctx, args, tool.mediaStore)
 	if err != nil {
 		return nodeFileDenied(err)
 	}
-	if approvalRequired(prepared.profile.Approval.Read) &&
+	approval := prepared.profile.Approval.Read
+	if prepared.jobProfile != nil {
+		approval = prepared.jobProfile.Approval.Read
+	}
+	if approvalRequired(approval) &&
 		!nodeFileApprovalGranted(ctx) {
 		return nodeFileApprovalRequired()
 	}
 	return tool.runtime.execute(ctx, prepared, tool.mediaStore)
+}
+
+func (runtime *nodeFileTransferToolRuntime) prepareDownload(
+	ctx context.Context,
+	args map[string]any,
+	store media.MediaStore,
+) (preparedNodeFileTransfer, error) {
+	if nodeDownloadUsesJobArtifact(args) {
+		return runtime.prepareJobArtifactDownload(ctx, args)
+	}
+	return runtime.prepare(ctx, "file.download.v1", args, store)
+}
+
+func nodeDownloadUsesJobArtifact(args map[string]any) bool {
+	jobID, _ := args["job_id"].(string)
+	artifactRef, _ := args["artifact_ref"].(string)
+	return strings.TrimSpace(jobID) != "" || strings.TrimSpace(artifactRef) != ""
 }
 
 func nodeFileApprovalGranted(ctx context.Context) bool {
@@ -804,6 +900,309 @@ func (runtime *nodeFileTransferToolRuntime) prepare(
 	return preparedNodeFileTransfer{
 		record: record, profile: profile, owner: owner,
 	}, nil
+}
+
+func (runtime *nodeFileTransferToolRuntime) prepareJobArtifactDownload(
+	ctx context.Context,
+	args map[string]any,
+) (preparedNodeFileTransfer, error) {
+	if runtime == nil || runtime.source == nil || runtime.access == nil {
+		return preparedNodeFileTransfer{}, errors.New("node file transfer runtime is unavailable")
+	}
+	principal, executionCallID, err := nodeInvocationIdentity(ctx)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	storedToolCallID := stableNodeInvocationID("file_call", executionCallID)
+	existing, found, err := runtime.source.LookupInvocationByToolCall(principal, storedToolCallID)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	resolved, sourceDescriptor, profile, revision, err := runtime.resolveJobArtifactAuthority(ctx, args)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	descriptor, err := jobArtifactDownloadPlanDescriptor(sourceDescriptor, profile)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	owner, err := nodeFileArtifactOwner(ctx, principal, storedToolCallID)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	jobID, jobErr := exactNodeFileArgument(args, "job_id")
+	artifactRef, artifactErr := exactNodeFileArgument(args, "artifact_ref")
+	_, sourcePresent := args["source"]
+	if jobErr != nil || artifactErr != nil || sourcePresent {
+		return preparedNodeFileTransfer{}, errors.New("job_id and artifact_ref are required without source")
+	}
+	deliver, deliverOK := args["deliver"].(bool)
+	if !deliverOK {
+		return preparedNodeFileTransfer{}, errors.New("deliver is required")
+	}
+	if found {
+		if retainedErr := validateRetainedJobArtifactDownload(
+			existing,
+			resolved,
+			descriptor,
+			profile,
+			revision,
+			jobID,
+			artifactRef,
+			deliver,
+			owner,
+		); retainedErr != nil {
+			return preparedNodeFileTransfer{}, retainedErr
+		}
+		retainedProfile := profile
+		return preparedNodeFileTransfer{
+			record: existing, jobProfile: &retainedProfile, owner: owner,
+		}, nil
+	}
+	if toolshared.ToolApprovalContinuation(ctx) {
+		return preparedNodeFileTransfer{}, errDiscoveryStale
+	}
+
+	transferID := stableNodeInvocationID(
+		"file",
+		principal.AgentID,
+		principal.SessionID,
+		principal.ActorID,
+		executionCallID,
+	)
+	now := time.Now()
+	expiresAt := now.Add(nodeFileTransferTTL).Unix()
+	info, err := runtime.source.InspectFile(
+		ctx,
+		resolved.snapshot.ID,
+		NodeFileTransferBinding{
+			TransferID: stableNodeInvocationID("job_artifact_info", transferID),
+			Direction:  protocol.TransferDownload, ProfileAlias: profile.Alias,
+			PolicyRevision: profile.Revision, SourceKind: nodes.JobArtifactTransferSourceKind,
+			JobProfile: profile.Alias, JobID: jobID, JobArtifactRef: artifactRef,
+			AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
+			SHA256: sha256.Sum256(nil), ExpiresAt: expiresAt,
+		},
+	)
+	if err != nil || info.State != "committed" ||
+		info.Size > uint64(profile.ArtifactBytesMax) ||
+		info.Size > uint64(nodes.MaxTransferArtifactBytes) {
+		return preparedNodeFileTransfer{}, errors.New("job artifact is unavailable")
+	}
+	digest, err := decodeNodeFileDigest(info.SHA256)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	input := nodeFileTransferPlanInput{
+		ArtifactRef: artifactRef, Size: float64(info.Size), SHA256: hex.EncodeToString(digest[:]),
+		Filename: safeNodeDownloadFilename(artifactRef), ContentType: info.ContentType,
+		Deliver: &deliver, RouteID: owner.RouteID, DiscoveryRevision: revision,
+		SourceKind: nodes.JobArtifactTransferSourceKind, JobProfile: profile.Alias, JobID: jobID,
+	}
+	if deliver {
+		input.Channel = toolshared.ToolChannel(ctx)
+		input.ChatID = toolshared.ToolChatID(ctx)
+		input.TopicID = toolshared.ToolTopicID(ctx)
+		if input.Channel == "" || input.ChatID == "" {
+			return preparedNodeFileTransfer{}, errors.New("delivery route is unavailable")
+		}
+	}
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	request := nodes.InvocationRequest{
+		InvocationID: transferID, IdempotencyKey: stableNodeInvocationID("file_idem", transferID),
+		NodeID: resolved.snapshot.ID, CatalogHash: resolved.snapshot.CatalogHash,
+		Command: nodes.InternalJobArtifactDownloadCommand, Input: inputJSON,
+		AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
+		TimeoutSeconds: int(nodeFileTransferTTL / time.Second), OutputLimitBytes: nodes.MaxInvocationOutput,
+	}
+	plan, err := nodes.PrepareExecutionPlan(
+		request,
+		descriptor,
+		resolved.snapshot.Executor,
+		profile.Revision,
+		now,
+		nodeFileTransferTTL,
+	)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	record, created, err := runtime.source.PrepareInvocation(
+		resolved.binding.Node,
+		resolved.name,
+		storedToolCallID,
+		principal,
+		plan,
+		descriptor,
+		true,
+		func(current NodeDiscoveryRecord) error {
+			return runtime.validateCurrentJobArtifactAuthority(
+				toolshared.ToolAgentID(ctx),
+				resolved.name,
+				revision,
+				profile,
+				current,
+			)
+		},
+	)
+	if err != nil {
+		return preparedNodeFileTransfer{}, err
+	}
+	if created {
+		runtime.publishFileTransferEvent(
+			ctx,
+			NodeInvocationObservationPrepared,
+			record,
+			string(nodes.GatewayInvocationPrepared),
+			"",
+		)
+	}
+	retainedProfile := profile
+	return preparedNodeFileTransfer{
+		record: record, jobProfile: &retainedProfile, owner: owner,
+	}, nil
+}
+
+func (runtime *nodeFileTransferToolRuntime) resolveJobArtifactAuthority(
+	ctx context.Context,
+	args map[string]any,
+) (resolvedNodeTarget, nodes.CommandDescriptor, nodes.JobProfileDescriptor, string, error) {
+	target, targetErr := exactNodeFileArgument(args, "target")
+	if targetErr != nil {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	resolved, err := (&nodeInvocationToolRuntime{access: runtime.access}).resolveTarget(
+		toolshared.ToolAgentID(ctx),
+		target,
+		true,
+	)
+	if err != nil || resolved.registration == nil || resolved.requiresReapproval {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	descriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, nodes.JobCommandArtifacts)
+	if !found {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, resolved.binding.JobProfile)
+	if !found || len(descriptor.JobProfiles) != 1 || descriptor.ModelContract == nil ||
+		descriptor.ModelContract.Availability != nodes.ModelAvailable {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	if _, approvalErr := resolved.registration.ApprovedCommand(nodes.JobCommandArtifacts); approvalErr != nil {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	revision, err := runtime.access.discoveryRevision(
+		toolshared.ToolAgentID(ctx),
+		resolved.name,
+		nodes.JobCommandArtifacts,
+		resolved.snapshot,
+		*resolved.registration,
+		descriptor,
+		resolved.available,
+	)
+	requestedRevision, revisionErr := exactNodeFileArgument(args, "discovery_revision")
+	if err != nil || revisionErr != nil || revision != requestedRevision {
+		return resolvedNodeTarget{}, nodes.CommandDescriptor{}, nodes.JobProfileDescriptor{}, "", errDiscoveryStale
+	}
+	return resolved, descriptor, descriptor.JobProfiles[0], revision, nil
+}
+
+func (runtime *nodeFileTransferToolRuntime) validateCurrentJobArtifactAuthority(
+	agentID string,
+	target string,
+	revision string,
+	profile nodes.JobProfileDescriptor,
+	current NodeDiscoveryRecord,
+) error {
+	if current.Registration == nil || !current.Connected {
+		return errDiscoveryStale
+	}
+	descriptor, found := nodeCatalogDescriptor(current.Snapshot.Catalog, nodes.JobCommandArtifacts)
+	if !found {
+		return errDiscoveryStale
+	}
+	binding, found := runtime.access.targets[target]
+	if !found {
+		return errDiscoveryStale
+	}
+	descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, binding.JobProfile)
+	if !found || len(descriptor.JobProfiles) != 1 ||
+		!reflect.DeepEqual(descriptor.JobProfiles[0], profile) {
+		return errDiscoveryStale
+	}
+	currentRevision, err := runtime.access.discoveryRevision(
+		agentID,
+		target,
+		nodes.JobCommandArtifacts,
+		current.Snapshot,
+		*current.Registration,
+		descriptor,
+		current.Connected,
+	)
+	if err != nil || currentRevision != revision {
+		return errDiscoveryStale
+	}
+	_, err = current.Registration.ApprovedCommand(nodes.JobCommandArtifacts)
+	return err
+}
+
+func jobArtifactDownloadPlanDescriptor(
+	source nodes.CommandDescriptor,
+	profile nodes.JobProfileDescriptor,
+) (nodes.CommandDescriptor, error) {
+	if source.Name != nodes.JobCommandArtifacts || len(source.JobProfiles) != 1 ||
+		source.JobProfiles[0].Alias != profile.Alias || source.ModelContract == nil {
+		return nodes.CommandDescriptor{}, errors.New("job artifact authority is incomplete")
+	}
+	schema, err := json.Marshal(map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"artifact_ref", "size", "sha256", "filename", "deliver", "route_id",
+			"discovery_revision", "source_kind", "job_profile", "job_id",
+		},
+		"properties": map[string]any{
+			"artifact_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+			"size": map[string]any{
+				"type":    "integer",
+				"minimum": 0,
+				"maximum": nodes.MaxTransferArtifactBytes,
+			},
+			"sha256":             map[string]any{"type": "string", "minLength": 64, "maxLength": 64},
+			"filename":           map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
+			"content_type":       map[string]any{"type": "string", "maxLength": 255},
+			"deliver":            map[string]any{"type": "boolean"},
+			"channel":            map[string]any{"type": "string", "maxLength": 64},
+			"chat_id":            map[string]any{"type": "string", "maxLength": 512},
+			"topic_id":           map[string]any{"type": "string", "maxLength": 512},
+			"route_id":           map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+			"discovery_revision": map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+			"source_kind": map[string]any{
+				"type": "string",
+				"enum": []string{nodes.JobArtifactTransferSourceKind},
+			},
+			"job_profile": map[string]any{"type": "string", "enum": []string{profile.Alias}},
+			"job_id":      map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+		},
+	})
+	if err != nil {
+		return nodes.CommandDescriptor{}, err
+	}
+	contract := &nodes.CommandModelContract{
+		Availability: nodes.ModelUnavailable, TimeoutSecondsMax: nodes.MaxInvocationTimeout,
+		OutputBytesMax: nodes.MaxInvocationOutput, ResultKind: "json",
+		AuthorityDigest: profile.AuthorityDigest, Guidance: []string{}, Examples: []json.RawMessage{},
+	}
+	if profile.Approval.Read == "required" {
+		contract.ApprovalMode = "each_command"
+	}
+	descriptor := nodes.CommandDescriptor{
+		Name: nodes.InternalJobArtifactDownloadCommand, InputSchema: schema,
+		OutputSchema: json.RawMessage(`{"additionalProperties":true,"properties":{},"type":"object"}`),
+		Risk:         nodes.RiskRead, SupportsProgress: true, SupportsCancel: true, ModelContract: contract,
+	}
+	return descriptor, descriptor.Validate()
 }
 
 func (runtime *nodeFileTransferToolRuntime) resolveAuthority(
@@ -1116,6 +1515,8 @@ func nodeFileToolName(command string) string {
 		return "nodes_upload"
 	case "file.download.v1":
 		return "nodes_download"
+	case nodes.InternalJobArtifactDownloadCommand:
+		return "nodes_download"
 	default:
 		return "nodes_file_transfer"
 	}
@@ -1152,11 +1553,11 @@ func (runtime *nodeFileTransferToolRuntime) result(
 			result.Path = retainedInput.Source
 		}
 	}
-	if prepared.record.Plan.Command != "file.download.v1" {
+	if !isNodeDownloadTransferCommand(prepared.record.Plan.Command) {
 		return nodeJSONResult(result)
 	}
 	input := retainedInput
-	if input.Source == "" {
+	if input.Source == "" && input.SourceKind != nodes.JobArtifactTransferSourceKind {
 		return nodeFileUnknown(prepared.record.Plan.InvocationID)
 	}
 	if input.Deliver == nil || !*input.Deliver || result.ArtifactRef == "" {
@@ -1185,6 +1586,37 @@ func (runtime *nodeFileTransferToolRuntime) result(
 	result.DeliveryState = "claimed"
 	data, _ := json.Marshal(result)
 	return toolshared.MediaResult(string(data), []string{mediaRef}).WithResponseHandled()
+}
+
+func validateRetainedJobArtifactDownload(
+	record nodes.GatewayInvocationRecord,
+	resolved resolvedNodeTarget,
+	descriptor nodes.CommandDescriptor,
+	profile nodes.JobProfileDescriptor,
+	revision string,
+	jobID string,
+	artifactRef string,
+	deliver bool,
+	owner nodes.TransferArtifactOwner,
+) error {
+	if record.Target != resolved.name || record.Plan.NodeID != resolved.snapshot.ID ||
+		record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
+		record.Plan.Command != nodes.InternalJobArtifactDownloadCommand ||
+		record.Descriptor.Name != descriptor.Name ||
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor) ||
+		record.Plan.PolicyRevision != profile.Revision ||
+		record.Plan.ExpiresAt <= time.Now().Unix() {
+		return fmt.Errorf("%w: retained job artifact authority changed", errDiscoveryStale)
+	}
+	var input nodeFileTransferPlanInput
+	if err := json.Unmarshal(record.Plan.Input, &input); err != nil ||
+		input.SourceKind != nodes.JobArtifactTransferSourceKind ||
+		input.JobProfile != profile.Alias || input.JobID != jobID ||
+		input.ArtifactRef != artifactRef || input.Deliver == nil || *input.Deliver != deliver ||
+		input.RouteID != owner.RouteID || input.DiscoveryRevision != revision {
+		return fmt.Errorf("%w: retained job artifact input changed", errDiscoveryStale)
+	}
+	return record.Plan.ValidateAgainstHash(record.ExpectedPlanHash)
 }
 
 func nodeFileUnknown(transferID string) *toolshared.ToolResult {
@@ -1394,18 +1826,18 @@ func (tool *NodeDownloadTool) SetMediaStore(store media.MediaStore) {
 }
 
 func (tool *NodeFileInfoTool) ToolEnabledForAgent(agentID string) bool {
-	return tool.runtime.enabledForAgent(agentID)
+	return tool.runtime.enabledForAgent(agentID, false)
 }
 
 func (tool *NodeUploadTool) ToolEnabledForAgent(agentID string) bool {
-	return tool.runtime.enabledForAgent(agentID)
+	return tool.runtime.enabledForAgent(agentID, false)
 }
 
 func (tool *NodeDownloadTool) ToolEnabledForAgent(agentID string) bool {
-	return tool.runtime.enabledForAgent(agentID)
+	return tool.runtime.enabledForAgent(agentID, true)
 }
 
-func (runtime *nodeFileTransferToolRuntime) enabledForAgent(agentID string) bool {
+func (runtime *nodeFileTransferToolRuntime) enabledForAgent(agentID string, includeJobs bool) bool {
 	if runtime == nil || runtime.access == nil {
 		return false
 	}
@@ -1414,7 +1846,8 @@ func (runtime *nodeFileTransferToolRuntime) enabledForAgent(agentID string) bool
 	}
 	targets, _ := runtime.access.visibleTargets(agentID)
 	for _, target := range targets {
-		if runtime.access.targets[target].FileProfile != "" {
+		binding := runtime.access.targets[target]
+		if binding.FileProfile != "" || includeJobs && binding.JobProfile != "" {
 			return true
 		}
 	}

@@ -446,7 +446,8 @@ func (runner *toolLoopRunner) admitToolCall(
 				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
 				runner.recordCommittedHookResponseDecision(tc, toolName)
 
-				argsJSON, _ := json.Marshal(tools.ToolLogArguments(toolName, toolArgs))
+				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+				argsJSON, _ := json.Marshal(auditArgs)
 				argsPreview := utils.Truncate(string(argsJSON), 200)
 				logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
 					map[string]any{
@@ -461,7 +462,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolExecStartPayload{
 						ToolCallID: tc.ID,
 						Tool:       toolName,
-						Arguments:  cloneEventArguments(toolArgs),
+						Arguments:  cloneEventArguments(auditArgs),
 					},
 				)
 
@@ -878,7 +879,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 	execCtx := call.executionContext
 	trustedExecution := call.trustedExecution
 
-	argsJSON, _ := json.Marshal(tools.ToolLogArguments(toolName, toolArgs))
+	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	argsJSON, _ := json.Marshal(auditArgs)
 	argsPreview := utils.Truncate(string(argsJSON), 200)
 	logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", toolName, argsPreview),
 		map[string]any{
@@ -892,7 +894,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		ToolExecStartPayload{
 			ToolCallID: tc.ID,
 			Tool:       toolName,
-			Arguments:  cloneEventArguments(toolArgs),
+			Arguments:  cloneEventArguments(auditArgs),
 		},
 	)
 
