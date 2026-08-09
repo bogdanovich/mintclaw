@@ -298,6 +298,28 @@ func TestFitJobLogOutputKeepsUTF8RuneBoundaries(t *testing.T) {
 	}
 }
 
+func TestFitJobLogOutputRejectsNonAdvancingCompleteRune(t *testing.T) {
+	input := jobLogsInput{
+		JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout",
+		LimitBytes: 1,
+	}
+	chunk := JobLogChunk{Available: 4, State: JobRunning}
+	envelope, err := fitJobLogOutput(input, chunk, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawEnvelope, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk.Data = []byte("😀")
+	_, err = fitJobLogOutput(input, chunk, len(rawEnvelope))
+	var failure *commandFailureError
+	if !errors.As(err, &failure) || failure.failure.Code != "OUTPUT_LIMIT_TOO_SMALL" {
+		t.Fatalf("fitJobLogOutput() error = %v, want OUTPUT_LIMIT_TOO_SMALL", err)
+	}
+}
+
 func TestFitJobLogOutputDefersIncompleteActiveRuneAndBoundsInvalidBytes(t *testing.T) {
 	input := jobLogsInput{
 		JobID: "job_0123456789abcdef0123456789abcdef", Stream: "stdout",

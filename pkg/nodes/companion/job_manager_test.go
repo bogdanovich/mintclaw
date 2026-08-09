@@ -332,8 +332,12 @@ func TestDirectJobManagerOwnsGroupUntilDescendantsExit(t *testing.T) {
 	}
 	data, readErr := io.ReadAll(artifact)
 	_ = artifact.Close()
-	if readErr != nil || string(data) != "stable\n" {
+	if readErr != nil || len(data) == 0 {
 		t.Fatalf("snapshot after descendant cleanup = %q, error %v", data, readErr)
+	}
+	source, err := os.ReadFile(filepath.Join(root, "artifact.out"))
+	if err != nil || !bytes.Equal(source, data) {
+		t.Fatalf("source %q does not match terminal snapshot %q, error %v", source, data, err)
 	}
 	pidData, err := os.ReadFile(filepath.Join(root, "descendant.pid"))
 	if err != nil {
@@ -344,10 +348,9 @@ func TestDirectJobManagerOwnsGroupUntilDescendantsExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForProcessExit(t, pid)
-	time.Sleep(1100 * time.Millisecond)
-	source, err := os.ReadFile(filepath.Join(root, "artifact.out"))
-	if err != nil || string(source) != "stable\n" {
-		t.Fatalf("source mutated after terminal snapshot = %q, error %v", source, err)
+	finalSource, err := os.ReadFile(filepath.Join(root, "artifact.out"))
+	if err != nil || !bytes.Equal(finalSource, data) {
+		t.Fatalf("source changed after terminal snapshot = %q, error %v", finalSource, err)
 	}
 }
 

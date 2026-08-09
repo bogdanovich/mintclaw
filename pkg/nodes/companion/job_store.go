@@ -32,6 +32,7 @@ type JobStore struct {
 	retention   time.Duration
 	now         func() time.Time
 	writeFile   func(string, []byte, os.FileMode) error
+	removeFile  func(string) error
 	directory   *jobStoreDirectory
 	releaseLock func()
 
@@ -82,6 +83,7 @@ func NewJobStore(
 		retention:   limits.Retention,
 		now:         time.Now,
 		writeFile:   fileutil.WriteFileAtomic,
+		removeFile:  directory.removeRegular,
 		directory:   directory,
 		releaseLock: release,
 		records:     make(map[string]JobRecord),
@@ -554,6 +556,9 @@ func (store *JobStore) pruneExpired() error {
 func (store *JobStore) pruneExpiredAndPersistLocked() (bool, error) {
 	now := store.now()
 	if !store.hasExpiredLocked(now, "") {
+		if err := store.flushPendingLocked(); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	previous := cloneJobRecords(store.records)
@@ -635,7 +640,7 @@ func (store *JobStore) removeOrphanFiles() error {
 			}
 			continue
 		}
-		if err := store.directory.removeRegular(name); err != nil {
+		if err := store.removeFile(name); err != nil {
 			return fmt.Errorf("remove orphaned node job file %q: %w", name, err)
 		}
 	}
@@ -664,7 +669,7 @@ func (store *JobStore) flushPendingLocked() error {
 			return fmt.Errorf("inspect expired node job file %q: %w", name, err)
 		}
 		_ = file.Close()
-		if err := store.directory.removeRegular(name); err != nil {
+		if err := store.removeFile(name); err != nil {
 			return fmt.Errorf("remove expired node job file %q: %w", name, err)
 		}
 		store.payloadUsed -= info.Size()

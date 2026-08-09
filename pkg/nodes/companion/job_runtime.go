@@ -451,6 +451,13 @@ func fitJobLogOutput(input jobLogsInput, chunk JobLogChunk, limit int) (jobLogOu
 			errors.New("node job log envelope exceeds output limit"),
 		)
 	}
+	if pageEnd > 0 && boundaries[low] == 0 {
+		return jobLogOutput{}, newCommandFailure(
+			"OUTPUT_LIMIT_TOO_SMALL",
+			"node job log output limit is too small",
+			errors.New("node job log output cannot fit one complete rune"),
+		)
+	}
 	return output, nil
 }
 

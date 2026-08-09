@@ -177,6 +177,67 @@ func TestJobStoreLookupPrunesExpiredWithoutAnotherAccept(t *testing.T) {
 	}
 }
 
+func TestJobStoreLookupRetriesCommittedPrunePayloadCleanup(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "jobs")
+	store, err := NewJobStore(root, JobStoreLimits{
+		Records: 8, IndexBytes: 1024 * 1024, PayloadBytes: 1024 * 1024,
+		Retention: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	base := time.Unix(1000, 0)
+	store.now = func() time.Time { return base }
+	record := testAcceptedJobRecord("cleanup-retry")
+	record.CreatedAt = base.UnixNano()
+	record.UpdatedAt = base.UnixNano()
+	record.RetentionSeconds = int(time.Minute / time.Second)
+	if _, _, err := store.Accept(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkFailedBeforeLaunch(record.JobID, "TEST_COMPLETE"); err != nil {
+		t.Fatal(err)
+	}
+	logName := jobLogFileName(record.JobID, false)
+	log, err := store.CreateFile(logName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.WriteString("expired log"); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	removeFile := store.removeFile
+	failCleanup := true
+	store.removeFile = func(name string) error {
+		if failCleanup && name == logName {
+			return errors.New("injected cleanup failure")
+		}
+		return removeFile(name)
+	}
+	store.now = func() time.Time { return base.Add(time.Minute + time.Second) }
+	if _, _, err := store.Lookup(record.JobID); err == nil {
+		t.Fatal("Lookup() accepted committed prune with incomplete payload cleanup")
+	}
+	index, err := os.ReadFile(filepath.Join(root, "index.json"))
+	if err != nil || strings.Contains(string(index), record.JobID) {
+		t.Fatalf("committed prune index = %q, error %v", index, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, logName)); err != nil {
+		t.Fatalf("failed cleanup unexpectedly removed payload: %v", err)
+	}
+	failCleanup = false
+	if _, found, err := store.Lookup(record.JobID); err != nil || found {
+		t.Fatalf("retry Lookup() found = %v, error %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, logName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retry retained expired payload: %v", err)
+	}
+}
+
 func TestJobStoreStartupPrunesExpiredWithoutAnotherAccept(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "jobs")
 	store, err := NewJobStore(root, JobStoreLimits{
