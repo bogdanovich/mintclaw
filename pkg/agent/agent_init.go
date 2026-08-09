@@ -86,8 +86,16 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
-	if !al.isolatedToolBootstrap {
-		if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
+			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
+			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)
+			if err != nil {
+				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+			} else {
+				al.state = manager
+			}
+		} else if !al.isolatedToolBootstrap {
 			al.state = state.NewManager(defaultAgent.Workspace)
 		}
 	}
@@ -112,6 +120,14 @@ func newAgentLoopWithRegistry(
 	// Register shared tools to all agents (now that al is created)
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
+	}
+	if al.hasCodingToolProfile() {
+		for _, agentID := range registry.ListAgentIDs() {
+			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
+				instance.Tools.Seal()
+				instance.admitTrustedToolRegistry()
+			}
+		}
 	}
 
 	return al
@@ -143,8 +159,8 @@ func NewAgentLoopWithRuntimeProfile(
 	profile RuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	if !profile.hasCodingOwner() {
-		return nil, fmt.Errorf("personal runtime profiles require the P0.4 tool bootstrap cutover")
+	if profile.toolProfile == RuntimeToolProfilePersonal && len(profile.agentLayouts) != 1 {
+		return nil, fmt.Errorf("strict personal runtime profiles currently require exactly one owner")
 	}
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
@@ -159,11 +175,14 @@ func NewAgentLoopWithRuntimeProfile(
 	}
 	opts = append([]AgentLoopOption{withRuntimeProfile(profile)}, opts...)
 	if profile.hasCodingOwner() {
-		// P0.4 replaces this fail-closed bootstrap with an explicit coding tool
-		// profile. Until then, a coding owner cannot inherit personal shared tools.
 		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	if al.runtimeProfileInitErr != nil {
+		err := al.runtimeProfileInitErr
+		al.Close()
+		return nil, err
+	}
 	if al.contextManagerInitErr != nil {
 		err := al.contextManagerInitErr
 		al.Close()
@@ -209,10 +228,14 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("memory") {
 			workspace := agent.Workspace
+			memoryRoot := workspace
+			if layout, ok := profileLayoutForAgent(al.runtimeProfile, agent.ID); ok {
+				memoryRoot = layout.StateRoot()
+			}
 			registerToolIfAllowed(
 				agent,
 				tools.NewMemoryTool(
-					workspace,
+					memoryRoot,
 					func() { registry.invalidateWorkspaceContextCaches(workspace) },
 					al.runtimeEvents,
 				),
@@ -499,4 +522,11 @@ func registerSharedTools(
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}
+}
+
+func profileLayoutForAgent(profile *RuntimeProfile, agentID string) (RuntimeLayout, bool) {
+	if profile == nil {
+		return RuntimeLayout{}, false
+	}
+	return profile.AgentLayout(agentID)
 }

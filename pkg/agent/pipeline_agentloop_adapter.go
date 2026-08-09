@@ -1,5 +1,7 @@
 package agent
 
+import "github.com/bogdanovich/mintclaw/pkg/interactions"
+
 // NewPipeline creates a Pipeline from an AgentLoop instance.
 func NewPipeline(al *AgentLoop) *Pipeline {
 	cfg := al.GetConfig()
@@ -12,15 +14,22 @@ func NewPipeline(al *AgentLoop) *Pipeline {
 			TurnControl:    al.turnAbortController(),
 		},
 		Config: PipelineConfigServices{
-			ChannelStreaming:  newConfigChannelStreamingProvider(cfg),
-			NativeSearch:      newConfigNativeSearchPolicy(cfg),
-			LLMRetry:          newConfigLLMRetryPolicy(cfg),
-			RetrySleeper:      contextRetrySleeper{},
-			MediaLimits:       newConfigMediaLimitsProvider(cfg),
-			FinalTurnRender:   newConfigFinalTurnRenderPolicy(cfg),
-			ModelResolution:   newConfigPipelineModelResolution(cfg),
-			PromptBuilder:     newConfigPipelinePromptBuilder(cfg),
-			ToolContentFilter: newConfigToolContentFilter(cfg),
+			ChannelStreaming:      newConfigChannelStreamingProvider(cfg),
+			NativeSearch:          newConfigNativeSearchPolicy(cfg),
+			LLMRetry:              newConfigLLMRetryPolicy(cfg),
+			RetrySleeper:          contextRetrySleeper{},
+			MediaLimits:           newConfigMediaLimitsProvider(cfg),
+			FinalTurnRender:       newConfigFinalTurnRenderPolicy(cfg),
+			ModelResolution:       newConfigPipelineModelResolution(cfg),
+			PromptBuilder:         newConfigPipelinePromptBuilder(cfg),
+			ToolContentFilter:     newConfigToolContentFilter(cfg),
+			TrustAllToolExecution: al.hasCodingToolProfile(),
+			HashToolArguments: func(workspace string, arguments map[string]any) (string, error) {
+				if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+					return interactions.HashArgumentsAtPath(layout.StatePaths().InteractionKeyFile, arguments)
+				}
+				return interactions.HashArguments(workspace, arguments)
+			},
 		},
 		Context: PipelineContextServices{
 			Runtime:              al.contextManager,

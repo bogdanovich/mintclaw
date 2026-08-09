@@ -27,7 +27,7 @@ Consequently, two resumable coding threads have two different Seahorse SQLite
 files. MintClaw does not accumulate all coding history in a process-global
 database. A personal runtime similarly resolves one context database per
 personal-agent state owner; admitting the complete personal tool bootstrap on
-the strict constructor remains the dependent P0.4 cutover.
+the strict constructor is completed by the dependent P0.4 cutover.
 
 ## Authority and Recovery
 
@@ -61,8 +61,9 @@ construction failure closes the partial context manager and the complete
 registry, including every canonical store and internally owned provider.
 
 The legacy `NewAgentLoop` path retains its existing migration and fallback
-behavior. That keeps the deployed personal gateway operational until its
-explicit P0.4 profile and one-time deployment migration are ready.
+behavior. P0.4 adds the strict personal profile without changing that gateway
+catalogue; deployment may perform the one-time state move before switching
+entry points.
 
 ## Done Evidence
 
@@ -86,5 +87,6 @@ Focused tests prove that:
 - failure of a later Seahorse runtime closes the already opened engine and all
   canonical stores instead of leaking a partial context manager.
 
-P0.4 can now select explicit personal and coding tool profiles without changing
-the persistence authority or adding another storage construction path.
+P0.4 now selects explicit personal and coding tool profiles without changing
+the persistence authority or adding another storage construction path. See
+[`local-coding-agent-p0-tool-profiles.md`](local-coding-agent-p0-tool-profiles.md).

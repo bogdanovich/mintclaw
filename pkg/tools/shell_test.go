@@ -163,6 +163,102 @@ func TestShellTool_ExposesWorkspaceTmp(t *testing.T) {
 	}
 }
 
+func TestShellTool_RuntimeScratchStaysOutsideWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	workingDir := filepath.Join(root, "project")
+	scratchDir := filepath.Join(root, "state", "runtime", "tmp")
+	_, err := NewExecToolWithRuntimeConfig(workingDir, scratchDir, false, nil)
+	if err != nil {
+		t.Fatalf("NewExecToolWithRuntimeConfig() error = %v", err)
+	}
+	if _, err := os.Stat(workingDir); !os.IsNotExist(err) {
+		t.Fatalf("runtime exec construction created working directory: %v", err)
+	}
+	if info, err := os.Stat(scratchDir); err != nil || !info.IsDir() {
+		t.Fatalf("runtime scratch directory = %v, %v", info, err)
+	}
+}
+
+func TestShellTool_RuntimeSessionsAreOwnerScoped(t *testing.T) {
+	root := t.TempDir()
+	firstWorkspace := filepath.Join(root, "first-project")
+	secondWorkspace := filepath.Join(root, "second-project")
+	require.NoError(t, os.MkdirAll(firstWorkspace, 0o755))
+	require.NoError(t, os.MkdirAll(secondWorkspace, 0o755))
+	first, err := NewExecToolWithRuntimeConfig(
+		firstWorkspace,
+		filepath.Join(root, "first-state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	second, err := NewExecToolWithRuntimeConfig(
+		secondWorkspace,
+		filepath.Join(root, "second-state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(first.sessionManager.Stop)
+	t.Cleanup(second.sessionManager.Stop)
+
+	run := first.Execute(toolshared.WithToolContext(context.Background(), "cli", "test"), map[string]any{
+		"action": "run", "command": "sleep 30", "background": "true",
+	})
+	require.False(t, run.IsError, run.ForLLM)
+	var response toolshared.ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(run.ForLLM), &response))
+	t.Cleanup(func() {
+		_ = first.Execute(context.Background(), map[string]any{
+			"action": "kill", "sessionId": response.SessionID,
+		})
+	})
+
+	listed := second.Execute(context.Background(), map[string]any{"action": "list"})
+	require.False(t, listed.IsError)
+	require.Contains(t, listed.ForUser, "0 active sessions")
+	for _, request := range []map[string]any{
+		{"action": "poll", "sessionId": response.SessionID},
+		{"action": "read", "sessionId": response.SessionID},
+		{"action": "write", "sessionId": response.SessionID, "data": "hello"},
+		{"action": "send-keys", "sessionId": response.SessionID, "keys": "enter"},
+		{"action": "kill", "sessionId": response.SessionID},
+	} {
+		result := second.Execute(context.Background(), request)
+		require.True(t, result.IsError, "cross-runtime action unexpectedly succeeded: %v", request)
+		require.Contains(t, result.ForLLM, "session not found")
+	}
+}
+
+func TestShellTool_RuntimeCloseWaitsForAdmittedProcessReap(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	tool, err := NewExecToolWithRuntimeConfig(
+		workspace,
+		filepath.Join(root, "state", "tmp"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	command := "sleep 30"
+	if runtime.GOOS == "windows" {
+		command = "Start-Sleep -Seconds 30"
+	}
+	run := tool.Execute(context.Background(), map[string]any{
+		"action": "run", "command": command, "background": "true",
+	})
+	require.False(t, run.IsError, run.ForLLM)
+	var response toolshared.ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(run.ForLLM), &response))
+	session, err := tool.sessionManager.Get(response.SessionID)
+	require.NoError(t, err)
+
+	require.NoError(t, tool.Close())
+	require.NoError(t, session.waitForCompletion())
+	require.True(t, session.IsDone())
+}
+
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
 	tool, err := NewExecTool("", false)

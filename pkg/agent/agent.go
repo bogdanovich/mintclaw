@@ -59,6 +59,7 @@ type AgentLoop struct {
 	startupResult              chan error
 	contextManager             ContextManager
 	contextManagerInitErr      error
+	runtimeProfileInitErr      error
 	fallback                   *providers.FallbackChain
 	modelExecution             *modelExecutionManager
 	channelManager             interfaces.ChannelManager

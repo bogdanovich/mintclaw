@@ -116,6 +116,17 @@ func WorkspaceStorePath(workspace string) string {
 	return filepath.Join(workspace, "state", "interaction_registry.json")
 }
 
+// ValidateSnapshot reads and validates a registry snapshot without locking,
+// pruning, or writing it.
+func ValidateSnapshot(storePath string) error {
+	r := &Registry{
+		storePath: strings.TrimSpace(storePath),
+		records:   make(map[string]Record),
+		events:    make([]Event, 0),
+	}
+	return r.load()
+}
+
 func (r *Registry) LastLoadError() error {
 	if r == nil {
 		return nil
