@@ -171,15 +171,16 @@ func effectiveBrowserLimit(value, fallback int) int {
 // browser authority. Driver commands, endpoints, profile paths, lock paths,
 // environment, and credentials intentionally never cross the node boundary.
 type BrowserProfileDescriptor struct {
-	Alias       string        `json:"alias"`
-	Revision    string        `json:"revision"`
-	Driver      string        `json:"driver"`
-	Mode        string        `json:"mode"`
-	NetworkMode string        `json:"network_mode"`
-	DryRun      bool          `json:"dry_run"`
-	Headed      bool          `json:"headed"`
-	Actions     []string      `json:"actions"`
-	Limits      BrowserLimits `json:"limits"`
+	Alias                string        `json:"alias"`
+	Revision             string        `json:"revision"`
+	Driver               string        `json:"driver"`
+	Mode                 string        `json:"mode"`
+	NetworkMode          string        `json:"network_mode"`
+	DryRun               bool          `json:"dry_run"`
+	AllowApprovedActions bool          `json:"allow_approved_actions,omitempty"`
+	Headed               bool          `json:"headed"`
+	Actions              []string      `json:"actions"`
+	Limits               BrowserLimits `json:"limits"`
 }
 
 // Browser command payloads are the typed internal gateway-to-companion
@@ -535,7 +536,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 		profile.Driver != BrowserDriverPlaywrightMCP || profile.Mode != BrowserProfileManaged ||
 		(profile.NetworkMode != BrowserNetworkExactOrigins &&
 			profile.NetworkMode != BrowserNetworkPublicWeb && profile.NetworkMode != BrowserNetworkAnyHTTP) ||
-		!profile.DryRun || len(profile.Actions) == 0 ||
+		profile.DryRun == profile.AllowApprovedActions || len(profile.Actions) == 0 ||
 		len(profile.Actions) > MaxBrowserActions || !sort.StringsAreSorted(profile.Actions) {
 		return fmt.Errorf("%w: malformed browser profile descriptor", ErrInvalidCapability)
 	}
@@ -652,10 +653,11 @@ func browserCommandInputSchema(
 	for _, profile := range profiles {
 		profileRevisions = append(profileRevisions, profile.Revision)
 		profileBranches = append(profileBranches, map[string]any{
-			"required": []string{"profile", "profile_revision"},
+			"required": []string{"profile", "profile_revision", "dry_run"},
 			"properties": map[string]any{
 				"profile":          map[string]any{"const": profile.Alias},
 				"profile_revision": map[string]any{"const": profile.Revision},
+				"dry_run":          map[string]any{"const": profile.DryRun},
 				"limits":           browserLimitsSchema(profile.Limits),
 			},
 		})
@@ -705,7 +707,7 @@ func browserCommandInputSchema(
 		add("profile_revision", identifier)
 		profileConstraint = map[string]any{"oneOf": profileBranches}
 		add("browser_policy_revision", digest)
-		add("dry_run", map[string]any{"const": true})
+		add("dry_run", map[string]any{"type": "boolean"})
 		add("limits", browserLimitsSchema(BrowserLimits{}.Effective()))
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		add("session_id", identifier)

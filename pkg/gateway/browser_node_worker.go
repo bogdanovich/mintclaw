@@ -252,7 +252,7 @@ func (factory *nodeBrowserWorkerFactory) Open(
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	profile, ok := target.Profiles[request.Profile]
-	if !ok || !profile.Enabled || !profile.DryRun {
+	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	worker := &nodeBrowserWorker{
@@ -782,7 +782,8 @@ func browserProfileIntersects(
 	remote nodes.BrowserProfileDescriptor,
 ) bool {
 	requested := browserNodeLimits(limits)
-	return remote.DryRun && local.DryRun &&
+	return remote.DryRun == local.DryRun &&
+		remote.AllowApprovedActions == local.AllowApprovedActions &&
 		remote.NetworkMode == local.EffectiveNetworkMode() &&
 		slices.Contains(remote.Actions, "navigate") &&
 		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
@@ -804,6 +805,7 @@ func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
 	return left.Alias == right.Alias && left.Revision == right.Revision &&
 		left.Driver == right.Driver && left.Mode == right.Mode &&
 		left.NetworkMode == right.NetworkMode && left.DryRun == right.DryRun &&
+		left.AllowApprovedActions == right.AllowApprovedActions &&
 		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
 		left.Limits == right.Limits
 }

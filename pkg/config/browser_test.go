@@ -34,6 +34,20 @@ func TestBrowserConfigAcceptsAdmittedB1Shape(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsExplicitApprovedActionMode(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() approved-action mode error = %v", err)
+	}
+}
+
 func TestBrowserConfigAcceptsDisabledCompanionPlacement(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	cfg.Nodes.Enabled = false
@@ -323,7 +337,18 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 				target.Profiles["managed"] = profile
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
-			wantErr: "requires dry_run=true in B1",
+			wantErr: "requires exactly one of dry_run or allow_approved_actions",
+		},
+		{
+			name: "conflicting action modes",
+			mutate: func(cfg *Config) {
+				target := cfg.Tools.Browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.AllowApprovedActions = true
+				target.Profiles["managed"] = profile
+				cfg.Tools.Browser.Targets["gateway"] = target
+			},
+			wantErr: "requires exactly one of dry_run or allow_approved_actions",
 		},
 		{
 			name: "unsupported network mode",

@@ -514,3 +514,24 @@ func browserNodeTestRuntime(
 	}
 	return cfg, runtime, handler
 }
+
+func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		AllowApprovedActions: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged,
+		NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
+	}
+	if !browserProfileIntersects(local, limits, remote) {
+		t.Fatal("matching approved-action profiles did not intersect")
+	}
+	local.DryRun = true
+	local.AllowApprovedActions = false
+	if browserProfileIntersects(local, limits, remote) {
+		t.Fatal("mismatched action modes intersected")
+	}
+}
