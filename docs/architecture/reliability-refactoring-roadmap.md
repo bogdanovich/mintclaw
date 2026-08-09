@@ -187,6 +187,12 @@ rendering. Typed `LLMCallOutcome` and `ToolLoopOutcome` improved terminal contro
 Provider failover classification currently combines structured HTTP errors with broad string and regular-expression
 matching. Provider capabilities are discovered through several optional interfaces and duplicated catalog metadata.
 
+Status: implemented. Provider adapters normalize protocol failures into `ProviderError` at their boundaries, with
+structured metadata taking precedence over the isolated legacy classification fallback. Built-in providers publish a
+normalized `ProviderCapabilities` descriptor, while centralized streaming and image-generation compatibility edges
+preserve external providers without spreading optional-interface assertions through the agent pipeline. Cross-family
+contract tests cover the required failure taxonomy and capability invariants.
+
 #### Direction
 
 - Normalize provider failures at adapter boundaries into `ProviderError` with kind, HTTP status, retry-after,
