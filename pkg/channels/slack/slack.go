@@ -597,7 +597,12 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		inboundCtx.TopicID = threadTS
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender); err != nil {
+		logger.ErrorCF("slack", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
@@ -681,7 +686,12 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, mentionSender); err != nil {
+		logger.ErrorCF("slack", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 func (c *SlackChannel) markInboundEventHandled(eventKind, channelID, messageTS string) bool {
@@ -786,7 +796,12 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, cmdSender); err != nil {
+		logger.ErrorCF("slack", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 func (c *SlackChannel) downloadSlackFile(file slack.File) string {

@@ -245,7 +245,12 @@ func (c *DingTalkChannel) onChatBotMessageReceived(
 		}
 	}
 
-	c.HandleInboundContext(ctx, chatID, content, nil, inboundCtx, sender)
+	if err := c.HandleInboundContext(ctx, chatID, content, nil, inboundCtx, sender); err != nil {
+		logger.ErrorCF("dingtalk", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 
 	// Return nil to indicate we've handled the message asynchronously
 	// The response will be sent through the message bus

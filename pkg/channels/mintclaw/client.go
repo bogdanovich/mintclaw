@@ -291,7 +291,12 @@ func (c *MintClawClientChannel) handleServerMessage(pc *mintclawConn, msg MintCl
 		},
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender); err != nil {
+		logger.ErrorCF("mintclaw", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 // Send sends a message to the remote server.
@@ -336,6 +341,6 @@ func (c *MintClawClientChannel) StartTyping(ctx context.Context, chatID string) 
 		}
 		stopMsg := newMessage(TypeTypingStop, nil)
 		stopMsg.SessionID = strings.TrimPrefix(chatID, "mintclaw_client:")
-		currentPC.writeJSON(c.ctx, stopMsg)
+		_ = currentPC.writeJSON(c.ctx, stopMsg)
 	}, nil
 }

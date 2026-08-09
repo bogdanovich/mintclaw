@@ -258,5 +258,10 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		inboundCtx.ChatType = "group"
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender); err != nil {
+		logger.ErrorCF("whatsapp", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }

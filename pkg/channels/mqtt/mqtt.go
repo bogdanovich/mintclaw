@@ -205,7 +205,12 @@ func (c *MQTTChannel) handleInbound(msg pahomqtt.Message) {
 		SenderID: clientID,
 	}
 
-	c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx)
+	if err := c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx); err != nil {
+		logger.ErrorCF("mqtt", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 // Stop disconnects from the MQTT broker.

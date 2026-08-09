@@ -208,7 +208,12 @@ func (c *MaixCamChannel) handlePersonDetection(msg MaixCamMessage) {
 		Raw:      metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, nil, inboundCtx, sender); err != nil {
+		logger.ErrorCF("maixcam", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 func (c *MaixCamChannel) handleStatusUpdate(msg MaixCamMessage) {

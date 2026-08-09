@@ -1730,14 +1730,19 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		inboundCtx.ReplyToMessageID = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
 	}
 
-	c.HandleMessageWithContext(
+	if err := c.HandleMessageWithContext(
 		c.ctx,
 		compositeChatID,
 		content,
 		mediaPaths,
 		inboundCtx,
 		sender,
-	)
+	); err != nil {
+		logger.ErrorCF("telegram", "Inbound dispatch failed", map[string]any{
+			"chat_id": compositeChatID,
+			"error":   err.Error(),
+		})
+	}
 	return nil
 }
 

@@ -427,7 +427,7 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
 	if storedCreatedAt.IsZero() {
@@ -743,7 +743,7 @@ func (s *Store) CreateSummary(ctx context.Context, input CreateSummaryInput) (*S
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count,
@@ -864,7 +864,7 @@ func (s *Store) LinkSummaryToMessages(ctx context.Context, summaryID string, mes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for i, msgID := range messageIDs {
 		_, err = tx.ExecContext(ctx,
@@ -992,7 +992,7 @@ func (s *Store) UpsertContextItems(ctx context.Context, convID int64, items []Co
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id = ?", convID)
 	if err != nil {
@@ -1028,7 +1028,7 @@ func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Get message IDs to delete for cleaning up related tables
 	rows, err := tx.QueryContext(ctx,
@@ -1086,7 +1086,7 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Delete in child→parent order. FTS tables (messages_fts, summaries_fts) are
 	// kept in sync by DELETE triggers, so we just delete from the parent tables.
@@ -1156,7 +1156,7 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	maxOrd, err := s.GetMaxOrdinalTx(ctx, tx, convID)
 	if err != nil {
@@ -1224,7 +1224,7 @@ func (s *Store) ReplaceContextRangeWithSummary(
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Delete the range
 	_, err = tx.ExecContext(ctx,
@@ -1286,7 +1286,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Find the ordinals of items to delete and calculate midpoint
 	placeholders := make([]string, len(summaryIDs))

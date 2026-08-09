@@ -1093,7 +1093,12 @@ func (c *OneBotChannel) handleMessage(raw *oneBotRawEvent) {
 		Raw:              metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, parsed.Media, inboundCtx, senderInfo)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, parsed.Media, inboundCtx, senderInfo); err != nil {
+		logger.ErrorCF("onebot", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 func (c *OneBotChannel) isDuplicate(messageID string) bool {

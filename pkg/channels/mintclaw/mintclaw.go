@@ -1305,7 +1305,7 @@ func (c *MintClawChannel) readLoop(pc *mintclawConn) {
 		var msg MintClawMessage
 		if err := json.Unmarshal(rawMsg, &msg); err != nil {
 			errMsg := newError("invalid_message", "failed to parse message")
-			pc.writeJSON(c.ctx, errMsg)
+			_ = pc.writeJSON(c.ctx, errMsg)
 			continue
 		}
 
@@ -1340,7 +1340,7 @@ func (c *MintClawChannel) handleMessage(pc *mintclawConn, msg MintClawMessage) {
 	case TypePing:
 		pong := newMessage(TypePong, nil)
 		pong.ID = msg.ID
-		pc.writeJSON(c.ctx, pong)
+		_ = pc.writeJSON(c.ctx, pong)
 
 	case TypeMessageSend:
 		c.handleMessageSend(pc, msg)
@@ -1350,7 +1350,7 @@ func (c *MintClawChannel) handleMessage(pc *mintclawConn, msg MintClawMessage) {
 
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
-		pc.writeJSON(c.ctx, errMsg)
+		_ = pc.writeJSON(c.ctx, errMsg)
 	}
 }
 
@@ -1362,7 +1362,7 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		errMsg := newErrorWithPayload("invalid_media", err.Error(), map[string]any{
 			"request_id": msg.ID,
 		})
-		pc.writeJSON(c.ctx, errMsg)
+		_ = pc.writeJSON(c.ctx, errMsg)
 		return
 	}
 
@@ -1370,7 +1370,7 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		errMsg := newErrorWithPayload("empty_content", "message content is empty", map[string]any{
 			"request_id": msg.ID,
 		})
-		pc.writeJSON(c.ctx, errMsg)
+		_ = pc.writeJSON(c.ctx, errMsg)
 		return
 	}
 
@@ -1413,7 +1413,12 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		Raw:       metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender); err != nil {
+		logger.ErrorCF("mintclaw", "Inbound dispatch failed", map[string]any{
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }
 
 // truncate truncates a string to maxLen runes.

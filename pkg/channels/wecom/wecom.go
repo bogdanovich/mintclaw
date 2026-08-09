@@ -601,7 +601,12 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 		Raw: metadata,
 	}
 
-	c.HandleInboundContext(c.ctx, actualChatID, content, mediaRefs, inboundCtx, sender)
+	if err := c.HandleInboundContext(c.ctx, actualChatID, content, mediaRefs, inboundCtx, sender); err != nil {
+		logger.ErrorCF("wecom", "Inbound dispatch failed", map[string]any{
+			"chat_id": actualChatID,
+			"error":   err.Error(),
+		})
+	}
 	return nil
 }
 

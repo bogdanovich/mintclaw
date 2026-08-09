@@ -433,7 +433,7 @@ func (m *Manager) cleanupDeliveryState(
 			if v, loaded := m.interactions.placeholders.LoadAndDelete(name + ":" + cleanupChatID); loaded {
 				if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 					if deleter, ok := ch.(MessageDeleter); ok {
-						deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
+						_ = deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
 					}
 				}
 			}
@@ -769,7 +769,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 					if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 						// Prefer deleting the placeholder (cleaner UX than editing to same content)
 						if deleter, ok := ch.(MessageDeleter); ok {
-							deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+							_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 						} else if editor, ok := ch.(MessageEditor); ok {
 							if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
 								_ = payloadEditor.EditMessageWithPayload(
@@ -820,13 +820,13 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 				})
 			if isToolFeedback {
 				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+					_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 				}
 				return nil, false
 			}
 			if outboundMessageBypassesPlaceholderEdit(msg) {
 				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+					_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 				}
 				return nil, false
 			}
@@ -1007,7 +1007,7 @@ func (m *Manager) GetStreamer(
 		if v, loaded := m.interactions.placeholders.LoadAndDelete(placeholderKey); loaded {
 			if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 				if deleter, ok := ch.(MessageDeleter); ok {
-					deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
+					_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
 				} else if editor, ok := ch.(MessageEditor); ok {
 					editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent) // best effort fallback
 				}
