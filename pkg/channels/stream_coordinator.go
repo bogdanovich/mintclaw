@@ -27,27 +27,101 @@ type placeholderEntry struct {
 	createdAt time.Time
 }
 
-// deliveryInteractionState owns transient UI state associated with outbound
-// delivery.
-type deliveryInteractionState struct {
+// StreamCoordinator owns transient UI state and final-stream suppression state.
+// Channel adapters provide operations; the coordinator owns their lifecycle.
+type StreamCoordinator struct {
 	placeholders  sync.Map // "channel:chatID" -> placeholderEntry
 	typingStops   sync.Map // "channel:chatID" -> typingEntry
 	reactionUndos sync.Map // "channel:chatID" -> reactionEntry
 	toolFeedback  *ToolFeedbackCoordinator
+
+	streamActive              sync.Map // streamSuppressionKey -> true
+	streamAuxiliaryTombstones sync.Map // streamSuppressionKey -> time.Time
 }
 
-func (s *deliveryInteractionState) initializeToolFeedback(
+func newStreamCoordinator() *StreamCoordinator {
+	return &StreamCoordinator{}
+}
+
+func (s *StreamCoordinator) storePlaceholder(key string, entry placeholderEntry) {
+	s.placeholders.Store(key, entry)
+}
+
+func (s *StreamCoordinator) takePlaceholder(key string) (placeholderEntry, bool) {
+	value, loaded := s.placeholders.LoadAndDelete(key)
+	entry, ok := value.(placeholderEntry)
+	return entry, loaded && ok
+}
+
+func (s *StreamCoordinator) placeholderExists(key string) bool {
+	_, ok := s.placeholders.Load(key)
+	return ok
+}
+
+func (s *StreamCoordinator) swapTyping(key string, entry typingEntry) (typingEntry, bool) {
+	value, loaded := s.typingStops.Swap(key, entry)
+	previous, ok := value.(typingEntry)
+	return previous, loaded && ok
+}
+
+func (s *StreamCoordinator) takeTyping(key string) (typingEntry, bool) {
+	value, loaded := s.typingStops.LoadAndDelete(key)
+	entry, ok := value.(typingEntry)
+	return entry, loaded && ok
+}
+
+func (s *StreamCoordinator) typingExists(key string) bool {
+	_, ok := s.typingStops.Load(key)
+	return ok
+}
+
+func (s *StreamCoordinator) storeReaction(key string, entry reactionEntry) {
+	s.reactionUndos.Store(key, entry)
+}
+
+func (s *StreamCoordinator) takeReaction(key string) (reactionEntry, bool) {
+	value, loaded := s.reactionUndos.LoadAndDelete(key)
+	entry, ok := value.(reactionEntry)
+	return entry, loaded && ok
+}
+
+func (s *StreamCoordinator) markActive(key string) {
+	s.streamActive.Store(key, true)
+}
+
+func (s *StreamCoordinator) active(key string) bool {
+	_, ok := s.streamActive.Load(key)
+	return ok
+}
+
+func (s *StreamCoordinator) storeTombstone(key string, createdAt time.Time) {
+	s.streamAuxiliaryTombstones.Store(key, createdAt)
+}
+
+func (s *StreamCoordinator) tombstoneExists(key string) bool {
+	_, ok := s.streamAuxiliaryTombstones.Load(key)
+	return ok
+}
+
+func (s *StreamCoordinator) activeToolFeedbackCount() int {
+	if !s.hasToolFeedback() {
+		return 0
+	}
+	return s.toolFeedback.ActiveCount()
+}
+
+func (s *StreamCoordinator) initializeToolFeedback(
 	config ToolFeedbackAnimatorConfig,
 	separateMessages bool,
 ) {
 	s.toolFeedback = NewToolFeedbackCoordinator(config, separateMessages)
 }
 
-func (s *deliveryInteractionState) hasToolFeedback() bool {
+func (s *StreamCoordinator) hasToolFeedback() bool {
 	return s != nil && s.toolFeedback != nil
 }
 
-func (s *deliveryInteractionState) beginToolFeedbackTerminals(
+func (s *StreamCoordinator) beginToolFeedbackTerminals(
 	keys []string,
 	scoped bool,
 	transient bool,
@@ -66,7 +140,7 @@ func (s *deliveryInteractionState) beginToolFeedbackTerminals(
 	return terminals
 }
 
-func (s *deliveryInteractionState) completeToolFeedbackTerminals(
+func (s *StreamCoordinator) completeToolFeedbackTerminals(
 	ctx context.Context,
 	terminals []*toolFeedbackTerminal,
 	success bool,
@@ -79,7 +153,7 @@ func (s *deliveryInteractionState) completeToolFeedbackTerminals(
 	}
 }
 
-func (s *deliveryInteractionState) deliverToolFeedback(
+func (s *StreamCoordinator) deliverToolFeedback(
 	ctx context.Context,
 	key, chatID, content string,
 	operations toolFeedbackOperations,
@@ -92,7 +166,7 @@ func (s *deliveryInteractionState) deliverToolFeedback(
 	return s.toolFeedback.deliver(ctx, key, chatID, content, operations, send)
 }
 
-func (s *deliveryInteractionState) dismissToolFeedback(
+func (s *StreamCoordinator) dismissToolFeedback(
 	ctx context.Context,
 	keys []string,
 	scoped bool,
@@ -109,14 +183,14 @@ func (s *deliveryInteractionState) dismissToolFeedback(
 	}
 }
 
-func (s *deliveryInteractionState) singleActiveScopedToolFeedbackKey(base string) (string, bool) {
+func (s *StreamCoordinator) singleActiveScopedToolFeedbackKey(base string) (string, bool) {
 	if !s.hasToolFeedback() {
 		return "", false
 	}
 	return s.toolFeedback.singleActiveScopedKey(base)
 }
 
-func (s *deliveryInteractionState) releaseToolFeedbackTerminals(keys []string) {
+func (s *StreamCoordinator) releaseToolFeedbackTerminals(keys []string) {
 	if !s.hasToolFeedback() {
 		return
 	}
@@ -125,19 +199,19 @@ func (s *deliveryInteractionState) releaseToolFeedbackTerminals(keys []string) {
 	}
 }
 
-func (s *deliveryInteractionState) stopToolFeedback() {
+func (s *StreamCoordinator) stopToolFeedback() {
 	if s.hasToolFeedback() {
 		s.toolFeedback.StopAll()
 	}
 }
 
-func (s *deliveryInteractionState) retireToolFeedbackChannel(ctx context.Context, channel string) {
+func (s *StreamCoordinator) retireToolFeedbackChannel(ctx context.Context, channel string) {
 	if s.hasToolFeedback() {
 		s.toolFeedback.RetireChannel(ctx, channel)
 	}
 }
 
-func (s *deliveryInteractionState) configureToolFeedback(
+func (s *StreamCoordinator) configureToolFeedback(
 	config ToolFeedbackAnimatorConfig,
 	separateMessages bool,
 ) {
@@ -146,7 +220,7 @@ func (s *deliveryInteractionState) configureToolFeedback(
 	}
 }
 
-func (s *deliveryInteractionState) expire(now time.Time) {
+func (s *StreamCoordinator) expireInteractions(now time.Time) {
 	s.typingStops.Range(func(key, value any) bool {
 		if entry, ok := value.(typingEntry); ok && now.Sub(entry.createdAt) > typingStopTTL {
 			if _, loaded := s.typingStops.LoadAndDelete(key); loaded {
@@ -171,14 +245,7 @@ func (s *deliveryInteractionState) expire(now time.Time) {
 	})
 }
 
-// streamDeliveryState owns final-stream suppression state independently from
-// channel lifecycle and queue ownership.
-type streamDeliveryState struct {
-	streamActive              sync.Map // streamSuppressionKey -> true
-	streamAuxiliaryTombstones sync.Map // streamSuppressionKey -> time.Time
-}
-
-func (s *streamDeliveryState) activeKey(
+func (s *StreamCoordinator) activeKey(
 	channel, chatID, sessionKey string,
 	traceScope runtimeevents.TraceScope,
 ) (string, bool) {
@@ -196,26 +263,26 @@ func (s *streamDeliveryState) activeKey(
 	)
 }
 
-func (s *streamDeliveryState) consumeActive(key string) bool {
+func (s *StreamCoordinator) consumeActive(key string) bool {
 	_, loaded := s.streamActive.LoadAndDelete(key)
 	return loaded
 }
 
-func (s *streamDeliveryState) clear(key string) {
+func (s *StreamCoordinator) clear(key string) {
 	s.streamActive.Delete(key)
 	s.streamAuxiliaryTombstones.Delete(key)
 }
 
-func (s *streamDeliveryState) markFinalized(key string, now time.Time) {
+func (s *StreamCoordinator) markFinalized(key string, now time.Time) {
 	s.streamActive.Store(key, true)
 	s.streamAuxiliaryTombstones.Store(key, now)
 }
 
-func (s *streamDeliveryState) clearTombstone(key string) {
+func (s *StreamCoordinator) clearTombstone(key string) {
 	s.streamAuxiliaryTombstones.Delete(key)
 }
 
-func (s *streamDeliveryState) tombstoneActive(key string, now time.Time) bool {
+func (s *StreamCoordinator) tombstoneActive(key string, now time.Time) bool {
 	value, ok := s.streamAuxiliaryTombstones.Load(key)
 	if !ok {
 		return false
@@ -228,7 +295,7 @@ func (s *streamDeliveryState) tombstoneActive(key string, now time.Time) bool {
 	return true
 }
 
-func (s *streamDeliveryState) tombstoneActiveForMessage(
+func (s *StreamCoordinator) tombstoneActiveForMessage(
 	channel, chatID, sessionKey string,
 	traceScope runtimeevents.TraceScope,
 	now time.Time,
@@ -255,7 +322,7 @@ func (s *streamDeliveryState) tombstoneActiveForMessage(
 	return ok && s.tombstoneActive(key, now)
 }
 
-func (s *streamDeliveryState) activeForChat(channel, chatID string) bool {
+func (s *StreamCoordinator) activeForChat(channel, chatID string) bool {
 	chatKey := streamSuppressionBaseKey(channel, chatID, "")
 	found := false
 	s.streamActive.Range(func(key, _ any) bool {
@@ -273,7 +340,7 @@ func (s *streamDeliveryState) activeForChat(channel, chatID string) bool {
 	return found
 }
 
-func (s *streamDeliveryState) expire(now time.Time) {
+func (s *StreamCoordinator) expireStreams(now time.Time) {
 	s.streamAuxiliaryTombstones.Range(func(key, value any) bool {
 		if createdAt, ok := value.(time.Time); !ok || now.Sub(createdAt) > streamAuxiliaryTombstoneTTL {
 			s.streamAuxiliaryTombstones.Delete(key)

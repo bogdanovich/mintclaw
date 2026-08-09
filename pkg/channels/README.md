@@ -1251,8 +1251,9 @@ Timeout configuration: ReadTimeout = 30s, WriteTimeout = 30s
 ### 5.3 Concurrency Safety Conventions
 
 - `BaseChannel.running`: Uses `atomic.Bool`, thread-safe
-- `Manager.channels` / `Manager.workers`: Protected by `sync.RWMutex`
-- `Manager.placeholders` / `Manager.typingStops` / `Manager.reactionUndos`: Uses `sync.Map`
+- `Manager.channels`: Protected by `sync.RWMutex`
+- `DeliveryRuntime`: Owns delivery workers and queues behind its synchronized registry
+- `StreamCoordinator`: Owns placeholders, typing stops, reactions, tool feedback, and stream suppression state
 - `MessageBus.closed`: Uses `atomic.Bool`
 - `FileMediaStore`: Uses `sync.RWMutex`, two-phase operation to minimize lock-hold time
 - Channel Worker queue: Go channel, inherently concurrent-safe

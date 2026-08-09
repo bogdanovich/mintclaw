@@ -97,8 +97,7 @@ type Manager struct {
 	httpListeners          []net.Listener
 	mu                     sync.RWMutex
 	delivery               *DeliveryRuntime
-	interactions           deliveryInteractionState
-	streams                streamDeliveryState
+	stream                 *StreamCoordinator
 	outboundOutbox         *outbox.Coordinator
 	channelHashes          map[string]string // channel name → config hash
 	channelRestartRequired map[string]string // channel name → desired config hash that needs process restart
@@ -390,20 +389,16 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.StopTyping {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.typingStops.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(typingEntry); ok {
-					entry.stop()
-				}
+			if entry, loaded := m.streamCoordinator().takeTyping(name + ":" + cleanupChatID); loaded {
+				entry.stop()
 			}
 		}
 	}
 
 	if opts.UndoReaction {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.reactionUndos.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(reactionEntry); ok {
-					entry.undo()
-				}
+			if entry, loaded := m.streamCoordinator().takeReaction(name + ":" + cleanupChatID); loaded {
+				entry.undo()
 			}
 		}
 	}
@@ -413,7 +408,7 @@ func (m *Manager) cleanupDeliveryState(
 			streamKey := streamSuppressionKey(
 				name, cleanupChatID, opts.SessionKey, primaryTraceScope(opts.TraceScopes),
 			)
-			m.streams.clear(streamKey)
+			m.streamCoordinator().clear(streamKey)
 		}
 	}
 
@@ -425,11 +420,11 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.DeletePlaceholder {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if v, loaded := m.interactions.placeholders.LoadAndDelete(name + ":" + cleanupChatID); loaded {
-				if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-					if deleter, ok := ch.(MessageDeleter); ok {
-						_ = deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
-					}
+			if entry, loaded := m.streamCoordinator().
+				takePlaceholder(name + ":" + cleanupChatID); loaded &&
+				entry.id != "" {
+				if deleter, ok := ch.(MessageDeleter); ok {
+					_ = deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
 				}
 			}
 		}
@@ -515,13 +510,13 @@ func (m *Manager) beginToolFeedbackTerminals(
 	traceScopes []runtimeevents.TraceScope,
 	transient bool,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.interactions.hasToolFeedback() {
+	if m == nil || !m.streamCoordinator().hasToolFeedback() {
 		return nil
 	}
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.interactions.beginToolFeedbackTerminals(keys, scoped, transient)
+	return m.streamCoordinator().beginToolFeedbackTerminals(keys, scoped, transient)
 }
 
 func (m *Manager) completeToolFeedbackTerminals(
@@ -529,7 +524,7 @@ func (m *Manager) completeToolFeedbackTerminals(
 	terminals []*toolFeedbackTerminal,
 	success bool,
 ) {
-	m.interactions.completeToolFeedbackTerminals(ctx, terminals, success)
+	m.streamCoordinator().completeToolFeedbackTerminals(ctx, terminals, success)
 }
 
 func (m *Manager) beginOutboundToolFeedbackTerminals(
@@ -537,7 +532,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 	ch Channel,
 	msg bus.OutboundMessage,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.interactions.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
+	if m == nil || !m.streamCoordinator().hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
 		!OutboundMessageDismissesTrackedToolFeedback(msg) {
 		return nil
 	}
@@ -569,7 +564,7 @@ func (m *Manager) deliverToolFeedback(
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
 	operations := toolFeedbackOperationsFor(ch)
-	return m.interactions.deliverToolFeedback(
+	return m.streamCoordinator().deliverToolFeedback(
 		ctx,
 		key,
 		deliveryChatID,
@@ -590,7 +585,7 @@ func (m *Manager) deliverToolFeedback(
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
 func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.interactions.hasToolFeedback() {
+	if m == nil || !m.streamCoordinator().hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -621,7 +616,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.interactions.dismissToolFeedback(ctx, keys, scoped)
+	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped)
 }
 
 func (m *Manager) resolveToolFeedbackTargets(
@@ -636,7 +631,7 @@ func (m *Manager) resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
 	if !scoped && len(keys) == 1 {
-		if key, ok := m.interactions.singleActiveScopedToolFeedbackKey(keys[0]); ok {
+		if key, ok := m.streamCoordinator().singleActiveScopedToolFeedbackKey(keys[0]); ok {
 			return []string{key}, true
 		}
 	}
@@ -660,7 +655,7 @@ func prepareToolFeedbackMessageContent(ch Channel, content string) string {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	key := channel + ":" + chatID
-	m.interactions.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
+	m.streamCoordinator().storePlaceholder(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
 }
 
 // SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
@@ -689,10 +684,8 @@ func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) b
 func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 	key := channel + ":" + chatID
 	entry := typingEntry{stop: stop, createdAt: time.Now()}
-	if previous, loaded := m.interactions.typingStops.Swap(key, entry); loaded {
-		if oldEntry, ok := previous.(typingEntry); ok && oldEntry.stop != nil {
-			oldEntry.stop()
-		}
+	if previous, loaded := m.streamCoordinator().swapTyping(key, entry); loaded && previous.stop != nil {
+		previous.stop()
 	}
 }
 
@@ -702,10 +695,8 @@ func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 // regardless of whether an outbound message is published.
 func (m *Manager) InvokeTypingStop(channel, chatID string) {
 	key := channel + ":" + chatID
-	if v, loaded := m.interactions.typingStops.LoadAndDelete(key); loaded {
-		if entry, ok := v.(typingEntry); ok {
-			entry.stop()
-		}
+	if entry, loaded := m.streamCoordinator().takeTyping(key); loaded {
+		entry.stop()
 	}
 }
 
@@ -713,7 +704,7 @@ func (m *Manager) InvokeTypingStop(channel, chatID string) {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 	key := channel + ":" + chatID
-	m.interactions.reactionUndos.Store(key, reactionEntry{undo: undo, createdAt: time.Now()})
+	m.streamCoordinator().storeReaction(key, reactionEntry{undo: undo, createdAt: time.Now()})
 }
 
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
@@ -723,7 +714,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	traceScope := primaryTraceScope(msg.TraceScopes)
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey, traceScope)
-	activeStreamKey, streamActive := m.streams.activeKey(name, chatID, msg.SessionKey, traceScope)
+	activeStreamKey, streamActive := m.streamCoordinator().activeKey(name, chatID, msg.SessionKey, traceScope)
 
 	m.cleanupDeliveryState(ctx, name, chatID, &msg.Context, ch, deliveryCleanupOptions{
 		StopTyping:   true,
@@ -745,7 +736,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if streamActive {
 			return nil, true
 		}
-		if m.streams.tombstoneActiveForMessage(
+		if m.streamCoordinator().tombstoneActiveForMessage(
 			name, chatID, msg.SessionKey, traceScope,
 			time.Now(),
 		) {
@@ -757,33 +748,31 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// outbound. Earlier queued visible messages must still be delivered.
 	if isFinalMessage {
 		if streamActive {
-			if !m.streams.consumeActive(activeStreamKey) {
+			if !m.streamCoordinator().consumeActive(activeStreamKey) {
 				streamActive = false
 			} else {
-				if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
-					if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-						// Prefer deleting the placeholder (cleaner UX than editing to same content)
-						if deleter, ok := ch.(MessageDeleter); ok {
-							_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-						} else if editor, ok := ch.(MessageEditor); ok {
-							if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
-								_ = payloadEditor.EditMessageWithPayload(
-									ctx,
-									chatID,
-									entry.id,
-									outboundMessageEditPayload(msg, msg.Content),
-								)
-							} else {
-								editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
-							}
+				if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+					// Prefer deleting the placeholder (cleaner UX than editing to same content)
+					if deleter, ok := ch.(MessageDeleter); ok {
+						_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+					} else if editor, ok := ch.(MessageEditor); ok {
+						if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
+							_ = payloadEditor.EditMessageWithPayload(
+								ctx,
+								chatID,
+								entry.id,
+								outboundMessageEditPayload(msg, msg.Content),
+							)
+						} else {
+							editor.EditMessage(ctx, chatID, entry.id, msg.Content) // fallback
 						}
 					}
 				}
-				if m.interactions.hasToolFeedback() {
+				if m.streamCoordinator().hasToolFeedback() {
 					keys, _ := toolFeedbackTargets(
 						name, ch, chatID, &msg.Context, msg.SessionKey, msg.TraceScopes,
 					)
-					m.interactions.releaseToolFeedbackTerminals(keys)
+					m.streamCoordinator().releaseToolFeedbackTerminals(keys)
 				}
 				return nil, true
 			}
@@ -793,56 +782,54 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if streamActive {
 		return nil, false
 	}
-	if m.streams.activeForChat(name, chatID) {
+	if m.streamCoordinator().activeForChat(name, chatID) {
 		return nil, false
 	}
 
 	if !isAuxiliaryMessage {
-		m.streams.clearTombstone(streamKey)
+		m.streamCoordinator().clearTombstone(streamKey)
 	}
 
 	// 5. Try editing placeholder
-	if v, loaded := m.interactions.placeholders.LoadAndDelete(key); loaded {
-		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-			logger.InfoCF("channels", "Evaluating placeholder edit bypass",
-				map[string]any{
-					"channel":          name,
-					"chat_id":          chatID,
-					"placeholder_id":   entry.id,
-					"message_kind":     bus.OutboundMetadataFromMessage(msg).MessageKind,
-					"is_tool_feedback": isToolFeedback,
-					"bypass":           outboundMessageBypassesPlaceholderEdit(msg),
-				})
-			if isToolFeedback {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-				}
-				return nil, false
+	if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+		logger.InfoCF("channels", "Evaluating placeholder edit bypass",
+			map[string]any{
+				"channel":          name,
+				"chat_id":          chatID,
+				"placeholder_id":   entry.id,
+				"message_kind":     bus.OutboundMetadataFromMessage(msg).MessageKind,
+				"is_tool_feedback": isToolFeedback,
+				"bypass":           outboundMessageBypassesPlaceholderEdit(msg),
+			})
+		if isToolFeedback {
+			if deleter, ok := ch.(MessageDeleter); ok {
+				_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 			}
-			if outboundMessageBypassesPlaceholderEdit(msg) {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
-				}
-				return nil, false
+			return nil, false
+		}
+		if outboundMessageBypassesPlaceholderEdit(msg) {
+			if deleter, ok := ch.(MessageDeleter); ok {
+				_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
 			}
-			if editor, ok := ch.(MessageEditor); ok {
-				content := msg.Content
-				err := func() error {
-					if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
-						return payloadEditor.EditMessageWithPayload(
-							ctx,
-							chatID,
-							entry.id,
-							outboundMessageEditPayload(msg, content),
-						)
-					}
-					return editor.EditMessage(ctx, chatID, entry.id, content)
-				}()
-				if err == nil {
-					return []string{entry.id}, true
+			return nil, false
+		}
+		if editor, ok := ch.(MessageEditor); ok {
+			content := msg.Content
+			err := func() error {
+				if payloadEditor, ok := ch.(MessageEditorWithPayload); ok {
+					return payloadEditor.EditMessageWithPayload(
+						ctx,
+						chatID,
+						entry.id,
+						outboundMessageEditPayload(msg, content),
+					)
 				}
-				// edit failed → fall through to normal Send
+				return editor.EditMessage(ctx, chatID, entry.id, content)
+			}()
+			if err == nil {
+				return []string{entry.id}, true
 			}
+			// edit failed → fall through to normal Send
 		}
 	}
 
@@ -875,6 +862,7 @@ func NewManager(
 	m := &Manager{
 		channels:               make(map[string]Channel),
 		delivery:               newDeliveryRuntime(),
+		stream:                 newStreamCoordinator(),
 		bus:                    messageBus,
 		config:                 cfg,
 		mediaStore:             store,
@@ -883,7 +871,7 @@ func NewManager(
 	}
 	m.delivery.bindHost(m)
 	if cfg != nil {
-		m.interactions.initializeToolFeedback(
+		m.streamCoordinator().initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -920,6 +908,13 @@ func (m *Manager) deliveryRuntime() *DeliveryRuntime {
 	return m.delivery
 }
 
+func (m *Manager) streamCoordinator() *StreamCoordinator {
+	if m.stream == nil {
+		m.stream = newStreamCoordinator()
+	}
+	return m.stream
+}
+
 func (m *Manager) deliveryChannel(name string) (Channel, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -940,7 +935,7 @@ func (m *Manager) deliverySplitOnMarker() bool {
 }
 
 func (m *Manager) deliveryToolFeedbackEnabled() bool {
-	return m.interactions.hasToolFeedback()
+	return m.streamCoordinator().hasToolFeedback()
 }
 
 // SetMediaStore updates the store used by the manager and every channel that
@@ -1011,7 +1006,7 @@ func (m *Manager) GetStreamer(
 	streamKey := streamSuppressionKey(channelName, chatID, sessionKey, traceScope)
 	placeholderKey := channelName + ":" + chatID
 	clearMarker := func() {
-		m.streams.consumeActive(streamKey)
+		m.streamCoordinator().consumeActive(streamKey)
 	}
 	onFinalize := func(finalizeCtx context.Context, finalContent string) {
 		m.dismissToolFeedbackTargets(
@@ -1023,16 +1018,14 @@ func (m *Manager) GetStreamer(
 			sessionKey,
 			[]runtimeevents.TraceScope{traceScope},
 		)
-		if v, loaded := m.interactions.placeholders.LoadAndDelete(placeholderKey); loaded {
-			if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
-				if deleter, ok := ch.(MessageDeleter); ok {
-					_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
-				} else if editor, ok := ch.(MessageEditor); ok {
-					editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent) // best effort fallback
-				}
+		if entry, loaded := m.streamCoordinator().takePlaceholder(placeholderKey); loaded && entry.id != "" {
+			if deleter, ok := ch.(MessageDeleter); ok {
+				_ = deleter.DeleteMessage(finalizeCtx, chatID, entry.id) // best effort
+			} else if editor, ok := ch.(MessageEditor); ok {
+				editor.EditMessage(finalizeCtx, chatID, entry.id, finalContent) // best effort fallback
 			}
 		}
-		m.streams.markFinalized(streamKey, time.Now())
+		m.streamCoordinator().markFinalized(streamKey, time.Now())
 	}
 
 	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
@@ -1910,7 +1903,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	for _, owner := range deliveries {
 		owner.CloseDeliveryAndWait()
 	}
-	m.interactions.stopToolFeedback()
+	m.streamCoordinator().stopToolFeedback()
 
 	// Stop all channels
 	for _, target := range channels {
@@ -2224,7 +2217,7 @@ func (m *Manager) finalizedStreamActiveForMessage(channelName string, msg bus.Ou
 	if strings.TrimSpace(channelName) == "" || strings.TrimSpace(chatID) == "" {
 		return false
 	}
-	_, active := m.streams.activeKey(
+	_, active := m.streamCoordinator().activeKey(
 		channelName, chatID, msg.SessionKey, primaryTraceScope(msg.TraceScopes),
 	)
 	return active
@@ -2735,8 +2728,8 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			m.interactions.expire(now)
-			m.streams.expire(now)
+			m.streamCoordinator().expireInteractions(now)
+			m.streamCoordinator().expireStreams(now)
 		}
 	}
 }
@@ -2873,7 +2866,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			m.config = oldConfig
 			return err
 		}
-		m.interactions.retireToolFeedbackChannel(ctx, name)
+		m.streamCoordinator().retireToolFeedbackChannel(ctx, name)
 		if err := oldChannel.Stop(ctx); err != nil {
 			logger.ErrorCF("channels", "Error stopping inactive changed channel", map[string]any{
 				"channel": name,
@@ -2923,7 +2916,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	// Commit hashes only on full success.
 	m.channelHashes = list
 	if cfg != nil {
-		m.interactions.configureToolFeedback(
+		m.streamCoordinator().configureToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -2972,7 +2965,7 @@ func (m *Manager) UnregisterChannel(name string) {
 	if owner != nil {
 		owner.CloseDeliveryAndWait()
 	}
-	m.interactions.retireToolFeedbackChannel(context.Background(), name)
+	m.streamCoordinator().retireToolFeedbackChannel(context.Background(), name)
 
 	m.mu.Lock()
 	m.delivery.removeIfMatches(name, owner)
