@@ -7,6 +7,8 @@ import (
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
+const legacyImageGenerationMaxResults = 4
+
 var (
 	ErrStreamingContract       = errors.New("provider declares streaming without implementing a streaming operation")
 	ErrImageGenerationContract = errors.New("provider declares image generation without implementing the operation")
@@ -54,6 +56,7 @@ func ImageCapabilities(provider ImageGenerationCapable) ImageGenerationCapabilit
 		Supported:    true,
 		ProviderID:   provider.ImageGenerationProviderID(),
 		DefaultModel: provider.DefaultImageGenerationModel(),
+		MaxResults:   legacyImageGenerationMaxResults,
 	}
 }
 

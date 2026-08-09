@@ -68,12 +68,15 @@ func TestImageGenerateToolAcceptsLegacyExternalProvider(t *testing.T) {
 		WithImageGenerationProvider(provider),
 	)
 
-	result := tool.Execute(t.Context(), map[string]any{"prompt": "legacy icon"})
+	result := tool.Execute(t.Context(), map[string]any{"prompt": "legacy icon", "count": float64(12)})
 	if result.IsError {
 		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
 	}
 	if provider.request.Model != "legacy-default" {
 		t.Fatalf("model = %q, want legacy-default", provider.request.Model)
+	}
+	if provider.request.Count != 4 {
+		t.Fatalf("count = %d, want legacy safety cap 4", provider.request.Count)
 	}
 }
 
