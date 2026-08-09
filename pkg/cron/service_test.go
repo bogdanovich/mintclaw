@@ -1016,6 +1016,84 @@ func TestLoadMissingFileClearsLiveJobs(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileSuppressesInFlightDispatchWrites(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "jobs.json")
+
+	released := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	var startedOnce sync.Once
+	var handlerCalls int
+	var cs *CronService
+	cs = NewCronService(storePath, func(job *CronJob) (string, error) {
+		cs.mu.Lock()
+		handlerCalls++
+		cs.mu.Unlock()
+		startedOnce.Do(func() { close(handlerStarted) })
+		<-released
+		return "ok", nil
+	})
+
+	// Recurring job: its completion would persist a next run and recreate a
+	// deleted store if writes were not suppressed during the reload.
+	job, err := cs.AddJob("tick", CronSchedule{Kind: "every", EveryMS: int64Ptr(50)}, "", "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1000
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			cs.store.Jobs[i].State.NextRunAtMS = &past
+		}
+	}
+	cs.mu.Unlock()
+	cs.running = true
+
+	dispatchDone := make(chan struct{})
+	go func() {
+		cs.checkJobs()
+		close(dispatchDone)
+	}()
+
+	// Delete the authoritative file while the handler is in flight.
+	<-handlerStarted
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store: %v", err)
+	}
+
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- cs.Load()
+	}()
+	select {
+	case err := <-loadDone:
+		t.Fatalf("Load completed during in-flight dispatch: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The in-flight completion must not recreate the deleted file.
+	close(released)
+	<-dispatchDone
+
+	if err := <-loadDone; err != nil {
+		t.Fatalf("Load after dispatch failed: %v", err)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("deleted store was recreated by in-flight dispatch: %v", err)
+	}
+	if len(cs.ListJobs(true)) != 0 {
+		t.Fatalf("stale job survived missing-store reload, %d job(s) live", len(cs.ListJobs(true)))
+	}
+
+	cs.mu.RLock()
+	calls := handlerCalls
+	cs.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("job dispatched %d times, want 1", calls)
+	}
+}
+
 func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")

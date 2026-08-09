@@ -61,6 +61,7 @@ type CronService struct {
 	storePath  string
 	store      *CronStore
 	loadErr    error
+	reloadWait bool
 	onJob      JobHandler
 	mu         sync.RWMutex
 	dispatchMu sync.Mutex
@@ -186,10 +187,10 @@ func (cs *CronService) checkJobs() {
 		return
 	}
 
-	// A failed reload latches loadErr and blocks mutations: do not select,
-	// persist, or execute due jobs while the authoritative store is
-	// unreadable, otherwise the live snapshot would overwrite the corrupt file.
-	if cs.loadErr != nil {
+	// A failed reload latches loadErr and a missing-store reload sets
+	// reloadWait; in both cases block selection/persistence/execution so the
+	// live snapshot cannot overwrite or recreate the authoritative file.
+	if cs.writesBlocked() {
 		cs.mu.Unlock()
 		return
 	}
@@ -314,7 +315,7 @@ func (cs *CronService) executeJobByID(jobID string) {
 		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
 	}
 
-	if cs.loadErr == nil {
+	if !cs.writesBlocked() {
 		if err := cs.saveStoreUnsafe(); err != nil {
 			log.Printf("[cron] failed to save store: %v", err)
 		}
@@ -411,12 +412,21 @@ func (cs *CronService) Load() error {
 	// corrupt, latch the failure immediately so an in-flight handler
 	// completion suppresses its save instead of overwriting the malformed
 	// file with the live snapshot.
-	if _, readErr := cs.readStore(); readErr != nil {
+	probe, probeErr := cs.readStore()
+	if probeErr != nil {
 		cs.mu.Lock()
-		cs.loadErr = readErr
+		cs.loadErr = probeErr
 		cs.notify()
 		cs.mu.Unlock()
-		return readErr
+		return probeErr
+	}
+	if probe == nil {
+		// The file is missing: suppress dispatch writes until the locked
+		// re-read is published so an in-flight handler cannot recreate the
+		// deleted file with stale jobs.
+		cs.mu.Lock()
+		cs.reloadWait = true
+		cs.mu.Unlock()
 	}
 
 	cs.dispatchMu.Lock()
@@ -433,6 +443,7 @@ func (cs *CronService) Load() error {
 	// fails.
 	store, readErr := cs.readStore()
 	if readErr != nil {
+		cs.reloadWait = false
 		cs.loadErr = readErr
 		cs.notify()
 		return readErr
@@ -449,10 +460,18 @@ func (cs *CronService) Load() error {
 		cs.store = store
 	}
 	cs.loadErr = nil
+	cs.reloadWait = false
 	// Re-evaluate the scheduler wake time after every reload outcome so a
 	// repaired store resumes promptly and a failed one suspends.
 	cs.notify()
 	return nil
+}
+
+// writesBlocked reports whether the live store must not be persisted: either
+// the authoritative store failed to load or a reload is being serialized with
+// an in-flight dispatch.
+func (cs *CronService) writesBlocked() bool {
+	return cs.loadErr != nil || cs.reloadWait
 }
 
 func (cs *CronService) SetOnJob(handler JobHandler) {
@@ -699,7 +718,7 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	removed := len(cs.store.Jobs) < before
 
 	if removed {
-		if cs.loadErr == nil {
+		if !cs.writesBlocked() {
 			if err := cs.saveStoreUnsafe(); err != nil {
 				log.Printf("[cron] failed to save store after remove: %v", err)
 			}
