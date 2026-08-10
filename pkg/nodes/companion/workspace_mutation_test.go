@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -143,8 +145,8 @@ func TestWorkspaceMutationRejectsTraversalPolicyAndCancellation(t *testing.T) {
 			t.Fatalf("write passed: %#v", options)
 		}
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errCancellationRequested)
 	_, err := runtime.WriteWorkspace(
 		ctx,
 		"project-v1",
@@ -156,6 +158,41 @@ func TestWorkspaceMutationRejectsTraversalPolicyAndCancellation(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "canceled.txt")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("canceled write published: %v", statErr)
+	}
+	deadlineCtx, deadlineCancel := context.WithCancel(t.Context())
+	deadlineCancel()
+	_, err = runtime.WriteWorkspace(
+		deadlineCtx,
+		"project-v1",
+		root,
+		WorkspaceWriteOptions{Path: "timed-out.txt", Content: "no"},
+	)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, errCommandCancellationConfirmed) {
+		t.Fatalf("deadline-like cancellation error = %v", err)
+	}
+}
+
+func TestWorkspaceMutationRejectsOutputAndInputBoundsBeforeEffect(t *testing.T) {
+	runtime, root := newWorkspaceMutationTestRuntime(t)
+	_, err := runtime.handlers[nodes.WorkspaceCommandWrite].execute(t.Context(), commandInvocation{
+		Input: json.RawMessage(`{
+			"profile_revision":"project-v1","workspace_revision":"workspace-v1",
+			"working_scope":"project","path":"bounded.txt","content":"new","overwrite":false
+		}`),
+		OutputLimitBytes: 8,
+	})
+	if err == nil {
+		t.Fatal("tiny output budget passed")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "bounded.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output-bound rejection published a file: %v", statErr)
+	}
+	fileRuntime := runtime.handlers[nodes.WorkspaceCommandPatch].(workspacePatchHandler).runtime.files.
+		workspace["project-v1"].(*FileTransferRuntime)
+	if _, err := fileRuntime.PatchWorkspace(t.Context(), "project-v1", root, WorkspacePatchOptions{
+		Input: strings.Repeat("x", nodes.MaxWorkspacePatchBytes+1),
+	}); !errors.Is(err, ErrFileAccessDenied) {
+		t.Fatalf("oversized patch error = %v", err)
 	}
 }
 

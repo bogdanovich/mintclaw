@@ -120,7 +120,7 @@ func (runtime *FileTransferRuntime) WriteWorkspace(
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return WorkspaceWriteResult{}, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
+		return WorkspaceWriteResult{}, stoppedWorkspaceMutation(ctx)
 	}
 	if err := stage.publish(publication); err != nil {
 		var uncertain *committedFileMutationError
@@ -173,9 +173,12 @@ func publishPreparedWorkspacePatch(
 	for _, mutation := range prepared {
 		if err := ctx.Err(); err != nil {
 			if len(result.Committed) == 0 {
-				return WorkspacePatchResult{}, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
+				return WorkspacePatchResult{}, stoppedWorkspaceMutation(ctx)
 			}
-			result.State, result.Code = "partial", "CANCELED"
+			result.State, result.Code = "partial", "TIMEOUT"
+			if errors.Is(context.Cause(ctx), errCancellationRequested) {
+				result.Code = "CANCELED"
+			}
 			return result, nil
 		}
 		if mutation.before != nil {
@@ -255,8 +258,10 @@ func prepareWorkspaceMutation(
 	operation patchformat.Operation,
 ) (*preparedWorkspaceMutation, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
+		return nil, stoppedWorkspaceMutation(ctx)
 	}
+	// P2 has no separate delete grant: add consumes allow_create, while both
+	// update and delete consume the existing allow_overwrite authority.
 	if operation.Kind == patchformat.Add && !profile.profile.AllowCreate ||
 		operation.Kind != patchformat.Add && !profile.profile.AllowOverwrite {
 		return nil, ErrFileAccessDenied
@@ -336,7 +341,7 @@ func (profile *fileProfileRuntime) workspaceWritableRoot(workspace string) *file
 
 func stageWorkspaceContent(ctx context.Context, parent *resolvedParent, content []byte) (*stagedFile, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
+		return nil, stoppedWorkspaceMutation(ctx)
 	}
 	stage, err := parent.createStage("workspace")
 	if err != nil {
@@ -403,6 +408,14 @@ func workspacePatchFailure(result WorkspacePatchResult, err error) (WorkspacePat
 }
 
 func confirmedWorkspaceMutationCancellation(ctx context.Context, err error) error {
+	if err != nil && errors.Is(context.Cause(ctx), errCancellationRequested) {
+		return fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
+	}
+	return err
+}
+
+func stoppedWorkspaceMutation(ctx context.Context) error {
+	err := ctx.Err()
 	if err != nil && errors.Is(context.Cause(ctx), errCancellationRequested) {
 		return fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
 	}
