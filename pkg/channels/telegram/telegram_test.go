@@ -3515,13 +3515,15 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"}),
 		chatIDs:     make(map[string]int64),
 		ctx:         context.Background(),
+		bot:         newTestTelegramBot(t, "mintclaw_bot"),
 		selfID:      42,
 		selfName:    "mintclaw_bot",
 	}
 	msg := &telego.Message{
 		Caption: "  use this caption  ", MessageID: 23,
-		Chat: telego.Chat{ID: 999, Type: "private"},
-		From: &telego.User{ID: 15, FirstName: "Eve"},
+		Photo: []telego.PhotoSize{{FileID: "photo-file"}},
+		Chat:  telego.Chat{ID: 999, Type: "private"},
+		From:  &telego.User{ID: 15, FirstName: "Eve"},
 		ReplyToMessage: &telego.Message{
 			MessageID: 101, Text: "Which input?",
 			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
