@@ -904,6 +904,14 @@ func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
 	return append([]providers.Message(nil), ts.persistedMessages...)
 }
 
+func (ts *turnState) stripPersistedMessageMedia() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for i := range ts.persistedMessages {
+		ts.persistedMessages[i].Media = nil
+	}
+}
+
 func (ts *turnState) acceptedSteeringSnapshot() []providers.Message {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
