@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
 )
 
 type fakeNodeAdmissionRoutes struct {
@@ -268,6 +269,29 @@ func TestNodeAdmissionRuntimeOwnsOneInvocationStoreAndClosesIt(t *testing.T) {
 	}
 	if err = runtime.Close(t.Context()); err != nil {
 		t.Fatalf("second runtime Close() error = %v", err)
+	}
+}
+
+func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t *testing.T) {
+	runtime := &nodeAdmissionRuntime{
+		handler: &closeErrorNodeAdmissionHandler{
+			fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
+			err:                      nodews.ErrSessionDrainIncomplete,
+		},
+	}
+	path := nodes.GatewayInvocationStorePath(t.TempDir())
+	store, err := runtime.gatewayInvocationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runtime.Close(t.Context()); !errors.Is(err, nodews.ErrSessionDrainIncomplete) {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if runtime.invocationStore != store || runtime.invocationStorePath != path {
+		t.Fatal("incomplete drain discarded invocation store reconciliation authority")
+	}
+	if _, _, err = store.Lookup(nodes.GatewayInvocationPrincipal{}, "inv_closed"); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("drain-timeout invocation store lookup error = %v", err)
 	}
 }
 

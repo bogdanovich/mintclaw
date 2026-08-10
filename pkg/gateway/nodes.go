@@ -502,9 +502,15 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	var closeErr error
 	if handler != nil {
 		closeErr = handler.Close(ctx)
-		if errors.Is(closeErr, nodews.ErrSessionDrainIncomplete) {
-			return closeErr
+	}
+	var invocationErr error
+	if invocationStore != nil {
+		if err := invocationStore.Close(); err != nil {
+			invocationErr = fmt.Errorf("close gateway invocation store: %w", err)
 		}
+	}
+	if errors.Is(closeErr, nodews.ErrSessionDrainIncomplete) {
+		return errors.Join(closeErr, invocationErr)
 	}
 	var terminalErr error
 	if terminalStore != nil {
@@ -516,12 +522,6 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	if transferSpool != nil {
 		if err := transferSpool.Close(); err != nil {
 			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
-		}
-	}
-	var invocationErr error
-	if invocationStore != nil {
-		if err := invocationStore.Close(); err != nil {
-			invocationErr = fmt.Errorf("close gateway invocation store: %w", err)
 		}
 	}
 	if closeErr != nil || terminalErr != nil || transferErr != nil || invocationErr != nil {
