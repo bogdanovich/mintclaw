@@ -395,7 +395,7 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 		state.tabIndexes = make(map[string]int)
 	}
 	if state.generation == 0 {
-		state.generation = raw.Generation
+		state.generation = 1
 	} else if raw.Generation > state.rawGeneration {
 		state.generation += raw.Generation - state.rawGeneration
 	}

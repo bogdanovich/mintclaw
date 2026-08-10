@@ -30,8 +30,12 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 			{Token: "f2", Parent: "f1", Generation: 1, URL: "https://example.com/nested", Label: "inner"},
 		},
 	}}}
+	changedRaw := raw
+	changedRaw.Generation++
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
-		"browser_run_code_unsafe": {contextProbeResult(t, raw), contextProbeResult(t, raw)},
+		"browser_run_code_unsafe": {
+			contextProbeResult(t, raw), contextProbeResult(t, raw), contextProbeResult(t, changedRaw),
+		},
 	}}
 	worker := contextTestWorker(client)
 	first, err := worker.ContextCatalog(t.Context())
@@ -45,6 +49,13 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 	if first.ID != second.ID || first.Generation != second.Generation || first.SelectedTabID != second.SelectedTabID ||
 		len(first.Tabs) != 1 || len(first.Tabs[0].Frames) != 2 {
 		t.Fatalf("catalogs = %#v, %#v", first, second)
+	}
+	if first.Generation != 1 {
+		t.Fatalf("initial broker-visible generation = %d, want 1", first.Generation)
+	}
+	changed, err := worker.ContextCatalog(t.Context())
+	if err != nil || changed.Generation != 2 {
+		t.Fatalf("changed ContextCatalog() = %#v, %v", changed, err)
 	}
 	if strings.Contains(first.SelectedTabID, "driver") || strings.Contains(first.Tabs[0].Frames[0].ID, "driver") ||
 		first.Tabs[0].URL != "https://example.com/path" || first.Tabs[0].Kind != TabPrimary ||
