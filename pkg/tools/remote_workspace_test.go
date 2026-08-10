@@ -164,6 +164,14 @@ func TestRemoteWorkspaceNodeRouterBindsWriteApprovalAndExactPlan(t *testing.T) {
 		!strings.Contains(string(prepared.Plan.Input), strings.Repeat("a", 64)) {
 		t.Fatalf("prepared workspace write = %#v", prepared)
 	}
+	changedArgs := cloneToolArguments(toolArgs)
+	changedArgs["content"] = "changed\n"
+	changed := router.ExecuteRemoteWorkspace(
+		toolshared.WithToolApprovalContinuation(ctx, true), "write_file", "project", changedArgs,
+	)
+	if !changed.IsError || source.dispatchCalls != 0 {
+		t.Fatalf("changed approved write = %#v; dispatches=%d", changed, source.dispatchCalls)
+	}
 	result := router.ExecuteRemoteWorkspace(
 		toolshared.WithToolApprovalContinuation(ctx, true), "write_file", "project", toolArgs,
 	)
@@ -462,11 +470,14 @@ func TestRemoteWorkspaceMutationToolIsExplicitAndNeverLeaksRemotePreconditionLoc
 
 func TestToolLogArgumentsRedactsRemoteWorkspaceFileContent(t *testing.T) {
 	arguments := map[string]any{
-		"workspace": "private-node", "path": "secret.txt", "pattern": "password",
+		"workspace": "private-node", "path": "secret.txt", "pattern": "password", "content": "secret",
+		"input": "secret patch",
 	}
-	got := ToolLogArguments("search_files", arguments)
-	if got["redacted"] != true || got["argument_count"] != 3 || len(got) != 2 {
-		t.Fatalf("remote workspace arguments = %#v", got)
+	for _, name := range []string{"search_files", "write_file", "apply_patch"} {
+		got := ToolLogArguments(name, arguments)
+		if got["redacted"] != true || got["argument_count"] != 5 || len(got) != 2 {
+			t.Fatalf("%s remote workspace arguments = %#v", name, got)
+		}
 	}
 	if local := ToolLogArguments("search_files", map[string]any{"pattern": "public"}); local["pattern"] != "public" {
 		t.Fatalf("local search arguments unexpectedly redacted: %#v", local)
