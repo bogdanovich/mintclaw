@@ -143,6 +143,17 @@ func TestPeerRequestCancellationWhileWaitingForWriter(t *testing.T) {
 	}
 }
 
+func TestPeerControlWriteBypassesApplicationWriter(t *testing.T) {
+	session := newPeer(newStubPeerConnection())
+	session.writeSlot <- struct{}{}
+	defer func() { <-session.writeSlot }()
+
+	deadline := time.Now().Add(time.Second)
+	if err := session.writeControl(websocket.PingMessage, []byte("heartbeat"), deadline); err != nil {
+		t.Fatalf("writeControl() error = %v", err)
+	}
+}
+
 func TestPeerDispatchCommitFailurePreventsWrite(t *testing.T) {
 	connection := newStubPeerConnection()
 	session := newPeer(connection)
