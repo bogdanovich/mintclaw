@@ -500,8 +500,14 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolResultStatus: toolResultContextStatus(hookResult),
 					Media:            toolResultMedia,
 				}
-				if err := runner.commitToolResult(toolResultMsg); err != nil {
+				aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+				if err != nil {
 					return stopToolBatch(ToolLoopOutcome{})
+				}
+				if aborted {
+					return stopToolBatch(ToolLoopOutcome{
+						Control: ToolControlBreak, AbortCause: TurnAbortHard,
+					})
 				}
 
 				attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
@@ -1020,6 +1026,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	if ts.hardAbortRequested() {
 		resolveCanceledToolSuspension(execCtx, toolResult)
+		if toolResult != nil && toolResult.Suspension == nil {
+			_ = runner.journalHardAbortedToolResult(tc, toolResult)
+		}
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
 
@@ -1144,37 +1153,33 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
-	if bindErr := bindNodeFileMediaOwner(
-		p.Context.MediaResolver,
-		ts,
-		toolResult.Media,
-	); bindErr != nil {
-		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
-			"tool":        toolName,
-			"media_count": len(toolResult.Media),
-		})
-	}
 	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
 		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
 		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
 	}
-	contentForLLM := p.filterToolContentForLLM(toolResult.ContentForLLM())
+	toolResultMsg := buildToolResultJournalMessage(
+		p,
+		ts,
+		toolCallID,
+		toolName,
+		toolResult,
+		p.filterToolContentForLLM(toolResult.ContentForLLM()),
+	)
+	contentForLLM := toolResultMsg.Content
 	loopDecision := p.afterToolLoopDecision(
 		ts, exec, toolName, toolArgs, toolResult, contentForLLM, toolSemantics,
 	)
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
-	toolResultMsg := providers.Message{
-		Role:             "tool",
-		Content:          contentForLLM,
-		ToolCallID:       toolCallID,
-		ToolResultStatus: toolResultContextStatus(toolResult),
-	}
-	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
-		toolResultMsg.Media = append(toolResultMsg.Media, toolResult.Media...)
-	}
-	if err := runner.commitToolResult(toolResultMsg); err != nil {
+	toolResultMsg.Content = contentForLLM
+	aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+	if err != nil {
 		return stopToolBatch(ToolLoopOutcome{})
+	}
+	if aborted {
+		return stopToolBatch(ToolLoopOutcome{
+			Control: ToolControlBreak, AbortCause: TurnAbortHard,
+		})
 	}
 
 	attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
@@ -1441,16 +1446,24 @@ const (
 )
 
 func (r *toolLoopRunner) appendToolMessage(msg providers.Message, ingest toolMessageIngestMode) error {
+	return r.appendToolMessageWithContext(r.turnCtx, msg, ingest)
+}
+
+func (r *toolLoopRunner) appendToolMessageWithContext(
+	ctx context.Context,
+	msg providers.Message,
+	ingest toolMessageIngestMode,
+) error {
 	r.messages = append(r.messages, msg)
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return nil
 	}
-	writeErr := persistFullSessionMessage(r.turnCtx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
+	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
 	if writeErr == nil {
 		r.ts.recordPersistedMessage(msg)
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
-		r.p.ingestMessage(r.turnCtx, r.ts, msg, writeErr)
+		r.p.ingestMessage(ctx, r.ts, msg, writeErr)
 	} else if writeErr != nil {
 		logger.WarnCF("agent", "Canonical tool message write failed", map[string]any{
 			"session_key": r.ts.sessionKey,
@@ -1463,8 +1476,73 @@ func (r *toolLoopRunner) appendToolMessage(msg providers.Message, ingest toolMes
 	return writeErr
 }
 
-func (r *toolLoopRunner) commitToolResult(msg providers.Message) error {
-	return r.appendToolMessage(msg, toolMessagePersistAndIngest)
+func (r *toolLoopRunner) journalHardAbortedToolResult(
+	toolCall providers.ToolCall,
+	result *toolshared.ToolResult,
+) error {
+	if r == nil || result == nil {
+		return nil
+	}
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	return r.appendToolMessageWithContext(
+		ctx,
+		buildToolResultJournalMessage(
+			r.p,
+			r.ts,
+			toolCall.ID,
+			toolCall.Name,
+			result,
+			r.p.filterToolContentForLLM(result.ContentForLLM()),
+		),
+		toolMessagePersistOnly,
+	)
+}
+
+func buildToolResultJournalMessage(
+	pipeline *Pipeline,
+	ts *turnState,
+	toolCallID string,
+	toolName string,
+	result *toolshared.ToolResult,
+	content string,
+) providers.Message {
+	if bindErr := bindNodeFileMediaOwner(pipeline.Context.MediaResolver, ts, result.Media); bindErr != nil {
+		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
+			"tool": toolName, "media_count": len(result.Media),
+		})
+	}
+	message := providers.Message{
+		Role: "tool", Content: content, ToolCallID: toolCallID,
+		ToolResultStatus: toolResultContextStatus(result),
+	}
+	if len(result.Media) > 0 && !result.ResponseHandled {
+		message.Media = append(message.Media, result.Media...)
+	}
+	return message
+}
+
+func (r *toolLoopRunner) commitExecutedToolResult(msg providers.Message) (bool, error) {
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	if err := r.appendToolMessageWithContext(ctx, msg, toolMessagePersistOnly); err != nil {
+		return false, err
+	}
+	if r.ts.hardAbortRequested() {
+		return true, nil
+	}
+	if r.ts != nil && !r.ts.opts.NoHistory && r.p != nil {
+		r.p.ingestMessage(r.turnCtx, r.ts, msg, nil)
+	}
+	return r.ts.hardAbortRequested(), nil
 }
 
 func (r *toolLoopRunner) captureAfterToolSteering(markAdditionalSteering bool) {

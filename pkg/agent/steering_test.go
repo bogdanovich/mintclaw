@@ -2682,7 +2682,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_HardAbort_AfterToolStartPreservesDurableIntent(t *testing.T) {
+func TestAgentLoop_HardAbort_AfterToolStartPreservesTerminalResult(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -2797,16 +2797,22 @@ func TestAgentLoop_HardAbort_AfterToolStartPreservesDurableIntent(t *testing.T) 
 	for i := range originalHistory {
 		originalHistory[i].CreatedAt = nil
 	}
-	if len(finalHistory) != len(originalHistory)+2 {
-		t.Fatalf("expected root and unresolved tool intent after hard abort, got %#v", finalHistory)
+	if len(finalHistory) != len(originalHistory)+3 {
+		t.Fatalf("expected root, tool intent, and terminal result after hard abort, got %#v", finalHistory)
 	}
 	if !reflect.DeepEqual(finalHistory[:len(originalHistory)], originalHistory) {
 		t.Fatalf("expected original history prefix after hard abort, got %#v", finalHistory)
 	}
 	root := finalHistory[len(originalHistory)]
 	intent := finalHistory[len(originalHistory)+1]
+	terminal := finalHistory[len(originalHistory)+2]
 	if root.Role != "user" || root.Content != "do work" || intent.Role != "assistant" || len(intent.ToolCalls) != 1 {
-		t.Fatalf("expected durable root and unresolved tool intent after hard abort, got %#v", finalHistory)
+		t.Fatalf("expected durable root and tool intent after hard abort, got %#v", finalHistory)
+	}
+	if terminal.Role != "tool" || terminal.ToolCallID != "call_1" ||
+		terminal.ToolResultStatus != providers.ToolResultStatusError ||
+		!strings.Contains(terminal.Content, "context canceled") {
+		t.Fatalf("expected exact terminal tool result after hard abort, got %#v", finalHistory)
 	}
 
 	events := collectRuntimeEventStream(runtimeCh)

@@ -1334,6 +1334,9 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	pipeline.dismissToolFeedbackForTurn(dismissCtx, ts)
 	dismissCancel()
+	if outcome.JournalErr != nil {
+		return outcome.Control, false, outcome.JournalErr
+	}
 	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
 		return outcome.Control, true, nil
 	}
@@ -1758,6 +1761,9 @@ func (al *AgentLoop) ensureInteractionCancellationToolResult(
 	}
 	if resultIndex >= 0 {
 		return nil
+	}
+	if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt != 0 {
+		return fmt.Errorf("approved tool terminal result is unavailable after approval consumption")
 	}
 	return al.persistInteractionToolResult(ctx, agent, record, interactionToolResultPayload{
 		InteractionID: record.ID,
