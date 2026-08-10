@@ -335,7 +335,13 @@ func NewRuntime(
 			update.descriptorValue.ModelContract = cloneModelContract(modelContract)
 		} else if nodes.IsWorkspaceCommand(descriptor.Name) {
 			// Workspace commands are internal to the explicit gateway router and
-			// remain unavailable through generic nodes_invoke discovery.
+			// remain unavailable through generic nodes_invoke discovery. Their
+			// advertised execution bounds still cannot exceed local policy.
+			modelContract := cloneModelContract(descriptor.ModelContract)
+			modelContract.TimeoutSecondsMax = min(modelContract.TimeoutSecondsMax, policy.MaxTimeoutSeconds)
+			modelContract.OutputBytesMax = min(modelContract.OutputBytesMax, policy.MaxOutputBytes)
+			descriptor.ModelContract = modelContract
+			settings.workspaceRead.descriptors[descriptor.Name] = descriptor
 		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) &&
 			!nodes.IsJobCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)

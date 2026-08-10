@@ -119,6 +119,38 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 	})
 }
 
+func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
+	ctx context.Context,
+	toolName string,
+	workspaceAlias string,
+	toolArgs map[string]any,
+) (map[string]any, error) {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	command, err := remoteWorkspaceReadCommand(toolName)
+	if err != nil {
+		return nil, err
+	}
+	args, err := router.prepareArguments(ctx, binding, command, toolArgs)
+	if err != nil {
+		return nil, err
+	}
+	return router.invoke.approvalArguments(ctx, args, true)
+}
+
+func remoteWorkspaceReadCommand(toolName string) (string, error) {
+	switch toolName {
+	case "read_file":
+		return nodes.WorkspaceCommandRead, nil
+	case "search_files":
+		return nodes.WorkspaceCommandSearch, nil
+	default:
+		return "", ErrRemoteWorkspaceUnavailable
+	}
+}
+
 func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 	ctx context.Context,
 	binding remoteWorkspaceNodeBinding,
@@ -133,15 +165,11 @@ func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 	if !found || descriptor.ModelContract == nil || !nodes.IsWorkspaceCommand(command) {
 		return nil, fmt.Errorf("workspace command unavailable")
 	}
-	fileDescriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, "file.info.v1")
-	if !found {
+	descriptor, found = projectFileDescriptorForTarget(descriptor, resolved.binding.FileProfile)
+	if !found || len(descriptor.FileProfiles) != 1 {
 		return nil, fmt.Errorf("workspace file profile unavailable")
 	}
-	fileDescriptor, found = projectFileDescriptorForTarget(fileDescriptor, resolved.binding.FileProfile)
-	if !found || len(fileDescriptor.FileProfiles) != 1 {
-		return nil, fmt.Errorf("workspace file profile unavailable")
-	}
-	profileRevision := fileDescriptor.FileProfiles[0].Revision
+	profileRevision := descriptor.FileProfiles[0].Revision
 	if !slices.Contains(descriptor.ModelContract.Constraints.ProfileAliases, profileRevision) ||
 		!slices.Contains(descriptor.ModelContract.Constraints.WorkingScopes, binding.config.WorkingScope) {
 		return nil, fmt.Errorf("workspace authority does not intersect node policy")

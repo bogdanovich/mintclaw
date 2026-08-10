@@ -348,7 +348,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
 ) (map[string]any, error) {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.approvalArguments(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) approvalArguments(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) (map[string]any, error) {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -1047,13 +1055,29 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 			nil,
 		)
 	}
-	if isNodeFileTransferDescriptor(descriptor) {
+	if isNodeFileTransferDescriptor(descriptor) &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
 			nodeActionRefreshDiscovery,
 			nil,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialCommandUnavailable,
+				nodeConstraintCommandPolicy,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
 	}
 	if resolved.requiresReapproval {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
@@ -1162,6 +1186,16 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 			nodeActionRefreshDiscovery,
 			err,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		var projected bool
@@ -1409,6 +1443,17 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	descriptor, err := current.Registration.ApprovedCommand(command)
 	if err != nil {
 		return errDiscoveryStale
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		binding, exists := runtime.access.targets[target]
+		if !exists {
+			return errDiscoveryStale
+		}
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(descriptor, binding.FileProfile)
+		if !projected {
+			return errDiscoveryStale
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		binding, exists := runtime.access.targets[target]

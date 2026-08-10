@@ -136,6 +136,19 @@ func (router *FileTransferRouter) WorkspaceProfileRevisions() []string {
 	return revisions
 }
 
+func (router *FileTransferRouter) WorkspaceProfiles() []nodes.FileProfileDescriptor {
+	if router == nil || len(router.descriptors) == 0 {
+		return nil
+	}
+	profiles := make([]nodes.FileProfileDescriptor, 0, len(router.workspace))
+	for _, profile := range router.descriptors[0].FileProfiles {
+		if router.workspace[profile.Revision] != nil {
+			profiles = append(profiles, profile)
+		}
+	}
+	return cloneFileProfileDescriptors(profiles)
+}
+
 func (router *FileTransferRouter) ReadWorkspace(
 	ctx context.Context,
 	profileRevision string,

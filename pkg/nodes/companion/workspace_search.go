@@ -235,7 +235,8 @@ func (state *workspaceSearchState) visitFile(path, name string, _ []workspaceIgn
 		return nil
 	}
 	source, err := state.profile.openReadable(path)
-	if err != nil || source.info.Size() > workspaceSearchMaxFileBytes {
+	if err != nil || source.info.Size() > workspaceSearchMaxFileBytes ||
+		source.info.Size() > state.profile.profile.MaxFileBytes {
 		return nil
 	}
 	defer func() { _ = source.file.Close() }()

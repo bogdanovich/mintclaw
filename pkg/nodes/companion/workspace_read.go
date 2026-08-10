@@ -61,7 +61,7 @@ func newWorkspaceReadRuntime(
 		return nil, errors.New("workspace read requires system-exec working-scope discovery")
 	}
 	scopes := sortedSystemExecMapKeys(systemExec.workingScopeAliases)
-	descriptors, err := nodes.WorkspaceReadDescriptors(files.WorkspaceProfileRevisions(), scopes)
+	descriptors, err := nodes.WorkspaceReadDescriptors(files.WorkspaceProfiles(), scopes)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +111,34 @@ func (handler workspaceSearchHandler) execute(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", nodes.ErrCommandDenied, safeFileFailureCode(err))
 	}
+	result, err = boundWorkspaceSearchResult(result, handler.descriptor(), invocation.OutputLimitBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: OUTPUT_LIMIT", nodes.ErrCommandDenied)
+	}
+	return result, nil
+}
+
+func boundWorkspaceSearchResult(
+	result WorkspaceSearchResult,
+	descriptor nodes.CommandDescriptor,
+	outputLimit int,
+) (WorkspaceSearchResult, error) {
+	if outputLimit <= 0 || outputLimit > nodes.MaxWorkspaceReadBytes {
+		return WorkspaceSearchResult{}, nodes.ErrCommandDenied
+	}
+	if workspaceOutputFits(result, descriptor, outputLimit) {
+		return result, nil
+	}
+	content := result.Result
+	result.Truncated = true
+	bounded, ok := boundWorkspaceText(content, func(candidate string) bool {
+		result.Result = candidate
+		return workspaceOutputFits(result, descriptor, outputLimit)
+	})
+	if !ok {
+		return WorkspaceSearchResult{}, nodes.ErrCommandDenied
+	}
+	result.Result = bounded
 	return result, nil
 }
 
@@ -147,7 +175,72 @@ func (handler workspaceReadHandler) execute(
 		return nil, fmt.Errorf("%w: %s", nodes.ErrCommandDenied, safeFileFailureCode(err))
 	}
 	result.Path = filepath.ToSlash(input.Path)
+	result, err = boundWorkspaceReadResult(result, handler.descriptor(), invocation.OutputLimitBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: OUTPUT_LIMIT", nodes.ErrCommandDenied)
+	}
 	return result, nil
+}
+
+func boundWorkspaceReadResult(
+	result WorkspaceReadResult,
+	descriptor nodes.CommandDescriptor,
+	outputLimit int,
+) (WorkspaceReadResult, error) {
+	if outputLimit <= 0 || outputLimit > nodes.MaxWorkspaceReadBytes {
+		return WorkspaceReadResult{}, nodes.ErrCommandDenied
+	}
+	if workspaceOutputFits(result, descriptor, outputLimit) {
+		return result, nil
+	}
+	content := result.Content
+	result.Truncated = true
+	bounded, ok := boundWorkspaceText(content, func(candidate string) bool {
+		result.Content = candidate
+		return workspaceOutputFits(result, descriptor, outputLimit)
+	})
+	if !ok {
+		return WorkspaceReadResult{}, nodes.ErrCommandDenied
+	}
+	result.Content = bounded
+	return result, nil
+}
+
+func boundWorkspaceText(content string, fits func(string) bool) (string, bool) {
+	boundaries := []int{0}
+	for index := range content {
+		if index > 0 {
+			boundaries = append(boundaries, index)
+		}
+	}
+	if boundaries[len(boundaries)-1] != len(content) {
+		boundaries = append(boundaries, len(content))
+	}
+	best := -1
+	low, high := 0, len(boundaries)-1
+	for low <= high {
+		middle := low + (high-low)/2
+		contentBytes := boundaries[middle]
+		if fits(content[:contentBytes]) {
+			best = contentBytes
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	if best < 0 {
+		return "", false
+	}
+	return content[:best], true
+}
+
+func workspaceOutputFits(result any, descriptor nodes.CommandDescriptor, outputLimit int) bool {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return false
+	}
+	_, err = nodes.ValidateInvocationOutput(descriptor, encoded, outputLimit)
+	return err == nil
 }
 
 func validWorkspaceRelativePath(path string) bool {

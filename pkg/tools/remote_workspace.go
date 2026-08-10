@@ -15,12 +15,40 @@ import (
 // generic tool proxy.
 type RemoteWorkspaceReadSource interface {
 	WorkspaceAliases() []string
+	ApprovalArgumentsRemoteWorkspace(
+		context.Context,
+		string,
+		string,
+		map[string]any,
+	) (map[string]any, error)
 	ExecuteRemoteWorkspace(
 		context.Context,
 		string,
 		string,
 		map[string]any,
 	) *toolshared.ToolResult
+}
+
+func (tool *RemoteWorkspaceReadTool) ApprovalArguments(
+	ctx context.Context,
+	args map[string]any,
+) (map[string]any, error) {
+	workspace, remoteArgs, remote, err := tool.routeArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	if !remote {
+		if provider, ok := tool.local.(ApprovalArgumentsProvider); ok {
+			return provider.ApprovalArguments(ctx, remoteArgs)
+		}
+		return remoteArgs, nil
+	}
+	return tool.remote.ApprovalArgumentsRemoteWorkspace(
+		ctx,
+		tool.Name(),
+		workspace,
+		tool.withReadMode(remoteArgs),
+	)
 }
 
 // RemoteWorkspaceReadTool preserves one agent-specific local tool and routes
@@ -81,30 +109,45 @@ func (tool *RemoteWorkspaceReadTool) Execute(
 	ctx context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	workspace, routedArgs, remote, err := tool.routeArguments(args)
+	if err != nil {
+		return toolshared.ErrorResult("remote workspace is unavailable")
+	}
+	if !remote {
+		return tool.local.Execute(ctx, routedArgs)
+	}
+	return tool.remote.ExecuteRemoteWorkspace(ctx, tool.Name(), workspace, tool.withReadMode(routedArgs))
+}
+
+func (tool *RemoteWorkspaceReadTool) routeArguments(
+	args map[string]any,
+) (string, map[string]any, bool, error) {
 	raw, exists := args["workspace"]
 	if !exists {
-		return tool.local.Execute(ctx, args)
+		return "", args, false, nil
 	}
 	workspace, ok := raw.(string)
 	workspace = strings.TrimSpace(workspace)
+	routed := cloneToolArguments(args)
+	delete(routed, "workspace")
 	if !ok || workspace == "" {
-		localArgs := cloneToolArguments(args)
-		delete(localArgs, "workspace")
-		return tool.local.Execute(ctx, localArgs)
+		return "", routed, false, nil
 	}
 	if !slices.Contains(tool.aliases, workspace) {
-		return toolshared.ErrorResult("remote workspace is unavailable")
+		return "", nil, false, ErrRemoteWorkspaceUnavailable
 	}
-	remoteArgs := cloneToolArguments(args)
-	delete(remoteArgs, "workspace")
+	return workspace, routed, true, nil
+}
+
+func (tool *RemoteWorkspaceReadTool) withReadMode(args map[string]any) map[string]any {
 	if tool.lineRead {
-		if _, hasStart := remoteArgs["start_line"]; !hasStart {
-			if _, hasLimit := remoteArgs["max_lines"]; !hasLimit {
-				remoteArgs["start_line"] = float64(1)
+		if _, hasStart := args["start_line"]; !hasStart {
+			if _, hasLimit := args["max_lines"]; !hasLimit {
+				args["start_line"] = float64(1)
 			}
 		}
 	}
-	return tool.remote.ExecuteRemoteWorkspace(ctx, tool.Name(), workspace, remoteArgs)
+	return args
 }
 
 func toolHasParameter(tool toolshared.Tool, name string) bool {

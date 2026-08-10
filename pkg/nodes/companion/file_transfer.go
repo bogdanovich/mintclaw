@@ -326,6 +326,9 @@ func (runtime *FileTransferRuntime) ReadWorkspace(
 		return WorkspaceReadResult{}, err
 	}
 	defer func() { _ = source.file.Close() }()
+	if source.info.Size() > runtime.profiles[profileRevision].profile.MaxFileBytes {
+		return WorkspaceReadResult{}, ErrFileAccessDenied
+	}
 	digest, err := hashOpenedFile(ctx, source.file)
 	if err != nil {
 		return WorkspaceReadResult{}, err

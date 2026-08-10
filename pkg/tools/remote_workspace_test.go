@@ -43,6 +43,52 @@ func TestRemoteWorkspaceNodeRouterBindsConfiguredRead(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceNodeRouterPreservesReadApprovalAndPreparedPlan(t *testing.T) {
+	cfg, source := remoteWorkspaceNodeTestSetupWithApproval(t, "required")
+	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "read_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := nodeInvocationTestContext("owner", "workspace-read-approval")
+	toolArgs := map[string]any{"path": "README.md", "start_line": float64(1)}
+	approval, err := router.ApprovalArgumentsRemoteWorkspace(
+		ctx,
+		"read_file",
+		"project",
+		toolArgs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := mustFakeGatewayInvocation(t, source, ctx, approval["invocation_id"].(string))
+	if prepared.Descriptor.ModelContract == nil ||
+		prepared.Descriptor.ModelContract.ApprovalMode != "each_command" ||
+		len(prepared.Descriptor.FileProfiles) != 1 ||
+		prepared.Descriptor.FileProfiles[0].Approval.Read != "required" {
+		t.Fatalf("prepared workspace approval authority = %#v", prepared.Descriptor)
+	}
+	unapproved := router.ExecuteRemoteWorkspace(ctx, "read_file", "project", toolArgs)
+	if !unapproved.IsError || !strings.Contains(unapproved.ContentForLLM(), nodeDenialApprovalRequired) ||
+		source.dispatchCalls != 0 {
+		t.Fatalf("unapproved workspace read = %#v; dispatches = %d", unapproved, source.dispatchCalls)
+	}
+	approved := router.ExecuteRemoteWorkspace(
+		toolshared.WithToolApprovalContinuation(ctx, true),
+		"read_file",
+		"project",
+		toolArgs,
+	)
+	payload := decodeNodeResult(t, approved)
+	if payload["invocation_id"] != approval["invocation_id"] || source.dispatchCalls != 1 || source.prepareCalls != 1 {
+		t.Fatalf(
+			"approved workspace read = %#v; prepares = %d, dispatches = %d",
+			payload,
+			source.prepareCalls,
+			source.dispatchCalls,
+		)
+	}
+}
+
 func TestGenericNodeInvokeCannotBypassRemoteWorkspaceAlias(t *testing.T) {
 	cfg, source := remoteWorkspaceNodeTestSetup(t)
 	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "read_file")
@@ -88,13 +134,22 @@ func TestRemoteWorkspaceNodeRouterBindsConfiguredSearch(t *testing.T) {
 }
 
 func remoteWorkspaceNodeTestSetup(t *testing.T) (*config.Config, *fakeNodeInvocationSource) {
+	return remoteWorkspaceNodeTestSetupWithApproval(t, "none")
+}
+
+func remoteWorkspaceNodeTestSetupWithApproval(
+	t *testing.T,
+	readApproval string,
+) (*config.Config, *fakeNodeInvocationSource) {
 	t.Helper()
-	descriptors, err := nodes.WorkspaceReadDescriptors([]string{"project-v1"}, []string{"project"})
+	fileInfo := nodeFileInfoTestDescriptor("none")
+	fileInfo.FileProfiles[0].Approval.Read = readApproval
+	descriptors, err := nodes.WorkspaceReadDescriptors(fileInfo.FileProfiles, []string{"project"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{
-		nodeFileInfoTestDescriptor("none"),
+		fileInfo,
 		descriptors[0],
 		descriptors[1],
 	}}
@@ -168,6 +223,19 @@ type remoteWorkspaceReadSource struct {
 	tool      string
 	workspace string
 	args      map[string]any
+}
+
+func (source *remoteWorkspaceReadSource) ApprovalArgumentsRemoteWorkspace(
+	_ context.Context,
+	tool string,
+	workspace string,
+	args map[string]any,
+) (map[string]any, error) {
+	source.calls++
+	source.tool = tool
+	source.workspace = workspace
+	source.args = args
+	return map[string]any{"workspace": workspace, "path": args["path"]}, nil
 }
 
 func (*remoteWorkspaceReadSource) WorkspaceAliases() []string { return []string{"vpn", "mac"} }

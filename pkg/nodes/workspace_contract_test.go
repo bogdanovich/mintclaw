@@ -7,7 +7,10 @@ import (
 
 func TestWorkspaceReadDescriptorsAreHiddenAndBounded(t *testing.T) {
 	descriptors, err := WorkspaceReadDescriptors(
-		[]string{"project-v2", "project-v1"},
+		[]FileProfileDescriptor{
+			workspaceTestFileProfile("project-b", "project-v2"),
+			workspaceTestFileProfile("project-a", "project-v1"),
+		},
 		[]string{"source", "build"},
 	)
 	if err != nil {
@@ -41,11 +44,17 @@ func TestWorkspaceReadDescriptorsAreHiddenAndBounded(t *testing.T) {
 }
 
 func TestWorkspaceReadDescriptorAuthorityChangesWithProfiles(t *testing.T) {
-	first, err := WorkspaceReadDescriptors([]string{"project-v1"}, []string{"project"})
+	first, err := WorkspaceReadDescriptors(
+		[]FileProfileDescriptor{workspaceTestFileProfile("project", "project-v1")},
+		[]string{"project"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := WorkspaceReadDescriptors([]string{"project-v2"}, []string{"project"})
+	second, err := WorkspaceReadDescriptors(
+		[]FileProfileDescriptor{workspaceTestFileProfile("project", "project-v2")},
+		[]string{"project"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,5 +63,12 @@ func TestWorkspaceReadDescriptorAuthorityChangesWithProfiles(t *testing.T) {
 	}
 	if _, err := json.Marshal(first); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func workspaceTestFileProfile(alias, revision string) FileProfileDescriptor {
+	return FileProfileDescriptor{
+		Alias: alias, Revision: revision, ReadableRoots: []string{"/workspace"}, MaxFileBytes: 1024,
+		Approval: FileProfileApproval{Metadata: "none", Read: "required", Write: "required"},
 	}
 }

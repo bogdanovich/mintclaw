@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 const (
@@ -26,22 +27,28 @@ func IsWorkspaceCommand(command string) bool {
 // model-unavailable in generic nodes discovery; the gateway P8a router binds
 // profile, scope, and workspace revision before preparing an invocation.
 func WorkspaceReadDescriptors(
-	profileRevisions []string,
+	profiles []FileProfileDescriptor,
 	workingScopes []string,
 ) ([]CommandDescriptor, error) {
-	profileRevisions = append([]string(nil), profileRevisions...)
+	profiles = cloneWorkspaceFileProfiles(profiles)
 	workingScopes = append([]string(nil), workingScopes...)
-	slices.Sort(profileRevisions)
+	slices.SortFunc(profiles, func(left, right FileProfileDescriptor) int {
+		return strings.Compare(left.Alias, right.Alias)
+	})
 	slices.Sort(workingScopes)
-	profileRevisions = slices.Compact(profileRevisions)
 	workingScopes = slices.Compact(workingScopes)
-	if len(profileRevisions) == 0 || len(workingScopes) == 0 {
+	if len(profiles) == 0 || len(workingScopes) == 0 {
 		return nil, fmt.Errorf("%w: workspace read authority is empty", ErrInvalidCapability)
 	}
+	profileRevisions := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		profileRevisions = append(profileRevisions, profile.Revision)
+	}
+	slices.Sort(profileRevisions)
 	authority, err := json.Marshal(struct {
-		Profiles []string `json:"profiles"`
-		Scopes   []string `json:"scopes"`
-	}{Profiles: profileRevisions, Scopes: workingScopes})
+		Profiles []FileProfileDescriptor `json:"profiles"`
+		Scopes   []string                `json:"scopes"`
+	}{Profiles: profiles, Scopes: workingScopes})
 	if err != nil {
 		return nil, err
 	}
@@ -61,14 +68,26 @@ func WorkspaceReadDescriptors(
 	}
 	descriptors := []CommandDescriptor{
 		{
-			Name: WorkspaceCommandRead, InputSchema: workspaceReadInputSchema(profileRevisions, workingScopes),
-			OutputSchema: workspaceReadOutputSchema(), Risk: RiskRead, SupportsCancel: true,
-			ModelContract: cloneCommandModelContractPointer(contract),
+			Name:           WorkspaceCommandRead,
+			InputSchema:    workspaceReadInputSchema(profileRevisions, workingScopes),
+			OutputSchema:   workspaceReadOutputSchema(),
+			Risk:           RiskRead,
+			SupportsCancel: true,
+			ModelContract: cloneCommandModelContractPointer(
+				contract,
+			),
+			FileProfiles: cloneWorkspaceFileProfiles(profiles),
 		},
 		{
-			Name: WorkspaceCommandSearch, InputSchema: workspaceSearchInputSchema(profileRevisions, workingScopes),
-			OutputSchema: workspaceSearchOutputSchema(), Risk: RiskRead, SupportsCancel: true,
-			ModelContract: cloneCommandModelContractPointer(contract),
+			Name:           WorkspaceCommandSearch,
+			InputSchema:    workspaceSearchInputSchema(profileRevisions, workingScopes),
+			OutputSchema:   workspaceSearchOutputSchema(),
+			Risk:           RiskRead,
+			SupportsCancel: true,
+			ModelContract: cloneCommandModelContractPointer(
+				contract,
+			),
+			FileProfiles: cloneWorkspaceFileProfiles(profiles),
 		},
 	}
 	for _, descriptor := range descriptors {
@@ -77,6 +96,16 @@ func WorkspaceReadDescriptors(
 		}
 	}
 	return descriptors, nil
+}
+
+func cloneWorkspaceFileProfiles(profiles []FileProfileDescriptor) []FileProfileDescriptor {
+	cloned := make([]FileProfileDescriptor, len(profiles))
+	for index, profile := range profiles {
+		cloned[index] = profile
+		cloned[index].ReadableRoots = append([]string(nil), profile.ReadableRoots...)
+		cloned[index].WritableRoots = append([]string(nil), profile.WritableRoots...)
+	}
+	return cloned
 }
 
 func cloneCommandModelContractPointer(contract *CommandModelContract) *CommandModelContract {

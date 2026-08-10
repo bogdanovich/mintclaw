@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
@@ -104,7 +105,7 @@ func TestWorkspaceReadLineModeBoundsRenderedOutput(t *testing.T) {
 			"path":"large.txt",
 			"start_line":1,
 			"max_lines":2
-		}`)},
+		}`), OutputLimitBytes: nodes.MaxWorkspaceReadBytes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +113,40 @@ func TestWorkspaceReadLineModeBoundsRenderedOutput(t *testing.T) {
 	read := result.(WorkspaceReadResult)
 	if len(read.Content) > nodes.MaxWorkspaceReadBytes || !read.Truncated {
 		t.Fatalf("workspace read content bytes = %d, truncated = %v", len(read.Content), read.Truncated)
+	}
+}
+
+func TestWorkspaceReadBoundsFullyEncodedResult(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	const outputLimit = 64 * 1024
+	content := strings.Repeat("\"\\\t", nodes.MaxWorkspaceReadBytes/3)
+	if err := os.WriteFile(filepath.Join(root, "escaped.txt"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resultJSON, err := runtime.Invoke(
+		t.Context(),
+		testRuntimePlanAtWithOutputLimit(t, runtime, nodes.WorkspaceCommandRead, json.RawMessage(`{
+			"profile_revision":"project-v1",
+			"workspace_revision":"workspace-v1",
+			"working_scope":"project",
+			"path":"escaped.txt",
+			"offset":0,
+			"length":524288
+		}`), time.Now(), time.Minute, outputLimit),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resultJSON) > outputLimit {
+		t.Fatalf("encoded workspace result bytes = %d", len(resultJSON))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(resultJSON, &result); err != nil {
+		t.Fatal(err)
+	}
+	boundedContent, _ := result["content"].(string)
+	if result["truncated"] != true || len(boundedContent) >= len(content) {
+		t.Fatalf("workspace escaped result = %#v", result)
 	}
 }
 
@@ -163,7 +198,7 @@ func TestWorkspaceSearchIsBoundedAndRespectsIgnoreFiles(t *testing.T) {
 	}`)
 	fileResult, err := runtime.handlers[nodes.WorkspaceCommandSearch].execute(
 		t.Context(),
-		commandInvocation{Input: fileInput},
+		commandInvocation{Input: fileInput, OutputLimitBytes: nodes.MaxWorkspaceReadBytes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +236,38 @@ func TestWorkspaceSearchCountModeEmitsEntryAtLimit(t *testing.T) {
 	}
 	if result.Matches != 1 || result.Result != "a.txt:1" || !result.Truncated {
 		t.Fatalf("workspace count result = %#v", result)
+	}
+}
+
+func TestWorkspaceSearchBoundsFullyEncodedResult(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	line := "match\t\"\\" + strings.Repeat("x", 80) + "\n"
+	if err := os.WriteFile(filepath.Join(root, "escaped.txt"), []byte(strings.Repeat(line, 100)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resultJSON, err := runtime.Invoke(
+		t.Context(),
+		testRuntimePlan(t, runtime, nodes.WorkspaceCommandSearch, json.RawMessage(`{
+			"profile_revision":"project-v1",
+			"workspace_revision":"workspace-v1",
+			"working_scope":"project",
+			"pattern":"match",
+			"output_mode":"content",
+			"limit":100
+		}`)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resultJSON) > 4096 {
+		t.Fatalf("encoded workspace search bytes = %d", len(resultJSON))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(resultJSON, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["truncated"] != true || result["result"] == "" {
+		t.Fatalf("workspace encoded search result = %#v", result)
 	}
 }
 
