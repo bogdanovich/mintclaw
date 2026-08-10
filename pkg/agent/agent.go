@@ -336,6 +336,21 @@ type turnEventScope struct {
 	context    *TurnContext
 }
 
+// ValidateConfigReload reports restart-only changes without mutating live runtime state.
+func (al *AgentLoop) ValidateConfigReload(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	if al.runtimeProfile != nil {
+		return fmt.Errorf("runtime-profile loops require restart; hot reload is not supported")
+	}
+	if _, stateless := al.contextManager.(*noneContextManager); !stateless ||
+		contextManagerConfigName(cfg) != "none" {
+		return fmt.Errorf("context manager changes require restart; hot reload is supported only for none")
+	}
+	return nil
+}
+
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
 // It uses a context to allow timeout control from the caller.
 // Returns an error if the reload fails or context is canceled.
@@ -348,15 +363,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if provider == nil {
 		return fmt.Errorf("provider cannot be nil")
 	}
-	if cfg == nil {
-		return fmt.Errorf("config cannot be nil")
-	}
-	if al.runtimeProfile != nil {
-		return fmt.Errorf("runtime-profile loops require restart; hot reload is not supported")
-	}
-	if _, stateless := al.contextManager.(*noneContextManager); !stateless ||
-		contextManagerConfigName(cfg) != "none" {
-		return fmt.Errorf("context manager changes require restart; hot reload is supported only for none")
+	if err := al.ValidateConfigReload(cfg); err != nil {
+		return err
 	}
 
 	// Create new registry with updated config and provider
