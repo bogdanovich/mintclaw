@@ -612,13 +612,23 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 	if isNodeFileToolName(toolName) ||
 		toolName == "nodes_invoke" ||
 		toolName == "nodes_status" ||
-		toolName == "nodes_cancel" {
+		toolName == "nodes_cancel" ||
+		isRemoteWorkspaceFileCall(toolName, arguments) {
 		return map[string]any{
 			"redacted":       true,
 			"argument_count": len(arguments),
 		}
 	}
 	return arguments
+}
+
+func isRemoteWorkspaceFileCall(toolName string, arguments map[string]any) bool {
+	if toolName != "read_file" && toolName != "search_files" &&
+		toolName != "write_file" && toolName != "apply_patch" {
+		return false
+	}
+	workspace, _ := arguments["workspace"].(string)
+	return strings.TrimSpace(workspace) != ""
 }
 
 func exactNodeFileApprovalSize(value any) (uint64, bool) {

@@ -639,6 +639,44 @@ func setupNodeTools(
 	); err != nil {
 		return err
 	}
+	for _, toolName := range []string{"read_file", "search_files"} {
+		name := toolName
+		if err := agentLoop.RegisterRuntimeToolDecorator(
+			name,
+			func(
+				reloadCfg *config.Config,
+				agentID string,
+				local toolshared.Tool,
+			) (toolshared.Tool, error) {
+				if !configuredRemoteWorkspaceForTool(reloadCfg, name) {
+					return nil, nil
+				}
+				source, sourceErr := newNodeInvocationSource(reloadCfg, runtime)
+				if errors.Is(sourceErr, errNodeDiscoveryAuthorityUnavailable) || source == nil {
+					return nil, nil
+				}
+				if sourceErr != nil {
+					return nil, sourceErr
+				}
+				router, routerErr := tools.NewRemoteWorkspaceNodeRouter(
+					reloadCfg,
+					source,
+					agentID,
+					name,
+				)
+				if errors.Is(routerErr, tools.ErrRemoteWorkspaceUnavailable) {
+					return nil, nil
+				}
+				if routerErr != nil {
+					return nil, routerErr
+				}
+				router.SetEventPublisher(agentLoop.RuntimeEventBus())
+				return tools.NewRemoteWorkspaceReadTool(local, router)
+			},
+		); err != nil {
+			return err
+		}
+	}
 	return agentLoop.RegisterRuntimeTool(
 		"nodes_terminal",
 		func(reloadCfg *config.Config) (toolshared.Tool, error) {
@@ -657,6 +695,18 @@ func setupNodeTools(
 			return tool, nil
 		},
 	)
+}
+
+func configuredRemoteWorkspaceForTool(cfg *config.Config, toolName string) bool {
+	if cfg == nil {
+		return false
+	}
+	for alias := range cfg.Execution.RemoteWorkspaces {
+		if _, allowed := cfg.RemoteWorkspaceAllows(alias, toolName); allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func nodeFileTransferToolFactory(
