@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -455,6 +456,145 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 		task.DeliveryStatus != taskregistry.DeliveryDelivered ||
 		tool.executions != 1 {
 		t.Fatalf("completed approval task = %#v, executions=%d", task, tool.executions)
+	}
+}
+
+type scopeRecordingApprovalTool struct {
+	executions int
+	scope      *session.SessionScope
+	agentID    string
+}
+
+func (*scopeRecordingApprovalTool) Name() string { return "approval_scope_recording" }
+
+func (*scopeRecordingApprovalTool) Description() string {
+	return "Record the durable continuation scope for a protected action"
+}
+
+func (*scopeRecordingApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *scopeRecordingApprovalTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	tool.scope = toolshared.ToolSessionScope(ctx)
+	tool.agentID = toolshared.ToolAgentID(ctx)
+	return toolshared.NewToolResult("protected child action completed")
+}
+
+func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-child-approval", Name: "approval_scope_recording",
+			Arguments: map[string]any{"target": "companion"},
+			Function: &providers.FunctionCall{
+				Name: "approval_scope_recording", Arguments: `{"target":"companion"}`,
+			},
+		}}},
+		{Content: "cross-agent approval completed", FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+	if err := al.MountHook(NamedHook("child-scope-approval", &durableApprovalHook{
+		actionSummary: "Run the protected child action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	alpha, _ := al.registry.GetAgent("alpha")
+	beta, _ := al.registry.GetAgent("beta")
+	tool := &scopeRecordingApprovalTool{}
+	beta.Tools.Register(tool)
+
+	const taskID = "cross-agent-approval"
+	tasks := al.taskRegistryForWorkspace(alpha.Workspace)
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "protected companion action",
+		Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-cross-agent", SenderID: "user-cross-agent",
+	}
+	parentScope := &session.SessionScope{
+		Version: session.ScopeVersionV2, AgentID: alpha.ID, Channel: "telegram",
+		Dimensions: []string{"chat"}, Values: map[string]string{"chat": "chat-cross-agent"},
+		RouteScopeKey: "telegram:chat-cross-agent",
+	}
+	parent := newTurnState(alpha, processOptions{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-cross-agent", SessionKey: "owner-cross-agent",
+		InboundContext: inbound, SessionScope: parentScope,
+	}}, al.newTurnEventScope(
+		alpha.ID, alpha.Workspace, "owner-cross-agent", newTurnContext(inbound, nil, parentScope),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 4)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		TargetAgentID: beta.ID, Model: beta.Model, SystemPrompt: "run protected action",
+		TaskID: taskID, Critical: true,
+	})
+	if err != nil || result == nil || !result.TaskSuspended {
+		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
+	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusWaitingForInput || task.InteractionID == "" {
+		t.Fatalf("waiting cross-agent task = %#v", task)
+	}
+	record, ok := al.interactionRegistryForWorkspace(alpha.Workspace).Get(task.InteractionID)
+	if !ok {
+		t.Fatalf("interaction %q was not persisted", task.InteractionID)
+	}
+	continuationKey := interactionContinuationSessionKey(record)
+	metaStore, ok := beta.Sessions.(session.MetadataAwareSessionStore)
+	if !ok {
+		t.Fatalf("beta session store %T does not expose metadata", beta.Sessions)
+	}
+	persistedScope := metaStore.GetSessionScope(continuationKey)
+	if persistedScope == nil || persistedScope.AgentID != beta.ID ||
+		persistedScope.RouteScopeKey != parentScope.RouteScopeKey {
+		t.Fatalf("persisted child scope = %#v", persistedScope)
+	}
+	legacyScope := session.CloneScope(persistedScope)
+	legacyScope.AgentID = alpha.ID
+	metaStore.EnsureSessionMetadata(continuationKey, legacyScope, nil)
+
+	registry := al.interactionRegistryForWorkspace(alpha.Workspace)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "cross-agent-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approval arrives through the parent route and therefore carries the
+	// parent's scope. Resume must prefer the durable child session's provenance.
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, alpha.Workspace, beta, parentScope, *inbound, record,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if tool.executions != 1 || tool.agentID != beta.ID || tool.scope == nil ||
+		tool.scope.AgentID != beta.ID || tool.scope.RouteScopeKey != parentScope.RouteScopeKey {
+		t.Fatalf(
+			"approved tool executions=%d agent=%q scope=%#v",
+			tool.executions, tool.agentID, tool.scope,
+		)
+	}
+	repairedScope := metaStore.GetSessionScope(continuationKey)
+	if repairedScope == nil || repairedScope.AgentID != beta.ID ||
+		repairedScope.RouteScopeKey != parentScope.RouteScopeKey {
+		t.Fatalf("repaired child scope = %#v", repairedScope)
+	}
+	task, _ = tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded ||
+		task.DeliveryStatus != taskregistry.DeliveryDelivered {
+		t.Fatalf("completed cross-agent task = %#v", task)
 	}
 }
 

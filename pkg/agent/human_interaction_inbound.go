@@ -1045,6 +1045,17 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		return fmt.Errorf("interaction continuation runtime is unavailable")
 	}
 	continuationSessionKey := interactionContinuationSessionKey(record)
+	continuationScope := sessionScopeForRecovery(agent.Sessions, continuationSessionKey)
+	if continuationScope == nil {
+		continuationScope = session.CloneScope(scope)
+	}
+	if continuationScope != nil {
+		// Approval replies arrive on the parent route, but execution resumes in
+		// the agent that owns the durable continuation. This also repairs legacy
+		// metadata written before cross-agent ownership was persisted correctly.
+		continuationScope.AgentID = agent.ID
+		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope, nil)
+	}
 	approvalAllowed := record.Kind == interactions.KindApproval &&
 		record.Outcome == interactions.OutcomeAllowed
 	if !approvalAllowed {
@@ -1089,7 +1100,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 				}
 			} else {
 				control, aborted, err := al.executeApprovedInteractionTool(
-					ctx, registry, interactionWorkspace, agent, scope, resuming,
+					ctx, registry, interactionWorkspace, agent, continuationScope, resuming,
 				)
 				if err != nil {
 					_, _ = registry.RecordResumeFailure(resuming.ID, resuming.Revision, err.Error())
@@ -1150,7 +1161,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 			BaseSessionKey:  continuationSessionKey,
 			SessionKey:      continuationSessionKey,
 			InboundContext:  cloneInboundContext(&inbound),
-			SessionScope:    session.CloneScope(scope),
+			SessionScope:    session.CloneScope(continuationScope),
 		},
 		DefaultResponse:             defaultResponse,
 		EnableSummary:               true,
