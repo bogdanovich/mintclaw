@@ -25,9 +25,9 @@ import (
 
 type interactionChannelManager struct {
 	*recordingChannelManager
-	sent     chan bus.OutboundMessage
-	restored chan bus.OutboundMessage
-	sendErr  error
+	sent    chan bus.OutboundMessage
+	synced  chan bus.OutboundMessage
+	sendErr error
 }
 
 type blockingInteractionProvider struct {
@@ -315,12 +315,12 @@ func newInteractionChannelManager() *interactionChannelManager {
 	return &interactionChannelManager{
 		recordingChannelManager: &recordingChannelManager{},
 		sent:                    make(chan bus.OutboundMessage, 16),
-		restored:                make(chan bus.OutboundMessage, 16),
+		synced:                  make(chan bus.OutboundMessage, 16),
 	}
 }
 
-func (m *interactionChannelManager) RestoreInteractionControls(msg bus.OutboundMessage) error {
-	m.restored <- msg
+func (m *interactionChannelManager) SyncInteractionControls(msg bus.OutboundMessage) error {
+	m.synced <- msg
 	return nil
 }
 
@@ -2836,6 +2836,8 @@ func TestInteractionIngressRetainsClaimedAnswerReplayOwnership(t *testing.T) {
 func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 	sessionKey := "session-claimed-spool-ownership"
@@ -2878,6 +2880,14 @@ func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	record, _ = registry.Get(record.ID)
 	if record.Status != interactions.StatusClaimed {
 		t.Fatalf("record status = %q, want claimed recovery ownership", record.Status)
+	}
+	select {
+	case synced := <-manager.synced:
+		if !bus.OutboundMetadataFromMessage(synced).RemovesInteractionControls() {
+			t.Fatalf("claimed answer control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("claimed answer did not clear projected controls")
 	}
 }
 
@@ -3596,6 +3606,8 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "Cancel turn",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
@@ -3615,6 +3627,40 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	if !result.Matched || !result.Canceled || result.Failed ||
 		!result.CommandHandled || result.Kind != interactions.KindQuestion {
 		t.Fatalf("cancel button result = %#v", result)
+	}
+	select {
+	case synced := <-manager.synced:
+		if !bus.OutboundMetadataFromMessage(synced).RemovesInteractionControls() {
+			t.Fatalf("canceled question control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled question did not clear projected controls")
+	}
+}
+
+func TestQuestionResponseTakesPriorityOverCommandShapedOption(t *testing.T) {
+	for _, option := range []string{"/stop", "/new", "/reset", "/clear"} {
+		t.Run(option, func(t *testing.T) {
+			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+			defer cleanup()
+			msg := testInboundMessage(bus.InboundMessage{
+				Content:    option,
+				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:command-option"),
+				Context: bus.InboundContext{
+					Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+					Raw: map[string]string{bus.InboundMetadataKeyInteractionResponse: option},
+				},
+			})
+			_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+
+			result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Matched || result.Canceled || result.CommandHandled {
+				t.Fatalf("command-shaped option was treated as session control: %#v", result)
+			}
+		})
 	}
 }
 
@@ -3999,14 +4045,14 @@ func TestRecoveryRestoresWaitingQuestionControlsWithoutRepublishingPrompt(t *tes
 		t.Fatalf("RecoverHumanInteractions() = %d, want 0 durable transitions", recovered)
 	}
 	select {
-	case restored := <-manager.restored:
-		metadata := bus.OutboundMetadataFromMessage(restored)
-		if restored.Channel != "telegram" || restored.Context.SenderID != "user-1" ||
+	case synced := <-manager.synced:
+		metadata := bus.OutboundMetadataFromMessage(synced)
+		if synced.Channel != "telegram" || synced.Context.SenderID != "user-1" ||
 			!metadata.IsQuestionPrompt() || !reflect.DeepEqual(
 			metadata.InteractionChoices(),
 			[]string{"Canary", "All"},
 		) {
-			t.Fatalf("restored controls = %#v", restored)
+			t.Fatalf("synced controls = %#v", synced)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("waiting question controls were not restored")

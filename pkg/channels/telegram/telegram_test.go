@@ -3365,6 +3365,10 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 		},
 		{name: "question option", text: "Generate it", seed: true},
 		{name: "question option matching former cancel label", text: "Cancel turn", seed: true},
+		{name: "stop command option", text: "/stop", seed: true},
+		{name: "new command option", text: "/new", seed: true},
+		{name: "reset command option", text: "/reset", seed: true},
+		{name: "clear command option", text: "/clear", seed: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -3427,14 +3431,14 @@ func TestQuestionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *test
 	assert.Empty(t, ch.telegramQuestionControlResponse(message, "15"))
 }
 
-func TestRestoreInteractionControlsRebuildsQuestionRouting(t *testing.T) {
+func TestSyncInteractionControlsRebuildsQuestionRouting(t *testing.T) {
 	ch := &TelegramChannel{}
 	ctx := bus.InboundContext{SenderID: "15", TopicID: "1771"}
 	bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
-	require.NoError(t, ch.RestoreInteractionControls(bus.OutboundMessage{
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
 		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
 	}))
 	assert.Equal(t, "Generate it", ch.telegramQuestionControlResponse(&telego.Message{
@@ -3498,11 +3502,36 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 	ownBot := &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"}
 	assert.Equal(t, "generate it yourself", ch.telegramInteractionResponse(&telego.Message{
 		Text: "  generate it yourself  ", ReplyToMessage: &telego.Message{From: ownBot},
-	}))
+	}, "  generate it yourself  "))
 	assert.Empty(t, ch.telegramInteractionResponse(&telego.Message{
 		Text: "answer", ReplyToMessage: &telego.Message{From: &telego.User{ID: 7}},
-	}))
-	assert.Empty(t, ch.telegramInteractionResponse(&telego.Message{Text: "answer"}))
+	}, "answer"))
+	assert.Empty(t, ch.telegramInteractionResponse(&telego.Message{Text: "answer"}, "answer"))
+}
+
+func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"}),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		selfID:      42,
+		selfName:    "mintclaw_bot",
+	}
+	msg := &telego.Message{
+		Caption: "  use this caption  ", MessageID: 23,
+		Chat: telego.Chat{ID: 999, Type: "private"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101, Text: "Which input?",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	inbound := <-messageBus.InboundChan()
+	assert.Equal(t, "[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption", inbound.Content)
+	assert.Equal(t, "use this caption", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 }
 
 func TestTelegramQuotedContent_IncludesVoiceMarkerAlongsideCaption(t *testing.T) {

@@ -51,12 +51,12 @@ func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) str
 	}
 }
 
-func (c *TelegramChannel) telegramInteractionResponse(message *telego.Message) string {
+func (c *TelegramChannel) telegramInteractionResponse(message *telego.Message, content string) string {
 	if message == nil || message.ReplyToMessage == nil ||
 		!c.isOwnBotUser(message.ReplyToMessage.From) {
 		return ""
 	}
-	return strings.TrimSpace(message.Text)
+	return strings.TrimSpace(content)
 }
 
 func (c *TelegramChannel) ownBotIdentity() (int64, string) {

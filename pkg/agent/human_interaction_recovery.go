@@ -14,8 +14,8 @@ import (
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
-type interactionControlRestoreManager interface {
-	RestoreInteractionControls(bus.OutboundMessage) error
+type interactionControlSyncManager interface {
+	SyncInteractionControls(bus.OutboundMessage) error
 }
 
 func (al *AgentLoop) scheduleHumanInteractionRecovery(ctx context.Context) {
@@ -57,12 +57,13 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				return false
 			}
 			if !al.interactionAgentAvailable(workspace, record) {
-				if _, err := registry.Fail(
+				if failed, err := registry.Fail(
 					record.ID,
 					record.Revision,
 					"agent_unavailable",
 					"the originating agent or workspace is no longer configured",
 				); err == nil {
+					al.syncInteractionControls(workspace, failed, bus.OutboundInteractionControlsRemove)
 					recovered++
 				}
 				continue
@@ -92,8 +93,9 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 					recovered++
 				}
 			case interactions.StatusWaiting:
-				al.restoreInteractionControls(workspace, record)
+				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsPrompt)
 			case interactions.StatusResuming:
+				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
 				if record.FinalDeliveryState == interactions.DeliveryStateSending ||
 					record.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
 					if al.failRecoveredInteraction(
@@ -132,10 +134,12 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 					recovered++
 				}
 			case interactions.StatusClaimed:
+				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
 				if al.recoverClaimedInteraction(ctx, workspace, record) {
 					recovered++
 				}
 			case interactions.StatusCanceling:
+				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
 				if al.recoverCancelingInteraction(ctx, workspace, registry, record) {
 					recovered++
 				}
@@ -164,19 +168,25 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 	return recovered
 }
 
-func (al *AgentLoop) restoreInteractionControls(workspace string, record interactions.Record) {
+func (al *AgentLoop) syncInteractionControls(workspace string, record interactions.Record, controls string) {
 	if record.Kind != interactions.KindQuestion || al.channelManager == nil {
 		return
 	}
-	restorer, ok := al.channelManager.(interactionControlRestoreManager)
+	syncer, ok := al.channelManager.(interactionControlSyncManager)
 	if !ok {
 		return
 	}
-	if err := restorer.RestoreInteractionControls(interactionPromptMessage(record)); err != nil {
-		logger.WarnCF("agent", "Failed to restore human interaction controls", map[string]any{
+	message := interactionPromptMessage(record)
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: controls,
+	}.ApplyToContext(&message.Context)
+	if err := syncer.SyncInteractionControls(message); err != nil {
+		logger.WarnCF("agent", "Failed to sync human interaction controls", map[string]any{
 			"workspace":      workspace,
 			"interaction_id": record.ID,
 			"channel":        record.Route.Channel,
+			"controls":       controls,
 			"error":          err.Error(),
 		})
 	}
@@ -270,9 +280,11 @@ func (al *AgentLoop) failRecoveredInteraction(
 			return false
 		}
 	}
-	if _, err := registry.Fail(record.ID, record.Revision, code, detail); err != nil {
+	failed, err := registry.Fail(record.ID, record.Revision, code, detail)
+	if err != nil {
 		return false
 	}
+	al.syncInteractionControls(workspace, failed, bus.OutboundInteractionControlsRemove)
 	return true
 }
 

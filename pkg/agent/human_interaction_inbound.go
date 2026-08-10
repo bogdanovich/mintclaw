@@ -69,6 +69,9 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	target *inboundDispatchTarget,
 ) (interactionControlCancellationResult, error) {
 	result := interactionControlCancellationResult{}
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" {
+		return result, nil
+	}
 	name, ok := commands.CommandName(msg.Content)
 	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) ==
 		bus.InboundInteractionChoiceCancel {
@@ -110,6 +113,7 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 			return result, fmt.Errorf("begin %s cancellation: %w", name, err)
 		}
 	}
+	al.syncInteractionControls(target.Agent.Workspace, record, bus.OutboundInteractionControlsRemove)
 	if err := al.ensureInteractionCancellationToolResult(
 		ctx,
 		al.interactionContinuationAgent(record, target.Agent),
@@ -598,6 +602,7 @@ func (al *AgentLoop) processInteractionInbound(
 		}
 		return interactionInboundCallerOwned, notRequired, err
 	}
+	al.syncInteractionControls(target.Agent.Workspace, claimed, bus.OutboundInteractionControlsRemove)
 	if err := al.settleInboundAdmission(ctx, msg, notRequired); err != nil {
 		return interactionInboundClaimed, notRequired, err
 	}

@@ -6,20 +6,20 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 )
 
-type interactionControlRestorer interface {
-	RestoreInteractionControls(bus.OutboundMessage) error
+type interactionControlSyncer interface {
+	SyncInteractionControls(bus.OutboundMessage) error
 }
 
-// RestoreInteractionControls rebuilds channel-local controls from durable
-// interaction state without sending another prompt.
-func (m *Manager) RestoreInteractionControls(msg bus.OutboundMessage) error {
+// SyncInteractionControls projects durable interaction control state into a
+// channel without sending another message.
+func (m *Manager) SyncInteractionControls(msg bus.OutboundMessage) error {
 	channel, ok := m.GetChannel(msg.Channel)
 	if !ok {
 		return fmt.Errorf("channel %q is unavailable", msg.Channel)
 	}
-	restorer, ok := channel.(interactionControlRestorer)
+	syncer, ok := channel.(interactionControlSyncer)
 	if !ok {
 		return nil
 	}
-	return restorer.RestoreInteractionControls(msg)
+	return syncer.SyncInteractionControls(msg)
 }
