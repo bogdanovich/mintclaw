@@ -237,7 +237,8 @@ func (runtime *FileTransferRuntime) prepareWorkspacePatch(
 			closePreparedWorkspaceMutations(prepared)
 			return nil, err
 		}
-		item, err := prepareWorkspaceMutation(ctx, profile, path, operation)
+		remainingBytes := nodes.MaxWorkspacePatchTotal - totalBytes
+		item, err := prepareWorkspaceMutation(ctx, profile, path, operation, remainingBytes)
 		if err != nil {
 			closePreparedWorkspaceMutations(prepared)
 			return nil, confirmedWorkspaceMutationCancellation(ctx, err)
@@ -257,9 +258,13 @@ func prepareWorkspaceMutation(
 	profile *fileProfileRuntime,
 	path string,
 	operation patchformat.Operation,
+	remainingBytes int,
 ) (*preparedWorkspaceMutation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, stoppedWorkspaceMutation(ctx)
+	}
+	if remainingBytes < 0 {
+		return nil, ErrFileAccessDenied
 	}
 	// P2 has no separate delete grant: add consumes allow_create, while both
 	// update and delete consume the existing allow_overwrite authority.
@@ -285,8 +290,16 @@ func prepareWorkspaceMutation(
 			_ = parent.close()
 			return nil, err
 		}
-		before, err = io.ReadAll(io.LimitReader(item.before.file, profile.profile.MaxFileBytes+1))
-		if err != nil || int64(len(before)) > profile.profile.MaxFileBytes || !utf8.Valid(before) ||
+		readLimit := int64(remainingBytes)
+		if profile.profile.MaxFileBytes < readLimit {
+			readLimit = profile.profile.MaxFileBytes
+		}
+		if item.before.info.Size() < 0 || item.before.info.Size() > readLimit {
+			closePreparedWorkspaceMutation(item)
+			return nil, ErrFileAccessDenied
+		}
+		before, err = io.ReadAll(io.LimitReader(item.before.file, readLimit+1))
+		if err != nil || int64(len(before)) > readLimit || !utf8.Valid(before) ||
 			strings.ContainsRune(string(before), 0) {
 			closePreparedWorkspaceMutation(item)
 			return nil, ErrFileAccessDenied
@@ -295,7 +308,8 @@ func prepareWorkspaceMutation(
 		exists = true
 	}
 	item.mutation, err = patchformat.Prepare(operation, before, exists)
-	if err != nil || len(item.mutation.After) > nodes.MaxWorkspaceWriteBytes ||
+	if err != nil || len(item.mutation.After) > remainingBytes ||
+		len(item.mutation.After) > nodes.MaxWorkspaceWriteBytes ||
 		int64(len(item.mutation.After)) > profile.profile.MaxFileBytes || !utf8.Valid(item.mutation.After) ||
 		strings.ContainsRune(string(item.mutation.After), 0) {
 		closePreparedWorkspaceMutation(item)

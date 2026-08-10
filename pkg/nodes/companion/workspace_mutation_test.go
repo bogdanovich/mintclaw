@@ -137,6 +137,26 @@ func TestWorkspacePatchDoesNotPublishWhenPreparationFails(t *testing.T) {
 	}
 }
 
+func TestWorkspacePatchPreparationRejectsExistingFileBeforeAggregateRead(t *testing.T) {
+	runtime, root, _ := newTestFileTransferRuntime(t)
+	path := filepath.Join(root, "bounded.txt")
+	if err := os.WriteFile(path, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile, resolved, err := runtime.workspaceMutationPath("project-v1", root, "bounded.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = prepareWorkspaceMutation(t.Context(), profile, resolved, patchformat.Operation{
+		Kind:  patchformat.Update,
+		Path:  "bounded.txt",
+		Lines: []string{"@@", "-existing", "+updated"},
+	}, len("existing\n")-1)
+	if !errors.Is(err, ErrFileAccessDenied) {
+		t.Fatalf("aggregate preflight error = %v", err)
+	}
+}
+
 func TestWorkspacePatchReportsCommittedPrefixAfterLaterConflict(t *testing.T) {
 	runtime, root, _ := newTestFileTransferRuntime(t)
 	for _, path := range []string{"a.txt", "z.txt"} {
