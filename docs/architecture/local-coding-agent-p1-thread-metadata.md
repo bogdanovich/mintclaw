@@ -104,8 +104,8 @@ cwd and all Git fields are empty.
 
 Absolute and scheme-relative URLs lose userinfo, query, and fragment. SCP-like
 remotes lose the user component. Safe local paths remain intact; malformed or
-credential-bearing values that cannot be classified are omitted rather than
-persisted verbatim.
+credential-bearing values that cannot be classified, including opaque file
+URLs, are omitted rather than persisted verbatim.
 
 The `project_key` is a typed SHA-256 digest of the canonical project root. The
 type separates a plain directory from a Git worktree at the same path. A linked

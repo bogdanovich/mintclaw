@@ -86,6 +86,16 @@ func TestSanitizeGitRemote(t *testing.T) {
 			want:   "../repositories/repo.git",
 		},
 		{
+			name:   "absolute file URL",
+			remote: "file:///repositories/repo.git?token=secret#fragment",
+			want:   "file:///repositories/repo.git",
+		},
+		{
+			name:   "opaque file URL",
+			remote: "file:user:password@example.com/repo.git?token=secret#fragment",
+			want:   "",
+		},
+		{
 			name:   "malformed URL",
 			remote: "https://%zz:secret@example.com/repo.git",
 			want:   "",

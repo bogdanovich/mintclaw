@@ -358,7 +358,7 @@ func sanitizeGitRemote(remote string) string {
 	if strings.HasPrefix(remote, "//") || strings.Contains(remote, "://") ||
 		strings.HasPrefix(remote, "file:") {
 		parsed, err := url.Parse(remote)
-		if err != nil || (parsed.Host == "" && parsed.Scheme != "file") {
+		if err != nil || parsed.Opaque != "" || (parsed.Host == "" && parsed.Scheme != "file") {
 			return ""
 		}
 		parsed.User = nil
