@@ -232,7 +232,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
 	interactionChoice := c.telegramInteractionChoice(message)
-	interactionResponse := c.telegramInteractionResponse(message, content)
+	interactionResponse := c.telegramInteractionResponse(message, content, platformID, interactionChoice)
 	if interactionResponse == "" {
 		interactionResponse = c.telegramQuestionControlResponse(message, platformID)
 	}

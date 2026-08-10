@@ -14,6 +14,10 @@ type telegramQuestionControlKey struct {
 	senderID string
 }
 
+type telegramQuestionControls struct {
+	choices map[string]struct{}
+}
+
 func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
 	metadata := bus.OutboundMetadataFromMessage(msg)
 	if !metadata.IsQuestionPrompt() && !metadata.RemovesInteractionControls() {
@@ -31,18 +35,15 @@ func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID
 		delete(c.questionControls, key)
 		return
 	}
-	choices := metadata.InteractionChoices()
-	if len(choices) == 0 {
-		return
-	}
 	if c.questionControls == nil {
-		c.questionControls = make(map[telegramQuestionControlKey]map[string]struct{})
+		c.questionControls = make(map[telegramQuestionControlKey]telegramQuestionControls)
 	}
+	choices := metadata.InteractionChoices()
 	allowed := make(map[string]struct{}, len(choices))
 	for _, choice := range choices {
 		allowed[choice] = struct{}{}
 	}
-	c.questionControls[key] = allowed
+	c.questionControls[key] = telegramQuestionControls{choices: allowed}
 }
 
 // SyncInteractionControls projects durable question routing state without
@@ -67,14 +68,26 @@ func (c *TelegramChannel) telegramQuestionControlResponse(
 	if response == "" || response != message.Text {
 		return ""
 	}
+	controls, active := c.activeQuestionControls(message, senderID)
+	_, ok := controls.choices[response]
+	if !active || !ok {
+		return ""
+	}
+	return response
+}
+
+func (c *TelegramChannel) activeQuestionControls(
+	message *telego.Message,
+	senderID string,
+) (telegramQuestionControls, bool) {
+	if c == nil || message == nil {
+		return telegramQuestionControls{}, false
+	}
 	key := telegramQuestionControlKey{
 		chatID: message.Chat.ID, threadID: message.MessageThreadID, senderID: strings.TrimSpace(senderID),
 	}
 	c.questionControlsMu.RLock()
-	_, ok := c.questionControls[key][response]
+	controls, active := c.questionControls[key]
 	c.questionControlsMu.RUnlock()
-	if !ok {
-		return ""
-	}
-	return response
+	return controls, active
 }

@@ -51,9 +51,19 @@ func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) str
 	}
 }
 
-func (c *TelegramChannel) telegramInteractionResponse(message *telego.Message, content string) string {
+func (c *TelegramChannel) telegramInteractionResponse(
+	message *telego.Message,
+	content string,
+	senderID string,
+	interactionChoice string,
+) string {
 	if message == nil || message.ReplyToMessage == nil ||
 		!c.isOwnBotUser(message.ReplyToMessage.From) {
+		return ""
+	}
+	isApprovalChoice := interactionChoice == bus.InboundInteractionChoiceAllowOnce ||
+		interactionChoice == bus.InboundInteractionChoiceDeny
+	if _, active := c.activeQuestionControls(message, senderID); !active && !isApprovalChoice {
 		return ""
 	}
 	return strings.TrimSpace(content)
