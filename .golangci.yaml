@@ -22,6 +22,7 @@ linters:
     - reassign
     - staticcheck
     - unconvert
+    - unused
     - wastedassign
 
     # Resource lifecycle and protocol safety.
@@ -79,10 +80,12 @@ linters:
       - linters:
           - nolintlint
         path: 'pkg/tools/(i2c\.go|spi\.go)$'
-      # errcheck: defer test-file backlog (deferred from the maintenance pass).
+      # govet shadow: idiomatic shadowed err/loop variables in tests are
+      # intentional; keep the check for non-test code.
       - linters:
-          - errcheck
-        path: '.*_test\.go'
+          - govet
+        path: '_test\.go$'
+        text: '^shadow:'
 
 issues:
   max-issues-per-linter: 0

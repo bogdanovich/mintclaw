@@ -55,7 +55,7 @@ func TestProviderErrorContract(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("request-id", "req-anthropic-contract")
+				w.Header().Set("Request-Id", "req-anthropic-contract")
 				if test.retryAfter != "" {
 					w.Header().Set("Retry-After", test.retryAfter)
 				}

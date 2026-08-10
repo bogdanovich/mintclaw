@@ -45,10 +45,6 @@ func argumentHashKeyPath(workspace string) string {
 	return filepath.Join(workspace, "state", "interaction_hmac.key")
 }
 
-func loadOrCreateArgumentHashKey(workspace string) ([]byte, error) {
-	return loadOrCreateArgumentHashKeyAtPath(argumentHashKeyPath(workspace))
-}
-
 func loadOrCreateArgumentHashKeyAtPath(path string) ([]byte, error) {
 	if path == "" {
 		return nil, fmt.Errorf("approval argument hash requires a key path")
