@@ -4207,6 +4207,125 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	}
 }
 
+func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		boundary string
+	}{
+		{name: "prepared", boundary: interactionBoundaryFinalPrepared},
+		{name: "task completed", boundary: interactionBoundaryTaskCompleted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+			defer cleanup()
+			stop := testInboundMessage(bus.InboundMessage{
+				Content: "/stop",
+				SessionKey: session.BuildOpaqueSessionKey(
+					"agent:main:test:task-final-" + strings.ReplaceAll(test.name, " ", "-"),
+				),
+				Context: bus.InboundContext{
+					Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+					SenderID: "user-1",
+				},
+			})
+			taskID := "task-final-" + strings.ReplaceAll(test.name, " ", "-")
+			tasks := al.taskRegistryForWorkspace(agent.Workspace)
+			if err := tasks.Upsert(taskregistry.Record{
+				TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+				TaskKind: "spawn", Task: "finish after interaction",
+				Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
+				DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+				Channel:      "telegram", ChatID: "chat-1",
+				RequesterSessionKey: stop.SessionKey,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			record, target := prepareWaitingControlInteraction(t, al, agent, stop, taskID)
+			registry := al.interactionRegistryForWorkspace(agent.Workspace)
+			var err error
+			record, err = registry.ClaimAnswer(
+				record.ID,
+				record.Revision,
+				interactions.Answer{Text: "continue", ReceivedAt: time.Now().UnixMilli()},
+				interactions.OutcomeAnswered,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err = registry.MarkResuming(record.ID, record.Revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			boundaryReached := make(chan struct{})
+			releaseDelivery := make(chan struct{})
+			var hookOnce sync.Once
+			deliveryCtx := context.WithValue(
+				t.Context(),
+				interactionLifecycleBoundaryHookKey{},
+				interactionLifecycleBoundaryHook(func(boundary string) {
+					if boundary != test.boundary {
+						return
+					}
+					hookOnce.Do(func() { close(boundaryReached) })
+					<-releaseDelivery
+				}),
+			)
+			deliveryDone := make(chan error, 1)
+			go func() {
+				deliveryDone <- al.deliverTaskInteractionFinal(
+					deliveryCtx,
+					registry,
+					agent.Workspace,
+					record,
+					inboundContextForInteraction(record.Route),
+					"undelivered task final",
+					nil,
+				)
+			}()
+			select {
+			case <-boundaryReached:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("task delivery did not reach %q", test.boundary)
+			}
+
+			result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+			if cancelErr != nil {
+				t.Fatal(cancelErr)
+			}
+			if !result.Matched || !result.Canceled || result.Failed || !result.CommandHandled {
+				t.Fatalf("task final cancellation result = %#v", result)
+			}
+			close(releaseDelivery)
+			select {
+			case deliveryErr := <-deliveryDone:
+				if !errors.Is(deliveryErr, interactions.ErrConflict) {
+					t.Fatalf("delivery after cancellation error = %v, want conflict", deliveryErr)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for task final delivery to unwind")
+			}
+
+			canceled, _ := registry.Get(record.ID)
+			if canceled.Status != interactions.StatusCancelled {
+				t.Fatalf("canceled interaction = %#v", canceled)
+			}
+			task, _ := tasks.Get(taskID)
+			if task.Status != taskregistry.StatusCancelled ||
+				task.DeliveryStatus != taskregistry.DeliveryNotApplicable ||
+				task.Completion != nil || task.Deliverable != nil ||
+				task.LastCompletionID != "" || task.TerminalSummary != "" {
+				t.Fatalf("canceled task projection = %#v", task)
+			}
+			select {
+			case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+				t.Fatalf("canceled task final was published: %#v", outbound)
+			default:
+			}
+		})
+	}
+}
+
 func TestStopCancellationWinsPrecomputedFinalizationBoundary(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
