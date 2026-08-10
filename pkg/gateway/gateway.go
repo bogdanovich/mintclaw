@@ -638,6 +638,9 @@ func setupNodeTools(
 			if toolErr != nil {
 				return nil, toolErr
 			}
+			tool.SetInvocationSourceFactory(func() (tools.NodeInvocationSource, error) {
+				return newNodeInvocationSource(reloadCfg, runtime)
+			})
 			tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 			return tool, nil
 		},
@@ -739,6 +742,17 @@ func setupNodeTools(
 			return tool, nil
 		},
 	)
+}
+
+var generationBoundNodeRuntimeTools = []string{
+	"nodes_invoke",
+	"nodes_status",
+	"nodes_cancel",
+	"workspace_exec",
+	"nodes_file_info",
+	"nodes_upload",
+	"nodes_download",
+	"nodes_terminal",
 }
 
 func configuredRemoteWorkspaceForTool(cfg *config.Config, toolName string) bool {
@@ -1467,6 +1481,17 @@ func handleConfigReloadWithHooks(
 				fmt.Errorf("reconcile node admission: %w", err), oldCfg, al, runningServices, msgBus, generation,
 			)
 		}
+		if err = prepared.RefreshRuntimeTools(generationBoundNodeRuntimeTools...); err != nil {
+			runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+			return rollbackReloadGeneration(
+				fmt.Errorf("refresh reconciled node tools: %w", err),
+				oldCfg,
+				al,
+				runningServices,
+				msgBus,
+				generation,
+			)
+		}
 	}
 	if err = hooks.checkpoint(gatewayReloadNodesReconciled); err != nil {
 		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
@@ -1542,6 +1567,8 @@ func rollbackReloadGeneration(
 	if runningServices.NodeAdmission != nil {
 		if err := runningServices.NodeAdmission.Reconcile(oldCfg); err != nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore node admission: %w", err))
+		} else if err := al.RefreshRuntimeTools(generationBoundNodeRuntimeTools...); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore reconciled node tools: %w", err))
 		}
 	}
 	if err := failedGeneration.rollback(); err != nil {

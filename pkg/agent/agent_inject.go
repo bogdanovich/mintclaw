@@ -110,6 +110,76 @@ func (al *AgentLoop) RegisterRuntimeAgentTool(name string, factory RuntimeAgentT
 	return nil
 }
 
+// RefreshRuntimeTools rebuilds selected generation-bound tools on the active
+// registry without changing their retained factories.
+func (al *AgentLoop) RefreshRuntimeTools(names ...string) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	al.mu.RLock()
+	cfg := al.cfg
+	registry := al.registry
+	al.mu.RUnlock()
+	return al.refreshRuntimeToolsOnRegistry(cfg, registry, names...)
+}
+
+// RefreshRuntimeTools rebuilds selected generation-bound tools on the
+// unpublished registry after the owning runtime has reconciled.
+func (prepared *PreparedConfigReload) RefreshRuntimeTools(names ...string) error {
+	if prepared == nil {
+		return fmt.Errorf("prepared config reload is nil")
+	}
+	prepared.mu.Lock()
+	defer prepared.mu.Unlock()
+	if prepared.committed || prepared.registry == nil {
+		return fmt.Errorf("prepared config reload is no longer available")
+	}
+	return prepared.loop.refreshRuntimeToolsOnRegistry(
+		prepared.config,
+		prepared.registry,
+		names...,
+	)
+}
+
+func (al *AgentLoop) refreshRuntimeToolsOnRegistry(
+	cfg *config.Config,
+	registry *AgentRegistry,
+	names ...string,
+) error {
+	if registry == nil {
+		return nil
+	}
+	factories := al.runtimeToolFactories()
+	agentFactories := al.runtimeAgentToolFactories()
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("runtime tool name is required")
+		}
+		for _, agentID := range registry.ListAgentIDs() {
+			if instance, ok := registry.GetAgent(agentID); ok && instance != nil && instance.Tools != nil {
+				instance.Tools.Unregister(name)
+			}
+		}
+		if factory, ok := factories[name]; ok {
+			tool, err := factory(cfg)
+			if err != nil {
+				return fmt.Errorf("refresh runtime tool %s: %w", name, err)
+			}
+			registerToolOnRegistry(registry, tool)
+			continue
+		}
+		if factory, ok := agentFactories[name]; ok {
+			if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory); err != nil {
+				return fmt.Errorf("refresh runtime agent tool %s: %w", name, err)
+			}
+			continue
+		}
+		return fmt.Errorf("runtime tool %s is not registered", name)
+	}
+	return nil
+}
+
 // RegisterRuntimeToolDecorator installs a per-agent wrapper around an existing
 // tool and remembers the factory for registry rebuilds after configuration
 // reload. It never creates a tool that the agent did not already have. A nil

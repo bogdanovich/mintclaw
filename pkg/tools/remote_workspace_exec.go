@@ -20,7 +20,11 @@ const defaultWorkspaceExecTimeout = 30
 // system.exec.v1 or job.start.v1 invocation path. It owns no process or job
 // lifecycle of its own.
 type WorkspaceExecTool struct {
-	router *RemoteWorkspaceNodeRouter
+	router        *RemoteWorkspaceNodeRouter
+	config        *config.Config
+	agentID       string
+	sourceFactory func() (NodeInvocationSource, error)
+	eventBus      runtimeevents.Bus
 }
 
 func NewWorkspaceExecTool(
@@ -33,13 +37,49 @@ func NewWorkspaceExecTool(
 		return nil, err
 	}
 	router.runtime.eventSource = "workspace_exec"
-	return &WorkspaceExecTool{router: router}, nil
+	return &WorkspaceExecTool{router: router, config: cfg, agentID: agentID}, nil
 }
 
 func (tool *WorkspaceExecTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 	if tool != nil && tool.router != nil {
+		tool.eventBus = eventBus
 		tool.router.SetEventPublisher(eventBus)
 	}
+}
+
+// SetInvocationSourceFactory makes generation-bound gateway authority resolve
+// at call time, after any config-reload node reconciliation has completed.
+func (tool *WorkspaceExecTool) SetInvocationSourceFactory(
+	factory func() (NodeInvocationSource, error),
+) {
+	if tool != nil {
+		tool.sourceFactory = factory
+	}
+}
+
+func (tool *WorkspaceExecTool) routerForCall() (*RemoteWorkspaceNodeRouter, error) {
+	if tool == nil || tool.router == nil {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	if tool.sourceFactory == nil {
+		return tool.router, nil
+	}
+	source, err := tool.sourceFactory()
+	if err != nil || source == nil {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	router, err := NewRemoteWorkspaceNodeRouter(
+		tool.config,
+		source,
+		tool.agentID,
+		"workspace_exec",
+	)
+	if err != nil {
+		return nil, err
+	}
+	router.runtime.eventSource = "workspace_exec"
+	router.SetEventPublisher(tool.eventBus)
+	return router, nil
 }
 
 func (*WorkspaceExecTool) Name() string { return "workspace_exec" }
@@ -104,12 +144,16 @@ func (tool *WorkspaceExecTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
 ) (map[string]any, error) {
-	prepared, binding, mode, executable, err := tool.router.prepareWorkspaceExec(ctx, args)
+	router, err := tool.routerForCall()
+	if err != nil {
+		return nil, err
+	}
+	prepared, binding, mode, executable, effectiveTimeout, err := router.prepareWorkspaceExec(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 	boundCtx := bindRemoteWorkspaceInvocationIdentity(ctx, binding)
-	approval, err := tool.router.invoke.approvalArguments(boundCtx, prepared, false)
+	approval, err := router.invoke.approvalArguments(boundCtx, prepared, false)
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +162,7 @@ func (tool *WorkspaceExecTool) ApprovalArguments(
 	approval["operation"] = "workspace_exec"
 	approval["mode"] = mode
 	approval["executable"] = executable
-	if timeout, exists := args["timeout_seconds"]; exists {
-		approval["timeout_seconds"] = timeout
-	} else {
-		approval["timeout_seconds"] = defaultWorkspaceExecTimeout
-	}
+	approval["timeout_seconds"] = effectiveTimeout
 	if mode == "job" {
 		artifacts, _ := workspaceExecArtifacts(args)
 		approval["artifact_count"] = len(artifacts)
@@ -134,12 +174,16 @@ func (tool *WorkspaceExecTool) Execute(
 	ctx context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
-	prepared, binding, mode, _, err := tool.router.prepareWorkspaceExec(ctx, args)
+	router, err := tool.routerForCall()
+	if err != nil {
+		return toolshared.ErrorResult("remote workspace execution authority is unavailable")
+	}
+	prepared, binding, mode, _, _, err := router.prepareWorkspaceExec(ctx, args)
 	if err != nil {
 		return toolshared.ErrorResult("remote workspace execution authority is unavailable")
 	}
 	boundCtx := bindRemoteWorkspaceInvocationIdentity(ctx, binding)
-	result := tool.router.invoke.execute(boundCtx, prepared, false)
+	result := router.invoke.execute(boundCtx, prepared, false)
 	return projectWorkspaceExecResult(result, binding, mode)
 }
 
@@ -150,100 +194,103 @@ func (*WorkspaceExecTool) ToolLoopSemantics() loopguard.Semantics {
 func (router *RemoteWorkspaceNodeRouter) prepareWorkspaceExec(
 	ctx context.Context,
 	toolArgs map[string]any,
-) (map[string]any, remoteWorkspaceNodeBinding, string, string, error) {
+) (map[string]any, remoteWorkspaceNodeBinding, string, string, any, error) {
 	for name := range toolArgs {
 		switch name {
 		case "workspace", "executable", "args", "env", "mode", "timeout_seconds", "artifacts":
 		default:
-			return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+			return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 		}
 	}
 	workspace, ok := toolArgs["workspace"].(string)
 	if !ok || workspace == "" || strings.TrimSpace(workspace) != workspace {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	binding, ok := router.byAlias[workspace]
 	if !ok {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	mode, ok := toolArgs["mode"].(string)
 	if !ok || (mode != "foreground" && mode != "job") {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	command := "system.exec.v1"
 	if mode == "job" {
 		if !binding.allowJobs {
-			return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+			return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 		}
 		command = nodes.JobCommandStart
 	}
 	executable, ok := toolArgs["executable"].(string)
 	if !ok || executable == "" || strings.TrimSpace(executable) != executable {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	argv, ok := workspaceExecArgv(executable, toolArgs["args"])
 	if !ok {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	environment, ok := workspaceExecEnvironment(toolArgs)
 	if !ok {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
-	}
-	timeout := any(float64(defaultWorkspaceExecTimeout))
-	if configured, exists := toolArgs["timeout_seconds"]; exists {
-		timeout = configured
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	input := map[string]any{
 		"argv": argv, "cwd": binding.config.WorkingScope, "env": environment,
-		"timeout_seconds": timeout,
 	}
 	artifacts, artifactsOK := workspaceExecArtifacts(toolArgs)
 	if !artifactsOK {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
 	if mode == "foreground" {
 		if _, supplied := toolArgs["artifacts"]; supplied {
-			return nil, remoteWorkspaceNodeBinding{}, "", "", ErrRemoteWorkspaceUnavailable
+			return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 		}
 	} else {
 		input["artifacts"] = artifacts
 	}
-	prepared, err := router.prepareWorkspaceExecInvocation(
+	requestedTimeout, timeoutSupplied := toolArgs["timeout_seconds"]
+	prepared, effectiveTimeout, err := router.prepareWorkspaceExecInvocation(
 		binding,
 		command,
 		input,
-		timeout,
+		requestedTimeout,
+		timeoutSupplied,
 	)
 	if err != nil {
-		return nil, remoteWorkspaceNodeBinding{}, "", "", err
+		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, err
 	}
-	return prepared, binding, mode, executable, nil
+	return prepared, binding, mode, executable, effectiveTimeout, nil
 }
 
 func (router *RemoteWorkspaceNodeRouter) prepareWorkspaceExecInvocation(
 	binding remoteWorkspaceNodeBinding,
 	command string,
 	input map[string]any,
-	timeout any,
-) (map[string]any, error) {
+	requestedTimeout any,
+	timeoutSupplied bool,
+) (map[string]any, any, error) {
 	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
 	if err != nil || resolved.registration == nil || !resolved.available {
-		return nil, ErrRemoteWorkspaceUnavailable
+		return nil, nil, ErrRemoteWorkspaceUnavailable
 	}
 	descriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, command)
 	if !found || descriptor.ModelContract == nil {
-		return nil, ErrRemoteWorkspaceUnavailable
+		return nil, nil, ErrRemoteWorkspaceUnavailable
 	}
 	if command == nodes.JobCommandStart {
 		descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, resolved.binding.JobProfile)
 		if !found {
-			return nil, ErrRemoteWorkspaceUnavailable
+			return nil, nil, ErrRemoteWorkspaceUnavailable
 		}
 	}
 	constraints := descriptor.ModelContract.Constraints
 	if !slices.Contains(constraints.WorkingScopes, binding.config.WorkingScope) {
-		return nil, ErrRemoteWorkspaceUnavailable
+		return nil, nil, ErrRemoteWorkspaceUnavailable
 	}
+	effectiveTimeout := requestedTimeout
+	if !timeoutSupplied {
+		effectiveTimeout = float64(min(defaultWorkspaceExecTimeout, descriptor.ModelContract.TimeoutSecondsMax))
+	}
+	input["timeout_seconds"] = effectiveTimeout
 	revision, err := router.runtime.access.discoveryRevision(
 		router.agentID,
 		resolved.name,
@@ -254,9 +301,9 @@ func (router *RemoteWorkspaceNodeRouter) prepareWorkspaceExecInvocation(
 		resolved.available,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	invocationTimeout := timeout
+	invocationTimeout := effectiveTimeout
 	if command == nodes.JobCommandStart {
 		invocationTimeout = float64(min(defaultWorkspaceExecTimeout, descriptor.ModelContract.TimeoutSecondsMax))
 	}
@@ -267,7 +314,7 @@ func (router *RemoteWorkspaceNodeRouter) prepareWorkspaceExecInvocation(
 		"discovery_revision": revision,
 		"timeout_seconds":    invocationTimeout,
 		"output_limit_bytes": min(defaultNodeInvocationOutput, descriptor.ModelContract.OutputBytesMax),
-	}, nil
+	}, effectiveTimeout, nil
 }
 
 func bindRemoteWorkspaceInvocationIdentity(

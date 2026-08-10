@@ -47,6 +47,71 @@ func TestWorkspaceExecForegroundBindsWorkspaceAuthority(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecBoundsOmittedTimeoutToCommandMaximum(t *testing.T) {
+	cfg, source := workspaceExecTestSetup(t, false)
+	workspaceExecSetTimeoutMaximum(source, "system.exec.v1", 12)
+	tool, err := NewWorkspaceExecTool(cfg, source, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := nodeInvocationTestContext("owner", "workspace-exec-short-timeout")
+	args := map[string]any{
+		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+	}
+	approval, err := tool.ApprovalArguments(ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval["timeout_seconds"] != float64(12) {
+		t.Fatalf("effective approval timeout = %#v", approval["timeout_seconds"])
+	}
+	result := tool.Execute(ctx, args)
+	payload := decodeNodeResult(t, result)
+	prepared := mustFakeGatewayInvocation(t, source, ctx, payload["invocation_id"].(string))
+	if prepared.Plan.TimeoutSeconds != 12 {
+		t.Fatalf("effective execution timeout = %d", prepared.Plan.TimeoutSeconds)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(prepared.Plan.Input, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input["timeout_seconds"] != float64(12) {
+		t.Fatalf("effective command timeout = %#v", input["timeout_seconds"])
+	}
+	explicit := cloneToolArguments(args)
+	explicit["timeout_seconds"] = float64(30)
+	denied := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-long-timeout"), explicit)
+	if !denied.IsError || source.dispatchCalls != 1 {
+		t.Fatalf("out-of-range explicit timeout = %#v; dispatch=%d", denied, source.dispatchCalls)
+	}
+}
+
+func TestWorkspaceExecResolvesGenerationBoundSourcePerCall(t *testing.T) {
+	cfg, stale := workspaceExecTestSetup(t, false)
+	_, current := workspaceExecTestSetup(t, false)
+	tool, err := NewWorkspaceExecTool(cfg, stale, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	factoryCalls := 0
+	tool.SetInvocationSourceFactory(func() (NodeInvocationSource, error) {
+		factoryCalls++
+		return current, nil
+	})
+	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-fresh-source"), map[string]any{
+		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+	})
+	if result.IsError || factoryCalls != 1 || current.dispatchCalls != 1 || stale.dispatchCalls != 0 {
+		t.Fatalf(
+			"fresh source result = %#v; factory=%d current=%d stale=%d",
+			result,
+			factoryCalls,
+			current.dispatchCalls,
+			stale.dispatchCalls,
+		)
+	}
+}
+
 func TestWorkspaceExecJobUsesExistingP5aStart(t *testing.T) {
 	cfg, source := workspaceExecTestSetup(t, true)
 	source.dispatchResult = json.RawMessage(`{"job_id":"job_123","state":"running"}`)
@@ -307,6 +372,21 @@ func workspaceExecSetApprovalMode(source *fakeNodeInvocationSource, command stri
 	for index := range snapshot.Catalog.Commands {
 		if snapshot.Catalog.Commands[index].Name == command {
 			snapshot.Catalog.Commands[index].ModelContract.ApprovalMode = mode
+		}
+	}
+	snapshot.CatalogHash, _ = snapshot.Catalog.Hash()
+	source.byRef["builder-node"] = snapshot
+	registration := source.registrations[snapshot.ID]
+	registration.Snapshot = snapshot
+	registration.ApprovedCatalogHash = snapshot.CatalogHash
+	source.registrations[snapshot.ID] = registration
+}
+
+func workspaceExecSetTimeoutMaximum(source *fakeNodeInvocationSource, command string, maximum int) {
+	snapshot := source.byRef["builder-node"]
+	for index := range snapshot.Catalog.Commands {
+		if snapshot.Catalog.Commands[index].Name == command {
+			snapshot.Catalog.Commands[index].ModelContract.TimeoutSecondsMax = maximum
 		}
 	}
 	snapshot.CatalogHash, _ = snapshot.Catalog.Hash()
