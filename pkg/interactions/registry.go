@@ -450,6 +450,32 @@ func (r *Registry) BeginFinalDelivery(id string, expectedRevision int64) (Record
 					rec.FinalDeliveryState,
 				)
 			}
+			rec.LastFinalDeliveryAt = now
+			rec.FinalDeliveryError = ""
+			rec.FinalDeliveryState = DeliveryStateNotSent
+			return EventFinalDelivery, "delivery_prepared", nil, nil
+		},
+	)
+}
+
+// StartFinalDelivery crosses the durable no-replay boundary immediately before
+// an external delivery attempt. The preceding definitely-not-sent state remains
+// recoverable after a crash because no channel or parent delivery has started.
+func (r *Registry) StartFinalDelivery(id string, expectedRevision int64) (Record, error) {
+	return r.update(
+		id,
+		expectedRevision,
+		func(rec *Record, now int64) (EventType, string, *bool, error) {
+			if rec.Status != StatusResuming ||
+				rec.FinalDeliveryState != DeliveryStateNotSent ||
+				rec.FinalDelivered || rec.FinalDeliveryTries >= MaxDeliveryAttempts {
+				return "", "", nil, fmt.Errorf(
+					"%w: start final delivery from %s/%s",
+					ErrInvalidTransition,
+					rec.Status,
+					rec.FinalDeliveryState,
+				)
+			}
 			rec.FinalDeliveryTries++
 			rec.LastFinalDeliveryAt = now
 			rec.FinalDeliveryError = ""
@@ -1333,7 +1359,8 @@ func validStoredOutcome(kind Kind, outcome Outcome) bool {
 
 func validDeliveryState(state DeliveryState) bool {
 	switch state {
-	case "", DeliveryStateNotSent, DeliveryStateSending, DeliveryStateDelivered, DeliveryStateAmbiguous:
+	case "", DeliveryStateNotSent, DeliveryStateSending, DeliveryStateDelivered,
+		DeliveryStateAmbiguous:
 		return true
 	default:
 		return false

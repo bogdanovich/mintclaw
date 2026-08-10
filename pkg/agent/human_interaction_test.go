@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1461,8 +1462,12 @@ func TestRecoveryDoesNotResendAmbiguousFinal(t *testing.T) {
 	record, _ = registry.MarkResuming(record.ID, record.Revision)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Final response"})
 	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
-	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateSending {
+	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateNotSent {
 		t.Fatalf("begin final delivery = (%#v, %v)", record, err)
+	}
+	record, err = registry.StartFinalDelivery(record.ID, record.Revision)
+	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateSending {
+		t.Fatalf("start final delivery = (%#v, %v)", record, err)
 	}
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
@@ -1509,6 +1514,7 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 	record, _ = registry.MarkResuming(record.ID, record.Revision)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Final response"})
 	record, _ = registry.BeginFinalDelivery(record.ID, record.Revision)
+	record, _ = registry.StartFinalDelivery(record.ID, record.Revision)
 	record, err = registry.CompleteFinalDelivery(
 		record.ID,
 		record.Revision,
@@ -1534,6 +1540,125 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 		}
 	default:
 		t.Fatal("definitely not-sent final was not retried")
+	}
+}
+
+func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		completeTaskFirst bool
+	}{
+		{name: "after interaction fence"},
+		{name: "after task completion", completeTaskFirst: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+			defer cleanup()
+			workspace := agent.Workspace
+			taskID := "task-prepared-final-" + strings.ReplaceAll(test.name, " ", "-")
+			interactionID := "interaction_prepared_" + strings.ReplaceAll(test.name, " ", "_")
+			continuationSession := "task-prepared-session-" + strings.ReplaceAll(test.name, " ", "-")
+			ownerSession := "owner-prepared-session-" + strings.ReplaceAll(test.name, " ", "-")
+
+			tasks := al.taskRegistryForWorkspace(workspace)
+			if err := tasks.Upsert(taskregistry.Record{
+				TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+				TaskKind: "spawn", Task: "recover prepared task final",
+				Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
+				DeliveryMode:  string(toolshared.AsyncDeliveryUserOnly),
+				InteractionID: interactionID, Channel: "telegram", ChatID: "chat-1",
+				RequesterSessionKey: ownerSession,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			request := testToolSuspensionRequest(workspace)
+			request.Route.AgentID = agent.ID
+			request.Route.SessionKey = ownerSession
+			request.Route.RouteSessionKey = "route-" + ownerSession
+			request.Origin.TaskID = taskID
+			request.Origin.ContinuationSessionKey = continuationSession
+			registry := al.interactionRegistryForWorkspace(workspace)
+			record, err := registry.Create(interactions.CreateRequest{
+				ID: interactionID, Kind: request.Prompt.Kind, Route: request.Route,
+				Origin: request.Origin, Questions: request.Prompt.Questions,
+				PromptSummary: request.Prompt.PromptSummary,
+				ExpiresAt:     time.Now().Add(time.Hour),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+			record, _ = registry.MarkWaiting(record.ID, record.Revision)
+			record, err = registry.ClaimAnswer(
+				record.ID,
+				record.Revision,
+				interactions.Answer{Text: "continue", ReceivedAt: time.Now().UnixMilli()},
+				interactions.OutcomeAnswered,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err = registry.MarkResuming(record.ID, record.Revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+				Role: "assistant", ToolCalls: []providers.ToolCall{{
+					ID: record.Origin.ToolCallID, Name: record.Origin.ToolName,
+				}},
+			})
+			agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+				Role: "tool", ToolCallID: record.Origin.ToolCallID,
+				Content: `{"interaction_id":"` + record.ID + `","outcome":"answered"}`,
+			})
+			const finalContent = "recovered prepared task completion"
+			agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+				Role: "assistant", Content: finalContent,
+			})
+			record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
+			if err != nil || record.FinalDeliveryState != interactions.DeliveryStateNotSent ||
+				record.FinalDeliveryTries != 0 {
+				t.Fatalf("prepare final delivery = (%#v, %v)", record, err)
+			}
+			if test.completeTaskFirst {
+				if err = tasks.CompleteInteractionTask(
+					taskID, interactionID, finalContent, taskregistry.DeliveryPending,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			al.taskRegistries.Delete(normalizeRuntimeWorkspace(workspace))
+			al.interactionRegistries.Delete(workspace)
+			if reloaded := al.interactionRegistryForWorkspace(workspace); reloaded.LastLoadError() != nil {
+				t.Fatalf("reload prepared interaction registry: %v", reloaded.LastLoadError())
+			}
+			if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+				t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+			}
+			reloadedRegistry := al.interactionRegistryForWorkspace(workspace)
+			resolved, ok := reloadedRegistry.Get(interactionID)
+			if !ok || resolved.Status != interactions.StatusResolved ||
+				resolved.FinalDeliveryState != interactions.DeliveryStateDelivered ||
+				resolved.FinalDeliveryTries != 1 {
+				t.Fatalf("recovered interaction = %#v, found=%t", resolved, ok)
+			}
+			reloadedTasks := al.taskRegistryForWorkspace(workspace)
+			task, ok := reloadedTasks.Get(taskID)
+			if !ok || task.Status != taskregistry.StatusSucceeded ||
+				task.DeliveryStatus != taskregistry.DeliveryDelivered {
+				t.Fatalf("recovered task = %#v, found=%t", task, ok)
+			}
+			select {
+			case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+				if outbound.Content != finalContent {
+					t.Fatalf("recovered task outbound = %#v", outbound)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("prepared task final was not delivered after recovery")
+			}
+		})
 	}
 }
 
@@ -3968,6 +4093,8 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	provider := newBlockingInteractionProvider()
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	trackingBus := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = trackingBus
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
 	stop := testInboundMessage(bus.InboundMessage{
@@ -4003,6 +4130,18 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	case <-provider.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the interaction provider")
+	}
+	const steeringSpoolID = "spool-model-final-cancellation"
+	if err := al.enqueueSteeringMessageWithSender(
+		target.runtimeSessionScope(),
+		agent.ID,
+		stop.Context.SenderID,
+		providers.Message{
+			Role: "user", Content: "continue after the browser check",
+			InboundSpoolID: steeringSpoolID,
+		},
+	); err != nil {
+		t.Fatalf("enqueue held steering: %v", err)
 	}
 	close(provider.release)
 	select {
@@ -4058,6 +4197,13 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	case final := <-manager.sent:
 		t.Fatalf("model-final cancellation published a response: %#v", final)
 	case <-time.After(100 * time.Millisecond):
+	}
+	acked, released, releaseCause := trackingBus.ownership()
+	if slices.Contains(acked, steeringSpoolID) || !slices.Contains(released, steeringSpoolID) {
+		t.Fatalf("held steering ownership = acked:%v released:%v", acked, released)
+	}
+	if !errors.Is(releaseCause, errInteractionFinalizationCanceled) {
+		t.Fatalf("held steering release cause = %v", releaseCause)
 	}
 }
 

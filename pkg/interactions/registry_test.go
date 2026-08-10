@@ -978,6 +978,91 @@ func TestRegistryBoundsDefiniteDeliveryAttempts(t *testing.T) {
 	}
 }
 
+func TestRegistryFinalDeliveryPreparationSurvivesRestartWithoutSpendingAttempt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	record := makeWaiting(
+		t,
+		registry,
+		clock,
+		"interaction_19191919aaaaaaaa",
+		"session-final-prepared",
+	)
+	var err error
+	record, err = registry.ClaimAnswer(
+		record.ID,
+		record.Revision,
+		Answer{Text: "continue", ReceivedAt: clock.Now().UnixMilli()},
+		OutcomeAnswered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.FinalDeliveryState != DeliveryStateNotSent || record.FinalDeliveryTries != 0 {
+		t.Fatalf("prepared final delivery = %#v", record)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err = reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload prepared final delivery: %v", err)
+	}
+	record, ok := reloaded.Get(record.ID)
+	if !ok || record.FinalDeliveryState != DeliveryStateNotSent || record.FinalDeliveryTries != 0 {
+		t.Fatalf("reloaded prepared final delivery = %#v, found=%t", record, ok)
+	}
+	record, err = reloaded.StartFinalDelivery(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.FinalDeliveryState != DeliveryStateSending || record.FinalDeliveryTries != 1 {
+		t.Fatalf("started final delivery = %#v", record)
+	}
+}
+
+func TestRegistryCancellationCanWinPreparedFinalDeliveryFence(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	record := makeWaiting(
+		t,
+		registry,
+		clock,
+		"interaction_20202020aaaaaaaa",
+		"session-final-cancel-fence",
+	)
+	var err error
+	record, err = registry.ClaimAnswer(
+		record.ID,
+		record.Revision,
+		Answer{Text: "continue", ReceivedAt: clock.Now().UnixMilli()},
+		OutcomeAnswered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
+	if err != nil || record.FinalDeliveryState != DeliveryStateNotSent ||
+		record.FinalDeliveryTries != 0 {
+		t.Fatalf("prepare final delivery = (%#v, %v)", record, err)
+	}
+	canceling, err := registry.BeginCancellation(record.ID, record.Revision, "stop_requested")
+	if err != nil || canceling.Status != StatusCanceling {
+		t.Fatalf("begin cancellation = (%#v, %v)", canceling, err)
+	}
+	if _, err = registry.StartFinalDelivery(record.ID, record.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale start final delivery error = %v, want conflict", err)
+	}
+}
+
 func TestRegistryObserverRunsOutsideLockAndReceivesBoundedEvents(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	var observed []Event

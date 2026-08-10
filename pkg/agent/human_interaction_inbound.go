@@ -40,6 +40,19 @@ const (
 	interactionBoundaryCancelAfterLoad  = "cancel_after_load"
 	interactionBoundaryPrecomputedFinal = "precomputed_final"
 	interactionBoundaryModelFinal       = "model_final"
+	interactionBoundaryFinalPrepared    = "final_delivery_prepared"
+	interactionBoundaryTaskCompleted    = "task_completion_persisted"
+)
+
+type interactionFinalizationDisposition uint8
+
+const (
+	interactionFinalizationDelivered interactionFinalizationDisposition = iota
+	interactionFinalizationCanceled
+)
+
+var errInteractionFinalizationCanceled = errors.New(
+	"interaction finalization was canceled before delivery",
 )
 
 func runInteractionLifecycleBoundaryHook(ctx context.Context, boundary string) {
@@ -1094,10 +1107,11 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
-		return al.finalizeResumedInteraction(
+		_, finalizeErr := al.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, finalContent, nil,
 			interactionBoundaryPrecomputedFinal,
 		)
+		return finalizeErr
 	}
 
 	routeSessionKey := record.Route.RouteSessionKey
@@ -1151,7 +1165,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
 	}
-	deliveryErr := al.finalizeResumedInteraction(
+	finalization, deliveryErr := al.finalizeResumedInteraction(
 		ctx,
 		registry,
 		interactionWorkspace,
@@ -1163,7 +1177,9 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	)
 	if deliveryObservation != nil {
 		admission := finalResponseAdmission{status: finalResponseAdmissionAccepted}
-		if deliveryErr != nil {
+		if finalization == interactionFinalizationCanceled {
+			admission = rejectedFinalResponseAdmission(errInteractionFinalizationCanceled)
+		} else if deliveryErr != nil {
 			admission = rejectedFinalResponseAdmission(deliveryErr)
 		}
 		if settleErr := al.settleSteeringMessages(
@@ -1185,21 +1201,23 @@ func (al *AgentLoop) finalizeResumedInteraction(
 	content string,
 	traceScopes []runtimeevents.TraceScope,
 	boundary string,
-) error {
+) (interactionFinalizationDisposition, error) {
 	runInteractionLifecycleBoundaryHook(ctx, boundary)
 	current, ok := registry.Get(record.ID)
 	if !ok {
-		return interactions.ErrNotFound
+		return interactionFinalizationDelivered, interactions.ErrNotFound
 	}
 	switch current.Status {
 	case interactions.StatusCanceling, interactions.StatusCancelled:
-		return nil
+		return interactionFinalizationCanceled, nil
 	case interactions.StatusResuming:
-		return al.deliverInteractionFinal(
+		return interactionFinalizationDelivered, al.deliverInteractionFinal(
 			ctx, registry, interactionWorkspace, current, inbound, content, traceScopes,
 		)
 	default:
-		return fmt.Errorf("cannot finalize interaction from status %q", current.Status)
+		return interactionFinalizationDelivered, fmt.Errorf(
+			"cannot finalize interaction from status %q", current.Status,
+		)
 	}
 }
 
@@ -1392,11 +1410,12 @@ func (al *AgentLoop) deliverInteractionFinal(
 		)
 		return fmt.Errorf("channel manager unavailable")
 	}
-	started, stateErr := registry.BeginFinalDelivery(record.ID, record.Revision)
+	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
 	if stateErr != nil {
 		return fmt.Errorf("begin final interaction delivery: %w", stateErr)
 	}
-	al.dismissInteractionToolFeedback(ctx, started, inbound, traceScopes)
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
+	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
 	if inbound.Raw == nil {
 		inbound.Raw = make(map[string]string)
 	}
@@ -1413,6 +1432,10 @@ func (al *AgentLoop) deliverInteractionFinal(
 		return err
 	}
 	message.TraceSettlement = len(message.TraceScopes) > 0
+	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
+	if stateErr != nil {
+		return fmt.Errorf("start final interaction delivery: %w", stateErr)
+	}
 	deliveryErr := al.sendInteractionMessage(ctx, message)
 	updated, stateErr := registry.CompleteFinalDelivery(
 		started.ID,
@@ -1434,6 +1457,16 @@ func (al *AgentLoop) deliverInteractionFinal(
 		)
 	}
 	return err
+}
+
+func prepareInteractionFinalDelivery(
+	registry *interactions.Registry,
+	record interactions.Record,
+) (interactions.Record, error) {
+	if record.FinalDeliveryState == interactions.DeliveryStateNotSent {
+		return record, nil
+	}
+	return registry.BeginFinalDelivery(record.ID, record.Revision)
 }
 
 func interactionResponseReplyTarget(record interactions.Record, inbound bus.InboundContext) string {
@@ -1485,27 +1518,27 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if !ok {
 		return fmt.Errorf("owning task %q is unavailable", taskID)
 	}
-	started, stateErr := registry.BeginFinalDelivery(record.ID, record.Revision)
+	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
 	if stateErr != nil {
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
 	if err := taskRegistry.CompleteInteractionTask(
 		taskID, record.ID, content, taskregistry.DeliveryPending,
 	); err != nil {
-		_, recordErr := registry.CompleteFinalDelivery(
-			started.ID, started.Revision, false, false, err.Error(),
-		)
-		if recordErr != nil {
-			return errors.Join(err, fmt.Errorf("release task interaction delivery: %w", recordErr))
-		}
 		return err
 	}
-	al.dismissInteractionToolFeedback(ctx, started, inbound, traceScopes)
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryTaskCompleted)
+	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
 	mode := toolshared.AsyncDeliveryMode(strings.TrimSpace(task.DeliveryMode))
 	switch mode {
 	case toolshared.AsyncDeliveryParentOnly, toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryUserAndParent:
 	default:
 		mode = toolshared.AsyncDeliveryUserOnly
+	}
+	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
+	if stateErr != nil {
+		return fmt.Errorf("start task interaction delivery: %w", stateErr)
 	}
 	if mode == toolshared.AsyncDeliveryParentOnly &&
 		(record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion) &&
