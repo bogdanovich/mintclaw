@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -64,6 +65,40 @@ func TestGatewayInvocationStorePersistsPreparedBinding(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("store mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestGatewayInvocationRecordDescriptorValidationCache(t *testing.T) {
+	store := newGatewayInvocationStore("", 8, 1024*1024, time.Now)
+	firstPlan := gatewayTestPlan(t, "inv_cache_first", "idem_cache_first", time.Now())
+	first, _, err := store.Prepare("vpn_box", "call-cache-first", firstPlan, gatewayTestDescriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan := gatewayTestPlan(t, "inv_cache_second", "idem_cache_second", time.Now())
+	second, _, err := store.Prepare("vpn_box", "call-cache-second", secondPlan, gatewayTestDescriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cache := make(map[string][]CommandDescriptor)
+	if err = first.validateWithDescriptorCache(cache); err != nil {
+		t.Fatalf("validate first record: %v", err)
+	}
+	if err = second.validateWithDescriptorCache(cache); err != nil {
+		t.Fatalf("validate repeated descriptor: %v", err)
+	}
+	if got := len(cache[first.Plan.DescriptorHash]); got != 1 {
+		t.Fatalf("cached descriptor count = %d, want 1", got)
+	}
+
+	corrupt := second
+	corrupt.Descriptor.OutputSchema = json.RawMessage(`{"type":"array"}`)
+	if err = corrupt.validateWithDescriptorCache(cache); err == nil {
+		t.Fatal("descriptor changed under a retained hash was accepted")
+	}
+	if got := len(cache[first.Plan.DescriptorHash]); got != 1 {
+		t.Fatalf("cached descriptor count after rejection = %d, want 1", got)
 	}
 }
 
@@ -184,6 +219,520 @@ func TestGatewayInvocationStoreReloadsAcrossInstancesBeforeMutation(t *testing.T
 		ErrGatewayInvocationConflict,
 	) {
 		t.Fatalf("cross-instance idempotency conflict = %v", err)
+	}
+}
+
+func TestGatewayInvocationStoreReusesValidatedUnchangedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := gatewayTestPlan(t, "inv_cached_file", "idem_cached_file", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-cached-file",
+		plan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	reads := 0
+	readFile := store.readFile
+	store.readFile = func(
+		path string,
+		maxBytes int,
+	) (gatewayInvocationDocument, *os.File, error) {
+		reads++
+		return readFile(path, maxBytes)
+	}
+	got, found, err := store.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
+	if err != nil || !found {
+		t.Fatalf("lookup cached record = (%#v, %v, %v)", got, found, err)
+	}
+	if reads != 0 {
+		t.Fatalf("unchanged file reads = %d, want 0", reads)
+	}
+}
+
+func TestGatewayInvocationStoreCachesIdentityOfValidatedFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPlan := gatewayTestPlan(t, "inv_identity_first", "idem_identity_first", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-identity-first",
+		firstPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	secondPath := filepath.Join(dir, "second.json")
+	copyGatewayInvocationStoreFile(t, path, secondPath)
+	secondStore, err := NewGatewayInvocationStore(secondPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan := gatewayTestPlan(t, "inv_identity_second", "idem_identity_second", time.Now())
+	if _, _, err = secondStore.Prepare(
+		"vpn",
+		"call-identity-second",
+		secondPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	thirdPath := filepath.Join(dir, "third.json")
+	copyGatewayInvocationStoreFile(t, secondPath, thirdPath)
+	thirdStore, err := NewGatewayInvocationStore(thirdPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdPlan := gatewayTestPlan(t, "inv_identity_third", "idem_identity_third", time.Now())
+	if _, _, err = thirdStore.Prepare(
+		"vpn",
+		"call-identity-third",
+		thirdPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(secondPath, path); err != nil {
+		t.Fatal(err)
+	}
+
+	replaced := false
+	readFile := store.readFile
+	store.readFile = func(
+		path string,
+		maxBytes int,
+	) (gatewayInvocationDocument, *os.File, error) {
+		document, file, readErr := readFile(path, maxBytes)
+		if readErr == nil && !replaced {
+			replaced = true
+			if renameErr := os.Rename(thirdPath, path); renameErr != nil {
+				_ = file.Close()
+				return gatewayInvocationDocument{}, nil, renameErr
+			}
+		}
+		return document, file, readErr
+	}
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(firstPlan),
+		firstPlan.InvocationID,
+	); lookupErr != nil || !found {
+		t.Fatalf("lookup during replacement = (%v, %v)", found, lookupErr)
+	}
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(thirdPlan),
+		thirdPlan.InvocationID,
+	); lookupErr != nil || !found {
+		t.Fatalf("lookup after replacement = (%v, %v)", found, lookupErr)
+	}
+}
+
+func TestGatewayInvocationStoreBlocksDispatchAfterReplacementFollowingRead(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialPlan := gatewayTestPlan(t, "inv_after_read_initial", "idem_after_read_initial", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn", "call-after-read-initial", initialPlan, gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	preparedPath := filepath.Join(dir, "prepared.json")
+	preparedStore, err := NewGatewayInvocationStore(preparedPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedPlan := gatewayTestPlan(t, "inv_after_read_dispatch", "idem_after_read_dispatch", time.Now())
+	if _, _, err = preparedStore.Prepare(
+		"vpn", "call-after-read-dispatch", preparedPlan, gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath := filepath.Join(dir, "canonical.json")
+	canonicalStore, err := NewGatewayInvocationStore(canonicalPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPlan := gatewayTestPlan(t, "inv_after_read_canonical", "idem_after_read_canonical", time.Now())
+	if _, _, err = canonicalStore.Prepare(
+		"vpn", "call-after-read-canonical", canonicalPlan, gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	canonicalBytes, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(preparedPath, path); err != nil {
+		t.Fatal(err)
+	}
+	if err = preparedStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readFile := store.readFile
+	store.readFile = func(
+		path string,
+		maxBytes int,
+	) (gatewayInvocationDocument, *os.File, error) {
+		document, file, readErr := readFile(path, maxBytes)
+		if readErr == nil {
+			if renameErr := os.Rename(canonicalPath, path); renameErr != nil {
+				_ = file.Close()
+				return gatewayInvocationDocument{}, nil, renameErr
+			}
+			if closeErr := canonicalStore.Close(); closeErr != nil {
+				_ = file.Close()
+				return gatewayInvocationDocument{}, nil, closeErr
+			}
+		}
+		return document, file, readErr
+	}
+	_, transitioned, dispatchErr := store.MarkDispatched(
+		gatewayTestOwner("vpn", "call-after-read-dispatch", preparedPlan),
+		preparedPlan.InvocationID,
+		preparedPlan.PlanHash,
+	)
+	if transitioned || !errors.Is(dispatchErr, ErrGatewayInvocationConflict) {
+		t.Fatalf("dispatch after replacement = (%v, %v)", transitioned, dispatchErr)
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, canonicalBytes) {
+		t.Fatal("failed dispatch overwrote the canonical replacement ledger")
+	}
+	reloaded, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reloaded.Close() }()
+	if _, found, lookupErr := reloaded.Lookup(
+		gatewayTestPrincipal(preparedPlan), preparedPlan.InvocationID,
+	); lookupErr != nil || found {
+		t.Fatalf("reloaded stale dispatch authority = (%v, %v)", found, lookupErr)
+	}
+}
+
+func TestGatewayInvocationStoreBlocksPruneAfterReplacementFollowingRead(t *testing.T) {
+	now := time.Now()
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now.Add(2 * time.Minute) }
+
+	expiredPath := filepath.Join(dir, "expired.json")
+	expiredStore, err := NewGatewayInvocationStore(expiredPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredPlan := gatewayTestPlan(t, "inv_after_read_expired", "idem_after_read_expired", now)
+	if _, _, err = expiredStore.Prepare(
+		"vpn", "call-after-read-expired", expiredPlan, gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath := filepath.Join(dir, "canonical-prune.json")
+	canonicalStore, err := NewGatewayInvocationStore(canonicalPath, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPlan := gatewayTestPlan(t, "inv_after_read_retained", "idem_after_read_retained", now)
+	if _, _, err = canonicalStore.Prepare(
+		"vpn", "call-after-read-retained", canonicalPlan, gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	canonicalBytes, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(expiredPath, path); err != nil {
+		t.Fatal(err)
+	}
+	if err = expiredStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readFile := store.readFile
+	store.readFile = func(
+		path string,
+		maxBytes int,
+	) (gatewayInvocationDocument, *os.File, error) {
+		document, file, readErr := readFile(path, maxBytes)
+		if readErr == nil {
+			if renameErr := os.Rename(canonicalPath, path); renameErr != nil {
+				_ = file.Close()
+				return gatewayInvocationDocument{}, nil, renameErr
+			}
+			if closeErr := canonicalStore.Close(); closeErr != nil {
+				_ = file.Close()
+				return gatewayInvocationDocument{}, nil, closeErr
+			}
+		}
+		return document, file, readErr
+	}
+	if _, _, lookupErr := store.Lookup(
+		gatewayTestPrincipal(expiredPlan), expiredPlan.InvocationID,
+	); !errors.Is(lookupErr, ErrGatewayInvocationConflict) {
+		t.Fatalf("prune after replacement error = %v", lookupErr)
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, canonicalBytes) {
+		t.Fatal("failed prune overwrote the canonical replacement ledger")
+	}
+}
+
+func TestGatewayInvocationStorePinsValidatedIdentityAcrossReplacementCycle(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPlan := gatewayTestPlan(t, "inv_cycle_firstx", "idem_cycle_firstx", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-cycle-firstx",
+		firstPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	validatedFile := store.file
+	validatedInfo, err := validatedFile.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for index, name := range []string{"middle", "finalx"} {
+		replacementPath := filepath.Join(dir, name+".json")
+		replacement, createErr := NewGatewayInvocationStore(replacementPath, 8, 1024*1024)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		plan := gatewayTestPlan(
+			t,
+			"inv_cycle_"+name,
+			"idem_cycle_"+name,
+			time.Now(),
+		)
+		if _, _, createErr = replacement.Prepare(
+			"vpn",
+			"call-cycle-"+name,
+			plan,
+			gatewayTestDescriptor(),
+		); createErr != nil {
+			t.Fatal(createErr)
+		}
+		if index == 1 {
+			data, readErr := os.ReadFile(replacementPath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if int64(len(data)) != validatedInfo.Size() {
+				t.Fatalf(
+					"final replacement size = %d, want cached size %d",
+					len(data),
+					validatedInfo.Size(),
+				)
+			}
+			if chtimesErr := os.Chtimes(
+				replacementPath,
+				validatedInfo.ModTime(),
+				validatedInfo.ModTime(),
+			); chtimesErr != nil {
+				t.Fatal(chtimesErr)
+			}
+		}
+		if renameErr := os.Rename(replacementPath, path); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+	}
+
+	finalInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalInfo.Size() != validatedInfo.Size() ||
+		!finalInfo.ModTime().Equal(validatedInfo.ModTime()) {
+		t.Fatalf("final replacement metadata = %#v, want cached size and mtime", finalInfo)
+	}
+	finalPlan := gatewayTestPlan(t, "inv_cycle_finalx", "idem_cycle_finalx", time.Now())
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(finalPlan),
+		finalPlan.InvocationID,
+	); lookupErr != nil || !found {
+		t.Fatalf("lookup after replacement cycle = (%v, %v)", found, lookupErr)
+	}
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(firstPlan),
+		firstPlan.InvocationID,
+	); lookupErr != nil || found {
+		t.Fatalf("stale lookup after replacement cycle = (%v, %v)", found, lookupErr)
+	}
+	if _, statErr := validatedFile.Stat(); statErr == nil {
+		t.Fatal("superseded validated file handle remains open")
+	}
+}
+
+func TestGatewayInvocationStoreRejectsOversizedOpenedReplacement(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	const maxBytes = 4096
+	store, err := NewGatewayInvocationStore(path, 8, maxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPlan := gatewayTestPlan(t, "inv_size_first", "idem_size_first", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-size-first",
+		firstPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	replacementPath := filepath.Join(dir, "replacement.json")
+	replacement, err := NewGatewayInvocationStore(replacementPath, 8, maxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementPlan := gatewayTestPlan(t, "inv_size_second", "idem_size_second", time.Now())
+	if _, _, err = replacement.Prepare(
+		"vpn",
+		"call-size-second",
+		replacementPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(replacementPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedPath := filepath.Join(dir, "oversized.json")
+	oversized := append(append([]byte(nil), data...), bytes.Repeat([]byte(" "), maxBytes)...)
+	if err = os.WriteFile(oversizedPath, oversized, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacementPath, path); err != nil {
+		t.Fatal(err)
+	}
+
+	readFile := store.readFile
+	store.readFile = func(
+		path string,
+		maxBytes int,
+	) (gatewayInvocationDocument, *os.File, error) {
+		if renameErr := os.Rename(oversizedPath, path); renameErr != nil {
+			return gatewayInvocationDocument{}, nil, renameErr
+		}
+		return readFile(path, maxBytes)
+	}
+	if _, _, lookupErr := store.Lookup(
+		gatewayTestPrincipal(replacementPlan),
+		replacementPlan.InvocationID,
+	); !errors.Is(lookupErr, ErrGatewayInvocationStoreFull) {
+		t.Fatalf("oversized opened replacement error = %v", lookupErr)
+	}
+}
+
+func TestGatewayInvocationStoreCloseReleasesPinnedIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := gatewayTestPlan(t, "inv_close", "idem_close", time.Now())
+	if _, _, err = store.Prepare("vpn", "call-close", plan, gatewayTestDescriptor()); err != nil {
+		t.Fatal(err)
+	}
+	retained := store.file
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if _, statErr := retained.Stat(); statErr == nil {
+		t.Fatal("Close() retained the validated file handle")
+	}
+	if _, _, lookupErr := store.Lookup(
+		gatewayTestPrincipal(plan),
+		plan.InvocationID,
+	); !errors.Is(lookupErr, os.ErrClosed) {
+		t.Fatalf("lookup after Close() error = %v", lookupErr)
+	}
+}
+
+func TestGatewayInvocationStoreDoesNotCacheReplacedPostWriteFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "node_invocations.json")
+	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(dir, "replacement.json")
+	if err = os.WriteFile(replacement, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFile := store.writeFile
+	store.writeFile = func(path string, data []byte, mode os.FileMode) error {
+		if writeErr := writeFile(path, data, mode); writeErr != nil {
+			return writeErr
+		}
+		return os.Rename(replacement, path)
+	}
+	plan := gatewayTestPlan(t, "inv_post_write_replace", "idem_post_write_replace", time.Now())
+	_, _, err = store.Prepare(
+		"vpn",
+		"call-post-write-replace",
+		plan,
+		gatewayTestDescriptor(),
+	)
+	if err == nil || fileutil.IsCommittedWriteError(err) {
+		t.Fatalf("post-write replacement error = %v, want uncommitted verification failure", err)
+	}
+	if store.loaded {
+		t.Fatal("post-write replacement was cached as a validated file")
+	}
+	if _, retained := store.records[plan.InvocationID]; retained {
+		t.Fatal("unverified post-write mutation remained in memory")
+	}
+}
+
+func copyGatewayInvocationStoreFile(t *testing.T, source, destination string) {
+	t.Helper()
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(destination, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

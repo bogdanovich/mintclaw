@@ -881,6 +881,7 @@ func newTestNodeInvocationSourceWithRuntime(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	return &nodeInvocationSource{
 		nodeDiscoverySource: nodeDiscoverySource{
 			runtime: runtime, registryPath: runtime.registryPath,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
 )
 
 type fakeNodeAdmissionRoutes struct {
@@ -235,6 +236,62 @@ func TestNodeAdmissionDisableReconcilesActiveTerminalStore(t *testing.T) {
 		record.State != nodes.GatewayTerminalUnknown ||
 		record.Reason != "gateway_shutdown" {
 		t.Fatalf("disabled terminal = (%#v, %v, %v)", record, found, err)
+	}
+}
+
+func TestNodeAdmissionRuntimeOwnsOneInvocationStoreAndClosesIt(t *testing.T) {
+	runtime := &nodeAdmissionRuntime{}
+	path := nodes.GatewayInvocationStorePath(t.TempDir())
+	first, err := runtime.gatewayInvocationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.gatewayInvocationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("same invocation ledger path created multiple retained stores")
+	}
+	if _, err = runtime.gatewayInvocationStore(
+		nodes.GatewayInvocationStorePath(t.TempDir()),
+	); err == nil {
+		t.Fatal("invocation store path changed before runtime reconciliation")
+	}
+	if err = runtime.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.invocationStore != nil || runtime.invocationStorePath != "" {
+		t.Fatal("node runtime retained a closed invocation store")
+	}
+	if _, _, err = first.Lookup(nodes.GatewayInvocationPrincipal{}, "inv_closed"); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("closed runtime invocation store lookup error = %v", err)
+	}
+	if err = runtime.Close(t.Context()); err != nil {
+		t.Fatalf("second runtime Close() error = %v", err)
+	}
+}
+
+func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t *testing.T) {
+	runtime := &nodeAdmissionRuntime{
+		handler: &closeErrorNodeAdmissionHandler{
+			fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
+			err:                      nodews.ErrSessionDrainIncomplete,
+		},
+	}
+	path := nodes.GatewayInvocationStorePath(t.TempDir())
+	store, err := runtime.gatewayInvocationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runtime.Close(t.Context()); !errors.Is(err, nodews.ErrSessionDrainIncomplete) {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if runtime.invocationStore != store || runtime.invocationStorePath != path {
+		t.Fatal("incomplete drain discarded invocation store reconciliation authority")
+	}
+	if _, _, err = store.Lookup(nodes.GatewayInvocationPrincipal{}, "inv_closed"); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("drain-timeout invocation store lookup error = %v", err)
 	}
 }
 
