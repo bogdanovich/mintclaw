@@ -336,13 +336,16 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 	if err != nil {
 		return nodes.GatewayInvocationRecord{}, err
 	}
-	invocationID := stableNodeInvocationID(
-		"inv",
+	invocationIdentity := []string{
 		principal.AgentID,
 		principal.SessionID,
 		principal.ActorID,
 		executionCallID,
-	)
+	}
+	if workspaceAuthority := nodeInvocationWorkspaceAuthority(ctx); workspaceAuthority != "" {
+		invocationIdentity = append(invocationIdentity, workspaceAuthority)
+	}
+	invocationID := stableNodeInvocationID("inv", invocationIdentity...)
 	storedToolCallID := stableNodeInvocationID("call", executionCallID)
 	var updateAuthority *nodes.NodeUpdatePlanAuthority
 	if len(descriptor.UpdateProfiles) == 1 {
@@ -442,7 +445,7 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 		runtime.publishInvocationEvent(
 			ctx,
 			NodeInvocationObservationPrepared,
-			"nodes_invoke",
+			runtime.invocationEventSource(),
 			record,
 			string(nodes.GatewayInvocationPrepared),
 			"",

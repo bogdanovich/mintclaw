@@ -130,3 +130,82 @@ func TestRegisterRuntimeToolDecoratorDoesNotStackAcrossReloadRecovery(t *testing
 		t.Fatalf("decorator factory calls = first:%d second:%d, want 1 each", firstCalls, secondCalls)
 	}
 }
+
+func TestRegisterRuntimeAgentToolProjectsEachAgentSeparately(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{ID: "alpha"}, {ID: "beta"}}
+	loop := NewAgentLoop(cfg, nil, nil, nil)
+	if err := loop.RegisterRuntimeAgentTool(
+		"scoped",
+		func(_ *config.Config, agentID string) (toolshared.Tool, error) {
+			return &runtimeAgentTestTool{agentID: agentID}, nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, agentID := range []string{"alpha", "beta"} {
+		instance, ok := loop.GetRegistry().GetAgent(agentID)
+		if !ok {
+			t.Fatalf("agent %s is missing", agentID)
+		}
+		registered, ok := instance.Tools.Get("scoped")
+		if !ok || registered.(*runtimeAgentTestTool).agentID != agentID {
+			t.Fatalf("agent %s received %#v", agentID, registered)
+		}
+	}
+}
+
+type runtimeAgentTestTool struct{ agentID string }
+
+func (*runtimeAgentTestTool) Name() string        { return "scoped" }
+func (*runtimeAgentTestTool) Description() string { return "agent-scoped runtime test tool" }
+func (tool *runtimeAgentTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "agent": tool.agentID}
+}
+
+func (*runtimeAgentTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}
+
+func TestPreparedConfigReloadRefreshesGenerationBoundRuntimeTool(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(cfg, nil, &mockProvider{})
+	generation := "before-reconcile"
+	if err := loop.RegisterRuntimeTool(
+		"generation_test",
+		func(*config.Config) (toolshared.Tool, error) {
+			return &refreshRuntimeTestTool{generation: generation}, nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := loop.PrepareConfigReload(t.Context(), &mockProvider{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(prepared.Abort)
+	generation = "after-reconcile"
+	if err := prepared.RefreshRuntimeTools("generation_test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	tool, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("generation_test")
+	if !ok || tool.(*refreshRuntimeTestTool).generation != "after-reconcile" {
+		t.Fatalf("refreshed runtime tool = %#v", tool)
+	}
+}
+
+type refreshRuntimeTestTool struct{ generation string }
+
+func (*refreshRuntimeTestTool) Name() string               { return "generation_test" }
+func (*refreshRuntimeTestTool) Description() string        { return "generation-bound test tool" }
+func (*refreshRuntimeTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (*refreshRuntimeTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}

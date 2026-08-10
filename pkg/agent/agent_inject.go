@@ -19,6 +19,10 @@ import (
 
 type RuntimeToolFactory func(cfg *config.Config) (toolshared.Tool, error)
 
+// RuntimeAgentToolFactory builds one agent-scoped runtime tool so its schema
+// and authority can be projected without exposing another agent's grants.
+type RuntimeAgentToolFactory func(cfg *config.Config, agentID string) (toolshared.Tool, error)
+
 // RuntimeToolDecoratorFactory wraps one already configured agent tool. Unlike
 // RuntimeToolFactory, it receives the agent-specific local implementation, so
 // routing can preserve each agent's workspace and filesystem policy.
@@ -65,6 +69,114 @@ func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory
 	al.mu.Unlock()
 
 	registerToolOnRegistry(registry, tool)
+	return nil
+}
+
+func (al *AgentLoop) RegisterRuntimeAgentTool(name string, factory RuntimeAgentToolFactory) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	if al.hasCodingToolProfile() {
+		return fmt.Errorf("coding runtime profiles do not admit runtime tools")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("runtime agent tool name is required")
+	}
+	if factory == nil {
+		return fmt.Errorf("runtime agent tool factory is required for %s", name)
+	}
+
+	al.mu.Lock()
+	if al.runtimeAgentTools == nil {
+		al.runtimeAgentTools = make(map[string]RuntimeAgentToolFactory)
+	}
+	previous, hadPrevious := al.runtimeAgentTools[name]
+	al.runtimeAgentTools[name] = factory
+	registry := al.registry
+	cfg := al.cfg
+	al.mu.Unlock()
+
+	if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory); err != nil {
+		al.mu.Lock()
+		if hadPrevious {
+			al.runtimeAgentTools[name] = previous
+		} else {
+			delete(al.runtimeAgentTools, name)
+		}
+		al.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// RefreshRuntimeTools rebuilds selected generation-bound tools on the active
+// registry without changing their retained factories.
+func (al *AgentLoop) RefreshRuntimeTools(names ...string) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	al.mu.RLock()
+	cfg := al.cfg
+	registry := al.registry
+	al.mu.RUnlock()
+	return al.refreshRuntimeToolsOnRegistry(cfg, registry, names...)
+}
+
+// RefreshRuntimeTools rebuilds selected generation-bound tools on the
+// unpublished registry after the owning runtime has reconciled.
+func (prepared *PreparedConfigReload) RefreshRuntimeTools(names ...string) error {
+	if prepared == nil {
+		return fmt.Errorf("prepared config reload is nil")
+	}
+	prepared.mu.Lock()
+	defer prepared.mu.Unlock()
+	if prepared.committed || prepared.registry == nil {
+		return fmt.Errorf("prepared config reload is no longer available")
+	}
+	return prepared.loop.refreshRuntimeToolsOnRegistry(
+		prepared.config,
+		prepared.registry,
+		names...,
+	)
+}
+
+func (al *AgentLoop) refreshRuntimeToolsOnRegistry(
+	cfg *config.Config,
+	registry *AgentRegistry,
+	names ...string,
+) error {
+	if registry == nil {
+		return nil
+	}
+	factories := al.runtimeToolFactories()
+	agentFactories := al.runtimeAgentToolFactories()
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("runtime tool name is required")
+		}
+		for _, agentID := range registry.ListAgentIDs() {
+			if instance, ok := registry.GetAgent(agentID); ok && instance != nil && instance.Tools != nil {
+				instance.Tools.Unregister(name)
+			}
+		}
+		if factory, ok := factories[name]; ok {
+			tool, err := factory(cfg)
+			if err != nil {
+				return fmt.Errorf("refresh runtime tool %s: %w", name, err)
+			}
+			registerToolOnRegistry(registry, tool)
+			continue
+		}
+		if factory, ok := agentFactories[name]; ok {
+			if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory); err != nil {
+				return fmt.Errorf("refresh runtime agent tool %s: %w", name, err)
+			}
+			continue
+		}
+		return fmt.Errorf("runtime tool %s is not registered", name)
+	}
 	return nil
 }
 
@@ -115,11 +227,76 @@ func (al *AgentLoop) registerRuntimeToolsForRegistry(cfg *config.Config, registr
 		}
 		registerToolOnRegistry(registry, tool)
 	}
+	agentFactories := al.runtimeAgentToolFactories()
+	for _, name := range sortedRuntimeAgentToolNames(agentFactories) {
+		if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, agentFactories[name]); err != nil {
+			return fmt.Errorf("register runtime agent tool %s: %w", name, err)
+		}
+	}
 	decorators := al.runtimeToolDecoratorFactories()
 	for _, name := range sortedRuntimeToolDecoratorNames(decorators) {
 		if err := decorateRuntimeToolOnRegistry(cfg, registry, name, decorators[name]); err != nil {
 			return fmt.Errorf("decorate runtime tool %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func (al *AgentLoop) runtimeAgentToolFactories() map[string]RuntimeAgentToolFactory {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	if len(al.runtimeAgentTools) == 0 {
+		return nil
+	}
+	factories := make(map[string]RuntimeAgentToolFactory, len(al.runtimeAgentTools))
+	for name, factory := range al.runtimeAgentTools {
+		factories[name] = factory
+	}
+	return factories
+}
+
+func sortedRuntimeAgentToolNames(factories map[string]RuntimeAgentToolFactory) []string {
+	names := make([]string, 0, len(factories))
+	for name := range factories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func registerRuntimeAgentToolOnRegistry(
+	cfg *config.Config,
+	registry *AgentRegistry,
+	name string,
+	factory RuntimeAgentToolFactory,
+) error {
+	if registry == nil {
+		return nil
+	}
+	type registration struct {
+		instance *AgentInstance
+		tool     toolshared.Tool
+	}
+	registrations := make([]registration, 0, len(registry.ListAgentIDs()))
+	for _, agentID := range registry.ListAgentIDs() {
+		instance, ok := registry.GetAgent(agentID)
+		if !ok || instance == nil {
+			continue
+		}
+		tool, err := factory(cfg, agentID)
+		if err != nil {
+			return fmt.Errorf("agent %s: %w", agentID, err)
+		}
+		if tool == nil {
+			continue
+		}
+		if tool.Name() != name {
+			return fmt.Errorf("agent %s: factory returned invalid %s tool", agentID, name)
+		}
+		registrations = append(registrations, registration{instance: instance, tool: tool})
+	}
+	for _, candidate := range registrations {
+		registerToolIfAllowed(candidate.instance, candidate.tool)
 	}
 	return nil
 }

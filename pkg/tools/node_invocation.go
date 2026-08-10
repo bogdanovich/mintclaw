@@ -159,6 +159,7 @@ type nodeInvocationToolRuntime struct {
 	access        *nodeTargetAccess
 	source        NodeInvocationSource
 	runtimeEvents runtimeevents.Bus
+	eventSource   string
 }
 
 type resolvedNodeTarget struct {
@@ -237,6 +238,8 @@ type NodeInvocationEventPayload struct {
 	Observation       string                       `json:"observation"`
 	InvocationID      string                       `json:"invocation_id"`
 	Target            string                       `json:"target"`
+	Workspace         string                       `json:"workspace,omitempty"`
+	WorkspaceRevision string                       `json:"workspace_revision,omitempty"`
 	Command           string                       `json:"command"`
 	Risk              nodes.Risk                   `json:"risk"`
 	GatewayState      nodes.GatewayInvocationState `json:"gateway_state"`
