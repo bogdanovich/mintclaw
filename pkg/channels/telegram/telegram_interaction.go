@@ -57,23 +57,42 @@ func (c *TelegramChannel) SyncInteractionControls(msg bus.OutboundMessage) error
 	return nil
 }
 
-func (c *TelegramChannel) telegramQuestionControlResponse(
+func (c *TelegramChannel) telegramInteractionMetadata(
 	message *telego.Message,
+	content string,
 	senderID string,
-) string {
+) (string, string) {
 	if c == nil || message == nil {
-		return ""
+		return "", ""
 	}
-	response := strings.TrimSpace(message.Text)
-	if response == "" || response != message.Text {
-		return ""
+	controls, questionActive := c.activeQuestionControls(message, senderID)
+	if questionActive {
+		if message.Text == bus.InboundInteractionCancelLabel {
+			return bus.InboundInteractionChoiceCancel, ""
+		}
+		if message.ReplyToMessage != nil && c.isOwnBotUser(message.ReplyToMessage.From) {
+			return "", strings.TrimSpace(content)
+		}
+		response := strings.TrimSpace(message.Text)
+		if response == "" || response != message.Text {
+			return "", ""
+		}
+		if _, ok := controls.choices[response]; ok {
+			return "", response
+		}
+		return "", ""
 	}
-	controls, active := c.activeQuestionControls(message, senderID)
-	_, ok := controls.choices[response]
-	if !active || !ok {
-		return ""
+	if message.ReplyToMessage == nil || !c.isOwnBotUser(message.ReplyToMessage.From) {
+		return "", ""
 	}
-	return response
+	switch message.Text {
+	case "Allow once":
+		return bus.InboundInteractionChoiceAllowOnce, strings.TrimSpace(content)
+	case "Deny":
+		return bus.InboundInteractionChoiceDeny, strings.TrimSpace(content)
+	default:
+		return "", ""
+	}
 }
 
 func (c *TelegramChannel) activeQuestionControls(

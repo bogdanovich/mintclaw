@@ -231,11 +231,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		content = "[media only]"
 	}
 	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
-	interactionChoice := c.telegramInteractionChoice(message)
-	interactionResponse := c.telegramInteractionResponse(message, content, platformID, interactionChoice)
-	if interactionResponse == "" {
-		interactionResponse = c.telegramQuestionControlResponse(message, platformID)
-	}
+	interactionChoice, interactionResponse := c.telegramInteractionMetadata(message, content, platformID)
 
 	// In group chats, apply unified group trigger filtering
 	isMentioned := false

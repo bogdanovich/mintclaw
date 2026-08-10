@@ -32,43 +32,6 @@ func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
 	return strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(user.Username), "@"), botUsername)
 }
 
-func (c *TelegramChannel) telegramInteractionChoice(message *telego.Message) string {
-	if message != nil && message.Text == bus.InboundInteractionCancelLabel {
-		return bus.InboundInteractionChoiceCancel
-	}
-	if message == nil || message.ReplyToMessage == nil ||
-		!c.isOwnBotUser(message.ReplyToMessage.From) {
-		return ""
-	}
-
-	switch message.Text {
-	case "Allow once":
-		return bus.InboundInteractionChoiceAllowOnce
-	case "Deny":
-		return bus.InboundInteractionChoiceDeny
-	default:
-		return ""
-	}
-}
-
-func (c *TelegramChannel) telegramInteractionResponse(
-	message *telego.Message,
-	content string,
-	senderID string,
-	interactionChoice string,
-) string {
-	if message == nil || message.ReplyToMessage == nil ||
-		!c.isOwnBotUser(message.ReplyToMessage.From) {
-		return ""
-	}
-	isApprovalChoice := interactionChoice == bus.InboundInteractionChoiceAllowOnce ||
-		interactionChoice == bus.InboundInteractionChoiceDeny
-	if _, active := c.activeQuestionControls(message, senderID); !active && !isApprovalChoice {
-		return ""
-	}
-	return strings.TrimSpace(content)
-}
-
 func (c *TelegramChannel) ownBotIdentity() (int64, string) {
 	if c == nil {
 		return 0, ""
