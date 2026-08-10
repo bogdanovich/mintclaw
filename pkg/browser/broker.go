@@ -810,7 +810,7 @@ func (broker *Broker) updateSessionExact(
 		return Session{}, err
 	}
 	current, getErr := broker.store.GetSession(context.WithoutCancel(ctx), next.ID)
-	if getErr == nil && current == next {
+	if getErr == nil && sessionsEqual(current, next) {
 		return current, nil
 	}
 	return Session{}, errors.Join(err, getErr)

@@ -432,6 +432,8 @@ type Session struct {
 	Controller           ControllerState `json:"controller"`
 	ControllerExpiresAt  int64           `json:"controller_expires_at,omitempty"`
 	TabID                string          `json:"tab_id"`
+	FrameID              string          `json:"frame_id,omitempty"`
+	ContextAuthority     *ContextCatalog `json:"context_catalog,omitempty"`
 	SnapshotID           string          `json:"snapshot_id,omitempty"`
 	SnapshotGeneration   uint64          `json:"snapshot_generation"`
 	SnapshotOrigin       string          `json:"snapshot_origin,omitempty"`
@@ -475,6 +477,15 @@ func (session Session) Validate() error {
 			return fmt.Errorf("%w: malformed session snapshot origin", ErrInvalid)
 		}
 	}
+	if session.hasContextAuthority() {
+		catalog := *session.ContextAuthority
+		if err := catalog.Validate(); err != nil || catalog.SelectedTabID != session.TabID ||
+			catalog.SelectedFrameID != session.FrameID {
+			return fmt.Errorf("%w: malformed session context authority", ErrInvalid)
+		}
+	} else if session.FrameID != "" {
+		return fmt.Errorf("%w: incomplete session context authority", ErrInvalid)
+	}
 	if session.State.Terminal() && session.SnapshotID != "" {
 		return fmt.Errorf("%w: terminal session retains snapshot authority", ErrInvalid)
 	}
@@ -490,6 +501,26 @@ func (session Session) Validate() error {
 	return nil
 }
 
+func (session Session) hasContextAuthority() bool {
+	return session.ContextAuthority != nil
+}
+
+func (session Session) CurrentContextCatalog() (ContextCatalog, bool) {
+	if session.ContextAuthority == nil {
+		return ContextCatalog{}, false
+	}
+	return cloneContextCatalog(*session.ContextAuthority), true
+}
+
+func cloneSession(session Session) Session {
+	cloned := session
+	if session.ContextAuthority != nil {
+		catalog := cloneContextCatalog(*session.ContextAuthority)
+		cloned.ContextAuthority = &catalog
+	}
+	return cloned
+}
+
 // PreparedAction is the immutable durable authority that approval binds. It
 // deliberately omits the driver-local element target; that target remains in
 // the live worker slot and is usable only while the bound snapshot is fresh.
@@ -502,6 +533,9 @@ type PreparedAction struct {
 	Profile              string `json:"profile"`
 	ControllerGeneration uint64 `json:"controller_generation"`
 	TabID                string `json:"tab_id"`
+	FrameID              string `json:"frame_id,omitempty"`
+	ContextCatalogID     string `json:"context_catalog_id,omitempty"`
+	ContextGeneration    uint64 `json:"context_generation,omitempty"`
 	SnapshotID           string `json:"snapshot_id"`
 	SnapshotGeneration   uint64 `json:"snapshot_generation"`
 	CurrentOrigin        string `json:"current_origin"`
@@ -540,6 +574,13 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		!validDigest(prepared.ActionHash) || prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
+	}
+	if !validContextBinding(
+		prepared.FrameID,
+		prepared.ContextCatalogID,
+		prepared.ContextGeneration,
+	) {
+		return fmt.Errorf("%w: malformed prepared action context", ErrInvalid)
 	}
 	if prepared.Action.Kind != ActionDialog && (prepared.DialogType != "" || prepared.DialogMessage != "") {
 		return fmt.Errorf("%w: unexpected prepared dialog binding", ErrInvalid)

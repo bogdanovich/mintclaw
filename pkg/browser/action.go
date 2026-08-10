@@ -21,6 +21,9 @@ import (
 type Observation struct {
 	SessionID          string             `json:"browser_session_id"`
 	TabID              string             `json:"tab_id"`
+	FrameID            string             `json:"frame_id,omitempty"`
+	ContextCatalogID   string             `json:"context_catalog_id,omitempty"`
+	ContextGeneration  uint64             `json:"context_generation,omitempty"`
 	SnapshotID         string             `json:"snapshot_id"`
 	SnapshotGeneration uint64             `json:"snapshot_generation"`
 	URL                string             `json:"url"`
@@ -41,6 +44,9 @@ type PrepareActionRequest struct {
 	RequestID          string
 	SessionID          string
 	TabID              string
+	FrameID            string
+	ContextCatalogID   string
+	ContextGeneration  uint64
 	SnapshotID         string
 	SnapshotGeneration uint64
 	Action             Action
@@ -65,6 +71,9 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	session, slot, worker, err := broker.actionSessionLocked(ctx, owner, sessionID, tabID)
 	if err != nil {
 		return Observation{}, err
+	}
+	if session.FrameID != "" {
+		return Observation{}, ErrDriverIncompatible
 	}
 	driverObservation, navigationID, err := observeWithNavigationCheck(ctx, worker)
 	if err != nil {
@@ -112,13 +121,18 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	slot.inputs = nil
 	slot.uploads = nil
 	slot.navigationID = navigationID
-	return Observation{
-		SessionID: session.ID, TabID: session.TabID, SnapshotID: snapshotID,
+	observation := Observation{
+		SessionID: session.ID, TabID: session.TabID, FrameID: session.FrameID, SnapshotID: snapshotID,
 		SnapshotGeneration: session.SnapshotGeneration, URL: driverObservation.URL,
 		Origin: driverObservation.Origin, Title: driverObservation.Title, Snapshot: visibleSnapshot,
 		PendingDialog: cloneDialogObservation(driverObservation.PendingDialog),
 		Truncated:     driverObservation.Truncated,
-	}, nil
+	}
+	if session.ContextAuthority != nil {
+		observation.ContextCatalogID = session.ContextAuthority.ID
+		observation.ContextGeneration = session.ContextAuthority.Generation
+	}
+	return observation, nil
 }
 
 func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRequest) (Preparation, error) {
@@ -128,6 +142,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	if !validIdentifier(request.RequestID) || !validIdentifier(request.SessionID) ||
 		!validIdentifier(request.TabID) || !validIdentifier(request.SnapshotID) ||
 		request.SnapshotGeneration == 0 ||
+		!validContextBinding(request.FrameID, request.ContextCatalogID, request.ContextGeneration) ||
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil ||
 		(request.Action.Kind == ActionSelect && request.Action.Value == "") ||
 		(request.Action.Kind == ActionUpload && (request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
@@ -143,8 +158,17 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		return Preparation{}, err
 	}
 	if session.SnapshotID != request.SnapshotID ||
-		session.SnapshotGeneration != request.SnapshotGeneration {
+		session.SnapshotGeneration != request.SnapshotGeneration ||
+		!sessionMatchesContextBinding(
+			session,
+			request.FrameID,
+			request.ContextCatalogID,
+			request.ContextGeneration,
+		) {
 		return Preparation{}, ErrStale
+	}
+	if session.FrameID != "" {
+		return Preparation{}, ErrDriverIncompatible
 	}
 	boundAction, inputDigest, inputBytes, err := broker.bindActionInput(request.Action)
 	if err != nil {
@@ -157,6 +181,8 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		}
 		if existing.Owner != request.Owner || existing.SessionID != request.SessionID ||
 			existing.TabID != request.TabID || existing.SnapshotID != request.SnapshotID ||
+			existing.FrameID != request.FrameID || existing.ContextCatalogID != request.ContextCatalogID ||
+			existing.ContextGeneration != request.ContextGeneration ||
 			existing.SnapshotGeneration != request.SnapshotGeneration || existing.Action != boundAction ||
 			existing.InputDigest != inputDigest || existing.InputBytes != inputBytes {
 			return Preparation{}, ErrConflict
@@ -369,7 +395,9 @@ func (broker *Broker) resolvePreparedActionLocked(
 	prepared := PreparedAction{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
 		ControllerGeneration: session.ControllerGeneration, TabID: session.TabID,
-		SnapshotID: session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
+		FrameID: session.FrameID, ContextCatalogID: request.ContextCatalogID,
+		ContextGeneration: request.ContextGeneration,
+		SnapshotID:        session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
 		CurrentOrigin: session.SnapshotOrigin, Action: boundAction,
 		InputDigest: inputDigest, InputBytes: inputBytes, DryRun: session.DryRun,
 		PolicyRevision: session.PolicyRevision, CatalogRevision: worker.CatalogRevision(),
@@ -511,6 +539,12 @@ func (broker *Broker) revalidatePreparedLocked(
 	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt || session.PolicyRevision != prepared.PolicyRevision ||
 		session.Target != prepared.Target || session.Profile != prepared.Profile ||
 		session.ControllerGeneration != prepared.ControllerGeneration || session.TabID != prepared.TabID ||
+		!sessionMatchesContextBinding(
+			session,
+			prepared.FrameID,
+			prepared.ContextCatalogID,
+			prepared.ContextGeneration,
+		) ||
 		session.SnapshotID != prepared.SnapshotID || session.SnapshotGeneration != prepared.SnapshotGeneration ||
 		session.SnapshotOrigin != prepared.CurrentOrigin || worker.CatalogRevision() != prepared.CatalogRevision {
 		return ErrStale

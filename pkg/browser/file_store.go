@@ -164,7 +164,10 @@ func (store *FileStore) load() error {
 		invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
 		document.Invocations[id] = invocation
 	}
-	store.sessions = document.Sessions
+	store.sessions = make(map[string]Session, len(document.Sessions))
+	for id, session := range document.Sessions {
+		store.sessions[id] = cloneSession(session)
+	}
 	store.prepared = document.PreparedActions
 	store.invocations = document.Invocations
 	return nil
@@ -295,7 +298,7 @@ func (store *FileStore) CreateSession(_ context.Context, session Session) error 
 		return ErrStoreFull
 	}
 	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
-	store.sessions[session.ID] = session
+	store.sessions[session.ID] = cloneSession(session)
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
 
@@ -309,7 +312,7 @@ func (store *FileStore) GetSession(_ context.Context, id string) (Session, error
 	if !ok {
 		return Session{}, ErrNotFound
 	}
-	return session, nil
+	return cloneSession(session), nil
 }
 
 func (store *FileStore) ListSessions(_ context.Context) ([]Session, error) {
@@ -320,7 +323,7 @@ func (store *FileStore) ListSessions(_ context.Context) ([]Session, error) {
 	}
 	result := make([]Session, 0, len(store.sessions))
 	for _, session := range store.sessions {
-		result = append(result, session)
+		result = append(result, cloneSession(session))
 	}
 	slices.SortFunc(result, func(a, b Session) int { return cmp.Compare(a.ID, b.ID) })
 	return result, nil
@@ -345,13 +348,13 @@ func (store *FileStore) UpdateSession(_ context.Context, expected uint64, next S
 	if current.Owner != next.Owner || current.Target != next.Target || current.Profile != next.Profile ||
 		current.CreatedAt != next.CreatedAt || current.DryRun != next.DryRun ||
 		current.PolicyRevision != next.PolicyRevision || !validControllerTransition(current, next) ||
-		current.TabID != next.TabID || current.ExpiresAt != next.ExpiresAt ||
+		!validContextTransition(current, next) || current.ExpiresAt != next.ExpiresAt ||
 		!validSnapshotTransition(current, next) ||
 		!validSessionTransition(current.State, next.State) {
 		return ErrConflict
 	}
 	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
-	store.sessions[next.ID] = next
+	store.sessions[next.ID] = cloneSession(next)
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
 
@@ -550,7 +553,7 @@ func (store *FileStore) cloneLocked() (
 ) {
 	sessions := make(map[string]Session, len(store.sessions))
 	for id, session := range store.sessions {
-		sessions[id] = session
+		sessions[id] = cloneSession(session)
 	}
 	prepared := make(map[string]PreparedAction, len(store.prepared))
 	for id, action := range store.prepared {
