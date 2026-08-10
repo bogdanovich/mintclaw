@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -41,10 +42,12 @@ type WorkspaceSearchResult struct {
 }
 
 type workspaceIgnoreRule struct {
-	base    string
-	pattern string
-	negated bool
-	dirOnly bool
+	base     string
+	pattern  string
+	negated  bool
+	dirOnly  bool
+	anchored bool
+	hasSlash bool
 }
 
 type workspaceSearchState struct {
@@ -110,13 +113,20 @@ func (runtime *FileTransferRuntime) SearchWorkspace(
 		ctx: ctx, profile: profile, root: root, workspace: workspaceRoot, options: options, regex: pattern,
 	}
 	start := workspaceRoot
+	var inherited []workspaceIgnoreRule
+	depth := 0
 	if options.Path != "" {
 		start = filepath.Join(workspaceRoot, filepath.FromSlash(options.Path))
 		if !pathWithinWorkspaceRoot(workspaceRoot, start) {
 			return WorkspaceSearchResult{}, ErrFileAccessDenied
 		}
+		var ignored bool
+		inherited, depth, ignored = state.inheritedIgnoreRules(start)
+		if ignored {
+			return WorkspaceSearchResult{}, nil
+		}
 	}
-	if err := state.walk(start, nil, 0); err != nil {
+	if err := state.walk(start, inherited, depth); err != nil {
 		return WorkspaceSearchResult{}, err
 	}
 	return WorkspaceSearchResult{
@@ -180,7 +190,7 @@ func (state *workspaceSearchState) walk(
 				return ErrFileAccessDenied
 			}
 			if entry.Type()&os.ModeSymlink != 0 || name == ".git" ||
-				(!state.options.IncludeIgnored && (name == "node_modules" || name == ".cache" || name == "vendor")) ||
+				(!state.options.IncludeIgnored && workspaceDefaultIgnoredDirectory(name, entry.IsDir())) ||
 				(!state.options.IncludeIgnored && workspaceIgnored(filepath.ToSlash(rel), entry.IsDir(), rules)) {
 				continue
 			}
@@ -203,6 +213,46 @@ func (state *workspaceSearchState) walk(
 			return ErrFileAccessDenied
 		}
 	}
+}
+
+func (state *workspaceSearchState) inheritedIgnoreRules(
+	start string,
+) ([]workspaceIgnoreRule, int, bool) {
+	rel, err := filepath.Rel(state.workspace, start)
+	if err != nil || rel == "." || rel == "" {
+		return nil, 0, false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if state.options.IncludeIgnored {
+		return nil, len(parts), false
+	}
+	rules := state.loadIgnore(state.workspace)
+	directory := state.workspace
+	for index, part := range parts {
+		candidate := filepath.Join(directory, filepath.FromSlash(part))
+		candidateRel := filepath.ToSlash(filepath.Join(parts[:index+1]...))
+		isLast := index == len(parts)-1
+		isDir := !isLast
+		if isLast {
+			handle, openErr := state.root.openDirectory(candidate, state.profile.profile.CrossMounts)
+			if openErr == nil {
+				isDir = true
+				_ = handle.Close()
+			}
+		}
+		if workspaceDefaultIgnoredDirectory(part, isDir) || workspaceIgnored(candidateRel, isDir, rules) {
+			return rules, len(parts), true
+		}
+		if !isLast {
+			directory = candidate
+			rules = append(rules, state.loadIgnore(directory)...)
+		}
+	}
+	return rules, len(parts), false
+}
+
+func workspaceDefaultIgnoredDirectory(name string, directory bool) bool {
+	return directory && (name == "node_modules" || name == ".cache" || name == "vendor")
 }
 
 func (state *workspaceSearchState) limitReached() bool {
@@ -343,13 +393,23 @@ func (state *workspaceSearchState) loadIgnore(directory string) []workspaceIgnor
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		negated := strings.HasPrefix(line, "!")
-		line = strings.TrimPrefix(line, "!")
+		escapedPrefix := strings.HasPrefix(line, `\!`) || strings.HasPrefix(line, `\#`)
+		negated := !escapedPrefix && strings.HasPrefix(line, "!")
+		if negated {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "!"))
+		}
+		if escapedPrefix {
+			line = strings.TrimPrefix(line, `\`)
+		}
 		dirOnly := strings.HasSuffix(line, "/")
-		line = strings.Trim(line, "/")
+		line = strings.TrimRight(line, "/")
+		anchored := strings.HasPrefix(line, "/")
+		line = strings.TrimLeft(line, "/")
 		if line != "" {
+			pattern := filepath.ToSlash(filepath.Clean(line))
 			rules = append(rules, workspaceIgnoreRule{
-				base: filepath.ToSlash(base), pattern: filepath.ToSlash(line), negated: negated, dirOnly: dirOnly,
+				base: filepath.ToSlash(base), pattern: pattern, negated: negated, dirOnly: dirOnly,
+				anchored: anchored, hasSlash: strings.Contains(pattern, "/"),
 			})
 		}
 	}
@@ -362,18 +422,16 @@ func workspaceIgnored(path string, directory bool, rules []workspaceIgnoreRule) 
 		if rule.dirOnly && !directory {
 			continue
 		}
-		rel := path
-		if rule.base != "." && rule.base != "" {
-			prefix := rule.base + "/"
-			if !strings.HasPrefix(path, prefix) {
-				continue
-			}
-			rel = strings.TrimPrefix(path, prefix)
+		rel := relativeToWorkspaceIgnoreBase(path, rule.base)
+		if rel == "" || rel == "." || strings.HasPrefix(rel, "../") {
+			continue
 		}
-		matched, _ := filepath.Match(filepath.FromSlash(rule.pattern), filepath.FromSlash(rel))
-		if !matched && !strings.Contains(rule.pattern, "/") {
+		matched := false
+		if rule.anchored || rule.hasSlash {
+			matched = matchWorkspaceIgnorePattern(rule.pattern, rel)
+		} else {
 			for _, part := range strings.Split(rel, "/") {
-				if partMatch, _ := filepath.Match(rule.pattern, part); partMatch {
+				if matchWorkspaceIgnorePattern(rule.pattern, part) {
 					matched = true
 					break
 				}
@@ -384,4 +442,66 @@ func workspaceIgnored(path string, directory bool, rules []workspaceIgnoreRule) 
 		}
 	}
 	return ignored
+}
+
+func relativeToWorkspaceIgnoreBase(path, base string) string {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	base = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(base)), "./")
+	if base == "." || base == "" {
+		return path
+	}
+	if path == base {
+		return "."
+	}
+	prefix := base + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return "../"
+	}
+	return strings.TrimPrefix(path, prefix)
+}
+
+func matchWorkspaceIgnorePattern(pattern, value string) bool {
+	rawPattern := strings.Split(filepath.ToSlash(pattern), "/")
+	patternParts := make([]string, 0, len(rawPattern))
+	requiredParts := 0
+	for _, part := range rawPattern {
+		if part == "**" && len(patternParts) > 0 && patternParts[len(patternParts)-1] == "**" {
+			continue
+		}
+		patternParts = append(patternParts, part)
+		if part != "**" {
+			requiredParts++
+		}
+	}
+	valueParts := strings.Split(filepath.ToSlash(value), "/")
+	if requiredParts > len(valueParts) {
+		return false
+	}
+	type position struct{ pattern, value int }
+	memo := make(map[position]bool, len(patternParts)*len(valueParts))
+	seen := make(map[position]bool, len(patternParts)*len(valueParts))
+	var match func(int, int) bool
+	match = func(patternIndex, valueIndex int) bool {
+		current := position{pattern: patternIndex, value: valueIndex}
+		if seen[current] {
+			return memo[current]
+		}
+		seen[current] = true
+		if patternIndex == len(patternParts) {
+			memo[current] = valueIndex == len(valueParts)
+			return memo[current]
+		}
+		if patternParts[patternIndex] == "**" {
+			memo[current] = match(patternIndex+1, valueIndex) ||
+				(valueIndex < len(valueParts) && match(patternIndex, valueIndex+1))
+			return memo[current]
+		}
+		if valueIndex == len(valueParts) {
+			return false
+		}
+		matched, err := pathpkg.Match(patternParts[patternIndex], valueParts[valueIndex])
+		memo[current] = err == nil && matched && match(patternIndex+1, valueIndex+1)
+		return memo[current]
+	}
+	return match(0, 0)
 }

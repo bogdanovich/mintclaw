@@ -91,11 +91,18 @@ func (al *AgentLoop) RegisterRuntimeToolDecorator(name string, factory RuntimeTo
 	if al.runtimeToolDecorators == nil {
 		al.runtimeToolDecorators = make(map[string]RuntimeToolDecoratorFactory)
 	}
+	_, registered := al.runtimeToolDecorators[name]
 	al.runtimeToolDecorators[name] = factory
 	registry := al.registry
 	cfg := al.cfg
 	al.mu.Unlock()
 
+	// Registry rebuilds apply retained decorators before service setup runs
+	// again. Re-registration refreshes the factory for the next rebuild, but
+	// must not wrap the already decorated current registry a second time.
+	if registered {
+		return nil
+	}
 	return decorateRuntimeToolOnRegistry(cfg, registry, name, factory)
 }
 

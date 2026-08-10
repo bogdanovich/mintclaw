@@ -209,6 +209,75 @@ func TestWorkspaceSearchIsBoundedAndRespectsIgnoreFiles(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSearchHonorsRecursiveGitIgnoreAtRootAndNestedDepth(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	for path, content := range map[string]string{
+		".gitignore": "**/.env\n/root-only.txt\nprivate/\n*.secret\n" +
+			"!visible.secret\n\\!literal\n\\#hash\n",
+		".env":                    "workspace-secret\n",
+		"pkg/deep/.env":           "workspace-secret\n",
+		"pkg/deep/visible":        "workspace-secret\n",
+		"root-only.txt":           "workspace-secret\n",
+		"pkg/deep/root-only.txt":  "workspace-secret\n",
+		"private/hidden.txt":      "workspace-secret\n",
+		"pkg/deep/hidden.secret":  "workspace-secret\n",
+		"pkg/deep/visible.secret": "workspace-secret\n",
+		"pkg/deep/!literal":       "workspace-secret\n",
+		"pkg/deep/#hash":          "workspace-secret\n",
+	} {
+		fullPath := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(includeIgnored bool, searchPath string) WorkspaceSearchResult {
+		t.Helper()
+		input, err := json.Marshal(map[string]any{
+			"profile_revision": "project-v1", "workspace_revision": "workspace-v1",
+			"working_scope": "project", "pattern": "workspace-secret", "target": "content",
+			"output_mode": "files_only", "limit": 20, "include_ignored": includeIgnored,
+			"path": searchPath,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runtime.handlers[nodes.WorkspaceCommandSearch].execute(
+			t.Context(),
+			commandInvocation{Input: input, OutputLimitBytes: nodes.MaxWorkspaceReadBytes},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.(WorkspaceSearchResult)
+	}
+
+	filtered := search(false, "")
+	for _, path := range []string{"pkg/deep/visible", "pkg/deep/root-only.txt", "pkg/deep/visible.secret"} {
+		if !strings.Contains(filtered.Result, path) {
+			t.Fatalf("filtered recursive-ignore result missing %q: %#v", path, filtered)
+		}
+	}
+	if filtered.Matches != 3 || strings.Contains(filtered.Result, ".env") ||
+		strings.Contains(filtered.Result, "private/") || strings.Contains(filtered.Result, "hidden.secret") ||
+		strings.Contains(filtered.Result, "!literal") || strings.Contains(filtered.Result, "#hash") {
+		t.Fatalf("filtered recursive-ignore result = %#v", filtered)
+	}
+	unfiltered := search(true, "")
+	if unfiltered.Matches != 10 || !strings.Contains(unfiltered.Result, ".env") ||
+		!strings.Contains(unfiltered.Result, "pkg/deep/.env") {
+		t.Fatalf("include-ignored recursive result = %#v", unfiltered)
+	}
+	if explicit := search(false, ".env"); explicit.Matches != 0 || explicit.FilesVisited != 0 {
+		t.Fatalf("explicit ignored-file result = %#v", explicit)
+	}
+	if explicit := search(true, ".env"); explicit.Matches != 1 || explicit.Result != ".env" {
+		t.Fatalf("explicit include-ignored result = %#v", explicit)
+	}
+}
+
 func TestWorkspaceSearchCountModeEmitsEntryAtLimit(t *testing.T) {
 	runtime, root := newWorkspaceReadSearchTestRuntime(t)
 	for _, name := range []string{"a.txt", "b.txt"} {
