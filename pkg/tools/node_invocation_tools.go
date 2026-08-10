@@ -100,7 +100,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
 ) (map[string]any, error) {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.approvalArguments(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) approvalArguments(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) (map[string]any, error) {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +132,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 }
 
 func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.execute(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) execute(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) *toolshared.ToolResult {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		var denial *nodeSafeDenialError
 		if errors.As(err, &denial) {

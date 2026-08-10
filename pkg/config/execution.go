@@ -9,6 +9,8 @@ import (
 
 const MaxExecutionTargets = 128
 
+const MaxRemoteWorkspaces = 64
+
 var (
 	executionTargetNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	nodeReferencePattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -17,7 +19,27 @@ var (
 // ExecutionConfig defines operator-owned target names. Models select only a
 // target name and never supply transport connection details.
 type ExecutionConfig struct {
-	Targets map[string]ExecutionTarget `json:"targets,omitempty"`
+	Targets          map[string]ExecutionTarget `json:"targets,omitempty"`
+	RemoteWorkspaces map[string]RemoteWorkspace `json:"remote_workspaces,omitempty"`
+}
+
+// RemoteWorkspace binds one model-visible execution scope to an existing
+// target and authenticated node working-scope alias. Tool calls still select
+// the workspace explicitly; this configuration grants no sticky session state.
+type RemoteWorkspace struct {
+	Target       string   `json:"target"`
+	WorkingScope string   `json:"working_scope"`
+	Tools        []string `json:"tools"`
+	Revision     string   `json:"revision"`
+}
+
+var remoteWorkspaceTools = map[string]struct{}{
+	"apply_patch":    {},
+	"jobs":           {},
+	"read_file":      {},
+	"search_files":   {},
+	"workspace_exec": {},
+	"write_file":     {},
 }
 
 // ExecutionTarget binds one operator-owned name to a transport-specific
@@ -75,6 +97,9 @@ func (c *Config) ValidateExecutionTargets() error {
 			return fmt.Errorf("execution target %q has an invalid job profile", name)
 		}
 	}
+	if err := validateRemoteWorkspaces(c.Execution.RemoteWorkspaces, c.Execution.Targets); err != nil {
+		return err
+	}
 	if err := validateTargetPolicy(
 		"agents.defaults.target_policy",
 		c.Agents.Defaults.TargetPolicy,
@@ -92,6 +117,76 @@ func (c *Config) ValidateExecutionTargets() error {
 		}
 	}
 	return nil
+}
+
+func validateRemoteWorkspaces(workspaces map[string]RemoteWorkspace, targets map[string]ExecutionTarget) error {
+	if len(workspaces) > MaxRemoteWorkspaces {
+		return fmt.Errorf("execution.remote_workspaces exceeds the %d workspace limit", MaxRemoteWorkspaces)
+	}
+	for name, workspace := range workspaces {
+		if !validExecutionTargetName(name) {
+			return fmt.Errorf("remote workspace %q has an invalid name", name)
+		}
+		if !validExecutionTargetName(workspace.Target) {
+			return fmt.Errorf("remote workspace %q has an invalid target", name)
+		}
+		target, exists := targets[workspace.Target]
+		if !exists {
+			return fmt.Errorf("remote workspace %q references unknown target %q", name, workspace.Target)
+		}
+		if !validExecutionTargetName(workspace.WorkingScope) {
+			return fmt.Errorf("remote workspace %q has an invalid working scope", name)
+		}
+		if !validNodeReference(workspace.Revision) {
+			return fmt.Errorf("remote workspace %q has an invalid revision", name)
+		}
+		if len(workspace.Tools) == 0 || len(workspace.Tools) > len(remoteWorkspaceTools) {
+			return fmt.Errorf("remote workspace %q requires a bounded non-empty tool set", name)
+		}
+		seen := make(map[string]struct{}, len(workspace.Tools))
+		needsFiles := false
+		needsJobs := false
+		for _, tool := range workspace.Tools {
+			if _, supported := remoteWorkspaceTools[tool]; !supported {
+				return fmt.Errorf("remote workspace %q contains unsupported tool %q", name, tool)
+			}
+			if _, duplicate := seen[tool]; duplicate {
+				return fmt.Errorf("remote workspace %q contains duplicate tool %q", name, tool)
+			}
+			seen[tool] = struct{}{}
+			switch tool {
+			case "read_file", "search_files", "write_file", "apply_patch":
+				needsFiles = true
+			case "jobs":
+				needsJobs = true
+			}
+		}
+		if needsFiles && target.FileProfile == "" {
+			return fmt.Errorf("remote workspace %q requires a target file profile", name)
+		}
+		if needsJobs && target.JobProfile == "" {
+			return fmt.Errorf("remote workspace %q requires a target job profile", name)
+		}
+	}
+	return nil
+}
+
+// RemoteWorkspaceAllows reports whether the operator enabled one tool for a
+// configured remote workspace. It does not replace agent target-policy checks.
+func (c *Config) RemoteWorkspaceAllows(workspace, tool string) (RemoteWorkspace, bool) {
+	if c == nil {
+		return RemoteWorkspace{}, false
+	}
+	configured, ok := c.Execution.RemoteWorkspaces[workspace]
+	if !ok {
+		return RemoteWorkspace{}, false
+	}
+	for _, allowed := range configured.Tools {
+		if allowed == tool {
+			return configured, true
+		}
+	}
+	return RemoteWorkspace{}, false
 }
 
 func validateTargetPolicy(

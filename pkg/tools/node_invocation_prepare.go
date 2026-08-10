@@ -28,9 +28,10 @@ func isNodeDownloadTransferCommand(command string) bool {
 	return command == "file.download.v1" || command == nodes.InternalJobArtifactDownloadCommand
 }
 
-func (runtime *nodeInvocationToolRuntime) prepare(
+func (runtime *nodeInvocationToolRuntime) prepareInternal(
 	ctx context.Context,
 	args map[string]any,
+	allowWorkspace bool,
 ) (nodes.GatewayInvocationRecord, error) {
 	if runtime == nil || runtime.source == nil || runtime.access == nil {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
@@ -72,13 +73,37 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nil,
 		)
 	}
-	if isNodeFileTransferDescriptor(descriptor) {
+	if nodes.IsWorkspaceCommand(command) && !allowWorkspace {
+		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+			nodeDenialCommandUnavailable,
+			nodeConstraintCommandPolicy,
+			nodeActionAskOperator,
+			nil,
+		)
+	}
+	if isNodeFileTransferDescriptor(descriptor) &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
 			nodeActionRefreshDiscovery,
 			nil,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialCommandUnavailable,
+				nodeConstraintCommandPolicy,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
 	}
 	if resolved.requiresReapproval {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
@@ -170,7 +195,8 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nil,
 		)
 	}
-	if descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
@@ -186,6 +212,16 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nodeActionRefreshDiscovery,
 			err,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		var projected bool
@@ -372,6 +408,7 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 				command,
 				requestedRevision,
 				current,
+				allowWorkspace,
 			)
 		},
 	)
@@ -420,6 +457,7 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	command string,
 	requestedRevision string,
 	current NodeDiscoveryRecord,
+	allowWorkspace bool,
 ) error {
 	if current.Registration == nil || current.Snapshot.ID == "" {
 		return errDiscoveryStale
@@ -431,6 +469,17 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	descriptor, err := current.Registration.ApprovedCommand(command)
 	if err != nil {
 		return errDiscoveryStale
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		binding, exists := runtime.access.targets[target]
+		if !exists {
+			return errDiscoveryStale
+		}
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(descriptor, binding.FileProfile)
+		if !projected {
+			return errDiscoveryStale
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		binding, exists := runtime.access.targets[target]
@@ -489,8 +538,8 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	if !current.Connected {
 		return errDiscoveryStale
 	}
-	if descriptor.ModelContract != nil &&
-		descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract != nil && descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return errDiscoveryStale
 	}
 	return nil

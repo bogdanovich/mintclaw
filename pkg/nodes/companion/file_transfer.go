@@ -14,8 +14,10 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
@@ -97,6 +99,21 @@ type FileTransferRuntime struct {
 	active   map[string]*activeFileTransfer
 	closeMu  sync.Mutex
 	closed   bool
+}
+
+type WorkspaceReadOptions struct {
+	Offset    int64
+	Length    int
+	StartLine int
+	MaxLines  int
+}
+
+type WorkspaceReadResult struct {
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	Truncated bool   `json:"truncated"`
 }
 
 func NewFileTransferRuntime(
@@ -277,6 +294,112 @@ func (runtime *FileTransferRuntime) TransferPolicyRevisions() []string {
 	}
 	sort.Strings(revisions)
 	return revisions
+}
+
+func (runtime *FileTransferRuntime) WorkspaceProfileRevisions() []string {
+	if runtime == nil {
+		return nil
+	}
+	revisions := make([]string, 0, len(runtime.profiles))
+	for revision := range runtime.profiles {
+		revisions = append(revisions, revision)
+	}
+	sort.Strings(revisions)
+	return revisions
+}
+
+func (runtime *FileTransferRuntime) ReadWorkspace(
+	ctx context.Context,
+	profileRevision string,
+	path string,
+	options WorkspaceReadOptions,
+) (WorkspaceReadResult, error) {
+	if runtime == nil || runtime.profiles[profileRevision] == nil {
+		return WorkspaceReadResult{}, ErrFileAccessDenied
+	}
+	if options.Offset < 0 || options.Length < 0 || options.StartLine < 0 || options.MaxLines < 0 ||
+		(options.Offset > 0 || options.Length > 0) && (options.StartLine > 0 || options.MaxLines > 0) {
+		return WorkspaceReadResult{}, ErrFileAccessDenied
+	}
+	source, err := runtime.profiles[profileRevision].openReadable(path)
+	if err != nil {
+		return WorkspaceReadResult{}, err
+	}
+	defer func() { _ = source.file.Close() }()
+	if source.info.Size() > runtime.profiles[profileRevision].profile.MaxFileBytes {
+		return WorkspaceReadResult{}, ErrFileAccessDenied
+	}
+	digest, err := hashOpenedFile(ctx, source.file)
+	if err != nil {
+		return WorkspaceReadResult{}, err
+	}
+	if _, seekErr := source.file.Seek(0, io.SeekStart); seekErr != nil {
+		return WorkspaceReadResult{}, seekErr
+	}
+	limit := options.Length
+	if limit <= 0 || limit > nodes.MaxWorkspaceReadBytes {
+		limit = nodes.MaxWorkspaceReadBytes
+	}
+	var content []byte
+	truncated := false
+	if options.StartLine > 0 || options.MaxLines > 0 {
+		if source.info.Size() > int64(nodes.MaxWorkspaceReadBytes*8) {
+			return WorkspaceReadResult{}, ErrFileAccessDenied
+		}
+		all, readErr := io.ReadAll(io.LimitReader(source.file, int64(nodes.MaxWorkspaceReadBytes*8)+1))
+		if readErr != nil || len(all) > nodes.MaxWorkspaceReadBytes*8 || !utf8.Valid(all) {
+			return WorkspaceReadResult{}, ErrFileAccessDenied
+		}
+		start := max(options.StartLine, 1)
+		maxLines := options.MaxLines
+		if maxLines <= 0 || maxLines > 5000 {
+			maxLines = 5000
+		}
+		lines := strings.Split(string(all), "\n")
+		if start > len(lines) {
+			content = []byte{}
+		} else {
+			end := min(len(lines), start-1+maxLines)
+			var builder strings.Builder
+			for index := start - 1; index < end; index++ {
+				line := fmt.Sprintf("%d|%s", index+1, lines[index])
+				separatorBytes := 0
+				if builder.Len() > 0 {
+					separatorBytes = 1
+				}
+				if builder.Len()+separatorBytes+len(line) > nodes.MaxWorkspaceReadBytes {
+					truncated = true
+					break
+				}
+				if separatorBytes > 0 {
+					builder.WriteByte('\n')
+				}
+				builder.WriteString(line)
+			}
+			content = []byte(builder.String())
+			truncated = truncated || end < len(lines)
+		}
+	} else {
+		if _, seekErr := source.file.Seek(options.Offset, io.SeekStart); seekErr != nil {
+			return WorkspaceReadResult{}, seekErr
+		}
+		content, err = io.ReadAll(io.LimitReader(source.file, int64(limit)+1))
+		if err != nil {
+			return WorkspaceReadResult{}, err
+		}
+		if len(content) > limit {
+			content = content[:limit]
+			truncated = true
+		}
+		if !utf8.Valid(content) {
+			return WorkspaceReadResult{}, ErrFileAccessDenied
+		}
+		truncated = truncated || options.Offset+int64(len(content)) < source.info.Size()
+	}
+	return WorkspaceReadResult{
+		Path: path, Content: string(content), Size: source.info.Size(),
+		SHA256: hex.EncodeToString(digest[:]), Truncated: truncated,
+	}, nil
 }
 
 func (runtime *FileTransferRuntime) HandleTransferFrame(

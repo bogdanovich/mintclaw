@@ -33,6 +33,83 @@ func TestValidateExecutionTargetsAcceptsBoundedNodePolicies(t *testing.T) {
 	}
 }
 
+func TestValidateExecutionTargetsAcceptsRemoteWorkspace(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Execution.Targets = map[string]ExecutionTarget{
+		"build": {
+			Type: "node", Node: "node-build", FileProfile: "project-files", JobProfile: "project-jobs",
+		},
+	}
+	cfg.Execution.RemoteWorkspaces = map[string]RemoteWorkspace{
+		"mintclaw-build": {
+			Target: "build", WorkingScope: "mintclaw", Revision: "mintclaw-v1",
+			Tools: []string{"read_file", "search_files", "write_file", "apply_patch", "workspace_exec", "jobs"},
+		},
+	}
+
+	if err := cfg.ValidateExecutionTargets(); err != nil {
+		t.Fatalf("ValidateExecutionTargets() error = %v", err)
+	}
+	workspace, allowed := cfg.RemoteWorkspaceAllows("mintclaw-build", "search_files")
+	if !allowed || workspace.Target != "build" {
+		t.Fatalf("RemoteWorkspaceAllows() = %#v, %v", workspace, allowed)
+	}
+	if _, allowed := cfg.RemoteWorkspaceAllows("mintclaw-build", "browser_act"); allowed {
+		t.Fatal("RemoteWorkspaceAllows() allowed unsupported tool")
+	}
+}
+
+func TestValidateExecutionTargetsRejectsInvalidRemoteWorkspaces(t *testing.T) {
+	tests := []struct {
+		name      string
+		workspace RemoteWorkspace
+		want      string
+	}{
+		{name: "unknown target", workspace: RemoteWorkspace{
+			Target: "missing", WorkingScope: "project", Revision: "v1", Tools: []string{"read_file"},
+		}, want: "unknown target"},
+		{name: "missing scope", workspace: RemoteWorkspace{
+			Target: "build", Revision: "v1", Tools: []string{"read_file"},
+		}, want: "invalid working scope"},
+		{name: "missing revision", workspace: RemoteWorkspace{
+			Target: "build", WorkingScope: "project", Tools: []string{"read_file"},
+		}, want: "invalid revision"},
+		{name: "empty tools", workspace: RemoteWorkspace{
+			Target: "build", WorkingScope: "project", Revision: "v1",
+		}, want: "non-empty tool set"},
+		{name: "unsupported tool", workspace: RemoteWorkspace{
+			Target: "build", WorkingScope: "project", Revision: "v1", Tools: []string{"browser_act"},
+		}, want: "unsupported tool"},
+		{name: "duplicate tool", workspace: RemoteWorkspace{
+			Target: "build", WorkingScope: "project", Revision: "v1",
+			Tools: []string{"read_file", "read_file"},
+		}, want: "duplicate tool"},
+		{name: "missing file profile", workspace: RemoteWorkspace{
+			Target: "exec-only", WorkingScope: "project", Revision: "v1", Tools: []string{"read_file"},
+		}, want: "target file profile"},
+		{name: "missing job profile", workspace: RemoteWorkspace{
+			Target: "build", WorkingScope: "project", Revision: "v1", Tools: []string{"jobs"},
+		}, want: "target job profile"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Execution.Targets = map[string]ExecutionTarget{
+				"build": {
+					Type: "node", Node: "node-build", FileProfile: "project-files",
+				},
+				"exec-only": {Type: "node", Node: "node-exec"},
+			}
+			cfg.Execution.RemoteWorkspaces = map[string]RemoteWorkspace{"workspace": test.workspace}
+			err := cfg.ValidateExecutionTargets()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateExecutionTargets() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestValidateExecutionTargetsRejectsInvalidDefinitions(t *testing.T) {
 	tests := []struct {
 		name   string

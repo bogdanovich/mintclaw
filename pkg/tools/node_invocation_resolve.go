@@ -201,6 +201,20 @@ func validateNodeModelConstraints(
 		return validateSystemExecModelConstraints(descriptor, input, constraints)
 	case "shell.exec.v1":
 		return validateShellExecModelConstraints(descriptor, input, constraints)
+	case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
+		profile, profileOK := input["profile_revision"].(string)
+		scope, scopeOK := input["working_scope"].(string)
+		if !profileOK || !scopeOK ||
+			!containsSorted(constraints.ProfileAliases, profile) ||
+			!containsSorted(constraints.WorkingScopes, scope) {
+			return denyNodeInvocation(
+				nodeDenialConstraintViolation,
+				nodeConstraintProfile,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
+		return nil
 	default:
 		return nil
 	}
