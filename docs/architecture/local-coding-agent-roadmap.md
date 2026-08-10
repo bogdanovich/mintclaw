@@ -947,6 +947,9 @@ Done when:
 
 Dependencies: P1.1
 
+Implementation evidence:
+[`local-coding-agent-p1-thread-catalog.md`](local-coding-agent-p1-thread-catalog.md)
+
 Scope:
 
 - List threads without loading their full JSONL transcripts.

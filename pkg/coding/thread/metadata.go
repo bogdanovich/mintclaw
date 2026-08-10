@@ -295,6 +295,10 @@ func (s *Store) Load(threadID string) (Metadata, error) {
 	if err != nil {
 		return Metadata{}, fmt.Errorf("coding thread store: read %q: %w", threadID, err)
 	}
+	return loadMetadataFile(threadID, file)
+}
+
+func loadMetadataFile(threadID string, file *os.File) (Metadata, error) {
 	data, readErr := io.ReadAll(io.LimitReader(file, MaxMetadataBytes+1))
 	closeErr := file.Close()
 	if readErr != nil {
