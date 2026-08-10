@@ -121,8 +121,9 @@ func (t *approvalCountingTool) Execute(context.Context, map[string]any) *toolsha
 }
 
 type blockingApprovalTool struct {
-	started  chan struct{}
-	canceled chan struct{}
+	started        chan struct{}
+	canceled       chan struct{}
+	terminalResult *toolshared.ToolResult
 }
 
 func newBlockingApprovalTool() *blockingApprovalTool {
@@ -152,6 +153,9 @@ func (tool *blockingApprovalTool) Execute(
 	select {
 	case tool.canceled <- struct{}{}:
 	default:
+	}
+	if tool.terminalResult != nil {
+		return tool.terminalResult
 	}
 	return &toolshared.ToolResult{ForLLM: ctx.Err().Error(), IsError: true}
 }
@@ -2284,6 +2288,9 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
 	tool := newBlockingApprovalTool()
+	tool.terminalResult = toolshared.ErrorResult(
+		`{"state":"unknown","code":"DISPATCH_UNCERTAIN","invocation_id":"inv_recover"}`,
+	)
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("blocking-approval", &durableApprovalHook{
 		actionSummary: "Run the blocking protected action",
@@ -2364,8 +2371,12 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		t.Fatal("approval stop did not pair the protected tool call exactly once")
 	}
 	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
-	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, `"outcome":"canceled"`) {
-		t.Fatalf("approval cancellation tool result = %#v", history)
+	if resultIndex < 0 ||
+		!strings.Contains(history[resultIndex].Content, `"code":"DISPATCH_UNCERTAIN"`) ||
+		!strings.Contains(history[resultIndex].Content, `"invocation_id":"inv_recover"`) ||
+		strings.Contains(history[resultIndex].Content, `"outcome":"canceled"`) ||
+		history[resultIndex].ToolResultStatus != providers.ToolResultStatusError {
+		t.Fatalf("approved tool terminal result = %#v", history)
 	}
 	select {
 	case final := <-manager.sent:

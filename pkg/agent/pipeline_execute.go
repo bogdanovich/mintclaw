@@ -1020,6 +1020,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	if ts.hardAbortRequested() {
 		resolveCanceledToolSuspension(execCtx, toolResult)
+		if toolResult != nil && toolResult.Suspension == nil {
+			_ = runner.journalHardAbortedToolResult(tc, toolResult)
+		}
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
 
@@ -1441,16 +1444,24 @@ const (
 )
 
 func (r *toolLoopRunner) appendToolMessage(msg providers.Message, ingest toolMessageIngestMode) error {
+	return r.appendToolMessageWithContext(r.turnCtx, msg, ingest)
+}
+
+func (r *toolLoopRunner) appendToolMessageWithContext(
+	ctx context.Context,
+	msg providers.Message,
+	ingest toolMessageIngestMode,
+) error {
 	r.messages = append(r.messages, msg)
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return nil
 	}
-	writeErr := persistFullSessionMessage(r.turnCtx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
+	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
 	if writeErr == nil {
 		r.ts.recordPersistedMessage(msg)
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
-		r.p.ingestMessage(r.turnCtx, r.ts, msg, writeErr)
+		r.p.ingestMessage(ctx, r.ts, msg, writeErr)
 	} else if writeErr != nil {
 		logger.WarnCF("agent", "Canonical tool message write failed", map[string]any{
 			"session_key": r.ts.sessionKey,
@@ -1461,6 +1472,27 @@ func (r *toolLoopRunner) appendToolMessage(msg providers.Message, ingest toolMes
 		r.journalErr = writeErr
 	}
 	return writeErr
+}
+
+func (r *toolLoopRunner) journalHardAbortedToolResult(
+	toolCall providers.ToolCall,
+	result *toolshared.ToolResult,
+) error {
+	if r == nil || result == nil {
+		return nil
+	}
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	return r.appendToolMessageWithContext(ctx, providers.Message{
+		Role:             "tool",
+		Content:          r.p.filterToolContentForLLM(result.ContentForLLM()),
+		ToolCallID:       toolCall.ID,
+		ToolResultStatus: toolResultContextStatus(result),
+	}, toolMessagePersistOnly)
 }
 
 func (r *toolLoopRunner) commitToolResult(msg providers.Message) error {
