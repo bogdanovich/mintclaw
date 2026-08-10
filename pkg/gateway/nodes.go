@@ -49,20 +49,22 @@ type nodeAdmissionHandler interface {
 }
 
 type nodeAdmissionRuntime struct {
-	registryMu        sync.RWMutex
-	routes            nodeAdmissionRoutes
-	registry          *nodes.FileRegistry
-	registryPath      string
-	handler           nodeAdmissionHandler
-	sessions          *nodews.SessionHub
-	terminalStore     *nodes.GatewayTerminalStore
-	terminalStorePath string
-	transferSpool     *nodes.GatewayTransferSpool
-	transferSpoolPath string
-	terminalHub       *nodeTerminalOperatorHub
-	terminalMounted   bool
-	generation        uint64
-	mounted           bool
+	registryMu          sync.RWMutex
+	routes              nodeAdmissionRoutes
+	registry            *nodes.FileRegistry
+	registryPath        string
+	handler             nodeAdmissionHandler
+	sessions            *nodews.SessionHub
+	terminalStore       *nodes.GatewayTerminalStore
+	terminalStorePath   string
+	transferSpool       *nodes.GatewayTransferSpool
+	transferSpoolPath   string
+	invocationStore     *nodes.GatewayInvocationStore
+	invocationStorePath string
+	terminalHub         *nodeTerminalOperatorHub
+	terminalMounted     bool
+	generation          uint64
+	mounted             bool
 }
 
 type nodeDiscoverySource struct {
@@ -329,6 +331,30 @@ func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 	return spool, nil
 }
 
+func (runtime *nodeAdmissionRuntime) gatewayInvocationStore(
+	path string,
+) (*nodes.GatewayInvocationStore, error) {
+	runtime.registryMu.Lock()
+	defer runtime.registryMu.Unlock()
+	if runtime.invocationStore != nil && runtime.invocationStorePath == path {
+		return runtime.invocationStore, nil
+	}
+	if runtime.invocationStore != nil {
+		return nil, errors.New("gateway invocation store path changed before node runtime reconciliation")
+	}
+	store, err := nodes.NewGatewayInvocationStore(
+		path,
+		nodes.DefaultGatewayInvocationLimit,
+		nodes.DefaultGatewayInvocationStoreBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	runtime.invocationStore = store
+	runtime.invocationStorePath = path
+	return store, nil
+}
+
 func (runtime *nodeAdmissionRuntime) invocationHandlerSnapshot(
 	expectedRegistryPath string,
 	expectedGeneration uint64,
@@ -454,6 +480,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	handler := runtime.handler
 	terminalStore := runtime.terminalStore
 	transferSpool := runtime.transferSpool
+	invocationStore := runtime.invocationStore
 	runtime.mounted = false
 	runtime.generation++
 	runtime.registryMu.Unlock()
@@ -491,8 +518,14 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
 		}
 	}
-	if closeErr != nil || terminalErr != nil || transferErr != nil {
-		return errors.Join(closeErr, terminalErr, transferErr)
+	var invocationErr error
+	if invocationStore != nil {
+		if err := invocationStore.Close(); err != nil {
+			invocationErr = fmt.Errorf("close gateway invocation store: %w", err)
+		}
+	}
+	if closeErr != nil || terminalErr != nil || transferErr != nil || invocationErr != nil {
+		return errors.Join(closeErr, terminalErr, transferErr, invocationErr)
 	}
 	runtime.registryMu.Lock()
 	runtime.registry = nil
@@ -501,6 +534,8 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.terminalStorePath = ""
 	runtime.transferSpool = nil
 	runtime.transferSpoolPath = ""
+	runtime.invocationStore = nil
+	runtime.invocationStorePath = ""
 	runtime.registryPath = ""
 	runtime.handler = nil
 	runtime.registryMu.Unlock()
