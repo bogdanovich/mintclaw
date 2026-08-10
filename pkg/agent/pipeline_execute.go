@@ -1147,6 +1147,10 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
+	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
+		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
+		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
+	}
 	toolResultMsg := buildToolResultJournalMessage(
 		p,
 		ts,
@@ -1155,10 +1159,6 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		toolResult,
 		p.filterToolContentForLLM(toolResult.ContentForLLM()),
 	)
-	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
-		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
-		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
-	}
 	contentForLLM := toolResultMsg.Content
 	loopDecision := p.afterToolLoopDecision(
 		ts, exec, toolName, toolArgs, toolResult, contentForLLM, toolSemantics,
