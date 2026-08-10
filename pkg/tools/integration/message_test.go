@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -43,8 +44,8 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	if !result.Silent {
 		t.Error("Expected Silent=true for successful send")
 	}
-	if result.DeliveryIntent != DeliveryImmediateContinue {
-		t.Fatalf("delivery intent = %q, want immediate_continue", result.DeliveryIntent)
+	if result.DeliveryIntent != DeliveryFinalHandled || !result.ResponseHandled {
+		t.Fatalf("delivery result = %+v, want final_handled", result)
 	}
 
 	// - ForLLM contains send status description
@@ -91,6 +92,21 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	}
 	if result.ForLLM != "Message sent to custom-channel:custom-chat-id" {
 		t.Errorf("Expected ForLLM 'Message sent to custom-channel:custom-chat-id', got '%s'", result.ForLLM)
+	}
+}
+
+func TestMessageTool_Execute_ImmediateContinue(t *testing.T) {
+	tool := NewMessageTool()
+	result := tool.Execute(
+		WithToolContext(context.Background(), "test-channel", "test-chat-id"),
+		map[string]any{
+			"content":         "Still working",
+			"delivery_intent": string(DeliveryImmediateContinue),
+		},
+	)
+
+	if result.DeliveryIntent != DeliveryImmediateContinue || !result.ImmediateDelivery || result.ResponseHandled {
+		t.Fatalf("delivery result = %+v, want immediate_continue", result)
 	}
 }
 
@@ -258,6 +274,15 @@ func TestMessageTool_Parameters(t *testing.T) {
 	}
 	if replyToProp["type"] != "string" {
 		t.Error("Expected reply_to_message_id type to be 'string'")
+	}
+
+	deliveryIntent, ok := props["delivery_intent"].(map[string]any)
+	if !ok {
+		t.Fatal("Expected delivery_intent property")
+	}
+	wantIntents := []string{string(DeliveryImmediateContinue), string(DeliveryFinalHandled)}
+	if got := deliveryIntent["enum"]; !reflect.DeepEqual(got, wantIntents) {
+		t.Fatalf("delivery_intent enum = %#v, want %#v", got, wantIntents)
 	}
 }
 

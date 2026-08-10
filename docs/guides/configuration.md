@@ -831,6 +831,10 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
+The `message` tool treats a successful send as the final user-facing result by default and ends the current turn without
+another model call. For progress updates or other non-final sends, agents can set
+`delivery_intent: "immediate_continue"`; the runtime delivers that message immediately and continues the turn.
+
 ### Read File Mode
 
 `read_file` has two mutually exclusive implementations selected by config. MintClaw registers exactly one of them at startup:
