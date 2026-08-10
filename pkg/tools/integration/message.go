@@ -60,10 +60,13 @@ func (t *MessageTool) Name() string {
 
 func (t *MessageTool) Description() string {
 	if !t.localMediaEnabled {
-		return "Send a text message to the user on a chat channel."
+		return "Send a text message to the user on a chat channel. By default, successful delivery completes the " +
+			"request. Set delivery_intent=\"immediate_continue\" only for progress or other non-final messages."
 	}
 	return "Send a message to the user on a chat channel. Supports text-only, media-only, or text with media attachments. " +
-		"When sending media with substantive text, put the complete user-facing text in content so it becomes the media caption/body; do not use placeholder text like 'attached' and then answer separately."
+		"When sending media with substantive text, put the complete user-facing text in content so it becomes the media " +
+		"caption/body; do not use placeholder text like 'attached' and then answer separately. Successful delivery completes " +
+		"the request by default. Set delivery_intent=\"immediate_continue\" only for progress or other non-final messages."
 }
 
 func (t *MessageTool) Parameters() map[string]any {
@@ -83,6 +86,15 @@ func (t *MessageTool) Parameters() map[string]any {
 		"reply_to_message_id": map[string]any{
 			"type":        "string",
 			"description": "Optional: reply target message ID for channels that support threaded replies",
+		},
+		"delivery_intent": map[string]any{
+			"type": "string",
+			"enum": []string{
+				string(DeliveryImmediateContinue),
+				string(DeliveryFinalHandled),
+			},
+			"description": "Delivery policy. Omit or use final_handled when this message satisfies the request. " +
+				"Use immediate_continue only for progress or another non-final message that must be followed by more work.",
 		},
 	}
 	params := map[string]any{
@@ -225,7 +237,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		status = fmt.Sprintf("Message with %d media attachment(s) sent to %s:%s", len(parts), channel, chatID)
 	}
 
-	return (&ToolResult{
+	result := (&ToolResult{
 		ForLLM: status,
 		Silent: true,
 	}).WithOutboundDelivery(OutboundDelivery{
@@ -234,7 +246,17 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		ReplyToMessageID: replyToMessageID,
 		Text:             content,
 		Media:            parts,
-	}).WithDeliveryIntent(DeliveryImmediateContinue)
+	})
+	result.WithDeliveryIntent(messageDeliveryIntent(args))
+	return result
+}
+
+func messageDeliveryIntent(args map[string]any) DeliveryIntent {
+	value, _ := args["delivery_intent"].(string)
+	if DeliveryIntent(strings.TrimSpace(value)) == DeliveryImmediateContinue {
+		return DeliveryImmediateContinue
+	}
+	return DeliveryFinalHandled
 }
 
 func parseMessageMediaArgs(raw any) ([]messageMediaArg, error) {
