@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 		jsonlJournalStageFlush,
 		jsonlJournalStageAppend,
 		jsonlJournalStageFsync,
+		jsonlJournalStageDir,
 		jsonlJournalStageRename,
 	}
 	for _, stage := range stages {
@@ -40,7 +42,193 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 			if !errors.Is(err, injectedErr) {
 				t.Fatalf("AddFullMessage() error = %v, want %v", err, injectedErr)
 			}
+			wantCommitted := stage == jsonlJournalStageRename
+			if got := IsCommittedAppendError(err); got != wantCommitted {
+				t.Fatalf("IsCommittedAppendError() = %t, want %t for %s", got, wantCommitted, stage)
+			}
+			wantIndeterminate := stage == jsonlJournalStageFsync || stage == jsonlJournalStageDir
+			if got := IsIndeterminateAppendError(err); got != wantIndeterminate {
+				t.Fatalf(
+					"IsIndeterminateAppendError() = %t, want %t for %s",
+					got,
+					wantIndeterminate,
+					stage,
+				)
+			}
 		})
+	}
+}
+
+func TestJSONLStoreSyncsDirectoryOnlyForFirstSessionFile(t *testing.T) {
+	store := newTestStore(t)
+	var stages []jsonlJournalWriteStage
+	store.journalFault = func(stage jsonlJournalWriteStage) error {
+		stages = append(stages, stage)
+		return nil
+	}
+	if err := store.AddMessage(t.Context(), "turn", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddMessage(t.Context(), "turn", "user", "second"); err != nil {
+		t.Fatal(err)
+	}
+	var directorySyncs int
+	for _, stage := range stages {
+		if stage == jsonlJournalStageDir {
+			directorySyncs++
+		}
+	}
+	if directorySyncs != 1 {
+		t.Fatalf("directory sync stages = %d, want 1; all stages = %v", directorySyncs, stages)
+	}
+}
+
+func TestJSONLStoreClassifiesPartialWriteAsIndeterminate(t *testing.T) {
+	store := newTestStore(t)
+	injectedErr := errors.New("injected partial write failure")
+	store.appendWrite = func(file *os.File, data []byte) (int, error) {
+		written, err := file.Write(data[:len(data)/2])
+		if err != nil {
+			return written, err
+		}
+		return written, injectedErr
+	}
+	err := store.AddMessage(t.Context(), "turn", "user", "partially written")
+	if !errors.Is(err, injectedErr) || !IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(partial write) error = %v", err)
+	}
+	info, statErr := os.Stat(store.jsonlPath("turn"))
+	if statErr != nil || info.Size() == 0 {
+		t.Fatalf("partial JSONL state = %#v, %v", info, statErr)
+	}
+}
+
+func TestJSONLStoreClassifiesZeroByteWriteFailureAsOrdinary(t *testing.T) {
+	store := newTestStore(t)
+	injectedErr := errors.New("injected zero-byte write failure")
+	store.appendWrite = func(*os.File, []byte) (int, error) { return 0, injectedErr }
+	err := store.AddMessage(t.Context(), "turn", "user", "not written")
+	if !errors.Is(err, injectedErr) || IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(zero-byte write) error = %v", err)
+	}
+}
+
+func TestJSONLStoreRecoversCommittedDirtyAppendBeforeNextAppend(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.AddMessage(t.Context(), "turn", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	injectedErr := errors.New("injected metadata finalization failure")
+	store.journalFault = func(stage jsonlJournalWriteStage) error {
+		if stage == jsonlJournalStageRename {
+			return injectedErr
+		}
+		return nil
+	}
+	err := store.AddMessage(t.Context(), "turn", "user", "committed despite error")
+	if !errors.Is(err, injectedErr) || !IsCommittedAppendError(err) {
+		t.Fatalf("AddMessage(committed failure) error = %v", err)
+	}
+	store.journalFault = nil
+	if err := store.AddMessage(t.Context(), "turn", "user", "different next prompt"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.GetHistory(t.Context(), "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"first", "committed despite error", "different next prompt"}
+	if len(history) != len(want) {
+		t.Fatalf("recovered history = %#v", history)
+	}
+	for index := range want {
+		if history[index].Content != want[index] {
+			t.Fatalf("recovered history[%d] = %q, want %q", index, history[index].Content, want[index])
+		}
+	}
+	meta, err := store.readMeta("turn")
+	if err != nil || meta.HistoryDirty || meta.Count != len(want) {
+		t.Fatalf("recovered metadata = %#v, %v", meta, err)
+	}
+}
+
+func TestJSONLStoreTruncatesPartialTailBeforeDistinctAppend(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.AddMessage(t.Context(), "turn", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	defaultWrite := store.appendWrite
+	injectedErr := errors.New("injected large partial write")
+	store.appendWrite = func(file *os.File, data []byte) (int, error) {
+		written, err := file.Write(data[:len(data)-1])
+		if err != nil {
+			return written, err
+		}
+		return written, injectedErr
+	}
+	err := store.AddMessage(
+		t.Context(),
+		"turn",
+		"user",
+		strings.Repeat("partial", 20_000),
+	)
+	if !errors.Is(err, injectedErr) || !IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(partial failure) error = %v", err)
+	}
+	store.appendWrite = defaultWrite
+	if err := store.AddMessage(t.Context(), "turn", "user", "different next prompt"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.GetHistory(t.Context(), "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].Content != "first" || history[1].Content != "different next prompt" {
+		t.Fatalf("history after partial-tail recovery = %#v", history)
+	}
+	data, err := os.ReadFile(store.jsonlPath("turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(data, []byte{'\n'}) || bytes.Contains(data, []byte("partialpartial")) {
+		t.Fatalf("recovered JSONL retained partial tail: size=%d suffix=%q", len(data), data[max(0, len(data)-32):])
+	}
+	meta, err := store.readMeta("turn")
+	if err != nil || meta.HistoryDirty || meta.Count != 2 {
+		t.Fatalf("recovered metadata = %#v, %v", meta, err)
+	}
+}
+
+func TestJSONLStoreRecoversCompleteIndeterminateAppendBeforeNextAppend(t *testing.T) {
+	store := newTestStore(t)
+	defaultWrite := store.appendWrite
+	injectedErr := errors.New("injected post-write failure")
+	store.appendWrite = func(file *os.File, data []byte) (int, error) {
+		written, err := file.Write(data)
+		if err != nil {
+			return written, err
+		}
+		return written, injectedErr
+	}
+	err := store.AddMessage(t.Context(), "turn", "user", "complete but indeterminate")
+	if !errors.Is(err, injectedErr) || !IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(indeterminate complete write) error = %v", err)
+	}
+	store.appendWrite = defaultWrite
+	if err := store.AddMessage(t.Context(), "turn", "user", "different next prompt"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.GetHistory(t.Context(), "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].Content != "complete but indeterminate" ||
+		history[1].Content != "different next prompt" {
+		t.Fatalf("history after complete indeterminate recovery = %#v", history)
+	}
+	meta, err := store.readMeta("turn")
+	if err != nil || meta.HistoryDirty || meta.Count != 2 {
+		t.Fatalf("recovered metadata = %#v, %v", meta, err)
 	}
 }
 

@@ -248,6 +248,29 @@ func (s *Store) ThreadRoot(threadID string) (string, error) {
 	return filepath.Join(s.root, "threads", threadID), nil
 }
 
+// ProvisionThread durably creates a private thread directory without
+// publishing catalog-visible metadata.
+func (s *Store) ProvisionThread(threadID string) error {
+	if s == nil {
+		return fmt.Errorf("coding thread store is nil")
+	}
+	threadRoot, err := s.ThreadRoot(threadID)
+	if err != nil {
+		return err
+	}
+	relativeRoot, err := filepath.Rel(s.durableRoot, threadRoot)
+	if err != nil {
+		return fmt.Errorf("coding thread store: resolve durable thread directory: %w", err)
+	}
+	if !filepath.IsLocal(relativeRoot) {
+		return fmt.Errorf("coding thread store: durable thread directory escapes store root")
+	}
+	if err := s.mkdirDurable(s.durableRoot, relativeRoot, 0o700); err != nil {
+		return fmt.Errorf("coding thread store: create durable thread directory: %w", err)
+	}
+	return nil
+}
+
 // Save atomically replaces one descriptor. A post-rename durability error is
 // returned as fileutil.CommittedWriteError and must not be blindly retried.
 func (s *Store) Save(metadata Metadata) error {
@@ -268,16 +291,8 @@ func (s *Store) Save(metadata Metadata) error {
 	if err != nil {
 		return err
 	}
-	threadRoot := filepath.Dir(path)
-	relativeRoot, err := filepath.Rel(s.durableRoot, threadRoot)
-	if err != nil {
-		return fmt.Errorf("coding thread store: resolve durable thread directory: %w", err)
-	}
-	if !filepath.IsLocal(relativeRoot) {
-		return fmt.Errorf("coding thread store: durable thread directory escapes store root")
-	}
-	if err := s.mkdirDurable(s.durableRoot, relativeRoot, 0o700); err != nil {
-		return fmt.Errorf("coding thread store: create durable thread directory: %w", err)
+	if err := s.ProvisionThread(metadata.ThreadID); err != nil {
+		return err
 	}
 	if err := s.writeAtomic(path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("coding thread store: save %q: %w", metadata.ThreadID, err)
