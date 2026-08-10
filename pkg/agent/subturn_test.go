@@ -463,6 +463,8 @@ type scopeRecordingApprovalTool struct {
 	executions int
 	scope      *session.SessionScope
 	agentID    string
+	started    chan struct{}
+	release    chan struct{}
 }
 
 func (*scopeRecordingApprovalTool) Name() string { return "approval_scope_recording" }
@@ -482,6 +484,15 @@ func (tool *scopeRecordingApprovalTool) Execute(
 	tool.executions++
 	tool.scope = toolshared.ToolSessionScope(ctx)
 	tool.agentID = toolshared.ToolAgentID(ctx)
+	if tool.started != nil {
+		select {
+		case tool.started <- struct{}{}:
+		default:
+		}
+	}
+	if tool.release != nil {
+		<-tool.release
+	}
 	return toolshared.NewToolResult("protected child action completed")
 }
 
@@ -506,7 +517,9 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	}
 	alpha, _ := al.registry.GetAgent("alpha")
 	beta, _ := al.registry.GetAgent("beta")
-	tool := &scopeRecordingApprovalTool{}
+	tool := &scopeRecordingApprovalTool{
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
 	beta.Tools.Register(tool)
 
 	const taskID = "cross-agent-approval"
@@ -575,10 +588,40 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	}
 	// The approval arrives through the parent route and therefore carries the
 	// parent's scope. Resume must prefer the durable child session's provenance.
-	if err = al.resumeClaimedInteraction(
-		t.Context(), registry, alpha.Workspace, beta, parentScope, *inbound, record,
-	); err != nil {
-		t.Fatal(err)
+	firstResume := make(chan error, 1)
+	go func() {
+		firstResume <- al.resumeClaimedInteraction(
+			t.Context(), registry, alpha.Workspace, beta, parentScope, *inbound, record,
+		)
+	}()
+	select {
+	case <-tool.started:
+	case <-time.After(time.Second):
+		t.Fatal("approved child tool did not start")
+	}
+	secondResume := make(chan error, 1)
+	go func() {
+		secondResume <- al.resumeClaimedInteraction(
+			t.Context(), registry, alpha.Workspace, beta, parentScope, *inbound, record,
+		)
+	}()
+	select {
+	case err = <-secondResume:
+		t.Fatalf("concurrent recovery escaped active resume with error %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(tool.release)
+	for name, result := range map[string]<-chan error{
+		"live": firstResume, "recovery": secondResume,
+	} {
+		select {
+		case err = <-result:
+			if err != nil {
+				t.Fatalf("%s resume error = %v", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s resume did not finish", name)
+		}
 	}
 	if tool.executions != 1 || tool.agentID != beta.ID || tool.scope == nil ||
 		tool.scope.AgentID != beta.ID || tool.scope.RouteScopeKey != parentScope.RouteScopeKey {

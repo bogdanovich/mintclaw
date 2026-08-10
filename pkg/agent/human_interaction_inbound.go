@@ -1032,6 +1032,11 @@ type interactionToolResultPayload struct {
 	Text          string               `json:"text,omitempty"`
 }
 
+type interactionResumeFlight struct {
+	done chan struct{}
+	err  error
+}
+
 func (al *AgentLoop) resumeClaimedInteraction(
 	ctx context.Context,
 	registry *interactions.Registry,
@@ -1041,8 +1046,53 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	inbound bus.InboundContext,
 	record interactions.Record,
 ) error {
-	if registry == nil || agent == nil {
+	if al == nil || registry == nil || agent == nil {
 		return fmt.Errorf("interaction continuation runtime is unavailable")
+	}
+	flightKey := strings.TrimSpace(interactionWorkspace) + "\x00" + strings.TrimSpace(record.ID)
+	candidate := &interactionResumeFlight{done: make(chan struct{})}
+	actual, loaded := al.interactionResumeFlights.LoadOrStore(flightKey, candidate)
+	if loaded {
+		flight := actual.(*interactionResumeFlight)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-flight.done:
+			return flight.err
+		}
+	}
+	var resumeErr error
+	defer func() {
+		candidate.err = resumeErr
+		close(candidate.done)
+		al.interactionResumeFlights.Delete(flightKey)
+	}()
+	resumeErr = al.resumeClaimedInteractionOwned(
+		ctx, registry, interactionWorkspace, agent, scope, inbound, record,
+	)
+	return resumeErr
+}
+
+func (al *AgentLoop) resumeClaimedInteractionOwned(
+	ctx context.Context,
+	registry *interactions.Registry,
+	interactionWorkspace string,
+	agent *AgentInstance,
+	scope *session.SessionScope,
+	inbound bus.InboundContext,
+	record interactions.Record,
+) error {
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		return interactions.ErrNotFound
+	}
+	switch current.Status {
+	case interactions.StatusResolved, interactions.StatusCancelled, interactions.StatusFailed:
+		return nil
+	case interactions.StatusClaimed, interactions.StatusResuming:
+		record = current
+	default:
+		return fmt.Errorf("cannot resume interaction from status %q", current.Status)
 	}
 	continuationSessionKey := interactionContinuationSessionKey(record)
 	continuationScope := sessionScopeForRecovery(agent.Sessions, continuationSessionKey)
