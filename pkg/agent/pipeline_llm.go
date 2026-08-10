@@ -216,11 +216,15 @@ func (p *Pipeline) invokeLLMWithRetry(
 			})
 			strippedCallMessages := stripMessageMedia(llm.callMessages)
 			if !ts.opts.NoHistory {
-				strippedHistory := stripMessageMedia(exec.history)
+				canonicalHistory, readErr := ts.agent.Sessions.ReadTurnHistory(turnCtx, ts.sessionKey)
+				if readErr != nil {
+					return llmStageResult{}, fmt.Errorf("read history for vision retry: %w", readErr)
+				}
+				strippedCanonicalHistory := stripMessageMedia(canonicalHistory)
 				if replaceErr := ts.agent.Sessions.ReplaceTurnHistory(
 					turnCtx,
 					ts.sessionKey,
-					strippedHistory,
+					strippedCanonicalHistory,
 				); replaceErr != nil {
 					_, restoreErr := ts.restoreSessionBeforeToolExecution()
 					return llmStageResult{}, errors.Join(
@@ -228,7 +232,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 						restoreErr,
 					)
 				}
-				exec.history = strippedHistory
+				exec.history = stripMessageMedia(exec.history)
 				ts.stripPersistedMessageMedia()
 				ts.refreshCanonicalRestorePointFromSession()
 			}

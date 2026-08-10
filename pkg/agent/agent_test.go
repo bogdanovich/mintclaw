@@ -7935,6 +7935,67 @@ func TestAgentLoop_VisionRetryRequiresConfirmedHistoryReplacement(t *testing.T) 
 	}
 }
 
+func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace:         t.TempDir(),
+		ModelName:         "test-model",
+		MaxTokens:         4096,
+		MaxToolIterations: 3,
+		ContextManager:    "none",
+	}}}
+	provider := &visionUnsupportedMediaProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(func() { al.Close() })
+	const sessionKey = "agent:main:telegram:direct:user1"
+	omitted := providers.Message{Role: "user", Content: "omitted canonical message"}
+	assembled := providers.Message{
+		Role: "assistant", Content: "assembled historical message",
+		Media: []string{"data:image/png;base64,historical"},
+	}
+	agent := al.registry.GetDefaultAgent()
+	if err := agent.Sessions.ReplaceTurnHistory(
+		t.Context(),
+		sessionKey,
+		[]providers.Message{omitted, assembled},
+	); err != nil {
+		t.Fatal(err)
+	}
+	al.contextManager = &staticContextManager{response: &AssembleResponse{
+		History: []providers.Message{assembled},
+	}}
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat1", ChatType: "direct",
+			SenderID: "user1", MessageID: "m1",
+		},
+		Content: "current root", SessionKey: sessionKey,
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "ok" {
+		t.Fatalf("response = %q, want %q", response, "ok")
+	}
+	if provider.calls != 2 || !slices.Equal(provider.mediaSeen, []bool{true, false}) {
+		t.Fatalf("provider calls/media = %d/%v, want 2/[true false]", provider.calls, provider.mediaSeen)
+	}
+
+	history := agent.Sessions.GetHistory(sessionKey)
+	wantContents := []string{"omitted canonical message", "assembled historical message", "current root", "ok"}
+	if len(history) != len(wantContents) {
+		t.Fatalf("history = %+v, want contents %v", history, wantContents)
+	}
+	for i, want := range wantContents {
+		if history[i].Content != want {
+			t.Fatalf("history[%d].Content = %q, want %q", i, history[i].Content, want)
+		}
+	}
+	if hasMediaRefs(history) {
+		t.Fatalf("canonical history retained unsupported media: %+v", history)
+	}
+}
+
 func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

@@ -46,6 +46,7 @@ type SessionStore interface {
 // history and complete session clears. Active turn and administrative paths
 // that depend on the mutation succeeding must use this contract.
 type TurnHistoryStore interface {
+	ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
 	ReplaceTurnHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 	ClearSession(ctx context.Context, sessionKey string) error
 }
