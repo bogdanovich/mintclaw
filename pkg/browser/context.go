@@ -98,6 +98,7 @@ func (catalog ContextCatalog) Validate() error {
 		return fmt.Errorf("%w: malformed browser context catalog", ErrInvalid)
 	}
 	tabIDs := make(map[string]struct{}, len(catalog.Tabs))
+	tabSequences := make(map[string]uint64, len(catalog.Tabs))
 	frameIDs := make(map[string]struct{})
 	selectedTabFound := false
 	selectedFrameFound := catalog.SelectedFrameID == ""
@@ -109,6 +110,7 @@ func (catalog ContextCatalog) Validate() error {
 		}
 		previousTabSequence = tab.CreationSequence
 		tabIDs[tab.ID] = struct{}{}
+		tabSequences[tab.ID] = tab.CreationSequence
 		if tab.Kind == TabPrimary {
 			primaryCount++
 		}
@@ -121,6 +123,15 @@ func (catalog ContextCatalog) Validate() error {
 					}
 				}
 			}
+		}
+	}
+	for _, tab := range catalog.Tabs {
+		if tab.Kind != TabPopup {
+			continue
+		}
+		if openerSequence, openerIsLive := tabSequences[tab.OpenerTabID]; openerIsLive &&
+			openerSequence >= tab.CreationSequence {
+			return fmt.Errorf("%w: popup browser tab has an invalid live opener", ErrInvalid)
 		}
 	}
 	if !selectedTabFound || !selectedFrameFound || primaryCount > 1 {
@@ -155,11 +166,6 @@ func (tab TabContext) validate(
 	}
 	if tab.Kind == TabPopup && (tab.OpenerTabID == "" || tab.OpenerInvocationID == "") {
 		return fmt.Errorf("%w: popup browser tab lacks correlation", ErrInvalid)
-	}
-	if tab.Kind == TabPopup {
-		if _, openerExists := tabIDs[tab.OpenerTabID]; !openerExists {
-			return fmt.Errorf("%w: popup browser tab has an unknown opener", ErrInvalid)
-		}
 	}
 	if tab.Kind != TabPopup && (tab.OpenerTabID != "" || tab.OpenerInvocationID != "") {
 		return fmt.Errorf("%w: non-popup browser tab has popup correlation", ErrInvalid)

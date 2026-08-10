@@ -64,8 +64,12 @@ func TestContextCatalogValidation(t *testing.T) {
 		{name: "popup without correlation", mutate: func(c *ContextCatalog) {
 			c.Tabs[1].OpenerInvocationID = ""
 		}},
-		{name: "popup with unknown opener", mutate: func(c *ContextCatalog) {
-			c.Tabs[1].OpenerTabID = "tab_missing"
+		{name: "popup with later live opener", mutate: func(c *ContextCatalog) {
+			c.Tabs[1].OpenerTabID = "tab_later"
+			c.Tabs = append(c.Tabs, TabContext{
+				ID: "tab_later", Kind: TabOpened, CreationSequence: 3,
+				DocumentGeneration: 1, URL: initialBlankOrigin, Origin: initialBlankOrigin,
+			})
 		}},
 		{name: "tab with popup correlation", mutate: func(c *ContextCatalog) {
 			c.Tabs[0].OpenerTabID = "tab_popup"
@@ -91,6 +95,15 @@ func TestContextCatalogValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want ErrInvalid", err)
 			}
 		})
+	}
+}
+
+func TestContextCatalogAllowsPopupWhoseOpenerWasClosed(t *testing.T) {
+	catalog := testContextCatalog()
+	catalog.SelectedTabID = "tab_popup"
+	catalog.Tabs = catalog.Tabs[1:]
+	if err := catalog.Validate(); err != nil {
+		t.Fatalf("Validate() surviving popup error = %v", err)
 	}
 }
 
