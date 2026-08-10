@@ -872,6 +872,9 @@ Done when:
 
 Dependencies: P0.1
 
+Implementation evidence:
+[`local-coding-agent-p0-terminal-frontend.md`](local-coding-agent-p0-terminal-frontend.md)
+
 Scope:
 
 - Build a disposable TUI spike using the preferred framework.
