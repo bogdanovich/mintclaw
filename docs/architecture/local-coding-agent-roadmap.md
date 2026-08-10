@@ -969,6 +969,9 @@ Done when:
 
 Dependencies: P1.1
 
+Implementation evidence:
+[`local-coding-agent-p1-thread-lease.md`](local-coding-agent-p1-thread-lease.md)
+
 Scope:
 
 - Add an OS-appropriate single-writer lease around a coding thread.
