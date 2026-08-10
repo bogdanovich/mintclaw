@@ -54,7 +54,7 @@ func newGatewayHandoffStatusTool(cfg *config.Config) (toolshared.Tool, error) {
 }
 
 func setupGatewayHandoffStatusTool(cfg *config.Config, agentLoop *agent.AgentLoop) error {
-	if cfg == nil || (!cfg.Gateway.SafeRestart.Enabled && !cfg.Gateway.Deploy.Enabled) {
+	if cfg == nil {
 		return nil
 	}
 	return agentLoop.RegisterRuntimeTool("gateway_handoff_status", newGatewayHandoffStatusTool)

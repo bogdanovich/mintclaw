@@ -500,14 +500,17 @@ func setupSafeRestartTool(
 	if cfg == nil {
 		return nil
 	}
-	if !cfg.Gateway.SafeRestart.Enabled {
-		return nil
-	}
 	err := agentLoop.RegisterRuntimeTool("gateway_restart", func(cfg *config.Config) (toolshared.Tool, error) {
+		if cfg == nil || !cfg.Gateway.SafeRestart.Enabled {
+			return nil, nil
+		}
 		return newGatewayRestartToolFromConfig(cfg, msgBus, preflightOptions)
 	})
 	if err != nil {
 		return err
+	}
+	if !cfg.Gateway.SafeRestart.Enabled {
+		return nil
 	}
 	logger.InfoCF("gateway", "Safe restart tool enabled", map[string]any{
 		"service_manager": cfg.Gateway.SafeRestart.EffectiveServiceManager(),
@@ -517,7 +520,7 @@ func setupSafeRestartTool(
 }
 
 func setupDeployTool(cfg *config.Config, agentLoop *agent.AgentLoop) error {
-	if cfg == nil || !cfg.Gateway.Deploy.Enabled {
+	if cfg == nil {
 		return nil
 	}
 	return agentLoop.RegisterRuntimeTool("gateway_deploy", func(reloadCfg *config.Config) (toolshared.Tool, error) {
@@ -1282,57 +1285,134 @@ func handleConfigReload(
 	debug bool,
 	shutdownTimeout time.Duration,
 ) error {
+	return handleConfigReloadWithHooks(
+		ctx,
+		al,
+		newCfg,
+		providerRef,
+		runningServices,
+		msgBus,
+		allowEmptyStartup,
+		debug,
+		shutdownTimeout,
+		gatewayReloadHooks{},
+	)
+}
+
+func handleConfigReloadWithHooks(
+	ctx context.Context,
+	al *agent.AgentLoop,
+	newCfg *config.Config,
+	providerRef *providers.LLMProvider,
+	runningServices *services,
+	msgBus *bus.MessageBus,
+	allowEmptyStartup bool,
+	debug bool,
+	shutdownTimeout time.Duration,
+	hooks gatewayReloadHooks,
+) error {
 	logger.Info("🔄 Config file changed, reloading...")
 	if err := preflightConfigReload(al, newCfg); err != nil {
 		return err
 	}
+	oldCfg := al.GetConfig()
 
 	newModel := newCfg.Agents.Defaults.ModelName
 
 	logger.Infof(" New model is '%s', recreating provider...", newModel)
-
-	logger.Info("  Stopping all services...")
-	if err := stopAndCleanupServices(runningServices, shutdownTimeout, true); err != nil {
-		logger.Errorf("  ⚠ Error stopping services for reload: %v", err)
-		return fmt.Errorf("error stopping services for reload: %w", err)
-	}
-
 	newProvider, newModelID, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
-		logger.Errorf("  ⚠ Error creating new provider: %v", err)
-		logger.Warn("  Attempting to restart services with old provider and config...")
-		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
-			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
-		}
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
-
+	providerOwned := true
+	defer func() {
+		if providerOwned {
+			if stateful, ok := newProvider.(providers.StatefulProvider); ok {
+				stateful.Close()
+			}
+		}
+	}()
 	if newModelID != "" {
 		newCfg.Agents.Defaults.ModelName = newModelID
 	}
 
+	quiesceCtx, cancelQuiesce := context.WithTimeout(ctx, shutdownTimeout)
+	resumeTurns, err := al.QuiesceTurns(quiesceCtx)
+	cancelQuiesce()
+	if err != nil {
+		return fmt.Errorf("quiesce agent turns: %w", err)
+	}
+	defer resumeTurns()
+
+	logger.Info("  Stopping all services...")
+	if err = stopAndCleanupServices(runningServices, shutdownTimeout, true); err != nil {
+		logger.Errorf("  ⚠ Error stopping services for reload: %v", err)
+		return errors.Join(
+			fmt.Errorf("error stopping services for reload: %w", err),
+			errGatewayReloadRestartRequired,
+		)
+	}
+
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
-
-	if err := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg); err != nil {
-		logger.Errorf("  ⚠ Error reloading agent loop: %v", err)
-		if cp, ok := newProvider.(providers.StatefulProvider); ok {
-			cp.Close()
-		}
-		logger.Warn("  Attempting to restart services with old provider and config...")
-		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
-			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
-		}
-		return fmt.Errorf("error reloading agent loop: %w", err)
+	prepared, err := al.PrepareConfigReload(reloadCtx, newProvider, newCfg)
+	if err != nil {
+		return rollbackReloadGeneration(
+			fmt.Errorf("prepare agent reload: %w", err), oldCfg, al, runningServices, msgBus, nil,
+		)
+	}
+	providerOwned = false
+	defer prepared.Abort()
+	if err = hooks.checkpoint(gatewayReloadAgentPrepared); err != nil {
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, nil)
 	}
 
+	generation, err := prepareReloadGeneration(
+		reloadCtx,
+		newCfg,
+		al,
+		prepared,
+		runningServices,
+		msgBus,
+		hooks,
+	)
+	if err != nil {
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, nil)
+	}
+
+	oldMediaStore := runningServices.MediaStore
+	runningServices.ChannelManager.SetMediaStore(generation.services.MediaStore)
+	if err = runningServices.ChannelManager.Reload(reloadCtx, newCfg); err != nil {
+		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+		return rollbackReloadGeneration(
+			fmt.Errorf("reconcile channels: %w", err), oldCfg, al, runningServices, msgBus, generation,
+		)
+	}
+	if err = hooks.checkpoint(gatewayReloadChannelsReconciled); err != nil {
+		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, generation)
+	}
+	if runningServices.NodeAdmission != nil {
+		if err = runningServices.NodeAdmission.Reconcile(newCfg); err != nil {
+			runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+			return rollbackReloadGeneration(
+				fmt.Errorf("reconcile node admission: %w", err), oldCfg, al, runningServices, msgBus, generation,
+			)
+		}
+	}
+	if err = hooks.checkpoint(gatewayReloadNodesReconciled); err != nil {
+		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, generation)
+	}
+
+	if err = prepared.Commit(reloadCtx); err != nil {
+		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
+		return rollbackReloadGeneration(
+			fmt.Errorf("commit agent reload: %w", err), oldCfg, al, runningServices, msgBus, generation,
+		)
+	}
+	generation.commit(runningServices, al)
 	*providerRef = newProvider
-
-	logger.Info("  Restarting all services with new configuration...")
-	if err := restartServices(al, runningServices, msgBus); err != nil {
-		logger.Errorf("  ⚠ Error restarting services: %v", err)
-		return fmt.Errorf("error restarting services: %w", err)
-	}
 
 	logger.Info("  ✓ Provider, configuration, and services reloaded successfully (thread-safe)")
 
@@ -1371,123 +1451,59 @@ func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
 	return nil
 }
 
-func restartServices(
+func rollbackReloadGeneration(
+	cause error,
+	oldCfg *config.Config,
 	al *agent.AgentLoop,
 	runningServices *services,
 	msgBus *bus.MessageBus,
+	failedGeneration *gatewayReloadGeneration,
 ) error {
-	cfg := al.GetConfig()
-
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var err error
-	runningServices.CronService, err = setupCronTool(
-		al,
-		msgBus,
-		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
-		cfg,
-	)
-	if err != nil {
-		return fmt.Errorf("error restarting cron service: %w", err)
-	}
-	if err = setupSafeRestartTool(cfg, al, msgBus, restartPreflightOptions(al, runningServices)); err != nil {
-		return fmt.Errorf("error setting up safe restart tool: %w", err)
-	}
-	if err = setupDeployTool(cfg, al); err != nil {
-		return fmt.Errorf("error setting up deploy tool: %w", err)
-	}
-	if err = setupGatewayHandoffStatusTool(cfg, al); err != nil {
-		return fmt.Errorf("error setting up gateway handoff status tool: %w", err)
-	}
-	if err = runningServices.CronService.Start(); err != nil {
-		return fmt.Errorf("error restarting cron service: %w", err)
-	}
-	fmt.Println("  ✓ Cron service restarted")
-
-	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-	)
-	runningServices.HeartbeatService.SetBus(msgBus)
-	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(al))
-	if err = runningServices.HeartbeatService.Start(); err != nil {
-		return fmt.Errorf("error restarting heartbeat service: %w", err)
-	}
-	fmt.Println("  ✓ Heartbeat service restarted")
-
-	mediaStore, err := newWorkspaceMediaStore(cfg)
-	if err != nil {
-		return fmt.Errorf("error recreating media store: %w", err)
-	}
-	mediaStore.Start()
-	runningServices.MediaStore = mediaStore
+	var rollbackErrors []error
 	if runningServices.ChannelManager != nil {
+		if err := runningServices.ChannelManager.Reload(context.Background(), oldCfg); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore channels: %w", err))
+		}
 		runningServices.ChannelManager.SetMediaStore(runningServices.MediaStore)
 	}
-	al.SetMediaStore(runningServices.MediaStore)
-
-	al.SetChannelManager(runningServices.ChannelManager)
-
-	if err = runningServices.ChannelManager.Reload(context.Background(), cfg); err != nil {
-		return fmt.Errorf("error reload channels: %w", err)
+	if runningServices.NodeAdmission != nil {
+		if err := runningServices.NodeAdmission.Reconcile(oldCfg); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore node admission: %w", err))
+		}
 	}
-	if runningServices.NodeAdmission == nil {
-		runningServices.NodeAdmission, err = setupNodeAdmission(cfg, runningServices.ChannelManager)
-	} else {
-		err = runningServices.NodeAdmission.Reconcile(cfg)
+	if err := failedGeneration.rollback(); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("discard failed reload generation: %w", err))
 	}
+
+	restored, err := prepareReloadGeneration(
+		context.Background(),
+		oldCfg,
+		al,
+		nil,
+		runningServices,
+		msgBus,
+		gatewayReloadHooks{},
+	)
 	if err != nil {
-		return fmt.Errorf("error reloading node admission: %w", err)
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("restore old service generation: %w", err))
+		result := reloadRollbackResult(cause, rollbackErrors)
+		logger.ErrorCF("gateway", "Reload rollback failed; gateway restart is required", map[string]any{
+			"error": result.Error(),
+		})
+		return result
 	}
-	if err = setupNodeTools(cfg, al, runningServices.NodeAdmission); err != nil {
-		return fmt.Errorf("error reloading node tools: %w", err)
+	restored.commit(runningServices, al)
+	if len(rollbackErrors) > 0 {
+		result := reloadRollbackResult(cause, rollbackErrors)
+		logger.ErrorCF("gateway", "Reload rollback was incomplete; gateway restart is required", map[string]any{
+			"error": result.Error(),
+		})
+		return result
 	}
-	if err = setupBrowserRuntime(context.Background(), cfg, runningServices); err != nil {
-		return fmt.Errorf("error reloading browser runtime: %w", err)
-	}
-	fmt.Println("  ✓ Channels restarted.")
-
-	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()
-	if len(enabledChannels) > 0 {
-		fmt.Printf("  ✓ Channels enabled: %s\n", enabledChannels)
-	} else {
-		fmt.Println("  ⚠ Warning: No channels enabled")
-	}
-
-	stateManager := state.NewManager(cfg.WorkspacePath())
-	runningServices.DeviceService = devices.NewService(devices.Config{
-		Enabled:    cfg.Devices.Enabled,
-		MonitorUSB: cfg.Devices.MonitorUSB,
-	}, stateManager)
-	runningServices.DeviceService.SetBus(msgBus)
-	if err := runningServices.DeviceService.Start(context.Background()); err != nil {
-		logger.WarnCF("device", "Failed to restart device service", map[string]any{"error": err.Error()})
-	} else if cfg.Devices.Enabled {
-		fmt.Println("  ✓ Device event service restarted")
-	}
-
-	transcriber := asr.DetectTranscriber(cfg)
-	al.SetTranscriber(transcriber)
-	if transcriber != nil {
-		logger.InfoCF("voice", "Transcription re-enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
-
-		// Start Voice Agent Orchestrator on reload
-		vaCtx, vaCancel := context.WithCancel(context.Background())
-		runningServices.VoiceAgentCancel = vaCancel
-		voiceAgent := asr.NewAgent(msgBus, transcriber)
-		voiceAgent.Start(vaCtx)
-	} else {
-		logger.InfoCF("voice", "Transcription disabled", nil)
-	}
-
-	ttsAvailable := tts.DetectTTS(cfg) != nil
-	logChannelVoiceCapabilities(runningServices.ChannelManager, transcriber != nil, ttsAvailable)
-	// NOTE: PID file is written once at startup and not updated on reload.
-	// Changing the gateway listen address requires a full restart.
-
-	return nil
+	logger.WarnCF("gateway", "Reload rolled back to the previous generation", map[string]any{
+		"error": cause.Error(),
+	})
+	return cause
 }
 
 func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Config, func()) {
@@ -1580,6 +1596,26 @@ func setupCronTool(
 	execTimeout time.Duration,
 	cfg *config.Config,
 ) (*cron.CronService, error) {
+	return setupCronToolWithRegistrar(
+		agentLoop,
+		msgBus,
+		workspace,
+		restrict,
+		execTimeout,
+		cfg,
+		agentLoop.RegisterTool,
+	)
+}
+
+func setupCronToolWithRegistrar(
+	agentLoop *agent.AgentLoop,
+	msgBus *bus.MessageBus,
+	workspace string,
+	restrict bool,
+	execTimeout time.Duration,
+	cfg *config.Config,
+	register func(toolshared.Tool),
+) (*cron.CronService, error) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	cronService := cron.NewCronService(cronStorePath, nil)
@@ -1593,7 +1629,7 @@ func setupCronTool(
 		}
 		cronTool.SetTaskRegistry(agentLoop.TaskRegistryForWorkspace(workspace))
 
-		agentLoop.RegisterTool(cronTool)
+		register(cronTool)
 	}
 
 	if cronTool != nil {

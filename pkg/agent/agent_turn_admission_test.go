@@ -86,6 +86,111 @@ func TestAgentTurnAdmissionReloadPreservesActiveTurns(t *testing.T) {
 	nextRelease()
 }
 
+func TestQuiesceTurnsDrainsActiveAndBlocksNewAdmissions(t *testing.T) {
+	controller := newAgentTurnAdmissionController(nil)
+	loop := &AgentLoop{agentTurnAdmissions: controller}
+	releaseActive, err := controller.acquire(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("initial acquire() error = %v", err)
+	}
+
+	quiesced := make(chan func(), 1)
+	go func() {
+		resume, quiesceErr := loop.QuiesceTurns(context.Background())
+		if quiesceErr != nil {
+			quiesced <- nil
+			return
+		}
+		quiesced <- resume
+	}()
+	select {
+	case <-quiesced:
+		t.Fatal("QuiesceTurns returned before the active turn drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseActive()
+
+	var resume func()
+	select {
+	case resume = <-quiesced:
+		if resume == nil {
+			t.Fatal("QuiesceTurns returned an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("QuiesceTurns did not finish after the active turn drained")
+	}
+
+	admitted := make(chan struct{})
+	go func() {
+		release, acquireErr := controller.acquire(context.Background(), "main")
+		if acquireErr == nil {
+			release()
+		}
+		close(admitted)
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("new turn was admitted while reload was quiesced")
+	case <-time.After(20 * time.Millisecond):
+	}
+	resume()
+	select {
+	case <-admitted:
+	case <-time.After(time.Second):
+		t.Fatal("new turn was not admitted after reload resumed")
+	}
+}
+
+func TestQuiesceTurnsCancellationRestoresAdmissions(t *testing.T) {
+	t.Parallel()
+
+	controller := newAgentTurnAdmissionController(nil)
+	release, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = controller.pause(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pause() error = %v, want context.Canceled", err)
+	}
+	release()
+
+	releaseAfterCancel, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() after canceled pause error = %v", err)
+	}
+	releaseAfterCancel()
+}
+
+func TestQuiesceTurnsRequiresEveryPauseToResume(t *testing.T) {
+	t.Parallel()
+
+	controller := newAgentTurnAdmissionController(nil)
+	firstResume, err := controller.pause(context.Background())
+	if err != nil {
+		t.Fatalf("first pause() error = %v", err)
+	}
+	secondResume, err := controller.pause(context.Background())
+	if err != nil {
+		t.Fatalf("second pause() error = %v", err)
+	}
+	firstResume()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = controller.acquire(waitCtx, "default"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("acquire() after one resume error = %v, want deadline exceeded", err)
+	}
+	secondResume()
+	release, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() after every resume error = %v", err)
+	}
+	release()
+}
+
 func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
@@ -98,7 +203,6 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial acquireAgentTurn() error = %v", err)
 	}
-	defer release()
 
 	reloaded := config.DefaultConfig()
 	reloaded.Agents.Defaults.Workspace = cfg.Agents.Defaults.Workspace
@@ -108,11 +212,25 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 		Default:          true,
 		MaxParallelTurns: 1,
 	}}
-	err = al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, reloaded)
-	if err != nil {
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, reloaded)
+	}()
+	select {
+	case err = <-reloadDone:
+		t.Fatalf("ReloadProviderAndConfig() returned before the active turn drained: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	if err = <-reloadDone; err != nil {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
 	}
 
+	_, release, err = al.acquireAgentTurn(context.Background(), "browser")
+	if err != nil {
+		t.Fatalf("first acquireAgentTurn() after reload error = %v", err)
+	}
+	defer release()
 	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, _, err = al.acquireAgentTurn(waitCtx, "browser")

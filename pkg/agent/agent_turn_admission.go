@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -58,6 +59,7 @@ type agentTurnAdmissionController struct {
 	mu      sync.Mutex
 	limits  map[string]int
 	active  map[string]int
+	pauses  int
 	changed chan struct{}
 }
 
@@ -100,7 +102,7 @@ func (c *agentTurnAdmissionController) acquire(ctx context.Context, agentID stri
 	for {
 		c.mu.Lock()
 		limit := c.limits[agentID]
-		if limit <= 0 || c.active[agentID] < limit {
+		if c.pauses == 0 && (limit <= 0 || c.active[agentID] < limit) {
 			c.active[agentID]++
 			c.mu.Unlock()
 			return func() { c.release(agentID) }, nil
@@ -114,6 +116,48 @@ func (c *agentTurnAdmissionController) acquire(ctx context.Context, agentID stri
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (c *agentTurnAdmissionController) pause(ctx context.Context) (func(), error) {
+	if c == nil {
+		return func() {}, nil
+	}
+	c.mu.Lock()
+	c.pauses++
+	c.notifyLocked()
+	for len(c.active) > 0 {
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			c.mu.Lock()
+			c.pauses--
+			c.notifyLocked()
+			c.mu.Unlock()
+			return nil, ctx.Err()
+		}
+		c.mu.Lock()
+	}
+	c.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			c.pauses--
+			c.notifyLocked()
+			c.mu.Unlock()
+		})
+	}, nil
+}
+
+// QuiesceTurns blocks new turn admission and waits for admitted turns to drain.
+func (al *AgentLoop) QuiesceTurns(ctx context.Context) (func(), error) {
+	if al == nil {
+		return nil, fmt.Errorf("agent loop is nil")
+	}
+	return al.agentTurnAdmissions.pause(ctx)
 }
 
 func (c *agentTurnAdmissionController) release(agentID string) {
