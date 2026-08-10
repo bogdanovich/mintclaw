@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -886,6 +887,112 @@ func TestLoadWaitsForInFlightDispatch(t *testing.T) {
 	cs.mu.RUnlock()
 	if calls != 1 {
 		t.Fatalf("job dispatched %d times, want 1", calls)
+	}
+}
+
+func TestStopAndDrainWaitsForClaimedDispatchStoreUpdate(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "jobs.json")
+	releaseHandler := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	cs := NewCronService(storePath, func(*CronJob) (string, error) {
+		close(handlerStarted)
+		<-releaseHandler
+		return "ok", nil
+	})
+	job, err := cs.AddJob(
+		"due",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(time.Minute.Milliseconds())},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob() error = %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().Add(-time.Second).UnixMilli()
+	for index := range cs.store.Jobs {
+		if cs.store.Jobs[index].ID == job.ID {
+			cs.store.Jobs[index].State.NextRunAtMS = &past
+		}
+	}
+	cs.running = true
+	cs.mu.Unlock()
+
+	dispatchDone := make(chan struct{})
+	go func() {
+		cs.checkJobs()
+		close(dispatchDone)
+	}()
+	<-handlerStarted
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelDrain()
+	if err = cs.StopAndDrain(drainCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopAndDrain() error = %v, want deadline exceeded", err)
+	}
+	close(releaseHandler)
+	select {
+	case <-dispatchDone:
+	case <-time.After(time.Second):
+		t.Fatal("claimed dispatch did not finish after handler release")
+	}
+	if err = cs.StopAndDrain(context.Background()); err != nil {
+		t.Fatalf("StopAndDrain() after dispatch error = %v", err)
+	}
+
+	reloaded := NewCronService(storePath, nil)
+	persisted, ok := reloaded.GetJob(job.ID)
+	if !ok {
+		t.Fatal("claimed job was not persisted before drain completed")
+	}
+	if persisted.State.LastRunAtMS == nil || persisted.State.LastStatus != "ok" {
+		t.Fatalf("persisted claimed job state = %#v, want completed run", persisted.State)
+	}
+}
+
+func TestPrepareDoesNotDispatchUntilActivate(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "jobs.json")
+	dispatched := make(chan struct{}, 1)
+	cs := NewCronService(storePath, func(*CronJob) (string, error) {
+		dispatched <- struct{}{}
+		return "ok", nil
+	})
+	if _, err := cs.AddJob(
+		"due",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(time.Minute.Milliseconds())},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatalf("AddJob() error = %v", err)
+	}
+	if err := cs.Prepare(); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().Add(-time.Second).UnixMilli()
+	cs.store.Jobs[0].State.NextRunAtMS = &past
+	cs.mu.Unlock()
+	select {
+	case <-dispatched:
+		t.Fatal("prepared cron service dispatched before activation")
+	case <-time.After(30 * time.Millisecond):
+	}
+	cs.Activate()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := cs.StopAndDrain(ctx); err != nil {
+			t.Errorf("StopAndDrain() cleanup error = %v", err)
+		}
+	})
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("activated cron service did not dispatch due job")
 	}
 }
 

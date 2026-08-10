@@ -74,6 +74,7 @@ type AgentInstance struct {
 	ownedProviders     []providers.StatefulProvider
 	ownedToolClosers   []interface{ Close() error }
 	closeState         *agentInstanceCloseState
+	ownerRegistry      *AgentRegistry
 }
 
 type agentInstanceCloseState struct {

@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -95,7 +96,25 @@ func (cs *CronService) Start() error {
 	if cs.running {
 		return nil
 	}
+	if err := cs.prepareLocked(); err != nil {
+		return err
+	}
+	cs.activateLocked()
+	return nil
+}
 
+// Prepare validates and publishes the durable schedule snapshot without
+// starting the dispatcher.
+func (cs *CronService) Prepare() error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.running {
+		return nil
+	}
+	return cs.prepareLocked()
+}
+
+func (cs *CronService) prepareLocked() error {
 	if err := cs.loadStore(); err != nil {
 		return fmt.Errorf("failed to load store: %w", err)
 	}
@@ -104,15 +123,26 @@ func (cs *CronService) Start() error {
 	if err := cs.saveStoreUnsafe(); err != nil {
 		return fmt.Errorf("failed to save store: %w", err)
 	}
+	return nil
+}
 
+// Activate starts dispatching a previously prepared schedule.
+func (cs *CronService) Activate() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.running {
+		return
+	}
+	cs.activateLocked()
+}
+
+func (cs *CronService) activateLocked() {
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
 		cs.wakeChan = make(chan struct{}, 1)
 	}
 	cs.running = true
 	go cs.runLoop(cs.stopChan)
-
-	return nil
 }
 
 func (cs *CronService) Stop() {
@@ -127,6 +157,32 @@ func (cs *CronService) Stop() {
 	if cs.stopChan != nil {
 		close(cs.stopChan)
 		cs.stopChan = nil
+	}
+}
+
+// StopAndDrain stops new scheduling and waits for every claimed dispatch to
+// finish its handler and final store update.
+func (cs *CronService) StopAndDrain(ctx context.Context) error {
+	if cs == nil {
+		return nil
+	}
+	cs.Stop()
+	drained := make(chan error, 1)
+	go func() {
+		cs.dispatchMu.Lock()
+		activeJobs := cs.ActiveJobCount()
+		cs.dispatchMu.Unlock()
+		if activeJobs != 0 {
+			drained <- fmt.Errorf("cron dispatch barrier retained %d active job(s)", activeJobs)
+			return
+		}
+		drained <- nil
+	}()
+	select {
+	case err := <-drained:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

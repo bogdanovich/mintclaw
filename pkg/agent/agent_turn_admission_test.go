@@ -3,12 +3,30 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+type admissionGenerationProvider struct {
+	mockProvider
+	calls atomic.Int32
+}
+
+func (provider *admissionGenerationProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls.Add(1)
+	return provider.mockProvider.Chat(ctx, messages, tools, model, opts)
+}
 
 func TestAcquireAgentTurnSerializesConfiguredAgent(t *testing.T) {
 	al := &AgentLoop{
@@ -86,6 +104,172 @@ func TestAgentTurnAdmissionReloadPreservesActiveTurns(t *testing.T) {
 	nextRelease()
 }
 
+func TestQuiesceTurnsDrainsActiveAndBlocksNewAdmissions(t *testing.T) {
+	controller := newAgentTurnAdmissionController(nil)
+	loop := &AgentLoop{agentTurnAdmissions: controller}
+	releaseActive, err := controller.acquire(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("initial acquire() error = %v", err)
+	}
+
+	quiesced := make(chan func(), 1)
+	go func() {
+		resume, quiesceErr := loop.QuiesceTurns(context.Background())
+		if quiesceErr != nil {
+			quiesced <- nil
+			return
+		}
+		quiesced <- resume
+	}()
+	select {
+	case <-quiesced:
+		t.Fatal("QuiesceTurns returned before the active turn drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseActive()
+
+	var resume func()
+	select {
+	case resume = <-quiesced:
+		if resume == nil {
+			t.Fatal("QuiesceTurns returned an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("QuiesceTurns did not finish after the active turn drained")
+	}
+
+	admitted := make(chan struct{})
+	go func() {
+		release, acquireErr := controller.acquire(context.Background(), "main")
+		if acquireErr == nil {
+			release()
+		}
+		close(admitted)
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("new turn was admitted while reload was quiesced")
+	case <-time.After(20 * time.Millisecond):
+	}
+	resume()
+	select {
+	case <-admitted:
+	case <-time.After(time.Second):
+		t.Fatal("new turn was not admitted after reload resumed")
+	}
+}
+
+func TestQuiesceTurnsCancellationRestoresAdmissions(t *testing.T) {
+	t.Parallel()
+
+	controller := newAgentTurnAdmissionController(nil)
+	release, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = controller.pause(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pause() error = %v, want context.Canceled", err)
+	}
+	release()
+
+	releaseAfterCancel, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() after canceled pause error = %v", err)
+	}
+	releaseAfterCancel()
+}
+
+func TestQuiesceTurnsRequiresEveryPauseToResume(t *testing.T) {
+	t.Parallel()
+
+	controller := newAgentTurnAdmissionController(nil)
+	firstResume, err := controller.pause(context.Background())
+	if err != nil {
+		t.Fatalf("first pause() error = %v", err)
+	}
+	secondResume, err := controller.pause(context.Background())
+	if err != nil {
+		t.Fatalf("second pause() error = %v", err)
+	}
+	firstResume()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = controller.acquire(waitCtx, "default"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("acquire() after one resume error = %v, want deadline exceeded", err)
+	}
+	secondResume()
+	release, err := controller.acquire(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("acquire() after every resume error = %v", err)
+	}
+	release()
+}
+
+func TestTurnWaitingBehindReloadUsesCurrentAgentGeneration(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	oldProvider := &admissionGenerationProvider{}
+	loop := NewAgentLoop(cfg, msgBus, oldProvider)
+	t.Cleanup(loop.Close)
+	oldAgent := loop.GetRegistry().GetDefaultAgent()
+
+	resume, err := loop.QuiesceTurns(context.Background())
+	if err != nil {
+		t.Fatalf("QuiesceTurns() error = %v", err)
+	}
+	turnDone := make(chan error, 1)
+	go func() {
+		_, turnErr := loop.runAgentLoop(context.Background(), oldAgent, processOptions{
+			Dispatch: DispatchRequest{
+				SessionKey:  "generation-waiter",
+				UserMessage: "use the current generation",
+			},
+			NoHistory:       true,
+			DefaultResponse: defaultResponse,
+		})
+		turnDone <- turnErr
+	}()
+	select {
+	case err = <-turnDone:
+		t.Fatalf("runAgentLoop() returned while turns were quiesced: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	next := *cfg
+	newProvider := &admissionGenerationProvider{}
+	prepared, err := loop.PrepareConfigReload(context.Background(), newProvider, &next)
+	if err != nil {
+		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if err = prepared.Commit(context.Background()); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	resume()
+	select {
+	case err = <-turnDone:
+		if err != nil {
+			t.Fatalf("runAgentLoop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgentLoop() did not resume after reload")
+	}
+	if got := oldProvider.calls.Load(); got != 0 {
+		t.Fatalf("old provider calls = %d, want 0", got)
+	}
+	if got := newProvider.calls.Load(); got != 1 {
+		t.Fatalf("new provider calls = %d, want 1", got)
+	}
+}
+
 func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
@@ -98,7 +282,6 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial acquireAgentTurn() error = %v", err)
 	}
-	defer release()
 
 	reloaded := config.DefaultConfig()
 	reloaded.Agents.Defaults.Workspace = cfg.Agents.Defaults.Workspace
@@ -108,11 +291,25 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 		Default:          true,
 		MaxParallelTurns: 1,
 	}}
-	err = al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, reloaded)
-	if err != nil {
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, reloaded)
+	}()
+	select {
+	case err = <-reloadDone:
+		t.Fatalf("ReloadProviderAndConfig() returned before the active turn drained: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	if err = <-reloadDone; err != nil {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
 	}
 
+	_, release, err = al.acquireAgentTurn(context.Background(), "browser")
+	if err != nil {
+		t.Fatalf("first acquireAgentTurn() after reload error = %v", err)
+	}
+	defer release()
 	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, _, err = al.acquireAgentTurn(waitCtx, "browser")
