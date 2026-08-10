@@ -45,7 +45,7 @@ type Compaction struct {
 }
 
 // Metadata is the versioned, transcript-independent coding-thread descriptor.
-// It is intentionally small enough to support catalogue reads without loading
+// It is intentionally small enough to support catalog reads without loading
 // canonical JSONL history.
 type Metadata struct {
 	SchemaVersion int             `json:"schema_version"`
@@ -277,10 +277,13 @@ func (s *Store) Load(threadID string) (Metadata, error) {
 	if err != nil {
 		return Metadata{}, fmt.Errorf("coding thread store: read %q: %w", threadID, err)
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, MaxMetadataBytes+1))
-	if err != nil {
-		return Metadata{}, fmt.Errorf("coding thread store: read %q: %w", threadID, err)
+	data, readErr := io.ReadAll(io.LimitReader(file, MaxMetadataBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return Metadata{}, fmt.Errorf("coding thread store: read %q: %w", threadID, readErr)
+	}
+	if closeErr != nil {
+		return Metadata{}, fmt.Errorf("coding thread store: close %q: %w", threadID, closeErr)
 	}
 	if len(data) > MaxMetadataBytes {
 		return Metadata{}, fmt.Errorf(

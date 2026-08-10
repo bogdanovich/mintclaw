@@ -51,7 +51,7 @@ func (p ProjectIdentity) Validate() error {
 		}
 	case ProjectKindGitWorktree:
 		if p.GitWorktreeRoot == "" || p.GitCommonDir == "" || p.ProjectRoot != p.GitWorktreeRoot {
-			return fmt.Errorf("Git project requires matching worktree root and common directory")
+			return fmt.Errorf("git project requires matching worktree root and common directory")
 		}
 	default:
 		return fmt.Errorf("unsupported kind %q", p.Kind)
@@ -70,19 +70,19 @@ func (p ProjectIdentity) Validate() error {
 		return fmt.Errorf("project key does not match canonical root")
 	}
 	if p.GitCommonDir != "" && !filepath.IsAbs(p.GitCommonDir) {
-		return fmt.Errorf("Git common directory must be absolute")
+		return fmt.Errorf("git common directory must be absolute")
 	}
 	if p.GitOrigin != strings.TrimSpace(p.GitOrigin) || !utf8.ValidString(p.GitOrigin) ||
 		len(p.GitOrigin) > gitOriginMaxBytes {
-		return fmt.Errorf("Git origin must be valid UTF-8 within %d bytes", gitOriginMaxBytes)
+		return fmt.Errorf("git origin must be valid UTF-8 within %d bytes", gitOriginMaxBytes)
 	}
 	if p.GitBranch != strings.TrimSpace(p.GitBranch) || !utf8.ValidString(p.GitBranch) ||
 		len(p.GitBranch) > gitRefMaxBytes {
-		return fmt.Errorf("Git branch must be valid UTF-8 within %d bytes", gitRefMaxBytes)
+		return fmt.Errorf("git branch must be valid UTF-8 within %d bytes", gitRefMaxBytes)
 	}
 	if p.GitHead != "" {
 		if (len(p.GitHead) != 40 && len(p.GitHead) != 64) || !isHex(p.GitHead) {
-			return fmt.Errorf("Git HEAD must be a 40- or 64-character object ID")
+			return fmt.Errorf("git HEAD must be a 40- or 64-character object ID")
 		}
 	}
 	return nil
