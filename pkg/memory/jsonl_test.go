@@ -40,6 +40,10 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 			if !errors.Is(err, injectedErr) {
 				t.Fatalf("AddFullMessage() error = %v, want %v", err, injectedErr)
 			}
+			wantCommitted := stage == jsonlJournalStageRename
+			if got := IsCommittedAppendError(err); got != wantCommitted {
+				t.Fatalf("IsCommittedAppendError() = %t, want %t for %s", got, wantCommitted, stage)
+			}
 		})
 	}
 }

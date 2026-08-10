@@ -15,6 +15,31 @@ import (
 
 const MaxPromptBytes = 1 << 20
 
+// CommittedPromptError reports that a prompt reached canonical history even
+// though a later finalization step failed. Retrying may duplicate the prompt.
+type CommittedPromptError struct {
+	ThreadID string
+	Err      error
+}
+
+func (e *CommittedPromptError) Error() string {
+	return fmt.Sprintf(
+		"coding thread transcript: prompt committed for thread %q; do not blindly retry: %v",
+		e.ThreadID,
+		e.Err,
+	)
+}
+
+func (e *CommittedPromptError) Unwrap() error {
+	return e.Err
+}
+
+// IsCommittedPromptError reports whether err preserves a committed prompt.
+func IsCommittedPromptError(err error) bool {
+	var committed *CommittedPromptError
+	return errors.As(err, &committed)
+}
+
 // ValidatePrompt checks the canonical coding prompt bound before any thread
 // metadata or transcript state is created.
 func ValidatePrompt(content string) error {
@@ -44,7 +69,7 @@ func (s *Store) AppendUserMessage(
 	if err := ValidatePrompt(content); err != nil {
 		return err
 	}
-	return lease.withActive(metadata.ThreadID, func() (resultErr error) {
+	return lease.withActive(s.root, metadata.ThreadID, func() error {
 		threadRoot, err := s.ThreadRoot(metadata.ThreadID)
 		if err != nil {
 			return err
@@ -54,21 +79,31 @@ func (s *Store) AppendUserMessage(
 			return fmt.Errorf("coding thread transcript: open canonical store: %w", err)
 		}
 		backend := session.NewJSONLBackend(canonical)
-		defer func() {
-			if closeErr := backend.Close(); closeErr != nil {
-				resultErr = errors.Join(
-					resultErr,
-					fmt.Errorf("coding thread transcript: close canonical store: %w", closeErr),
-				)
-			}
-		}()
-		if err := backend.AppendTurnMessage(
+		appendErr := backend.AppendTurnMessage(
 			ctx,
 			metadata.SessionKey,
 			providers.Message{Role: "user", Content: content},
-		); err != nil {
-			return fmt.Errorf("coding thread transcript: append prompt: %w", err)
-		}
-		return nil
+		)
+		closeErr := backend.Close()
+		return classifyPromptAppend(metadata.ThreadID, appendErr, closeErr)
 	})
+}
+
+func classifyPromptAppend(threadID string, appendErr, closeErr error) error {
+	if memory.IsCommittedAppendError(appendErr) {
+		return &CommittedPromptError{ThreadID: threadID, Err: errors.Join(appendErr, closeErr)}
+	}
+	if appendErr != nil {
+		return errors.Join(
+			fmt.Errorf("coding thread transcript: append prompt: %w", appendErr),
+			closeErr,
+		)
+	}
+	if closeErr != nil {
+		return &CommittedPromptError{
+			ThreadID: threadID,
+			Err:      fmt.Errorf("close canonical store: %w", closeErr),
+		}
+	}
+	return nil
 }

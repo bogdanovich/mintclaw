@@ -283,6 +283,72 @@ func TestInvalidPromptAndResumeMetadataFailBeforeCanonicalAppend(t *testing.T) {
 	if len(history) != 1 || history[0] != "accepted" {
 		t.Fatalf("invalid resume mutated history = %#v", history)
 	}
+	_, emptyPromptErr := executeCommandError(newResumeCommand(deps), created.ThreadID, "--prompt", "")
+	if emptyPromptErr == nil || !strings.Contains(emptyPromptErr.Error(), "prompt is required") {
+		t.Fatalf("explicit empty resume prompt error = %v", emptyPromptErr)
+	}
+}
+
+func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
+	t.Run("lease busy", func(t *testing.T) {
+		home := t.TempDir()
+		project := t.TempDir()
+		now := time.Date(2026, time.August, 10, 15, 0, 0, 0, time.UTC)
+		deps := testDependencies(home, project, &now)
+		threadID := uuid.NewString()
+		deps.newThreadID = func() string { return threadID }
+		store, err := thread.NewStore(filepath.Join(home, "coding"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ProvisionThread(threadID); err != nil {
+			t.Fatal(err)
+		}
+		lease, err := store.AcquireLease(threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = lease.Release() })
+
+		_, runErr := executeCommandError(newCodeCommand(deps), "must not publish")
+		if !errors.Is(runErr, thread.ErrLeaseBusy) {
+			t.Fatalf("code with busy lease error = %v", runErr)
+		}
+		if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("busy creation published metadata: %v", err)
+		}
+	})
+
+	t.Run("append fails", func(t *testing.T) {
+		home := t.TempDir()
+		project := t.TempDir()
+		now := time.Date(2026, time.August, 10, 15, 30, 0, 0, time.UTC)
+		deps := testDependencies(home, project, &now)
+		threadID := uuid.NewString()
+		deps.newThreadID = func() string { return threadID }
+		store, err := thread.NewStore(filepath.Join(home, "coding"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ProvisionThread(threadID); err != nil {
+			t.Fatal(err)
+		}
+		threadRoot, err := store.ThreadRoot(threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(threadRoot, "sessions"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, runErr := executeCommandError(newCodeCommand(deps), "must not publish")
+		if runErr == nil || !strings.Contains(runErr.Error(), "open canonical store") {
+			t.Fatalf("code with append failure error = %v", runErr)
+		}
+		if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("failed append published metadata: %v", err)
+		}
+	})
 }
 
 func TestPlainListReportsPaginationAndScanTruncationTogether(t *testing.T) {
@@ -327,9 +393,10 @@ func TestPlainResultDistinguishesProjectAndWorkingDirectory(t *testing.T) {
 
 func testDependencies(home, cwd string, now *time.Time) dependencies {
 	return dependencies{
-		home: func() string { return home },
-		cwd:  func() (string, error) { return cwd, nil },
-		now:  func() time.Time { return *now },
+		home:        func() string { return home },
+		cwd:         func() (string, error) { return cwd, nil },
+		now:         func() time.Time { return *now },
+		newThreadID: thread.NewThreadID,
 	}
 }
 

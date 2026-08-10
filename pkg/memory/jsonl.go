@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -73,6 +74,27 @@ type JSONLStore struct {
 	dir          string
 	locks        [numLockShards]sync.Mutex
 	journalFault func(jsonlJournalWriteStage) error
+}
+
+// CommittedAppendError reports that the JSONL record was durably appended,
+// but a later close or metadata-finalization step failed. Callers must recover
+// from the canonical history instead of blindly retrying the append.
+type CommittedAppendError struct {
+	Err error
+}
+
+func (e *CommittedAppendError) Error() string {
+	return fmt.Sprintf("memory: append committed but finalization failed: %v", e.Err)
+}
+
+func (e *CommittedAppendError) Unwrap() error {
+	return e.Err
+}
+
+// IsCommittedAppendError reports whether err preserves a committed append.
+func IsCommittedAppendError(err error) bool {
+	var committed *CommittedAppendError
+	return errors.As(err, &committed)
 }
 
 func contextCause(ctx context.Context) error {
@@ -774,16 +796,19 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
 	}
 	if closeErr := f.Close(); closeErr != nil {
-		return fmt.Errorf("memory: close jsonl: %w", closeErr)
+		return &CommittedAppendError{Err: fmt.Errorf("memory: close jsonl: %w", closeErr)}
 	}
 
 	meta.Count++
 	meta.UpdatedAt = now
 	if faultErr := s.injectJournalFault(jsonlJournalStageRename); faultErr != nil {
-		return fmt.Errorf("memory: commit journal metadata: %w", faultErr)
+		return &CommittedAppendError{Err: fmt.Errorf("memory: commit journal metadata: %w", faultErr)}
 	}
 
-	return s.finishHistoryMutation(sessionKey, &meta)
+	if finishErr := s.finishHistoryMutation(sessionKey, &meta); finishErr != nil {
+		return &CommittedAppendError{Err: finishErr}
+	}
+	return nil
 }
 
 func (s *JSONLStore) GetHistory(

@@ -3,6 +3,7 @@ package thread
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,13 +102,19 @@ func TestAppendUserMessageKeepsThreadsIsolated(t *testing.T) {
 
 func TestAppendUserMessageRejectsInvalidInputBeforeWrite(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
-	otherStore, other := newLeaseTestThread(t)
+	other, err := NewMetadata(NewThreadID(), metadata.Project, "other thread", metadata.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(other); err != nil {
+		t.Fatal(err)
+	}
 	lease, err := store.AcquireLease(metadata.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lease.Release() })
-	if err := otherStore.AppendUserMessage(t.Context(), lease, other, "wrong thread"); err == nil ||
+	if err := store.AppendUserMessage(t.Context(), lease, other, "wrong thread"); err == nil ||
 		!strings.Contains(err.Error(), "cannot write") {
 		t.Fatalf("AppendUserMessage(wrong lease) error = %v", err)
 	}
@@ -126,5 +133,45 @@ func TestAppendUserMessageRejectsInvalidInputBeforeWrite(t *testing.T) {
 	cancel()
 	if err := store.AppendUserMessage(canceled, lease, metadata, "canceled"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("AppendUserMessage(canceled) error = %v", err)
+	}
+}
+
+func TestAppendUserMessageRejectsLeaseFromDifferentStoreWithSameThreadID(t *testing.T) {
+	storeA, metadata := newLeaseTestThread(t)
+	storeB, err := NewStore(filepath.Join(t.TempDir(), "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storeB.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := storeA.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	if err := storeB.AppendUserMessage(t.Context(), lease, metadata, "wrong store"); err == nil ||
+		!strings.Contains(err.Error(), "different store") {
+		t.Fatalf("AppendUserMessage(cross-store lease) error = %v", err)
+	}
+	threadRoot, err := storeB.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(threadRoot, "sessions")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cross-store append created transcript state: %v", err)
+	}
+}
+
+func TestClassifyPromptAppendPreservesCommittedState(t *testing.T) {
+	committedCause := &memory.CommittedAppendError{Err: errors.New("metadata finalization failed")}
+	err := classifyPromptAppend("thread-id", committedCause, nil)
+	if !IsCommittedPromptError(err) || !errors.Is(err, committedCause) ||
+		!strings.Contains(err.Error(), "do not blindly retry") {
+		t.Fatalf("classifyPromptAppend() error = %v", err)
+	}
+	ordinary := errors.New("append failed")
+	if err := classifyPromptAppend("thread-id", ordinary, nil); IsCommittedPromptError(err) {
+		t.Fatalf("ordinary append classified as committed: %v", err)
 	}
 }

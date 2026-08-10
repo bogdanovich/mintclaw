@@ -20,16 +20,18 @@ import (
 )
 
 type dependencies struct {
-	home func() string
-	cwd  func() (string, error)
-	now  func() time.Time
+	home        func() string
+	cwd         func() (string, error)
+	now         func() time.Time
+	newThreadID func() string
 }
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		home: internal.GetMintClawHome,
-		cwd:  os.Getwd,
-		now:  time.Now,
+		home:        internal.GetMintClawHome,
+		cwd:         os.Getwd,
+		now:         time.Now,
+		newThreadID: thread.NewThreadID,
 	}
 }
 
@@ -104,14 +106,15 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 				threadID = args[0]
 			}
 			options := resumeOptions{
-				threadID: threadID,
-				all:      all,
-				last:     last,
-				model:    model,
-				prompt:   prompt,
-				json:     jsonOutput,
-				offset:   offset,
-				limit:    limit,
+				threadID:  threadID,
+				all:       all,
+				last:      last,
+				model:     model,
+				prompt:    prompt,
+				promptSet: cmd.Flags().Changed("prompt"),
+				json:      jsonOutput,
+				offset:    offset,
+				limit:     limit,
 			}
 			return runResume(cmd.Context(), cmd.OutOrStdout(), deps, options)
 		},
@@ -141,7 +144,7 @@ func runNew(
 	if err := thread.ValidatePrompt(prompt); err != nil {
 		return err
 	}
-	metadata, metadataErr := thread.NewMetadata(thread.NewThreadID(), project, prompt, deps.now())
+	metadata, metadataErr := thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
 	if metadataErr != nil {
 		return metadataErr
 	}
@@ -152,7 +155,7 @@ func runNew(
 	if _, err := runtimeLayoutFor(store, metadata); err != nil {
 		return err
 	}
-	if err := store.Save(metadata); err != nil {
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
 		return err
 	}
 	lease, leaseErr := store.AcquireLease(metadata.ThreadID)
@@ -160,9 +163,16 @@ func runNew(
 		return leaseErr
 	}
 	appendErr := store.AppendUserMessage(ctx, lease, metadata, prompt)
+	if appendErr != nil && !thread.IsCommittedPromptError(appendErr) {
+		return errors.Join(appendErr, lease.Release())
+	}
+	saveErr := store.Save(metadata)
 	releaseErr := lease.Release()
-	if appendErr != nil || releaseErr != nil {
-		return errors.Join(appendErr, releaseErr)
+	if appendErr != nil {
+		return errors.Join(appendErr, saveErr, releaseErr)
+	}
+	if saveErr != nil || releaseErr != nil {
+		return committedPromptOperationError(metadata.ThreadID, errors.Join(saveErr, releaseErr))
 	}
 	result, resultErr := resultFor("created", store, metadata, true)
 	if resultErr != nil {
@@ -172,14 +182,15 @@ func runNew(
 }
 
 type resumeOptions struct {
-	threadID string
-	all      bool
-	last     bool
-	model    string
-	prompt   string
-	json     bool
-	offset   int
-	limit    int
+	threadID  string
+	all       bool
+	last      bool
+	model     string
+	prompt    string
+	promptSet bool
+	json      bool
+	offset    int
+	limit     int
 }
 
 func runResume(
@@ -198,7 +209,7 @@ func runResume(
 	if options.threadID != "" && options.all {
 		return fmt.Errorf("resume: explicit thread ID cannot be combined with --all; change to its project first")
 	}
-	if options.threadID == "" && !options.last && (options.model != "" || options.prompt != "") {
+	if options.threadID == "" && !options.last && (options.model != "" || options.promptSet) {
 		return fmt.Errorf("resume: --model and --prompt require a thread ID or --last")
 	}
 	if (options.threadID != "" || options.last) && (options.offset != 0 || options.limit != 0) {
@@ -261,8 +272,13 @@ func resumeSelectedThread(
 	if leaseErr != nil {
 		return commandResult{}, leaseErr
 	}
+	promptStored := false
 	defer func() {
-		resultErr = errors.Join(resultErr, lease.Release())
+		releaseErr := lease.Release()
+		if releaseErr != nil && promptStored {
+			releaseErr = committedPromptOperationError(threadID, releaseErr)
+		}
+		resultErr = errors.Join(resultErr, releaseErr)
 	}()
 	metadata, loadErr := store.Load(threadID)
 	if loadErr != nil {
@@ -294,7 +310,7 @@ func resumeSelectedThread(
 			metadata.ThreadID,
 		)
 	}
-	if options.prompt != "" {
+	if options.promptSet {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
 			return commandResult{}, err
 		}
@@ -315,27 +331,35 @@ func resumeSelectedThread(
 	if _, err := runtimeLayoutFor(store, metadata); err != nil {
 		return commandResult{}, err
 	}
-	promptStored := false
-	if options.prompt != "" {
-		if err := store.AppendUserMessage(ctx, lease, metadata, options.prompt); err != nil {
-			return commandResult{}, err
+	var appendErr error
+	if options.promptSet {
+		appendErr = store.AppendUserMessage(ctx, lease, metadata, options.prompt)
+		if appendErr != nil && !thread.IsCommittedPromptError(appendErr) {
+			return commandResult{}, appendErr
 		}
 		promptStored = true
 	}
 	if err := store.Save(metadata); err != nil {
 		if promptStored {
-			return commandResult{}, fmt.Errorf(
-				"resume: prompt committed but metadata update failed; do not blindly retry: %w",
-				err,
+			return commandResult{}, errors.Join(
+				appendErr,
+				committedPromptOperationError(metadata.ThreadID, err),
 			)
 		}
 		return commandResult{}, err
+	}
+	if appendErr != nil {
+		return commandResult{}, appendErr
 	}
 	result, buildErr := resultFor("resumed", store, metadata, promptStored)
 	if buildErr != nil {
 		return commandResult{}, buildErr
 	}
 	return result, nil
+}
+
+func committedPromptOperationError(threadID string, err error) error {
+	return &thread.CommittedPromptError{ThreadID: threadID, Err: err}
 }
 
 func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectIdentity, *thread.Store, error) {
