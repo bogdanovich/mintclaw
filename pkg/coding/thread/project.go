@@ -76,6 +76,12 @@ func (p ProjectIdentity) Validate() error {
 		len(p.GitOrigin) > gitOriginMaxBytes {
 		return fmt.Errorf("git origin must be valid UTF-8 within %d bytes", gitOriginMaxBytes)
 	}
+	if p.GitOrigin != "" {
+		sanitized := sanitizeGitRemote(p.GitOrigin)
+		if sanitized == "" || sanitized != p.GitOrigin {
+			return fmt.Errorf("git origin must already be in credential-free canonical form")
+		}
+	}
 	if p.GitBranch != strings.TrimSpace(p.GitBranch) || !utf8.ValidString(p.GitBranch) ||
 		len(p.GitBranch) > gitRefMaxBytes {
 		return fmt.Errorf("git branch must be valid UTF-8 within %d bytes", gitRefMaxBytes)

@@ -2,6 +2,7 @@ package thread
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -236,5 +237,49 @@ func TestLoadRejectsUnknownAndOversizedMetadata(t *testing.T) {
 	}
 	if _, err := store.Load(metadata.ThreadID); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("Load(oversized) error = %v", err)
+	}
+}
+
+func TestStoreRejectsCredentialBearingGitOriginOnSaveAndLoad(t *testing.T) {
+	projectRoot := t.TempDir()
+	project := ProjectIdentity{
+		Kind:            ProjectKindGitWorktree,
+		ProjectRoot:     projectRoot,
+		InvocationCWD:   projectRoot,
+		GitWorktreeRoot: projectRoot,
+		GitCommonDir:    projectRoot,
+		GitOrigin:       "https://example.com/owner/repo.git",
+	}
+	project.ProjectKey = projectKey(project.Kind, project.ProjectRoot)
+	metadata, err := NewMetadata(uuid.NewString(), project, "request", time.Now())
+	if err != nil {
+		t.Fatalf("NewMetadata() error = %v", err)
+	}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatalf("Save(safe) error = %v", err)
+	}
+
+	metadata.Project.GitOrigin = "https://user:password@example.com/owner/repo.git?token=secret"
+	if err := store.Save(metadata); err == nil || !strings.Contains(err.Error(), "credential-free canonical form") {
+		t.Fatalf("Save(credential origin) error = %v", err)
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	path, err := store.metadataPath(metadata.ThreadID)
+	if err != nil {
+		t.Fatalf("metadataPath() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.Load(metadata.ThreadID); err == nil ||
+		!strings.Contains(err.Error(), "credential-free canonical form") {
+		t.Fatalf("Load(credential origin) error = %v", err)
 	}
 }

@@ -106,6 +106,9 @@ Absolute and scheme-relative URLs lose userinfo, query, and fragment. SCP-like
 remotes lose the user component. Safe local paths remain intact; malformed or
 credential-bearing values that cannot be classified, including opaque file
 URLs, are omitted rather than persisted verbatim.
+Metadata validation additionally requires every non-empty stored origin to
+already equal its canonical sanitizer output. Manually constructed values and
+existing on-disk descriptors cannot bypass resolution-time redaction.
 
 The `project_key` is a typed SHA-256 digest of the canonical project root. The
 type separates a plain directory from a Git worktree at the same path. A linked
@@ -153,6 +156,8 @@ Focused tests prove:
 - Git root, common directory, sanitized origin, branch, and HEAD are observed;
 - absolute, scheme-relative, SCP-like, local, and malformed remote forms obey
   the credential-redaction contract;
+- Save and Load reject a credential-bearing origin even when the surrounding
+  Git identity is otherwise valid;
 - unborn and detached repositories have explicit empty ref observations;
 - linked worktrees share a common directory but have different project keys;
 - available, missing, moved, and mismatched locations remain distinct; and
