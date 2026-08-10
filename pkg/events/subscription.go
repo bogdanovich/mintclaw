@@ -24,10 +24,15 @@ type Handler func(context.Context, Event) error
 
 // SubscribeOptions controls how a subscription receives events.
 type SubscribeOptions struct {
-	Name         string
-	Buffer       int
-	Priority     int
-	Concurrency  ConcurrencyKind
+	Name        string
+	Buffer      int
+	Priority    int
+	Concurrency ConcurrencyKind
+	// KeyFunc derives the ordering key for Keyed subscriptions. When nil,
+	// the key is derived from the event scope (session, then turn trace,
+	// then chat, then agent identity). Events sharing a key are handled
+	// sequentially; events with different keys run concurrently.
+	KeyFunc      func(Event) string
 	Backpressure BackpressurePolicy
 	// Timeout bounds how long the subscription worker waits for one handler call.
 	// Handlers should still honor ctx cancellation; timed-out calls keep running
@@ -44,7 +49,8 @@ const (
 	Concurrent ConcurrencyKind = "concurrent"
 	// Locked processes events sequentially in subscription order.
 	Locked ConcurrencyKind = "locked"
-	// Keyed is reserved for keyed sequential processing and currently behaves as Locked.
+	// Keyed processes events with the same derived key sequentially while
+	// events with different keys run concurrently.
 	Keyed ConcurrencyKind = "keyed"
 )
 
@@ -96,6 +102,7 @@ type eventSubscription struct {
 	filters []Filter
 	handler Handler
 	once    bool
+	keyed   *keyedDispatcher
 
 	ch      chan Event
 	done    chan struct{}
@@ -133,6 +140,7 @@ func normalizeSubscribeOptions(opts SubscribeOptions) SubscribeOptions {
 }
 
 func newSubscription(
+	ctx context.Context,
 	bus *EventBus,
 	id uint64,
 	filters []Filter,
@@ -141,7 +149,7 @@ func newSubscription(
 	once bool,
 ) *eventSubscription {
 	opts = normalizeSubscribeOptions(opts)
-	return &eventSubscription{
+	sub := &eventSubscription{
 		bus:     bus,
 		id:      id,
 		name:    opts.Name,
@@ -153,6 +161,10 @@ func newSubscription(
 		done:    make(chan struct{}),
 		closing: make(chan struct{}),
 	}
+	if opts.Concurrency == Keyed && handler != nil {
+		sub.keyed = newKeyedDispatcher(sub, ctx, opts.KeyFunc)
+	}
+	return sub
 }
 
 // ID returns the subscription identifier.
@@ -209,6 +221,10 @@ func (s *eventSubscription) Stats() SubscriberStats {
 
 func (s *eventSubscription) run(ctx context.Context) {
 	defer func() {
+		if s.keyed != nil {
+			s.keyed.shutdown()
+			s.keyed.wg.Wait()
+		}
 		s.wg.Wait()
 		s.closeDone()
 	}()
@@ -235,10 +251,6 @@ func (s *eventSubscription) dispatch(ctx context.Context, evt Event) {
 			}()
 			s.handle(ctx, evt)
 		}()
-	case Keyed:
-		// TODO: replace this with keyed executors when runtime events need
-		// per-scope ordering with cross-scope concurrency.
-		s.handle(ctx, evt)
 	default:
 		s.handle(ctx, evt)
 	}
@@ -343,6 +355,12 @@ func (s *eventSubscription) closeInput() {
 		s.mu.Lock()
 		close(s.ch)
 		s.mu.Unlock()
+		if s.keyed != nil {
+			// Stop accepting keyed events before Close returns, matching the
+			// close contract of the bounded channel path. The deferred
+			// shutdown in run() stays as idempotent cleanup.
+			s.keyed.shutdown()
+		}
 		if s.handler == nil {
 			s.closeDone()
 		}
@@ -365,6 +383,10 @@ type deliveryResult struct {
 func (s *eventSubscription) enqueue(ctx context.Context, evt Event, nonBlocking bool) deliveryResult {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	if s.keyed != nil {
+		return s.keyed.enqueue(ctx, evt, nonBlocking)
 	}
 
 	if nonBlocking {
