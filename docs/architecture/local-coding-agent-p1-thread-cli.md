@@ -86,14 +86,17 @@ append against concurrent `Release`, rejects a token after release, and cannot
 write another thread or the same thread ID in another store. Prompts are
 required, valid UTF-8, and bounded to 1 MiB. Supplying `--prompt` with an empty
 value is therefore an error rather than a metadata-only resume. The existing
-JSONL turn journal fsyncs the accepted user message and, for the first session
-record, its new directory entry before append returns.
+thread store durably creates `sessions/` below the already-provisioned thread
+root before opening the JSONL store. The JSONL turn journal then fsyncs the
+accepted user message and, for the first session record, its new file entry
+before append returns.
 
 An uncommitted lease or append failure leaves only an unpublished private
 directory, which list and exact-ID catalog queries cannot select. A file or
-directory fsync failure after `Write` is reported as indeterminate and unsafe
-to retry, but does not publish new thread metadata. Once the JSONL line and any
-new directory entry are durable, a later close, journal-metadata,
+partial write or file/directory fsync failure after `Write` is reported as
+indeterminate and unsafe to retry, but does not publish new thread metadata.
+Once the JSONL line and every new directory entry are durable, a later close,
+journal-metadata,
 thread-metadata, or lease-finalization failure is reported as a typed
 committed-prompt error with the thread ID and explicit do-not-retry guidance.
 

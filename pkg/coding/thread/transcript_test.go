@@ -100,6 +100,58 @@ func TestAppendUserMessageKeepsThreadsIsolated(t *testing.T) {
 	}
 }
 
+func TestAppendUserMessageDurablyProvisionsSessionsBeforeOpen(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	originalMkdirDurable := store.mkdirDurable
+	var gotRoot, gotRelative string
+	var gotMode os.FileMode
+	store.mkdirDurable = func(root, relative string, mode os.FileMode) error {
+		gotRoot, gotRelative, gotMode = root, relative, mode
+		return originalMkdirDurable(root, relative, mode)
+	}
+	if err := store.AppendUserMessage(t.Context(), lease, metadata, "durable sessions"); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != threadRoot || gotRelative != "sessions" || gotMode != 0o700 {
+		t.Fatalf("durable sessions call = root %q relative %q mode %o", gotRoot, gotRelative, gotMode)
+	}
+	info, err := os.Stat(filepath.Join(threadRoot, "sessions"))
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("sessions directory = %#v, %v", info, err)
+	}
+}
+
+func TestAppendUserMessageFailsBeforeOpenWhenSessionsProvisioningFails(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	injectedErr := errors.New("injected sessions durability failure")
+	store.mkdirDurable = func(string, string, os.FileMode) error { return injectedErr }
+	err = store.AppendUserMessage(t.Context(), lease, metadata, "must not open")
+	if !errors.Is(err, injectedErr) || IsCommittedPromptError(err) || IsIndeterminatePromptError(err) {
+		t.Fatalf("AppendUserMessage(sessions provision failure) error = %v", err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(threadRoot, "sessions")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sessions provisioning failure created state: %v", err)
+	}
+}
+
 func TestAppendUserMessageRejectsInvalidInputBeforeWrite(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	other, err := NewMetadata(NewThreadID(), metadata.Project, "other thread", metadata.CreatedAt)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -74,6 +75,7 @@ type JSONLStore struct {
 	dir          string
 	locks        [numLockShards]sync.Mutex
 	journalFault func(jsonlJournalWriteStage) error
+	appendWrite  func(*os.File, []byte) (int, error)
 }
 
 // CommittedAppendError reports that the JSONL record was durably appended,
@@ -149,7 +151,9 @@ func NewJSONLStore(dir string) (*JSONLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: create directory: %w", err)
 	}
-	return &JSONLStore{dir: dir}, nil
+	return &JSONLStore{dir: dir, appendWrite: func(file *os.File, data []byte) (int, error) {
+		return file.Write(data)
+	}}, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -802,9 +806,19 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		_ = f.Close()
 		return fmt.Errorf("memory: append message: %w", faultErr)
 	}
-	_, writeErr := f.Write(line)
+	writeAppend := s.appendWrite
+	if writeAppend == nil {
+		writeAppend = func(file *os.File, data []byte) (int, error) { return file.Write(data) }
+	}
+	written, writeErr := writeAppend(f, line)
+	if writeErr == nil && written != len(line) {
+		writeErr = io.ErrShortWrite
+	}
 	if writeErr != nil {
 		_ = f.Close()
+		if written > 0 {
+			return &IndeterminateAppendError{Err: fmt.Errorf("memory: append message: %w", writeErr)}
+		}
 		return fmt.Errorf("memory: append message: %w", writeErr)
 	}
 	// Flush to physical storage before closing. This matches the

@@ -82,6 +82,36 @@ func TestJSONLStoreSyncsDirectoryOnlyForFirstSessionFile(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreClassifiesPartialWriteAsIndeterminate(t *testing.T) {
+	store := newTestStore(t)
+	injectedErr := errors.New("injected partial write failure")
+	store.appendWrite = func(file *os.File, data []byte) (int, error) {
+		written, err := file.Write(data[:len(data)/2])
+		if err != nil {
+			return written, err
+		}
+		return written, injectedErr
+	}
+	err := store.AddMessage(t.Context(), "turn", "user", "partially written")
+	if !errors.Is(err, injectedErr) || !IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(partial write) error = %v", err)
+	}
+	info, statErr := os.Stat(store.jsonlPath("turn"))
+	if statErr != nil || info.Size() == 0 {
+		t.Fatalf("partial JSONL state = %#v, %v", info, statErr)
+	}
+}
+
+func TestJSONLStoreClassifiesZeroByteWriteFailureAsOrdinary(t *testing.T) {
+	store := newTestStore(t)
+	injectedErr := errors.New("injected zero-byte write failure")
+	store.appendWrite = func(*os.File, []byte) (int, error) { return 0, injectedErr }
+	err := store.AddMessage(t.Context(), "turn", "user", "not written")
+	if !errors.Is(err, injectedErr) || IsIndeterminateAppendError(err) {
+		t.Fatalf("AddMessage(zero-byte write) error = %v", err)
+	}
+}
+
 func TestJSONLStoreCanceledTurnJournalWaitDoesNotMutate(t *testing.T) {
 	store := newTestStore(t)
 	lock := store.sessionLock("turn")

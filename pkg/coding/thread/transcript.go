@@ -100,6 +100,9 @@ func (s *Store) AppendUserMessage(
 		if err != nil {
 			return err
 		}
+		if durableErr := s.mkdirDurable(threadRoot, "sessions", 0o700); durableErr != nil {
+			return fmt.Errorf("coding thread transcript: create durable sessions directory: %w", durableErr)
+		}
 		canonical, err := memory.NewJSONLStore(filepath.Join(threadRoot, "sessions"))
 		if err != nil {
 			return fmt.Errorf("coding thread transcript: open canonical store: %w", err)

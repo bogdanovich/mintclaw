@@ -342,7 +342,7 @@ func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
 		}
 
 		_, runErr := executeCommandError(newCodeCommand(deps), "must not publish")
-		if runErr == nil || !strings.Contains(runErr.Error(), "open canonical store") {
+		if runErr == nil || !strings.Contains(runErr.Error(), "sessions directory") {
 			t.Fatalf("code with append failure error = %v", runErr)
 		}
 		if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
