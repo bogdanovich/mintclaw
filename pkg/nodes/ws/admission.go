@@ -464,6 +464,29 @@ func validateInvocationApproval(
 	plan nodes.ExecutionPlan,
 ) error {
 	descriptor := approval.Descriptor
+	if len(descriptor.FileProfiles) > 0 {
+		var input struct {
+			ProfileRevision string `json:"profile_revision"`
+		}
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return fmt.Errorf("%w: execution plan lacks file profile authority", nodes.ErrCommandDenied)
+		}
+		profileAlias := ""
+		for _, profile := range descriptor.FileProfiles {
+			if profile.Revision == input.ProfileRevision {
+				profileAlias = profile.Alias
+				break
+			}
+		}
+		var projected bool
+		descriptor, projected = nodes.ProjectFileDescriptorForProfile(descriptor, profileAlias)
+		if !projected {
+			return fmt.Errorf(
+				"%w: execution plan does not match approved command",
+				nodes.ErrCommandDenied,
+			)
+		}
+	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		var projected bool
 		descriptor, projected = nodes.ProjectServiceDescriptorForProfile(

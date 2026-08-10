@@ -171,6 +171,91 @@ func TestExecutionPlanBindsTargetServiceProfileEndToEnd(t *testing.T) {
 	}
 }
 
+func TestExecutionPlanBindsTargetFileProfileEndToEnd(t *testing.T) {
+	profiles := []FileProfileDescriptor{
+		{
+			Alias: "legacy", Revision: "legacy-v1",
+			ReadableRoots: []string{"/srv/legacy"}, WritableRoots: []string{"/srv/legacy"},
+			AllowCreate: true, AllowOverwrite: true, MaxFileBytes: 1024,
+			Approval: FileProfileApproval{Metadata: "none", Read: "required", Write: "required"},
+		},
+		{
+			Alias: "workspace", Revision: "workspace-v1",
+			ReadableRoots: []string{"/srv/workspace"}, WritableRoots: []string{"/srv/workspace"},
+			AllowCreate: true, AllowOverwrite: true, MaxFileBytes: 1024,
+			Approval: FileProfileApproval{Metadata: "none", Read: "none", Write: "none"},
+		},
+	}
+	descriptors, err := WorkspaceDescriptors(profiles, []string{"project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full CommandDescriptor
+	for _, descriptor := range descriptors {
+		if descriptor.Name == WorkspaceCommandWrite {
+			full = descriptor
+			break
+		}
+	}
+	fullCatalog := invocationCatalog(full)
+	catalogHash, err := fullCatalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, ok := ProjectFileDescriptorForProfile(full, "workspace")
+	if !ok {
+		t.Fatal("project file profile")
+	}
+	request := InvocationRequest{
+		InvocationID: "inv_workspace", IdempotencyKey: "idem_workspace", NodeID: ID("node_test"),
+		CatalogHash: catalogHash, Command: full.Name,
+		Input: json.RawMessage(
+			`{"profile_revision":"workspace-v1","workspace_revision":"route-v1",` +
+				`"working_scope":"project","path":"README.md","content":"ok","overwrite":false}`,
+		),
+		AgentID: "main", SessionID: "session_test", ActorID: "user_test",
+		TimeoutSeconds: 30, OutputLimitBytes: 4096,
+	}
+	plan, err := PrepareExecutionPlan(
+		request,
+		projected,
+		"local",
+		"policy-1",
+		time.Unix(100, 0),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := LocalCommandPolicy{
+		Revision: "policy-1", AllowedCommands: []string{full.Name}, MaximumRisk: RiskWrite,
+		MaxTimeoutSeconds: 60, MaxOutputBytes: 4096,
+	}
+	if err = policy.Authorize(plan, fullCatalog, plan.NodeID, plan.Executor, time.Unix(100, 0)); err != nil {
+		t.Fatalf("Authorize() rejected target-bound file plan: %v", err)
+	}
+	if err = policy.AuthorizeReplay(plan, fullCatalog, plan.NodeID, plan.Executor); err != nil {
+		t.Fatalf("AuthorizeReplay() rejected target-bound file plan: %v", err)
+	}
+
+	changed := plan
+	changed.Input = json.RawMessage(
+		`{"profile_revision":"legacy-v1","workspace_revision":"route-v1",` +
+			`"working_scope":"project","path":"README.md","content":"ok","overwrite":false}`,
+	)
+	if err = policy.AuthorizeReplay(
+		changed,
+		fullCatalog,
+		changed.NodeID,
+		changed.Executor,
+	); !errors.Is(
+		err,
+		ErrInvalidInvocation,
+	) {
+		t.Fatalf("changed file profile error = %v", err)
+	}
+}
+
 func TestInvocationRequestRejectsNonCanonicalCatalogHash(t *testing.T) {
 	t.Parallel()
 
