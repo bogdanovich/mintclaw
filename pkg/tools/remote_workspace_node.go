@@ -25,7 +25,7 @@ type remoteWorkspaceNodeBinding struct {
 	config config.RemoteWorkspace
 }
 
-// RemoteWorkspaceNodeRouter maps read-only local tool shapes onto the hidden
+// RemoteWorkspaceNodeRouter maps compatible local file-tool shapes onto the hidden
 // typed workspace commands. Generic nodes_invoke cannot dispatch those
 // commands, so the configured workspace remains the only gateway authority.
 type RemoteWorkspaceNodeRouter struct {
