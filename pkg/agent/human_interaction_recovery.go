@@ -94,47 +94,7 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				}
 			case interactions.StatusWaiting:
 				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsPrompt)
-			case interactions.StatusResuming:
-				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
-				if record.FinalDeliveryState == interactions.DeliveryStateSending ||
-					record.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
-					if al.failRecoveredInteraction(
-						workspace,
-						registry,
-						record,
-						"final_delivery_ambiguous",
-						"final response delivery could not be confirmed and was not retried",
-					) {
-						recovered++
-						_ = al.drainDeferredInteractionIngress(
-							ctx,
-							workspace,
-							record.Route,
-							inboundContextForInteraction(record.Route),
-						)
-					}
-				} else if !record.FinalDelivered &&
-					record.FinalDeliveryTries >= interactions.MaxDeliveryAttempts {
-					if al.failRecoveredInteraction(
-						workspace,
-						registry,
-						record,
-						"final_delivery_exhausted",
-						"final delivery exhausted its bounded retry budget",
-					) {
-						recovered++
-						_ = al.drainDeferredInteractionIngress(
-							ctx,
-							workspace,
-							record.Route,
-							inboundContextForInteraction(record.Route),
-						)
-					}
-				} else if al.recoverClaimedInteraction(ctx, workspace, record) {
-					recovered++
-				}
-			case interactions.StatusClaimed:
-				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
+			case interactions.StatusResuming, interactions.StatusClaimed:
 				if al.recoverClaimedInteraction(ctx, workspace, record) {
 					recovered++
 				}
@@ -421,6 +381,67 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	workspace string,
 	record interactions.Record,
 ) bool {
+	flightKey, flight, owner := al.startInteractionResumeFlight(workspace, record.ID)
+	if !owner {
+		return false
+	}
+	var recoveryErr error
+	recoveryHandled := false
+	defer func() {
+		al.finishInteractionResumeFlight(flightKey, flight, recoveryHandled, recoveryErr)
+	}()
+	registry := al.interactionRegistryForWorkspace(workspace)
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		recoveryErr = interactions.ErrNotFound
+		return false
+	}
+	record = current
+	switch record.Status {
+	case interactions.StatusResolved, interactions.StatusCancelled, interactions.StatusFailed:
+		recoveryHandled = true
+		return false
+	case interactions.StatusClaimed:
+		al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
+	case interactions.StatusResuming:
+		al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
+		if record.FinalDeliveryState == interactions.DeliveryStateSending ||
+			record.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
+			if !al.failRecoveredInteraction(
+				workspace,
+				registry,
+				record,
+				"final_delivery_ambiguous",
+				"final response delivery could not be confirmed and was not retried",
+			) {
+				return false
+			}
+			_ = al.drainDeferredInteractionIngress(
+				ctx, workspace, record.Route, inboundContextForInteraction(record.Route),
+			)
+			recoveryHandled = true
+			return true
+		}
+		if !record.FinalDelivered &&
+			record.FinalDeliveryTries >= interactions.MaxDeliveryAttempts {
+			if !al.failRecoveredInteraction(
+				workspace,
+				registry,
+				record,
+				"final_delivery_exhausted",
+				"final delivery exhausted its bounded retry budget",
+			) {
+				return false
+			}
+			_ = al.drainDeferredInteractionIngress(
+				ctx, workspace, record.Route, inboundContextForInteraction(record.Route),
+			)
+			recoveryHandled = true
+			return true
+		}
+	default:
+		return false
+	}
 	agentRegistry := al.GetRegistry()
 	if agentRegistry == nil {
 		return false
@@ -461,15 +482,17 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		return false
 	}
 	defer claim.releaseIfOwned()
-	if err := al.resumeClaimedInteraction(
+	recoveryHandled = true
+	if err := al.resumeClaimedInteractionOwned(
 		ctx,
-		al.interactionRegistryForWorkspace(workspace),
+		registry,
 		workspace,
 		agent,
 		scope,
 		inboundContextForInteraction(record.Route),
 		record,
 	); err != nil {
+		recoveryErr = err
 		logger.WarnCF("agent", "Failed to recover human interaction", map[string]any{
 			"interaction_id": record.ID,
 			"session_key":    record.Route.SessionKey,

@@ -1032,6 +1032,41 @@ type interactionToolResultPayload struct {
 	Text          string               `json:"text,omitempty"`
 }
 
+type interactionResumeFlight struct {
+	done    chan struct{}
+	handled bool
+	err     error
+}
+
+func interactionResumeFlightKey(workspace, interactionID string) string {
+	return strings.TrimSpace(workspace) + "\x00" + strings.TrimSpace(interactionID)
+}
+
+func (al *AgentLoop) startInteractionResumeFlight(
+	workspace string,
+	interactionID string,
+) (string, *interactionResumeFlight, bool) {
+	key := interactionResumeFlightKey(workspace, interactionID)
+	candidate := &interactionResumeFlight{done: make(chan struct{})}
+	actual, loaded := al.interactionResumeFlights.LoadOrStore(key, candidate)
+	if loaded {
+		return key, actual.(*interactionResumeFlight), false
+	}
+	return key, candidate, true
+}
+
+func (al *AgentLoop) finishInteractionResumeFlight(
+	key string,
+	flight *interactionResumeFlight,
+	handled bool,
+	err error,
+) {
+	flight.handled = handled
+	flight.err = err
+	close(flight.done)
+	al.interactionResumeFlights.Delete(key)
+}
+
 func (al *AgentLoop) resumeClaimedInteraction(
 	ctx context.Context,
 	registry *interactions.Registry,
@@ -1041,8 +1076,55 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	inbound bus.InboundContext,
 	record interactions.Record,
 ) error {
-	if registry == nil || agent == nil {
+	if al == nil || registry == nil || agent == nil {
 		return fmt.Errorf("interaction continuation runtime is unavailable")
+	}
+	for {
+		flightKey, flight, owner := al.startInteractionResumeFlight(
+			interactionWorkspace, record.ID,
+		)
+		if !owner {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
+				if flight.handled {
+					return flight.err
+				}
+				continue
+			}
+		}
+		var resumeErr error
+		defer func() {
+			al.finishInteractionResumeFlight(flightKey, flight, true, resumeErr)
+		}()
+		resumeErr = al.resumeClaimedInteractionOwned(
+			ctx, registry, interactionWorkspace, agent, scope, inbound, record,
+		)
+		return resumeErr
+	}
+}
+
+func (al *AgentLoop) resumeClaimedInteractionOwned(
+	ctx context.Context,
+	registry *interactions.Registry,
+	interactionWorkspace string,
+	agent *AgentInstance,
+	scope *session.SessionScope,
+	inbound bus.InboundContext,
+	record interactions.Record,
+) error {
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		return interactions.ErrNotFound
+	}
+	switch current.Status {
+	case interactions.StatusResolved, interactions.StatusCancelled, interactions.StatusFailed:
+		return nil
+	case interactions.StatusClaimed, interactions.StatusResuming:
+		record = current
+	default:
+		return fmt.Errorf("cannot resume interaction from status %q", current.Status)
 	}
 	continuationSessionKey := interactionContinuationSessionKey(record)
 	continuationScope := sessionScopeForRecovery(agent.Sessions, continuationSessionKey)

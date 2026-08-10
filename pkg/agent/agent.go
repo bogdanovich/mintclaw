@@ -77,6 +77,7 @@ type AgentLoop struct {
 	taskRegistries             sync.Map
 	interactionRegistries      sync.Map
 	interactionResolutions     sync.Map
+	interactionResumeFlights   sync.Map
 	interactionCatalog         *interactions.WorkspaceCatalog
 	interactionCatalogMu       sync.Mutex
 	interactionRecoveryRunning atomic.Bool
