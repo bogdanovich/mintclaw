@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
@@ -25,6 +26,26 @@ type trackedStartupProvider struct {
 
 func (provider *trackedStartupProvider) Close() {
 	provider.closed.Store(true)
+}
+
+type failingStopStartupChannel struct {
+	channels.BaseChannel
+	stopErr error
+}
+
+func (channel *failingStopStartupChannel) Start(context.Context) error {
+	return nil
+}
+
+func (channel *failingStopStartupChannel) Stop(context.Context) error {
+	return channel.stopErr
+}
+
+func (channel *failingStopStartupChannel) Send(
+	context.Context,
+	bus.OutboundMessage,
+) ([]string, error) {
+	return nil, nil
 }
 
 func TestGatewayStartupTransactionRollsBackInReverseOrderAndJoinsErrors(t *testing.T) {
@@ -117,6 +138,68 @@ func TestGatewayProcessStartupRollbackClosesEveryOwner(t *testing.T) {
 	case <-runDone:
 	default:
 		t.Fatal("agent loop remains running after startup rollback")
+	}
+}
+
+func TestServiceStartupRollbackReturnsChannelStopFailure(t *testing.T) {
+	const channelType = "gateway-startup-stop-failure-test"
+
+	stopErr := errors.New("channel stop failed")
+	channels.RegisterFactory(
+		channelType,
+		func(string, string, *config.Config, *bus.MessageBus) (channels.Channel, error) {
+			return &failingStopStartupChannel{stopErr: stopErr}, nil
+		},
+	)
+
+	workspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ContextManagerConfig = nil
+	cfg.Channels["rollback-test"] = &config.Channel{
+		Enabled:  true,
+		Type:     channelType,
+		Settings: config.RawNode(`{"enabled":true}`),
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+	cfg.Gateway.Port = port
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	al := agent.NewAgentLoop(cfg, msgBus, &startupBlockedProvider{reason: "not used"})
+	t.Cleanup(al.Close)
+	injectedErr := errors.New("startup failed after channels started")
+
+	_, setupErr := setupAndStartServicesWithHooks(
+		context.Background(),
+		cfg,
+		al,
+		msgBus,
+		"test-token",
+		netbind.OpenResult{
+			Listeners: []net.Listener{listener},
+			BindHosts: []string{"127.0.0.1"},
+			Port:      strconv.Itoa(port),
+			ProbeHost: "127.0.0.1",
+		},
+		gatewayStartupHooks{
+			afterStage: func(stage gatewayStartupStage, _ *services) error {
+				if stage == gatewayStartupChannelsStarted {
+					return injectedErr
+				}
+				return nil
+			},
+		},
+	)
+	if !errors.Is(setupErr, injectedErr) || !errors.Is(setupErr, stopErr) {
+		t.Fatalf("setup error = %v, want startup and channel cleanup errors", setupErr)
 	}
 }
 
