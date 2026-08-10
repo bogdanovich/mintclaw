@@ -22,11 +22,11 @@ rendering before P2 installs the native coding runtime profile. The command
 help says this explicitly rather than presenting a stored prompt as a completed
 coding task.
 
-The first accepted `code` prompt creates `thread.meta.json`, obtains the P1.3
-writer lease, and durably appends one user message to the thread's canonical
-JSONL. `resume --prompt` uses the same append seam. P2 consumes this exact
-history; it does not convert a personal chat session or replay a display
-projection.
+The first accepted `code` prompt provisions a private thread directory, obtains
+the P1.3 writer lease, durably appends one user message to the thread's
+canonical JSONL, and only then publishes `thread.meta.json` to the catalog.
+`resume --prompt` uses the same append seam. P2 consumes this exact history; it
+does not convert a personal chat session or replay a display projection.
 
 ## Selection contract
 
@@ -83,9 +83,16 @@ free; it cannot create the in-project state path while discovering the error.
 
 Canonical append requires a live, matching `thread.Lease`. The lease guards
 append against concurrent `Release`, rejects a token after release, and cannot
-write another thread. Prompts are required, valid UTF-8, and bounded to 1 MiB.
-The existing JSONL turn journal fsyncs the accepted user message before append
-returns.
+write another thread or the same thread ID in another store. Prompts are
+required, valid UTF-8, and bounded to 1 MiB. Supplying `--prompt` with an empty
+value is therefore an error rather than a metadata-only resume. The existing
+JSONL turn journal fsyncs the accepted user message before append returns.
+
+An uncommitted lease or append failure leaves only an unpublished private
+directory, which list and exact-ID catalog queries cannot select. Once the
+JSONL line has been fsynced, any later close, journal-metadata, thread-metadata,
+or lease-finalization failure is reported as a typed committed-prompt error
+with the thread ID and explicit do-not-retry guidance.
 
 Catalog metadata is only a selection hint. Once a thread ID is selected,
 `resume` acquires its writer lease and reloads the authoritative metadata under
@@ -143,7 +150,10 @@ Automated tests prove:
   errors are actionable;
 - catalog listing succeeds without taking the writer lease;
 - selected metadata is reloaded under the writer lease before resume mutation;
-- released and mismatched lease tokens cannot append;
+- released, wrong-thread, and same-ID/different-store lease tokens cannot
+  append;
+- lease and ordinary append failures during creation do not publish selectable
+  metadata, while post-fsync failures retain committed-prompt classification;
 - canceled, empty, invalid, and oversized prompt appends fail before success;
 - root command registration and startup-output detection retain existing help
   expectations; and
