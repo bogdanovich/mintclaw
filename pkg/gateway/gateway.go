@@ -639,7 +639,7 @@ func setupNodeTools(
 	); err != nil {
 		return err
 	}
-	for _, toolName := range []string{"read_file", "search_files"} {
+	for _, toolName := range []string{"read_file", "search_files", "write_file", "apply_patch"} {
 		name := toolName
 		if err := agentLoop.RegisterRuntimeToolDecorator(
 			name,
@@ -671,7 +671,7 @@ func setupNodeTools(
 					return nil, routerErr
 				}
 				router.SetEventPublisher(agentLoop.RuntimeEventBus())
-				return tools.NewRemoteWorkspaceReadTool(local, router)
+				return tools.NewRemoteWorkspaceTool(local, router)
 			},
 		); err != nil {
 			return err

@@ -533,6 +533,10 @@ func projectFileDescriptorForTarget(
 			if profile.Approval.Read == "required" {
 				contract.ApprovalMode = "each_command"
 			}
+		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
+			if profile.Approval.Write == "required" {
+				contract.ApprovalMode = "each_command"
+			}
 		default:
 			return nodes.CommandDescriptor{}, false
 		}

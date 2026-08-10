@@ -10,12 +10,14 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
+	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type remoteWorkspaceLocalTool struct {
 	calls int
 	args  map[string]any
+	name  string
 }
 
 func TestRemoteWorkspaceNodeRouterBindsConfiguredRead(t *testing.T) {
@@ -133,6 +135,70 @@ func TestRemoteWorkspaceNodeRouterBindsConfiguredSearch(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceNodeRouterBindsWriteApprovalAndExactPlan(t *testing.T) {
+	cfg, source := remoteWorkspaceNodeTestSetupWithApproval(t, "required")
+	source.dispatchResult = json.RawMessage(
+		`{"path":"README.md","action":"replace","size":4,"sha256":"` + strings.Repeat("b", 64) + `"}`,
+	)
+	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "write_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := nodeInvocationTestContext("owner", "workspace-write-approval")
+	toolArgs := map[string]any{
+		"path": "README.md", "content": "new\n", "overwrite": true,
+		"expected_sha256": strings.Repeat("a", 64),
+	}
+	approval, err := router.ApprovalArgumentsRemoteWorkspace(ctx, "write_file", "project", toolArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval["workspace"] != "project" || approval["path"] != "README.md" ||
+		approval["publication"] != "replace" || approval["content_bytes"] != 4 ||
+		approval["content"] != nil || approval["input"] != nil {
+		t.Fatalf("safe workspace approval = %#v", approval)
+	}
+	prepared := mustFakeGatewayInvocation(t, source, ctx, approval["invocation_id"].(string))
+	if prepared.Plan.Command != nodes.WorkspaceCommandWrite || len(prepared.Descriptor.FileProfiles) != 1 ||
+		prepared.Descriptor.FileProfiles[0].Approval.Write != "required" ||
+		!strings.Contains(string(prepared.Plan.Input), strings.Repeat("a", 64)) {
+		t.Fatalf("prepared workspace write = %#v", prepared)
+	}
+	result := router.ExecuteRemoteWorkspace(
+		toolshared.WithToolApprovalContinuation(ctx, true), "write_file", "project", toolArgs,
+	)
+	payload := decodeNodeResult(t, result)
+	if payload["invocation_id"] != approval["invocation_id"] || source.prepareCalls != 1 ||
+		source.dispatchCalls != 1 {
+		t.Fatalf("approved write = %#v; prepares=%d dispatches=%d", payload, source.prepareCalls, source.dispatchCalls)
+	}
+}
+
+func TestRemoteWorkspaceNodeRouterMapsPatch(t *testing.T) {
+	cfg, source := remoteWorkspaceNodeTestSetup(t)
+	source.dispatchResult = json.RawMessage(
+		`{"state":"completed","committed":[{"path":"a.txt","action":"add","size":2,"sha256":"` +
+			strings.Repeat("c", 64) + `"}]}`,
+	)
+	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "apply_patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := nodeInvocationTestContext("owner", "workspace-patch-1")
+	result := router.ExecuteRemoteWorkspace(
+		ctx,
+		"apply_patch",
+		"project",
+		map[string]any{"input": "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch"},
+	)
+	payload := decodeNodeResult(t, result)
+	prepared := mustFakeGatewayInvocation(t, source, ctx, payload["invocation_id"].(string))
+	if payload["placement"] != "remote" || prepared.Plan.Command != nodes.WorkspaceCommandPatch ||
+		source.dispatchCalls != 1 {
+		t.Fatalf("remote patch = %#v; plan = %#v", payload, prepared.Plan)
+	}
+}
+
 func remoteWorkspaceNodeTestSetup(t *testing.T) (*config.Config, *fakeNodeInvocationSource) {
 	return remoteWorkspaceNodeTestSetupWithApproval(t, "none")
 }
@@ -144,7 +210,11 @@ func remoteWorkspaceNodeTestSetupWithApproval(
 	t.Helper()
 	fileInfo := nodeFileInfoTestDescriptor("none")
 	fileInfo.FileProfiles[0].Approval.Read = readApproval
-	descriptors, err := nodes.WorkspaceReadDescriptors(fileInfo.FileProfiles, []string{"project"})
+	fileInfo.FileProfiles[0].Approval.Write = readApproval
+	fileInfo.FileProfiles[0].WritableRoots = []string{"/srv/project"}
+	fileInfo.FileProfiles[0].AllowCreate = true
+	fileInfo.FileProfiles[0].AllowOverwrite = true
+	descriptors, err := nodes.WorkspaceDescriptors(fileInfo.FileProfiles, []string{"project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +222,8 @@ func remoteWorkspaceNodeTestSetupWithApproval(
 		fileInfo,
 		descriptors[0],
 		descriptors[1],
+		descriptors[2],
+		descriptors[3],
 	}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
@@ -164,6 +236,7 @@ func remoteWorkspaceNodeTestSetupWithApproval(
 			snapshot.ID: {
 				Snapshot: snapshot, AllowedCommands: []string{
 					"file.info.v1", nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch,
+					nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch,
 				},
 				ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
 			},
@@ -189,14 +262,19 @@ func remoteWorkspaceNodeTestSetupWithApproval(
 	cfg.Execution.RemoteWorkspaces = map[string]config.RemoteWorkspace{
 		"project": {
 			Target: "build", WorkingScope: "project", Revision: "project-workspace-v1",
-			Tools: []string{"read_file", "search_files"},
+			Tools: []string{"read_file", "search_files", "write_file", "apply_patch"},
 		},
 	}
 	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"build"}}
 	return cfg, source
 }
 
-func (*remoteWorkspaceLocalTool) Name() string        { return "read_file" }
+func (tool *remoteWorkspaceLocalTool) Name() string {
+	if tool.name != "" {
+		return tool.name
+	}
+	return "read_file"
+}
 func (*remoteWorkspaceLocalTool) Description() string { return "Read a local file." }
 func (*remoteWorkspaceLocalTool) Parameters() map[string]any {
 	return map[string]any{
@@ -255,7 +333,7 @@ func (source *remoteWorkspaceReadSource) ExecuteRemoteWorkspace(
 func TestRemoteWorkspaceReadToolRoutesOnlyExplicitAlias(t *testing.T) {
 	local := &remoteWorkspaceLocalTool{}
 	remote := &remoteWorkspaceReadSource{}
-	tool, err := NewRemoteWorkspaceReadTool(local, remote)
+	tool, err := NewRemoteWorkspaceTool(local, remote)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +357,7 @@ func TestRemoteWorkspaceReadToolRoutesOnlyExplicitAlias(t *testing.T) {
 func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
 	remote := &remoteWorkspaceReadSource{}
 	local := fstools.NewReadFileLinesTool(t.TempDir(), false, fstools.MaxReadFileSize)
-	tool, err := NewRemoteWorkspaceReadTool(local, remote)
+	tool, err := NewRemoteWorkspaceTool(local, remote)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +375,7 @@ func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
 func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	local := &remoteWorkspaceLocalTool{}
 	remote := &remoteWorkspaceReadSource{}
-	tool, err := NewRemoteWorkspaceReadTool(local, remote)
+	tool, err := NewRemoteWorkspaceTool(local, remote)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +394,32 @@ func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	}
 	if _, changed := local.Parameters()["properties"].(map[string]any)["workspace"]; changed {
 		t.Fatal("decorator mutated local tool parameters")
+	}
+}
+
+func TestRemoteWorkspaceMutationToolIsExplicitAndNeverLeaksRemotePreconditionLocally(t *testing.T) {
+	local := &remoteWorkspaceLocalTool{name: "write_file"}
+	remote := &remoteWorkspaceReadSource{}
+	tool, err := NewRemoteWorkspaceTool(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties := tool.Parameters()["properties"].(map[string]any)
+	if properties["workspace"] == nil || properties["expected_sha256"] == nil ||
+		tool.ToolLoopSemantics() != loopguard.SemanticsMutating {
+		t.Fatalf("remote write schema = %#v", properties)
+	}
+	localResult := tool.Execute(context.Background(), map[string]any{
+		"path": "a.txt", "expected_sha256": strings.Repeat("a", 64),
+	})
+	if !localResult.IsError || local.calls != 0 || remote.calls != 0 {
+		t.Fatalf("local precondition result = %#v, local=%d remote=%d", localResult, local.calls, remote.calls)
+	}
+	remoteResult := tool.Execute(context.Background(), map[string]any{
+		"path": "a.txt", "content": "new", "workspace": "vpn",
+	})
+	if remoteResult.IsError || remote.calls != 1 || remote.args["overwrite"] != false {
+		t.Fatalf("remote write = %#v, source = %#v", remoteResult, remote)
 	}
 }
 

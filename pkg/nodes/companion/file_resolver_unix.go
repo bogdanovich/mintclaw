@@ -631,6 +631,32 @@ func (parent *resolvedParent) openFinalRegular() (*resolvedFile, error) {
 	return &resolvedFile{file: file, info: info, identity: identity}, nil
 }
 
+func (parent *resolvedParent) removeFinalRegular(expected fileIdentity) error {
+	if parent == nil || parent.file == nil {
+		return ErrFileAccessDenied
+	}
+	current, err := parent.openFinalRegular()
+	if err != nil {
+		return err
+	}
+	if current.identity.Device != expected.Device ||
+		current.identity.Inode != expected.Inode ||
+		current.identity.Links != expected.Links {
+		_ = current.file.Close()
+		return ErrFileConflict
+	}
+	if err := current.file.Close(); err != nil {
+		return err
+	}
+	if err := unix.Unlinkat(int(parent.file.Fd()), parent.basename, 0); err != nil {
+		return classifyFileAccessError(err)
+	}
+	if err := parent.file.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	return nil
+}
+
 func (parent *resolvedParent) close() error {
 	if parent == nil {
 		return nil

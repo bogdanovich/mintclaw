@@ -88,6 +88,10 @@ func (*resolvedParent) openFinalRegular() (*resolvedFile, error) {
 	return nil, ErrFileAccessDenied
 }
 
+func (*resolvedParent) removeFinalRegular(fileIdentity) error {
+	return ErrFileAccessDenied
+}
+
 func (*stagedFile) publish(string) error {
 	return ErrFileAccessDenied
 }
