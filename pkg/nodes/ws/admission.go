@@ -22,7 +22,7 @@ import (
 
 const (
 	Path                   = "/nodes/v1/ws"
-	DefaultHandshakeWindow = 15 * time.Second
+	DefaultHandshakeWindow = 30 * time.Second
 	DefaultHeartbeatPeriod = 20 * time.Second
 	DefaultLivenessTimeout = 60 * time.Second
 )

@@ -680,21 +680,15 @@ func (session *peer) writeEnvelopeAtDispatch(
 }
 
 func (session *peer) writeControl(messageType int, data []byte, deadline time.Time) error {
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-	select {
-	case session.writeSlot <- struct{}{}:
-		defer func() { <-session.writeSlot }()
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-session.closed:
-		return ErrNodeDisconnected
-	}
 	select {
 	case <-session.closed:
 		return ErrNodeDisconnected
 	default:
 	}
+	// Gorilla permits control frames to run concurrently with every other
+	// connection method. Keeping pings behind the application write slot lets
+	// a slow durable authority lease starve liveness and tear down a healthy
+	// companion while an invocation is being admitted.
 	return session.connection.WriteControl(messageType, data, deadline)
 }
 
