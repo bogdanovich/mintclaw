@@ -152,14 +152,15 @@ func (al *AgentLoop) processScheduledMessage(
 			UserMessage:     msg.Content,
 			Media:           append([]string(nil), msg.Media...),
 		},
-		ModelBinding:         modelBinding,
-		SenderID:             msg.SenderID,
-		SenderDisplayName:    msg.Sender.DisplayName,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true,
+		ModelBinding:              modelBinding,
+		ExcludeInheritedNodeFiles: true,
+		SenderID:                  msg.SenderID,
+		SenderDisplayName:         msg.Sender.DisplayName,
+		DefaultResponse:           defaultResponse,
+		EnableSummary:             false,
+		SendResponse:              false,
+		SuppressToolFeedback:      true,
+		NoHistory:                 true,
 	})
 	return response, agent.ID, err
 }
@@ -193,12 +194,13 @@ func (al *AgentLoop) ProcessHeartbeat(
 		}
 	}
 	return al.runAgentLoop(ctx, agent, processOptions{
-		Dispatch:             dispatch,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true, // Don't load session history for heartbeat
+		Dispatch:                  dispatch,
+		ExcludeInheritedNodeFiles: true,
+		DefaultResponse:           defaultResponse,
+		EnableSummary:             false,
+		SendResponse:              false,
+		SuppressToolFeedback:      true,
+		NoHistory:                 true, // Don't load session history for heartbeat
 	})
 }
 
@@ -258,7 +260,23 @@ func (al *AgentLoop) processInboundMessageTurn(
 		return al.processSystemMessage(ctx, msg)
 	}
 
-	defer turn.Cleanup()
+	defer func() { turn.Cleanup() }()
+	admittedCtx, releaseAdmission, err := al.acquireAgentTurn(ctx, turn.Agent.ID)
+	if err != nil {
+		return "", err
+	}
+	defer releaseAdmission()
+	ctx = admittedCtx
+	currentAgent, changed, err := al.currentAgentGeneration(turn.Agent)
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		turn.ModelBinding.Cleanup()
+		turn.Agent = currentAgent
+		turn.ModelBinding = al.bindEffectiveModel(turn.Options.Dispatch.RouteSessionKey, currentAgent)
+		turn.Options.ModelBinding = turn.ModelBinding
+	}
 	turn.resetMessageToolRound()
 
 	logger.InfoCF("agent", "Routed message",
@@ -275,7 +293,6 @@ func (al *AgentLoop) processInboundMessageTurn(
 		})
 
 	opts := turn.Options
-	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return "", err

@@ -69,6 +69,7 @@ func NewAgentRegistry(
 	}
 
 	for _, instance := range registry.agents {
+		instance.ownerRegistry = registry
 		if instance.ContextBuilder != nil {
 			instance.ContextBuilder.WithAgentDiscovery(instance.ID, registry.ListSpawnableAgents)
 		}
@@ -126,6 +127,7 @@ func newAgentRegistryWithRuntimeProfile(
 	}
 
 	for _, instance := range registry.agents {
+		instance.ownerRegistry = registry
 		if instance.ContextBuilder != nil {
 			instance.ContextBuilder.WithAgentDiscovery(instance.ID, registry.ListSpawnableAgents)
 		}

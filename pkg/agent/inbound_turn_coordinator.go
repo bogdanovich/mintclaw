@@ -200,6 +200,17 @@ func (c *inboundTurnCoordinator) runWorker(
 	}
 	defer releaseCapacity()
 	ctx = admittedCtx
+	currentAgent, changed, err := al.currentAgentGeneration(target.Agent)
+	if err != nil {
+		claim.releaseIfOwned()
+		al.releaseInboundMessage(context.Background(), msg, err)
+		return
+	}
+	if changed {
+		refreshed := *target
+		refreshed.Agent = currentAgent
+		target = &refreshed
+	}
 
 	defer claim.releaseIfOwned()
 	defer c.recoverWorkerPanic(claim.scope.sessionKey, msg)

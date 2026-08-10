@@ -142,6 +142,7 @@ type processOptions struct {
 	SuppressToolUserDelivery    bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
 	SuppressToolFeedback        bool                      // Whether to suppress inline tool feedback messages
 	NoHistory                   bool                      // If true, don't load session history (for heartbeat)
+	ExcludeInheritedNodeFiles   bool                      // Remove inherited node file tools from this internal turn
 	SkipInitialSteeringPoll     bool                      // If true, skip the steering poll at loop start (used by Continue)
 	InboundContext              *bus.InboundContext       // Normalized inbound facts for events/hooks
 	RouteResult                 *routing.ResolvedRoute    // Route decision snapshot for events/hooks
@@ -359,140 +360,18 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	provider providers.LLMProvider,
 	cfg *config.Config,
 ) error {
-	// Validate inputs
-	if provider == nil {
-		return fmt.Errorf("provider cannot be nil")
+	resumeTurns, err := al.QuiesceTurns(ctx)
+	if err != nil {
+		return fmt.Errorf("quiesce turns for config reload: %w", err)
 	}
-	if err := al.ValidateConfigReload(cfg); err != nil {
+	defer resumeTurns()
+
+	prepared, err := al.PrepareConfigReload(ctx, provider, cfg)
+	if err != nil {
 		return err
 	}
-
-	// Create new registry with updated config and provider
-	// Wrap in defer/recover to handle any panics gracefully
-	var registry *AgentRegistry
-	var panicErr error
-	done := make(chan struct{}, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.RecoverPanicNoExit(r)
-				panicErr = fmt.Errorf("panic during registry creation: %v", r)
-				logger.ErrorCF("agent", "Panic during registry creation",
-					map[string]any{"panic": r})
-			}
-			close(done)
-		}()
-
-		registry = NewAgentRegistry(cfg, provider)
-	}()
-
-	// Wait for completion or context cancellation
-	select {
-	case <-done:
-		if registry == nil {
-			if panicErr != nil {
-				return fmt.Errorf("registry creation failed: %w", panicErr)
-			}
-			return fmt.Errorf("registry creation failed (nil result)")
-		}
-	case <-ctx.Done():
-		return fmt.Errorf("context canceled during registry creation: %w", ctx.Err())
-	}
-
-	// Check context again before proceeding
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled after registry creation: %w", err)
-	}
-	if al.isolatedSkillBootstrap {
-		al.isolateSkillRegistry(registry, cfg)
-	}
-
-	// Ensure shared tools are re-registered on the new registry
-	if !al.isolatedToolBootstrap {
-		registerSharedTools(al, cfg, al.bus, registry, provider)
-	}
-	if err := al.registerRuntimeToolsForRegistry(cfg, registry); err != nil {
-		registry.Close()
-		return err
-	}
-
-	// Atomically swap the config and registry under write lock
-	// This ensures readers see a consistent pair
-	al.mu.Lock()
-	oldRegistry := al.registry
-
-	// Store new values
-	al.cfg = cfg
-	al.registry = registry
-	al.agentTurnAdmissions.update(registry)
-
-	// Also update fallback chain with new config; rebuild rate limiter registry.
-	newRL := providers.NewRateLimiterRegistry()
-	for _, agentID := range registry.ListAgentIDs() {
-		if agent, ok := registry.GetAgent(agentID); ok {
-			newRL.RegisterCandidates(agent.Candidates)
-			newRL.RegisterCandidates(agent.LightCandidates)
-		}
-	}
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
-
-	al.mu.Unlock()
-	al.refreshRuntimeEventLogger(cfg)
-	if al.traceCapture != nil {
-		al.traceCapture.updateConfig(cfg)
-	}
-
-	oldMCPManager := al.mcp.reset()
-	al.hookRuntime.reset(al)
-	configureHookManagerFromConfig(al.hooks, cfg)
-	if err := al.ensureHooksInitialized(ctx); err != nil {
-		logger.WarnCF("agent", "Configured hooks failed to reinitialize after reload",
-			map[string]any{"error": err.Error()})
-	}
-	if oldMCPManager != nil {
-		if err := oldMCPManager.Close(); err != nil {
-			logger.WarnCF("agent", "Failed to close previous MCP manager during reload",
-				map[string]any{"error": err.Error()})
-		}
-	}
-	if err := al.ensureMCPInitialized(ctx); err != nil {
-		logger.WarnCF("agent", "MCP failed to reinitialize after reload",
-			map[string]any{"error": err.Error()})
-	}
-
-	// Close old provider after releasing the lock
-	// This prevents blocking readers while closing
-	if oldProvider, ok := extractProvider(oldRegistry); ok {
-		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
-			// Wait for in-flight turns to drain before closing the previous
-			// provider so reload does not interrupt an active request.
-			if !al.waitForActiveRequests(ctx, 2*time.Second) {
-				if ctx.Err() != nil {
-					// Context canceled, close immediately but log warning
-					logger.WarnCF(
-						"agent",
-						"Context canceled during provider cleanup, forcing close",
-						map[string]any{"error": ctx.Err()},
-					)
-				} else {
-					logger.WarnCF(
-						"agent",
-						"Timed out waiting for active requests during provider cleanup, forcing close",
-						map[string]any{"timeout_ms": 2000},
-					)
-				}
-			}
-			stateful.Close()
-		}
-	}
-
-	logger.InfoCF("agent", "Provider and config reloaded successfully",
-		map[string]any{
-			"model": cfg.Agents.Defaults.GetModelName(),
-		})
-
-	return nil
+	defer prepared.Abort()
+	return prepared.Commit(ctx)
 }
 
 // GetRegistry returns the current registry (thread-safe)
@@ -535,8 +414,31 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	if agent == nil {
+		return "", fmt.Errorf("agent is unavailable")
+	}
+	admittedCtx, releaseAdmission, err := al.acquireAgentTurn(ctx, agent.ID)
+	if err != nil {
+		return "", err
+	}
+	defer releaseAdmission()
+	ctx = admittedCtx
+
+	currentAgent, changed, err := al.currentAgentGeneration(agent)
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		agent = currentAgent
+		if opts.ExcludeInheritedNodeFiles {
+			agent = agentWithoutInheritedNodeFileTools(agent)
+		}
+		binding := al.bindEffectiveModel(opts.ModelBinding.RouteSessionKey, agent)
+		defer binding.Cleanup()
+		opts.ModelBinding = binding
+	}
+
 	opts = normalizeProcessOptions(opts)
-	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return "", err

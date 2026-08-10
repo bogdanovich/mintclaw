@@ -19,6 +19,44 @@ type fakeTranscriber struct {
 	lastPath string
 }
 
+type blockingTranscriber struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type contextAwareBlockingTranscriber struct {
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+}
+
+func (transcriber *contextAwareBlockingTranscriber) Name() string { return "context-aware-blocking" }
+
+func (transcriber *contextAwareBlockingTranscriber) Transcribe(
+	ctx context.Context,
+	_ string,
+) (*TranscriptionResponse, error) {
+	close(transcriber.started)
+	select {
+	case <-transcriber.release:
+		return &TranscriptionResponse{Text: "pending speech"}, nil
+	case <-ctx.Done():
+		close(transcriber.canceled)
+		return nil, ctx.Err()
+	}
+}
+
+func (transcriber *blockingTranscriber) Name() string { return "blocking" }
+
+func (transcriber *blockingTranscriber) Transcribe(
+	context.Context,
+	string,
+) (*TranscriptionResponse, error) {
+	close(transcriber.started)
+	<-transcriber.release
+	return &TranscriptionResponse{Text: "done"}, nil
+}
+
 func (f *fakeTranscriber) Name() string { return "fake" }
 
 func (f *fakeTranscriber) Transcribe(ctx context.Context, audioFilePath string) (*TranscriptionResponse, error) {
@@ -41,6 +79,102 @@ func waitForFileRemoval(t *testing.T, path string, timeout time.Duration) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Fatalf("expected file to be removed: %s", path)
+	}
+}
+
+func TestAgentStartWithDoneWaitsForShutdown(t *testing.T) {
+	t.Parallel()
+
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := NewAgent(mb, &fakeTranscriber{}).StartWithDone(ctx)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("voice agent did not finish after cancellation")
+	}
+}
+
+func TestAgentStartWithDoneDrainsInFlightUtterance(t *testing.T) {
+	t.Parallel()
+
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	transcriber := &blockingTranscriber{started: make(chan struct{}), release: make(chan struct{})}
+	agent := NewAgent(mb, transcriber)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := agent.StartWithDone(ctx)
+
+	agent.handleChunk(bus.AudioChunk{
+		SessionID: "session", SpeakerID: "speaker", ChatID: "chat", Channel: "discord",
+		SampleRate: 48000, Channels: 2, Format: "opus", Data: []byte{0xF8, 0xFF, 0xFE},
+	})
+	agent.mu.Lock()
+	for _, accumulator := range agent.sessions {
+		accumulator.mu.Lock()
+		accumulator.lastAudioAt = time.Now().Add(-2 * time.Second)
+		accumulator.mu.Unlock()
+	}
+	agent.mu.Unlock()
+	agent.checkSilence(ctx)
+	<-transcriber.started
+
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("voice agent stopped before its in-flight utterance drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(transcriber.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("voice agent did not stop after its in-flight utterance drained")
+	}
+}
+
+func TestAgentStartWithDoneFinalizesPendingSpeechWithoutCancelingDrain(t *testing.T) {
+	t.Parallel()
+
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	transcriber := &contextAwareBlockingTranscriber{
+		started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{}),
+	}
+	agent := NewAgent(mb, transcriber)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := agent.StartWithDone(ctx)
+	agent.handleChunk(bus.AudioChunk{
+		SessionID: "session", SpeakerID: "speaker", ChatID: "chat", Channel: "discord",
+		SampleRate: 48000, Channels: 2, Format: "opus", Data: []byte{0xF8, 0xFF, 0xFE},
+	})
+
+	cancel()
+	select {
+	case <-transcriber.started:
+	case <-time.After(time.Second):
+		t.Fatal("pending recording was not finalized for transcription")
+	}
+	select {
+	case <-transcriber.canceled:
+		t.Fatal("intake cancellation propagated into the drain context")
+	default:
+	}
+	close(transcriber.release)
+	select {
+	case msg := <-mb.InboundChan():
+		if !strings.Contains(msg.Content, "pending speech") {
+			t.Fatalf("unexpected drained voice message: %q", msg.Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("drained pending speech was not published")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("voice agent did not finish after pending speech drained")
 	}
 }
 

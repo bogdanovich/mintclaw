@@ -1,6 +1,8 @@
 package heartbeat
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +131,45 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 	hs.Stop()
 
 	time.Sleep(100 * time.Millisecond)
+}
+
+func TestHeartbeatServiceStopAndDrainWaitsForActiveHandler(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o600); err != nil {
+		t.Fatalf("write heartbeat task: %v", err)
+	}
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.interval = time.Millisecond
+	started := make(chan struct{})
+	release := make(chan struct{})
+	hs.SetHandler(func(string, string, string) *toolshared.ToolResult {
+		close(started)
+		<-release
+		return &toolshared.ToolResult{Silent: true}
+	})
+	if err := hs.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat handler did not start")
+	}
+
+	timeoutCtx, cancelTimeout := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := hs.StopAndDrain(timeoutCtx)
+	cancelTimeout()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopAndDrain() error = %v, want deadline exceeded", err)
+	}
+	close(release)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), time.Second)
+	defer cancelDrain()
+	if err := hs.StopAndDrain(drainCtx); err != nil {
+		t.Fatalf("StopAndDrain() after handler release error = %v", err)
+	}
 }
 
 func TestHeartbeatService_Disabled(t *testing.T) {

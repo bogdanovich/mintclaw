@@ -69,8 +69,9 @@ type Agent struct {
 	bus         *bus.MessageBus
 	transcriber Transcriber
 
-	mu       sync.Mutex
-	sessions map[string]*speechAccumulator // keyed by sessionID_speakerID
+	mu         sync.Mutex
+	sessions   map[string]*speechAccumulator // keyed by sessionID_speakerID
+	utterances sync.WaitGroup
 }
 
 func NewAgent(mb *bus.MessageBus, t Transcriber) *Agent {
@@ -82,25 +83,33 @@ func NewAgent(mb *bus.MessageBus, t Transcriber) *Agent {
 }
 
 func (a *Agent) Start(ctx context.Context) {
-	logger.InfoCF("voice-agent", "Started Voice Agent orchestrator", nil)
-	go a.listenChunks(ctx)
-	go a.vadTick(ctx)
+	a.StartWithDone(ctx)
+}
 
-	// Cleanup sessions on shutdown
+// StartWithDone starts the voice consumer and returns a channel closed after
+// its readers, cleanup, and in-flight utterance workers have exited.
+func (a *Agent) StartWithDone(ctx context.Context) <-chan struct{} {
+	logger.InfoCF("voice-agent", "Started Voice Agent orchestrator", nil)
+	done := make(chan struct{})
+	drainCtx := context.WithoutCancel(ctx)
+	var readers sync.WaitGroup
+	readers.Add(2)
 	go func() {
-		<-ctx.Done()
-		a.mu.Lock()
-		for key, acc := range a.sessions {
-			if err := acc.Close(); err != nil {
-				logger.ErrorCF("voice-agent", "Failed to finalize Ogg recording on shutdown",
-					map[string]any{"file": acc.file, "error": err})
-			}
-			os.Remove(acc.file)
-			delete(a.sessions, key)
-		}
-		a.mu.Unlock()
-		logger.InfoCF("voice-agent", "Cleaned up voice sessions on shutdown", nil)
+		defer readers.Done()
+		a.listenChunks(ctx)
 	}()
+	go func() {
+		defer readers.Done()
+		a.vadTick(ctx, drainCtx)
+	}()
+	go func() {
+		readers.Wait()
+		a.finishSessions(drainCtx, true)
+		a.utterances.Wait()
+		logger.InfoCF("voice-agent", "Cleaned up voice sessions on shutdown", nil)
+		close(done)
+	}()
+	return done
 }
 
 func (a *Agent) listenChunks(ctx context.Context) {
@@ -155,7 +164,7 @@ func (a *Agent) handleChunk(chunk bus.AudioChunk) {
 	acc.Push(chunk)
 }
 
-func (a *Agent) vadTick(ctx context.Context) {
+func (a *Agent) vadTick(ctx context.Context, drainCtx context.Context) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -164,12 +173,16 @@ func (a *Agent) vadTick(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			a.checkSilence(ctx)
+			a.checkSilence(drainCtx)
 		}
 	}
 }
 
 func (a *Agent) checkSilence(ctx context.Context) {
+	a.finishSessions(ctx, false)
+}
+
+func (a *Agent) finishSessions(ctx context.Context, force bool) {
 	a.mu.Lock()
 	now := time.Now()
 	var finished []*speechAccumulator
@@ -179,7 +192,7 @@ func (a *Agent) checkSilence(ctx context.Context) {
 		last := acc.lastAudioAt
 		acc.mu.Unlock()
 
-		if now.Sub(last) > 1500*time.Millisecond {
+		if force || now.Sub(last) > 1500*time.Millisecond {
 			if err := acc.Close(); err != nil {
 				logger.ErrorCF("voice-agent", "Failed to finalize Ogg recording; skipping transcription",
 					map[string]any{"file": acc.file, "error": err})
@@ -194,7 +207,11 @@ func (a *Agent) checkSilence(ctx context.Context) {
 	a.mu.Unlock()
 
 	for _, acc := range finished {
-		go a.processUtterance(ctx, acc)
+		a.utterances.Add(1)
+		go func() {
+			defer a.utterances.Done()
+			a.processUtterance(ctx, acc)
+		}()
 	}
 }
 

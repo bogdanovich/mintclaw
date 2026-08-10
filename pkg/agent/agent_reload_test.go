@@ -1,0 +1,141 @@
+package agent
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+)
+
+type preparedReloadProvider struct {
+	mockProvider
+	closed atomic.Int32
+}
+
+func (provider *preparedReloadProvider) Close() {
+	provider.closed.Add(1)
+}
+
+func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	t.Cleanup(loop.Close)
+	originalRegistry := loop.GetRegistry()
+
+	next := *cfg
+	next.Agents.Defaults.ModelName = "prepared-model"
+	provider := &preparedReloadProvider{}
+	prepared, err := loop.PrepareConfigReload(context.Background(), provider, &next)
+	if err != nil {
+		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg {
+		t.Fatal("prepare published the new registry or config")
+	}
+
+	prepared.Abort()
+	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg {
+		t.Fatal("abort changed the active registry or config")
+	}
+	if got := provider.closed.Load(); got != 1 {
+		t.Fatalf("prepared provider close count = %d, want 1", got)
+	}
+}
+
+func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	t.Cleanup(loop.Close)
+	originalRegistry := loop.GetRegistry()
+
+	next := *cfg
+	next.Agents.Defaults.ModelName = "committed-model"
+	provider := &preparedReloadProvider{}
+	prepared, err := loop.PrepareConfigReload(context.Background(), provider, &next)
+	if err != nil {
+		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if err = prepared.Commit(context.Background()); err != nil {
+		t.Fatalf("PreparedConfigReload.Commit() error = %v", err)
+	}
+	prepared.Abort()
+
+	if loop.GetRegistry() == originalRegistry || loop.GetConfig() != &next {
+		t.Fatal("commit did not publish the prepared registry and config")
+	}
+	if got := provider.closed.Load(); got != 0 {
+		t.Fatalf("committed provider close count = %d, want 0", got)
+	}
+}
+
+func TestPrepareConfigReloadCommitClosesPreviousProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	previous := &preparedReloadProvider{}
+	loop := NewAgentLoop(cfg, msgBus, previous)
+	t.Cleanup(loop.Close)
+
+	next := *cfg
+	prepared, err := loop.PrepareConfigReload(context.Background(), &preparedReloadProvider{}, &next)
+	if err != nil {
+		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if err = prepared.Commit(context.Background()); err != nil {
+		t.Fatalf("PreparedConfigReload.Commit() error = %v", err)
+	}
+	if got := previous.closed.Load(); got != 1 {
+		t.Fatalf("previous provider close count = %d, want 1", got)
+	}
+}
+
+func TestPrepareConfigReloadRejectsStaleCommit(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	t.Cleanup(loop.Close)
+
+	firstConfig := *cfg
+	first, err := loop.PrepareConfigReload(context.Background(), &preparedReloadProvider{}, &firstConfig)
+	if err != nil {
+		t.Fatalf("first PrepareConfigReload() error = %v", err)
+	}
+	defer first.Abort()
+	secondConfig := *cfg
+	second, err := loop.PrepareConfigReload(context.Background(), &preparedReloadProvider{}, &secondConfig)
+	if err != nil {
+		t.Fatalf("second PrepareConfigReload() error = %v", err)
+	}
+	if err = second.Commit(context.Background()); err != nil {
+		t.Fatalf("second Commit() error = %v", err)
+	}
+	if err = first.Commit(context.Background()); err == nil {
+		t.Fatal("stale Commit() error = nil, want stale registry rejection")
+	}
+	if loop.GetConfig() != &secondConfig {
+		t.Fatal("stale commit replaced the active config")
+	}
+}
