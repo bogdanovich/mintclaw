@@ -35,6 +35,7 @@ const (
 	RecordDeliveryOutcome      RecordKind = "delivery.outcome"
 	RecordContextCompaction    RecordKind = "context.compaction"
 	RecordContextSnapshot      RecordKind = "context.snapshot"
+	RecordSubTurnAdmission     RecordKind = "subturn.admission"
 	RecordRuntimeError         RecordKind = "runtime.error"
 )
 

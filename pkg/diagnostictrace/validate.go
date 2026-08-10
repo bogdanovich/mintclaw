@@ -18,7 +18,8 @@ var supportedKinds = map[RecordKind]struct{}{
 	RecordSteeringInjected: {}, RecordInterrupt: {},
 	RecordDeliveryDecision: {}, RecordDeliveryAttempt: {}, RecordDeliveryOutcome: {},
 	RecordContextCompaction: {}, RecordContextSnapshot: {},
-	RecordRuntimeError: {},
+	RecordSubTurnAdmission: {},
+	RecordRuntimeError:     {},
 }
 
 func Validate(trace Trace) error {

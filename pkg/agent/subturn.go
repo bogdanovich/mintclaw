@@ -329,6 +329,78 @@ func effectiveSubTurnDeliveryMode(cfg SubTurnConfig) toolshared.AsyncDeliveryMod
 	return toolshared.AsyncDeliveryParentOnly
 }
 
+func (al *AgentLoop) acquireSubTurnAgentAdmission(
+	waitCtx context.Context,
+	parentCtx context.Context,
+	parentTS *turnState,
+	childTurnID string,
+	agentID string,
+	timeout time.Duration,
+) (context.Context, func(), error) {
+	waitStarted := time.Now()
+	active := 0
+	limit := 0
+	emitAdmission := func(state string) {
+		al.emitEvent(
+			runtimeevents.KindAgentSubTurnAdmission,
+			parentTS.eventMeta("spawnSubTurn", "subturn.admission"),
+			SubTurnAdmissionPayload{
+				AgentID:      agentID,
+				ChildTurnID:  childTurnID,
+				ParentTurnID: parentTS.turnID,
+				State:        state,
+				Active:       active,
+				Limit:        limit,
+				WaitDuration: time.Since(waitStarted),
+				WaitTimeout:  timeout,
+			},
+		)
+	}
+	admittedCtx, releaseAdmission, err := al.acquireAgentTurnObserved(
+		waitCtx,
+		agentID,
+		func(currentActive, currentLimit int) {
+			active = currentActive
+			limit = currentLimit
+			emitAdmission("queued")
+			al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
+				parentCtx,
+				parentTS,
+				agentID,
+				timeout,
+			)
+		},
+	)
+	if err != nil {
+		if parentCtx.Err() != nil {
+			emitAdmission("canceled")
+			return parentCtx, nil, parentCtx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			emitAdmission("timed_out")
+			return parentCtx, nil, fmt.Errorf(
+				"%w: agent %q remained busy for %v: %w",
+				ErrConcurrencyTimeout,
+				agentID,
+				timeout,
+				context.DeadlineExceeded,
+			)
+		}
+		emitAdmission("failed")
+		return parentCtx, nil, err
+	}
+	emitAdmission("admitted")
+
+	// Copy the acquired leases onto a context without the admission deadline.
+	// The child execution timeout starts only after capacity becomes available.
+	executionCtx, releaseExecutionAdmissions := inheritAgentTurnAdmissions(
+		context.Background(),
+		admittedCtx,
+	)
+	releaseAdmission()
+	return executionCtx, releaseExecutionAdmissions, nil
+}
+
 func spawnSubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -339,6 +411,8 @@ func spawnSubTurn(
 
 	// Get effective SubTurn configuration
 	rtCfg := al.getSubTurnConfig()
+	admissionCtx, cancelAdmission := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+	defer cancelAdmission()
 
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
 	// Blocks if parent already has maxConcurrentSubTurns running, with a timeout to prevent indefinite blocking.
@@ -350,10 +424,6 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
-		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
-		defer cancel()
-
 		select {
 		case parentTS.concurrencySem <- struct{}{}:
 			semAcquired = true
@@ -362,14 +432,18 @@ func spawnSubTurn(
 					<-parentTS.concurrencySem
 				}
 			}()
-		case <-timeoutCtx.Done():
+		case <-admissionCtx.Done():
 			// Check parent context first - if it was canceled, propagate that error
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			// Otherwise it's our timeout
-			return nil, fmt.Errorf("%w: all %d slots occupied for %v",
-				ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+			return nil, fmt.Errorf("%w: all %d slots occupied for %v: %w",
+				ErrConcurrencyTimeout,
+				rtCfg.maxConcurrent,
+				rtCfg.concurrencyTimeout,
+				context.DeadlineExceeded,
+			)
 		}
 	}
 
@@ -418,14 +492,24 @@ func spawnSubTurn(
 		return nil, errors.New("parent turnState has no agent instance")
 	}
 
-	// Create an independent child context so detached work can outlive the
-	// parent's cancellation. Same-agent children retain the work-tree admission
-	// until they finish; children targeting another agent acquire that agent's
-	// admission in runTurn.
-	detachedCtx, releaseInheritedAdmission := inheritAgentTurnAdmissions(context.Background(), ctx)
-	defer releaseInheritedAdmission()
-	detachedCtx = inheritOutboundTransaction(detachedCtx, ctx)
-	childCtx, cancel := context.WithTimeout(detachedCtx, timeout)
+	// Wait for target-agent capacity independently from the execution timeout.
+	// Same-agent children inherit the work-tree admission immediately. A child
+	// targeting another agent fails as busy before any turn work starts.
+	executionBase, releaseAdmissions, err := al.acquireSubTurnAgentAdmission(
+		admissionCtx,
+		ctx,
+		parentTS,
+		childID,
+		baseAgent.ID,
+		rtCfg.concurrencyTimeout,
+	)
+	if err != nil {
+		return nil, err
+	}
+	cancelAdmission()
+	defer releaseAdmissions()
+	executionBase = inheritOutboundTransaction(executionBase, ctx)
+	childCtx, cancel := context.WithTimeout(executionBase, timeout)
 	defer cancel()
 
 	modelBinding, err := al.buildSubagentChildBinding(parentTS, baseAgent)

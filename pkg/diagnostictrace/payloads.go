@@ -83,6 +83,15 @@ type ContextPayload struct {
 	ProtectedFactRefs []string `json:"protected_fact_refs,omitempty"`
 }
 
+type SubTurnAdmissionPayload struct {
+	State     string `json:"state"`
+	AgentID   string `json:"agent_id,omitempty"`
+	Active    int    `json:"active,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	WaitMS    int64  `json:"wait_ms,omitempty"`
+	TimeoutMS int64  `json:"timeout_ms,omitempty"`
+}
+
 type RuntimeErrorPayload struct {
 	Stage          string `json:"stage,omitempty"`
 	MessagePreview string `json:"message_preview,omitempty"`

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -12,6 +13,29 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
+
+func (tf *toolFeedbackPublisher) publishSubTurnAdmissionWait(
+	ctx context.Context,
+	ts *turnState,
+	agentID string,
+	timeout time.Duration,
+) {
+	if tf == nil || tf.bus == nil || !tf.shouldPublishToolFeedback(ts) || ts.channel == "mintclaw" {
+		return
+	}
+	feedback := fmt.Sprintf(
+		"Waiting for the %s agent to become available (up to %s).",
+		agentID,
+		timeout.Round(time.Second),
+	)
+	fbCtx, fbCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	_ = tf.bus.PublishOutbound(fbCtx, outboundMessageForTurnWithOptions(
+		ts,
+		feedback,
+		outboundTurnMessageOptions{kind: messageKindToolFeedback},
+	))
+	fbCancel()
+}
 
 type toolFeedbackPublisher struct {
 	bus                 interfaces.MessageBus
