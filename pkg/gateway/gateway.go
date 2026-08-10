@@ -81,6 +81,7 @@ type services struct {
 	Browser          *browserRuntime
 	HealthServer     *health.Server
 	VoiceAgentCancel context.CancelFunc
+	VoiceAgentDone   <-chan struct{}
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	authToken        string
@@ -1104,13 +1105,9 @@ func setupAndStartServicesWithHooks(
 
 	if transcriber != nil {
 		// Start Voice Agent Orchestrator after channels are ready.
-		vaCtx, vaCancel := context.WithCancel(context.Background())
-		runningServices.VoiceAgentCancel = vaCancel
-		voiceAgent := asr.NewAgent(msgBus, transcriber)
-		voiceAgent.Start(vaCtx)
-		cleanup.add("voice runtime", func(context.Context) error {
-			vaCancel()
-			return nil
+		runningServices.VoiceAgentCancel, runningServices.VoiceAgentDone = startVoiceAgent(msgBus, transcriber)
+		cleanup.add("voice runtime", func(cleanupCtx context.Context) error {
+			return stopVoiceAgent(cleanupCtx, generation)
 		})
 	}
 	if err = checkpoint(gatewayStartupVoiceRuntimeStarted); err != nil {
@@ -1186,8 +1183,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		}
 		drains.Wait()
 	}
-	if runningServices.VoiceAgentCancel != nil {
-		runningServices.VoiceAgentCancel()
+	if err := stopVoiceAgent(shutdownCtx, runningServices); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("drain voice runtime: %w", err))
 	}
 	if runningServices.DeviceService != nil {
 		runningServices.DeviceService.Stop()
@@ -1433,8 +1430,10 @@ func handleConfigReloadWithHooks(
 			fmt.Errorf("commit agent reload: %w", err), oldCfg, al, runningServices, msgBus, generation,
 		)
 	}
-	generation.commit(runningServices, al)
 	*providerRef = newProvider
+	if err = generation.commit(runningServices, al); err != nil {
+		return errors.Join(fmt.Errorf("activate committed reload generation: %w", err), errGatewayReloadRestartRequired)
+	}
 
 	logger.Info("  ✓ Provider, configuration, and services reloaded successfully (thread-safe)")
 
@@ -1517,7 +1516,9 @@ func rollbackReloadGeneration(
 		})
 		return result
 	}
-	restored.commit(runningServices, al)
+	if err = restored.commit(runningServices, al); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("activate restored service generation: %w", err))
+	}
 	if len(rollbackErrors) > 0 {
 		result := reloadRollbackResult(cause, rollbackErrors)
 		logger.ErrorCF("gateway", "Reload rollback was incomplete; gateway restart is required", map[string]any{
@@ -1529,6 +1530,29 @@ func rollbackReloadGeneration(
 		"error": cause.Error(),
 	})
 	return cause
+}
+
+func startVoiceAgent(msgBus *bus.MessageBus, transcriber asr.Transcriber) (context.CancelFunc, <-chan struct{}) {
+	voiceCtx, cancelVoice := context.WithCancel(context.Background())
+	done := asr.NewAgent(msgBus, transcriber).StartWithDone(voiceCtx)
+	return cancelVoice, done
+}
+
+func stopVoiceAgent(ctx context.Context, runningServices *services) error {
+	if runningServices == nil || runningServices.VoiceAgentCancel == nil {
+		return nil
+	}
+	runningServices.VoiceAgentCancel()
+	if runningServices.VoiceAgentDone != nil {
+		select {
+		case <-runningServices.VoiceAgentDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	runningServices.VoiceAgentCancel = nil
+	runningServices.VoiceAgentDone = nil
+	return nil
 }
 
 func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Config, func()) {

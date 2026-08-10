@@ -952,6 +952,50 @@ func TestStopAndDrainWaitsForClaimedDispatchStoreUpdate(t *testing.T) {
 	}
 }
 
+func TestPrepareDoesNotDispatchUntilActivate(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "jobs.json")
+	dispatched := make(chan struct{}, 1)
+	cs := NewCronService(storePath, func(*CronJob) (string, error) {
+		dispatched <- struct{}{}
+		return "ok", nil
+	})
+	if _, err := cs.AddJob(
+		"due",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(time.Minute.Milliseconds())},
+		"",
+		"msg",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatalf("AddJob() error = %v", err)
+	}
+	if err := cs.Prepare(); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	cs.mu.Lock()
+	past := time.Now().Add(-time.Second).UnixMilli()
+	cs.store.Jobs[0].State.NextRunAtMS = &past
+	cs.mu.Unlock()
+	select {
+	case <-dispatched:
+		t.Fatal("prepared cron service dispatched before activation")
+	case <-time.After(30 * time.Millisecond):
+	}
+	cs.Activate()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := cs.StopAndDrain(ctx); err != nil {
+			t.Errorf("StopAndDrain() cleanup error = %v", err)
+		}
+	})
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("activated cron service did not dispatch due job")
+	}
+}
+
 func TestLoadLatchesCorruptionDuringInFlightDispatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "jobs.json")

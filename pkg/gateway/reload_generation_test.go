@@ -78,12 +78,12 @@ func TestConfigReloadRollsBackEveryPostQuiesceStage(t *testing.T) {
 	useRestartRuntimeGOOS(t, "linux")
 	stages := []gatewayReloadStage{
 		gatewayReloadAgentPrepared,
-		gatewayReloadCronStarted,
-		gatewayReloadHeartbeatStarted,
-		gatewayReloadMediaStarted,
-		gatewayReloadBrowserStarted,
-		gatewayReloadVoiceStarted,
-		gatewayReloadDeviceInitialized,
+		gatewayReloadCronPrepared,
+		gatewayReloadHeartbeatPrepared,
+		gatewayReloadMediaPrepared,
+		gatewayReloadBrowserPrepared,
+		gatewayReloadVoicePrepared,
+		gatewayReloadDevicePrepared,
 		gatewayReloadChannelsReconciled,
 		gatewayReloadNodesReconciled,
 	}
@@ -199,8 +199,42 @@ func TestConfigReloadCommitsPreparedGeneration(t *testing.T) {
 	if harness.services.HeartbeatService == oldHeartbeat || !harness.services.HeartbeatService.IsRunning() {
 		t.Fatal("successful reload did not commit the prepared heartbeat generation")
 	}
+	if enabled, _ := harness.services.CronService.Status()["enabled"].(bool); !enabled {
+		t.Fatal("successful reload did not activate the prepared cron generation")
+	}
 	if _, ok := harness.loop.GetRegistry().GetDefaultAgent().Tools.Get("gateway_restart"); !ok {
 		t.Fatal("successful reload did not publish the enabled runtime tool")
+	}
+}
+
+func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
+	harness := newGatewayReloadHarness(t)
+	generation, err := prepareReloadGeneration(
+		context.Background(),
+		harness.config,
+		harness.loop,
+		nil,
+		harness.services,
+		harness.bus,
+		gatewayReloadHooks{},
+	)
+	if err != nil {
+		t.Fatalf("prepareReloadGeneration() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if rollbackErr := generation.rollback(); rollbackErr != nil {
+			t.Errorf("generation.rollback() error = %v", rollbackErr)
+		}
+	})
+
+	if enabled, _ := generation.services.CronService.Status()["enabled"].(bool); enabled {
+		t.Fatal("prepared cron service is dispatching before commit")
+	}
+	if generation.services.HeartbeatService.IsRunning() {
+		t.Fatal("prepared heartbeat service is dispatching before commit")
+	}
+	if generation.services.VoiceAgentCancel != nil || generation.services.VoiceAgentDone != nil {
+		t.Fatal("prepared voice runtime subscribed before commit")
 	}
 }
 
