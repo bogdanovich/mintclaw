@@ -851,7 +851,7 @@ func playwrightNavigationCheckedActionCode(
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
 ) (string, error) {
-	tool, _, err := mapPlaywrightAction(action, limits)
+	tool, arguments, err := mapPlaywrightAction(action, limits)
 	if err != nil {
 		return "", err
 	}
@@ -861,6 +861,12 @@ func playwrightNavigationCheckedActionCode(
 	}
 	var dispatch string
 	switch tool {
+	case "browser_navigate":
+		normalizedURL, ok := arguments["url"].(string)
+		if !ok || normalizedURL == "" {
+			return "", fmt.Errorf("%w: normalized navigation URL is unavailable", ErrInvalid)
+		}
+		dispatch = "await page.goto(" + jsonString(normalizedURL) + ");"
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\" });"
