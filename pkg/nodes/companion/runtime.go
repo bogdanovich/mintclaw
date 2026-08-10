@@ -643,9 +643,10 @@ func (runtime *Runtime) completeInvalidOutput(
 	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct ||
 		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
 		label := "service action"
-		if plan.Command == nodes.BrowserCommandAct {
+		switch plan.Command {
+		case nodes.BrowserCommandAct:
 			label = "browser action"
-		} else if plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
+		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
 			label = "workspace mutation"
 		}
 		if _, markErr := runtime.ledger.MarkUnknown(plan.InvocationID); markErr != nil {

@@ -125,7 +125,7 @@ func (runtime *FileTransferRuntime) WriteWorkspace(
 	if err := stage.publish(publication); err != nil {
 		var uncertain *committedFileMutationError
 		if errors.As(err, &uncertain) {
-			return WorkspaceWriteResult{}, fmt.Errorf("%w: %v", ErrInvocationOutcomeUnknown, err)
+			return WorkspaceWriteResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, err)
 		}
 		return WorkspaceWriteResult{}, err
 	}
@@ -199,7 +199,7 @@ func publishPreparedWorkspacePatch(
 		if err := publishWorkspaceMutation(mutation); err != nil {
 			var uncertain *committedFileMutationError
 			if errors.As(err, &uncertain) {
-				return WorkspacePatchResult{}, fmt.Errorf("%w: %v", ErrInvocationOutcomeUnknown, err)
+				return WorkspacePatchResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, err)
 			}
 			return workspacePatchFailure(result, err)
 		}
@@ -269,9 +269,9 @@ func prepareWorkspaceMutation(
 	var before []byte
 	exists := false
 	if operation.Kind == patchformat.Add {
-		if err := parent.ensureFinalAbsent(); err != nil {
+		if absentErr := parent.ensureFinalAbsent(); absentErr != nil {
 			_ = parent.close()
-			return nil, err
+			return nil, absentErr
 		}
 	} else {
 		item.before, err = profile.openReadable(path)
