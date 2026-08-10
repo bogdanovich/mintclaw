@@ -93,9 +93,8 @@ func prepareReloadGeneration(
 	if err != nil {
 		return nil, fmt.Errorf("prepare cron service: %w", err)
 	}
-	cleanup.add("cron service", func(context.Context) error {
-		next.CronService.Stop()
-		return nil
+	cleanup.add("cron service", func(cleanupCtx context.Context) error {
+		return next.CronService.StopAndDrain(cleanupCtx)
 	})
 	if err = next.CronService.Start(); err != nil {
 		return nil, fmt.Errorf("start cron service: %w", err)

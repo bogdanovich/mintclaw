@@ -160,6 +160,21 @@ func (al *AgentLoop) QuiesceTurns(ctx context.Context) (func(), error) {
 	return al.agentTurnAdmissions.pause(ctx)
 }
 
+func (al *AgentLoop) currentAgentGeneration(agent *AgentInstance) (*AgentInstance, bool, error) {
+	if agent == nil || agent.ownerRegistry == nil {
+		return agent, false, nil
+	}
+	registry := al.GetRegistry()
+	if registry == agent.ownerRegistry {
+		return agent, false, nil
+	}
+	current, ok := registry.GetAgent(agent.ID)
+	if !ok || current == nil {
+		return nil, false, fmt.Errorf("agent %q is unavailable after config reload", agent.ID)
+	}
+	return current, true, nil
+}
+
 func (c *agentTurnAdmissionController) release(agentID string) {
 	c.mu.Lock()
 	if c.active[agentID] <= 1 {

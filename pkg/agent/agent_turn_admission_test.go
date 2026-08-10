@@ -3,12 +3,30 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+type admissionGenerationProvider struct {
+	mockProvider
+	calls atomic.Int32
+}
+
+func (provider *admissionGenerationProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls.Add(1)
+	return provider.mockProvider.Chat(ctx, messages, tools, model, opts)
+}
 
 func TestAcquireAgentTurnSerializesConfiguredAgent(t *testing.T) {
 	al := &AgentLoop{
@@ -189,6 +207,67 @@ func TestQuiesceTurnsRequiresEveryPauseToResume(t *testing.T) {
 		t.Fatalf("acquire() after every resume error = %v", err)
 	}
 	release()
+}
+
+func TestTurnWaitingBehindReloadUsesCurrentAgentGeneration(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	oldProvider := &admissionGenerationProvider{}
+	loop := NewAgentLoop(cfg, msgBus, oldProvider)
+	t.Cleanup(loop.Close)
+	oldAgent := loop.GetRegistry().GetDefaultAgent()
+
+	resume, err := loop.QuiesceTurns(context.Background())
+	if err != nil {
+		t.Fatalf("QuiesceTurns() error = %v", err)
+	}
+	turnDone := make(chan error, 1)
+	go func() {
+		_, turnErr := loop.runAgentLoop(context.Background(), oldAgent, processOptions{
+			Dispatch: DispatchRequest{
+				SessionKey:  "generation-waiter",
+				UserMessage: "use the current generation",
+			},
+			NoHistory:       true,
+			DefaultResponse: defaultResponse,
+		})
+		turnDone <- turnErr
+	}()
+	select {
+	case err = <-turnDone:
+		t.Fatalf("runAgentLoop() returned while turns were quiesced: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	next := *cfg
+	newProvider := &admissionGenerationProvider{}
+	prepared, err := loop.PrepareConfigReload(context.Background(), newProvider, &next)
+	if err != nil {
+		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if err = prepared.Commit(context.Background()); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	resume()
+	select {
+	case err = <-turnDone:
+		if err != nil {
+			t.Fatalf("runAgentLoop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgentLoop() did not resume after reload")
+	}
+	if got := oldProvider.calls.Load(); got != 0 {
+		t.Fatalf("old provider calls = %d, want 0", got)
+	}
+	if got := newProvider.calls.Load(); got != 1 {
+		t.Fatalf("new provider calls = %d, want 1", got)
+	}
 }
 
 func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {

@@ -918,9 +918,8 @@ func setupAndStartServicesWithHooks(
 	if err = setupGatewayHandoffStatusTool(cfg, agentLoop); err != nil {
 		return nil, fmt.Errorf("error setting up gateway handoff status tool: %w", err)
 	}
-	cleanup.add("cron service", func(context.Context) error {
-		generation.CronService.Stop()
-		return nil
+	cleanup.add("cron service", func(cleanupCtx context.Context) error {
+		return generation.CronService.StopAndDrain(cleanupCtx)
 	})
 	if err = runningServices.CronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
@@ -1161,6 +1160,7 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 			return fmt.Errorf("close browser runtime before reload: %w", err)
 		}
 	}
+	var cleanupErrors []error
 
 	// Reload should not stop channels or node admission. Full shutdown drains
 	// both concurrently so either side retains the complete bounded budget.
@@ -1196,14 +1196,16 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		runningServices.HeartbeatService.Stop()
 	}
 	if runningServices.CronService != nil {
-		runningServices.CronService.Stop()
+		if err := runningServices.CronService.StopAndDrain(shutdownCtx); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("drain cron service: %w", err))
+		}
 	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()
 		}
 	}
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 func closeBrowserRuntime(ctx context.Context, runningServices *services) error {
@@ -1335,11 +1337,31 @@ func handleConfigReloadWithHooks(
 	if newModelID != "" {
 		newCfg.Agents.Defaults.ModelName = newModelID
 	}
+	if runningServices.CronService != nil {
+		cronDrainCtx, cancelCronDrain := context.WithTimeout(ctx, shutdownTimeout)
+		err = runningServices.CronService.StopAndDrain(cronDrainCtx)
+		cancelCronDrain()
+		if err != nil {
+			return errors.Join(
+				fmt.Errorf("freeze and drain cron service before reload: %w", err),
+				errGatewayReloadRestartRequired,
+			)
+		}
+	}
 
 	quiesceCtx, cancelQuiesce := context.WithTimeout(ctx, shutdownTimeout)
 	resumeTurns, err := al.QuiesceTurns(quiesceCtx)
 	cancelQuiesce()
 	if err != nil {
+		if runningServices.CronService != nil {
+			if restartErr := runningServices.CronService.Start(); restartErr != nil {
+				return errors.Join(
+					fmt.Errorf("quiesce agent turns: %w", err),
+					fmt.Errorf("restore cron service: %w", restartErr),
+					errGatewayReloadRestartRequired,
+				)
+			}
+		}
 		return fmt.Errorf("quiesce agent turns: %w", err)
 	}
 	defer resumeTurns()
@@ -1447,6 +1469,9 @@ func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
 	}
 	if currentCfg.Gateway.HotReload != newCfg.Gateway.HotReload {
 		return fmt.Errorf("gateway hot reload mode changes require a gateway restart")
+	}
+	if currentCfg.Nodes.Enabled != newCfg.Nodes.Enabled {
+		return fmt.Errorf("node admission enablement changes require a gateway restart")
 	}
 	return nil
 }

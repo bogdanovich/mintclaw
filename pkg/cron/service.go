@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -127,6 +128,32 @@ func (cs *CronService) Stop() {
 	if cs.stopChan != nil {
 		close(cs.stopChan)
 		cs.stopChan = nil
+	}
+}
+
+// StopAndDrain stops new scheduling and waits for every claimed dispatch to
+// finish its handler and final store update.
+func (cs *CronService) StopAndDrain(ctx context.Context) error {
+	if cs == nil {
+		return nil
+	}
+	cs.Stop()
+	drained := make(chan error, 1)
+	go func() {
+		cs.dispatchMu.Lock()
+		activeJobs := cs.ActiveJobCount()
+		cs.dispatchMu.Unlock()
+		if activeJobs != 0 {
+			drained <- fmt.Errorf("cron dispatch barrier retained %d active job(s)", activeJobs)
+			return
+		}
+		drained <- nil
+	}()
+	select {
+	case err := <-drained:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

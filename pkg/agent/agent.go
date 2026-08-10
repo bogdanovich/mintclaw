@@ -142,6 +142,7 @@ type processOptions struct {
 	SuppressToolUserDelivery    bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
 	SuppressToolFeedback        bool                      // Whether to suppress inline tool feedback messages
 	NoHistory                   bool                      // If true, don't load session history (for heartbeat)
+	ExcludeInheritedNodeFiles   bool                      // Remove inherited node file tools from this internal turn
 	SkipInitialSteeringPoll     bool                      // If true, skip the steering poll at loop start (used by Continue)
 	InboundContext              *bus.InboundContext       // Normalized inbound facts for events/hooks
 	RouteResult                 *routing.ResolvedRoute    // Route decision snapshot for events/hooks
@@ -413,8 +414,31 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	if agent == nil {
+		return "", fmt.Errorf("agent is unavailable")
+	}
+	admittedCtx, releaseAdmission, err := al.acquireAgentTurn(ctx, agent.ID)
+	if err != nil {
+		return "", err
+	}
+	defer releaseAdmission()
+	ctx = admittedCtx
+
+	currentAgent, changed, err := al.currentAgentGeneration(agent)
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		agent = currentAgent
+		if opts.ExcludeInheritedNodeFiles {
+			agent = agentWithoutInheritedNodeFileTools(agent)
+		}
+		binding := al.bindEffectiveModel(opts.ModelBinding.RouteSessionKey, agent)
+		defer binding.Cleanup()
+		opts.ModelBinding = binding
+	}
+
 	opts = normalizeProcessOptions(opts)
-	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return "", err

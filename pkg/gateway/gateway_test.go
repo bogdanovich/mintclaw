@@ -477,6 +477,13 @@ func TestConfigReloadPreflightRejectsBeforeQuiesce(t *testing.T) {
 			},
 			wantErr: "gateway hot reload mode changes require a gateway restart",
 		},
+		{
+			name: "node admission enablement",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Nodes.Enabled = !next.Nodes.Enabled
+			},
+			wantErr: "node admission enablement changes require a gateway restart",
+		},
 	}
 
 	for _, test := range tests {
