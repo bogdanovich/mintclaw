@@ -20,6 +20,7 @@ import (
 type actionTestWorker struct {
 	observation    DriverObservation
 	observeErr     error
+	observeCalls   int
 	resolveElement DriverElement
 	resolveOrigin  string
 	resolveErr     error
@@ -27,6 +28,7 @@ type actionTestWorker struct {
 	actions        []DriverAction
 	onExecute      func(DriverAction)
 	navigationID   string
+	catalogCalls   int
 	beforeNavCheck func()
 	executeErr     error
 	screenshot     DriverScreenshot
@@ -71,6 +73,7 @@ func (worker *actionTestWorker) Close(context.Context) error {
 }
 
 func (worker *actionTestWorker) Observe(context.Context) (DriverObservation, error) {
+	worker.observeCalls++
 	return worker.observation, worker.observeErr
 }
 
@@ -116,6 +119,7 @@ func (worker *actionTestWorker) ExecuteAfterNavigationCheck(
 }
 
 func (worker *actionTestWorker) CatalogRevision() string {
+	worker.catalogCalls++
 	return strings.Repeat("c", 64)
 }
 

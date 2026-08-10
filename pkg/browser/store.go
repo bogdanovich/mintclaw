@@ -60,7 +60,7 @@ func (store *MemoryStore) CreateSession(_ context.Context, session Session) erro
 			return ErrBusy
 		}
 	}
-	store.sessions[session.ID] = session
+	store.sessions[session.ID] = cloneSession(session)
 	return nil
 }
 
@@ -71,7 +71,7 @@ func (store *MemoryStore) GetSession(_ context.Context, id string) (Session, err
 	if !ok {
 		return Session{}, ErrNotFound
 	}
-	return session, nil
+	return cloneSession(session), nil
 }
 
 func (store *MemoryStore) ListSessions(_ context.Context) ([]Session, error) {
@@ -79,7 +79,7 @@ func (store *MemoryStore) ListSessions(_ context.Context) ([]Session, error) {
 	defer store.mu.Unlock()
 	sessions := make([]Session, 0, len(store.sessions))
 	for _, session := range store.sessions {
-		sessions = append(sessions, session)
+		sessions = append(sessions, cloneSession(session))
 	}
 	return sessions, nil
 }
@@ -100,13 +100,13 @@ func (store *MemoryStore) UpdateSession(_ context.Context, expected uint64, next
 	if current.Owner != next.Owner || current.Target != next.Target ||
 		current.Profile != next.Profile || current.CreatedAt != next.CreatedAt ||
 		current.DryRun != next.DryRun || current.PolicyRevision != next.PolicyRevision ||
-		!validControllerTransition(current, next) || current.TabID != next.TabID ||
+		!validControllerTransition(current, next) || !validContextTransition(current, next) ||
 		current.ExpiresAt != next.ExpiresAt ||
 		!validSnapshotTransition(current, next) ||
 		!validSessionTransition(current.State, next.State) {
 		return ErrConflict
 	}
-	store.sessions[next.ID] = next
+	store.sessions[next.ID] = cloneSession(next)
 	return nil
 }
 
@@ -159,6 +159,30 @@ func validSnapshotTransition(current, next Session) bool {
 		return next.SnapshotGeneration == current.SnapshotGeneration && next.SnapshotOrigin == ""
 	}
 	return next.SnapshotGeneration == current.SnapshotGeneration+1 && next.SnapshotOrigin != ""
+}
+
+func validContextTransition(current, next Session) bool {
+	currentHasContext, nextHasContext := current.hasContextAuthority(), next.hasContextAuthority()
+	if !currentHasContext && !nextHasContext {
+		return current.TabID == next.TabID && next.FrameID == ""
+	}
+	if currentHasContext && !nextHasContext {
+		return false
+	}
+	if !currentHasContext {
+		return next.ContextAuthority.Generation == 1 && current.TabID == next.TabID &&
+			(current.SnapshotID == "" || current.SnapshotID != next.SnapshotID)
+	}
+	if current.ContextAuthority.ID != next.ContextAuthority.ID ||
+		next.ContextAuthority.Generation < current.ContextAuthority.Generation ||
+		next.ContextAuthority.Generation > current.ContextAuthority.Generation+1 {
+		return false
+	}
+	if next.ContextAuthority.Generation == current.ContextAuthority.Generation {
+		return current.TabID == next.TabID && current.FrameID == next.FrameID &&
+			reflect.DeepEqual(current.ContextAuthority, next.ContextAuthority)
+	}
+	return current.SnapshotID == "" || current.SnapshotID != next.SnapshotID
 }
 
 func (store *MemoryStore) GetPreparedAction(_ context.Context, id string) (PreparedAction, error) {
@@ -331,6 +355,10 @@ func preparedReferenced(invocations map[string]Invocation, preparedID string) bo
 }
 
 func invocationsEqual(left, right Invocation) bool {
+	return reflect.DeepEqual(left, right)
+}
+
+func sessionsEqual(left, right Session) bool {
 	return reflect.DeepEqual(left, right)
 }
 
