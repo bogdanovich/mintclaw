@@ -3535,6 +3535,108 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
+func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:resuming-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("failed to resolve interaction control target")
+	}
+	continuationSessionKey := "interaction-resume-continuation"
+	origin := interactions.Origin{
+		TurnID: "turn-resume", ToolCallID: "call-resume-question",
+		ToolName: "request_user_input", ContinuationSessionKey: continuationSessionKey,
+	}
+	agent.Sessions.AddFullMessage(continuationSessionKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: origin.ToolCallID, Name: origin.ToolName,
+			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+		}},
+	})
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: target.SessionKey,
+			RouteSessionKey: target.Allocation.RouteScopeKey,
+			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
+			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
+			SenderID: msg.Context.SenderID,
+		},
+		Origin:    origin,
+		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err == nil {
+		record, err = registry.MarkWaiting(record.ID, record.Revision)
+	}
+	if err == nil {
+		record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+			Text: "continue", ReceivedAt: time.Now().UnixMilli(),
+		}, interactions.OutcomeAnswered)
+	}
+	if err == nil {
+		record, err = registry.MarkResuming(record.ID, record.Revision)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-resume")
+	if !claimed {
+		t.Fatal("failed to claim active interaction route")
+	}
+	continuationCtx, continuationCancel := context.WithCancel(t.Context())
+	continuationTurn := &turnState{
+		al: al, turnID: "interaction-resume-turn", workspace: agent.Workspace,
+		sessionKey: continuationSessionKey, phase: TurnPhaseTools,
+	}
+	continuationTurn.setTurnCancel(continuationCancel)
+	continuationScope := newRuntimeSessionScope(agent.Workspace, continuationSessionKey)
+	al.activeTurnStates.Store(continuationScope, continuationTurn)
+	defer al.activeTurnStates.Delete(continuationScope)
+	go func() {
+		<-continuationCtx.Done()
+		al.activeTurnStates.Delete(continuationScope)
+		activeClaim.releaseIfOwned()
+	}()
+
+	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Matched || !result.Canceled || result.Failed || !result.CommandHandled {
+		t.Fatalf("resuming stop cancellation result = %#v", result)
+	}
+	select {
+	case <-continuationCtx.Done():
+	default:
+		t.Fatal("active interaction continuation was not aborted")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled {
+		t.Fatalf("record status = %q, want canceled", record.Status)
+	}
+	if countInteractionToolResults(
+		agent.Sessions.GetHistory(continuationSessionKey), origin.ToolCallID,
+	) != 1 {
+		t.Fatal("stop did not pair the continuation tool call exactly once")
+	}
+}
+
 func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T) {
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)

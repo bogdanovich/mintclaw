@@ -27,6 +27,8 @@ const answerCommand = "/answer"
 const (
 	interactionAnswerClaimAttempts = 8
 	interactionAnswerClaimDelay    = 10 * time.Millisecond
+	interactionCancelClaimAttempts = 100
+	interactionCancelClaimDelay    = 10 * time.Millisecond
 )
 
 type interactionInboundOwnership int
@@ -81,10 +83,23 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Matched = true
 	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
 
+	claimTurnID := fmt.Sprintf(
+		"pending-interaction-cancel-%s-%d",
+		record.ShortID,
+		al.turnSeq.Add(1),
+	)
 	claim, _, claimed := al.claimRuntimeRouteSession(
 		target,
-		fmt.Sprintf("pending-interaction-cancel-%s-%d", record.ShortID, al.turnSeq.Add(1)),
+		claimTurnID,
 	)
+	if !claimed && (record.Status == interactions.StatusClaimed ||
+		record.Status == interactions.StatusResuming) {
+		if err := al.abortInteractionContinuation(record, target); err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("abort interaction continuation: %w", err)
+		}
+		claim, claimed = al.waitForInteractionCancellationClaim(ctx, target, claimTurnID)
+	}
 	if !claimed {
 		result.Failed = true
 		return result, fmt.Errorf("interaction session is busy while canceling")
@@ -119,6 +134,53 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Canceled = true
 	result.CommandHandled = name == "stop"
 	return result, nil
+}
+
+func (al *AgentLoop) abortInteractionContinuation(
+	record interactions.Record,
+	target *inboundDispatchTarget,
+) error {
+	agent := al.interactionContinuationAgent(record, target.Agent)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	scope := newRuntimeSessionScope(
+		agent.Workspace,
+		interactionContinuationSessionKey(record),
+	)
+	ts := al.getActiveTurnState(scope)
+	if ts == nil {
+		return nil
+	}
+	if strings.HasPrefix(ts.snapshot().TurnID, pendingTurnPrefix) {
+		al.markPendingStop(scope)
+		return nil
+	}
+	if err := al.hardAbortScope(scope); err != nil && al.getActiveTurnState(scope) != nil {
+		return err
+	}
+	return nil
+}
+
+func (al *AgentLoop) waitForInteractionCancellationClaim(
+	ctx context.Context,
+	target *inboundDispatchTarget,
+	turnID string,
+) (*runtimeSessionClaim, bool) {
+	for attempt := 0; attempt < interactionCancelClaimAttempts; attempt++ {
+		timer := time.NewTimer(interactionCancelClaimDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, false
+		case <-timer.C:
+		}
+		claim, _, claimed := al.claimRuntimeRouteSession(target, turnID)
+		if claimed {
+			return claim, true
+		}
+	}
+	return nil, false
 }
 
 func (al *AgentLoop) shouldHandleInteractionInbound(
