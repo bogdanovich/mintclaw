@@ -408,7 +408,11 @@ func TestKeyedDefaultKeyFunc(t *testing.T) {
 		want string
 	}{
 		{name: "session", evt: Event{Scope: Scope{SessionKey: "k"}}, want: "session:k"},
-		{name: "trace", evt: Event{Scope: Scope{TraceScope: TraceScope{Workspace: "w", TurnID: "t"}}}, want: "trace:w\x00t"},
+		{
+			name: "trace",
+			evt:  Event{Scope: Scope{TraceScope: TraceScope{Workspace: "w", TurnID: "t"}}},
+			want: "trace:w\x00t",
+		},
 		{name: "chat-channel", evt: Event{Scope: Scope{Channel: "c", ChatID: "1"}}, want: "chat:c\x001"},
 		{name: "chat-account", evt: Event{Scope: Scope{Account: "a", ChatID: "1"}}, want: "chat:a\x001"},
 		{name: "agent", evt: Event{Scope: Scope{AgentID: "a1"}}, want: "agent:a1"},
