@@ -82,8 +82,10 @@ Windows contenders can read diagnostics without crossing the mandatory
 byte-range lock; delete sharing remains disabled while the lease is live.
 
 Other Go targets compile with an explicit unsupported-platform result; they
-do not silently pretend to provide a cross-process lock. The supported release
-targets are Unix and Windows.
+do not silently pretend to provide a cross-process lock. AIX reuses the rooted
+Unix opener but routes acquisition to that unsupported result because the
+current `x/sys/unix` API does not expose `Flock` there. The supported release
+targets are Unix platforms with `Flock` and Windows.
 
 ## Contention and recovery
 
@@ -120,7 +122,8 @@ Focused contract tests prove:
   rejected without blocking;
 - Windows hard links are rejected before security or content mutation, with a
   native NTFS regression in the Windows CI job; and
-- the package passes race tests plus Darwin, Linux, and Windows compile checks.
+- the package passes race tests, Darwin/Linux/Windows compile checks, and an
+  explicit unsupported AIX package build.
 
 The tests exercise lease ownership itself rather than transcript writes
 because P1.4 introduces the first coding-thread writer entrypoint. That
