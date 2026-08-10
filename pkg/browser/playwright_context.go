@@ -190,9 +190,13 @@ func (worker *playwrightWorker) SelectContext(
 	worker.contextState.selectedTabID = tabID
 	worker.contextState.selectedFrame = frameID
 	worker.contextState.generation++
-	catalog, _, err = worker.probeContextsLocked(ctx)
+	catalog, selectedRaw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		return DriverObservation{}, ContextCatalog{}, err
+	}
+	if selectedRaw.Selected != worker.contextState.tabs[tabID] {
+		worker.lost = true
+		return DriverObservation{}, ContextCatalog{}, ErrStale
 	}
 	var observation DriverObservation
 	if frameID == "" {
@@ -200,7 +204,19 @@ func (worker *playwrightWorker) SelectContext(
 	} else {
 		observation, err = worker.observeFrameLocked(ctx, tabID, frameID)
 	}
-	return observation, catalog, err
+	if err != nil {
+		return DriverObservation{}, ContextCatalog{}, err
+	}
+	catalog, selectedRaw, err = worker.probeContextsLocked(ctx)
+	if err != nil {
+		return DriverObservation{}, ContextCatalog{}, err
+	}
+	if selectedRaw.Selected != worker.contextState.tabs[tabID] ||
+		(frameID != "" && !rawCatalogHasFrame(selectedRaw, tabID, worker.contextState.frames[frameID], worker.contextState.tabs)) {
+		worker.lost = true
+		return DriverObservation{}, ContextCatalog{}, ErrStale
+	}
+	return observation, catalog, nil
 }
 
 func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (ContextCatalog, error) {
@@ -216,14 +232,28 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 	if len(catalog.Tabs) <= 1 {
 		return ContextCatalog{}, ErrDenied
 	}
-	index, found := worker.contextState.tabIndexes[tabID]
+	rawToken, found := worker.contextState.tabs[tabID]
 	if !found {
 		return ContextCatalog{}, ErrNotFound
 	}
-	if _, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
-		"action": "close", "index": index,
-	}, true); err != nil {
+	code := fmt.Sprintf(`async (page) => {
+  const state = page.context()[Symbol.for("mintclaw.browser.context-registry.v1")];
+  if (!state) return "MINTCLAW_CONTEXT_V1|error|missing_registry";
+  const pages = page.context().pages();
+  if (pages.length <= 1) return "MINTCLAW_CONTEXT_V1|error|final_tab";
+  const target = pages.find(candidate => state.pages.get(candidate)?.token === %s);
+  if (!target) return "MINTCLAW_CONTEXT_V1|error|tab_not_found";
+  await target.close();
+  return "MINTCLAW_CONTEXT_V1|closed|" + %s;
+}`, strconv.Quote(rawToken), strconv.Quote(rawToken))
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
 		return ContextCatalog{}, err
+	}
+	line, parseErr := playwrightResultLine(text)
+	if parseErr != nil || line != playwrightContextMarker+"|closed|"+rawToken {
+		worker.lost = true
+		return ContextCatalog{}, ErrDriverIncompatible
 	}
 	delete(worker.contextState.tabs, tabID)
 	delete(worker.contextState.tabIndexes, tabID)
@@ -492,10 +522,7 @@ func boundedContextLabel(value string) string {
 		}
 		return r
 	}, value)
-	for len(value) > MaxContextLabelBytes {
-		value = value[:len(value)-1]
-	}
-	return value
+	return truncateUTF8(value, MaxContextLabelBytes)
 }
 
 func rawFrameDepth(frames []playwrightRawFrame, token string) int {

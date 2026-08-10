@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -76,6 +77,7 @@ func TestPlaywrightSelectContextKeepsIndexesPrivateAndObservesFrame(t *testing.T
 		"browser_run_code_unsafe": {
 			contextProbeResult(t, raw), contextProbeResult(t, raw), contextProbeResult(t, selected),
 			contextFrameResult(t, "https://frame.example/inside", "Page", "- heading \"Inside\""),
+			contextProbeResult(t, selected),
 		},
 	}}
 	worker := contextTestWorker(client)
@@ -125,6 +127,8 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 			contextProbeResult(t, initial),
 			contextProbeResult(t, opened),
 			contextProbeResult(t, opened),
+			contextCloseResult("p2"),
+			contextProbeResult(t, initial),
 		},
 	}}
 	worker := contextTestWorker(client)
@@ -135,6 +139,15 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 	if len(client.calls) < 2 || client.calls[1].tool != "browser_tabs" ||
 		client.calls[1].arguments["action"] != "new" {
 		t.Fatalf("open calls = %#v", client.calls)
+	}
+	closed, err := worker.CloseTab(t.Context(), catalog.SelectedTabID)
+	if err != nil || len(closed.Tabs) != 1 || closed.SelectedTabID != closed.Tabs[0].ID {
+		t.Fatalf("CloseTab() = %#v, %v", closed, err)
+	}
+	for _, call := range client.calls {
+		if call.tool == "browser_tabs" && call.arguments["action"] == "close" {
+			t.Fatal("close crossed the Playwright boundary by stale index")
+		}
 	}
 
 	finalClient := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
@@ -152,6 +165,59 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 		if call.tool == "browser_tabs" {
 			t.Fatal("final tab reached the driver close boundary")
 		}
+	}
+}
+
+func TestPlaywrightSelectContextRejectsIndexRaceBeforeObservation(t *testing.T) {
+	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+		{Token: "p2", Index: 1, Generation: 1, URL: "https://example.com/second"},
+	}}
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {contextProbeResult(t, raw), contextProbeResult(t, raw), contextProbeResult(t, raw)},
+	}}
+	worker := contextTestWorker(client)
+	catalog, err := worker.ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = worker.SelectContext(
+		t.Context(),
+		catalog.Tabs[1].ID,
+		"",
+	); !errors.Is(err, ErrStale) ||
+		!worker.lost {
+		t.Fatalf("SelectContext(index race) error = %v, lost = %t", err, worker.lost)
+	}
+	for _, call := range client.calls {
+		if call.tool == "browser_snapshot" {
+			t.Fatal("index race reached observation")
+		}
+	}
+}
+
+func TestPlaywrightContextCatalogTruncatesUnicodeLabelsSafely(t *testing.T) {
+	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{{
+		Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin,
+		Title: strings.Repeat("🦞", MaxContextLabelBytes), Frames: []playwrightRawFrame{{
+			Token: "f1", Generation: 1, URL: initialBlankOrigin, Label: strings.Repeat("界", MaxContextLabelBytes),
+		}},
+	}}}
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": contextProbeResult(t, raw),
+	}}
+	catalog, err := contextTestWorker(client).ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Tabs[0].Title) > MaxContextLabelBytes || !utf8.ValidString(catalog.Tabs[0].Title) ||
+		len(
+			catalog.Tabs[0].Frames[0].Label,
+		) > MaxContextLabelBytes || !utf8.ValidString(catalog.Tabs[0].Frames[0].Label) {
+		t.Fatalf("bounded labels = %q, %q", catalog.Tabs[0].Title, catalog.Tabs[0].Frames[0].Label)
+	}
+	if err = catalog.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -293,4 +359,8 @@ func contextFrameResult(t *testing.T, rawURL, title, snapshot string) *sdkmcp.Ca
 	return playwrightTextResult(
 		"### Result\n\"" + playwrightContextMarker + "|frame|" + url.QueryEscape(string(encoded)) + "\"",
 	)
+}
+
+func contextCloseResult(rawToken string) *sdkmcp.CallToolResult {
+	return playwrightTextResult("### Result\n\"" + playwrightContextMarker + "|closed|" + rawToken + "\"")
 }
