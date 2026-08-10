@@ -635,21 +635,50 @@ func (parent *resolvedParent) removeFinalRegular(expected fileIdentity) error {
 	if parent == nil || parent.file == nil {
 		return ErrFileAccessDenied
 	}
-	current, err := parent.openFinalRegular()
+	staging, err := parent.openStageDirectory(true)
 	if err != nil {
 		return err
 	}
-	if current.identity.Device != expected.Device ||
-		current.identity.Inode != expected.Inode ||
-		current.identity.Links != expected.Links {
-		_ = current.file.Close()
-		return ErrFileConflict
-	}
-	if err := current.file.Close(); err != nil {
+	name, err := randomFileStageName()
+	if err != nil {
 		return err
 	}
-	if err := unix.Unlinkat(int(parent.file.Fd()), parent.basename, 0); err != nil {
+	if err := unix.Renameat(
+		int(parent.file.Fd()),
+		parent.basename,
+		int(staging.Fd()),
+		name,
+	); err != nil {
 		return classifyFileAccessError(err)
+	}
+	var moved unix.Stat_t
+	if err := unix.Fstatat(int(staging.Fd()), name, &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return &committedFileMutationError{err: classifyFileAccessError(err)}
+	}
+	matches := moved.Mode&unix.S_IFMT == unix.S_IFREG && fileStatDevice(&moved) == expected.Device &&
+		moved.Ino == expected.Inode && fileStatLinks(&moved) == expected.Links
+	if !matches {
+		if err := restoreMovedFileStage(
+			int(staging.Fd()),
+			name,
+			int(parent.file.Fd()),
+			parent.basename,
+		); err != nil {
+			return &committedFileMutationError{err: classifyFileAccessError(err)}
+		}
+		if err := staging.Sync(); err != nil {
+			return &committedFileMutationError{err: err}
+		}
+		if err := parent.file.Sync(); err != nil {
+			return &committedFileMutationError{err: err}
+		}
+		return ErrFileConflict
+	}
+	if err := unix.Unlinkat(int(staging.Fd()), name, 0); err != nil {
+		return &committedFileMutationError{err: classifyFileAccessError(err)}
+	}
+	if err := staging.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
 	}
 	if err := parent.file.Sync(); err != nil {
 		return &committedFileMutationError{err: err}

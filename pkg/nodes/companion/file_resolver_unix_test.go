@@ -219,6 +219,145 @@ func TestFileResolverCreateAndReplaceAreExplicit(t *testing.T) {
 	}
 }
 
+func TestFileResolverDeleteRejectsAndRestoresReplacedIdentity(t *testing.T) {
+	rootPath := canonicalTempDir(t)
+	path := filepath.Join(rootPath, "config.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := openFileRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.close() })
+	parent, err := root.resolveParent(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.close() }()
+	original, err := parent.openFinalRegular()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := original.identity
+	if err := original.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(rootPath, "replacement.txt")
+	if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.removeFinalRegular(expected); !errors.Is(err, ErrFileConflict) {
+		t.Fatalf("remove replaced identity error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "replacement" {
+		t.Fatalf("restored replacement = %q", data)
+	}
+	staged, err := os.ReadDir(filepath.Join(rootPath, fileStageDirectoryName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("staged entries after restoration = %v", staged)
+	}
+}
+
+func TestFileResolverDeleteRestoresNonRegularReplacement(t *testing.T) {
+	rootPath := canonicalTempDir(t)
+	path := filepath.Join(rootPath, "config.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := openFileRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.close() })
+	parent, err := root.resolveParent(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.close() }()
+	original, err := parent.openFinalRegular()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := original.identity
+	if err := original.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(rootPath, "replacement.txt")
+	if err := os.Symlink("outside.txt", replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.removeFinalRegular(expected); !errors.Is(err, ErrFileConflict) {
+		t.Fatalf("remove non-regular identity error = %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("restored mode = %v", info.Mode())
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "outside.txt" {
+		t.Fatalf("restored symlink target = %q", target)
+	}
+}
+
+func TestFileResolverDeleteRemovesExactIdentity(t *testing.T) {
+	rootPath := canonicalTempDir(t)
+	path := filepath.Join(rootPath, "config.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := openFileRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.close() })
+	parent, err := root.resolveParent(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.close() }()
+	original, err := parent.openFinalRegular()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := original.identity
+	if err := original.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.removeFinalRegular(expected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted path stat error = %v", err)
+	}
+	staged, err := os.ReadDir(filepath.Join(rootPath, fileStageDirectoryName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("staged entries after delete = %v", staged)
+	}
+}
+
 func TestFileResolverRejectsUnprotectedStageParent(t *testing.T) {
 	rootPath := canonicalTempDir(t)
 	shared := filepath.Join(rootPath, "shared")

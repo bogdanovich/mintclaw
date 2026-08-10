@@ -33,3 +33,18 @@ func platformPublishFileStage(
 		return ErrFileAccessDenied
 	}
 }
+
+func restoreMovedFileStage(
+	stagingDirectoryFD int,
+	stageName string,
+	destinationDirectoryFD int,
+	finalName string,
+) error {
+	return unix.RenameatxNp(
+		stagingDirectoryFD,
+		stageName,
+		destinationDirectoryFD,
+		finalName,
+		unix.RENAME_EXCL,
+	)
+}
