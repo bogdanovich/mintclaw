@@ -75,6 +75,13 @@ jobs:
         shell: bash
         run: time go test -tags goolm,stdjson -run '^$' ./...
 
+      - name: Compile unsupported AIX coding thread package
+        env:
+          CGO_ENABLED: 0
+          GOARCH: ppc64
+          GOOS: aix
+        run: go build -tags goolm,stdjson ./pkg/coding/thread
+
       - name: Run Go tests with timing
         shell: bash
         run: |
@@ -202,4 +209,6 @@ jobs:
           go-version-file: go.mod
 
       - name: Run Windows platform tests
-        run: go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
+        run: |
+          go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
+          go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease)' ./pkg/coding/thread
