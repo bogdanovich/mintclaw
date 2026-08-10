@@ -176,7 +176,7 @@ func (b *EventBus) subscribe(
 	}
 
 	id := b.nextSubID.Add(1)
-	sub := newSubscription(b, id, filters, opts, handler, once)
+	sub := newSubscription(ctx, b, id, filters, opts, handler, once)
 
 	b.mu.Lock()
 	if b.closed {
