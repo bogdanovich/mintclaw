@@ -174,4 +174,10 @@ func TestClassifyPromptAppendPreservesCommittedState(t *testing.T) {
 	if err := classifyPromptAppend("thread-id", ordinary, nil); IsCommittedPromptError(err) {
 		t.Fatalf("ordinary append classified as committed: %v", err)
 	}
+	indeterminateCause := &memory.IndeterminateAppendError{Err: errors.New("fsync failed")}
+	err = classifyPromptAppend("thread-id", indeterminateCause, nil)
+	if !IsIndeterminatePromptError(err) || IsCommittedPromptError(err) ||
+		!errors.Is(err, indeterminateCause) || !strings.Contains(err.Error(), "do not blindly retry") {
+		t.Fatalf("indeterminate classifyPromptAppend() error = %v", err)
+	}
 }

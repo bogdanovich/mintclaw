@@ -97,6 +97,28 @@ func IsCommittedAppendError(err error) bool {
 	return errors.As(err, &committed)
 }
 
+// IndeterminateAppendError reports that writing began, but file or directory
+// durability could not be confirmed. The append must not be published as
+// durable, and retrying it may duplicate a record that survived the failure.
+type IndeterminateAppendError struct {
+	Err error
+}
+
+func (e *IndeterminateAppendError) Error() string {
+	return fmt.Sprintf("memory: append outcome is indeterminate; do not blindly retry: %v", e.Err)
+}
+
+func (e *IndeterminateAppendError) Unwrap() error {
+	return e.Err
+}
+
+// IsIndeterminateAppendError reports whether err is unsafe to retry without
+// first recovering canonical history.
+func IsIndeterminateAppendError(err error) bool {
+	var indeterminate *IndeterminateAppendError
+	return errors.As(err, &indeterminate)
+}
+
 func contextCause(ctx context.Context) error {
 	if ctx == nil {
 		return nil
@@ -110,6 +132,7 @@ const (
 	jsonlJournalStageFlush  jsonlJournalWriteStage = "flush"
 	jsonlJournalStageAppend jsonlJournalWriteStage = "append"
 	jsonlJournalStageFsync  jsonlJournalWriteStage = "fsync"
+	jsonlJournalStageDir    jsonlJournalWriteStage = "directory"
 	jsonlJournalStageRename jsonlJournalWriteStage = "rename"
 )
 
@@ -766,11 +789,12 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	}
 	line = append(line, '\n')
 
-	f, err := os.OpenFile(
-		s.jsonlPath(sessionKey),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0o644,
-	)
+	jsonlPath := s.jsonlPath(sessionKey)
+	f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
+	created := err == nil
+	if errors.Is(err, os.ErrExist) {
+		f, err = os.OpenFile(jsonlPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	}
 	if err != nil {
 		return fmt.Errorf("memory: open jsonl for append: %w", err)
 	}
@@ -789,11 +813,25 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	// leave the append in the kernel page cache only — lost on reboot.
 	if faultErr := s.injectJournalFault(jsonlJournalStageFsync); faultErr != nil {
 		_ = f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", faultErr)
+		return &IndeterminateAppendError{Err: fmt.Errorf("memory: sync jsonl: %w", faultErr)}
 	}
 	if syncErr := f.Sync(); syncErr != nil {
 		_ = f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+		return &IndeterminateAppendError{Err: fmt.Errorf("memory: sync jsonl: %w", syncErr)}
+	}
+	if created {
+		if faultErr := s.injectJournalFault(jsonlJournalStageDir); faultErr != nil {
+			_ = f.Close()
+			return &IndeterminateAppendError{
+				Err: fmt.Errorf("memory: sync jsonl directory: %w", faultErr),
+			}
+		}
+		if syncErr := fileutil.SyncDirectory(s.dir); syncErr != nil {
+			_ = f.Close()
+			return &IndeterminateAppendError{
+				Err: fmt.Errorf("memory: sync jsonl directory: %w", syncErr),
+			}
+		}
 	}
 	if closeErr := f.Close(); closeErr != nil {
 		return &CommittedAppendError{Err: fmt.Errorf("memory: close jsonl: %w", closeErr)}

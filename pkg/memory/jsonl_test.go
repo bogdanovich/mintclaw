@@ -21,6 +21,7 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 		jsonlJournalStageFlush,
 		jsonlJournalStageAppend,
 		jsonlJournalStageFsync,
+		jsonlJournalStageDir,
 		jsonlJournalStageRename,
 	}
 	for _, stage := range stages {
@@ -44,7 +45,40 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 			if got := IsCommittedAppendError(err); got != wantCommitted {
 				t.Fatalf("IsCommittedAppendError() = %t, want %t for %s", got, wantCommitted, stage)
 			}
+			wantIndeterminate := stage == jsonlJournalStageFsync || stage == jsonlJournalStageDir
+			if got := IsIndeterminateAppendError(err); got != wantIndeterminate {
+				t.Fatalf(
+					"IsIndeterminateAppendError() = %t, want %t for %s",
+					got,
+					wantIndeterminate,
+					stage,
+				)
+			}
 		})
+	}
+}
+
+func TestJSONLStoreSyncsDirectoryOnlyForFirstSessionFile(t *testing.T) {
+	store := newTestStore(t)
+	var stages []jsonlJournalWriteStage
+	store.journalFault = func(stage jsonlJournalWriteStage) error {
+		stages = append(stages, stage)
+		return nil
+	}
+	if err := store.AddMessage(t.Context(), "turn", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddMessage(t.Context(), "turn", "user", "second"); err != nil {
+		t.Fatal(err)
+	}
+	var directorySyncs int
+	for _, stage := range stages {
+		if stage == jsonlJournalStageDir {
+			directorySyncs++
+		}
+	}
+	if directorySyncs != 1 {
+		t.Fatalf("directory sync stages = %d, want 1; all stages = %v", directorySyncs, stages)
 	}
 }
 

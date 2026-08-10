@@ -163,7 +163,7 @@ func runNew(
 		return leaseErr
 	}
 	appendErr := store.AppendUserMessage(ctx, lease, metadata, prompt)
-	if appendErr != nil && !thread.IsCommittedPromptError(appendErr) {
+	if !appendOutcomeAllowsMetadataSave(appendErr) {
 		return errors.Join(appendErr, lease.Release())
 	}
 	saveErr := store.Save(metadata)
@@ -334,7 +334,7 @@ func resumeSelectedThread(
 	var appendErr error
 	if options.promptSet {
 		appendErr = store.AppendUserMessage(ctx, lease, metadata, options.prompt)
-		if appendErr != nil && !thread.IsCommittedPromptError(appendErr) {
+		if !appendOutcomeAllowsMetadataSave(appendErr) {
 			return commandResult{}, appendErr
 		}
 		promptStored = true
@@ -360,6 +360,10 @@ func resumeSelectedThread(
 
 func committedPromptOperationError(threadID string, err error) error {
 	return &thread.CommittedPromptError{ThreadID: threadID, Err: err}
+}
+
+func appendOutcomeAllowsMetadataSave(err error) bool {
+	return err == nil || thread.IsCommittedPromptError(err)
 }
 
 func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectIdentity, *thread.Store, error) {

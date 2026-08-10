@@ -40,6 +40,32 @@ func IsCommittedPromptError(err error) bool {
 	return errors.As(err, &committed)
 }
 
+// IndeterminatePromptError reports that a prompt write began, but its durable
+// outcome could not be confirmed. Retrying may duplicate the prompt.
+type IndeterminatePromptError struct {
+	ThreadID string
+	Err      error
+}
+
+func (e *IndeterminatePromptError) Error() string {
+	return fmt.Sprintf(
+		"coding thread transcript: prompt outcome is indeterminate for thread %q; do not blindly retry: %v",
+		e.ThreadID,
+		e.Err,
+	)
+}
+
+func (e *IndeterminatePromptError) Unwrap() error {
+	return e.Err
+}
+
+// IsIndeterminatePromptError reports whether a prompt may have been written
+// but was not confirmed durable.
+func IsIndeterminatePromptError(err error) bool {
+	var indeterminate *IndeterminatePromptError
+	return errors.As(err, &indeterminate)
+}
+
 // ValidatePrompt checks the canonical coding prompt bound before any thread
 // metadata or transcript state is created.
 func ValidatePrompt(content string) error {
@@ -92,6 +118,9 @@ func (s *Store) AppendUserMessage(
 func classifyPromptAppend(threadID string, appendErr, closeErr error) error {
 	if memory.IsCommittedAppendError(appendErr) {
 		return &CommittedPromptError{ThreadID: threadID, Err: errors.Join(appendErr, closeErr)}
+	}
+	if memory.IsIndeterminateAppendError(appendErr) {
+		return &IndeterminatePromptError{ThreadID: threadID, Err: errors.Join(appendErr, closeErr)}
 	}
 	if appendErr != nil {
 		return errors.Join(

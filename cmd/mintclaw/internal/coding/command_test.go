@@ -391,6 +391,35 @@ func TestPlainResultDistinguishesProjectAndWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestAppendOutcomeAllowsMetadataSave(t *testing.T) {
+	cause := errors.New("fixture")
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success", want: true},
+		{
+			name: "durable append with later failure",
+			err:  &thread.CommittedPromptError{ThreadID: uuid.NewString(), Err: cause},
+			want: true,
+		},
+		{
+			name: "indeterminate durability",
+			err:  &thread.IndeterminatePromptError{ThreadID: uuid.NewString(), Err: cause},
+			want: false,
+		},
+		{name: "ordinary failure", err: cause, want: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := appendOutcomeAllowsMetadataSave(testCase.err); got != testCase.want {
+				t.Fatalf("appendOutcomeAllowsMetadataSave() = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
 func testDependencies(home, cwd string, now *time.Time) dependencies {
 	return dependencies{
 		home:        func() string { return home },
