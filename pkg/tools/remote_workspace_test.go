@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -180,13 +181,18 @@ func TestRemoteWorkspaceNodeRouterBindsWriteApprovalAndExactPlan(t *testing.T) {
 		source.dispatchCalls != 1 {
 		t.Fatalf("approved write = %#v; prepares=%d dispatches=%d", payload, source.prepareCalls, source.dispatchCalls)
 	}
+	if len(result.WriteAudit) != 1 || result.WriteAudit[0].Target != "workspace:project/README.md" ||
+		result.WriteAudit[0].Action != "replace" || result.WriteAudit[0].Tool != "write_file" ||
+		result.WriteAudit[0].Metadata["target"] != "build" {
+		t.Fatalf("remote write audit = %#v", result.WriteAudit)
+	}
 }
 
 func TestRemoteWorkspaceNodeRouterMapsPatch(t *testing.T) {
 	cfg, source := remoteWorkspaceNodeTestSetup(t)
 	source.dispatchResult = json.RawMessage(
-		`{"state":"completed","committed":[{"path":"a.txt","action":"add","size":2,"sha256":"` +
-			strings.Repeat("c", 64) + `"}]}`,
+		`{"state":"partial","committed":[{"path":"a.txt","action":"add","size":2,"sha256":"` +
+			strings.Repeat("c", 64) + `"}],"code":"FILE_CONFLICT"}`,
 	)
 	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "apply_patch")
 	if err != nil {
@@ -204,6 +210,28 @@ func TestRemoteWorkspaceNodeRouterMapsPatch(t *testing.T) {
 	if payload["placement"] != "remote" || prepared.Plan.Command != nodes.WorkspaceCommandPatch ||
 		source.dispatchCalls != 1 {
 		t.Fatalf("remote patch = %#v; plan = %#v", payload, prepared.Plan)
+	}
+	if len(result.WriteAudit) != 1 || result.WriteAudit[0].Target != "workspace:project/a.txt" ||
+		result.WriteAudit[0].Action != "add" || result.WriteAudit[0].Tool != "apply_patch" {
+		t.Fatalf("remote patch audit = %#v", result.WriteAudit)
+	}
+}
+
+func TestRemoteWorkspaceNodeRouterLeavesUncertainWriteUnaudited(t *testing.T) {
+	cfg, source := remoteWorkspaceNodeTestSetup(t)
+	source.dispatchErr = errors.New("transport closed")
+	router, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "write_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := router.ExecuteRemoteWorkspace(
+		nodeInvocationTestContext("owner", "workspace-write-unknown"),
+		"write_file",
+		"project",
+		map[string]any{"path": "README.md", "content": "new\n", "overwrite": false},
+	)
+	if !result.IsError || len(result.WriteAudit) != 0 || !strings.Contains(result.ForLLM, "DISPATCH_UNCERTAIN") {
+		t.Fatalf("uncertain remote write = %#v", result)
 	}
 }
 
@@ -477,6 +505,16 @@ func TestToolLogArgumentsRedactsRemoteWorkspaceFileContent(t *testing.T) {
 		got := ToolLogArguments(name, arguments)
 		if got["redacted"] != true || got["argument_count"] != 5 || len(got) != 2 {
 			t.Fatalf("%s remote workspace arguments = %#v", name, got)
+		}
+	}
+	for _, workspace := range []any{nil, float64(7), false, ""} {
+		for _, name := range []string{"write_file", "apply_patch"} {
+			got := ToolLogArguments(name, map[string]any{
+				"workspace": workspace, "content": "secret", "input": "secret patch",
+			})
+			if got["redacted"] != true || got["argument_count"] != 3 || len(got) != 2 {
+				t.Fatalf("%s malformed workspace %T arguments = %#v", name, workspace, got)
+			}
 		}
 	}
 	if local := ToolLogArguments("search_files", map[string]any{"pattern": "public"}); local["pattern"] != "public" {

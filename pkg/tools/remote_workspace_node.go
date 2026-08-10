@@ -25,6 +25,15 @@ type remoteWorkspaceNodeBinding struct {
 	config config.RemoteWorkspace
 }
 
+type remoteWorkspaceMutationAudit struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+}
+
+type remoteWorkspacePatchAudit struct {
+	Committed []remoteWorkspaceMutationAudit `json:"committed"`
+}
+
 // RemoteWorkspaceNodeRouter maps compatible local file-tool shapes onto the hidden
 // typed workspace commands. Generic nodes_invoke cannot dispatch those
 // commands, so the configured workspace remains the only gateway authority.
@@ -116,7 +125,7 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 	if err := json.Unmarshal(view.Result, &payload); err != nil {
 		return toolshared.ErrorResult("remote workspace result is malformed")
 	}
-	return nodeJSONResult(map[string]any{
+	toolResult := nodeJSONResult(map[string]any{
 		"placement":          "remote",
 		"workspace":          workspaceAlias,
 		"workspace_revision": binding.config.Revision,
@@ -125,6 +134,55 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 		"state":              view.State,
 		"result":             payload,
 	})
+	if toolResult.IsError {
+		return toolResult
+	}
+	return attachRemoteWorkspaceWriteAudit(
+		toolResult,
+		command,
+		workspaceAlias,
+		binding.config.Target,
+		view.Result,
+	)
+}
+
+func attachRemoteWorkspaceWriteAudit(
+	result *toolshared.ToolResult,
+	command string,
+	workspaceAlias string,
+	targetAlias string,
+	payload json.RawMessage,
+) *toolshared.ToolResult {
+	appendEntry := func(entry remoteWorkspaceMutationAudit, toolName string) {
+		result.WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind:   "file",
+			Target: "workspace:" + workspaceAlias + "/" + entry.Path,
+			Action: entry.Action,
+			Tool:   toolName,
+			Metadata: map[string]string{
+				"placement": "remote",
+				"workspace": workspaceAlias,
+				"target":    targetAlias,
+			},
+		})
+	}
+	switch command {
+	case nodes.WorkspaceCommandWrite:
+		var mutation remoteWorkspaceMutationAudit
+		if err := json.Unmarshal(payload, &mutation); err != nil {
+			return toolshared.ErrorResult("remote workspace result is malformed")
+		}
+		appendEntry(mutation, "write_file")
+	case nodes.WorkspaceCommandPatch:
+		var patch remoteWorkspacePatchAudit
+		if err := json.Unmarshal(payload, &patch); err != nil {
+			return toolshared.ErrorResult("remote workspace result is malformed")
+		}
+		for _, mutation := range patch.Committed {
+			appendEntry(mutation, "apply_patch")
+		}
+	}
+	return result
 }
 
 func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
