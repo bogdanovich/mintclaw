@@ -536,6 +536,9 @@ func (broker *Broker) revalidatePreparedLocked(
 	worker ActionWorker,
 	prepared PreparedAction,
 ) error {
+	if prepared.FrameID != "" {
+		return ErrDriverIncompatible
+	}
 	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt || session.PolicyRevision != prepared.PolicyRevision ||
 		session.Target != prepared.Target || session.Profile != prepared.Profile ||
 		session.ControllerGeneration != prepared.ControllerGeneration || session.TabID != prepared.TabID ||

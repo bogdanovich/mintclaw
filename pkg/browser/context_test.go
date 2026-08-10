@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testContextCatalog() ContextCatalog {
@@ -215,6 +216,82 @@ func TestBrokerBindsPreparedActionToCurrentContextCatalog(t *testing.T) {
 	if prepared.Action.ContextCatalogID != catalog.ID ||
 		prepared.Action.ContextGeneration != catalog.Generation || prepared.Action.FrameID != "" {
 		t.Fatalf("prepared context binding = %#v", prepared.Action)
+	}
+}
+
+func TestBrokerRejectsDurableChildFramePreparationBeforeWorkerUse(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	catalog := testContextCatalog()
+	catalog.SelectedFrameID = "frame_child"
+	session.ContextAuthority = &catalog
+	session.FrameID = catalog.SelectedFrameID
+	session.Revision++
+	session.UpdatedAt++
+	session.LastActivityAt++
+	if err := store.UpdateSession(t.Context(), session.Revision-1, session); err != nil {
+		t.Fatal(err)
+	}
+	session.SnapshotID = "snapshot_child_frame"
+	session.SnapshotGeneration = 1
+	session.SnapshotOrigin = "https://example.com"
+	session.Revision++
+	session.UpdatedAt++
+	session.LastActivityAt++
+	if err := store.UpdateSession(t.Context(), session.Revision-1, session); err != nil {
+		t.Fatal(err)
+	}
+
+	created := broker.now().UTC()
+	prepared := PreparedAction{
+		RequestID: "request_seeded_child_frame", SessionID: session.ID, Owner: session.Owner,
+		Target: session.Target, Profile: session.Profile,
+		ControllerGeneration: session.ControllerGeneration, TabID: session.TabID,
+		FrameID: session.FrameID, ContextCatalogID: catalog.ID, ContextGeneration: catalog.Generation,
+		SnapshotID: session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
+		CurrentOrigin: session.SnapshotOrigin,
+		Action:        Action{Kind: ActionScroll, Direction: "down", Amount: 1}, Effect: EffectRead,
+		DryRun: session.DryRun, PolicyRevision: session.PolicyRevision,
+		CatalogRevision: worker.CatalogRevision(), CreatedAt: created.UnixNano(),
+		ExpiresAt: created.Add(time.Minute).UnixNano(),
+	}
+	prepared.ID = derivedIdentifier("prepared", prepared.Owner, prepared.SessionID, prepared.RequestID)
+	var err error
+	prepared.ActionHash, err = hashPreparedAction(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := Invocation{
+		ID:               derivedIdentifier("invocation", prepared.Owner, prepared.SessionID, prepared.RequestID),
+		PreparedActionID: prepared.ID, SessionID: prepared.SessionID, Owner: prepared.Owner,
+		ActionHash: prepared.ActionHash, Effect: prepared.Effect, State: InvocationPrepared,
+		Revision: 1, CreatedAt: prepared.CreatedAt, UpdatedAt: prepared.CreatedAt,
+		ExpiresAt: prepared.ExpiresAt,
+	}
+	if err = store.CreatePreparation(t.Context(), prepared, invocation); err != nil {
+		t.Fatal(err)
+	}
+	worker.observeErr = errors.New("worker must not be observed")
+	worker.observeCalls = 0
+	worker.catalogCalls = 0
+	if _, err = broker.ExecuteAction(
+		t.Context(),
+		session.Owner,
+		prepared.ID,
+		nil,
+	); !errors.Is(
+		err,
+		ErrDriverIncompatible,
+	) {
+		t.Fatalf("ExecuteAction() error = %v, want ErrDriverIncompatible", err)
+	}
+	if worker.observeCalls != 0 || worker.catalogCalls != 0 || len(worker.actions) != 0 ||
+		worker.resolveCalls != 0 || len(worker.uploads) != 0 {
+		t.Fatalf("child-frame preparation reached worker: %#v", worker)
+	}
+	storedInvocation, err := store.GetInvocation(t.Context(), invocation.ID)
+	if err != nil || storedInvocation.State != InvocationPrepared {
+		t.Fatalf("stored invocation = %#v, %v; want prepared", storedInvocation, err)
 	}
 }
 
