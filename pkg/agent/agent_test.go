@@ -3961,10 +3961,13 @@ func (m *messageToolThenFinalProvider) Chat(
 	if m.calls == 1 {
 		return &providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{{
-				ID:        "call_message",
-				Type:      "function",
-				Name:      "message",
-				Arguments: map[string]any{"content": "direct tool message"},
+				ID:   "call_message",
+				Type: "function",
+				Name: "message",
+				Arguments: map[string]any{
+					"content":         "direct tool message",
+					"delivery_intent": string(toolshared.DeliveryImmediateContinue),
+				},
 			}},
 		}, nil
 	}
@@ -3995,7 +3998,8 @@ func (m *messageToolMediaThenFinalProvider) Chat(
 				Type: "function",
 				Name: "message",
 				Arguments: map[string]any{
-					"content": "media caption",
+					"content":         "media caption",
+					"delivery_intent": string(toolshared.DeliveryImmediateContinue),
 					"media": []any{
 						map[string]any{
 							"path": m.mediaPath,
@@ -4011,6 +4015,41 @@ func (m *messageToolMediaThenFinalProvider) Chat(
 
 func (m *messageToolMediaThenFinalProvider) GetDefaultModel() string {
 	return "message-tool-media-final-model"
+}
+
+type terminalMessageToolMediaProvider struct {
+	calls     int
+	mediaPath string
+}
+
+func (m *terminalMessageToolMediaProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_terminal_message_media",
+				Type: "function",
+				Name: "message",
+				Arguments: map[string]any{
+					"content": "media caption",
+					"media": []any{
+						map[string]any{"path": m.mediaPath, "type": "video"},
+					},
+				},
+			}},
+		}, nil
+	}
+	return &providers.LLMResponse{}, nil
+}
+
+func (m *terminalMessageToolMediaProvider) GetDefaultModel() string {
+	return "terminal-message-tool-media-model"
 }
 
 type immediateMediaThenFinalProvider struct {
@@ -9024,8 +9063,11 @@ func TestProcessMessage_MessageToolPublishesOutboundWithTurnMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
 	}
-	if response == "" {
-		t.Fatal("expected processMessage() to return a final loop response")
+	if response != "" {
+		t.Fatalf("processMessage() response = %q, want handled terminal delivery", response)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
 
 	select {
@@ -9214,6 +9256,61 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	}
 }
 
+func TestRunAgentLoop_MessageToolMediaDefaultsToTerminalDelivery(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.MaxTokens = 4096
+	cfg.Agents.Defaults.MaxToolIterations = 10
+	cfg.Agents.Defaults.ToolFeedback.Enabled = false
+	cfg.Tools.Message.MediaEnabled = true
+	cfg.Session.Dimensions = []string{"chat"}
+
+	videoPath := filepath.Join(cfg.Agents.Defaults.Workspace, "clip.mp4")
+	if err := os.WriteFile(videoPath, []byte("not really a video"), 0o600); err != nil {
+		t.Fatalf("write media fixture: %v", err)
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &terminalMessageToolMediaProvider{mediaPath: videoPath}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+	mediaChannel := &fakeMediaChannel{}
+	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", mediaChannel))
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch: DispatchRequest{
+			SessionKey:  "message-tool-media-terminal-test",
+			UserMessage: "send media",
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
+			},
+		},
+		DefaultResponse: defaultResponse,
+		SendResponse:    true,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+	if response != "" {
+		t.Fatalf("response = %q, want handled terminal delivery", response)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
+	}
+	if len(mediaChannel.sentMedia) != 1 {
+		t.Fatalf("sent media count = %d, want 1", len(mediaChannel.sentMedia))
+	}
+	if len(mediaChannel.sentMessages) != 0 {
+		t.Fatalf("sent text count = %d, want 0", len(mediaChannel.sentMessages))
+	}
+}
+
 func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
@@ -9309,8 +9406,11 @@ func TestProcessMessage_MessageToolPublishesOutboundWithTopicContext(t *testing.
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
 	}
-	if response == "" {
-		t.Fatal("expected processMessage() to return a final loop response")
+	if response != "" {
+		t.Fatalf("processMessage() response = %q, want handled terminal delivery", response)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
 
 	select {

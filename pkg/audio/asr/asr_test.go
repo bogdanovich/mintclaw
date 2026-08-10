@@ -241,3 +241,57 @@ func TestDetectTranscriber(t *testing.T) {
 		})
 	}
 }
+
+func TestModelSupportsAudioInput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		modelID string
+		want    bool
+	}{
+		{name: "openai gpt-4o-audio-preview", modelID: "gpt-4o-audio-preview", want: true},
+		{name: "openai gpt-4.1-audio", modelID: "gpt-4.1-audio", want: true},
+		{name: "gemini flash", modelID: "gemini-2.5-flash", want: true},
+		{name: "gemini pro", modelID: "gemini-2.5-pro", want: true},
+		{name: "qwen omni", modelID: "qwen2.5-omni", want: true},
+		{name: "sensevoice", modelID: "sensevoice-small", want: true},
+		{name: "azure deployment containing audio", modelID: "my-audio-deployment", want: true},
+		{name: "case insensitive", modelID: "GEMINI-2.5-Flash", want: true},
+		{name: "plain gpt-4o", modelID: "gpt-4o", want: false},
+		{name: "llama", modelID: "llama-3.3-70b", want: false},
+		{name: "empty", modelID: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelSupportsAudioInput(tc.modelID); got != tc.want {
+				t.Fatalf("modelSupportsAudioInput(%q) = %v, want %v", tc.modelID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSupportsAudioTranscriptionRestrictsByModelID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{name: "openai audio model", model: "openai/gpt-4o-audio-preview", want: true},
+		{name: "gemini multimodal model", model: "gemini/gemini-2.5-flash", want: true},
+		{name: "azure audio deployment", model: "azure/my-audio-deployment", want: true},
+		{name: "openai text-only model", model: "openai/gpt-4o", want: false},
+		{name: "groq text-only model", model: "groq/llama-3.3-70b", want: false},
+		{name: "unsupported protocol", model: "anthropic/claude-sonnet-4.6", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.ModelConfig{Model: tc.model, APIKeys: config.SimpleSecureStrings("sk-test")}
+			if got := supportsAudioTranscription(cfg); got != tc.want {
+				t.Fatalf("supportsAudioTranscription(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}

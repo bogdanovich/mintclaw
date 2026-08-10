@@ -25,6 +25,9 @@ func TestRequestUserInputToolGuidesConversationLanguagePresentation(t *testing.T
 		}
 	}
 	questions := tool.Parameters()["properties"].(map[string]any)["questions"].(map[string]any)
+	if got := questions["maxItems"]; got != maxRequestUserInputQuestions {
+		t.Fatalf("questions maxItems = %#v, want %d", got, maxRequestUserInputQuestions)
+	}
 	items := questions["items"].(map[string]any)
 	properties := items["properties"].(map[string]any)
 	for _, field := range []string{"header", "question"} {
@@ -153,6 +156,10 @@ func TestRequestUserInputToolRejectsInvalidQuestionShapes(t *testing.T) {
 		questions any
 	}{
 		{name: "missing", questions: nil},
+		{name: "multiple questions", questions: []any{
+			map[string]any{"id": "first", "question": "First?"},
+			map[string]any{"id": "second", "question": "Second?"},
+		}},
 		{name: "bad id", questions: []any{map[string]any{"id": "Bad ID", "question": "Question?"}}},
 		{name: "duplicate ids", questions: []any{
 			map[string]any{"id": "same", "question": "One?"},
