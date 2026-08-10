@@ -190,7 +190,7 @@ func (worker *playwrightWorker) SelectContext(
 	worker.contextState.selectedTabID = tabID
 	worker.contextState.selectedFrame = frameID
 	worker.contextState.generation++
-	catalog, selectedRaw, err := worker.probeContextsLocked(ctx)
+	_, selectedRaw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		return DriverObservation{}, ContextCatalog{}, err
 	}
