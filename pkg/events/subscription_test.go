@@ -2,6 +2,8 @@ package events
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -250,5 +252,173 @@ func waitForStat(t *testing.T, stat func() uint64, want uint64) {
 		case <-deadline:
 			t.Fatalf("timed out waiting for stat >= %d", want)
 		}
+	}
+}
+
+func TestKeyedPreservesOrderWithinScope(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	var mu sync.Mutex
+	got := map[string][]int{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-order", Buffer: 16, Concurrency: Keyed},
+		func(_ context.Context, evt Event) error {
+			mu.Lock()
+			got[evt.Scope.SessionKey] = append(got[evt.Scope.SessionKey], evt.Payload.(int))
+			mu.Unlock()
+			time.Sleep(2 * time.Millisecond)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	for i := 0; i < 6; i++ {
+		bus.Publish(context.Background(), Event{Kind: KindAgentLLMDelta, Scope: Scope{SessionKey: "s1"}, Payload: i})
+		bus.Publish(context.Background(), Event{Kind: KindAgentLLMDelta, Scope: Scope{SessionKey: "s2"}, Payload: i})
+	}
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 12)
+
+	want := []int{0, 1, 2, 3, 4, 5}
+	for _, key := range []string{"s1", "s2"} {
+		if !slices.Equal(got[key], want) {
+			t.Fatalf("scope %q handled order = %v, want %v", key, got[key], want)
+		}
+	}
+}
+
+func TestKeyedOrdersPerScopeAndRunsConcurrentlyAcrossScopes(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	var (
+		stateMu         sync.Mutex
+		perKeyActive    = map[string]int{}
+		maxPerKeyActive int
+		globalActive    atomic.Int64
+		maxGlobalActive atomic.Int64
+	)
+
+	track := func(delta int, key string) {
+		if delta > 0 {
+			g := globalActive.Add(1)
+			for {
+				cur := maxGlobalActive.Load()
+				if g <= cur || maxGlobalActive.CompareAndSwap(cur, g) {
+					break
+				}
+			}
+		} else {
+			globalActive.Add(-1)
+		}
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		perKeyActive[key] += delta
+		if delta > 0 && perKeyActive[key] > maxPerKeyActive {
+			maxPerKeyActive = perKeyActive[key]
+		}
+	}
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed", Buffer: 16, Concurrency: Keyed},
+		func(_ context.Context, evt Event) error {
+			key := evt.Scope.SessionKey
+			track(1, key)
+			time.Sleep(5 * time.Millisecond)
+			track(-1, key)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		bus.Publish(context.Background(), Event{Kind: KindAgentLLMDelta, Scope: Scope{SessionKey: "s1"}})
+		bus.Publish(context.Background(), Event{Kind: KindAgentLLMDelta, Scope: Scope{SessionKey: "s2"}})
+	}
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 8)
+
+	if got := maxPerKeyActive; got != 1 {
+		t.Fatalf("max active handlers per scope = %d, want 1 (per-scope ordering)", got)
+	}
+	if got := maxGlobalActive.Load(); got < 2 {
+		t.Fatalf("max active handlers across scopes = %d, want >= 2 (cross-scope concurrency)", got)
+	}
+}
+
+func TestKeyedHonorsCustomKeyFunc(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	var mu sync.Mutex
+	got := map[string][]string{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{
+			Name:        "keyed-custom",
+			Buffer:      16,
+			Concurrency: Keyed,
+			KeyFunc:     func(evt Event) string { return string(evt.Kind) },
+		},
+		func(_ context.Context, evt Event) error {
+			mu.Lock()
+			got[string(evt.Kind)] = append(got[string(evt.Kind)], evt.Scope.SessionKey)
+			mu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		bus.Publish(context.Background(), Event{Kind: Kind("k1"), Scope: Scope{SessionKey: "s1"}})
+		bus.Publish(context.Background(), Event{Kind: Kind("k1"), Scope: Scope{SessionKey: "s2"}})
+		bus.Publish(context.Background(), Event{Kind: Kind("k2"), Scope: Scope{SessionKey: "s3"}})
+	}
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 9)
+
+	wantK1 := []string{"s1", "s2", "s1", "s2", "s1", "s2"}
+	if !slices.Equal(got["k1"], wantK1) {
+		t.Fatalf("k1 handled order = %v, want %v", got["k1"], wantK1)
+	}
+	wantK2 := []string{"s3", "s3", "s3"}
+	if !slices.Equal(got["k2"], wantK2) {
+		t.Fatalf("k2 handled order = %v, want %v", got["k2"], wantK2)
+	}
+}
+
+func TestKeyedDefaultKeyFunc(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		evt  Event
+		want string
+	}{
+		{name: "session", evt: Event{Scope: Scope{SessionKey: "k"}}, want: "session:k"},
+		{name: "trace", evt: Event{Scope: Scope{TraceScope: TraceScope{Workspace: "w", TurnID: "t"}}}, want: "trace:w\x00t"},
+		{name: "chat-channel", evt: Event{Scope: Scope{Channel: "c", ChatID: "1"}}, want: "chat:c\x001"},
+		{name: "chat-account", evt: Event{Scope: Scope{Account: "a", ChatID: "1"}}, want: "chat:a\x001"},
+		{name: "agent", evt: Event{Scope: Scope{AgentID: "a1"}}, want: "agent:a1"},
+		{name: "empty", evt: Event{}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := defaultKeyFunc(tc.evt); got != tc.want {
+				t.Fatalf("defaultKeyFunc = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
