@@ -357,6 +357,10 @@ func (al *AgentLoop) recoverCancelingInteraction(
 		return false
 	}
 	defer claim.releaseIfOwned()
+	al.takePendingStop(newRuntimeSessionScope(
+		agent.Workspace,
+		interactionContinuationSessionKey(record),
+	))
 	if err := al.ensureInteractionCancellationToolResult(
 		ctx,
 		agent,

@@ -27,7 +27,43 @@ const answerCommand = "/answer"
 const (
 	interactionAnswerClaimAttempts = 8
 	interactionAnswerClaimDelay    = 10 * time.Millisecond
+	interactionCancelClaimAttempts = 100
+	interactionCancelClaimDelay    = 10 * time.Millisecond
+	interactionCancelFenceAttempts = 16
 )
+
+type interactionLifecycleBoundaryHook func(string)
+
+type interactionLifecycleBoundaryHookKey struct{}
+
+const (
+	interactionBoundaryCancelAfterLoad  = "cancel_after_load"
+	interactionBoundaryPrecomputedFinal = "precomputed_final"
+	interactionBoundaryModelFinal       = "model_final"
+	interactionBoundaryFinalPrepared    = "final_delivery_prepared"
+	interactionBoundaryTaskCompleted    = "task_completion_persisted"
+)
+
+type interactionFinalizationDisposition uint8
+
+const (
+	interactionFinalizationDelivered interactionFinalizationDisposition = iota
+	interactionFinalizationCanceled
+)
+
+var errInteractionFinalizationCanceled = errors.New(
+	"interaction finalization was canceled before delivery",
+)
+
+func runInteractionLifecycleBoundaryHook(ctx context.Context, boundary string) {
+	if ctx == nil {
+		return
+	}
+	if hook, ok := ctx.Value(interactionLifecycleBoundaryHookKey{}).(interactionLifecycleBoundaryHook); ok &&
+		hook != nil {
+		hook(boundary)
+	}
+}
 
 type interactionInboundOwnership int
 
@@ -90,16 +126,60 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Matched = true
 	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
 	result.Kind = record.Kind
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryCancelAfterLoad)
 
+	claimTurnID := fmt.Sprintf(
+		"pending-interaction-cancel-%s-%d",
+		record.ShortID,
+		al.turnSeq.Add(1),
+	)
 	claim, _, claimed := al.claimRuntimeRouteSession(
 		target,
-		fmt.Sprintf("pending-interaction-cancel-%s-%d", record.ShortID, al.turnSeq.Add(1)),
+		claimTurnID,
 	)
+	if !claimed {
+		current, err := al.beginInteractionCancellationFence(
+			registry, record, target, msg.Context, "session_control_"+name,
+		)
+		if err != nil {
+			result.Failed = true
+			return result, err
+		}
+		record = current
+		result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+		result.Kind = record.Kind
+		if err := al.abortInteractionContinuation(record, target); err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("abort interaction continuation: %w", err)
+		}
+		claim, claimed = al.waitForInteractionCancellationClaim(ctx, target, claimTurnID)
+	}
 	if !claimed {
 		result.Failed = true
 		return result, fmt.Errorf("interaction session is busy while canceling")
 	}
 	defer claim.releaseIfOwned()
+
+	current, active := activeInteractionForSession(registry, target.SessionKey)
+	if !active || current.ID != record.ID ||
+		!interactionRouteAuthorizes(current.Route, target, msg.Context) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction changed while waiting to cancel")
+	}
+	record = current
+	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+	result.Kind = record.Kind
+	if interactionFinalizationStarted(record) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction finalization already started")
+	}
+	continuationAgent := al.interactionContinuationAgent(record, target.Agent)
+	if continuationAgent != nil {
+		al.takePendingStop(newRuntimeSessionScope(
+			continuationAgent.Workspace,
+			interactionContinuationSessionKey(record),
+		))
+	}
 
 	if record.Status != interactions.StatusCanceling {
 		var err error
@@ -130,6 +210,91 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Canceled = true
 	result.CommandHandled = name == "stop"
 	return result, nil
+}
+
+func (al *AgentLoop) beginInteractionCancellationFence(
+	registry *interactions.Registry,
+	loaded interactions.Record,
+	target *inboundDispatchTarget,
+	inbound bus.InboundContext,
+	code string,
+) (interactions.Record, error) {
+	for attempt := 0; attempt < interactionCancelFenceAttempts; attempt++ {
+		current, active := activeInteractionForSession(registry, target.SessionKey)
+		if !active || current.ID != loaded.ID ||
+			!interactionRouteAuthorizes(current.Route, target, inbound) {
+			return interactions.Record{}, fmt.Errorf("interaction changed while preparing cancellation")
+		}
+		if current.Status == interactions.StatusCanceling {
+			return current, nil
+		}
+		if interactionFinalizationStarted(current) {
+			return interactions.Record{}, fmt.Errorf("interaction finalization already started")
+		}
+		fenced, err := registry.BeginCancellation(current.ID, current.Revision, code)
+		if err == nil {
+			return fenced, nil
+		}
+		if !errors.Is(err, interactions.ErrConflict) {
+			return interactions.Record{}, fmt.Errorf("begin cancellation fence: %w", err)
+		}
+	}
+	return interactions.Record{}, fmt.Errorf("interaction kept changing while preparing cancellation")
+}
+
+func interactionFinalizationStarted(record interactions.Record) bool {
+	return record.FinalDelivered ||
+		record.FinalDeliveryState == interactions.DeliveryStateSending ||
+		record.FinalDeliveryState == interactions.DeliveryStateDelivered ||
+		record.FinalDeliveryState == interactions.DeliveryStateAmbiguous
+}
+
+func (al *AgentLoop) abortInteractionContinuation(
+	record interactions.Record,
+	target *inboundDispatchTarget,
+) error {
+	agent := al.interactionContinuationAgent(record, target.Agent)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	scope := newRuntimeSessionScope(
+		agent.Workspace,
+		interactionContinuationSessionKey(record),
+	)
+	ts := al.getActiveTurnState(scope)
+	if ts == nil {
+		al.markPendingStop(scope)
+		return nil
+	}
+	if strings.HasPrefix(ts.snapshot().TurnID, pendingTurnPrefix) {
+		al.markPendingStop(scope)
+		return nil
+	}
+	if err := al.hardAbortScope(scope); err != nil && al.getActiveTurnState(scope) != nil {
+		return err
+	}
+	return nil
+}
+
+func (al *AgentLoop) waitForInteractionCancellationClaim(
+	ctx context.Context,
+	target *inboundDispatchTarget,
+	turnID string,
+) (*runtimeSessionClaim, bool) {
+	for attempt := 0; attempt < interactionCancelClaimAttempts; attempt++ {
+		timer := time.NewTimer(interactionCancelClaimDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, false
+		case <-timer.C:
+		}
+		claim, _, claimed := al.claimRuntimeRouteSession(target, turnID)
+		if claimed {
+			return claim, true
+		}
+	}
+	return nil, false
 }
 
 func (al *AgentLoop) shouldHandleInteractionInbound(
@@ -923,12 +1088,15 @@ func (al *AgentLoop) resumeClaimedInteraction(
 					return err
 				}
 			} else {
-				control, err := al.executeApprovedInteractionTool(
+				control, aborted, err := al.executeApprovedInteractionTool(
 					ctx, registry, interactionWorkspace, agent, scope, resuming,
 				)
 				if err != nil {
 					_, _ = registry.RecordResumeFailure(resuming.ID, resuming.Revision, err.Error())
 					return err
+				}
+				if aborted {
+					return nil
 				}
 				if control == ToolControlSuspend {
 					return nil
@@ -948,9 +1116,11 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
-		return al.deliverInteractionFinal(
+		_, finalizeErr := al.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, finalContent, nil,
+			interactionBoundaryPrecomputedFinal,
 		)
+		return finalizeErr
 	}
 
 	routeSessionKey := record.Route.RouteSessionKey
@@ -997,11 +1167,14 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	if turnStatus == TurnEndStatusSuspended {
 		return nil
 	}
+	if turnStatus == TurnEndStatusAborted {
+		return nil
+	}
 	var traceScopes []runtimeevents.TraceScope
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
 	}
-	deliveryErr := al.deliverInteractionFinal(
+	finalization, deliveryErr := al.finalizeResumedInteraction(
 		ctx,
 		registry,
 		interactionWorkspace,
@@ -1009,10 +1182,13 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		inbound,
 		finalContent,
 		traceScopes,
+		interactionBoundaryModelFinal,
 	)
 	if deliveryObservation != nil {
 		admission := finalResponseAdmission{status: finalResponseAdmissionAccepted}
-		if deliveryErr != nil {
+		if finalization == interactionFinalizationCanceled {
+			admission = rejectedFinalResponseAdmission(errInteractionFinalizationCanceled)
+		} else if deliveryErr != nil {
 			admission = rejectedFinalResponseAdmission(deliveryErr)
 		}
 		if settleErr := al.settleSteeringMessages(
@@ -1025,6 +1201,35 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	return deliveryErr
 }
 
+func (al *AgentLoop) finalizeResumedInteraction(
+	ctx context.Context,
+	registry *interactions.Registry,
+	interactionWorkspace string,
+	record interactions.Record,
+	inbound bus.InboundContext,
+	content string,
+	traceScopes []runtimeevents.TraceScope,
+	boundary string,
+) (interactionFinalizationDisposition, error) {
+	runInteractionLifecycleBoundaryHook(ctx, boundary)
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		return interactionFinalizationDelivered, interactions.ErrNotFound
+	}
+	switch current.Status {
+	case interactions.StatusCanceling, interactions.StatusCancelled:
+		return interactionFinalizationCanceled, nil
+	case interactions.StatusResuming:
+		return interactionFinalizationDelivered, al.deliverInteractionFinal(
+			ctx, registry, interactionWorkspace, current, inbound, content, traceScopes,
+		)
+	default:
+		return interactionFinalizationDelivered, fmt.Errorf(
+			"cannot finalize interaction from status %q", current.Status,
+		)
+	}
+}
+
 func (al *AgentLoop) executeApprovedInteractionTool(
 	ctx context.Context,
 	registry *interactions.Registry,
@@ -1032,11 +1237,11 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	agent *AgentInstance,
 	scope *session.SessionScope,
 	record interactions.Record,
-) (ToolControl, error) {
+) (ToolControl, bool, error) {
 	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
 	toolCall, ok := interactionOriginToolCall(history, record.Origin.ToolCallID)
 	if !ok {
-		return ToolControlBreak, fmt.Errorf(
+		return ToolControlBreak, false, fmt.Errorf(
 			"originating approval tool call %q is missing",
 			record.Origin.ToolCallID,
 		)
@@ -1054,9 +1259,9 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 					"context is unavailable after restart.",
 			},
 		); err != nil {
-			return ToolControlBreak, err
+			return ToolControlBreak, false, err
 		}
-		return ToolControlBreak, nil
+		return ToolControlBreak, false, nil
 	}
 	toolCall = providers.NormalizeToolCall(toolCall)
 	routeSessionKey := record.Route.RouteSessionKey
@@ -1088,7 +1293,7 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
-		return ToolControlBreak, fmt.Errorf("resolve approved tool profile: %w", err)
+		return ToolControlBreak, false, fmt.Errorf("resolve approved tool profile: %w", err)
 	}
 	turnScope := al.newTurnEventScope(
 		agent.ID,
@@ -1098,9 +1303,24 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	)
 	ts := newTurnState(agent, opts, turnScope)
 	pipeline := NewPipeline(al)
-	exec, err := pipeline.SetupTurn(ctx, ts)
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	defer turnCancel()
+	ts.setTurnCancel(turnCancel)
+	ts.ctx = turnCtx
+	turnCtx = withTurnState(turnCtx, ts)
+	turnCtx = WithAgentLoop(turnCtx, al)
+	al.registerActiveTurn(ts)
+	defer al.clearActiveTurn(ts)
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
+	if al.takePendingStop(ts.runtimeSessionScope()) {
+		_ = ts.requestHardAbort()
+	}
+	if ts.hardAbortRequested() {
+		return ToolControlBreak, true, nil
+	}
+	exec, err := pipeline.SetupTurn(turnCtx, ts)
 	if err != nil {
-		return ToolControlBreak, err
+		return ToolControlBreak, false, err
 	}
 	if exec.model.cleanup != nil {
 		defer exec.model.cleanup()
@@ -1110,24 +1330,27 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.toolResponseDisposition = toolResponseHandled
 	llm.assistantToolCallsPersisted = true
-	outcome := pipeline.ExecuteTools(ctx, ctx, ts, exec, llm)
-	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	outcome := pipeline.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
+	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	pipeline.dismissToolFeedbackForTurn(dismissCtx, ts)
 	dismissCancel()
+	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+		return outcome.Control, true, nil
+	}
 	if outcome.Control == ToolControlSuspend {
-		return outcome.Control, nil
+		return outcome.Control, false, nil
 	}
 	if _, resultIndex := interactionToolPairIndexes(
 		agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
 		record.Origin.ToolCallID,
 	); resultIndex < 0 {
-		return outcome.Control, fmt.Errorf("approved tool execution did not persist a matching result")
+		return outcome.Control, false, fmt.Errorf("approved tool execution did not persist a matching result")
 	}
 	_, ok = registry.Get(record.ID)
 	if !ok {
-		return outcome.Control, interactions.ErrNotFound
+		return outcome.Control, false, interactions.ErrNotFound
 	}
-	return outcome.Control, nil
+	return outcome.Control, false, nil
 }
 
 func (al *AgentLoop) interactionContinuationAgent(
@@ -1160,7 +1383,6 @@ func (al *AgentLoop) deliverInteractionFinal(
 	content string,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
-	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
 		inbound.ReplyToMessageID = interactionResponseReplyTarget(record, inbound)
 	}
@@ -1180,6 +1402,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if record.FinalDelivered || strings.TrimSpace(content) == "" {
 		updated, err := registry.Resolve(record.ID, record.Revision)
 		if err == nil {
+			al.dismissInteractionToolFeedback(ctx, updated, inbound, traceScopes)
 			al.completeInteractionTask(
 				interactionWorkspace, updated, content, taskregistry.DeliveryNotApplicable,
 			)
@@ -1196,10 +1419,12 @@ func (al *AgentLoop) deliverInteractionFinal(
 		)
 		return fmt.Errorf("channel manager unavailable")
 	}
-	started, stateErr := registry.BeginFinalDelivery(record.ID, record.Revision)
+	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
 	if stateErr != nil {
 		return fmt.Errorf("begin final interaction delivery: %w", stateErr)
 	}
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
+	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
 	if inbound.Raw == nil {
 		inbound.Raw = make(map[string]string)
 	}
@@ -1216,6 +1441,10 @@ func (al *AgentLoop) deliverInteractionFinal(
 		return err
 	}
 	message.TraceSettlement = len(message.TraceScopes) > 0
+	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
+	if stateErr != nil {
+		return fmt.Errorf("start final interaction delivery: %w", stateErr)
+	}
 	deliveryErr := al.sendInteractionMessage(ctx, message)
 	updated, stateErr := registry.CompleteFinalDelivery(
 		started.ID,
@@ -1237,6 +1466,16 @@ func (al *AgentLoop) deliverInteractionFinal(
 		)
 	}
 	return err
+}
+
+func prepareInteractionFinalDelivery(
+	registry *interactions.Registry,
+	record interactions.Record,
+) (interactions.Record, error) {
+	if record.FinalDeliveryState == interactions.DeliveryStateNotSent {
+		return record, nil
+	}
+	return registry.BeginFinalDelivery(record.ID, record.Revision)
 }
 
 func interactionResponseReplyTarget(record interactions.Record, inbound bus.InboundContext) string {
@@ -1288,20 +1527,27 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if !ok {
 		return fmt.Errorf("owning task %q is unavailable", taskID)
 	}
+	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
+	if stateErr != nil {
+		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
+	}
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
 	if err := taskRegistry.CompleteInteractionTask(
 		taskID, record.ID, content, taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
-	started, stateErr := registry.BeginFinalDelivery(record.ID, record.Revision)
-	if stateErr != nil {
-		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
-	}
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryTaskCompleted)
+	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
 	mode := toolshared.AsyncDeliveryMode(strings.TrimSpace(task.DeliveryMode))
 	switch mode {
 	case toolshared.AsyncDeliveryParentOnly, toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryUserAndParent:
 	default:
 		mode = toolshared.AsyncDeliveryUserOnly
+	}
+	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
+	if stateErr != nil {
+		return fmt.Errorf("start task interaction delivery: %w", stateErr)
 	}
 	if mode == toolshared.AsyncDeliveryParentOnly &&
 		(record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion) &&

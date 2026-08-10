@@ -480,6 +480,63 @@ func TestFinishInteractionFailsSucceededTaskWithUndeliveredResult(t *testing.T) 
 	}
 }
 
+func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
+	registry := NewRegistry(store)
+	if err := registry.Upsert(Record{
+		TaskID: "task-undelivered-cancel", Status: StatusSucceeded,
+		DeliveryStatus: DeliveryPending, InteractionID: "interaction-1",
+		LastCompletionID: "interaction:interaction-1",
+		DeliveryError:    "pending",
+		TerminalSummary:  "result awaiting delivery",
+		Completion:       &CompletionPayload{Text: "undelivered result"},
+		Deliverable:      &DeliverablePayload{Text: "undelivered result"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.FinishInteraction(
+		"task-undelivered-cancel",
+		"interaction-1",
+		StatusCancelled,
+		"stopped before delivery",
+	); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistry(store)
+	record, ok := reloaded.Get("task-undelivered-cancel")
+	if !ok || record.Status != StatusCancelled ||
+		record.DeliveryStatus != DeliveryNotApplicable ||
+		record.Error != "stopped before delivery" || record.DeliveredAt == 0 {
+		t.Fatalf("reloaded canceled task = %#v, found=%t", record, ok)
+	}
+	if record.Completion != nil || record.Deliverable != nil ||
+		record.LastCompletionID != "" || record.TerminalSummary != "" ||
+		record.DeliveryError != "" {
+		t.Fatalf("canceled task retained undelivered result = %#v", record)
+	}
+}
+
+func TestFinishInteractionDoesNotCancelDeliveredSucceededTask(t *testing.T) {
+	registry := NewRegistry("")
+	if err := registry.Upsert(Record{
+		TaskID: "task-delivered", Status: StatusSucceeded,
+		DeliveryStatus: DeliveryDelivered, InteractionID: "interaction-1",
+		Completion: &CompletionPayload{Text: "delivered result"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.FinishInteraction(
+		"task-delivered", "interaction-1", StatusCancelled, "late stop",
+	); err != nil {
+		t.Fatal(err)
+	}
+	record, _ := registry.Get("task-delivered")
+	if record.Status != StatusSucceeded || record.DeliveryStatus != DeliveryDelivered ||
+		record.Completion == nil || record.Completion.Text != "delivered result" {
+		t.Fatalf("late cancellation replaced delivered task = %#v", record)
+	}
+}
+
 func TestWaitingForInputSurvivesReloadAndActiveReconciliation(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
 	registry := NewRegistry(store)
