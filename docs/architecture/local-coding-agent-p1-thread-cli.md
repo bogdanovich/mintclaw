@@ -102,7 +102,11 @@ guidance.
 Before any later append under the session lock, a dirty journal is reconciled
 with completed JSONL records and an incomplete trailing fragment is durably
 truncated to the last newline. A different later prompt therefore cannot be
-concatenated onto or hidden behind a failed partial record.
+concatenated onto or hidden behind a failed partial record. Logical truncation
+performs the same reconciliation before it scans or updates metadata. Atomic
+history replacements persist a target-content digest in the dirty metadata,
+so recovery can distinguish the old and new files even when their line counts
+are equal; the marker is cleared only after that identity is resolved.
 
 Catalog metadata is only a selection hint. Once a thread ID is selected,
 `resume` acquires its writer lease and reloads the authoritative metadata under
@@ -170,7 +174,8 @@ Automated tests prove:
 - lease and ordinary append failures during creation do not publish selectable
   metadata, while post-fsync failures retain committed-prompt classification;
 - dirty metadata and incomplete trailing JSONL fragments are reconciled before
-  a later distinct append;
+  a later distinct append or logical truncation, and equal-count replacements
+  are resolved by content identity on either side of the atomic rename;
 - output writer failures after `code` and `resume --prompt` preserve typed
   committed-prompt errors;
 - canceled, empty, invalid, and oversized prompt appends fail before success;
