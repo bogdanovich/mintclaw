@@ -184,7 +184,7 @@ Examples:
 
 #### Voice Transcription
 
-You can configure a dedicated model for audio transcription with `voice.model_name`. This lets you reuse existing multimodal providers that support audio input instead of relying only on Groq.
+You can configure a dedicated model for audio transcription with `voice.model_name`. This lets you reuse existing multimodal providers that support audio input instead of relying only on Groq. The model must be known to accept audio input (for example Gemini Flash/Pro, `gpt-4o-audio-preview`, or an Azure deployment whose name contains `audio`); text-only models are skipped.
 
 If `voice.model_name` is not configured, MintClaw will continue to fall back to Groq transcription when a Groq API key is available.
 

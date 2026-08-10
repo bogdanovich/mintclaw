@@ -25,8 +25,46 @@ type TranscriptionResponse struct {
 	Duration float64 `json:"duration,omitempty"`
 }
 
+// audioCapableModelPatterns are modelID substrings that identify models known
+// to accept audio input for chat-based transcription on OpenAI-compatible
+// protocols. Dedicated transcription models (whisper, gpt-*-transcribe) are
+// already routed to the Whisper transcriber before this check runs.
+var audioCapableModelPatterns = []string{
+	"whisper",
+	"transcribe",
+	"gpt-4o-audio",
+	"gpt-4.1-audio",
+	"audio-preview",
+	"-audio",
+	"sensevoice",
+	"funasr",
+	"paraformer",
+	"gemini-2.5-flash",
+	"gemini-2.5-pro",
+	"gemini-2.0-flash",
+	"gemini-2.0-pro",
+	"gemini-1.5-flash",
+	"gemini-1.5-pro",
+	"qwen2.5-omni",
+	"qwen3-omni",
+}
+
+// modelSupportsAudioInput reports whether modelID is known to accept audio
+// input. Matching is case-insensitive and substring-based so custom aliases
+// and provider-specific deployment names (for example Azure deployment names
+// containing "audio") keep working.
+func modelSupportsAudioInput(modelID string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelID))
+	for _, pattern := range audioCapableModelPatterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 func supportsAudioTranscription(modelCfg *config.ModelConfig) bool {
-	protocol, _ := providers.ExtractProtocol(modelCfg)
+	protocol, modelID := providers.ExtractProtocol(modelCfg)
 
 	switch protocol {
 	case "openai", "azure",
@@ -37,11 +75,9 @@ func supportsAudioTranscription(modelCfg *config.ModelConfig) bool {
 		"alibaba-coding", "zai":
 		// These protocols all go through the OpenAI-compatible or Azure provider path in
 		// providers.CreateProviderFromConfig, so they are the only ones that can supply
-		// the audio media payload shape expected by NewAudioModelTranscriber.
-
-		// TODO: Further restrict this by modelID, since not every model under these
-		// protocols supports audio transcription.
-		return true
+		// the audio media payload shape expected by NewAudioModelTranscriber. Restrict
+		// further by modelID, since not every model under these protocols accepts audio.
+		return modelSupportsAudioInput(modelID)
 	default:
 		return false
 	}
