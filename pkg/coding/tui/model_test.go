@@ -57,9 +57,9 @@ func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 }
 
 func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
-	controller, snapshot := newController(t)
+	controller, _ := newController(t)
 	controller.TurnStarted("turn-1", "fix it")
-	snapshot, _ = controller.Snapshot(t.Context())
+	snapshot, _ := controller.Snapshot(t.Context())
 	model, err := NewModel(controller, snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +81,7 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 	model = updateModel(t, model, DeltaMsg{
 		Delta: controller.AssistantAccumulated("turn-1", "still streaming", false),
 	})
-	updated, second := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	model = updated.(*Model)
+	_, second := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if second == nil {
 		t.Fatal("second Ctrl+C produced no hard-cancel command")
 	}
