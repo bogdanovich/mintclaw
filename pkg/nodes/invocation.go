@@ -455,6 +455,28 @@ func (policy LocalCommandPolicy) authorize(
 	if !advertised {
 		return fmt.Errorf("%w: command is not advertised by local runtime", ErrCommandDenied)
 	}
+	_, input, err := canonicalInvocationInputValue(plan.Input)
+	if err != nil {
+		return err
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		profileRevision, _ := input["profile_revision"].(string)
+		profileAlias := ""
+		for _, profile := range descriptor.FileProfiles {
+			if profile.Revision == profileRevision {
+				profileAlias = profile.Alias
+				break
+			}
+		}
+		projected, available := ProjectFileDescriptorForProfile(descriptor, profileAlias)
+		if !available {
+			return fmt.Errorf(
+				"%w: file profile is not advertised by local runtime",
+				ErrCommandDenied,
+			)
+		}
+		descriptor = projected
+	}
 	if plan.ServiceProfile != "" || len(descriptor.ServiceProfiles) > 0 {
 		projected, available := ProjectServiceDescriptorForProfile(
 			descriptor,
@@ -505,10 +527,6 @@ func (policy LocalCommandPolicy) authorize(
 			nowUnix >= plan.ExpiresAt {
 			return fmt.Errorf("%w: plan is not currently valid", ErrCommandDenied)
 		}
-	}
-	_, input, err := canonicalInvocationInputValue(plan.Input)
-	if err != nil {
-		return err
 	}
 	if err := validateDescriptorInvocationInput(descriptor, input); err != nil {
 		return err
