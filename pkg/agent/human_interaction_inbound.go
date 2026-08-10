@@ -169,6 +169,10 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	record = current
 	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
 	result.Kind = record.Kind
+	if interactionFinalizationStarted(record) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction finalization already started")
+	}
 	continuationAgent := al.interactionContinuationAgent(record, target.Agent)
 	if continuationAgent != nil {
 		al.takePendingStop(newRuntimeSessionScope(
@@ -224,9 +228,7 @@ func (al *AgentLoop) beginInteractionCancellationFence(
 		if current.Status == interactions.StatusCanceling {
 			return current, nil
 		}
-		if current.FinalDeliveryState == interactions.DeliveryStateSending ||
-			current.FinalDeliveryState == interactions.DeliveryStateDelivered ||
-			current.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
+		if interactionFinalizationStarted(current) {
 			return interactions.Record{}, fmt.Errorf("interaction finalization already started")
 		}
 		fenced, err := registry.BeginCancellation(current.ID, current.Revision, code)
@@ -238,6 +240,13 @@ func (al *AgentLoop) beginInteractionCancellationFence(
 		}
 	}
 	return interactions.Record{}, fmt.Errorf("interaction kept changing while preparing cancellation")
+}
+
+func interactionFinalizationStarted(record interactions.Record) bool {
+	return record.FinalDelivered ||
+		record.FinalDeliveryState == interactions.DeliveryStateSending ||
+		record.FinalDeliveryState == interactions.DeliveryStateDelivered ||
+		record.FinalDeliveryState == interactions.DeliveryStateAmbiguous
 }
 
 func (al *AgentLoop) abortInteractionContinuation(

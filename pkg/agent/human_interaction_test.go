@@ -3872,6 +3872,139 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
+func TestStopDoesNotCancelFinalizationStartedBeforeRestart(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		legacy bool
+		start  func(*testing.T, *interactions.Registry, interactions.Record) interactions.Record
+	}{
+		{
+			name: "sending",
+			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
+				t.Helper()
+				record, err := registry.BeginFinalDelivery(record.ID, record.Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record, err = registry.StartFinalDelivery(record.ID, record.Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return record
+			},
+		},
+		{
+			name: "ambiguous",
+			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
+				t.Helper()
+				record, err := registry.BeginFinalDelivery(record.ID, record.Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record, err = registry.StartFinalDelivery(record.ID, record.Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record, err = registry.CompleteFinalDelivery(
+					record.ID, record.Revision, false, true, "delivery outcome unknown",
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return record
+			},
+		},
+		{
+			name: "delivered",
+			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
+				t.Helper()
+				record, err := registry.RecordFinalDeliveryAttempt(record.ID, record.Revision, true, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return record
+			},
+		},
+		{
+			name:   "legacy final delivered",
+			legacy: true,
+			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
+				t.Helper()
+				record, err := registry.RecordFinalDeliveryAttempt(record.ID, record.Revision, true, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return record
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+			defer cleanup()
+			stop := testInboundMessage(bus.InboundMessage{
+				Content:    "/stop",
+				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:final-started-" + test.name),
+				Context: bus.InboundContext{
+					Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+					SenderID: "user-1",
+				},
+			})
+			record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+			registry := al.interactionRegistryForWorkspace(agent.Workspace)
+			var err error
+			record, err = registry.ClaimAnswer(
+				record.ID,
+				record.Revision,
+				interactions.Answer{Text: "continue", ReceivedAt: time.Now().UnixMilli()},
+				interactions.OutcomeAnswered,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err = registry.MarkResuming(record.ID, record.Revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record = test.start(t, registry, record)
+
+			if test.legacy {
+				storePath := interactions.WorkspaceStorePath(agent.Workspace)
+				data, readErr := os.ReadFile(storePath)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				legacy := strings.Replace(
+					string(data),
+					`"final_delivery_state": "delivered"`,
+					`"final_delivery_state": ""`,
+					1,
+				)
+				if legacy == string(data) {
+					t.Fatal("failed to construct legacy final-delivery fixture")
+				}
+				if writeErr := os.WriteFile(storePath, []byte(legacy), 0o600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			al.interactionRegistries.Delete(agent.Workspace)
+
+			result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+			if cancelErr == nil || !strings.Contains(cancelErr.Error(), "finalization already started") {
+				t.Fatalf("stop cancellation error = %v", cancelErr)
+			}
+			if !result.Matched || result.Canceled || !result.Failed || result.CommandHandled {
+				t.Fatalf("stop cancellation result = %#v", result)
+			}
+			reloaded, found := al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
+			if !found || reloaded.Status != interactions.StatusResuming || !reloaded.FinalDelivered &&
+				reloaded.FinalDeliveryState != interactions.DeliveryStateSending &&
+				reloaded.FinalDeliveryState != interactions.DeliveryStateAmbiguous {
+				t.Fatalf("interaction after rejected stop = %#v, found=%t", reloaded, found)
+			}
+		})
+	}
+}
+
 func TestStopCancellationFencesClaimedInteractionBeforeRouteWait(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
