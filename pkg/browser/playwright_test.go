@@ -155,6 +155,7 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 		"browser_run_code_unsafe": {
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|stale\""),
 		},
 	}}
@@ -169,6 +170,11 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 		t.Fatalf("ExecuteAfterNavigationCheck(select) error = %v", err)
 	}
 	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/path?q=one&two=three",
+	}); err != nil {
+		t.Fatalf("ExecuteAfterNavigationCheck(navigate) error = %v", err)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
 		Kind: DriverPress, Key: "Tab",
 	}); !errors.Is(err, ErrStale) {
 		t.Fatalf("ExecuteAfterNavigationCheck(stale press) error = %v", err)
@@ -181,20 +187,25 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}); !errors.Is(err, ErrStale) {
 		t.Fatalf("ExecuteAfterNavigationCheck(unknown identity) error = %v", err)
 	}
-	if len(client.calls) != 3 {
+	if len(client.calls) != 4 {
 		t.Fatalf("conditional dispatch calls = %#v", client.calls)
 	}
 	selectCode, selectOK := client.calls[1].arguments["code"].(string)
-	pressCode, pressOK := client.calls[2].arguments["code"].(string)
+	navigateCode, navigateOK := client.calls[2].arguments["code"].(string)
+	pressCode, pressOK := client.calls[3].arguments["code"].(string)
 	if !selectOK || client.calls[1].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(selectCode, `const expectedGeneration = 7`) ||
 		!strings.Contains(selectCode, `state.generation !== expectedGeneration`) ||
 		!strings.Contains(selectCode, `page.locator("aria-ref=" + "e5").selectOption(["CA"])`) {
 		t.Fatalf("conditional select call = %#v", client.calls[1])
 	}
-	if !pressOK || client.calls[2].tool != "browser_run_code_unsafe" ||
+	if !navigateOK || client.calls[2].tool != "browser_run_code_unsafe" ||
+		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) {
+		t.Fatalf("conditional navigate call = %#v", client.calls[2])
+	}
+	if !pressOK || client.calls[3].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(pressCode, `page.keyboard.press("Tab")`) {
-		t.Fatalf("conditional press call = %#v", client.calls[2])
+		t.Fatalf("conditional press call = %#v", client.calls[3])
 	}
 }
 
@@ -1716,7 +1727,9 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		initial.Snapshot != "" || len(initial.Elements) != 0 {
 		t.Fatalf("initial Observe() = %+v, %v", initial, err)
 	}
-	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
+	if err = worker.ExecuteAfterNavigationCheck(ctx, blankNavigation, DriverAction{
+		Kind: DriverNavigate, URL: fixtureOrigin,
+	}); err != nil {
 		t.Fatalf("navigate error = %v", err)
 	}
 	fixtureNavigation, err := worker.NavigationIdentity(ctx)
