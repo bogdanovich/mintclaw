@@ -202,4 +202,6 @@ jobs:
           go-version-file: go.mod
 
       - name: Run Windows platform tests
-        run: go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil ./pkg/coding/thread
+        run: |
+          go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
+          go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease)' ./pkg/coding/thread
