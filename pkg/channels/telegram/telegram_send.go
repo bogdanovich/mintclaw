@@ -63,6 +63,9 @@ func (c *TelegramChannel) SendMessageResult(
 		useMarkdownV2: useMarkdownV2,
 		replyMarkup:   replyMarkup,
 	}, c.richMessagesEnabled(useMarkdownV2) && !isToolFeedback && replyMarkup == nil, isToolFeedback)
+	if result.Delivered() {
+		c.updateQuestionControls(msg, chatID, threadID)
+	}
 	var remaining []bus.OutboundMessage
 	if result.Remaining != nil {
 		remaining = make([]bus.OutboundMessage, 0, len(result.Remaining))
@@ -101,6 +104,20 @@ func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyM
 				{Text: "Allow once"},
 				{Text: "Deny"},
 			}},
+			ResizeKeyboard:  true,
+			OneTimeKeyboard: true,
+			Selective:       true,
+		}
+	}
+	if metadata.IsQuestionPrompt() {
+		choices := metadata.InteractionChoices()
+		keyboard := make([][]telego.KeyboardButton, 0, len(choices)+1)
+		for _, choice := range choices {
+			keyboard = append(keyboard, []telego.KeyboardButton{{Text: choice}})
+		}
+		keyboard = append(keyboard, []telego.KeyboardButton{{Text: bus.InboundInteractionCancelLabel}})
+		return &telego.ReplyKeyboardMarkup{
+			Keyboard:        keyboard,
 			ResizeKeyboard:  true,
 			OneTimeKeyboard: true,
 			Selective:       true,

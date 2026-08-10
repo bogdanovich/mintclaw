@@ -24,6 +24,10 @@ func (a *channelManagerAdapter) GetChannel(name string) (channels.Channel, bool)
 	return a.inner.GetChannel(name)
 }
 
+func (a *channelManagerAdapter) SyncInteractionControls(msg bus.OutboundMessage) error {
+	return a.inner.SyncInteractionControls(msg)
+}
+
 func (a *channelManagerAdapter) GetEnabledChannels() []string {
 	return a.inner.GetEnabledChannels()
 }

@@ -14,6 +14,7 @@ import (
 const (
 	defaultRequestUserInputTimeout = time.Hour
 	maximumRequestUserInputTimeout = 24 * time.Hour
+	maxRequestUserInputQuestions   = 1
 )
 
 type RequestUserInputToolOptions struct {
@@ -54,12 +55,12 @@ func NewRequestUserInputTool(options RequestUserInputToolOptions) (*RequestUserI
 func (t *RequestUserInputTool) Name() string { return "request_user_input" }
 
 func (t *RequestUserInputTool) Description() string {
-	return "Pause the current task and ask the user one to three short questions when their input is required " +
+	return "Pause the current task and ask the user one short question when their input is required " +
 		"to continue safely or choose between meaningful alternatives. Write every user-facing question, header, " +
 		"option label, and option description in the same language and general style as the conversation. Make each " +
 		"question self-contained and include enough context for the user to answer directly, without an additional " +
 		"runtime explanation. Do not use this for optional confirmation or information that can be discovered with " +
-		"available tools."
+		"available tools. Ask later questions in later calls after the previous answer resumes the task."
 }
 
 func (t *RequestUserInputTool) Parameters() map[string]any {
@@ -70,7 +71,7 @@ func (t *RequestUserInputTool) Parameters() map[string]any {
 			"questions": map[string]any{
 				"type":     "array",
 				"minItems": 1,
-				"maxItems": interactions.MaxQuestions,
+				"maxItems": maxRequestUserInputQuestions,
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
@@ -175,8 +176,8 @@ func (t *RequestUserInputTool) parseTimeout(raw any) (time.Duration, error) {
 
 func parseInteractionQuestions(raw any) ([]interactions.Question, error) {
 	items, ok := raw.([]any)
-	if !ok || len(items) == 0 {
-		return nil, fmt.Errorf("questions must contain 1 to %d entries", interactions.MaxQuestions)
+	if !ok || len(items) != maxRequestUserInputQuestions {
+		return nil, fmt.Errorf("questions must contain exactly %d entry", maxRequestUserInputQuestions)
 	}
 	questions := make([]interactions.Question, 0, len(items))
 	for index, rawQuestion := range items {
