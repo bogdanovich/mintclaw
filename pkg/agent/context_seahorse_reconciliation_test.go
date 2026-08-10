@@ -15,6 +15,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
+type clearFailingSessionStore struct {
+	session.SessionStore
+	err error
+}
+
+func (s *clearFailingSessionStore) ClearSession(context.Context, string) error {
+	return s.err
+}
+
 func newReconciliationTestManager(t *testing.T) (*seahorseContextManager, *memory.JSONLStore) {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,6 +55,37 @@ func TestSeahorseReconciliationCleanRevisionSkipsDeepComparison(t *testing.T) {
 	}
 	if got := mgr.reconciliations.Load(); got != before {
 		t.Fatalf("unchanged revision reconciliations = %d, want %d", got, before)
+	}
+}
+
+func TestSeahorseClearStopsBeforeDerivedStateWhenCanonicalClearFails(t *testing.T) {
+	mgr, canonical := newReconciliationTestManager(t)
+	ctx := t.Context()
+	const key = "clear-failure"
+	if err := canonical.AddMessage(ctx, key, "user", "retained"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := singleTestRuntime(mgr)
+	if err := mgr.ensureReconciled(ctx, key, runtime.sessions); err != nil {
+		t.Fatal(err)
+	}
+	injectedErr := errors.New("canonical clear failed")
+	runtime.sessions = &clearFailingSessionStore{SessionStore: runtime.sessions, err: injectedErr}
+
+	err := mgr.Clear(ctx, &AgentInstance{ID: runtime.agentID}, key)
+	if !errors.Is(err, injectedErr) {
+		t.Fatalf("Clear() error = %v, want %v", err, injectedErr)
+	}
+	conversation, err := runtime.engine.GetRetrieval().Store().GetConversationBySessionKey(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := runtime.engine.GetRetrieval().Store().GetMessages(ctx, conversation.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Content != "retained" {
+		t.Fatalf("derived messages after failed clear = %#v", messages)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 // ---------------------------------------------------------------------------
@@ -281,6 +282,22 @@ func TestNoneContextManagerIsStatelessAndClearable(t *testing.T) {
 	}
 	if summary := agent.Sessions.GetSummary("session"); summary != "" {
 		t.Fatalf("summary after Clear() = %q", summary)
+	}
+}
+
+func TestNoneContextManagerClearReportsPersistenceFailure(t *testing.T) {
+	manager := session.NewSessionManager(t.TempDir())
+	manager.GetOrCreate(".")
+	manager.SetHistory(".", []providers.Message{{Role: "user", Content: "retained"}})
+	agent := &AgentInstance{Sessions: manager}
+
+	err := (&noneContextManager{}).Clear(t.Context(), agent, ".")
+	if !errors.Is(err, os.ErrInvalid) {
+		t.Fatalf("Clear() error = %v, want %v", err, os.ErrInvalid)
+	}
+	history := manager.GetHistory(".")
+	if len(history) != 1 || history[0].Content != "retained" {
+		t.Fatalf("failed clear mutated history: %+v", history)
 	}
 }
 
