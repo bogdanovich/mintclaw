@@ -26,9 +26,11 @@ import (
 
 type interactionChannelManager struct {
 	*recordingChannelManager
-	sent    chan bus.OutboundMessage
-	synced  chan bus.OutboundMessage
-	sendErr error
+	sent        chan bus.OutboundMessage
+	synced      chan bus.OutboundMessage
+	sendErr     error
+	sendStarted chan struct{}
+	sendRelease chan struct{}
 }
 
 type blockingInteractionProvider struct {
@@ -420,6 +422,15 @@ func (m *interactionChannelManager) SyncInteractionControls(msg bus.OutboundMess
 }
 
 func (m *interactionChannelManager) SendMessage(_ context.Context, msg bus.OutboundMessage) error {
+	if m.sendStarted != nil {
+		select {
+		case m.sendStarted <- struct{}{}:
+		default:
+		}
+	}
+	if m.sendRelease != nil {
+		<-m.sendRelease
+	}
 	if m.sendErr != nil {
 		return m.sendErr
 	}
@@ -1544,6 +1555,95 @@ func TestRecoveryDoesNotResendAmbiguousFinal(t *testing.T) {
 	case duplicate := <-manager.sent:
 		t.Fatalf("recovery resent ambiguous final: %#v", duplicate)
 	default:
+	}
+}
+
+func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	manager.sendStarted = make(chan struct{}, 1)
+	manager.sendRelease = make(chan struct{})
+	al.channelManager = manager
+	sessionKey := "session-active-final"
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
+	})
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = sessionKey
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
+	}, interactions.OutcomeAnswered)
+	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.MarkResuming(record.ID, record.Revision)
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", Content: "Final response",
+	})
+	flightKey, recoveryFlight, owner := al.startInteractionResumeFlight(
+		agent.Workspace, record.ID,
+	)
+	if !owner {
+		t.Fatal("failed to simulate recovery ownership")
+	}
+	resumeDone := make(chan error, 1)
+	go func() {
+		resumeDone <- al.resumeClaimedInteraction(
+			t.Context(), registry, agent.Workspace, agent,
+			&session.SessionScope{
+				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				RouteScopeKey: record.Route.RouteSessionKey,
+			},
+			inboundContextForInteraction(record.Route), record,
+		)
+	}()
+	select {
+	case <-manager.sendStarted:
+		t.Fatal("live continuation bypassed recovery ownership")
+	case <-time.After(50 * time.Millisecond):
+	}
+	al.finishInteractionResumeFlight(flightKey, recoveryFlight, false, nil)
+	select {
+	case <-manager.sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active final delivery did not start")
+	}
+	active, _ := registry.Get(record.ID)
+	if active.Status != interactions.StatusResuming ||
+		active.FinalDeliveryState != interactions.DeliveryStateSending {
+		t.Fatalf("active final delivery = %#v", active)
+	}
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 0 while live owner is sending", recovered)
+	}
+	active, _ = registry.Get(record.ID)
+	if active.Status != interactions.StatusResuming ||
+		active.FinalDeliveryState != interactions.DeliveryStateSending {
+		t.Fatalf("recovery changed active final delivery = %#v", active)
+	}
+	close(manager.sendRelease)
+	select {
+	case err = <-resumeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active final delivery did not finish")
+	}
+	resolved, _ := registry.Get(record.ID)
+	if resolved.Status != interactions.StatusResolved || !resolved.FinalDelivered {
+		t.Fatalf("resolved interaction = %#v", resolved)
 	}
 }
 

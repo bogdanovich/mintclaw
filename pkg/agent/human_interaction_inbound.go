@@ -1033,8 +1033,38 @@ type interactionToolResultPayload struct {
 }
 
 type interactionResumeFlight struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	handled bool
+	err     error
+}
+
+func interactionResumeFlightKey(workspace, interactionID string) string {
+	return strings.TrimSpace(workspace) + "\x00" + strings.TrimSpace(interactionID)
+}
+
+func (al *AgentLoop) startInteractionResumeFlight(
+	workspace string,
+	interactionID string,
+) (string, *interactionResumeFlight, bool) {
+	key := interactionResumeFlightKey(workspace, interactionID)
+	candidate := &interactionResumeFlight{done: make(chan struct{})}
+	actual, loaded := al.interactionResumeFlights.LoadOrStore(key, candidate)
+	if loaded {
+		return key, actual.(*interactionResumeFlight), false
+	}
+	return key, candidate, true
+}
+
+func (al *AgentLoop) finishInteractionResumeFlight(
+	key string,
+	flight *interactionResumeFlight,
+	handled bool,
+	err error,
+) {
+	flight.handled = handled
+	flight.err = err
+	close(flight.done)
+	al.interactionResumeFlights.Delete(key)
 }
 
 func (al *AgentLoop) resumeClaimedInteraction(
@@ -1049,28 +1079,30 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	if al == nil || registry == nil || agent == nil {
 		return fmt.Errorf("interaction continuation runtime is unavailable")
 	}
-	flightKey := strings.TrimSpace(interactionWorkspace) + "\x00" + strings.TrimSpace(record.ID)
-	candidate := &interactionResumeFlight{done: make(chan struct{})}
-	actual, loaded := al.interactionResumeFlights.LoadOrStore(flightKey, candidate)
-	if loaded {
-		flight := actual.(*interactionResumeFlight)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-flight.done:
-			return flight.err
+	for {
+		flightKey, flight, owner := al.startInteractionResumeFlight(
+			interactionWorkspace, record.ID,
+		)
+		if !owner {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
+				if flight.handled {
+					return flight.err
+				}
+				continue
+			}
 		}
+		var resumeErr error
+		defer func() {
+			al.finishInteractionResumeFlight(flightKey, flight, true, resumeErr)
+		}()
+		resumeErr = al.resumeClaimedInteractionOwned(
+			ctx, registry, interactionWorkspace, agent, scope, inbound, record,
+		)
+		return resumeErr
 	}
-	var resumeErr error
-	defer func() {
-		candidate.err = resumeErr
-		close(candidate.done)
-		al.interactionResumeFlights.Delete(flightKey)
-	}()
-	resumeErr = al.resumeClaimedInteractionOwned(
-		ctx, registry, interactionWorkspace, agent, scope, inbound, record,
-	)
-	return resumeErr
 }
 
 func (al *AgentLoop) resumeClaimedInteractionOwned(
