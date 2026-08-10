@@ -18,10 +18,11 @@ bounded P5a durable-jobs slice is complete under
 with merged-main, platform, deployment, recovery, and artifact evidence in
 [`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
 The remainder of P5 and later milestones remain unadmitted. The first bounded
-P8a remote-workspace slice is implemented under
+P8a remote-workspace slice is complete under
 [`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
-Its merged-main and deployment proof is tracked in
+Its merged-main and Linux/macOS deployment proof is recorded in
 [`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
+P8b and every other P8 extension remain unadmitted.
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -833,12 +834,16 @@ Media output uses the artifact contract established by P2.
 
 ## P8: Remote Workspace Routing
 
-The first bounded slice, P8a, is admitted under
+The first bounded slice, P8a, is complete under
 [`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
 It selects a stateless, explicit-per-call workspace alias and admits bounded
 read, search, write, patch, direct-argv foreground execution, and composition
 with existing P5a durable jobs. It does not admit a remote coding worker,
 sticky selection, generic proxy, shell jobs, or P7 routing.
+
+Completion evidence is recorded in
+[`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
+Do not continue into P8b or broaden P8 without a new explicit admission.
 
 P5a establishes the durable job capability that P8a routes. The local
 coding-agent roadmap separately owns `CodingTask` and `CodingThread` semantics
