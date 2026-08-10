@@ -188,6 +188,28 @@ func (sm *SessionManager) RestoreTurnSnapshot(
 	history []providers.Message,
 	summary string,
 ) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, history, summary, true)
+}
+
+func (sm *SessionManager) ReplaceTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, history, "", false)
+}
+
+func (sm *SessionManager) ClearSession(ctx context.Context, sessionKey string) error {
+	return sm.replaceTurnSnapshot(ctx, sessionKey, nil, "", true)
+}
+
+func (sm *SessionManager) replaceTurnSnapshot(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+	summary string,
+	replaceSummary bool,
+) error {
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
@@ -205,7 +227,9 @@ func (sm *SessionManager) RestoreTurnSnapshot(
 	}
 	next.Messages = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
 	normalizeHistoryCreatedAt(next.Messages)
-	next.Summary = summary
+	if replaceSummary {
+		next.Summary = summary
+	}
 	advanceHistoryRevision(&next)
 	next.Updated = now
 
@@ -231,7 +255,27 @@ func (sm *SessionManager) GetHistory(key string) []providers.Message {
 }
 
 func (sm *SessionManager) GetHistoryWithError(key string) ([]providers.Message, error) {
-	return sm.GetHistory(key), nil
+	return sm.ReadTurnHistory(context.Background(), key)
+}
+
+func (sm *SessionManager) ReadTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+) ([]providers.Message, error) {
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
+
+	session := sm.sessions[sessionKey]
+	if session == nil {
+		return []providers.Message{}, nil
+	}
+	return append([]providers.Message(nil), session.Messages...), nil
 }
 
 func (sm *SessionManager) GetSummary(key string) string {

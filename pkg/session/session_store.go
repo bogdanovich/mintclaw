@@ -17,6 +17,7 @@ import (
 // embedded TurnJournal contract.
 type SessionStore interface {
 	TurnJournal
+	TurnHistoryStore
 	TurnSnapshotStore
 
 	// AddMessage appends a simple role/content message to the session.
@@ -39,6 +40,15 @@ type SessionStore interface {
 	ListSessions() []string
 	// Close releases resources held by the store.
 	Close() error
+}
+
+// TurnHistoryStore owns contextual, error-aware replacements of canonical
+// history and complete session clears. Active turn and administrative paths
+// that depend on the mutation succeeding must use this contract.
+type TurnHistoryStore interface {
+	ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
+	ReplaceTurnHistory(ctx context.Context, sessionKey string, history []providers.Message) error
+	ClearSession(ctx context.Context, sessionKey string) error
 }
 
 // TurnJournal is the durability boundary for messages that determine whether

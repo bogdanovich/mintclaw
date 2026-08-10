@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 // noneContextManager disables stored context assembly and compaction.
@@ -26,16 +24,14 @@ func (m *noneContextManager) Ingest(_ context.Context, _ *IngestRequest) error {
 }
 
 func (m *noneContextManager) Clear(
-	_ context.Context,
+	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey string,
 ) error {
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{})
-	agent.Sessions.SetSummary(sessionKey, "")
-	return agent.Sessions.Save(sessionKey)
+	return agent.Sessions.ClearSession(ctx, sessionKey)
 }
 
 // failedContextManager preserves the construction error across direct callers

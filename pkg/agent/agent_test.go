@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -7498,6 +7499,26 @@ type visionUnsupportedMediaProvider struct {
 	mediaSeen []bool
 }
 
+type replaceFailingSessionStore struct {
+	session.SessionStore
+	err       error
+	committed bool
+}
+
+func (s *replaceFailingSessionStore) ReplaceTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+) error {
+	if s.committed {
+		if err := s.SessionStore.ReplaceTurnHistory(ctx, sessionKey, history); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: s.err}
+	}
+	return s.err
+}
+
 func (p *visionUnsupportedMediaProvider) Chat(
 	ctx context.Context,
 	messages []providers.Message,
@@ -7848,6 +7869,130 @@ func TestAgentLoop_VisionUnsupportedErrorPreservesCurrentTurnMedia(t *testing.T)
 	}
 	if !slices.Equal(provider.mediaSeen, []bool{true, true, false}) {
 		t.Fatalf("mediaSeen = %v, want %v", provider.mediaSeen, []bool{true, true, false})
+	}
+}
+
+func TestAgentLoop_VisionRetryRequiresConfirmedHistoryReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		committed bool
+	}{
+		{name: "pre-commit"},
+		{name: "committed-with-error", committed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			}}}
+			provider := &visionUnsupportedMediaProvider{}
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			t.Cleanup(func() { al.Close() })
+			const sessionKey = "agent:main:telegram:direct:user1"
+			inbound := func(messageID, content string, mediaRefs []string) bus.InboundMessage {
+				return testInboundMessage(bus.InboundMessage{
+					Context: bus.InboundContext{
+						Channel: "telegram", ChatID: "chat1", ChatType: "direct",
+						SenderID: "user1", MessageID: messageID,
+					},
+					Content: content, Media: mediaRefs, SessionKey: sessionKey,
+				})
+			}
+
+			_, err := al.processMessage(
+				t.Context(),
+				inbound("m1", "describe this", []string{"data:image/png;base64,abc123"}),
+			)
+			if err == nil || !isVisionUnsupportedError(err) {
+				t.Fatalf("first processMessage() error = %v, want vision unsupported", err)
+			}
+			agent := al.registry.GetDefaultAgent()
+			before := agent.Sessions.GetHistory(sessionKey)
+			injectedErr := errors.New("replace history failed")
+			agent.Sessions = &replaceFailingSessionStore{
+				SessionStore: agent.Sessions,
+				err:          injectedErr,
+				committed:    tc.committed,
+			}
+
+			_, err = al.processMessage(t.Context(), inbound("m2", "hello again", nil))
+			if !errors.Is(err, injectedErr) {
+				t.Fatalf("second processMessage() error = %v, want %v", err, injectedErr)
+			}
+			if provider.calls != 2 {
+				t.Fatalf("provider calls = %d, want 2", provider.calls)
+			}
+			after := agent.Sessions.GetHistory(sessionKey)
+			if !messageSlicesEquivalent(after, before) {
+				t.Fatalf("history after failed replacement = %+v, want %+v", after, before)
+			}
+			if !hasMediaRefs(after) {
+				t.Fatal("failed replacement did not restore historical media")
+			}
+		})
+	}
+}
+
+func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace:         t.TempDir(),
+		ModelName:         "test-model",
+		MaxTokens:         4096,
+		MaxToolIterations: 3,
+		ContextManager:    "none",
+	}}}
+	provider := &visionUnsupportedMediaProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(func() { al.Close() })
+	const sessionKey = "agent:main:telegram:direct:user1"
+	omitted := providers.Message{Role: "user", Content: "omitted canonical message"}
+	assembled := providers.Message{
+		Role: "assistant", Content: "assembled historical message",
+		Media: []string{"data:image/png;base64,historical"},
+	}
+	agent := al.registry.GetDefaultAgent()
+	if err := agent.Sessions.ReplaceTurnHistory(
+		t.Context(),
+		sessionKey,
+		[]providers.Message{omitted, assembled},
+	); err != nil {
+		t.Fatal(err)
+	}
+	al.contextManager = &staticContextManager{response: &AssembleResponse{
+		History: []providers.Message{assembled},
+	}}
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat1", ChatType: "direct",
+			SenderID: "user1", MessageID: "m1",
+		},
+		Content: "current root", SessionKey: sessionKey,
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "ok" {
+		t.Fatalf("response = %q, want %q", response, "ok")
+	}
+	if provider.calls != 2 || !slices.Equal(provider.mediaSeen, []bool{true, false}) {
+		t.Fatalf("provider calls/media = %d/%v, want 2/[true false]", provider.calls, provider.mediaSeen)
+	}
+
+	history := agent.Sessions.GetHistory(sessionKey)
+	wantContents := []string{"omitted canonical message", "assembled historical message", "current root", "ok"}
+	if len(history) != len(wantContents) {
+		t.Fatalf("history = %+v, want contents %v", history, wantContents)
+	}
+	for i, want := range wantContents {
+		if history[i].Content != want {
+			t.Fatalf("history[%d].Content = %q, want %q", i, history[i].Content, want)
+		}
+	}
+	if hasMediaRefs(history) {
+		t.Fatalf("canonical history retained unsupported media: %+v", history)
 	}
 }
 

@@ -475,16 +475,16 @@ func (m *seahorseContextManager) Clear(
 	}
 	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
 	defer unlock()
+	sessions := runtime.sessions
+	if sessions != nil {
+		if err := sessions.ClearSession(ctx, sessionKey); err != nil {
+			return err
+		}
+	}
 	if err := runtime.engine.ClearSession(ctx, sessionKey); err != nil {
 		return err
 	}
-	sessions := runtime.sessions
 	if sessions != nil {
-		sessions.SetHistory(sessionKey, []providers.Message{})
-		sessions.SetSummary(sessionKey, "")
-		if err := sessions.Save(sessionKey); err != nil {
-			return err
-		}
 		revision, err := historyRevision(sessions, sessionKey)
 		if err != nil {
 			return err
