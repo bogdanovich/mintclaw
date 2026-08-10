@@ -95,6 +95,8 @@ driver boundary.
 
 Add bounded discovery and selection of browser document contexts so later
 actions can target the correct page and frame without raw driver handles.
+The implementation authority and stop conditions are fixed in
+[Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
 
 ### Acceptance Criteria
 

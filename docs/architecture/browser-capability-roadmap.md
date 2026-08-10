@@ -12,6 +12,8 @@ The next selected slice is admitted in
 [Browser Capability BF1 Click Parity Admission](browser-capability-bf1-click-admission.md).
 The typed keyboard and option-selection slice is admitted in
 [Browser Capability BF1 Press And Select Parity Admission](browser-capability-bf1-press-select-admission.md).
+The tabs, frames, and popups slice is admitted in
+[Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
 The selected six-phase continuation is governed by
 [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md).
 B2 completion evidence is recorded in
@@ -659,6 +661,9 @@ host, but it must report that omission through `browser_targets`; it must not
 advertise a feature and fail only after the model attempts to use it.
 
 ### BF1: Ordinary interaction and document parity
+
+Tabs, frames, and popup context parity is admitted in
+[Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
 
 #### Operator outcome
 
