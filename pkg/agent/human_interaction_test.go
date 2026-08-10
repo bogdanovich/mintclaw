@@ -2291,6 +2291,7 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 	tool.terminalResult = toolshared.ErrorResult(
 		`{"state":"unknown","code":"DISPATCH_UNCERTAIN","invocation_id":"inv_recover"}`,
 	)
+	tool.terminalResult.Media = []string{"media://recoverable-partial-artifact"}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("blocking-approval", &durableApprovalHook{
 		actionSummary: "Run the blocking protected action",
@@ -2375,7 +2376,9 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		!strings.Contains(history[resultIndex].Content, `"code":"DISPATCH_UNCERTAIN"`) ||
 		!strings.Contains(history[resultIndex].Content, `"invocation_id":"inv_recover"`) ||
 		strings.Contains(history[resultIndex].Content, `"outcome":"canceled"`) ||
-		history[resultIndex].ToolResultStatus != providers.ToolResultStatusError {
+		history[resultIndex].ToolResultStatus != providers.ToolResultStatusError ||
+		len(history[resultIndex].Media) != 1 ||
+		history[resultIndex].Media[0] != "media://recoverable-partial-artifact" {
 		t.Fatalf("approved tool terminal result = %#v", history)
 	}
 	select {
@@ -2388,6 +2391,34 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		t.Fatal("canceled approved tool did not release the route for reuse")
 	}
 	claim.releaseIfOwned()
+}
+
+func TestInteractionCancellationDoesNotReplaceConsumedApprovalResult(t *testing.T) {
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:consumed-approval-cancellation")
+	agent := &AgentInstance{Sessions: session.NewSessionManager("")}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role:      "assistant",
+		ToolCalls: []providers.ToolCall{{ID: "call-consumed", Name: "protected_mutation"}},
+	})
+	record := interactions.Record{
+		ID: "interaction-consumed", Kind: interactions.KindApproval, ApprovalConsumedAt: time.Now().UnixMilli(),
+		Origin: interactions.Origin{
+			ToolCallID: "call-consumed", ContinuationSessionKey: sessionKey,
+		},
+	}
+	err := (&AgentLoop{}).ensureInteractionCancellationToolResult(
+		t.Context(),
+		agent,
+		record,
+		"session_control_stop",
+	)
+	if err == nil || !strings.Contains(err.Error(), "terminal result is unavailable") {
+		t.Fatalf("consumed approval cancellation error = %v", err)
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) != 1 || history[0].Role != "assistant" {
+		t.Fatalf("consumed approval gained synthetic cancellation result: %#v", history)
+	}
 }
 
 func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {

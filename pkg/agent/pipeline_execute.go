@@ -1147,35 +1147,25 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
-	if bindErr := bindNodeFileMediaOwner(
-		p.Context.MediaResolver,
+	toolResultMsg := buildToolResultJournalMessage(
+		p,
 		ts,
-		toolResult.Media,
-	); bindErr != nil {
-		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
-			"tool":        toolName,
-			"media_count": len(toolResult.Media),
-		})
-	}
+		toolCallID,
+		toolName,
+		toolResult,
+		p.filterToolContentForLLM(toolResult.ContentForLLM()),
+	)
 	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
 		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
 		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
 	}
-	contentForLLM := p.filterToolContentForLLM(toolResult.ContentForLLM())
+	contentForLLM := toolResultMsg.Content
 	loopDecision := p.afterToolLoopDecision(
 		ts, exec, toolName, toolArgs, toolResult, contentForLLM, toolSemantics,
 	)
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
-	toolResultMsg := providers.Message{
-		Role:             "tool",
-		Content:          contentForLLM,
-		ToolCallID:       toolCallID,
-		ToolResultStatus: toolResultContextStatus(toolResult),
-	}
-	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
-		toolResultMsg.Media = append(toolResultMsg.Media, toolResult.Media...)
-	}
+	toolResultMsg.Content = contentForLLM
 	if err := runner.commitToolResult(toolResultMsg); err != nil {
 		return stopToolBatch(ToolLoopOutcome{})
 	}
@@ -1487,12 +1477,41 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
-	return r.appendToolMessageWithContext(ctx, providers.Message{
-		Role:             "tool",
-		Content:          r.p.filterToolContentForLLM(result.ContentForLLM()),
-		ToolCallID:       toolCall.ID,
+	return r.appendToolMessageWithContext(
+		ctx,
+		buildToolResultJournalMessage(
+			r.p,
+			r.ts,
+			toolCall.ID,
+			toolCall.Name,
+			result,
+			r.p.filterToolContentForLLM(result.ContentForLLM()),
+		),
+		toolMessagePersistOnly,
+	)
+}
+
+func buildToolResultJournalMessage(
+	pipeline *Pipeline,
+	ts *turnState,
+	toolCallID string,
+	toolName string,
+	result *toolshared.ToolResult,
+	content string,
+) providers.Message {
+	if bindErr := bindNodeFileMediaOwner(pipeline.Context.MediaResolver, ts, result.Media); bindErr != nil {
+		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
+			"tool": toolName, "media_count": len(result.Media),
+		})
+	}
+	message := providers.Message{
+		Role: "tool", Content: content, ToolCallID: toolCallID,
 		ToolResultStatus: toolResultContextStatus(result),
-	}, toolMessagePersistOnly)
+	}
+	if len(result.Media) > 0 && !result.ResponseHandled {
+		message.Media = append(message.Media, result.Media...)
+	}
+	return message
 }
 
 func (r *toolLoopRunner) commitToolResult(msg providers.Message) error {
