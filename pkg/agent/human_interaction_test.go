@@ -103,6 +103,60 @@ func (h *durableApprovalHook) ApproveTool(
 	return ApprovalDecision{RequireHuman: true, ActionSummary: h.actionSummary}, nil
 }
 
+type postExecutionBarrierApprovalHook struct {
+	afterTool chan struct{}
+}
+
+func (h *postExecutionBarrierApprovalHook) ApproveTool(
+	context.Context,
+	*ToolApprovalRequest,
+) (ApprovalDecision, error) {
+	return ApprovalDecision{
+		RequireHuman:  true,
+		ActionSummary: "Run the post-execution barrier action",
+	}, nil
+}
+
+func (*postExecutionBarrierApprovalHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	return req, HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *postExecutionBarrierApprovalHook) AfterTool(
+	ctx context.Context,
+	result *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	select {
+	case h.afterTool <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return result, HookDecision{Action: HookActionContinue}, nil
+}
+
+type immediateApprovalTool struct {
+	executions int
+	result     *toolshared.ToolResult
+}
+
+func (*immediateApprovalTool) Name() string { return "approval_immediate" }
+
+func (*immediateApprovalTool) Description() string { return "Run an immediate protected test action" }
+
+func (*immediateApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *immediateApprovalTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	return tool.result
+}
+
 type approvalCountingTool struct {
 	executions int
 }
@@ -2391,6 +2445,112 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		t.Fatal("canceled approved tool did not release the route for reuse")
 	}
 	claim.releaseIfOwned()
+}
+
+func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-immediate-protected", Name: "approval_immediate",
+			Function: &providers.FunctionCall{Name: "approval_immediate", Arguments: `{}`},
+		}}},
+		{Content: "SHOULD_NOT_BE_DELIVERED", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	tool := &immediateApprovalTool{result: toolshared.ErrorResult(
+		`{"state":"unknown","code":"DISPATCH_UNCERTAIN","invocation_id":"inv_post_execute"}`,
+	)}
+	agent.Tools.Register(tool)
+	hook := &postExecutionBarrierApprovalHook{afterTool: make(chan struct{}, 1)}
+	if err := al.MountHook(NamedHook("post-execution-barrier", hook)); err != nil {
+		t.Fatal(err)
+	}
+	inbound := &bus.InboundContext{
+		Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+		SenderID: "user-1", MessageID: "approval-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus:            &turnStatus,
+		InteractionSessionKey: "owner-approval-post-execute-stop",
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-approval-post-execute-stop",
+			SessionKey:      "continuation-approval-post-execute-stop",
+			UserMessage:     "run immediate protected action",
+			InboundContext:  inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	select {
+	case <-manager.sent:
+	case <-time.After(time.Second):
+		t.Fatal("approval prompt was not delivered")
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "owner-approval-post-execute-stop")
+	if !ok || record.Kind != interactions.KindApproval {
+		t.Fatalf("approval interaction = %#v", record)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: record.Route.SessionKey,
+		RouteClaimKey: runtimeRouteClaimKey(record.Route.RouteSessionKey, ""),
+		Allocation:    session.Allocation{RouteScopeKey: record.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "/answer " + record.ShortID + " allow_once", SpoolID: "approval-answer-spool",
+		Context: inboundContextForInteraction(record.Route),
+	}
+	answer.Context.MessageID = "approval-answer"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("approval answer did not enter the continuation worker")
+	}
+	select {
+	case <-hook.afterTool:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the post-execution barrier")
+	}
+
+	stop := bus.InboundMessage{
+		Content: "/stop", Context: inboundContextForInteraction(record.Route),
+	}
+	stop.Context.MessageID = "approval-stop"
+	cancellation, err := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cancellation.Matched || !cancellation.Canceled || cancellation.Failed ||
+		!cancellation.CommandHandled {
+		t.Fatalf("approval stop cancellation = %#v", cancellation)
+	}
+	if tool.executions != 1 {
+		t.Fatalf("approved tool executions = %d, want 1", tool.executions)
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled || record.ApprovalConsumedAt == 0 {
+		t.Fatalf("canceled approval interaction = %#v", record)
+	}
+	history := agent.Sessions.GetHistory("continuation-approval-post-execute-stop")
+	if countInteractionToolResults(history, record.Origin.ToolCallID) != 1 {
+		t.Fatalf("post-execution stop did not pair the protected tool call exactly once: %#v", history)
+	}
+	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+	if resultIndex < 0 ||
+		!strings.Contains(history[resultIndex].Content, `"code":"DISPATCH_UNCERTAIN"`) ||
+		!strings.Contains(history[resultIndex].Content, `"invocation_id":"inv_post_execute"`) ||
+		strings.Contains(history[resultIndex].Content, `"outcome":"canceled"`) ||
+		history[resultIndex].ToolResultStatus != providers.ToolResultStatusError {
+		t.Fatalf("approved tool terminal result = %#v", history)
+	}
+	select {
+	case final := <-manager.sent:
+		t.Fatalf("post-execution stop published a final response: %#v", final)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestInteractionCancellationDoesNotReplaceConsumedApprovalResult(t *testing.T) {

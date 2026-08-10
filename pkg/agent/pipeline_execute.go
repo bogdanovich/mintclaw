@@ -500,8 +500,14 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolResultStatus: toolResultContextStatus(hookResult),
 					Media:            toolResultMedia,
 				}
-				if err := runner.commitToolResult(toolResultMsg); err != nil {
+				aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+				if err != nil {
 					return stopToolBatch(ToolLoopOutcome{})
+				}
+				if aborted {
+					return stopToolBatch(ToolLoopOutcome{
+						Control: ToolControlBreak, AbortCause: TurnAbortHard,
+					})
 				}
 
 				attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
@@ -1166,8 +1172,14 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
 	toolResultMsg.Content = contentForLLM
-	if err := runner.commitToolResult(toolResultMsg); err != nil {
+	aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+	if err != nil {
 		return stopToolBatch(ToolLoopOutcome{})
+	}
+	if aborted {
+		return stopToolBatch(ToolLoopOutcome{
+			Control: ToolControlBreak, AbortCause: TurnAbortHard,
+		})
 	}
 
 	attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
@@ -1514,8 +1526,23 @@ func buildToolResultJournalMessage(
 	return message
 }
 
-func (r *toolLoopRunner) commitToolResult(msg providers.Message) error {
-	return r.appendToolMessage(msg, toolMessagePersistAndIngest)
+func (r *toolLoopRunner) commitExecutedToolResult(msg providers.Message) (bool, error) {
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	if err := r.appendToolMessageWithContext(ctx, msg, toolMessagePersistOnly); err != nil {
+		return false, err
+	}
+	if r.ts.hardAbortRequested() {
+		return true, nil
+	}
+	if r.ts != nil && !r.ts.opts.NoHistory && r.p != nil {
+		r.p.ingestMessage(r.turnCtx, r.ts, msg, nil)
+	}
+	return r.ts.hardAbortRequested(), nil
 }
 
 func (r *toolLoopRunner) captureAfterToolSteering(markAdditionalSteering bool) {
