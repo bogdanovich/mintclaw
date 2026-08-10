@@ -833,6 +833,7 @@ mutation did not execute.
 | Root-owned service helper and verified actions | #498 | `cmd/mintclaw-node-service-helper`, `pkg/nodes/companion` | peer/cgroup/profile binding, cancellation, response-loss, post-action, and redaction tests | Root helper exposes one exact reversible canary service |
 | Generic model-to-service vertical slice | #504 | `pkg/nodes`, `pkg/tools`, `pkg/gateway`, `pkg/nodes/companion` | approval, WSS, recovery, unknown/no-replay, events, race, and Linux real-process E2E | Live status, logs, and approved restart completed through `p3-canary` |
 | Fail-closed node invocation trace content | #509 | `pkg/agent` | diagnostic message, tool-call, and runtime-log redaction regression tests | Deployed; post-fix trace scan found no service output or raw unit names |
+| Explicit remote workspace routing | #631, #635, #663, #674 | `pkg/config`, `pkg/tools`, `pkg/nodes`, `pkg/nodes/companion`, `pkg/gateway` | local-default, authority, read/search/write/patch, foreground/job, uncertainty, redaction, race, and real-process WSS tests | Bounded Linux and macOS operator profiles are recorded in the [P8a proof](../operations/node-companion-p8a-proof.md) |
 
 The matrix records merged implementation evidence. It does not imply that a
 particular installation has enabled node access. Deployment deliberately
@@ -912,9 +913,12 @@ Typed Linux systemd service administration is implemented under
 [Node Companion P3 Typed Service Administration Admission](node-companion-p3-admission.md),
 with operational proof in the
 [P3 deployment evidence](../operations/node-companion-p3-deployment-evidence.md).
-Later milestones cover directory transfer, fleet operations, additional
-executors, SSH, interactive application capabilities, platforms, and
-compatibility adapters.
+P8a remote workspace routing is implemented under
+[its admission contract](node-companion-p8a-remote-workspace-admission.md),
+with exact evidence in the
+[P8a proof matrix](../operations/node-companion-p8a-proof.md). Later milestones
+cover directory transfer, fleet operations, additional executors, SSH,
+interactive application capabilities, platforms, and compatibility adapters.
 
 The roadmap is not part of the MVP definition above and does not authorize
 implementation without a fresh milestone decision.
@@ -960,7 +964,7 @@ The implemented MVP does not include:
 - model-facing cancellation;
 - service managers other than Linux systemd, arbitrary unit names, unbounded
   logs, manager passthrough, or service actions outside an operator profile;
-- an owner shell, PTY, background remote jobs, or streamed execution;
+- an owner shell, remotely routed PTY, streamed execution, or shell-text jobs;
 - directory, archive, resumable, symlink, special-file, macOS-privileged, or
   Windows-privileged transfer;
 - Docker, bubblewrap, or SSH execution backends;

@@ -18,8 +18,10 @@ bounded P5a durable-jobs slice is complete under
 with merged-main, platform, deployment, recovery, and artifact evidence in
 [`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
 The remainder of P5 and later milestones remain unadmitted. The first bounded
-P8a remote-workspace slice is admitted under
+P8a remote-workspace slice is implemented under
 [`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
+Its merged-main and deployment proof is tracked in
+[`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in

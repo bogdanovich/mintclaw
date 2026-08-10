@@ -193,6 +193,75 @@ becomes `unknown` or `interrupted`. Disable the profile and remove the target's
 `job_profile` binding to roll back exposure; after the catalog changes, renew
 pairing approval without the job commands.
 
+### Remote workspaces
+
+A remote workspace is an operator-owned alias over one existing node target,
+authenticated working-scope alias, file profile, and optional job profile. It
+lets the ordinary `read_file`, `search_files`, `write_file`, and `apply_patch`
+tools name that alias explicitly. `workspace_exec` runs direct argv in the same
+scope, either synchronously through `system.exec.v1` or durably through the
+existing job lifecycle.
+
+The gateway configuration is deny-by-default because
+`execution.remote_workspaces` is empty unless an operator adds an entry:
+
+```json
+{
+  "execution": {
+    "targets": {
+      "build": {
+        "type": "node",
+        "node": "linux-builder",
+        "executor": "local",
+        "file_profile": "project-files",
+        "job_profile": "project-builds"
+      }
+    },
+    "remote_workspaces": {
+      "project": {
+        "target": "build",
+        "working_scope": "project",
+        "tools": [
+          "read_file",
+          "search_files",
+          "write_file",
+          "apply_patch",
+          "workspace_exec",
+          "jobs"
+        ],
+        "revision": "project-workspace-v1"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "target_policy": {"allowed_targets": ["build"]}
+    }
+  }
+}
+```
+
+The companion must independently allow the four `workspace.*.v1` commands,
+bind `project-files` to the same native root, and expose `project` as a
+`system_exec.discovery.working_scope_aliases` entry. Foreground execution also
+requires `system.exec.v1`; job mode additionally requires `job.start.v1` and
+the target's configured job profile. Pairing approval must contain only the
+commands intended for that node.
+
+Every remote call includes `"workspace":"project"`. Omitting `workspace`
+preserves the gateway-local file-tool behavior; an unknown or unavailable
+remote alias fails and never falls back locally. Paths are relative to the
+configured scope. Use `workspace_exec` with an executable alias and an argv
+array rather than a shell string. Job mode returns the existing opaque job ID;
+use the normal job status, logs, cancel, and artifact commands afterward.
+
+Changing the workspace revision, target profile, discovery catalog, or pairing
+authority invalidates retained approval. A disconnect after a mutation may be
+reported as unknown and is never an instruction to repeat the call. Rollback
+is configuration-first: remove the remote workspace entry, remove the target
+grant or profile binding, and remove the four workspace commands from node
+policy and pairing approval. Existing local tools remain unchanged.
+
 ## Run
 
 ```bash
