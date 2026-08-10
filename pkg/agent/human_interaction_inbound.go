@@ -1545,6 +1545,12 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	default:
 		mode = toolshared.AsyncDeliveryUserOnly
 	}
+	if mode != toolshared.AsyncDeliveryParentOnly {
+		bus.OutboundMetadata{
+			MessageKind:  bus.OutboundMessageKindFinalReply,
+			OutboundKind: bus.OutboundKindFinal,
+		}.ApplyToContext(&inbound)
+	}
 	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
 	if stateErr != nil {
 		return fmt.Errorf("start task interaction delivery: %w", stateErr)
