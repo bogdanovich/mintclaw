@@ -261,10 +261,6 @@ func (t *GatewayRestartTool) Name() string {
 	return "gateway_restart"
 }
 
-func (t *GatewayRestartTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
 func (t *GatewayRestartTool) Description() string {
 	return "Safely restart the configured gateway service. The service manager and service name come only from gateway.safe_restart config."
 }

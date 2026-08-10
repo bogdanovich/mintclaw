@@ -20,7 +20,7 @@ func TestHandleErrorResponse_ReturnsHTTPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("http.Get() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	err = HandleErrorResponse(resp, server.URL)
 	var httpErr *HTTPError

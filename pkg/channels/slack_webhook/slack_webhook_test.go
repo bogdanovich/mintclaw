@@ -91,7 +91,7 @@ func TestSlackWebhookChannel_Send(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var payload map[string]any
-		json.Unmarshal(body, &payload)
+		_ = json.Unmarshal(body, &payload)
 		payloadCh <- payload
 		w.WriteHeader(http.StatusOK)
 	}))

@@ -7,7 +7,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestRequestUserInputToolGuidesConversationLanguagePresentation(t *testing.T) {
@@ -83,9 +82,6 @@ func TestRequestUserInputToolReturnsTypedSuspension(t *testing.T) {
 	}
 	if got := tool.ToolLoopSemantics(); got != loopguard.SemanticsMutating {
 		t.Fatalf("ToolLoopSemantics() = %q", got)
-	}
-	if got := tool.ToolSteeringSafety(nil); got != toolshared.SteeringSafetyCancellable {
-		t.Fatalf("ToolSteeringSafety() = %q", got)
 	}
 }
 

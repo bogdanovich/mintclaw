@@ -35,7 +35,7 @@ func TestClawHubRegistrySearch(t *testing.T) {
 		summary := "Interact with GitHub repos"
 		version := "1.0.0"
 
-		json.NewEncoder(w).Encode(clawhubSearchResponse{
+		_ = json.NewEncoder(w).Encode(clawhubSearchResponse{
 			Results: []clawhubSearchResult{
 				{Score: 0.95, Slug: &slug, DisplayName: &name, Summary: &summary, Version: &version},
 			},
@@ -61,7 +61,7 @@ func TestClawHubRegistrySearchRetries429(t *testing.T) {
 		if attempts == 1 {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte("rate limited"))
+			_, _ = w.Write([]byte("rate limited"))
 			return
 		}
 
@@ -70,7 +70,7 @@ func TestClawHubRegistrySearchRetries429(t *testing.T) {
 		summary := "Interact with GitHub repos"
 		version := "1.0.0"
 
-		json.NewEncoder(w).Encode(clawhubSearchResponse{
+		_ = json.NewEncoder(w).Encode(clawhubSearchResponse{
 			Results: []clawhubSearchResult{
 				{Score: 0.95, Slug: &slug, DisplayName: &name, Summary: &summary, Version: &version},
 			},
@@ -91,7 +91,7 @@ func TestClawHubRegistryGetSkillMeta(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/skills/github", r.URL.Path)
 
-		json.NewEncoder(w).Encode(clawhubSkillResponse{
+		_ = json.NewEncoder(w).Encode(clawhubSkillResponse{
 			Slug:        "github",
 			DisplayName: "GitHub Integration",
 			Summary:     "Full GitHub API integration",
@@ -134,7 +134,7 @@ func TestClawHubRegistryDownloadAndInstall(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/skills/test-skill":
 			// Metadata endpoint.
-			json.NewEncoder(w).Encode(clawhubSkillResponse{
+			_ = json.NewEncoder(w).Encode(clawhubSkillResponse{
 				Slug:          "test-skill",
 				DisplayName:   "Test Skill",
 				Summary:       "A test skill",
@@ -143,7 +143,7 @@ func TestClawHubRegistryDownloadAndInstall(t *testing.T) {
 		case "/api/v1/download":
 			assert.Equal(t, "test-skill", r.URL.Query().Get("slug"))
 			w.Header().Set("Content-Type", "application/zip")
-			w.Write(zipBuf)
+			_, _ = w.Write(zipBuf)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -179,7 +179,7 @@ func TestClawHubRegistryDownloadAndInstallRetries429(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/retry-skill":
-			json.NewEncoder(w).Encode(clawhubSkillResponse{
+			_ = json.NewEncoder(w).Encode(clawhubSkillResponse{
 				Slug:          "retry-skill",
 				DisplayName:   "Retry Skill",
 				Summary:       "A retry test skill",
@@ -190,12 +190,12 @@ func TestClawHubRegistryDownloadAndInstallRetries429(t *testing.T) {
 			if downloadAttempts == 1 {
 				w.Header().Set("Retry-After", "0")
 				w.WriteHeader(http.StatusTooManyRequests)
-				w.Write([]byte("rate limited"))
+				_, _ = w.Write([]byte("rate limited"))
 				return
 			}
 			assert.Equal(t, "retry-skill", r.URL.Query().Get("slug"))
 			w.Header().Set("Content-Type", "application/zip")
-			w.Write(zipBuf)
+			_, _ = w.Write(zipBuf)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -222,7 +222,7 @@ func TestClawHubRegistryAuthToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		assert.Equal(t, "Bearer test-token-123", authHeader)
-		json.NewEncoder(w).Encode(clawhubSearchResponse{Results: nil})
+		_ = json.NewEncoder(w).Encode(clawhubSearchResponse{Results: nil})
 	}))
 	defer srv.Close()
 
@@ -238,9 +238,9 @@ func TestExtractZipPathTraversal(t *testing.T) {
 	// Malicious entry trying to escape directory.
 	w, err := zw.Create("../../etc/passwd")
 	require.NoError(t, err)
-	w.Write([]byte("malicious"))
+	_, _ = w.Write([]byte("malicious"))
 
-	zw.Close()
+	_ = zw.Close()
 
 	// Write to temp file for extractZipFile.
 	tmpZip := filepath.Join(t.TempDir(), "bad.zip")
@@ -278,7 +278,7 @@ func TestExtractZipWithSubdirectories(t *testing.T) {
 func TestClawHubRegistrySearchHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal Server Error"))
+		_, _ = w.Write([]byte("Internal Server Error"))
 	}))
 	defer srv.Close()
 
@@ -294,7 +294,7 @@ func TestClawHubRegistrySearchNullableFields(t *testing.T) {
 		validSummary := "valid summary"
 
 		// Return results with various null/empty fields
-		json.NewEncoder(w).Encode(clawhubSearchResponse{
+		_ = json.NewEncoder(w).Encode(clawhubSearchResponse{
 			Results: []clawhubSearchResult{
 				// Case 1: Null Slug -> Skip
 				{Score: 0.1, Slug: nil, DisplayName: nil, Summary: nil, Version: nil},

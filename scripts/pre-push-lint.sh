@@ -33,7 +33,6 @@ lint_all() {
 	run_step "Go formatting" golangci-lint fmt --config .golangci-format.yaml --diff
 	run_step "all Go packages" env CGO_ENABLED="$cgo_enabled" golangci-lint run \
 		--allow-serial-runners \
-		--tests=false \
 		--concurrency "$concurrency" \
 		--build-tags=goolm,stdjson
 }
@@ -123,7 +122,6 @@ run_step "changed Go package formatting" golangci-lint fmt \
 	"${packages[@]}"
 run_step "changed Go packages" env CGO_ENABLED="$cgo_enabled" golangci-lint run \
 	--allow-serial-runners \
-	--tests=false \
 	--concurrency "$concurrency" \
 	--build-tags=goolm,stdjson \
 	"${packages[@]}"

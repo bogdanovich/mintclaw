@@ -536,7 +536,9 @@ func TestCleanExpiredCleansEmptyScopes(t *testing.T) {
 	// Store old entry as the only one in scope
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 	path := createTempFile(t, dir, "only.jpg")
-	store.Store(path, MediaMeta{Source: "test"}, "lonely_scope")
+	if _, err := store.Store(path, MediaMeta{Source: "test"}, "lonely_scope"); err != nil {
+		t.Fatal(err)
+	}
 
 	store.nowFunc = func() time.Time { return now }
 	store.CleanExpired()
@@ -675,7 +677,9 @@ func TestConcurrentCleanupSafety(t *testing.T) {
 			scope := fmt.Sprintf("scope-%d", wIdx)
 			for i := range ops {
 				p := createTempFile(t, dir, fmt.Sprintf("w%d-f%d.tmp", wIdx, i))
-				store.Store(p, MediaMeta{Source: "test"}, scope)
+				if _, err := store.Store(p, MediaMeta{Source: "test"}, scope); err != nil {
+					t.Errorf("Store: %v", err)
+				}
 			}
 		}(w)
 	}
@@ -685,7 +689,7 @@ func TestConcurrentCleanupSafety(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range ops {
-				store.Resolve("media://nonexistent")
+				_, _ = store.Resolve("media://nonexistent")
 			}
 		}()
 	}
@@ -695,7 +699,9 @@ func TestConcurrentCleanupSafety(t *testing.T) {
 		go func(wIdx int) {
 			defer wg.Done()
 			for range ops {
-				store.ReleaseAll(fmt.Sprintf("scope-%d", wIdx))
+				if err := store.ReleaseAll(fmt.Sprintf("scope-%d", wIdx)); err != nil {
+					t.Errorf("ReleaseAll: %v", err)
+				}
 			}
 		}(w)
 	}
@@ -735,7 +741,9 @@ func TestRefToScopeConsistency(t *testing.T) {
 	store.mu.RUnlock()
 
 	// Release s1 and verify refToScope is cleaned
-	store.ReleaseAll("s1")
+	if err := store.ReleaseAll("s1"); err != nil {
+		t.Fatal(err)
+	}
 
 	store.mu.RLock()
 	defer store.mu.RUnlock()

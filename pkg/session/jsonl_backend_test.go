@@ -62,6 +62,52 @@ func TestJSONLBackendTurnJournalHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestJSONLBackendHistoryReplacementHonorsCancellation(t *testing.T) {
+	backend := newBackend(t)
+	if err := backend.AppendTurnMessage(
+		t.Context(),
+		"turn",
+		providers.Message{Role: "user", Content: "current"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := backend.ReplaceTurnHistory(
+		ctx,
+		"turn",
+		[]providers.Message{{Role: "user", Content: "replacement"}},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReplaceTurnHistory() error = %v, want %v", err, context.Canceled)
+	}
+	history := backend.GetHistory("turn")
+	if len(history) != 1 || history[0].Content != "current" {
+		t.Fatalf("canceled replacement mutated history: %+v", history)
+	}
+}
+
+func TestJSONLBackendClearSessionClearsHistoryAndSummary(t *testing.T) {
+	backend := newBackend(t)
+	if err := backend.AppendTurnMessage(
+		t.Context(),
+		"turn",
+		providers.Message{Role: "user", Content: "current"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	backend.SetSummary("turn", "current summary")
+	if err := backend.ClearSession(t.Context(), "turn"); err != nil {
+		t.Fatalf("ClearSession() error = %v", err)
+	}
+	if history := backend.GetHistory("turn"); len(history) != 0 {
+		t.Fatalf("history = %+v", history)
+	}
+	if summary := backend.GetSummary("turn"); summary != "" {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
 func TestJSONLBackendTurnJournalPropagatesCanonicalResolutionFailure(t *testing.T) {
 	store, err := memory.NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -145,7 +191,7 @@ func newBackend(t *testing.T) *session.JSONLBackend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return session.NewJSONLBackend(store)
 }
 

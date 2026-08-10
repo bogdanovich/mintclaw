@@ -1168,6 +1168,10 @@ func (al *AgentLoop) deliverInteractionFinal(
 			ctx, registry, interactionWorkspace, record, inbound, content, traceScopes,
 		)
 	}
+	if strings.TrimSpace(content) == "" && record.Kind == interactions.KindQuestion &&
+		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
+		content = "Response recorded."
+	}
 	if record.FinalDelivered || strings.TrimSpace(content) == "" {
 		updated, err := registry.Resolve(record.ID, record.Revision)
 		if err == nil {

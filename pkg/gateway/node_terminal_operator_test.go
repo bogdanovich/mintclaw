@@ -220,7 +220,7 @@ func TestNodeTerminalOperatorRequiresAuthSessionAndOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusUnauthorized || source.attachCount != 0 {
 		t.Fatalf("unauthenticated response = %d, attaches = %d", response.StatusCode, source.attachCount)
 	}
@@ -231,7 +231,7 @@ func TestNodeTerminalOperatorRequiresAuthSessionAndOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusNotFound || source.attachCount != 0 {
 		t.Fatalf("wrong-session response = %d, attaches = %d", response.StatusCode, source.attachCount)
 	}
@@ -239,8 +239,12 @@ func TestNodeTerminalOperatorRequiresAuthSessionAndOrigin(t *testing.T) {
 	wsEndpoint := "ws" + strings.TrimPrefix(endpoint, "http")
 	badOriginHeader := header.Clone()
 	badOriginHeader.Set("Origin", "https://attacker.example")
-	if connection, response, dialErr := websocket.DefaultDialer.Dial(wsEndpoint, badOriginHeader); dialErr == nil {
-		connection.Close()
+	connection, response, dialErr := websocket.DefaultDialer.Dial(wsEndpoint, badOriginHeader)
+	if response != nil {
+		defer func(r *http.Response) { _ = r.Body.Close() }(response)
+	}
+	if dialErr == nil {
+		_ = connection.Close()
 		t.Fatal("cross-origin operator websocket was accepted")
 	} else if response == nil || response.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-origin response = %#v, error = %v", response, dialErr)
@@ -248,11 +252,12 @@ func TestNodeTerminalOperatorRequiresAuthSessionAndOrigin(t *testing.T) {
 
 	validHeader := header.Clone()
 	validHeader.Set("Origin", "https://operator.example")
-	connection, response, err := websocket.DefaultDialer.Dial(wsEndpoint, validHeader)
+	connection, response, err = websocket.DefaultDialer.Dial(wsEndpoint, validHeader)
 	if err != nil {
 		t.Fatalf("valid operator websocket: response=%#v error=%v", response, err)
 	}
-	defer connection.Close()
+	defer func() { _ = response.Body.Close() }()
+	defer func() { _ = connection.Close() }()
 	var attached nodeTerminalOperatorAttached
 	if err := connection.ReadJSON(&attached); err != nil {
 		t.Fatal(err)
@@ -281,6 +286,7 @@ func TestNodeTerminalOperatorOrdersControlsAndKeepsBytesOnSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial operator websocket: response=%#v error=%v", response, err)
 	}
+	defer func() { _ = response.Body.Close() }()
 	var attached nodeTerminalOperatorAttached
 	if err := connection.ReadJSON(&attached); err != nil {
 		t.Fatal(err)
@@ -355,7 +361,8 @@ func TestNodeTerminalOperatorAcceptsBrowserSubprotocolAuthentication(t *testing.
 	if err != nil {
 		t.Fatalf("dial browser operator websocket: response=%#v error=%v", response, err)
 	}
-	defer connection.Close()
+	defer func() { _ = response.Body.Close() }()
+	defer func() { _ = connection.Close() }()
 	var attached nodeTerminalOperatorAttached
 	if err := connection.ReadJSON(&attached); err != nil {
 		t.Fatal(err)
@@ -386,7 +393,7 @@ func TestNodeTerminalOperatorOpenRequiresAuthenticationOriginAndIsolatesSessions
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusUnauthorized || len(opener.requests) != 0 {
 		t.Fatalf("unauthenticated open = %d, calls = %d", response.StatusCode, len(opener.requests))
 	}
@@ -401,7 +408,7 @@ func TestNodeTerminalOperatorOpenRequiresAuthenticationOriginAndIsolatesSessions
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusForbidden || len(opener.requests) != 0 {
 		t.Fatalf("cross-origin open = %d, calls = %d", response.StatusCode, len(opener.requests))
 	}
@@ -416,7 +423,7 @@ func TestNodeTerminalOperatorOpenRequiresAuthenticationOriginAndIsolatesSessions
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusCreated || len(opener.requests) != 1 {
 		t.Fatalf("authenticated open = %d, calls = %d", response.StatusCode, len(opener.requests))
 	}
@@ -442,7 +449,7 @@ func TestNodeTerminalOperatorOpenRequiresAuthenticationOriginAndIsolatesSessions
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusCreated || len(opener.requests) != 2 ||
 		opener.requests[1].Owner == first.Owner {
 		t.Fatalf("second session open = %d, requests = %#v", response.StatusCode, opener.requests)
@@ -464,7 +471,8 @@ func TestNodeTerminalOperatorModelCloseSharesOrderedStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial operator websocket: response=%#v error=%v", response, err)
 	}
-	defer connection.Close()
+	defer func() { _ = response.Body.Close() }()
+	defer func() { _ = connection.Close() }()
 	var attached nodeTerminalOperatorAttached
 	if err := connection.ReadJSON(&attached); err != nil {
 		t.Fatal(err)
@@ -677,7 +685,8 @@ func TestNodeTerminalOperatorShutdownTerminatesClaimDuringAttach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial operator websocket: response=%#v error=%v", response, err)
 	}
-	defer connection.Close()
+	defer func() { _ = response.Body.Close() }()
+	defer func() { _ = connection.Close() }()
 	waitForTerminalCleanupStart(t, source.attachStarted)
 	hub.shutdown()
 	source.mu.Lock()

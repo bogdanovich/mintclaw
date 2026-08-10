@@ -946,7 +946,9 @@ func TestCronTool_AllowlistedRemoteCanManageOwnCommandJob(t *testing.T) {
 			tool := newTestCronToolWithConfig(t, cfg)
 			job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
 			if action == "enable" {
-				tool.cronService.EnableJob(job.ID, false)
+				if _, err := tool.cronService.EnableJob(job.ID, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 
@@ -1028,7 +1030,9 @@ func TestCronTool_InternalChannelCanManageAllJobs(t *testing.T) {
 			tool := newTestCronTool(t)
 			job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
 			if action == "enable" {
-				tool.cronService.EnableJob(job.ID, false)
+				if _, err := tool.cronService.EnableJob(job.ID, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 
@@ -1062,7 +1066,9 @@ func TestCronTool_RemoteCanManageOwnNonCommandJob(t *testing.T) {
 			tool := newTestCronTool(t)
 			job := addTestCronJob(t, tool, "reminder", "telegram", "chat-1", "")
 			if action == "enable" {
-				tool.cronService.EnableJob(job.ID, false)
+				if _, err := tool.cronService.EnableJob(job.ID, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 
@@ -1082,7 +1088,9 @@ func TestCronTool_WildcardRemoteCanManageOwnCommandJob(t *testing.T) {
 			tool := newTestCronToolWithConfig(t, cfg)
 			job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
 			if action == "enable" {
-				tool.cronService.EnableJob(job.ID, false)
+				if _, err := tool.cronService.EnableJob(job.ID, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			other := addTestCronJob(t, tool, "other", "telegram", "chat-2", "uptime")
 			ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")

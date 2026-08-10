@@ -5,13 +5,6 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
-func channelTypeForEvent(m *Manager, channelName string) string {
-	if m == nil || m.lifecycle == nil {
-		return channelName
-	}
-	return m.lifecycle.channelType(channelName)
-}
-
 func (m *Manager) publishChannelEvent(
 	kind runtimeevents.Kind,
 	channelName string,

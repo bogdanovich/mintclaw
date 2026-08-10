@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,10 +17,13 @@ type fakeBrowserCommandHost struct {
 	observed       int
 	navigated      int
 	clicked        int
+	selected       int
+	pressed        int
 	scrolled       int
 	closed         int
 	navigateError  error
 	invalidAction  bool
+	selectSnapshot string
 	routedSessions []string
 }
 
@@ -95,6 +99,28 @@ func (host *fakeBrowserCommandHost) Click(
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Select(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.selected++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	if host.selectSnapshot != "" {
+		result.Snapshot = host.selectSnapshot
+	}
+	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Press(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.pressed++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1), host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Close(
@@ -256,6 +282,118 @@ func TestRuntimeExecutesOnlyExactlyAttestedTypedBrowserClick(t *testing.T) {
 	}
 	if host.clicked != 1 {
 		t.Fatalf("denied clicks reached host: %d", host.clicked)
+	}
+}
+
+func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
+	selectHost := browserRuntimeHostFixture()
+	selectHost.profiles[0].DryRun = false
+	selectHost.profiles[0].AllowApprovedActions = true
+	selectHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	selectHost.selectSnapshot = `- combobox "State CA" [ref=host_ref_1]`
+	selectRuntime := newBrowserRuntimeFixture(t, selectHost)
+	selectInput := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_select_1",
+		Action:             nodes.BrowserAction{Kind: "select", Ref: "host_ref_1"},
+		Effect:             "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
+		InputDigest: nodes.BrowserInputDigest("CA"), InputBytes: 2,
+	}
+	selectRaw, err := json.Marshal(selectInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, selectRaw)
+	if strings.Contains(string(selectPlan.Input), "CA") {
+		t.Fatalf("durable select plan exposed option identity: %s", selectPlan.Input)
+	}
+	selectResult, err := selectRuntime.InvokeWithEphemeral(
+		t.Context(), selectPlan, json.RawMessage(`{"value":"CA"}`),
+	)
+	if err != nil {
+		t.Fatalf("InvokeWithEphemeral(select) error = %v", err)
+	}
+	if !strings.Contains(string(selectResult), `State CA`) {
+		t.Fatalf("transient select result omitted fresh observation: %s", selectResult)
+	}
+	durable, found, err := selectRuntime.Invocation(selectPlan.InvocationID)
+	if err != nil || !found || durable.State != nodes.InvocationSucceeded {
+		t.Fatalf("durable select invocation = %+v, %v, %v", durable, found, err)
+	}
+	if bytes.Contains(durable.Result, []byte("CA")) {
+		t.Fatalf("durable select receipt exposed option identity: %s", durable.Result)
+	}
+	if selectHost.selected != 1 {
+		t.Fatalf("select calls = %d", selectHost.selected)
+	}
+	missingInput := selectInput
+	missingInput.ActionInvocationID = "browser_select_missing"
+	missingRaw, err := json.Marshal(missingInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, missingRaw)
+	if _, err = selectRuntime.Invoke(t.Context(), missingPlan); err == nil {
+		t.Fatal("select without transient option identity was accepted")
+	}
+	wrongInput := selectInput
+	wrongInput.ActionInvocationID = "browser_select_wrong"
+	wrongRaw, err := json.Marshal(wrongInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongPlan := testRuntimePlan(t, selectRuntime, nodes.BrowserCommandAct, wrongRaw)
+	if _, err = selectRuntime.InvokeWithEphemeral(
+		t.Context(), wrongPlan, json.RawMessage(`{"value":"NY"}`),
+	); err == nil {
+		t.Fatal("select with a mismatched transient option identity was accepted")
+	}
+	if selectHost.selected != 1 {
+		t.Fatalf("missing transient input reached host: %d", selectHost.selected)
+	}
+
+	pressHost := browserRuntimeHostFixture()
+	pressHost.profiles[0].DryRun = false
+	pressHost.profiles[0].AllowApprovedActions = true
+	pressHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	pressRuntime := newBrowserRuntimeFixture(t, pressHost)
+	pressInput := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
+		ActionInvocationID: "browser_press_1",
+		Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Enter"},
+		Effect:             "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1",
+	}
+	pressInput.ApprovalDigest, err = nodes.BrowserApprovalDigest(pressInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invokeBrowserRuntime(t, pressRuntime, nodes.BrowserCommandAct, pressInput)
+	if pressHost.pressed != 1 {
+		t.Fatalf("press calls = %d", pressHost.pressed)
+	}
+
+	deniedHost := browserRuntimeHostFixture()
+	deniedHost.profiles[0].DryRun = false
+	deniedHost.profiles[0].AllowApprovedActions = true
+	deniedHost.profiles[0].Actions = []string{"navigate", "press", "select"}
+	deniedRuntime := newBrowserRuntimeFixture(t, deniedHost)
+	denied := pressInput
+	denied.ActionInvocationID = "browser_press_denied"
+	denied.ApprovalDigest = strings.Repeat("f", 64)
+	raw, err := json.Marshal(denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, deniedRuntime, nodes.BrowserCommandAct, raw)
+	if _, err = deniedRuntime.Invoke(t.Context(), plan); err == nil {
+		t.Fatal("unattested press was accepted")
+	}
+	if deniedHost.pressed != 0 {
+		t.Fatalf("denied press reached host: %d", deniedHost.pressed)
 	}
 }
 

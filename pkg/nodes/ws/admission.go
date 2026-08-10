@@ -339,13 +339,22 @@ func (handler *AdmissionHandler) Invoke(
 	ctx context.Context,
 	nodeID nodes.ID,
 	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
 	commit func() error,
 ) (json.RawMessage, bool, error) {
 	approval, err := handler.validateInvocationPreflight(nodeID, plan)
 	if err != nil {
 		return nil, false, err
 	}
-	params, err := json.Marshal(plan)
+	var params []byte
+	if len(ephemeralInput) == 0 {
+		params, err = json.Marshal(plan)
+	} else {
+		dispatch := nodes.InvocationDispatch{Plan: plan, EphemeralInput: ephemeralInput}
+		if err = dispatch.Validate(); err == nil {
+			params, err = json.Marshal(dispatch)
+		}
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("encode node execution plan: %w", err)
 	}

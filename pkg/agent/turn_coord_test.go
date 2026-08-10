@@ -21,7 +21,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 // =============================================================================
@@ -1800,7 +1799,7 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 }
 
 func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {
-	tool := &steeringSafetyTestTool{name: "side-effect", safety: toolshared.SteeringSafetyNonCancellable}
+	tool := &countingTestTool{name: "side-effect"}
 	provider := &toolCallRespProvider{toolName: tool.Name(), response: "must not continue"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
@@ -2068,7 +2067,9 @@ func TestRunTurn_HardAbort(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		al.runTurn(context.Background(), ts, pipeline)
+		if _, err := al.runTurn(context.Background(), ts, pipeline); err != nil {
+			t.Errorf("runTurn() error = %v", err)
+		}
 		close(done)
 	}()
 

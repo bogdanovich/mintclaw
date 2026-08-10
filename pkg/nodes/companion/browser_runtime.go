@@ -18,6 +18,8 @@ type BrowserCommandHost interface {
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Navigate(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Click(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Select(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Press(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
@@ -47,6 +49,24 @@ func newBrowserCommandHandlers(host BrowserCommandHost) ([]commandHandler, error
 
 func (handler *browserCommandHandler) descriptor() nodes.CommandDescriptor {
 	return handler.descriptorValue
+}
+
+func (handler *browserCommandHandler) authorizeEphemeral(
+	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
+) error {
+	if handler.command != nodes.BrowserCommandAct {
+		if len(ephemeralInput) != 0 {
+			return nodes.ErrCommandDenied
+		}
+		return nil
+	}
+	var input nodes.BrowserActInput
+	if err := json.Unmarshal(plan.Input, &input); err != nil {
+		return nodes.ErrCommandDenied
+	}
+	_, err := browserEphemeralActionValue(input, ephemeralInput)
+	return err
 }
 
 func (handler *browserCommandHandler) execute(
@@ -120,13 +140,27 @@ func (handler *browserCommandHandler) executeAct(
 	if err := json.Unmarshal(invocation.Input, &input); err != nil {
 		return nil, browserCommandFailure(err)
 	}
-	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click") ||
+	value, err := browserEphemeralActionValue(input, invocation.EphemeralInput)
+	if err != nil {
+		return nil, newCommandFailure(
+			"COMMAND_DENIED", "browser action input is unavailable", nodes.ErrBrowserHostDenied,
+		)
+	}
+	input.Action.Value = value
+	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
+		input.Action.Kind != "select" && input.Action.Kind != "press") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
+		(input.Action.Kind == "select" &&
+			(input.Effect != "local_edit" || input.ExpectedRole != "combobox" ||
+				input.ApprovalDigest != "")) ||
+		(input.Action.Kind == "press" &&
+			(input.Effect != "unknown" || input.Action.Target != "document" ||
+				input.ExpectedRole != "" || input.ExpectedName != "" || !nodes.BrowserApprovalDigestMatches(input))) ||
 		(input.Action.Kind == "click" &&
 			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
 				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
-		(input.Action.Kind != "click" &&
+		(input.Action.Kind != "click" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -145,12 +179,15 @@ func (handler *browserCommandHandler) executeAct(
 		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
 	var observation nodes.BrowserObservationResult
-	var err error
 	switch input.Action.Kind {
 	case "scroll":
 		observation, err = handler.host.Scroll(ctx, request)
 	case "click":
 		observation, err = handler.host.Click(ctx, request)
+	case "select":
+		observation, err = handler.host.Select(ctx, request)
+	case "press":
+		observation, err = handler.host.Press(ctx, request)
 	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}
@@ -165,6 +202,31 @@ func (handler *browserCommandHandler) executeAct(
 		State:              "succeeded",
 		Observation:        &observation,
 	}, nil
+}
+
+func browserEphemeralActionValue(
+	input nodes.BrowserActInput,
+	ephemeralInput json.RawMessage,
+) (string, error) {
+	if input.Action.Kind != "select" {
+		if len(ephemeralInput) != 0 || input.InputDigest != "" || input.InputBytes != 0 {
+			return "", nodes.ErrCommandDenied
+		}
+		return "", nil
+	}
+	if input.Action.Value != "" || input.InputBytes < 1 ||
+		input.InputBytes > nodes.MaxBrowserTextInputBytes || len(ephemeralInput) == 0 {
+		return "", nodes.ErrCommandDenied
+	}
+	var ephemeral struct {
+		Value string `json:"value"`
+	}
+	if err := decodeStrictJSON(ephemeralInput, &ephemeral); err != nil || ephemeral.Value == "" ||
+		len(ephemeral.Value) != input.InputBytes ||
+		!nodes.BrowserInputDigestMatches(input.InputDigest, ephemeral.Value) {
+		return "", nodes.ErrCommandDenied
+	}
+	return ephemeral.Value, nil
 }
 
 func browserStatusRequest(

@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	urlpkg "net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -174,9 +176,73 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || afterClick.URL != "https://example.com/" || afterClick.SnapshotGeneration != 3 {
 		t.Fatalf("click observation = %#v, %v", afterClick, err)
 	}
+	selectMarker := `combobox "State" [ref=`
+	selectStart := strings.Index(afterClick.Snapshot, selectMarker)
+	if selectStart < 0 {
+		t.Fatalf("select fixture has no bounded ref: %q", afterClick.Snapshot)
+	}
+	selectStart += len(selectMarker)
+	selectEnd := strings.Index(afterClick.Snapshot[selectStart:], "]")
+	if selectEnd < 1 {
+		t.Fatalf("select fixture has malformed ref: %q", afterClick.Snapshot)
+	}
+	selection, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-select", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: afterClick.SnapshotID, SnapshotGeneration: afterClick.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionSelect, Ref: afterClick.Snapshot[selectStart : selectStart+selectEnd], Value: "CA",
+		},
+	})
+	if err != nil || selection.RequiresApproval || selection.Action.Effect != browser.EffectLocalEdit {
+		t.Fatalf("select preparation = %#v, %v", selection, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, selection.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("select invocation = %#v, %v", invocation, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(`"CA"`)) {
+			t.Fatalf("durable invocation state exposed select option in %s", retainedPath)
+		}
+	}
+	afterSelect, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterSelect.SnapshotGeneration != 4 {
+		t.Fatalf("select observation = %#v, %v", afterSelect, err)
+	}
+	press, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-press", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: afterSelect.SnapshotID, SnapshotGeneration: afterSelect.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionPress, Target: "document", Key: "Tab"},
+	})
+	if err != nil || !press.RequiresApproval || press.Action.Effect != browser.EffectUnknown {
+		t.Fatalf("press preparation = %#v, %v", press, err)
+	}
+	if _, err = broker.ExecuteAction(
+		t.Context(),
+		owner,
+		press.Action.ID,
+		nil,
+	); !errors.Is(
+		err,
+		browser.ErrApprovalRequired,
+	) {
+		t.Fatalf("unapproved press error = %v, want approval required", err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, press.Action.ID, &press.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("press invocation = %#v, %v", invocation, err)
+	}
+	afterPress, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterPress.SnapshotGeneration != 5 {
+		t.Fatalf("press observation = %#v, %v", afterPress, err)
+	}
 	scroll, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-scroll", SessionID: first.ID, TabID: first.TabID,
-		SnapshotID: afterClick.SnapshotID, SnapshotGeneration: afterClick.SnapshotGeneration,
+		SnapshotID: afterPress.SnapshotID, SnapshotGeneration: afterPress.SnapshotGeneration,
 		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 2},
 	})
 	if err != nil || scroll.RequiresApproval || scroll.Action.Effect != browser.EffectRead {
@@ -187,7 +253,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("scroll invocation = %#v, %v", invocation, err)
 	}
 	afterScroll, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 4 {
+	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 6 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
 	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
@@ -376,7 +442,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "click", "observe", "scroll", "close",
+		"open", "observe", "navigate", "click", "select", "observe", "press", "observe", "scroll", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
@@ -682,6 +748,61 @@ func (host *wssBrowserHost) Click(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) Select(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "select")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	if request.Action.Ref != "host_ref_2" || request.Action.Value != "CA" ||
+		request.ExpectedRole != "combobox" || request.ExpectedName != "State" ||
+		request.Effect != "local_edit" || request.ApprovalDigest != "" {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	result := wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url)
+	result.Snapshot += `
+- text "CA"`
+	return result, nil
+}
+
+func (host *wssBrowserHost) Press(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "press")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	input := nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration,
+		ActionInvocationID: request.ActionInvocationID, Action: request.Action,
+		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash:    request.PreparedActionHash,
+		BrowserPolicyRevision: request.BrowserPolicyRevision, ProfileRevision: request.ProfileRevision,
+		ApprovalDigest: request.ApprovalDigest,
+	}
+	if request.Action.Target != "document" || request.Action.Key != "Tab" ||
+		request.Effect != "unknown" || !nodes.BrowserApprovalDigestMatches(input) {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) failNextNavigate() {
 	host.mu.Lock()
 	defer host.mu.Unlock()
@@ -727,8 +848,11 @@ func wssBrowserObservation(
 	request nodes.BrowserHostObserveRequest,
 	url string,
 ) nodes.BrowserObservationResult {
-	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]"
-	elements := []nodes.BrowserElement{{Ref: "host_ref_1", Role: "button", Name: "Save"}}
+	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]\n- combobox \"State\" [ref=host_ref_2]"
+	elements := []nodes.BrowserElement{
+		{Ref: "host_ref_1", Role: "button", Name: "Save"},
+		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
+	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
 		elements = []nodes.BrowserElement{}
@@ -747,7 +871,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		AllowApprovedActions: true, Actions: []string{"click", "navigate", "scroll"},
+		AllowApprovedActions: true, Actions: []string{"click", "navigate", "press", "scroll", "select"},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
@@ -917,15 +1041,16 @@ func (handler *wssBrowserDropBeforeAcceptance) Invoke(
 	ctx context.Context,
 	nodeID nodes.ID,
 	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
 	commit func() error,
 ) (json.RawMessage, bool, error) {
 	if plan.Command != handler.command {
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	handler.mu.Lock()
 	if !handler.armed {
 		handler.mu.Unlock()
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	handler.plans = append(handler.plans, plan)
 	drop := !handler.dropped
@@ -934,7 +1059,7 @@ func (handler *wssBrowserDropBeforeAcceptance) Invoke(
 	}
 	handler.mu.Unlock()
 	if !drop {
-		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, commit)
+		return handler.nodeAdmissionHandler.Invoke(ctx, nodeID, plan, ephemeralInput, commit)
 	}
 	if commit != nil {
 		if err := commit(); err != nil {

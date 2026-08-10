@@ -26,7 +26,7 @@ func TestFileResolverPinsSourceDescriptorAcrossRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.file.Close()
+	defer func() { _ = source.file.Close() }()
 	moved := filepath.Join(rootPath, "moved.txt")
 	if err := os.Rename(original, moved); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestFileResolverBindsDestinationParentAcrossRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	stage, err := parent.createStage("transfer_parent_race")
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestFileResolverRejectsUnprotectedStageParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.close()
+	defer func() { _ = root.close() }()
 	parent, err := root.resolveParent(
 		filepath.Join(shared, "destination.txt"),
 		false,
@@ -240,7 +240,7 @@ func TestFileResolverRejectsUnprotectedStageParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.close()
+	defer func() { _ = parent.close() }()
 	if stage, stageErr := parent.createStage(
 		"unprotected_parent",
 	); !errors.Is(stageErr, ErrFileAccessDenied) {

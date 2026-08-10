@@ -76,7 +76,7 @@ func TestAgentModelConfig_MarshalObject(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var result map[string]any
-	json.Unmarshal(data, &result)
+	_ = json.Unmarshal(data, &result)
 	if result["primary"] != "claude-opus" {
 		t.Errorf("primary = %v", result["primary"])
 	}
@@ -3465,8 +3465,16 @@ func TestMakeBackup_AlsoBacksSecurityFile(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	secPath := securityPath(configPath)
 
-	os.WriteFile(configPath, []byte(`{"version":2}`), 0o600)
-	os.WriteFile(secPath, []byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`), 0o600)
+	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		secPath,
+		[]byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := MakeBackup(configPath); err != nil {
 		t.Fatalf("MakeBackup: %v", err)
@@ -3511,7 +3519,9 @@ func TestMakeBackup_NonexistentFileSkipsBackup(t *testing.T) {
 func TestMakeBackup_OnlyConfigNoSecurity(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{"version":2}`), 0o600)
+	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := MakeBackup(configPath); err != nil {
 		t.Fatalf("MakeBackup: %v", err)
@@ -3543,8 +3553,12 @@ func TestMakeBackup_SameDateSuffix(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	secPath := securityPath(configPath)
 
-	os.WriteFile(configPath, []byte(`{"version":2}`), 0o600)
-	os.WriteFile(secPath, []byte(`key: value`), 0o600)
+	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secPath, []byte(`key: value`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := MakeBackup(configPath); err != nil {
 		t.Fatalf("MakeBackup: %v", err)
@@ -3616,7 +3630,7 @@ func testChannelsConfigWithTokens() ChannelsConfig {
 	for _, def := range defs {
 		// Create Channel directly with settings to preserve SecureString values
 		bc := &Channel{Type: def.name}
-		bc.Decode(def.cfg)
+		_ = bc.Decode(def.cfg)
 		channels[def.name] = bc
 	}
 	return channels

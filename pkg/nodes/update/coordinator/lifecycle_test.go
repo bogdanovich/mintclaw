@@ -16,7 +16,7 @@ func TestCoordinatorActivationCommitsIntentBeforeBoundedLaunchAndHealth(t *testi
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
 	staged, err := coordinator.Stage(t.Context(), request)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestCoordinatorReconcilesActivationCommitPublicationBoundary(t *testing.T) 
 			fixture := newReleaseFixture(t, now, "mintclaw-node")
 			defer fixture.server.Close()
 			coordinator, _ := testCoordinator(t, fixture, now)
-			defer coordinator.Close()
+			defer func() { _ = coordinator.Close() }()
 			request := fixture.stageRequest(now)
 			if _, err := coordinator.Stage(t.Context(), request); err != nil {
 				t.Fatal(err)
@@ -100,7 +100,7 @@ func TestCoordinatorActivationFailsClosedWhenRequestExpiresAfterStaging(t *testi
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	coordinator.now = func() time.Time { return current }
 	request := fixture.stageRequest(now)
 	if _, err := coordinator.Stage(t.Context(), request); err != nil {
@@ -119,7 +119,7 @@ func TestCoordinatorActivationFailsClosedWhenAuthorityChangesAfterStaging(t *tes
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
 	if _, err := coordinator.Stage(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -140,9 +140,9 @@ func TestCoordinatorCancellationIsDurableBeforeActivationAndTooLateAfter(t *test
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
-	staged, err := coordinator.Stage(t.Context(), request)
+	_, err := coordinator.Stage(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestCoordinatorCancellationIsDurableBeforeActivationAndTooLateAfter(t *test
 	second.Identity.InvocationID = "invocation_second"
 	second.Identity.ExecutionID = "execution_second"
 	second.Identity.PlanHash = digestOf([]byte("second-plan"))
-	staged, err = coordinator.Stage(t.Context(), second)
+	staged, err := coordinator.Stage(t.Context(), second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestCoordinatorCancellationInterruptsInFlightDownloadAndCommitsTruth(t *tes
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	started := make(chan struct{})
 	coordinator.httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		close(started)
@@ -234,7 +234,7 @@ func TestCoordinatorRollbackSelectsAndProvesOnlyPreviousPayload(t *testing.T) {
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	coordinator, _ := testCoordinator(t, fixture, now)
-	defer coordinator.Close()
+	defer func() { _ = coordinator.Close() }()
 	request := fixture.stageRequest(now)
 	staged, err := coordinator.Stage(t.Context(), request)
 	if err != nil {

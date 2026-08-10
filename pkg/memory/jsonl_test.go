@@ -96,7 +96,7 @@ func TestNewJSONLStore_CreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -864,7 +864,7 @@ func TestTruncateHistory_StaleMetaCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write orphan: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// TruncateHistory(keepLast=4) should keep the last 4 of 11 lines,
 	// not the last 4 of 10.
@@ -959,7 +959,7 @@ func TestCrashRecovery_PartialLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write partial: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// GetHistory should return only the valid message.
 	history, err := store.GetHistory(ctx, "crash")
@@ -991,14 +991,14 @@ func TestPersistence_AcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetSummary: %v", err)
 	}
-	store1.Close()
+	_ = store1.Close()
 
 	// Read with second instance.
 	store2, err := NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	history, err := store2.GetHistory(ctx, "persist")
 	if err != nil {
@@ -1331,7 +1331,7 @@ func BenchmarkAddMessage(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewJSONLStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -1346,7 +1346,7 @@ func BenchmarkGetHistory_100(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewJSONLStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	ctx := context.Background()
 
 	for i := 0; i < 100; i++ {
@@ -1365,7 +1365,7 @@ func BenchmarkGetHistory_1000(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewJSONLStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	ctx := context.Background()
 
 	for i := 0; i < 1000; i++ {

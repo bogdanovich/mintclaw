@@ -51,7 +51,7 @@ func TestDoRequestWithRetry(t *testing.T) {
 					return
 				}
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			}))
 
 			t.Cleanup(func() {
@@ -165,7 +165,7 @@ func TestDoRequestWithRetry_ContextCancel(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("error"))
+		_, _ = w.Write([]byte("error"))
 	}))
 	defer server.Close()
 
@@ -262,7 +262,7 @@ func TestDoRequestWithRetry_Delay(t *testing.T) {
 			elapsed := time.Since(start)
 			delays = append(delays, elapsed)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("success"))
+			_, _ = w.Write([]byte("success"))
 		}
 	}))
 	defer server.Close()

@@ -49,10 +49,12 @@ func TestAssemblerAssembleMessagesOnly(t *testing.T) {
 	msg2, _ := s.AddMessage(ctx, convID, "assistant", "world", 5)
 
 	// Create context items
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "message", MessageID: msg1.ID, TokenCount: 5},
 		{Ordinal: 200, ItemType: "message", MessageID: msg2.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 100})
@@ -93,11 +95,13 @@ func TestAssemblerAssembleWithSummary(t *testing.T) {
 	msg2, _ := s.AddMessage(ctx, convID, "assistant", "reply", 5)
 
 	// Context: summary + recent messages
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: summary.SummaryID, TokenCount: 50},
 		{Ordinal: 200, ItemType: "message", MessageID: msg1.ID, TokenCount: 5},
 		{Ordinal: 300, ItemType: "message", MessageID: msg2.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -227,7 +231,9 @@ func TestAssemblerBudgetEvictsOldest(t *testing.T) {
 			TokenCount: 10,
 		}
 	}
-	s.UpsertContextItems(ctx, convID, items)
+	if err := s.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Budget of 200 tokens with FreshTailCount=32
 	// Fresh tail = last 32 messages (320 tokens, over budget)
@@ -342,13 +348,15 @@ func TestAssemblerBudgetPreservesLatestToolTurnWhenItExceedsBudget(t *testing.T)
 	}, 200)
 	finalAssistantMsg, _ := s.AddMessage(ctx, convID, "assistant", "done", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "message", MessageID: oldMsg.ID, TokenCount: 20},
 		{Ordinal: 200, ItemType: "message", MessageID: userMsg.ID, TokenCount: 5},
 		{Ordinal: 300, ItemType: "message", MessageID: assistantToolMsg.ID, TokenCount: 5},
 		{Ordinal: 400, ItemType: "message", MessageID: toolResultMsg.ID, TokenCount: 200},
 		{Ordinal: 500, ItemType: "message", MessageID: finalAssistantMsg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 210})
@@ -400,7 +408,9 @@ func TestAssemblerBudgetFitsAll(t *testing.T) {
 			TokenCount: 10,
 		}
 	}
-	s.UpsertContextItems(ctx, convID, items)
+	if err := s.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
 
 	// Budget = 100, total = 50, FreshTailCount=32 → all items in tail
 	a := &Assembler{store: s, config: Config{}}
@@ -428,10 +438,12 @@ func TestAssemblerSummaryXMLFormat(t *testing.T) {
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "hello", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: summary.SummaryID, TokenCount: 20},
 		{Ordinal: 200, ItemType: "message", MessageID: msg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -469,9 +481,11 @@ func TestAssemblerSummaryXMLEscaping(t *testing.T) {
 		TokenCount:     20,
 	})
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: summary.SummaryID, TokenCount: 20},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -521,10 +535,12 @@ func TestAssemblerSummaryXMLWithParents(t *testing.T) {
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: condensed.SummaryID, TokenCount: 15},
 		{Ordinal: 200, ItemType: "message", MessageID: msg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -569,10 +585,12 @@ func TestAssemblerSummaryXMLIncludesDescendantCount(t *testing.T) {
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: leaf.SummaryID, TokenCount: 20},
 		{Ordinal: 200, ItemType: "message", MessageID: msg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -606,10 +624,12 @@ func TestAssemblerLeafSummaryNoParents(t *testing.T) {
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: leaf.SummaryID, TokenCount: 20},
 		{Ordinal: 200, ItemType: "message", MessageID: msg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})
@@ -656,10 +676,12 @@ func TestAssemblerDepthAwarePrompt(t *testing.T) {
 
 	msg, _ := s.AddMessage(ctx, convID, "user", "fresh", 5)
 
-	s.UpsertContextItems(ctx, convID, []ContextItem{
+	if err := s.UpsertContextItems(ctx, convID, []ContextItem{
 		{Ordinal: 100, ItemType: "summary", SummaryID: condensed.SummaryID, TokenCount: 15},
 		{Ordinal: 200, ItemType: "message", MessageID: msg.ID, TokenCount: 5},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Assembler{store: s, config: Config{}}
 	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 1000})

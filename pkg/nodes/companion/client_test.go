@@ -224,7 +224,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, _, err := admission.Invoke(t.Context(), identity.ID, plan, nil)
+	output, _, err := admission.Invoke(t.Context(), identity.ID, plan, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestClientDispatchesInvocationsConcurrentlyAndServesQueries(t *testing.T) {
 	results := make(chan error, 2)
 	for _, plan := range []nodes.ExecutionPlan{first, second} {
 		go func() {
-			_, _, invokeErr := admission.Invoke(t.Context(), identity.ID, plan, nil)
+			_, _, invokeErr := admission.Invoke(t.Context(), identity.ID, plan, nil, nil)
 			results <- invokeErr
 		}()
 	}
@@ -374,7 +374,7 @@ func TestClientCancelsInvocationOverAuthenticatedSession(t *testing.T) {
 	plan := testTransportPlan(t, commandRuntime, descriptor, "cancel")
 	invokeDone := make(chan error, 1)
 	go func() {
-		_, _, invokeErr := admission.Invoke(t.Context(), identity.ID, plan, nil)
+		_, _, invokeErr := admission.Invoke(t.Context(), identity.ID, plan, nil, nil)
 		invokeDone <- invokeErr
 	}()
 	select {
@@ -585,12 +585,12 @@ func TestClientTerminalDetachReturnsUnavailableWhenRuntimeDisabled(t *testing.T)
 		nil,
 	)
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	serverConnection := <-accepted
 	defer close(release)
 	params, err := json.Marshal(nodes.TerminalSessionRequest{
@@ -658,7 +658,7 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	frame := protocol.TransferFrame{
 		Type: protocol.TransferFrameChunk, Direction: protocol.TransferUpload,
 		TransferID: "transfer_1", PolicyRevision: "files-v1",
@@ -884,7 +884,7 @@ func (handler *blockingHandler) execute(ctx context.Context, _ commandInvocation
 	handler.started <- struct{}{}
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, ctx.Err())
+		return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, ctx.Err())
 	case <-handler.release:
 		return map[string]bool{"ok": true}, nil
 	}
@@ -1181,23 +1181,23 @@ func testConnectProxy(t *testing.T, backendAddress string) (*httptest.Server, *a
 			}
 			hijacker, ok := writer.(http.Hijacker)
 			if !ok {
-				backend.Close()
+				_ = backend.Close()
 				http.Error(writer, "hijacking unavailable", http.StatusInternalServerError)
 				return
 			}
 			client, _, err := hijacker.Hijack()
 			if err != nil {
-				backend.Close()
+				_ = backend.Close()
 				return
 			}
 			requests.Add(1)
 			if _, err := fmt.Fprint(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-				client.Close()
-				backend.Close()
+				_ = client.Close()
+				_ = backend.Close()
 				return
 			}
-			defer client.Close()
-			defer backend.Close()
+			defer func() { _ = client.Close() }()
+			defer func() { _ = backend.Close() }()
 			copyDone := make(chan struct{})
 			go func() {
 				_, _ = io.Copy(backend, client)

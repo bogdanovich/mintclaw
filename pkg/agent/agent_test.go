@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -4798,7 +4799,7 @@ func newChatCompletionTestServer(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -4839,7 +4840,7 @@ func newChatCompletionTestServerWithUsage(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -4882,7 +4883,7 @@ func newStrictChatCompletionTestServer(
 			t.Fatalf("%s server path = %q, want /chat/completions", label, r.URL.Path)
 		}
 		*calls = *calls + 1
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var req struct {
 			Model string `json:"model"`
@@ -6923,7 +6924,7 @@ func TestProcessMessage_FallbackReceivesExplicitThinkingOff(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -7030,7 +7031,7 @@ func TestProcessMessage_PrimaryThinkingOffDoesNotLeakToFallback(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -7129,7 +7130,7 @@ func TestProcessMessage_FallbackThinkingOffUsesCandidateIdentity(t *testing.T) {
 			if r.URL.Path != "/chat/completions" {
 				t.Fatalf("fallback server path = %q, want /chat/completions", r.URL.Path)
 			}
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -7498,6 +7499,26 @@ type visionUnsupportedMediaProvider struct {
 	mediaSeen []bool
 }
 
+type replaceFailingSessionStore struct {
+	session.SessionStore
+	err       error
+	committed bool
+}
+
+func (s *replaceFailingSessionStore) ReplaceTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	history []providers.Message,
+) error {
+	if s.committed {
+		if err := s.SessionStore.ReplaceTurnHistory(ctx, sessionKey, history); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: s.err}
+	}
+	return s.err
+}
+
 func (p *visionUnsupportedMediaProvider) Chat(
 	ctx context.Context,
 	messages []providers.Message,
@@ -7848,6 +7869,130 @@ func TestAgentLoop_VisionUnsupportedErrorPreservesCurrentTurnMedia(t *testing.T)
 	}
 	if !slices.Equal(provider.mediaSeen, []bool{true, true, false}) {
 		t.Fatalf("mediaSeen = %v, want %v", provider.mediaSeen, []bool{true, true, false})
+	}
+}
+
+func TestAgentLoop_VisionRetryRequiresConfirmedHistoryReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		committed bool
+	}{
+		{name: "pre-commit"},
+		{name: "committed-with-error", committed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			}}}
+			provider := &visionUnsupportedMediaProvider{}
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			t.Cleanup(func() { al.Close() })
+			const sessionKey = "agent:main:telegram:direct:user1"
+			inbound := func(messageID, content string, mediaRefs []string) bus.InboundMessage {
+				return testInboundMessage(bus.InboundMessage{
+					Context: bus.InboundContext{
+						Channel: "telegram", ChatID: "chat1", ChatType: "direct",
+						SenderID: "user1", MessageID: messageID,
+					},
+					Content: content, Media: mediaRefs, SessionKey: sessionKey,
+				})
+			}
+
+			_, err := al.processMessage(
+				t.Context(),
+				inbound("m1", "describe this", []string{"data:image/png;base64,abc123"}),
+			)
+			if err == nil || !isVisionUnsupportedError(err) {
+				t.Fatalf("first processMessage() error = %v, want vision unsupported", err)
+			}
+			agent := al.registry.GetDefaultAgent()
+			before := agent.Sessions.GetHistory(sessionKey)
+			injectedErr := errors.New("replace history failed")
+			agent.Sessions = &replaceFailingSessionStore{
+				SessionStore: agent.Sessions,
+				err:          injectedErr,
+				committed:    tc.committed,
+			}
+
+			_, err = al.processMessage(t.Context(), inbound("m2", "hello again", nil))
+			if !errors.Is(err, injectedErr) {
+				t.Fatalf("second processMessage() error = %v, want %v", err, injectedErr)
+			}
+			if provider.calls != 2 {
+				t.Fatalf("provider calls = %d, want 2", provider.calls)
+			}
+			after := agent.Sessions.GetHistory(sessionKey)
+			if !messageSlicesEquivalent(after, before) {
+				t.Fatalf("history after failed replacement = %+v, want %+v", after, before)
+			}
+			if !hasMediaRefs(after) {
+				t.Fatal("failed replacement did not restore historical media")
+			}
+		})
+	}
+}
+
+func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace:         t.TempDir(),
+		ModelName:         "test-model",
+		MaxTokens:         4096,
+		MaxToolIterations: 3,
+		ContextManager:    "none",
+	}}}
+	provider := &visionUnsupportedMediaProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(func() { al.Close() })
+	const sessionKey = "agent:main:telegram:direct:user1"
+	omitted := providers.Message{Role: "user", Content: "omitted canonical message"}
+	assembled := providers.Message{
+		Role: "assistant", Content: "assembled historical message",
+		Media: []string{"data:image/png;base64,historical"},
+	}
+	agent := al.registry.GetDefaultAgent()
+	if err := agent.Sessions.ReplaceTurnHistory(
+		t.Context(),
+		sessionKey,
+		[]providers.Message{omitted, assembled},
+	); err != nil {
+		t.Fatal(err)
+	}
+	al.contextManager = &staticContextManager{response: &AssembleResponse{
+		History: []providers.Message{assembled},
+	}}
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat1", ChatType: "direct",
+			SenderID: "user1", MessageID: "m1",
+		},
+		Content: "current root", SessionKey: sessionKey,
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "ok" {
+		t.Fatalf("response = %q, want %q", response, "ok")
+	}
+	if provider.calls != 2 || !slices.Equal(provider.mediaSeen, []bool{true, false}) {
+		t.Fatalf("provider calls/media = %d/%v, want 2/[true false]", provider.calls, provider.mediaSeen)
+	}
+
+	history := agent.Sessions.GetHistory(sessionKey)
+	wantContents := []string{"omitted canonical message", "assembled historical message", "current root", "ok"}
+	if len(history) != len(wantContents) {
+		t.Fatalf("history = %+v, want contents %v", history, wantContents)
+	}
+	for i, want := range wantContents {
+		if history[i].Content != want {
+			t.Fatalf("history[%d].Content = %q, want %q", i, history[i].Content, want)
+		}
+	}
+	if hasMediaRefs(history) {
+		t.Fatalf("canonical history retained unsupported media: %+v", history)
 	}
 }
 
@@ -9572,7 +9717,9 @@ func TestResolveMediaRefs_MultiToolCallPreservesOrdering(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	// Simulate: assistant called load_image + read_file, two tool results follow
@@ -9713,7 +9860,9 @@ func TestResolveMediaRefs_DoesNotMutateOriginal(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	original := []providers.Message{
@@ -9735,7 +9884,9 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	// File with JPEG content but stored with explicit content type
 	jpegPath := filepath.Join(dir, "photo")
 	jpegHeader := []byte{0xFF, 0xD8, 0xFF, 0xE0} // JPEG magic bytes
-	os.WriteFile(jpegPath, jpegHeader, 0o644)
+	if err := os.WriteFile(jpegPath, jpegHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(jpegPath, media.MediaMeta{ContentType: "image/jpeg"}, "test")
 
 	messages := []providers.Message{
@@ -9759,7 +9910,9 @@ func TestResolveMediaRefs_PDFInjectsFilePath(t *testing.T) {
 
 	pdfPath := filepath.Join(dir, "report.pdf")
 	// PDF magic bytes
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644)
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
 
 	messages := []providers.Message{
@@ -9781,7 +9934,9 @@ func TestResolveMediaRefs_AudioInjectsAudioPath(t *testing.T) {
 	dir := t.TempDir()
 
 	oggPath := filepath.Join(dir, "voice.ogg")
-	os.WriteFile(oggPath, []byte("fake audio"), 0o644)
+	if err := os.WriteFile(oggPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(oggPath, media.MediaMeta{ContentType: "audio/ogg"}, "test")
 
 	messages := []providers.Message{
@@ -9844,7 +9999,9 @@ func TestResolveMediaRefs_VideoInjectsVideoPath(t *testing.T) {
 	dir := t.TempDir()
 
 	mp4Path := filepath.Join(dir, "clip.mp4")
-	os.WriteFile(mp4Path, []byte("fake video"), 0o644)
+	if err := os.WriteFile(mp4Path, []byte("fake video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(mp4Path, media.MediaMeta{ContentType: "video/mp4"}, "test")
 
 	messages := []providers.Message{
@@ -9866,7 +10023,9 @@ func TestResolveMediaRefs_NoGenericTagAppendsPath(t *testing.T) {
 	dir := t.TempDir()
 
 	csvPath := filepath.Join(dir, "data.csv")
-	os.WriteFile(csvPath, []byte("a,b,c"), 0o644)
+	if err := os.WriteFile(csvPath, []byte("a,b,c"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(csvPath, media.MediaMeta{ContentType: "text/csv"}, "test")
 
 	messages := []providers.Message{
@@ -9957,7 +10116,9 @@ func TestResolveMediaRefs_JSONContentPrependsPathTag(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := store.Store(pngPath, media.MediaMeta{ContentType: "image/png"}, "test")
 
 	jsonContent := `{"schema":"2.0","body":{"elements":[{"tag":"img","img_key":"img_123"}]}}`
@@ -9977,7 +10138,9 @@ func TestResolveMediaRefs_EmptyContentGetsPathTag(t *testing.T) {
 	dir := t.TempDir()
 
 	docPath := filepath.Join(dir, "doc.docx")
-	os.WriteFile(docPath, []byte("fake docx"), 0o644)
+	if err := os.WriteFile(docPath, []byte("fake docx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	docxMIME := "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	ref, _ := store.Store(docPath, media.MediaMeta{ContentType: docxMIME}, "test")
 
@@ -10003,11 +10166,15 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
 		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	pdfPath := filepath.Join(dir, "report.pdf")
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644)
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
 
 	messages := []providers.Message{

@@ -122,10 +122,6 @@ func (t *MemoryTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
-func (t *MemoryTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyNonCancellable
-}
-
 func (t *MemoryTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	operation, err := requiredStringArg(args, "operation", "operation")
 	if err != nil {

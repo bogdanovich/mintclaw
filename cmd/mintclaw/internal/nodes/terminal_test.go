@@ -125,7 +125,7 @@ func TestRunTerminalSmokeCompletesAttachedLifecycle(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		operatorConnected.Store(true)
 		if err := connection.WriteJSON(terminalOperatorAttached{
 			Version: nodepkg.TerminalProtocolVersion, Type: "attached",
@@ -266,16 +266,17 @@ func TestReadTerminalSmokeOutputRequiresResizeAndCloseProof(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				defer connection.Close()
+				defer func() { _ = connection.Close() }()
 				test.sendEvents(t, connection)
 			}))
 			defer server.Close()
 			endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-			connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+			connection, response, err := websocket.DefaultDialer.Dial(endpoint, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer connection.Close()
+			defer func() { _ = response.Body.Close() }()
+			defer func() { _ = connection.Close() }()
 			_, err = readTerminalSmokeOutput(connection, options, terminalID)
 			if err == nil || !strings.Contains(err.Error(), "requested close") {
 				t.Fatalf("close proof error = %v", err)
@@ -307,7 +308,7 @@ func TestRunInteractiveTerminalForwardsBytesResizeAndRestoresRawMode(t *testing.
 			t.Error(err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		if err := connection.WriteJSON(terminalOperatorAttached{
 			Version: nodepkg.TerminalProtocolVersion, Type: "attached",
 			TerminalID: terminalID, State: "live",
@@ -378,8 +379,8 @@ func TestRunInteractiveTerminalForwardsBytesResizeAndRestoresRawMode(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
-	defer inputWriter.Close()
+	defer func() { _ = stdin.Close() }()
+	defer func() { _ = inputWriter.Close() }()
 	local := &fakeLocalTerminal{columns: 90, rows: 25}
 	resizeSignals := make(chan os.Signal, 1)
 	terminationSignals := make(chan os.Signal, 1)
@@ -452,7 +453,7 @@ func TestRunInteractiveTerminalRestoresRawModeOnProtocolDenial(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		_ = connection.WriteJSON(terminalOperatorAttached{
 			Version: nodepkg.TerminalProtocolVersion, Type: "attached",
 			TerminalID: terminalID, State: "live",
@@ -474,8 +475,8 @@ func TestRunInteractiveTerminalRestoresRawModeOnProtocolDenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
-	defer inputWriter.Close()
+	defer func() { _ = stdin.Close() }()
+	defer func() { _ = inputWriter.Close() }()
 	local := &fakeLocalTerminal{columns: 90, rows: 25}
 	err = runInteractiveTerminal(
 		t.Context(), cfg,

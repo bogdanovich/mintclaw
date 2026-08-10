@@ -452,6 +452,8 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	workspace := t.TempDir()
 
 	request := testToolSuspensionRequest(workspace)
+	request.Route.ChatType = "supergroup"
+	request.Route.TopicID = "1771"
 	request.ExecutionContext = &bus.InboundContext{MessageID: "question-origin"}
 	disposition, err := al.humanInteractionRuntime().SuspendToolCall(t.Context(), request)
 	if err != nil || !disposition.Durable || disposition.InteractionID == "" {
@@ -470,7 +472,9 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 			strings.Contains(outbound.Content, "Reply with your answer") ||
 			outbound.Context.Raw[interactionIDMetadata] != record.ID ||
 			outbound.Context.Raw["delivery_key"] != interactionDeliveryKey(record.ID, "prompt") ||
-			outbound.Context.Account != "primary" || outbound.ReplyToMessageID != "" ||
+			outbound.Context.Account != "primary" || outbound.Context.TopicID != "1771" ||
+			outbound.ReplyToMessageID != "question-origin" ||
+			outbound.Context.Raw[bus.OutboundMetadataKeyRequestID] != "question-origin" ||
 			!strings.Contains(outbound.Content, "`/stop`") ||
 			bus.OutboundMetadataFromMessage(outbound).IsApprovalPrompt() {
 			t.Fatalf("outbound prompt = %#v", outbound)
@@ -3619,11 +3623,14 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	msg := testInboundMessage(bus.InboundMessage{
-		Content:    "/stop",
+		Content:    bus.InboundInteractionCancelLabel,
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:interaction-stop"),
 		Context: bus.InboundContext{
 			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
 			TopicID: "topic-1", SenderID: "user-1", MessageID: "stop-1",
+			Raw: map[string]string{
+				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			},
 		},
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
@@ -3641,6 +3648,9 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		if !metadata.RemovesInteractionControls() ||
 			metadata.InteractionKind != bus.OutboundInteractionQuestion {
 			t.Fatalf("stop reply metadata = %#v", metadata)
+		}
+		if outbound.Context.ReplyToMessageID != "stop-1" {
+			t.Fatalf("cancel-button reply target = %q, want stop-1", outbound.Context.ReplyToMessageID)
 		}
 		if strings.Contains(outbound.Content, "No active task to stop.") {
 			t.Fatalf("stop reply used inactive-task contract: %q", outbound.Content)
@@ -4264,6 +4274,68 @@ func TestInteractionFinalAfterToolResultDoesNotDuplicateHandledAttachment(t *tes
 	}
 	if content, ok := interactionFinalAfterToolResult(history, "call-media"); !ok || content != "" {
 		t.Fatalf("interactionFinalAfterToolResult() = (%q, %v), want empty handled final", content, ok)
+	}
+}
+
+func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	request := testToolSuspensionRequest(agent.Workspace)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Canary", MessageID: "answer-message", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: record.Origin.ToolCallID}}},
+		{Role: "tool", ToolCallID: record.Origin.ToolCallID, Content: "delivered"},
+		{
+			Role: "assistant", Content: handledToolResponseSummary,
+			Attachments: []providers.Attachment{{Ref: "media://delivered"}},
+		},
+	}
+	content, ok := interactionFinalAfterToolResult(history, record.Origin.ToolCallID)
+	if !ok || content != "" {
+		t.Fatalf("handled attachment final = (%q, %t)", content, ok)
+	}
+	if err = al.deliverInteractionFinal(
+		t.Context(), registry, agent.Workspace, record,
+		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
+		content, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case acknowledgement := <-manager.sent:
+		metadata := bus.OutboundMetadataFromMessage(acknowledgement)
+		if acknowledgement.Content != "Response recorded." ||
+			acknowledgement.ReplyToMessageID != "answer-message" ||
+			!metadata.RemovesInteractionControls() {
+			t.Fatalf("handled attachment acknowledgement = %#v", acknowledgement)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handled attachment final did not remove Telegram controls")
+	}
+	resolved, _ := registry.Get(record.ID)
+	if resolved.Status != interactions.StatusResolved || !resolved.FinalDelivered {
+		t.Fatalf("handled attachment interaction = %#v", resolved)
 	}
 }
 

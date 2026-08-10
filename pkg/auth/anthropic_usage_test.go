@@ -17,7 +17,7 @@ func TestFetchAnthropicUsage_Success(t *testing.T) {
 			t.Errorf("Anthropic-Beta = %q, want %q", got, anthropicBetaHeader)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"five_hour":{"utilization":0.42},"seven_day":{"utilization":0.85}}`))
+		_, _ = w.Write([]byte(`{"five_hour":{"utilization":0.42},"seven_day":{"utilization":0.85}}`))
 	}))
 	defer srv.Close()
 
@@ -41,7 +41,7 @@ func TestFetchAnthropicUsage_Success(t *testing.T) {
 func TestFetchAnthropicUsage_Forbidden(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error":"forbidden"}`))
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
 	}))
 	defer srv.Close()
 
@@ -61,7 +61,7 @@ func TestFetchAnthropicUsage_Forbidden(t *testing.T) {
 func TestFetchAnthropicUsage_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`internal error`))
+		_, _ = w.Write([]byte(`internal error`))
 	}))
 	defer srv.Close()
 
@@ -81,7 +81,7 @@ func TestFetchAnthropicUsage_ServerError(t *testing.T) {
 func TestFetchAnthropicUsage_MalformedJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`not json`))
+		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
 

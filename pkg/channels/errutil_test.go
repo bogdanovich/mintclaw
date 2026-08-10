@@ -38,7 +38,7 @@ func TestClassifySendError(t *testing.T) {
 				}
 			} else {
 				// Should return the raw error unchanged
-				if err != raw {
+				if err != raw { //nolint:errorlint // exact top-level identity is the behavior under test
 					t.Errorf("expected raw error to be returned unchanged for status %d, got %v", tt.statusCode, err)
 				}
 			}

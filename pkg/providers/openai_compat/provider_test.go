@@ -42,7 +42,7 @@ func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -297,7 +297,7 @@ func TestProviderChat_ParsesToolCalls(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -343,7 +343,7 @@ func TestProviderChat_ParsesToolCallsWithObjectArguments(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -390,7 +390,7 @@ func TestProviderChat_ParsesReasoningContent(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -427,7 +427,7 @@ func TestProviderChat_StripsReasoningContentForNonDeepSeekHistory(t *testing.T) 
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -484,7 +484,7 @@ func runCapturedChat(
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -636,7 +636,7 @@ func TestProviderChat_DeepSeekPreservesReasoningContentForToolTurnHistory(t *tes
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -766,7 +766,7 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -1062,7 +1062,7 @@ func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testin
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1103,7 +1103,7 @@ func TestProviderChat_StripsKnownProviderPrefixes(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1220,7 +1220,7 @@ func TestProviderChat_AcceptsNumericOptionTypes(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1312,7 +1312,7 @@ func TestProviderChat_ExtraBodyInjected(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1355,7 +1355,7 @@ func TestProviderChat_ExtraBodyOverridesOptions(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1395,7 +1395,7 @@ func TestProviderChat_CustomHeadersInjected(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -1795,7 +1795,7 @@ func TestSerializeMessages_PlainText(t *testing.T) {
 	}
 
 	var msgs []map[string]any
-	json.Unmarshal(data, &msgs)
+	_ = json.Unmarshal(data, &msgs)
 
 	if msgs[0]["content"] != "hello" {
 		t.Fatalf("expected plain string content, got %v", msgs[0]["content"])
@@ -1813,7 +1813,7 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 
 	data, _ := json.Marshal(result)
 	var msgs []map[string]any
-	json.Unmarshal(data, &msgs)
+	_ = json.Unmarshal(data, &msgs)
 
 	content, ok := msgs[0]["content"].([]any)
 	if !ok {
@@ -1846,7 +1846,7 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 
 	data, _ := json.Marshal(result)
 	var msgs []map[string]any
-	json.Unmarshal(data, &msgs)
+	_ = json.Unmarshal(data, &msgs)
 
 	if msgs[0]["tool_call_id"] != "call_1" {
 		t.Fatalf("tool_call_id not preserved with media, got %v", msgs[0]["tool_call_id"])
@@ -1877,7 +1877,7 @@ func chatWithCacheKey(t *testing.T, apiBase string) map[string]any {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -2058,7 +2058,7 @@ func TestProviderChat_NativeSearchToolInjected(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -2118,7 +2118,7 @@ func TestProviderChat_NativeSearchNotInjectedWithoutOption(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -2166,7 +2166,7 @@ func TestProviderChat_NativeSearchIgnoredOnNonOpenAI(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 

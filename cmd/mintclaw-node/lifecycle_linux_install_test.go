@@ -499,12 +499,12 @@ func TestSystemdInstallLockHonorsContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	lock, err := acquireSystemdUnitLock(t.Context(), directory, "mintclaw-node-main.service")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	ctx, cancel := context.WithTimeout(t.Context(), 75*time.Millisecond)
 	defer cancel()
 	_, err = acquireSystemdUnitLock(ctx, directory, "mintclaw-node-main.service")
@@ -519,7 +519,7 @@ func TestSystemdInstallLockRejectsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	target := filepath.Join(unitDir, "target")
 	if err = os.WriteFile(target, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -584,7 +584,7 @@ func TestSystemdUnitDirectoryDetectsPathReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 
 	moved := filepath.Join(root, "systemd-user-original")
 	if err = os.Rename(unitDir, moved); err != nil {

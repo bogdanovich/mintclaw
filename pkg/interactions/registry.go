@@ -1075,7 +1075,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if !validArgumentHashForKind(req.Kind, req.Origin.ArgumentHash) {
 		return Record{}, fmt.Errorf("%w: approval requires a canonical argument hash", ErrInvalidInteraction)
 	}
-	if err := validateApprovalCreateMetadata(req.Kind, req.Origin.ExecutionContext, req.ApprovalAction); err != nil {
+	if err := validateInteractionCreateMetadata(req.Kind, req.Origin.ExecutionContext, req.ApprovalAction); err != nil {
 		return Record{}, err
 	}
 	if err := validateQuestions(req.Kind, req.Questions); err != nil {
@@ -1275,7 +1275,7 @@ func validateStoredRecord(rec Record) error {
 	if !validStoredArgumentHashForKind(rec.Kind, rec.Origin.ArgumentHash) {
 		return fmt.Errorf("invalid argument hash for interaction %q", rec.ID)
 	}
-	if err := validateStoredApprovalMetadata(
+	if err := validateStoredInteractionMetadata(
 		rec.Kind, rec.Origin.ExecutionContext, rec.ApprovalAction,
 	); err != nil {
 		return fmt.Errorf("invalid approval metadata for interaction %q: %w", rec.ID, err)
@@ -1688,14 +1688,17 @@ func cloneExecutionContext(src *bus.InboundContext) *bus.InboundContext {
 	return &cloned
 }
 
-func validateApprovalCreateMetadata(
+func validateInteractionCreateMetadata(
 	kind Kind,
 	executionContext *bus.InboundContext,
 	action string,
 ) error {
 	if kind != KindApproval {
-		if executionContext != nil || strings.TrimSpace(action) != "" {
-			return fmt.Errorf("%w: question interactions cannot carry approval metadata", ErrInvalidInteraction)
+		if strings.TrimSpace(action) != "" {
+			return fmt.Errorf("%w: question interactions cannot carry an approval action", ErrInvalidInteraction)
+		}
+		if executionContext != nil {
+			return validateExecutionContext(executionContext)
 		}
 		return nil
 	}
@@ -1708,14 +1711,17 @@ func validateApprovalCreateMetadata(
 	return validateExecutionContext(executionContext)
 }
 
-func validateStoredApprovalMetadata(
+func validateStoredInteractionMetadata(
 	kind Kind,
 	executionContext *bus.InboundContext,
 	action string,
 ) error {
 	if kind != KindApproval {
-		if executionContext != nil || strings.TrimSpace(action) != "" {
-			return fmt.Errorf("question interaction carries approval metadata")
+		if strings.TrimSpace(action) != "" {
+			return fmt.Errorf("question interaction carries an approval action")
+		}
+		if executionContext != nil {
+			return validateExecutionContext(executionContext)
 		}
 		return nil
 	}

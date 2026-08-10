@@ -20,11 +20,17 @@ func setupWorkspace(t *testing.T, files map[string]string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755)
-	os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range files {
 		dir := filepath.Dir(filepath.Join(tmpDir, name))
-		os.MkdirAll(dir, 0o755)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -230,9 +236,13 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			// Use 2s offset for filesystem mtime resolution safety (some FS
 			// have 1s or coarser granularity, especially in CI containers).
 			fullPath := filepath.Join(tmpDir, tt.file)
-			os.WriteFile(fullPath, []byte(tt.contentV2), 0o644)
+			if err := os.WriteFile(fullPath, []byte(tt.contentV2), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			future := time.Now().Add(2 * time.Second)
-			os.Chtimes(fullPath, future, future)
+			if err := os.Chtimes(fullPath, future, future); err != nil {
+				t.Fatal(err)
+			}
 
 			// Verify sourceFilesChangedLocked detects the mtime change
 			cb.systemPromptMutex.RLock()
@@ -264,7 +274,9 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 		// Touch skills directory (simulate new skill installed)
 		skillsDir := filepath.Join(tmpDir, "skills")
 		future := time.Now().Add(2 * time.Second)
-		os.Chtimes(skillsDir, future, future)
+		if err := os.Chtimes(skillsDir, future, future); err != nil {
+			t.Fatal(err)
+		}
 
 		// Verify sourceFilesChangedLocked detects it (cache is rebuilt)
 		// We confirm by checking internal state: a second call should rebuild.
@@ -372,13 +384,17 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 
 			// Create the file after cache was built
 			fullPath := filepath.Join(tmpDir, tt.file)
-			os.MkdirAll(filepath.Dir(fullPath), 0o755)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(fullPath, []byte(tt.content), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			// Set future mtime to guarantee detection
 			future := time.Now().Add(2 * time.Second)
-			os.Chtimes(fullPath, future, future)
+			if err := os.Chtimes(fullPath, future, future); err != nil {
+				t.Fatal(err)
+			}
 
 			// Cache should auto-invalidate because file went from absent -> present
 			sp2 := cb.BuildSystemPromptWithCache()
@@ -427,7 +443,9 @@ Updated content.`
 	}
 	// Set future mtime on the skill file only (NOT the directory)
 	future := time.Now().Add(2 * time.Second)
-	os.Chtimes(skillPath, future, future)
+	if err := os.Chtimes(skillPath, future, future); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify that sourceFilesChangedLocked detects the content change
 	cb.systemPromptMutex.RLock()
@@ -803,10 +821,20 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 	tmpDir, _ := os.MkdirTemp("", "mintclaw-bench-*")
 	defer os.RemoveAll(tmpDir)
 
-	os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755)
-	os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755); err != nil {
+		b.Fatal(err)
+	}
 	for _, name := range []string{"AGENT.md", "SOUL.md"} {
-		os.WriteFile(filepath.Join(tmpDir, name), []byte(strings.Repeat("Content.\n", 10)), 0o644)
+		if err := os.WriteFile(
+			filepath.Join(tmpDir, name),
+			[]byte(strings.Repeat("Content.\n", 10)),
+			0o644,
+		); err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	cb := NewContextBuilder(tmpDir)

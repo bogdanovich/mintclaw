@@ -408,8 +408,10 @@ func TestConfigureFromEnv(t *testing.T) {
 	tmpFile := "/tmp/mintclaw_test_log_" + fmt.Sprintf("%d", time.Now().UnixNano())
 	defer os.Remove(tmpFile)
 
-	os.Setenv("MINTCLAW_LOG_FILE", tmpFile)
-	defer os.Unsetenv("MINTCLAW_LOG_FILE")
+	if err := os.Setenv("MINTCLAW_LOG_FILE", tmpFile); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Unsetenv("MINTCLAW_LOG_FILE") }()
 
 	ConfigureFromEnv()
 
@@ -419,7 +421,9 @@ func TestConfigureFromEnv(t *testing.T) {
 
 	Info("test message")
 
-	os.Setenv("MINTCLAW_LOG_FILE", "~/test_log")
+	if err := os.Setenv("MINTCLAW_LOG_FILE", "~/test_log"); err != nil {
+		t.Fatal(err)
+	}
 	ConfigureFromEnv()
 
 	expanded := filepath.Join(home, "test_log")
@@ -427,7 +431,9 @@ func TestConfigureFromEnv(t *testing.T) {
 }
 
 func TestConfigureFromEnvNoEnv(t *testing.T) {
-	os.Unsetenv("MINTCLAW_LOG_FILE")
+	if err := os.Unsetenv("MINTCLAW_LOG_FILE"); err != nil {
+		t.Fatal(err)
+	}
 	ConfigureFromEnv()
 }
 

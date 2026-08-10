@@ -21,7 +21,7 @@ func TestSupervisorRecoversDurableActivationAndCommitsAuthenticatedHealth(t *tes
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	updateCoordinator, _ := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	request := fixture.stageRequest(now)
 	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestSupervisorDoesNotActivateDurablyStagedRequestAfterRestart(t *testing.T)
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	updateCoordinator, _ := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	request := fixture.stageRequest(now)
 	staged, err := updateCoordinator.Stage(t.Context(), request)
 	if err != nil || staged.Transaction.Phase != PhaseStaged || staged.Transaction.ActivationAttempted {
@@ -101,7 +101,7 @@ func TestSupervisorStopsOldChildWhenActivationPublicationCannotBeRead(t *testing
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	updateCoordinator, root := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	request := fixture.stageRequest(now)
 	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestSupervisorTerminalizesExpiredPreactivationAfterRestart(t *testing.T) {
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	updateCoordinator, _ := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	request := fixture.stageRequest(now)
 	staged, err := updateCoordinator.Stage(t.Context(), request)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestSupervisorBoundsCandidateAttemptsThenProvesRollback(t *testing.T) {
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	defer fixture.server.Close()
 	updateCoordinator, _ := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	request := fixture.stageRequest(now)
 	if _, err := updateCoordinator.Stage(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestSupervisorKeepsVerifiedActivePayloadAfterPreActivationFailure(t *testin
 	fixture := newReleaseFixture(t, now, "mintclaw-node")
 	fixture.server.Close()
 	updateCoordinator, _ := testCoordinator(t, fixture, now)
-	defer updateCoordinator.Close()
+	defer func() { _ = updateCoordinator.Close() }()
 	if _, err := updateCoordinator.Stage(t.Context(), fixture.stageRequest(now)); err == nil {
 		t.Fatal("Stage() unexpectedly succeeded with an unavailable release source")
 	}

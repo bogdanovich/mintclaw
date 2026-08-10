@@ -29,7 +29,7 @@ func TestMemoryToolAddDeduplicatesAndAuditsWithoutRawContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	var invalidations atomic.Int32
 	tool := NewMemoryTool(workspace, func() { invalidations.Add(1) }, eventBus)
@@ -223,7 +223,7 @@ func TestMemoryToolAppendDailySelectsDateDeduplicatesAndAudits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	var invalidations atomic.Int32
 	tool := newMemoryTool(workspace, func() { invalidations.Add(1) }, eventBus, func() time.Time {
@@ -445,7 +445,7 @@ func TestMemoryToolAppendDailyAuditsCommittedSyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	var invalidations atomic.Int32
 	fixedNow := time.Date(2026, time.July, 18, 12, 0, 0, 0, time.UTC)

@@ -137,6 +137,36 @@ type ExecutionPlan struct {
 	PlanHash       string `json:"plan_hash"`
 }
 
+// InvocationDispatch is the transport-only envelope for an execution plan and
+// an optional input that must never enter either durable invocation ledger.
+// The durable plan binds the ephemeral bytes by digest and length; the command
+// handler independently verifies that binding before ledger acceptance.
+type InvocationDispatch struct {
+	Plan           ExecutionPlan   `json:"plan"`
+	EphemeralInput json.RawMessage `json:"ephemeral_input,omitempty"`
+}
+
+func (dispatch InvocationDispatch) Validate() error {
+	if err := dispatch.Plan.Validate(); err != nil {
+		return err
+	}
+	if len(dispatch.EphemeralInput) == 0 {
+		return nil
+	}
+	if dispatch.Plan.Command != BrowserCommandAct ||
+		len(dispatch.EphemeralInput) > MaxBrowserEphemeralInputBytes {
+		return fmt.Errorf("%w: ephemeral invocation input is unavailable", ErrInvalidInvocation)
+	}
+	value, err := jsonstrict.Decode(dispatch.EphemeralInput)
+	if err != nil {
+		return fmt.Errorf("%w: malformed ephemeral invocation input", ErrInvalidInvocation)
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return fmt.Errorf("%w: ephemeral invocation input must be an object", ErrInvalidInvocation)
+	}
+	return nil
+}
+
 func PrepareExecutionPlan(
 	request InvocationRequest,
 	descriptor CommandDescriptor,

@@ -663,7 +663,7 @@ func TestSteeringAckFailureRejectsRootSettlement(t *testing.T) {
 	if !errors.Is(err, ackErr) {
 		t.Fatalf("settleSteeringMessages() error = %v, want %v", err, ackErr)
 	}
-	al.settleInboundAdmission(
+	_ = al.settleInboundAdmission(
 		withOutboundTransaction(t.Context(), "spool-root"),
 		bus.InboundMessage{SpoolID: "spool-root"},
 		rejectedFinalResponseAdmission(err),

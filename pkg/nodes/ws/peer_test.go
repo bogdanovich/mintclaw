@@ -26,7 +26,7 @@ func TestPeerDiscardsResponseAfterRequestCancellation(t *testing.T) {
 			if err != nil {
 				return
 			}
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 			_, data, err := connection.ReadMessage()
 			if err != nil {
 				return
@@ -56,13 +56,13 @@ func TestPeerDiscardsResponseAfterRequestCancellation(t *testing.T) {
 		nil,
 	)
 	if handshakeResponse != nil && handshakeResponse.Body != nil {
-		defer handshakeResponse.Body.Close()
+		defer func() { _ = handshakeResponse.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	session := newPeer(connection)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	session.markReady()
 	ctx, cancel := context.WithCancel(t.Context())
 	requestDone := make(chan error, 1)
@@ -228,7 +228,7 @@ func TestPeerCancellationBurstPreservesLateResponses(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		ids := make([]string, 0, maxOutstandingRequests)
 		for range maxOutstandingRequests {
 			_, data, readErr := connection.ReadMessage()
@@ -280,13 +280,13 @@ func TestPeerCancellationBurstPreservesLateResponses(t *testing.T) {
 		"ws"+strings.TrimPrefix(server.URL, "http"), nil,
 	)
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	session := newPeer(connection)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	session.markReady()
 	for range maxOutstandingRequests {
 		ctx, cancel := context.WithCancel(t.Context())

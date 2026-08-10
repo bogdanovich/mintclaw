@@ -36,7 +36,7 @@ func TestTransferStreamUsesAuthenticatedPeerGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	outbound := testTransferFrame(binding, protocol.TransferFrameChunk, 1, []byte("payload"))
 	if sendErr := stream.Send(t.Context(), outbound); sendErr != nil {

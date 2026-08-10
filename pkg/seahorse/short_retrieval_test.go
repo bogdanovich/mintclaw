@@ -21,20 +21,24 @@ func TestRetrievalGrepSummaries(t *testing.T) {
 	r, s, convID := newTestRetrieval(t)
 	ctx := context.Background()
 
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: convID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "数据库连接配置说明",
 		TokenCount:     50,
-	})
-	s.CreateSummary(ctx, CreateSummaryInput{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: convID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "API endpoint documentation",
 		TokenCount:     50,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// FTS5 search (trigram, needs >= 3 chars)
 	results, err := r.Grep(ctx, GrepInput{
@@ -65,8 +69,12 @@ func TestRetrievalGrepMessages(t *testing.T) {
 	r, s, convID := newTestRetrieval(t)
 	ctx := context.Background()
 
-	s.AddMessage(ctx, convID, "user", "find this message about testing", 5)
-	s.AddMessage(ctx, convID, "user", "unrelated content here", 5)
+	if _, err := s.AddMessage(ctx, convID, "user", "find this message about testing", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "user", "unrelated content here", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	results, err := r.Grep(ctx, GrepInput{
 		Pattern:        "testing",
@@ -130,8 +138,12 @@ func TestRetrievalGrepWithTimeFilter(t *testing.T) {
 	before := now.Add(-2 * time.Hour)
 
 	// Create messages at different times
-	s.AddMessage(ctx, convID, "user", "old message about auth", 5)
-	s.AddMessage(ctx, convID, "user", "recent message about auth", 5)
+	if _, err := s.AddMessage(ctx, convID, "user", "old message about auth", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "user", "recent message about auth", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search with time filter
 	results, err := r.Grep(ctx, GrepInput{
@@ -153,7 +165,9 @@ func TestRetrievalGrepSelectedConversations(t *testing.T) {
 	conv2, _ := s.GetOrCreateConversation(ctx, "test:retrieval2")
 
 	// Add messages to both
-	s.AddMessage(ctx, conv2.ConversationID, "user", "unique keyword xyz", 5)
+	if _, err := s.AddMessage(ctx, conv2.ConversationID, "user", "unique keyword xyz", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search an explicitly resolved set of conversations.
 	results, err := r.Grep(ctx, GrepInput{
@@ -212,9 +226,15 @@ func TestRetrievalGrepRoleFilter(t *testing.T) {
 	r, s, convID := newTestRetrieval(t)
 	ctx := context.Background()
 
-	s.AddMessage(ctx, convID, "user", "user message about alpha", 5)
-	s.AddMessage(ctx, convID, "assistant", "assistant reply about alpha", 5)
-	s.AddMessage(ctx, convID, "user", "another user message", 5)
+	if _, err := s.AddMessage(ctx, convID, "user", "user message about alpha", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "assistant", "assistant reply about alpha", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "user", "another user message", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search all roles
 	allResults, err := r.Grep(ctx, GrepInput{
@@ -266,7 +286,9 @@ func TestRetrievalGrepWithLast(t *testing.T) {
 
 	// Add messages (we can't control timestamps in SQLite easily,
 	// but we can verify the parameter is parsed correctly)
-	s.AddMessage(ctx, convID, "user", "recent message about testing", 5)
+	if _, err := s.AddMessage(ctx, convID, "user", "recent message about testing", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test that Last parameter is converted to Since
 	results, err := r.Grep(ctx, GrepInput{
@@ -290,17 +312,23 @@ func TestRetrievalGrepRoleFilterWithSummaries(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a summary (no role column)
-	s.CreateSummary(ctx, CreateSummaryInput{
+	if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID: convID,
 		Kind:           SummaryKindLeaf,
 		Depth:          0,
 		Content:        "summary about testing",
 		TokenCount:     50,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Add messages with different roles
-	s.AddMessage(ctx, convID, "user", "user message about testing", 5)
-	s.AddMessage(ctx, convID, "assistant", "assistant reply about testing", 5)
+	if _, err := s.AddMessage(ctx, convID, "user", "user message about testing", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddMessage(ctx, convID, "assistant", "assistant reply about testing", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	// Search with role filter and scope=both (default), using LIKE mode (%)
 	// This should NOT error even though summaries don't have role column
@@ -333,18 +361,22 @@ func TestRetrievalGrepTotalCounts(t *testing.T) {
 
 	// Create 3 summaries
 	for i := 0; i < 3; i++ {
-		s.CreateSummary(ctx, CreateSummaryInput{
+		if _, err := s.CreateSummary(ctx, CreateSummaryInput{
 			ConversationID: convID,
 			Kind:           SummaryKindLeaf,
 			Depth:          0,
 			Content:        fmt.Sprintf("summary about testing %d", i),
 			TokenCount:     50,
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Add 5 messages
 	for i := 0; i < 5; i++ {
-		s.AddMessage(ctx, convID, "user", fmt.Sprintf("message about testing %d", i), 5)
+		if _, err := s.AddMessage(ctx, convID, "user", fmt.Sprintf("message about testing %d", i), 5); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Search with limit smaller than total

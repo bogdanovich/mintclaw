@@ -37,7 +37,7 @@ func TestCommandDescriptorSchemaAcceptsInternalBrowserProfiles(t *testing.T) {
 	profiles := []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: "playwright_mcp",
 		Mode: "managed", NetworkMode: "any_http", DryRun: true,
-		Actions: []string{"download", "navigate"},
+		Actions: []string{"click", "download", "navigate", "press", "scroll", "select"},
 		Limits: nodes.BrowserLimits{
 			Sessions: 1, Tabs: 1, SessionSeconds: 3600, IdleSeconds: 600,
 			PreparedSeconds: 300, ActionSeconds: 60,

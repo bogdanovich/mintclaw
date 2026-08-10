@@ -401,7 +401,9 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	// write a job and persist
 	cs1 := NewCronService(tmpFile, nil)
 	at := int64(2000000000000)
-	cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "", "payload", "ch1", "")
+	if _, err := cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "", "payload", "ch1", ""); err != nil {
+		t.Fatal(err)
+	}
 
 	// check file exists
 	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
@@ -420,7 +422,9 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	}
 
 	// test loading invalid JSON
-	os.WriteFile(tmpFile, []byte("{invalid json}"), 0o644)
+	if err := os.WriteFile(tmpFile, []byte("{invalid json}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cs3 := NewCronService(tmpFile, nil)
 	err := cs3.loadStore()
 	if err == nil {

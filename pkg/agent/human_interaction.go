@@ -251,10 +251,9 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 			)
 		}
 	}
-	var executionContext *bus.InboundContext
+	executionContext := cloneInboundContext(request.ExecutionContext)
 	approvalAction := ""
 	if request.Prompt.Kind == interactions.KindApproval {
-		executionContext = cloneInboundContext(request.ExecutionContext)
 		approvalAction = request.ApprovalAction
 	}
 	record, err := registry.Create(interactions.CreateRequest{
@@ -383,19 +382,18 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 		},
 	}
 	replyToMessageID := ""
+	requestID := ""
+	if record.Origin.ExecutionContext != nil {
+		requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
+	}
+	if requestID != "" {
+		outboundContext.Raw[bus.OutboundMetadataKeyRequestID] = requestID
+	}
+	if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
+		replyToMessageID = requestID
+	}
 	switch record.Kind {
 	case interactions.KindApproval:
-		requestID := ""
-		if record.Origin.ExecutionContext != nil {
-			requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
-		}
-		if requestID != "" {
-			outboundContext.Raw[bus.OutboundMetadataKeyRequestID] = requestID
-		}
-		if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") &&
-			requestID != "" {
-			replyToMessageID = requestID
-		}
 		bus.OutboundMetadata{
 			InteractionKind:     bus.OutboundInteractionApproval,
 			InteractionControls: bus.OutboundInteractionControlsPrompt,

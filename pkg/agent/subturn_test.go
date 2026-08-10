@@ -157,7 +157,7 @@ func TestSpawnSubTurn(t *testing.T) {
 
 			// Assert errors
 			if tt.wantErr != nil {
-				if err == nil || err != tt.wantErr {
+				if err == nil || !errors.Is(err, tt.wantErr) {
 					t.Errorf("expected error %v, got %v", tt.wantErr, err)
 				}
 				return
@@ -2969,8 +2969,12 @@ func newMultiAgentLoop(t *testing.T, provider providers.LLMProvider) (*AgentLoop
 
 	alphaDir := filepath.Join(tmpDir, "alpha")
 	betaDir := filepath.Join(tmpDir, "beta")
-	os.MkdirAll(alphaDir, 0o755)
-	os.MkdirAll(betaDir, 0o755)
+	if err := os.MkdirAll(alphaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(betaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
