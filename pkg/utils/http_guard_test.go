@@ -38,7 +38,7 @@ func TestCreateSafeHTTPClient_AllowsLoopbackProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Do() error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 }
 
 func TestCreateSafeHTTPClient_BlocksPrivateRedirect(t *testing.T) {
@@ -100,7 +100,7 @@ func TestNewSafeDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testin
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
@@ -122,7 +122,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	accepted := make(chan struct{}, 1)
 	go func() {
@@ -130,7 +130,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 		if acceptErr != nil {
 			return
 		}
-		conn.Close()
+		_ = conn.Close()
 		accepted <- struct{}{}
 	}()
 
@@ -149,7 +149,7 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 	if err != nil {
 		t.Fatalf("expected localhost DNS resolution to succeed with whitelist, got %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	select {
 	case <-accepted:

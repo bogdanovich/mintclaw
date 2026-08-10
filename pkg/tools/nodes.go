@@ -226,10 +226,6 @@ func (*NodeDiscoveryTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
 }
 
-func (*NodeDiscoveryTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
-}
-
 func (tool *NodeDiscoveryTool) list(ctx context.Context) *toolshared.ToolResult {
 	names, defaultTarget := tool.access.visibleTargets(toolshared.ToolAgentID(ctx))
 	entries := make([]nodeListEntry, 0, len(names))

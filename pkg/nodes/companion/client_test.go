@@ -884,7 +884,7 @@ func (handler *blockingHandler) execute(ctx context.Context, _ commandInvocation
 	handler.started <- struct{}{}
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %v", errCommandCancellationConfirmed, ctx.Err())
+		return nil, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, ctx.Err())
 	case <-handler.release:
 		return map[string]bool{"ok": true}, nil
 	}

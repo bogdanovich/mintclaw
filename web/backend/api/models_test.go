@@ -2759,9 +2759,13 @@ func TestHandleFetchModels_ModelIndexUsesStoredKey(t *testing.T) {
 	t.Setenv("MINTCLAW_HOME", filepath.Join(tmp, ".mintclaw"))
 	defer func() {
 		if oldHome != "" {
-			os.Setenv("MINTCLAW_HOME", oldHome)
+			if err := os.Setenv("MINTCLAW_HOME", oldHome); err != nil {
+				t.Fatal(err)
+			}
 		} else {
-			os.Unsetenv("MINTCLAW_HOME")
+			if err := os.Unsetenv("MINTCLAW_HOME"); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}()
 

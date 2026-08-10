@@ -266,28 +266,6 @@ func (r *ToolRegistry) LoopSemantics(name string) loopguard.Semantics {
 	}
 }
 
-// SteeringSafety returns a tool's pending-call policy. Missing, unavailable,
-// or invalid declarations fail closed as unknown.
-func (r *ToolRegistry) SteeringSafety(name string, args map[string]any) toolshared.SteeringSafety {
-	tool, ok := r.Get(name)
-	if !ok || tool == nil {
-		return toolshared.SteeringSafetyUnknown
-	}
-	provider, ok := tool.(toolshared.SteeringSafetyProvider)
-	if !ok {
-		return toolshared.SteeringSafetyUnknown
-	}
-	safety := provider.ToolSteeringSafety(args)
-	switch safety {
-	case toolshared.SteeringSafetyReadOnly,
-		toolshared.SteeringSafetyNonCancellable,
-		toolshared.SteeringSafetyCancellable:
-		return safety
-	default:
-		return toolshared.SteeringSafetyUnknown
-	}
-}
-
 func (r *ToolRegistry) toolAllowedLocked(name string) bool {
 	if r.allowlist == nil {
 		return true

@@ -38,7 +38,6 @@ const (
 	EventKindToolExecEnd            EventKind = runtimeevents.KindAgentToolExecEnd
 	EventKindToolExecSkipped        EventKind = runtimeevents.KindAgentToolExecSkipped
 	EventKindToolLoopDecision       EventKind = runtimeevents.KindAgentToolLoopDecision
-	EventKindToolSteeringDecision   EventKind = runtimeevents.KindAgentToolSteeringDecision
 	EventKindSteeringInjected       EventKind = runtimeevents.KindAgentSteeringInjected
 	EventKindFollowUpQueued         EventKind = runtimeevents.KindAgentFollowUpQueued
 	EventKindAsyncCompletion        EventKind = runtimeevents.KindAgentAsyncCompletion

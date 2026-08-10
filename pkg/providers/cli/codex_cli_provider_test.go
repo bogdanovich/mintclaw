@@ -165,7 +165,7 @@ func TestParseJSONLEvents_ErrorEvent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	assertProviderErrorKind(t, err, providererrors.KindAuthentication)
+	_ = assertProviderErrorKind(t, err, providererrors.KindAuthentication)
 }
 
 func TestParseJSONLEvents_TurnFailed(t *testing.T) {
@@ -177,7 +177,7 @@ func TestParseJSONLEvents_TurnFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	assertProviderErrorKind(t, err, providererrors.KindRateLimit)
+	_ = assertProviderErrorKind(t, err, providererrors.KindRateLimit)
 }
 
 func TestParseJSONLEvents_ErrorWithContent(t *testing.T) {
@@ -248,7 +248,7 @@ func TestParseJSONLEvents_LifecycleEventDoesNotHideMalformedOutput(t *testing.T)
 {"type":"item.completed"`
 
 	_, err := p.parseJSONLEvents(events)
-	assertProviderErrorKind(t, err, providererrors.KindUnknown)
+	_ = assertProviderErrorKind(t, err, providererrors.KindUnknown)
 }
 
 func TestParseJSONLEvents_CommandExecution(t *testing.T) {
@@ -549,7 +549,7 @@ func TestCodexCliProvider_MockCLI_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	assertProviderErrorKind(t, err, providererrors.KindAuthentication)
+	_ = assertProviderErrorKind(t, err, providererrors.KindAuthentication)
 }
 
 func TestCodexCliProvider_MockCLI_WithModel(t *testing.T) {
@@ -627,7 +627,7 @@ func TestCodexCliProvider_MockCLI_ContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on canceled context")
 	}
-	assertProviderError(t, err, context.Canceled, providererrors.KindCanceled)
+	_ = assertProviderError(t, err, context.Canceled, providererrors.KindCanceled)
 }
 
 func TestCodexCliProvider_EmptyCommand(t *testing.T) {

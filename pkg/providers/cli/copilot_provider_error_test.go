@@ -64,7 +64,7 @@ func TestNormalizeCopilotErrorStatusAndCompatibilityFallback(t *testing.T) {
 	message := "credit balance is too low"
 	status := int64(429)
 	event := &copilot.SessionEvent{Data: copilot.Data{StatusCode: &status, Message: &message}}
-	assertProviderError(t, normalizeCopilotError(cause, event), cause, providererrors.KindRateLimit)
+	_ = assertProviderError(t, normalizeCopilotError(cause, event), cause, providererrors.KindRateLimit)
 
 	requestID := "github-request-fallback"
 	event = &copilot.SessionEvent{Data: copilot.Data{Message: &message, ProviderCallID: &requestID}}
@@ -77,7 +77,7 @@ func TestNormalizeCopilotErrorStatusAndCompatibilityFallback(t *testing.T) {
 		t.Fatal("ProviderError exposed raw Copilot diagnostics")
 	}
 
-	assertProviderError(
+	_ = assertProviderError(
 		t,
 		normalizeCopilotError(context.DeadlineExceeded, event),
 		context.DeadlineExceeded,

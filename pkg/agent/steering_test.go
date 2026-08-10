@@ -2994,7 +2994,7 @@ func (m *capturingMockProvider) GetDefaultModel() string {
 	return "capturing-mock"
 }
 
-func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
+func TestAgentLoop_SteeringPreservesBatchAndReachesNextModelIteration(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -3085,20 +3085,23 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 		t.Fatal("timeout")
 	}
 
-	// Check that the skipped tool result message is in the conversation
+	// The emitted batch completes before steering becomes model-visible.
 	capMu.Lock()
 	msgs := secondCallMessages
 	capMu.Unlock()
 
-	foundSkipped := false
+	foundSecondResult := false
+	foundSteering := false
 	for _, m := range msgs {
 		if m.Role == "tool" && m.ToolCallID == "call_2" &&
-			m.Content == queuedSteeringDeferredToolResult {
-			foundSkipped = true
-			break
+			m.Content == "executed skipped_tool" {
+			foundSecondResult = true
+		}
+		if m.Role == "user" && strings.Contains(m.Content, "interrupt!") {
+			foundSteering = true
 		}
 	}
-	if !foundSkipped {
+	if !foundSecondResult || !foundSteering {
 		// Log what we actually got
 		for i, m := range msgs {
 			t.Logf(
@@ -3109,7 +3112,11 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 				truncate(m.Content, 80),
 			)
 		}
-		t.Fatal("expected skipped tool result for call_2")
+		t.Fatalf(
+			"second iteration missing completed batch or steering: result=%v steering=%v",
+			foundSecondResult,
+			foundSteering,
+		)
 	}
 }
 

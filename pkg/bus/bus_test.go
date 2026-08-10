@@ -841,7 +841,7 @@ func TestPublishInbound_ContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from canceled context, got nil")
 	}
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -859,7 +859,7 @@ func TestPublishInbound_BusClosed(t *testing.T) {
 		},
 		Content: "test",
 	})
-	if err != ErrBusClosed {
+	if !errors.Is(err, ErrBusClosed) {
 		t.Fatalf("expected ErrBusClosed, got %v", err)
 	}
 }
@@ -875,7 +875,7 @@ func TestPublishOutbound_BusClosed(t *testing.T) {
 		},
 		Content: "test",
 	})
-	if err != ErrBusClosed {
+	if !errors.Is(err, ErrBusClosed) {
 		t.Fatalf("expected ErrBusClosed, got %v", err)
 	}
 }
@@ -901,7 +901,7 @@ func TestConsumeInbound_ContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	mb.PublishInbound(ctx, InboundMessage{
+	_ = mb.PublishInbound(ctx, InboundMessage{
 		Context: InboundContext{
 			Channel:  "test",
 			ChatID:   "chat-cancel",
@@ -1032,7 +1032,7 @@ func TestPublishInbound_FullBuffer(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when buffer is full and context times out")
 	}
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
@@ -1123,7 +1123,7 @@ func TestCloseIdempotent(t *testing.T) {
 		},
 		Content: "test",
 	})
-	if err != ErrBusClosed {
+	if !errors.Is(err, ErrBusClosed) {
 		t.Fatalf("expected ErrBusClosed after multiple closes, got %v", err)
 	}
 }

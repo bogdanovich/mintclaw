@@ -566,10 +566,6 @@ func (*NodeInvokeTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
-func (*NodeInvokeTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
 func (*NodeStatusTool) Name() string { return "nodes_status" }
 
 func (*NodeStatusTool) Description() string {
@@ -726,10 +722,6 @@ func (*NodeStatusTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
 }
 
-func (*NodeStatusTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
-}
-
 func (*NodeCancelTool) Name() string { return "nodes_cancel" }
 
 func (*NodeCancelTool) Description() string {
@@ -830,10 +822,6 @@ func (tool *NodeCancelTool) Execute(ctx context.Context, args map[string]any) *t
 
 func (*NodeCancelTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
-}
-
-func (*NodeCancelTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
 }
 
 func (runtime *nodeInvocationToolRuntime) fileTransferStatus(

@@ -25,7 +25,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	_ = w.Close()
 	os.Stdout = oldStdout
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, r); err != nil {

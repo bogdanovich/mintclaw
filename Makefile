@@ -393,7 +393,7 @@ lint-docs:
 
 ## lint: Run linters
 lint:
-	@CGO_ENABLED=$(GOLANGCI_LINT_CGO_ENABLED) $(GOLANGCI_LINT) run --tests=false \
+	@CGO_ENABLED=$(GOLANGCI_LINT_CGO_ENABLED) $(GOLANGCI_LINT) run \
 		--concurrency $(GOLANGCI_LINT_CONCURRENCY) --build-tags $(GO_BUILD_TAGS)
 	@./scripts/lint-docs.sh
 

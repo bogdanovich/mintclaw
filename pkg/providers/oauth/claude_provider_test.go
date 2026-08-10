@@ -24,7 +24,7 @@ func TestClaudeProvider_ChatRoundTrip(t *testing.T) {
 		}
 
 		var reqBody map[string]any
-		json.NewDecoder(r.Body).Decode(&reqBody)
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
 		resp := map[string]any{
 			"id":          "msg_test",
@@ -41,7 +41,7 @@ func TestClaudeProvider_ChatRoundTrip(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 

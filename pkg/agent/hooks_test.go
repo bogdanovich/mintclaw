@@ -1559,7 +1559,7 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
+func TestAgentLoop_HookRespond_SteeringPreservesRemainingBatch(t *testing.T) {
 	provider := &multiToolProvider{
 		toolCalls: []providers.ToolCall{
 			{ID: "call-1", Name: "tool_one", Arguments: map[string]any{}},
@@ -1645,17 +1645,21 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 	events := append(collectedEvents, collectRuntimeEventStream(runtimeCh)...)
 
 	skippedEvts := filterRuntimeEvents(events, runtimeevents.KindAgentToolExecSkipped)
-	if len(skippedEvts) < 1 {
-		t.Fatal("expected at least one ToolExecSkipped event after steering")
+	if len(skippedEvts) != 0 {
+		t.Fatalf("unexpected ToolExecSkipped events after steering: %#v", skippedEvts)
 	}
 
-	for _, evt := range skippedEvts {
-		payload, ok := evt.Payload.(ToolExecSkippedPayload)
+	completed := make(map[string]bool)
+	for _, evt := range filterRuntimeEvents(events, runtimeevents.KindAgentToolExecEnd) {
+		end, ok := evt.Payload.(ToolExecEndPayload)
 		if !ok {
-			t.Fatalf("expected ToolExecSkippedPayload, got %T", evt.Payload)
+			t.Fatalf("expected ToolExecEndPayload, got %T", evt.Payload)
 		}
-		if payload.Reason != "queued user steering message" {
-			t.Fatalf("expected skip reason 'queued user steering message', got %q", payload.Reason)
+		completed[end.Tool] = true
+	}
+	for _, toolName := range []string{"tool_one", "tool_two", "tool_three"} {
+		if !completed[toolName] {
+			t.Fatalf("missing completion event for %s: %#v", toolName, events)
 		}
 	}
 }

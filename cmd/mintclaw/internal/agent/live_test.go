@@ -228,7 +228,7 @@ func liveTestServer(
 		if err != nil {
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		var message channelmintclaw.MintClawMessage
 		if connection.ReadJSON(&message) != nil {
 			return

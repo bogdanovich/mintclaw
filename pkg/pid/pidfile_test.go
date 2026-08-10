@@ -128,7 +128,9 @@ func TestWritePidFileStalePID(t *testing.T) {
 	// Write a PID file with a PID that almost certainly doesn't exist.
 	stale := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(stale, "", "  ")
-	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	data, err := WritePidFile(dir, "127.0.0.1", 18790)
 	if err != nil {
@@ -178,7 +180,9 @@ func TestReadPidFileWithCheckStalePID(t *testing.T) {
 
 	stale := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(stale, "", "  ")
-	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	data := ReadPidFileWithCheck(dir)
 	if data != nil {
@@ -195,7 +199,9 @@ func TestReadPidFileWithCheckStalePID(t *testing.T) {
 func TestReadPidFileWithCheckInvalidFile(t *testing.T) {
 	dir := tmpDir(t)
 	path := filepath.Join(dir, pidFileName)
-	os.WriteFile(path, []byte("not json"), 0o600)
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	data := ReadPidFileWithCheck(dir)
 	if data != nil {
@@ -228,7 +234,9 @@ func TestRemovePidFileDifferentPID(t *testing.T) {
 
 	other := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(other, "", "  ")
-	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	RemovePidFile(dir)
 
@@ -250,7 +258,9 @@ func TestRemovePidFileIfPID(t *testing.T) {
 	other := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(other, "", "  ")
 	path := filepath.Join(dir, pidFileName)
-	os.WriteFile(path, raw, 0o600)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	removed := RemovePidFileIfPID(dir, 99999999)
 	if !removed {
@@ -267,7 +277,9 @@ func TestRemovePidFileIfPIDMismatch(t *testing.T) {
 	other := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(other, "", "  ")
 	path := filepath.Join(dir, pidFileName)
-	os.WriteFile(path, raw, 0o600)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	removed := RemovePidFileIfPID(dir, 88888888)
 	if removed {
@@ -285,7 +297,9 @@ func TestWritePidFileContainerPID1(t *testing.T) {
 
 	stale := PidFileData{PID: 1, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(stale, "", "  ")
-	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	data, err := WritePidFile(dir, "127.0.0.1", 18790)
 	if err != nil {
@@ -306,7 +320,9 @@ func TestReadPidFileWithCheckContainerPID1(t *testing.T) {
 
 	stale := PidFileData{PID: 1, Token: "deadbeef12345678deadbeef12345678"}
 	raw, _ := json.MarshalIndent(stale, "", "  ")
-	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	data := ReadPidFileWithCheck(dir)
 	if data != nil {
@@ -322,7 +338,9 @@ func TestReadPidFileWithCheckContainerPID1(t *testing.T) {
 func TestReadPidFileUnlockedInvalidJSON(t *testing.T) {
 	dir := tmpDir(t)
 	path := filepath.Join(dir, pidFileName)
-	os.WriteFile(path, []byte("not json"), 0o600)
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := readPidFileUnlocked(path)
 	if err == nil {
@@ -334,7 +352,9 @@ func TestReadPidFileUnlockedInvalidJSON(t *testing.T) {
 func TestReadPidFileUnlockedInvalidPID(t *testing.T) {
 	dir := tmpDir(t)
 	path := filepath.Join(dir, pidFileName)
-	os.WriteFile(path, []byte(`{"pid": -1, "token": "a"}`), 0o600)
+	if err := os.WriteFile(path, []byte(`{"pid": -1, "token": "a"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := readPidFileUnlocked(path)
 	if err == nil {

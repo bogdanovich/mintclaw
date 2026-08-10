@@ -145,7 +145,7 @@ func newBackend(t *testing.T) *session.JSONLBackend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return session.NewJSONLBackend(store)
 }
 

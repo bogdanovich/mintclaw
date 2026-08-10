@@ -21,7 +21,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
@@ -352,20 +351,12 @@ func (t *ReadFileTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
 }
 
-func (t *ReadFileTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
-}
-
 func (t *ReadFileLinesTool) Name() string {
 	return "read_file"
 }
 
 func (t *ReadFileLinesTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
-}
-
-func (t *ReadFileLinesTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
 }
 
 func (t *ReadFileTool) Description() string {
@@ -1035,10 +1026,6 @@ func (t *ListDirTool) Name() string {
 
 func (t *ListDirTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsReadOnlyIdempotent
-}
-
-func (t *ListDirTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyReadOnly
 }
 
 func (t *ListDirTool) Description() string {

@@ -302,7 +302,7 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 		t.Fatalf("coding runtime executed configured process hook: %v", err)
 	}
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
-		t.Fatalf("coding catalogue changed after dynamic injection: %v", got)
+		t.Fatalf("coding catalog changed after dynamic injection: %v", got)
 	}
 	identity := agent.ContextBuilder.getIdentity(true)
 	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
@@ -1456,7 +1456,7 @@ func TestNewAgentLoopWithRuntimeProfilePreservesPersonalCatalogueAndExternalStat
 	t.Cleanup(loop.Close)
 	gotTools := loop.GetRegistry().GetDefaultAgent().Tools.List()
 	if !slices.Equal(gotTools, wantTools) {
-		t.Fatalf("strict personal tools = %v, want legacy catalogue %v", gotTools, wantTools)
+		t.Fatalf("strict personal tools = %v, want legacy catalog %v", gotTools, wantTools)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("strict personal construction created execution-root state: %v", statErr)

@@ -364,7 +364,15 @@ func TestHandleInboundContext_PublishesNormalizedContext(t *testing.T) {
 			defer msgBus.Close()
 
 			ch := NewBaseChannel("test", nil, msgBus, []string{"*"})
-			ch.HandleInboundContext(context.Background(), tt.inbound.ChatID, "hello", nil, tt.inbound)
+			if err := ch.HandleInboundContext(
+				context.Background(),
+				tt.inbound.ChatID,
+				"hello",
+				nil,
+				tt.inbound,
+			); err != nil {
+				t.Fatal(err)
+			}
 
 			msg := <-msgBus.InboundChan()
 			if msg.ChatID != tt.wantChat {

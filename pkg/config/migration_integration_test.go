@@ -109,7 +109,7 @@ func TestMigration_Integration_LegacyConfigWithoutWorkspace(t *testing.T) {
 	if bc == nil || !bc.Enabled {
 		t.Error("Telegram.Enabled should be true")
 	}
-	bc.Decode(&tgCfg)
+	_ = bc.Decode(&tgCfg)
 	if tgCfg.Token.String() != "test-token" {
 		t.Errorf("Telegram.Token = %q, want %q", tgCfg.Token.String(), "test-token")
 	}

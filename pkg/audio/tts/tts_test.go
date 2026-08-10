@@ -87,7 +87,7 @@ func TestOpenAITTSProvider_SynthesizeSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize failed: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	data, err := io.ReadAll(stream)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestOpenAITTSProvider_SynthesizeRetriesWithoutResponseFormat(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Synthesize failed: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	data, err := io.ReadAll(stream)
 	if err != nil {

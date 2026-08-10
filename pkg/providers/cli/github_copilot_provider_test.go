@@ -68,5 +68,5 @@ func TestGitHubCopilotProviderChatNormalizesCancellation(t *testing.T) {
 	cause := context.Canceled
 	provider := &GitHubCopilotProvider{session: &fakeCopilotSession{err: cause}}
 	_, err := provider.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, nil, "", nil)
-	assertProviderError(t, err, cause, providererrors.KindCanceled)
+	_ = assertProviderError(t, err, cause, providererrors.KindCanceled)
 }

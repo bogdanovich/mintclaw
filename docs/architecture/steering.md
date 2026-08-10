@@ -1,46 +1,65 @@
 # Steering
 
-Steering allows injecting messages into an already-running agent loop at safe
-boundaries without waiting for the entire cycle to complete.
+Steering injects genuine user input into an already-running regular agent turn.
+MintClaw uses a Codex-style model boundary: the current model response and its
+emitted tool batch finish first, then the new input is included in another model
+iteration within the same turn.
 
-## How it works
+## Runtime Contract
 
-When the model requests a sequence of tool calls, steering checks the queue
-before the first dispatch and after each tool completes. Once steering is
-pending, every remaining call is evaluated independently:
-
-1. Read-only and explicitly non-cancellable calls finish.
-2. Cancellable and unclassified calls are skipped before dispatch.
-3. Every call receives exactly one source-ordered tool result, including a
-   synthetic result for skipped calls.
-4. Steering is injected before the next model request.
-
-```
-User ──► Steer("change approach")
-                │
-Agent Loop      ▼
-  ├─ tool[0] ✔  (executed)
-  ├─ [polling] → steering found!
-  ├─ tool[1] ✔  (read-only, finished)
-  ├─ tool[2] ✘  (cancellable, skipped)
-  └─ new LLM turn with steering message
+```text
+User request
+  -> model response
+  -> emitted tool batch
+       tool 1 -> real result
+       tool 2 -> real result
+       steering arrives and is queued
+       tool 3 -> real result
+  -> steering is appended as user input
+  -> next model iteration decides what to do
 ```
 
-## Scoped queues
+Steering does not classify, cancel, or replace pending tool calls. The model sees
+the completed work and decides whether to continue, amend it, change direction,
+reply, or finish. Every emitted tool call keeps exactly one source-ordered result
+in history.
 
-Steering is now isolated per resolved session scope, not stored in a single
-global queue.
+Explicit hard abort, graceful interrupt, and stop requests are separate control
+paths. They may stop unstarted work according to their own lifecycle contracts;
+ordinary inbound user messages do not acquire cancellation semantics merely by
+arriving during a turn.
 
-- The active turn writes and reads from its own scope key (usually the routed session key such as `agent:<agent_id>:...`)
-- `Steer()` still works outside an active turn through a legacy fallback queue
-- `Continue()` first dequeues messages for the requested session scope, then falls back to the legacy queue for backwards compatibility
+## Model Boundaries
 
-This prevents a message arriving from another chat, DM peer, or routed agent
-session from being injected into the wrong conversation.
+Steering is checked at these boundaries:
 
-## Configuration
+1. At loop start, before the first model request.
+2. Before tool execution begins, without suppressing the emitted batch.
+3. After each tool result, so input is captured promptly while the remaining
+   batch continues.
+4. After the complete tool batch, before the next model request.
+5. After a direct model response and immediately before finalization, so late
+   input cannot be orphaned behind a completed turn.
 
-In `config.json`, under `agents.defaults`:
+The model never receives steering in the middle of an in-flight provider
+request. Instead, the current response reaches a normal boundary and the queued
+input is included in the next request.
+
+## Scoped Queues
+
+Steering queues are isolated by resolved session scope, usually the routed
+session key such as `agent:<agent_id>:...`.
+
+- An active turn reads only its own scope.
+- Input from another chat, topic, DM peer, or routed agent cannot enter it.
+- `Steer()` outside an active turn uses the process-level fallback queue exposed
+  by the public Go API.
+- `Continue()` checks scoped input first and then the fallback queue.
+
+## Queue Drain Configuration
+
+`agents.defaults.steering_mode` controls how many already queued messages become
+visible at one model boundary. It does not control tool execution.
 
 ```json
 {
@@ -52,193 +71,84 @@ In `config.json`, under `agents.defaults`:
 }
 ```
 
-### Modes
-
 | Value | Behavior |
-|-------|----------|
-| `"one-at-a-time"` | **(default)** Dequeues only one message per polling cycle. If there are 3 messages in the queue, they are processed one at a time across 3 successive iterations. |
-| `"all"` | Drains the entire queue in a single poll. All pending messages are injected into the context together. |
+|---|---|
+| `one-at-a-time` | Dequeue one message per model boundary. Later messages remain ordered for later iterations. |
+| `all` | Drain all currently queued messages into the next model iteration in FIFO order. |
 
-The environment variable `MINTCLAW_AGENTS_DEFAULTS_STEERING_MODE` can be used as an alternative.
+The environment variable
+`MINTCLAW_AGENTS_DEFAULTS_STEERING_MODE` provides the same setting.
 
 ## Go API
 
-### Steer — Send a steering message
+### Steer
 
 ```go
 err := agentLoop.Steer(providers.Message{
     Role:    "user",
-    Content: "change direction, focus on X instead",
+    Content: "also include the attached correction",
 })
-if err != nil {
-    // Queue is full (MaxQueueSize=10) or not initialized
-}
 ```
 
-The message is enqueued in a thread-safe manner. Returns an error if the queue is full or not initialized. It will be picked up at the next polling point (after the current tool finishes).
+`Steer` enqueues input and returns an error if the queue is full or unavailable.
+Input accepted for an active turn remains part of that turn.
 
-### SteeringMode / SetSteeringMode
-
-```go
-// Read the current mode
-mode := agentLoop.SteeringMode() // SteeringOneAtATime | SteeringAll
-
-// Change it at runtime
-agentLoop.SetSteeringMode(agent.SteeringAll)
-```
-
-### Continue — Resume an idle agent
-
-When the agent is idle (it has finished processing and its last message was from the assistant), `Continue` checks if there are steering messages in the queue and uses them to start a new cycle:
+### Continue
 
 ```go
 response, err := agentLoop.Continue(ctx, sessionKey, channel, chatID)
-if err != nil {
-    // Error (e.g. "no default agent available")
-}
-if response == "" {
-    // No steering messages in queue, the agent stays idle
-}
 ```
 
-`Continue` internally uses `SkipInitialSteeringPoll: true` to avoid double-dequeuing the same messages (since it already extracted them and passes them directly as input).
+`Continue` starts work for queued input when the agent is idle. It resolves the
+agent from the session key and avoids dequeuing the same message twice.
 
-`Continue` also resolves the target agent from the provided session key, so
-agent-scoped sessions continue on the correct agent instead of always using
-the default one.
+## Inbound Scheduling
 
-## Polling points in the loop
+The shared message bus preserves per-session serialization:
 
-Steering is checked at the following points in the agent cycle:
+1. A message for an idle session starts a worker turn.
+2. A message for the same active session enters that turn's steering queue.
+3. Messages for different sessions may run concurrently up to
+   `max_parallel_turns`.
+4. Non-routable system messages retain their dedicated synchronous handling.
 
-1. **At loop start** — before the first LLM call, to catch messages enqueued during setup
-2. **Before the first tool dispatch** — catches steering that arrived while the model was responding
-3. **After every tool completes** — including the first and last; remaining calls are classified individually
-4. **After a direct LLM response** — if a new steering message arrived while the model was generating a non-tool response, the loop continues instead of returning a stale answer
-5. **Right before the turn is finalized** — if steering arrived at the very end of the turn, the agent immediately starts a continuation turn instead of leaving the message orphaned in the queue
+This makes rapid same-chat input one coherent turn while preserving concurrency
+between unrelated conversations.
 
-## Tool cancellation safety
+## Steering With Media
 
-Tools optionally implement `ToolSteeringSafety(args)`. The declared value controls
-only calls that have not been dispatched:
+Steering messages retain their `media://` references in canonical history. At
+the next provider boundary they use the same media-resolution path as initial
+input:
 
-| Classification | Pending-call decision |
-|---|---|
-| `read_only` | Finish; observing state is safe and may still help the next model turn |
-| `non_cancellable` | Finish; the tool contract says skipping at this boundary is unsafe |
-| `cancellable` | Skip before execution |
-| `unknown` or missing | Skip before execution (fail closed) |
+- image references become provider-compatible multimodal inputs;
+- non-image media is resolved through the normal attachment pipeline;
+- missing durable media is represented honestly as unavailable;
+- mixed text and media preserve their original order and session ownership.
 
-Once a tool has been dispatched, MintClaw lets it finish. Steering does not
-cancel its context because cancellation after an external commit could leave
-the runtime and external system in disagreement. Tool authors must classify
-the externally visible operation, not merely its Go implementation. Call
-arguments support mixed-operation tools: `exec` treats `list`, `poll`, and
-`read` as read-only, while commands and session writes, keys, or kills are
-cancellable.
+## Human Interaction Boundary
 
-All built-in tool types declare a policy. Remote MCP annotations are not used
-as authorization to continue because MCP defines them as untrusted hints;
-dynamic MCP calls deliberately remain `unknown` unless a trusted wrapper
-implements a stronger local policy.
+`request_user_input` owns a durable suspension lifecycle. If normal input arrives
+before suspension admission, MintClaw does not create a stale second question:
+the call receives a normal error result explaining that input arrived first, the
+dependent tail is paired as skipped, and the new user message is processed at
+the next model boundary. Once a suspension is durable, its interaction routing
+rules determine how an answer resumes the turn.
 
-### Preventing unwanted side effects
+## Observability
 
-Tools can have **irreversible side effects**. If the user says "no, wait" while the agent is mid-batch, executing the remaining tools means those side effects happen anyway:
+Runtime events and diagnostic traces record:
 
-| Tool batch | Steering message | With skip | Without skip |
-|---|---|---|---|
-| `[web_search, send_email]` | "don't send it" | Email **not** sent | Email sent, damage done |
-| `[query_db, write_file, spawn_agent]` | "use another database" | Only the query runs | File written + subagent spawned, all wasted |
-| `[search₁, search₂, search₃, write_file]` | user changes topic entirely | 1 search | 3 searches + file write, all irrelevant |
+- steering enqueue/injection;
+- real tool start, result, error, suspension, or explicit skip;
+- the next model request and response;
+- final turn outcome.
 
-### Avoiding wasted time
+There is no pending-tool steering-decision event because steering no longer
+makes per-tool execution decisions.
 
-Tools that take seconds (web fetches, API calls, database queries) would all run to completion before the agent sees the user's correction. In a batch of 3 tools each taking 3-4 seconds, that's 10+ seconds of work that will be discarded.
+## Future Queue Policies
 
-With skipping, the agent reacts as soon as the current tool finishes — typically within a few seconds instead of waiting for the entire batch.
-
-### The LLM gets full context
-
-Skipped tools receive an explicit synthetic result describing the cause and
-the required reconciliation behavior, so the model knows which actions were
-not performed. A queued message defers unsafe pending calls; it does not imply
-that every earlier operation was canceled. At the next model boundary, the
-model must reissue operations that are still requested, update operations
-affected by a correction, and omit only operations the user canceled or
-replaced.
-
-### Trade-off: sequential execution
-
-Skipping requires tools to run **sequentially** (the previous implementation ran them in parallel). This introduces latency when the LLM requests multiple independent tools in a single turn. In practice, most batches contain 1-2 tools, so the impact is minimal compared to the benefit of being able to stop unwanted actions.
-
-## Skipped tool result format
-
-When steering skips a call, it receives a `tool` result:
-
-```
-Content: "Deferred without execution because a newer user message arrived. Reconcile this operation after reading the newer message: reissue it if it is still requested, update it if the user corrected it, and omit it only if the user canceled or replaced it."
-```
-
-The structured `agent.tool.steering_decision` event separately records the
-classification, decision, cause, and tool-call correlation. The result is
-saved to the session and sent to the model, so it knows the action did not run.
-
-## Full flow example
-
-```
-1. User: "search for info on X, write a file, and send me a message"
-
-2. LLM responds with 3 tool calls: [web_search, write_file, message]
-
-3. web_search is executed → result saved
-
-4. [polling] → User called Steer("no, search for Y instead")
-
-5. A pending read-only search finishes, while `write_file` and `message` are
-   skipped with synthetic results.
-
-6. Message "search for Y instead" injected into context
-
-7. LLM receives the full updated context and responds accordingly
-```
-
-## Automatic bus drain
-
-When the agent loop (`Run()`) starts, it reads inbound messages from a shared message bus. The routing logic determines how each message is handled:
-
-1. **No active turn for the message's session** — the message is dispatched to a **worker goroutine** that processes the full turn (LLM calls, tool execution, steering drain)
-2. **An active turn already exists for the same session** — the message is enqueued directly into that session's **steering queue** via `enqueueSteeringMessage`. No background drain goroutine is needed
-3. **Non-routable message** (e.g. `system`) — processed synchronously in the main loop
-
-This design enables **parallel processing of messages from different sessions** while keeping same-session messages strictly sequential. Key implications:
-
-- Messages from different users/channels are processed **concurrently** (up to `max_parallel_turns`)
-- Messages from the same session are **serialized** — subsequent messages go to the steering queue
-- Users don't need to do anything special — their messages are automatically captured as steering when the agent is busy for their session
-- Audio messages are transcribed within the worker that processes the turn, so the agent receives text
-- `system` inbound messages are processed immediately and do not trigger steering
-
-## Steering with media
-
-Steering messages can include `Media` refs, just like normal inbound user
-messages.
-
-- The original `media://` refs are preserved in session history via `AddFullMessage`
-- Before the next provider call, steering messages go through the normal media resolution pipeline
-- Image refs are converted to data URLs for multimodal providers; non-image refs are resolved the same way as standard inbound media
-
-This applies both to in-turn steering and to idle-session continuation through
-`Continue()`.
-
-## Notes
-
-- Steering **does not interrupt** a tool that is currently executing. It waits for the current tool to finish, then classifies pending calls.
-- Tool execution is currently sequential, so there is only one already-dispatched call at a time.
-- Steering queues remain in memory. Accepted messages are persisted when they
-  are injected, but a process restart before injection can still lose queued
-  steering; cancellation decisions therefore do not claim restart durability.
-- With `one-at-a-time` mode, if multiple messages are enqueued rapidly, they will be processed one per iteration. This gives the model the opportunity to react to each message individually.
-- With `all` mode, all pending messages are combined into a single injection. Useful when you want the agent to receive all the context at once.
-- The steering queue has a maximum capacity of 10 messages (`MaxQueueSize`). `Steer()` returns an error when the queue is full. In the bus drain path, the error is logged as a warning and the message is effectively dropped.
-- Manual `Steer()` calls made outside an active turn still go to the legacy fallback queue, so older integrations keep working.
+Potential `followup` and `collect` modes are documented but not implemented in
+[Codex-Style Steering Roadmap](codex-style-steering-roadmap.md). Current
+MintClaw behavior is same-turn steering only.

@@ -70,7 +70,9 @@ func TestLoadSecurityValue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "token1", v2.MintClaw.Token.raw)
 
-	os.Setenv("MINTCLAW_TOKEN", "token_env")
+	if err := os.Setenv("MINTCLAW_TOKEN", "token_env"); err != nil {
+		t.Fatal(err)
+	}
 	err = env.Parse(v2)
 	assert.NoError(t, err)
 	assert.NotNil(t, v2.MintClaw.Token)

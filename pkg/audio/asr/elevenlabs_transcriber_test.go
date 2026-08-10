@@ -3,6 +3,7 @@ package asr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -50,7 +51,7 @@ func TestElevenLabsTranscribe(t *testing.T) {
 			var gotModelID string
 			for {
 				part, err := reader.NextPart()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
@@ -127,7 +128,7 @@ func TestElevenLabsTranscribe(t *testing.T) {
 			var gotModelID string
 			for {
 				part, err := reader.NextPart()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {

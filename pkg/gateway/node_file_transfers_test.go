@@ -318,7 +318,7 @@ func TestNodeFileTransferSnapshotsOnlyRetainedMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Close()
+	_ = file.Close()
 	if retained.Ref != record.Ref {
 		t.Fatalf("retained ref = %q, want %q", retained.Ref, record.Ref)
 	}
@@ -463,7 +463,7 @@ func TestNodeFileTransferHandoffClaimsOneRoutedDelivery(t *testing.T) {
 	owner := testNodeTransferOwner()
 	content := []byte("one routed artifact")
 	digest := sha256.Sum256(content)
-	writer, artifact, created, err := spool.Begin(owner, nodes.TransferArtifactSpec{
+	writer, _, created, err := spool.Begin(owner, nodes.TransferArtifactSpec{
 		TransferID:      "transfer-download-1",
 		Direction:       nodes.TransferDirectionDownload,
 		Target:          "personal-vpn",
@@ -480,7 +480,7 @@ func TestNodeFileTransferHandoffClaimsOneRoutedDelivery(t *testing.T) {
 	if err := writer.WriteChunk(1, content); err != nil {
 		t.Fatal(err)
 	}
-	artifact, err = writer.Commit()
+	artifact, err := writer.Commit()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +544,7 @@ func TestCopyNodeTransferDeliveryRejectsSymlinkedWorkspaceAncestor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	digest := sha256.Sum256(content)
 	artifact := nodes.TransferArtifactRecord{Spec: nodes.TransferArtifactSpec{
 		DeclaredSize: int64(len(content)),

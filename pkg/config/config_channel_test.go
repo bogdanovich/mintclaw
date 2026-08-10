@@ -479,7 +479,7 @@ func TestMergeRawJSON(t *testing.T) {
 		require.NoError(t, err)
 
 		var m map[string]any
-		json.Unmarshal(merged, &m)
+		_ = json.Unmarshal(merged, &m)
 		assert.Equal(t, "old", m["base_url"])
 		assert.Equal(t, "REAL_TOKEN", m["token"])
 	})
@@ -490,8 +490,8 @@ func TestMergeRawJSON(t *testing.T) {
 		require.NoError(t, err)
 		// mergeRawJSON normalizes JSON through unmarshal→marshal, so compare parsed values
 		var orig, result map[string]any
-		json.Unmarshal(base, &orig)
-		json.Unmarshal(merged, &result)
+		_ = json.Unmarshal(base, &orig)
+		_ = json.Unmarshal(merged, &result)
 		assert.Equal(t, orig, result)
 	})
 
@@ -824,7 +824,7 @@ func TestRemoveSecureFields(t *testing.T) {
 		cleaned := removeSecureFields(r, names)
 
 		var m map[string]any
-		json.Unmarshal(cleaned, &m)
+		_ = json.Unmarshal(cleaned, &m)
 		assert.Equal(t, "https://api.telegram.org", m["base_url"])
 		assert.NotContains(t, m, "token")
 	})
@@ -848,7 +848,7 @@ func TestFilterSecureFields(t *testing.T) {
 		filtered := filterSecureFields(r, names)
 
 		var m map[string]any
-		json.Unmarshal(filtered, &m)
+		_ = json.Unmarshal(filtered, &m)
 		assert.NotContains(t, m, "base_url")
 		assert.Equal(t, "SECRET", m["token"])
 	})

@@ -175,7 +175,7 @@ func TestSendMedia_UploadsLocalFileAsBase64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp() error = %v", err)
 	}
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	content := []byte("local-image-data")
 	if _, writeErr := tmpFile.Write(content); writeErr != nil {
@@ -545,7 +545,7 @@ func TestSendMedia_ReturnsSendFailedWhenLocalFileExceedsBase64MiBLimit(t *testin
 	if err != nil {
 		t.Fatalf("CreateTemp() error = %v", err)
 	}
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	content := make([]byte, bytesPerMiB+1)
 	if _, writeErr := tmpFile.Write(content); writeErr != nil {

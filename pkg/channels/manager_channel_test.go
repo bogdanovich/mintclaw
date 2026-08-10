@@ -64,7 +64,7 @@ func TestToChannelHashes(t *testing.T) {
 	bc := cc.Get("telegram")
 	assert.NotNil(t, bc)
 	var tc config.TelegramSettings
-	bc.Decode(&tc)
+	_ = bc.Decode(&tc)
 	assert.Equal(t, "114314", tc.Token.String())
 	assert.Equal(t, true, bc.Enabled)
 

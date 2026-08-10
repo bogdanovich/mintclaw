@@ -153,10 +153,6 @@ func (*RequestUserInputTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
-func (*RequestUserInputTool) ToolSteeringSafety(map[string]any) toolshared.SteeringSafety {
-	return toolshared.SteeringSafetyCancellable
-}
-
 func (t *RequestUserInputTool) parseTimeout(raw any) (time.Duration, error) {
 	if raw == nil {
 		return t.defaultTimeout, nil

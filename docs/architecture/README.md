@@ -2,7 +2,10 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
+- [Reliability and Refactoring Roadmap V2](reliability-refactoring-roadmap-v2.md): evidence-based follow-up work for
+  turn-critical session mutation, transactional gateway generations, and versioned configuration writes.
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
+- [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
@@ -76,11 +79,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Shellguard](shellguard.md): reusable shell command validation, command classification, permission modes, and path-scope limits.
 - [Tool-Loop Stagnation Protection](tool-loop-stagnation.md): warning-first repeated failure and read-only no-progress detection with hash-safe state and events.
 - [Passive Diagnostics](passive-diagnostics.md): bounded redacted execution traces for direct human and Codex debugging without runtime coupling.
-- [Current Refactoring Audit](current-refactoring-audit.md): near-term architecture risks around metadata, delivery, turn state, context manager migration, and provider contracts.
 - [Test Suite Performance Roadmap](test-suite-performance-roadmap.md): measured test-runtime bottlenecks, coverage-preserving remediation phases, and explicit completion criteria.
 - [Hook System Guide](hooks/README.md): current hook architecture and protocol details.
 
 ## Archived Plans
 
+- [Current Refactoring Audit](current-refactoring-audit.md): superseded July 2026 static audit retained as implementation
+  history.
 - [Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md): completed durability, security,
   ownership, provider-contract, and cross-platform verification program.

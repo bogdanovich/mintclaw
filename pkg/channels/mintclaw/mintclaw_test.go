@@ -86,7 +86,7 @@ func TestSend_ThoughtMessageIncludesMetadata(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -135,7 +135,7 @@ func TestSend_FinalMessageIncludesCorrelationMetadata(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
 	ch.addConnForTest(&mintclawConn{id: "conn-final", conn: clientConn, sessionID: "sess-final"})
@@ -177,7 +177,7 @@ func TestSend_FinalMessageUsesInboundMessageIDOverReplyTarget(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
 	ch.addConnForTest(&mintclawConn{id: "conn-reply-target", conn: clientConn, sessionID: "sess-reply-target"})
@@ -218,7 +218,7 @@ func TestScopedStreamSegmentIsNotMarkedAsTurnFinal(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 	var got MintClawMessage
 	ch.broadcastFn = func(_ context.Context, _ string, msg MintClawMessage) error {
 		got = msg
@@ -255,7 +255,7 @@ func TestScopedStreamFinalizeIncludesCorrelationMetadata(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 	var got MintClawMessage
 	ch.broadcastFn = func(_ context.Context, _ string, msg MintClawMessage) error {
 		got = msg
@@ -288,7 +288,7 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -337,7 +337,7 @@ func TestSendPlaceholder_EmitsNormalMessageWithoutKind(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -384,7 +384,7 @@ func TestBeginStream_CreatesAndUpdatesSameMessage(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -444,7 +444,7 @@ func TestBeginStream_DefaultStreamingShowsSmallIncrements(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -487,7 +487,7 @@ func TestBeginStream_StreamsReasoningAsThoughtUpdates(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -556,7 +556,7 @@ func TestBeginStream_ThrottlesIntermediateUpdatesAndFinalFlushes(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -618,7 +618,7 @@ func TestBeginStream_FinalizeIncludesContextUsage(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -1113,7 +1113,7 @@ func newBlockedMintClawConn(t *testing.T) (*mintclawConn, func()) {
 			t.Errorf("Upgrade() error = %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		close(accepted)
 		<-release
 	}))
@@ -1125,9 +1125,9 @@ func newBlockedMintClawConn(t *testing.T) (*mintclawConn, func()) {
 		server.Close()
 		t.Fatalf("Dial() error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	cleanup := func() {
-		conn.Close()
+		_ = conn.Close()
 		close(release)
 		server.Close()
 	}
@@ -1214,7 +1214,7 @@ func TestSendMedia_ResolvesMediaBeforeDelivery(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	localPath := filepath.Join(t.TempDir(), "report.txt")
 	if writeErr := os.WriteFile(localPath, []byte("attachment body"), 0o600); writeErr != nil {
@@ -1380,7 +1380,7 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -1449,7 +1449,7 @@ func TestSendMedia_UsesCaptionFromFirstDeliveredAttachment(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -1512,7 +1512,7 @@ func TestSendMedia_DoesNotPromoteCaptionFromSkippedAttachment(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	clientConn, received, cleanup := newTestMintClawWebSocket(t)
 	defer cleanup()
@@ -1585,7 +1585,7 @@ func TestHandleMediaDownload_ServesStoredFile(t *testing.T) {
 	if err := ch.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ch.Stop(context.Background())
+	defer func() { _ = ch.Stop(context.Background()) }()
 
 	localPath := filepath.Join(t.TempDir(), "report.txt")
 	if err := os.WriteFile(localPath, []byte("downloadable"), 0o600); err != nil {
@@ -1670,7 +1670,7 @@ func newTestMintClawWebSocket(t *testing.T) (*websocket.Conn, <-chan MintClawMes
 			t.Errorf("Upgrade() error = %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			var msg MintClawMessage
 			if err := conn.ReadJSON(&msg); err != nil {
@@ -1688,9 +1688,9 @@ func newTestMintClawWebSocket(t *testing.T) (*websocket.Conn, <-chan MintClawMes
 	}
 
 	cleanup := func() {
-		clientConn.Close()
+		_ = clientConn.Close()
 		server.Close()
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return clientConn, received, cleanup
 }
