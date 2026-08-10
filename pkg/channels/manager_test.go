@@ -1537,6 +1537,35 @@ func TestStopAll_DrainsDeliveryOutsideManagerLock(t *testing.T) {
 	}
 }
 
+func TestStopAll_ReturnsErrorsAfterStoppingEveryChannel(t *testing.T) {
+	t.Parallel()
+
+	firstErr := errors.New("first stop failed")
+	secondErr := errors.New("second stop failed")
+	var stopCalls atomic.Int32
+	m := newTestManager()
+	m.lifecycle.storeChannel("first", &mockChannel{
+		stopFn: func(context.Context) error {
+			stopCalls.Add(1)
+			return firstErr
+		},
+	})
+	m.lifecycle.storeChannel("second", &mockChannel{
+		stopFn: func(context.Context) error {
+			stopCalls.Add(1)
+			return secondErr
+		},
+	})
+
+	err := m.StopAll(context.Background())
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("StopAll() error = %v, want both channel stop errors", err)
+	}
+	if got := stopCalls.Load(); got != 2 {
+		t.Fatalf("channel Stop calls = %d, want 2", got)
+	}
+}
+
 func TestStopAll_ConcurrentCallsShareOneShutdown(t *testing.T) {
 	m := newTestManager()
 	stopStarted := make(chan struct{})

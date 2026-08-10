@@ -209,25 +209,33 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 			_ = ln.Close()
 		}
 	}()
+	startupCleanup := &gatewayStartupTransaction{}
+	defer func() {
+		if runErr != nil {
+			runErr = errors.Join(runErr, startupCleanup.rollback(serviceShutdownTimeout))
+		}
+	}()
 
 	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
+	startupCleanup.ownProvider(provider)
 
 	if modelID != "" {
 		cfg.Agents.Defaults.ModelName = modelID
 	}
 
 	msgBus := bus.NewMessageBus()
+	startupCleanup.ownMessageBus(msgBus)
 	if spoolErr := configureGatewayInboundSpool(cfg, msgBus); spoolErr != nil {
 		return fmt.Errorf("configure inbound spool: %w", spoolErr)
 	}
 	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider)
 	if err != nil {
-		msgBus.Close()
 		return fmt.Errorf("initialize agent: %w", err)
 	}
+	startupCleanup.ownAgent(agentLoop)
 	msgBus.SetEventPublisher(agentLoop.RuntimeEventBus())
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayStart, startedAt, nil)
 
@@ -241,7 +249,12 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() { _ = agentLoop.Run(ctx) }()
+	agentRunDone := make(chan struct{})
+	go func() {
+		defer close(agentRunDone)
+		_ = agentLoop.Run(ctx)
+	}()
+	startupCleanup.ownAgentRun(agentLoop, cancel, agentRunDone)
 	// Wait for the agent loop to finish initialization (hooks/MCP). Run can
 	// return immediately on init failure; without this handshake the gateway
 	// would still mark /ready healthy while inbound messages are never
@@ -254,6 +267,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if err != nil {
 		return err
 	}
+	startupCleanup.commit()
 	// All services (channels + shared HTTP server) are up; mark the health
 	// server ready so GET /ready reports "ready". The health endpoints are
 	// mounted on the shared gateway mux, so Health.Server.Start() (which would
@@ -835,7 +849,44 @@ func setupAndStartServices(
 	authToken string,
 	listenResult netbind.OpenResult,
 ) (*services, error) {
-	runningServices := &services{}
+	return setupAndStartServicesWithHooks(
+		ctx,
+		cfg,
+		agentLoop,
+		msgBus,
+		authToken,
+		listenResult,
+		gatewayStartupHooks{},
+	)
+}
+
+func setupAndStartServicesWithHooks(
+	ctx context.Context,
+	cfg *config.Config,
+	agentLoop *agent.AgentLoop,
+	msgBus *bus.MessageBus,
+	authToken string,
+	listenResult netbind.OpenResult,
+	hooks gatewayStartupHooks,
+) (runningServices *services, setupErr error) {
+	runningServices = &services{}
+	generation := runningServices
+	cleanup := &gatewayStartupTransaction{
+		onRegister: hooks.onRegister,
+		onCleanup:  hooks.onCleanup,
+	}
+	defer func() {
+		if setupErr != nil {
+			setupErr = errors.Join(setupErr, cleanup.rollback(serviceShutdownTimeout))
+			runningServices = nil
+		}
+	}()
+	checkpoint := func(stage gatewayStartupStage) error {
+		if hooks.afterStage == nil {
+			return nil
+		}
+		return hooks.afterStage(stage, generation)
+	}
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
@@ -864,8 +915,15 @@ func setupAndStartServices(
 	if err = setupGatewayHandoffStatusTool(cfg, agentLoop); err != nil {
 		return nil, fmt.Errorf("error setting up gateway handoff status tool: %w", err)
 	}
+	cleanup.add("cron service", func(context.Context) error {
+		generation.CronService.Stop()
+		return nil
+	})
 	if err = runningServices.CronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
+	}
+	if err = checkpoint(gatewayStartupCronStarted); err != nil {
+		return nil, err
 	}
 	fmt.Println("✓ Cron service started")
 
@@ -876,8 +934,15 @@ func setupAndStartServices(
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
+	cleanup.add("heartbeat service", func(context.Context) error {
+		generation.HeartbeatService.Stop()
+		return nil
+	})
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
+	}
+	if err = checkpoint(gatewayStartupHeartbeatStarted); err != nil {
+		return nil, err
 	}
 	fmt.Println("✓ Heartbeat service started")
 
@@ -887,24 +952,31 @@ func setupAndStartServices(
 	}
 	mediaStore.Start()
 	runningServices.MediaStore = mediaStore
+	cleanup.add("media store", func(context.Context) error {
+		mediaStore.Stop()
+		return nil
+	})
+	if err = checkpoint(gatewayStartupMediaStarted); err != nil {
+		return nil, err
+	}
 	outboundOutbox, err := outbox.OpenCoordinator(cfg.WorkspacePath())
 	if err != nil {
-		mediaStore.Stop()
 		return nil, fmt.Errorf("error opening outbound outbox: %w", err)
 	}
 	agentLoop.SetOutboundOutbox(outboundOutbox)
-	retainOutboundOutbox := false
-	defer func() {
-		if retainOutboundOutbox {
-			return
-		}
+	cleanup.add("outbound outbox", func(context.Context) error {
 		agentLoop.SetOutboundOutbox(nil)
-		_ = outboundOutbox.Close()
-	}()
+		return outboundOutbox.Close()
+	})
+	if err = checkpoint(gatewayStartupOutboundOutboxOpened); err != nil {
+		return nil, err
+	}
 	recoveredOutbound, err := outboundOutbox.Recover()
 	if err != nil {
-		mediaStore.Stop()
 		return nil, fmt.Errorf("error recovering outbound outbox: %w", err)
+	}
+	if err = checkpoint(gatewayStartupOutboundOutboxRecovered); err != nil {
+		return nil, err
 	}
 
 	runningServices.ChannelManager, err = channels.NewManager(
@@ -915,17 +987,28 @@ func setupAndStartServices(
 		channels.WithOutboundOutbox(outboundOutbox),
 	)
 	if err != nil {
-		mediaStore.Stop()
 		return nil, fmt.Errorf("error creating channel manager: %w", err)
 	}
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
+	cleanup.add("channel manager", func(cleanupCtx context.Context) error {
+		agentLoop.SetChannelManager(nil)
+		agentLoop.SetMediaStore(nil)
+		return generation.ChannelManager.StopAll(cleanupCtx)
+	})
 
 	transcriber := asr.DetectTranscriber(cfg)
 	if transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
+		cleanup.add("transcriber", func(context.Context) error {
+			agentLoop.SetTranscriber(nil)
+			return nil
+		})
 		logger.InfoCF("voice", "Transcription enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
+	}
+	if err = checkpoint(gatewayStartupChannelsCreated); err != nil {
+		return nil, err
 	}
 
 	ttsAvailable := tts.DetectTTS(cfg) != nil
@@ -955,14 +1038,34 @@ func setupAndStartServices(
 	if err != nil {
 		return nil, fmt.Errorf("error setting up node admission: %w", err)
 	}
+	if runningServices.NodeAdmission != nil {
+		cleanup.add("node admission", func(cleanupCtx context.Context) error {
+			return generation.NodeAdmission.Close(cleanupCtx)
+		})
+	}
+	if err = checkpoint(gatewayStartupNodeAdmissionReady); err != nil {
+		return nil, err
+	}
 	if err = setupNodeTools(cfg, agentLoop, runningServices.NodeAdmission); err != nil {
 		return nil, fmt.Errorf("error setting up node tools: %w", err)
+	}
+	if err = checkpoint(gatewayStartupNodeToolsReady); err != nil {
+		return nil, err
 	}
 	if err = setupBrowserTools(cfg, agentLoop, runningServices); err != nil {
 		return nil, fmt.Errorf("error setting up browser tools: %w", err)
 	}
+	if err = checkpoint(gatewayStartupBrowserToolsReady); err != nil {
+		return nil, err
+	}
+	cleanup.add("browser runtime", func(cleanupCtx context.Context) error {
+		return closeBrowserRuntime(cleanupCtx, generation)
+	})
 	if err = setupBrowserRuntime(ctx, cfg, runningServices); err != nil {
 		return nil, fmt.Errorf("error setting up browser runtime: %w", err)
+	}
+	if err = checkpoint(gatewayStartupBrowserRuntimeReady); err != nil {
+		return nil, err
 	}
 
 	// Capture durable work before channel ingress starts, then replay the exact
@@ -970,13 +1073,10 @@ func setupAndStartServices(
 	inboundReplaySnapshot := snapshotGatewayInboundSpool(ctx, msgBus)
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
-		if rollbackBrowserRuntime(runningServices) != nil {
-			return nil, errors.Join(
-				fmt.Errorf("error starting channels: %w", err),
-				errors.New("browser runtime rollback failed"),
-			)
-		}
 		return nil, fmt.Errorf("error starting channels: %w", err)
+	}
+	if err = checkpoint(gatewayStartupChannelsStarted); err != nil {
+		return nil, err
 	}
 	runningServices.OutboundRecovery, err = startGatewayOutboundReconciler(
 		ctx,
@@ -987,16 +1087,14 @@ func setupAndStartServices(
 		cfg.WorkspacePath(),
 	)
 	if err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), serviceShutdownTimeout)
-		defer cancel()
-		_ = runningServices.ChannelManager.StopAll(shutdownCtx)
-		if rollbackBrowserRuntime(runningServices) != nil {
-			return nil, errors.Join(
-				fmt.Errorf("error reconciling outbound outbox: %w", err),
-				errors.New("browser runtime rollback failed"),
-			)
-		}
 		return nil, fmt.Errorf("error reconciling outbound outbox: %w", err)
+	}
+	cleanup.add("outbound recovery", func(context.Context) error {
+		generation.OutboundRecovery.stop()
+		return nil
+	})
+	if err = checkpoint(gatewayStartupOutboundRecoveryStarted); err != nil {
+		return nil, err
 	}
 	replayGatewayInboundSnapshot(ctx, msgBus, inboundReplaySnapshot)
 
@@ -1008,6 +1106,13 @@ func setupAndStartServices(
 		runningServices.VoiceAgentCancel = vaCancel
 		voiceAgent := asr.NewAgent(msgBus, transcriber)
 		voiceAgent.Start(vaCtx)
+		cleanup.add("voice runtime", func(context.Context) error {
+			vaCancel()
+			return nil
+		})
+	}
+	if err = checkpoint(gatewayStartupVoiceRuntimeStarted); err != nil {
+		return nil, err
 	}
 
 	healthAddr := net.JoinHostPort(listenResult.ProbeHost, strconv.Itoa(cfg.Gateway.Port))
@@ -1022,13 +1127,20 @@ func setupAndStartServices(
 		MonitorUSB: cfg.Devices.MonitorUSB,
 	}, stateManager)
 	runningServices.DeviceService.SetBus(msgBus)
+	cleanup.add("device service", func(context.Context) error {
+		generation.DeviceService.Stop()
+		return nil
+	})
 	if err = runningServices.DeviceService.Start(context.Background()); err != nil {
 		logger.ErrorCF("device", "Error starting device service", map[string]any{"error": err.Error()})
 	} else if cfg.Devices.Enabled {
 		fmt.Println("✓ Device event service started")
 	}
+	if err = checkpoint(gatewayStartupDeviceRuntimeInitialized); err != nil {
+		return nil, err
+	}
 
-	retainOutboundOutbox = true
+	cleanup.commit()
 	return runningServices, nil
 }
 
@@ -1171,9 +1283,8 @@ func handleConfigReload(
 	shutdownTimeout time.Duration,
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
-	currentCfg := al.GetConfig()
-	if currentCfg != nil && filepath.Clean(currentCfg.WorkspacePath()) != filepath.Clean(newCfg.WorkspacePath()) {
-		return fmt.Errorf("workspace changes require a gateway restart")
+	if err := preflightConfigReload(al, newCfg); err != nil {
+		return err
 	}
 
 	newModel := newCfg.Agents.Defaults.ModelName
@@ -1233,6 +1344,30 @@ func handleConfigReload(
 		logger.Infof("Log level changing from current to %q", effectiveLogLevel)
 	}
 
+	return nil
+}
+
+func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is unavailable")
+	}
+	if err := al.ValidateConfigReload(newCfg); err != nil {
+		return err
+	}
+
+	currentCfg := al.GetConfig()
+	if currentCfg == nil {
+		return fmt.Errorf("active gateway config is unavailable")
+	}
+	if filepath.Clean(currentCfg.WorkspacePath()) != filepath.Clean(newCfg.WorkspacePath()) {
+		return fmt.Errorf("workspace changes require a gateway restart")
+	}
+	if currentCfg.Gateway.Host != newCfg.Gateway.Host || currentCfg.Gateway.Port != newCfg.Gateway.Port {
+		return fmt.Errorf("gateway listen address changes require a gateway restart")
+	}
+	if currentCfg.Gateway.HotReload != newCfg.Gateway.HotReload {
+		return fmt.Errorf("gateway hot reload mode changes require a gateway restart")
+	}
 	return nil
 }
 
