@@ -1521,6 +1521,20 @@ func TestRegistryConsumeApprovalEnforcesExpiryAtomically(t *testing.T) {
 }
 
 func TestStoredV1QuestionsRemainLoadableUnderTighterCreatePolicy(t *testing.T) {
+	reservedCancel := []Question{{
+		ID: "reserved_cancel", Question: "Cancel?",
+		Options: []Option{
+			{Label: bus.InboundInteractionCancelLabel},
+			{Label: "Continue"},
+		},
+	}}
+	if err := validateStoredQuestions(KindQuestion, reservedCancel); err != nil {
+		t.Fatalf("stored reserved-label question rejected: %v", err)
+	}
+	if err := validateQuestions(KindQuestion, reservedCancel); err == nil {
+		t.Fatal("new question accepted reserved cancellation label")
+	}
+
 	legacySingle := []Question{{
 		ID: "legacy_single", Question: "Legacy choice?",
 		Options: []Option{{Label: "Only", Description: "Previously valid."}},

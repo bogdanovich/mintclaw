@@ -251,10 +251,9 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 			)
 		}
 	}
-	var executionContext *bus.InboundContext
+	executionContext := cloneInboundContext(request.ExecutionContext)
 	approvalAction := ""
 	if request.Prompt.Kind == interactions.KindApproval {
-		executionContext = cloneInboundContext(request.ExecutionContext)
 		approvalAction = request.ApprovalAction
 	}
 	record, err := registry.Create(interactions.CreateRequest{
@@ -350,49 +349,8 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 	if runtime.al.channelManager == nil {
 		return fmt.Errorf("channel manager unavailable")
 	}
-	content := renderInteractionPrompt(record)
-	outboundContext := bus.InboundContext{
-		Channel:   record.Route.Channel,
-		Account:   record.Route.AccountID,
-		ChatID:    record.Route.ChatID,
-		ChatType:  record.Route.ChatType,
-		TopicID:   record.Route.TopicID,
-		SpaceID:   record.Route.SpaceID,
-		SpaceType: record.Route.SpaceType,
-		Raw: map[string]string{
-			metadataKeyMessageKind: interactionMessageKind,
-			interactionIDMetadata:  record.ID,
-			interactionShortIDMeta: record.ShortID,
-			"delivery_key":         interactionDeliveryKey(record.ID, "prompt"),
-		},
-	}
-	replyToMessageID := ""
-	if record.Kind == interactions.KindApproval {
-		requestID := ""
-		if record.Origin.ExecutionContext != nil {
-			requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
-		}
-		if requestID != "" {
-			outboundContext.Raw[bus.OutboundMetadataKeyRequestID] = requestID
-		}
-		if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") &&
-			requestID != "" {
-			replyToMessageID = requestID
-		}
-		bus.OutboundMetadata{
-			InteractionKind:     bus.OutboundInteractionApproval,
-			InteractionControls: bus.OutboundInteractionControlsPrompt,
-		}.ApplyToContext(&outboundContext)
-	}
-	message := bus.OutboundMessage{
-		Channel:          record.Route.Channel,
-		ChatID:           record.Route.ChatID,
-		Context:          outboundContext,
-		AgentID:          record.Route.AgentID,
-		SessionKey:       record.Route.SessionKey,
-		Content:          content,
-		ReplyToMessageID: replyToMessageID,
-	}
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
 	if runtime.al.registry != nil {
 		if agent, ok := runtime.al.registry.GetAgent(record.Route.AgentID); ok && agent != nil {
 			traceScope := runtimeevents.NewTraceScope(agent.Workspace, record.Origin.TurnID)
@@ -404,6 +362,65 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 		}
 	}
 	return runtime.al.sendInteractionMessage(ctx, message)
+}
+
+func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
+	outboundContext := bus.InboundContext{
+		Channel:   record.Route.Channel,
+		Account:   record.Route.AccountID,
+		ChatID:    record.Route.ChatID,
+		ChatType:  record.Route.ChatType,
+		SenderID:  record.Route.SenderID,
+		TopicID:   record.Route.TopicID,
+		SpaceID:   record.Route.SpaceID,
+		SpaceType: record.Route.SpaceType,
+		Raw: map[string]string{
+			metadataKeyMessageKind: interactionMessageKind,
+			interactionIDMetadata:  record.ID,
+			interactionShortIDMeta: record.ShortID,
+			"delivery_key":         interactionDeliveryKey(record.ID, "prompt"),
+		},
+	}
+	replyToMessageID := ""
+	requestID := ""
+	if record.Origin.ExecutionContext != nil {
+		requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
+	}
+	if requestID != "" {
+		outboundContext.Raw[bus.OutboundMetadataKeyRequestID] = requestID
+	}
+	if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
+		replyToMessageID = requestID
+	}
+	switch record.Kind {
+	case interactions.KindApproval:
+		bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionApproval,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+		}.ApplyToContext(&outboundContext)
+	case interactions.KindQuestion:
+		choices := []string(nil)
+		if len(record.Questions) == 1 {
+			choices = make([]string, 0, len(record.Questions[0].Options))
+			for _, option := range record.Questions[0].Options {
+				choices = append(choices, option.Label)
+			}
+		}
+		metadata := bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+		}
+		metadata = metadata.WithInteractionChoices(choices)
+		metadata.ApplyToContext(&outboundContext)
+	}
+	return bus.OutboundMessage{
+		Channel:          record.Route.Channel,
+		ChatID:           record.Route.ChatID,
+		Context:          outboundContext,
+		AgentID:          record.Route.AgentID,
+		SessionKey:       record.Route.SessionKey,
+		ReplyToMessageID: replyToMessageID,
+	}
 }
 
 func (al *AgentLoop) sendInteractionMessage(ctx context.Context, msg bus.OutboundMessage) error {
@@ -433,7 +450,7 @@ func renderInteractionPrompt(record interactions.Record) string {
 	}
 	if len(record.Questions) == 1 {
 		renderSingleInteractionQuestion(&builder, record.Questions[0])
-		fmt.Fprintf(&builder, "\n\n`/answer %s …`", record.ShortID)
+		fmt.Fprintf(&builder, "\n\n`/answer %s …`\n`/stop`", record.ShortID)
 		return builder.String()
 	}
 	for index, question := range record.Questions {

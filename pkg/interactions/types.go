@@ -375,6 +375,17 @@ func validateQuestionsWithPolicy(
 				)
 			}
 			label := strings.ToLower(strings.TrimSpace(option.Label))
+			if strictChoices && strings.EqualFold(
+				strings.TrimSpace(option.Label),
+				bus.InboundInteractionCancelLabel,
+			) {
+				return fmt.Errorf(
+					"%w: question %q option %q is reserved for cancellation",
+					ErrInvalidInteraction,
+					question.ID,
+					option.Label,
+				)
+			}
 			if _, ok := optionLabels[label]; ok && strictChoices {
 				return fmt.Errorf(
 					"%w: question %q has duplicate option %q",

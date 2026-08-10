@@ -1402,6 +1402,63 @@ func TestSend_ApprovalPromptUsesSelectiveOneTimeKeyboard(t *testing.T) {
 	assert.Equal(t, "Deny", row[1].(map[string]any)["text"])
 }
 
+func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponseWithMessageID(t, 1), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	outboundCtx := bus.InboundContext{}
+	metadata := bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}
+	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
+	metadata.ApplyToContext(&outboundCtx)
+
+	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Context: outboundCtx, Content: "Choose an input method",
+	})
+	require.NoError(t, err)
+	require.Len(t, caller.calls, 1)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+	markup := payload["reply_markup"].(map[string]any)
+	assert.Equal(t, true, markup["resize_keyboard"])
+	assert.Equal(t, true, markup["one_time_keyboard"])
+	assert.Equal(t, true, markup["selective"])
+	keyboard := markup["keyboard"].([]any)
+	require.Len(t, keyboard, 3)
+	assert.Equal(t, "Generate it", keyboard[0].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "Enter manually", keyboard[1].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
+}
+
+func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponseWithMessageID(t, 1), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	outboundCtx := bus.InboundContext{}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&outboundCtx)
+
+	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Context: outboundCtx, Content: "What value should be used?",
+	})
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+	keyboard := payload["reply_markup"].(map[string]any)["keyboard"].([]any)
+	require.Len(t, keyboard, 1)
+	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[0].([]any)[0].(map[string]any)["text"])
+}
+
 func TestSend_ApprovalFinalRemovesKeyboard(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -3235,6 +3292,7 @@ func TestHandleMessage_ApprovalButtonReplyPreservesQuoteAndProjectsChoice(t *tes
 	)
 	assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
 		inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+	assert.Equal(t, "Allow once", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 }
 
 func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *testing.T) {
@@ -3291,17 +3349,269 @@ func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *test
 	}
 }
 
-func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.T) {
+func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		replyTo *telego.Message
+		seed    bool
+	}{
+		{
+			name: "typed reply", text: "generate it yourself",
+			seed: true,
+			replyTo: &telego.Message{
+				MessageID: 101, Text: "Which value?",
+				From: &telego.User{ID: 1, IsBot: true, Username: "mintclaw_bot"},
+			},
+		},
+		{name: "question option", text: "Generate it", seed: true},
+		{name: "question option matching former cancel label", text: "Cancel turn", seed: true},
+		{name: "stop command option", text: "/stop", seed: true},
+		{name: "new command option", text: "/new", seed: true},
+		{name: "reset command option", text: "/reset", seed: true},
+		{name: "clear command option", text: "/clear", seed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			messageBus := bus.NewMessageBus()
+			ch := &TelegramChannel{
+				BaseChannel: channels.NewBaseChannel(
+					"telegram",
+					nil,
+					messageBus,
+					[]string{"15"},
+					channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+				),
+				bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+				chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+			}
+			if test.seed {
+				ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
+					{chatID: -100123, senderID: "15"}: {
+						choices: map[string]struct{}{test.text: {}},
+					},
+				}
+			}
+			msg := &telego.Message{
+				Text: test.text, MessageID: 23,
+				Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+				From: &telego.User{ID: 15, FirstName: "Eve"}, ReplyToMessage: test.replyTo,
+			}
+
+			require.NoError(t, ch.handleMessage(context.Background(), msg))
+			select {
+			case inbound := <-messageBus.InboundChan():
+				assert.False(t, inbound.Context.Mentioned)
+				assert.Equal(t, test.text,
+					inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+			case <-time.After(time.Second):
+				t.Fatal("question response was filtered")
+			}
+		})
+	}
+}
+
+func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel(
+			"telegram",
+			nil,
+			messageBus,
+			[]string{"15"},
+			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+		),
+		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+	}
+	msg := &telego.Message{
+		Text: "historical follow-up", MessageID: 23,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+		ReplyToMessage: &telego.Message{
+			MessageID: 10, Text: "Old response",
+			From: &telego.User{ID: 1, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("stale bot reply bypassed mention gate: %#v", inbound)
+	default:
+	}
+}
+
+func TestHandleMessage_StaleCancelControlDoesNotBypassGroupMentionOnly(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel(
+			"telegram",
+			nil,
+			messageBus,
+			[]string{"15"},
+			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+		),
+		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+	}
+	msg := &telego.Message{
+		Text: bus.InboundInteractionCancelLabel, MessageID: 23,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("stale cancel control bypassed mention gate: %#v", inbound)
+	default:
+	}
+}
+
+func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel(
+			"telegram",
+			nil,
+			messageBus,
+			[]string{"15"},
+			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+		),
+		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+			{chatID: -100123, senderID: "15"}: {},
+		},
+	}
+	msg := &telego.Message{
+		Text: bus.InboundInteractionCancelLabel, MessageID: 23,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, bus.InboundInteractionChoiceCancel,
+			inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+		assert.Empty(t, inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	case <-time.After(time.Second):
+		t.Fatal("active cancel control was filtered")
+	}
+}
+
+func TestQuestionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *testing.T) {
+	ch := &TelegramChannel{}
+	ctx := bus.InboundContext{SenderID: "15"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
+	ch.updateQuestionControls(bus.OutboundMessage{Context: ctx}, -100123, 1771)
+	message := &telego.Message{
+		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
+	}
+	_, response := ch.telegramInteractionMetadata(message, message.Text, "15")
+	assert.Equal(t, "Generate it", response)
+	_, response = ch.telegramInteractionMetadata(message, message.Text, "16")
+	assert.Empty(t, response)
+
+	removeCtx := bus.InboundContext{SenderID: "15"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsRemove,
+	}.ApplyToContext(&removeCtx)
+	ch.updateQuestionControls(bus.OutboundMessage{Context: removeCtx}, -100123, 1771)
+	_, response = ch.telegramInteractionMetadata(message, message.Text, "15")
+	assert.Empty(t, response)
+}
+
+func TestSyncInteractionControlsRebuildsQuestionRouting(t *testing.T) {
+	ch := &TelegramChannel{}
+	ctx := bus.InboundContext{SenderID: "15", TopicID: "1771"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
+	}))
+	_, response := ch.telegramInteractionMetadata(&telego.Message{
+		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
+	}, "Generate it", "15")
+	assert.Equal(t, "Generate it", response)
+}
+
+func TestSyncInteractionControlsTracksFreeTextQuestionWithoutChoices(t *testing.T) {
 	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
-	assert.Equal(t, bus.InboundInteractionChoiceDeny, ch.telegramInteractionChoice(&telego.Message{
-		Text: "Deny", ReplyToMessage: &telego.Message{
+	ctx := bus.InboundContext{SenderID: "15"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&ctx)
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "-100123", Context: ctx,
+	}))
+	message := &telego.Message{
+		Text: "generate it yourself", Chat: telego.Chat{ID: -100123},
+		ReplyToMessage: &telego.Message{
 			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
 		},
+	}
+	_, response := ch.telegramInteractionMetadata(
+		message,
+		"generate it yourself",
+		"15",
+	)
+	assert.Equal(t, "generate it yourself", response)
+
+	removeCtx := bus.InboundContext{SenderID: "15"}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionControls: bus.OutboundInteractionControlsRemove,
+	}.ApplyToContext(&removeCtx)
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "-100123", Context: removeCtx,
 	}))
+	_, response = ch.telegramInteractionMetadata(message, "generate it yourself", "15")
+	assert.Empty(t, response)
+}
+
+func TestTelegramInteractionMetadataRejectsUntrustedOrArbitraryControls(t *testing.T) {
+	ch := &TelegramChannel{
+		selfID: 42, selfName: "mintclaw_bot",
+		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+			{chatID: 999, senderID: "15"}: {},
+		},
+	}
+	choice, _ := ch.telegramInteractionMetadata(&telego.Message{
+		Text: bus.InboundInteractionCancelLabel, Chat: telego.Chat{ID: 999},
+	}, bus.InboundInteractionCancelLabel, "15")
+	assert.Equal(t, bus.InboundInteractionChoiceCancel, choice)
+	choice, _ = ch.telegramInteractionMetadata(&telego.Message{
+		Text: bus.InboundInteractionCancelLabel, Chat: telego.Chat{ID: 1000},
+	}, bus.InboundInteractionCancelLabel, "15")
+	assert.Empty(t, choice)
+	choice, _ = ch.telegramInteractionMetadata(&telego.Message{
+		Text: "Cancel turn", Chat: telego.Chat{ID: 999},
+	}, "Cancel turn", "15")
+	assert.Empty(t, choice)
+	choice, _ = ch.telegramInteractionMetadata(&telego.Message{
+		Text: "Deny", Chat: telego.Chat{ID: 1000}, ReplyToMessage: &telego.Message{
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "Deny", "15")
+	assert.Equal(t, bus.InboundInteractionChoiceDeny, choice)
 	tests := []struct {
 		name    string
 		message *telego.Message
 	}{
+		{
+			name:    "cancel with whitespace",
+			message: &telego.Message{Text: " " + bus.InboundInteractionCancelLabel},
+		},
 		{
 			name: "reply to user",
 			message: &telego.Message{Text: "Allow once", ReplyToMessage: &telego.Message{
@@ -3329,9 +3639,71 @@ func TestTelegramInteractionChoiceRejectsUntrustedOrArbitraryReplies(t *testing.
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Empty(t, ch.telegramInteractionChoice(test.message))
+			choice, response := ch.telegramInteractionMetadata(test.message, test.message.Text, "15")
+			assert.Empty(t, choice)
+			assert.Empty(t, response)
 		})
 	}
+}
+
+func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
+	ch := &TelegramChannel{
+		selfID: 42, selfName: "mintclaw_bot",
+		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+			{chatID: 999, senderID: "15"}: {},
+		},
+	}
+	ownBot := &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"}
+	_, response := ch.telegramInteractionMetadata(&telego.Message{
+		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{From: ownBot},
+	}, "  generate it yourself  ", "15")
+	assert.Equal(t, "generate it yourself", response)
+	_, response = ch.telegramInteractionMetadata(&telego.Message{
+		Text: "answer", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{From: &telego.User{ID: 7}},
+	}, "answer", "15")
+	assert.Empty(t, response)
+	_, response = ch.telegramInteractionMetadata(&telego.Message{
+		Text: "stale", Chat: telego.Chat{ID: 1000}, ReplyToMessage: &telego.Message{From: ownBot},
+	}, "stale", "15")
+	assert.Empty(t, response)
+	_, response = ch.telegramInteractionMetadata(
+		&telego.Message{Text: "answer", Chat: telego.Chat{ID: 999}},
+		"answer",
+		"15",
+	)
+	assert.Empty(t, response)
+}
+
+func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"}),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		bot:         newTestTelegramBot(t, "mintclaw_bot"),
+		selfID:      42,
+		selfName:    "mintclaw_bot",
+		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+			{chatID: 999, senderID: "15"}: {},
+		},
+	}
+	msg := &telego.Message{
+		Caption: "  use this caption  ", MessageID: 23,
+		Photo: []telego.PhotoSize{{FileID: "photo-file"}},
+		Chat:  telego.Chat{ID: 999, Type: "private"},
+		From:  &telego.User{ID: 15, FirstName: "Eve"},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101, Text: "Which input?",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	inbound := <-messageBus.InboundChan()
+	assert.Equal(t, "[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption", inbound.Content)
+	assert.Equal(t, "use this caption", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 }
 
 func TestTelegramQuotedContent_IncludesVoiceMarkerAlongsideCaption(t *testing.T) {

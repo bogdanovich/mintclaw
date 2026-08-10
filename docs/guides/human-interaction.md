@@ -32,8 +32,9 @@ cleanup.
 
 ## Asking and Answering
 
-The model can ask one to three bounded questions. Each question may accept free
-text or offer two to three choices. MintClaw sends the prompt to the same routed
+The model asks one bounded question per tool call. It can ask another question
+after the previous answer resumes the task. Each question may accept free text
+or offer two to three choices. MintClaw sends the prompt to the same routed
 conversation and accepts an answer only from the recorded channel, account,
 chat, topic, session, and sender.
 
@@ -55,27 +56,18 @@ Which environment should be used?
 • production — The live environment.
 
 `/answer 16131195 …`
+`/stop`
 ```
 
-A normal message reply remains sufficient. For several questions, MintClaw
-adds question numbers and stable question IDs, then appends a keyed answer
-template:
+The short interaction ID, option layout, and `/answer` syntax are runtime-owned
+machine structure. A normal message reply remains sufficient.
 
-```text
-1. `region`
-Which region should be used?
-
-2. `mode`
-Which deployment mode should be used?
-
-`/answer 16131195`
-`region: …`
-`mode: …`
-```
-
-The short interaction ID, question IDs, option layout, and `/answer` syntax are
-runtime-owned machine structure. Replies may contain the keyed lines directly
-or prefix them with the shown `/answer <short-id>` command.
+On Telegram, each predefined option appears as a one-time reply-keyboard
+button, followed by `⛔ Cancel turn`. The message composer remains available, so
+you can always type any free-text answer, such as `generate it yourself`, even
+when the model supplied options. Replying to the prompt strips Telegram's
+quoted-message decoration before parsing the answer. The keyboard is removed
+after answering or canceling.
 
 For example, a completed single-question command is:
 
@@ -83,20 +75,12 @@ For example, a completed single-question command is:
 /answer 16131195 production
 ```
 
-A completed multiple-question command puts the keyed answers on following
-lines:
-
-```text
-/answer 16131195
-region: eu
-mode: balanced
-```
-
 An ordinary answer, including a negative answer such as `no` or
 `/answer <short-id> no`, supplies that answer and resumes the agent. It does not
 cancel the operation.
 
-`/stop` terminates the pending foreground turn or background task. MintClaw
+`⛔ Cancel turn` on Telegram or `/stop` on any channel terminates the pending
+foreground turn or background task. MintClaw
 durably records the cancellation, completes the suspended tool call with a
 cancellation result, and does not resume the model. `/new`, `/reset`, and
 `/clear` perform the same durable cancellation first, then continue with their
