@@ -108,12 +108,17 @@ func TestRemoteWorkspaceVerticalSliceRealProcess(t *testing.T) {
 		t.Fatalf("model-facing response = %q", response)
 	}
 	waitForNodeJobFile(t, filepath.Join(remoteRoot, "job.completed"))
+	if _, statErr := os.Stat(filepath.Join(gatewayWorkspace, "created.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("remote mutation appeared in gateway-local workspace: %v", statErr)
+	}
 	instance, ok := loop.GetRegistry().GetAgent("main")
 	if !ok {
 		t.Fatal("main agent is unavailable")
 	}
 
 	uncertainCtx := remoteWorkspaceToolContext(gatewayWorkspace, "remote-uncertain")
+	firstCtx, cancelFirst := context.WithTimeout(uncertainCtx, 15*time.Second)
+	defer cancelFirst()
 	workspaceExec, ok := instance.Tools.Get("workspace_exec")
 	if !ok {
 		t.Fatal("workspace_exec is unavailable")
@@ -124,18 +129,32 @@ func TestRemoteWorkspaceVerticalSliceRealProcess(t *testing.T) {
 	}
 	resultChannel := make(chan *toolshared.ToolResult, 1)
 	go func() {
-		resultChannel <- workspaceExec.Execute(uncertainCtx, uncertainArgs)
+		resultChannel <- workspaceExec.Execute(firstCtx, uncertainArgs)
 	}()
 	waitForNodeJobFile(t, filepath.Join(remoteRoot, "uncertain.started"))
 	process.stop(t)
-	first := <-resultChannel
+	disconnected := waitForVerticalSliceNodeState(t, registry, nodes.StateDisconnected)
+	if disconnected.ID != pending.ID {
+		t.Fatalf("disconnected node ID = %q, want %q", disconnected.ID, pending.ID)
+	}
+	var first *toolshared.ToolResult
+	select {
+	case first = <-resultChannel:
+	case <-firstCtx.Done():
+		t.Fatalf("disconnected invocation did not return: %v", context.Cause(firstCtx))
+	}
 	if !first.IsError || !strings.Contains(first.ContentForLLM(), "DISPATCH_UNCERTAIN") {
 		t.Fatalf("disconnected mutation = %#v", first)
 	}
 
 	process = startVerticalSliceCompanion(t, binaryPath, configPath)
-	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
-	second := workspaceExec.Execute(uncertainCtx, uncertainArgs)
+	reconnected := waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+	if reconnected.ID != pending.ID {
+		t.Fatalf("reconnected node ID = %q, want %q", reconnected.ID, pending.ID)
+	}
+	secondCtx, cancelSecond := context.WithTimeout(uncertainCtx, 5*time.Second)
+	defer cancelSecond()
+	second := workspaceExec.Execute(secondCtx, uncertainArgs)
 	if !second.IsError || !strings.Contains(second.ContentForLLM(), "DISPATCH_UNCERTAIN") {
 		t.Fatalf("repeated uncertain mutation = %#v", second)
 	}
@@ -353,11 +372,20 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 		if result["state"] != "completed" {
 			return nil, fmt.Errorf("remote patch = %#v", payload)
 		}
+		return remoteWorkspaceToolCall("remote-patched-read", "read_file", map[string]any{
+			"workspace": remoteWorkspaceAlias, "path": "created.txt", "offset": 0, "length": 1024,
+		}), nil
+	case 6:
+		result, _ := payload["result"].(map[string]any)
+		if content := fmt.Sprint(result["content"]); !strings.Contains(content, "needle after") ||
+			strings.Contains(content, "needle before") {
+			return nil, fmt.Errorf("remote patched read = %#v", payload)
+		}
 		return remoteWorkspaceToolCall("remote-foreground", "workspace_exec", map[string]any{
 			"workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"foreground"},
 			"mode": "foreground", "timeout_seconds": 5,
 		}), nil
-	case 6:
+	case 7:
 		result, _ := payload["result"].(map[string]any)
 		if payload["mode"] != "foreground" || result["stdout"] != "foreground-ok\n" {
 			return nil, fmt.Errorf("remote foreground = %#v", payload)
@@ -366,7 +394,7 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			"workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"job"},
 			"mode": "job", "timeout_seconds": 10,
 		}), nil
-	case 7:
+	case 8:
 		if payload["mode"] != "job" || strings.TrimSpace(fmt.Sprint(payload["job_id"])) == "" {
 			return nil, fmt.Errorf("remote job = %#v", payload)
 		}
