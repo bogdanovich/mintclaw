@@ -1062,6 +1062,11 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 			len(outbound.TraceScopes) != 1 || outbound.TraceScopes[0] != traceScope {
 			t.Fatalf("task user delivery = %#v", outbound)
 		}
+		metadata := bus.OutboundMetadataFromMessage(outbound)
+		if metadata.OutboundKind != bus.OutboundKindFinal ||
+			metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+			t.Fatalf("task user delivery metadata = %#v", metadata)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("user-only task completion was not queued")
 	}
