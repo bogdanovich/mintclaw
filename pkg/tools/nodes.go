@@ -498,52 +498,17 @@ func projectFileDescriptorForTarget(
 	descriptor nodes.CommandDescriptor,
 	fileProfile string,
 ) (nodes.CommandDescriptor, bool) {
-	if len(descriptor.FileProfiles) == 0 {
-		return descriptor, true
-	}
-	if fileProfile == "" {
+	hasFileProfiles := len(descriptor.FileProfiles) > 0
+	projected, available := nodes.ProjectFileDescriptorForProfile(descriptor, fileProfile)
+	if !available {
 		return nodes.CommandDescriptor{}, false
 	}
-	for _, profile := range descriptor.FileProfiles {
-		if profile.Alias != fileProfile {
-			continue
-		}
-		descriptor.FileProfiles = []nodes.FileProfileDescriptor{profile}
-		if descriptor.ModelContract == nil {
-			return nodes.CommandDescriptor{}, false
-		}
-		contract := *descriptor.ModelContract
-		if !nodes.IsWorkspaceCommand(descriptor.Name) {
-			contract.Availability = nodes.ModelAvailable
-		}
-		switch descriptor.Name {
-		case "file.info.v1":
-			if profile.Approval.Metadata == "required" {
-				contract.ApprovalMode = "each_command"
-			}
-		case "file.download.v1":
-			if profile.Approval.Read == "required" {
-				contract.ApprovalMode = "each_command"
-			}
-		case "file.upload.v1":
-			if profile.Approval.Write == "required" {
-				contract.ApprovalMode = "each_command"
-			}
-		case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
-			if profile.Approval.Read == "required" {
-				contract.ApprovalMode = "each_command"
-			}
-		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
-			if profile.Approval.Write == "required" {
-				contract.ApprovalMode = "each_command"
-			}
-		default:
-			return nodes.CommandDescriptor{}, false
-		}
-		descriptor.ModelContract = &contract
-		return descriptor, true
+	if hasFileProfiles && !nodes.IsWorkspaceCommand(projected.Name) && projected.ModelContract != nil {
+		contract := *projected.ModelContract
+		contract.Availability = nodes.ModelAvailable
+		projected.ModelContract = &contract
 	}
-	return nodes.CommandDescriptor{}, false
+	return projected, true
 }
 
 func projectServiceDescriptorForTarget(

@@ -197,6 +197,71 @@ func TestValidateInvocationApprovalProjectsJobProfile(t *testing.T) {
 	}
 }
 
+func TestValidateInvocationApprovalProjectsFileProfileFromPreparedInput(t *testing.T) {
+	_, _, nodeID, _ := testInvocationAdmission(t, "")
+	profiles := []nodes.FileProfileDescriptor{
+		{
+			Alias: "legacy", Revision: "legacy-v1",
+			ReadableRoots: []string{"/srv/legacy"}, WritableRoots: []string{"/srv/legacy"},
+			AllowCreate: true, AllowOverwrite: true, MaxFileBytes: 1024,
+			Approval: nodes.FileProfileApproval{Metadata: "none", Read: "required", Write: "required"},
+		},
+		{
+			Alias: "workspace", Revision: "workspace-v1",
+			ReadableRoots: []string{"/srv/workspace"}, WritableRoots: []string{"/srv/workspace"},
+			AllowCreate: true, AllowOverwrite: true, MaxFileBytes: 1024,
+			Approval: nodes.FileProfileApproval{Metadata: "none", Read: "none", Write: "none"},
+		},
+	}
+	descriptors, err := nodes.WorkspaceDescriptors(profiles, []string{"project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor nodes.CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == nodes.WorkspaceCommandWrite {
+			descriptor = candidate
+			break
+		}
+	}
+	projected, ok := nodes.ProjectFileDescriptorForProfile(descriptor, "workspace")
+	if !ok {
+		t.Fatal("project workspace file descriptor")
+	}
+	catalogHash := strings.Repeat("d", 64)
+	plan, err := nodes.PrepareExecutionPlan(
+		nodes.InvocationRequest{
+			InvocationID: "inv_workspace", IdempotencyKey: "idem_workspace", NodeID: nodeID,
+			CatalogHash: catalogHash, Command: descriptor.Name,
+			Input: json.RawMessage(
+				`{"profile_revision":"workspace-v1","workspace_revision":"route-v1",` +
+					`"working_scope":"project","path":"README.md","content":"ok","overwrite":false}`,
+			),
+			AgentID: "main", SessionID: "session_workspace", ActorID: "user_workspace",
+			TimeoutSeconds: 30, OutputLimitBytes: 4096,
+		},
+		projected,
+		"local",
+		"policy-workspace",
+		time.Unix(10, 0),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := nodes.CommandApproval{Descriptor: descriptor, CatalogHash: catalogHash}
+	if err := validateInvocationApproval(approval, nodeID, plan); err != nil {
+		t.Fatalf("profile-projected workspace approval rejected: %v", err)
+	}
+	plan.Input = json.RawMessage(
+		`{"profile_revision":"legacy-v1","workspace_revision":"route-v1",` +
+			`"working_scope":"project","path":"README.md","content":"ok","overwrite":false}`,
+	)
+	if err := validateInvocationApproval(approval, nodeID, plan); !errors.Is(err, nodes.ErrCommandDenied) {
+		t.Fatalf("changed workspace profile error = %v", err)
+	}
+}
+
 func TestAdmissionRevocationWaitsForDispatchWrite(t *testing.T) {
 	registry, handler, nodeID, plan := testInvocationAdmission(t, "")
 	connection := newStubPeerConnection()
