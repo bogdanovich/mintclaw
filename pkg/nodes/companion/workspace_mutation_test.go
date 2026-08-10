@@ -82,6 +82,43 @@ func TestWorkspacePatchPreparesThenPublishesDeterministically(t *testing.T) {
 	}
 }
 
+func TestWorkspacePatchUpdateAndDeleteUseWritableAuthority(t *testing.T) {
+	root := canonicalTempDir(t)
+	for path, content := range map[string]string{"changed.txt": "old\n", "removed.txt": "gone\n"} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policies := testFilePolicies(t, root)
+	policy := policies["project"]
+	policy.ReadableRoots = nil
+	policies["project"] = policy
+	runtime, err := NewFileTransferRuntime(policies, newMemoryFileTransferLedger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.Close)
+	result, err := runtime.PatchWorkspace(t.Context(), "project-v1", root, WorkspacePatchOptions{Input: `*** Begin Patch
+*** Update File: changed.txt
+@@
+-old
++new
+*** Delete File: removed.txt
+*** End Patch`})
+	if err != nil || result.State != "completed" || len(result.Committed) != 2 {
+		t.Fatalf("writable-only patch = %#v, err = %v", result, err)
+	}
+	if content, readErr := os.ReadFile(
+		filepath.Join(root, "changed.txt"),
+	); readErr != nil ||
+		string(content) != "new\n" {
+		t.Fatalf("updated content = %q, err = %v", content, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "removed.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("deleted file stat error = %v", statErr)
+	}
+}
+
 func TestWorkspacePatchDoesNotPublishWhenPreparationFails(t *testing.T) {
 	runtime, root, _ := newTestFileTransferRuntime(t)
 	_, err := runtime.PatchWorkspace(t.Context(), "project-v1", root, WorkspacePatchOptions{Input: `*** Begin Patch
@@ -132,6 +169,22 @@ func TestWorkspacePatchReportsCommittedPrefixAfterLaterConflict(t *testing.T) {
 		if readErr != nil || string(content) != expected {
 			t.Fatalf("%s = %q, err = %v", path, content, readErr)
 		}
+	}
+}
+
+func TestStoppedWorkspacePatchPreservesTimeoutAndCancellationTruth(t *testing.T) {
+	committed := WorkspacePatchResult{Committed: []WorkspacePatchEntry{{Path: "done.txt", Action: "add"}}}
+	deadlineCtx, deadlineCancel := context.WithTimeout(t.Context(), 0)
+	defer deadlineCancel()
+	deadlineResult, err := stoppedWorkspacePatch(committed, deadlineCtx)
+	if err != nil || deadlineResult.State != "partial" || deadlineResult.Code != "TIMEOUT" {
+		t.Fatalf("deadline result = %#v, err = %v", deadlineResult, err)
+	}
+	cancelCtx, cancel := context.WithCancelCause(t.Context())
+	cancel(errCancellationRequested)
+	cancelResult, err := stoppedWorkspacePatch(committed, cancelCtx)
+	if err != nil || cancelResult.State != "partial" || cancelResult.Code != "CANCELED" {
+		t.Fatalf("cancellation result = %#v, err = %v", cancelResult, err)
 	}
 }
 

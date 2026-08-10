@@ -122,12 +122,18 @@ func (runtime *FileTransferRuntime) WriteWorkspace(
 	if err := ctx.Err(); err != nil {
 		return WorkspaceWriteResult{}, stoppedWorkspaceMutation(ctx)
 	}
-	if err := stage.publish(publication); err != nil {
+	var publishErr error
+	if before != nil {
+		publishErr = stage.publishReplacing(ctx, before.identity, before.info.Size(), beforeDigest)
+	} else {
+		publishErr = stage.publish(publication)
+	}
+	if publishErr != nil {
 		var uncertain *committedFileMutationError
-		if errors.As(err, &uncertain) {
-			return WorkspaceWriteResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, err)
+		if errors.As(publishErr, &uncertain) {
+			return WorkspaceWriteResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, publishErr)
 		}
-		return WorkspaceWriteResult{}, err
+		return WorkspaceWriteResult{}, publishErr
 	}
 	committed = true
 	digest := sha256.Sum256([]byte(options.Content))
@@ -172,14 +178,7 @@ func publishPreparedWorkspacePatch(
 	result := WorkspacePatchResult{State: "completed", Committed: make([]WorkspacePatchEntry, 0, len(prepared))}
 	for _, mutation := range prepared {
 		if err := ctx.Err(); err != nil {
-			if len(result.Committed) == 0 {
-				return WorkspacePatchResult{}, stoppedWorkspaceMutation(ctx)
-			}
-			result.State, result.Code = "partial", "TIMEOUT"
-			if errors.Is(context.Cause(ctx), errCancellationRequested) {
-				result.Code = "CANCELED"
-			}
-			return result, nil
+			return stoppedWorkspacePatch(result, ctx)
 		}
 		if mutation.before != nil {
 			if err := verifyWorkspaceFile(
@@ -189,20 +188,22 @@ func publishPreparedWorkspacePatch(
 				mutation.before.info.Size(),
 				mutation.digest,
 			); err != nil {
-				if errors.Is(context.Cause(ctx), errCancellationRequested) {
-					if len(result.Committed) == 0 {
-						return WorkspacePatchResult{}, fmt.Errorf("%w: %w", errCommandCancellationConfirmed, err)
-					}
-					result.State, result.Code = "partial", "CANCELED"
-					return result, nil
+				if ctx.Err() != nil {
+					return stoppedWorkspacePatch(result, ctx)
 				}
 				return workspacePatchFailure(result, err)
 			}
 		}
-		if err := publishWorkspaceMutation(mutation); err != nil {
+		if err := ctx.Err(); err != nil {
+			return stoppedWorkspacePatch(result, ctx)
+		}
+		if err := publishWorkspaceMutation(ctx, mutation); err != nil {
 			var uncertain *committedFileMutationError
 			if errors.As(err, &uncertain) {
 				return WorkspacePatchResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, err)
+			}
+			if ctx.Err() != nil {
+				return stoppedWorkspacePatch(result, ctx)
 			}
 			return workspacePatchFailure(result, err)
 		}
@@ -279,7 +280,7 @@ func prepareWorkspaceMutation(
 			return nil, absentErr
 		}
 	} else {
-		item.before, err = profile.openReadable(path)
+		item.before, err = parent.openFinalRegular()
 		if err != nil {
 			_ = parent.close()
 			return nil, err
@@ -385,12 +386,17 @@ func verifyWorkspaceFile(
 	return nil
 }
 
-func publishWorkspaceMutation(item *preparedWorkspaceMutation) error {
+func publishWorkspaceMutation(ctx context.Context, item *preparedWorkspaceMutation) error {
 	switch item.mutation.Action {
 	case string(patchformat.Add):
 		return item.stage.publish(filePublicationCreate)
 	case string(patchformat.Update):
-		return item.stage.publish(filePublicationReplace)
+		return item.stage.publishReplacing(
+			ctx,
+			item.before.identity,
+			item.before.info.Size(),
+			item.digest,
+		)
 	case string(patchformat.Delete):
 		return item.parent.removeFinalRegular(item.before.identity)
 	default:
@@ -404,6 +410,20 @@ func workspacePatchFailure(result WorkspacePatchResult, err error) (WorkspacePat
 	}
 	result.State = "partial"
 	result.Code = safeFileFailureCode(err)
+	return result, nil
+}
+
+func stoppedWorkspacePatch(
+	result WorkspacePatchResult,
+	ctx context.Context,
+) (WorkspacePatchResult, error) {
+	if len(result.Committed) == 0 {
+		return WorkspacePatchResult{}, stoppedWorkspaceMutation(ctx)
+	}
+	result.State, result.Code = "partial", "TIMEOUT"
+	if errors.Is(context.Cause(ctx), errCancellationRequested) {
+		result.Code = "CANCELED"
+	}
 	return result, nil
 }
 

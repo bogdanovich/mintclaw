@@ -3,6 +3,8 @@
 package companion
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 )
@@ -97,6 +99,10 @@ func (*resolvedParent) removeFinalRegular(fileIdentity) error {
 }
 
 func (*stagedFile) publish(string) error {
+	return ErrFileAccessDenied
+}
+
+func (*stagedFile) publishReplacing(context.Context, fileIdentity, int64, [sha256.Size]byte) error {
 	return ErrFileAccessDenied
 }
 
