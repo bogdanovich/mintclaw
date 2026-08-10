@@ -88,6 +88,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	if delivery.DeliveryMode == "" {
 		delivery = decideAsyncToolResultDelivery(result)
 	}
+	ts = turnStateForAsyncUserDelivery(ts, delivery)
 	completionID := strings.TrimSpace(req.CompletionID)
 	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
@@ -297,6 +298,36 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			"",
 		)
 	}
+}
+
+func turnStateForAsyncUserDelivery(
+	ts *turnState,
+	delivery AsyncDeliveryDecision,
+) *turnState {
+	if ts == nil || delivery.DeliveryMode != toolshared.AsyncDeliveryUserOnly {
+		return ts
+	}
+
+	cloned := &turnState{
+		agent:      ts.agent,
+		opts:       ts.opts,
+		turnID:     ts.turnID,
+		agentID:    ts.agentID,
+		sessionKey: ts.sessionKey,
+		channel:    ts.channel,
+		chatID:     ts.chatID,
+		workspace:  ts.workspace,
+	}
+	inbound := cloneInboundContext(ts.opts.Dispatch.InboundContext)
+	if inbound == nil {
+		inbound = &bus.InboundContext{}
+	}
+	bus.OutboundMetadata{
+		MessageKind:  bus.OutboundMessageKindFinalReply,
+		OutboundKind: bus.OutboundKindFinal,
+	}.ApplyToContext(inbound)
+	cloned.opts.Dispatch.InboundContext = inbound
+	return cloned
 }
 
 func (d *asyncToolCompletionDelivery) publishOutbound(ctx context.Context, msg bus.OutboundMessage) error {

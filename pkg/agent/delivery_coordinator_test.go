@@ -239,6 +239,11 @@ func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 	if outbound.Context.TopicID != "topic-1" {
 		t.Fatalf("TopicID = %q, want topic-1", outbound.Context.TopicID)
 	}
+	metadata := bus.OutboundMetadataFromMessage(outbound)
+	if metadata.OutboundKind != bus.OutboundKindFinal ||
+		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("outbound metadata = %+v, want final/final_reply", metadata)
+	}
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliveryDelivered)
 	rec, _ := al.taskRegistryForWorkspace(workspace).Get(taskID)
 	if rec.LastCompletionID != "completion-user-only" {
@@ -300,9 +305,12 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 	}
 
 	al.deliverAsyncToolCompletion(req)
-	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
+	userOutbound := waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "user visible"
 	})
+	if metadata := bus.OutboundMetadataFromMessage(userOutbound); metadata.OutboundKind == bus.OutboundKindFinal {
+		t.Fatalf("user_and_parent outbound metadata = %+v, must not be terminal", metadata)
+	}
 	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "parent synthesized"
 	})
@@ -407,6 +415,11 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 	media := waitForOutboundMediaMessage(t, msgBus.OutboundMediaChan(), 2*time.Second)
 	if len(media.Parts) != 1 || media.Parts[0].Ref != "media://video-1" {
 		t.Fatalf("media parts = %+v, want media://video-1", media.Parts)
+	}
+	metadata := bus.OutboundMetadataFromContext(media.Context)
+	if metadata.OutboundKind != bus.OutboundKindFinal ||
+		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("media outbound metadata = %+v, want final/final_reply", metadata)
 	}
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliveryDelivered)
 
@@ -700,9 +713,19 @@ func TestDeliverAsyncToolCompletion_ErrorDeliveryUpdatesTaskStatus(t *testing.T)
 		Decision:     decideAsyncToolResultDelivery(result),
 	})
 
-	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
-		return msg.Content == "user error"
-	})
+	errorOutbound := waitForOutboundMessage(
+		t,
+		msgBus.OutboundChan(),
+		2*time.Second,
+		func(msg bus.OutboundMessage) bool {
+			return msg.Content == "user error"
+		},
+	)
+	metadata := bus.OutboundMetadataFromMessage(errorOutbound)
+	if metadata.OutboundKind != bus.OutboundKindFinal ||
+		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("error outbound metadata = %+v, want final/final_reply", metadata)
+	}
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliveryDelivered)
 	rec, _ := al.taskRegistryForWorkspace(workspace).Get(taskID)
 	if rec.LastCompletionID != "error-completion" {
