@@ -29,7 +29,7 @@ type authorityBrokerRequestFrame struct {
 	Terminal *TerminalBrokerOpenRequest `json:"terminal,omitempty"`
 }
 
-type authorityBrokerResponseFrame struct { //nolint:unused // Used by the Linux authority-broker transport.
+type authorityBrokerResponseFrame struct {
 	Version  int                  `json:"version"`
 	OK       bool                 `json:"ok"`
 	Code     string               `json:"code,omitempty"`

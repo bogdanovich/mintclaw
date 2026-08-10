@@ -104,7 +104,7 @@ func serviceActionStatusMatches(action nodes.ServiceAction, status ServiceStatus
 // serviceActionAcceptor atomically marks the manager acceptance boundary. A
 // false return means cancellation won before manager access and the action
 // must not be attempted.
-type serviceActionAcceptor func() bool //nolint:unused // Used by Linux systemd implementations.
+type serviceActionAcceptor func() bool
 
 // ServiceManager is the narrow system-manager boundary used by typed service
 // commands. Implementations resolve the exact profile and model-safe service
@@ -124,7 +124,7 @@ type ServiceController interface {
 	Action(context.Context, ServiceActionRequest) (ServiceActionResult, error)
 }
 
-type serviceActionExecutor interface { //nolint:unused // Used by the Linux systemd helper service.
+type serviceActionExecutor interface {
 	ServiceManager
 	executeAction(context.Context, ServiceActionRequest, serviceActionAcceptor) (ServiceActionResult, error)
 }

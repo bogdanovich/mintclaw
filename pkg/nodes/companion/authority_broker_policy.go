@@ -73,7 +73,7 @@ type preparedAuthorityBrokerExecution struct {
 	environment      []string
 }
 
-type preparedAuthorityBrokerTerminal struct { //nolint:unused // Used by the Linux authority-broker implementation.
+type preparedAuthorityBrokerTerminal struct {
 	profile          normalizedAuthorityBrokerProfile
 	shellPath        string
 	shellArguments   []string
@@ -311,7 +311,6 @@ func normalizeAuthorityBrokerProfile(
 	}, nil
 }
 
-//nolint:unused // Used by the Linux authority-broker implementation.
 func (config AuthorityBrokerConfig) prepareTerminal(
 	request TerminalBrokerOpenRequest,
 ) (preparedAuthorityBrokerTerminal, error) {
