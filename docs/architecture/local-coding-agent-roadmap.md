@@ -990,6 +990,9 @@ Done when:
 
 Dependencies: P1.2, P1.3
 
+Implementation evidence:
+[`local-coding-agent-p1-thread-cli.md`](local-coding-agent-p1-thread-cli.md)
+
 Scope:
 
 - Add `mintclaw code` and top-level `mintclaw resume` command plumbing.

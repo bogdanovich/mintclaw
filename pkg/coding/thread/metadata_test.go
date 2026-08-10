@@ -65,6 +65,35 @@ func TestMetadataAtomicRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProvisionThreadDoesNotPublishMetadata(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := uuid.NewString()
+	if err := store.ProvisionThread(threadID); err != nil {
+		t.Fatalf("ProvisionThread() error = %v", err)
+	}
+	threadRoot, err := store.ThreadRoot(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(threadRoot)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("provisioned root = %#v, %v", info, err)
+	}
+	if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Load(provisioned-only) error = %v, want not exist", err)
+	}
+	catalog, err := NewCatalog(store, CatalogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Query(t.Context(), CatalogQuery{ThreadID: threadID}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Query(provisioned-only) error = %v, want not exist", err)
+	}
+}
+
 func TestStoreCanonicalizesSymlinkedExternalRoot(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

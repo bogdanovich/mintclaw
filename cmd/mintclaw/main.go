@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/agent"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/auth"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cliui"
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/coding"
 	configcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/config"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cron"
 	doctorcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/doctor"
@@ -107,13 +108,25 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "nodes", "agent":
+		case "doctor", "nodes", "agent", "code", "resume":
 			hasJSONCommand = true
 		case "--json", "--json=true", "--json=1":
 			hasJSON = true
 		}
 	}
 	return hasJSONCommand && hasJSON
+}
+
+// codingFrontendRequested suppresses process-level output which would corrupt
+// the future alternate-screen frontend and today's stable plain renderer.
+func codingFrontendRequested(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg == "code" || arg == "resume"
+	}
+	return false
 }
 
 func NewMintClawCommand() *cobra.Command {
@@ -148,6 +161,8 @@ mintclaw --no-color status`,
 
 	cmd.AddCommand(
 		configcmd.NewConfigCommand(),
+		coding.NewCodeCommand(),
+		coding.NewResumeCommand(),
 		onboard.NewOnboardCommand(),
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),
@@ -195,7 +210,8 @@ func main() {
 	cliui.Init(earlyColorDisabled())
 
 	machineJSON := machineJSONRequested(os.Args[1:])
-	if machineJSON {
+	quietStartup := machineJSON || codingFrontendRequested(os.Args[1:])
+	if quietStartup {
 		logger.DisableConsole()
 	} else {
 		if earlyColorDisabled() {
@@ -207,14 +223,22 @@ func main() {
 
 	tzEnv := os.Getenv("TZ")
 	if tzEnv != "" {
-		fmt.Println("TZ environment:", tzEnv)
+		if !quietStartup {
+			fmt.Println("TZ environment:", tzEnv)
+		}
 		zoneinfoEnv := os.Getenv("ZONEINFO")
-		fmt.Println("ZONEINFO environment:", zoneinfoEnv)
+		if !quietStartup {
+			fmt.Println("ZONEINFO environment:", zoneinfoEnv)
+		}
 		loc, err := time.LoadLocation(tzEnv)
 		if err != nil {
-			fmt.Println("Error loading time zone:", err)
+			if !quietStartup {
+				fmt.Println("Error loading time zone:", err)
+			}
 		} else {
-			fmt.Println("Time zone loaded successfully:", loc)
+			if !quietStartup {
+				fmt.Println("Time zone loaded successfully:", loc)
+			}
 			time.Local = loc //nolint:gosmopolitan // We intentionally set local timezone from TZ env
 		}
 	}

@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -56,6 +58,7 @@ type SessionMeta struct {
 	HistoryHasPrevious   bool   `json:"history_has_previous,omitempty"`
 	HistoryPreviousCount int    `json:"history_previous_count,omitempty"`
 	HistoryPreviousSkip  int    `json:"history_previous_skip,omitempty"`
+	HistoryTargetDigest  string `json:"history_target_digest,omitempty"`
 }
 
 // JSONLStore implements Store using append-only JSONL files.
@@ -73,6 +76,50 @@ type JSONLStore struct {
 	dir          string
 	locks        [numLockShards]sync.Mutex
 	journalFault func(jsonlJournalWriteStage) error
+	appendWrite  func(*os.File, []byte) (int, error)
+}
+
+// CommittedAppendError reports that the JSONL record was durably appended,
+// but a later close or metadata-finalization step failed. Callers must recover
+// from the canonical history instead of blindly retrying the append.
+type CommittedAppendError struct {
+	Err error
+}
+
+func (e *CommittedAppendError) Error() string {
+	return fmt.Sprintf("memory: append committed but finalization failed: %v", e.Err)
+}
+
+func (e *CommittedAppendError) Unwrap() error {
+	return e.Err
+}
+
+// IsCommittedAppendError reports whether err preserves a committed append.
+func IsCommittedAppendError(err error) bool {
+	var committed *CommittedAppendError
+	return errors.As(err, &committed)
+}
+
+// IndeterminateAppendError reports that writing began, but file or directory
+// durability could not be confirmed. The append must not be published as
+// durable, and retrying it may duplicate a record that survived the failure.
+type IndeterminateAppendError struct {
+	Err error
+}
+
+func (e *IndeterminateAppendError) Error() string {
+	return fmt.Sprintf("memory: append outcome is indeterminate; do not blindly retry: %v", e.Err)
+}
+
+func (e *IndeterminateAppendError) Unwrap() error {
+	return e.Err
+}
+
+// IsIndeterminateAppendError reports whether err is unsafe to retry without
+// first recovering canonical history.
+func IsIndeterminateAppendError(err error) bool {
+	var indeterminate *IndeterminateAppendError
+	return errors.As(err, &indeterminate)
 }
 
 func contextCause(ctx context.Context) error {
@@ -88,6 +135,7 @@ const (
 	jsonlJournalStageFlush  jsonlJournalWriteStage = "flush"
 	jsonlJournalStageAppend jsonlJournalWriteStage = "append"
 	jsonlJournalStageFsync  jsonlJournalWriteStage = "fsync"
+	jsonlJournalStageDir    jsonlJournalWriteStage = "directory"
 	jsonlJournalStageRename jsonlJournalWriteStage = "rename"
 )
 
@@ -104,7 +152,9 @@ func NewJSONLStore(dir string) (*JSONLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: create directory: %w", err)
 	}
-	return &JSONLStore{dir: dir}, nil
+	return &JSONLStore{dir: dir, appendWrite: func(file *os.File, data []byte) (int, error) {
+		return file.Write(data)
+	}}, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -190,7 +240,129 @@ func (s *JSONLStore) finishHistoryMutation(key string, meta *SessionMeta) error 
 	meta.HistoryHasPrevious = false
 	meta.HistoryPreviousCount = 0
 	meta.HistoryPreviousSkip = 0
+	meta.HistoryTargetDigest = ""
 	return s.writeMeta(key, *meta)
+}
+
+func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error {
+	if !meta.HistoryDirty {
+		return nil
+	}
+	jsonlExists, err := repairDirtyJSONL(s.jsonlPath(key))
+	if err != nil {
+		return err
+	}
+	if jsonlExists {
+		if syncErr := fileutil.SyncDirectory(s.dir); syncErr != nil {
+			return fmt.Errorf("memory: sync recovered jsonl directory: %w", syncErr)
+		}
+	}
+	rawCount, _, err := scanRetainedMessageLines(s.jsonlPath(key))
+	if err != nil {
+		return err
+	}
+	targetReached := false
+	if meta.HistoryTargetDigest != "" && jsonlExists {
+		digest, digestErr := digestFile(s.jsonlPath(key))
+		if digestErr != nil {
+			return digestErr
+		}
+		targetReached = digest == meta.HistoryTargetDigest
+	}
+	if meta.HistoryHasPrevious && meta.HistoryTargetDigest != "" && !targetReached {
+		meta.Count = meta.HistoryPreviousCount
+		meta.Skip = meta.HistoryPreviousSkip
+	} else if meta.HistoryHasPrevious && meta.HistoryTargetDigest == "" && rawCount != meta.Count {
+		// Legacy dirty metadata did not record a replacement identity. Keep
+		// the historical count-based fallback for stores created before the
+		// digest field existed.
+		meta.Count = meta.HistoryPreviousCount
+		meta.Skip = meta.HistoryPreviousSkip
+	} else {
+		meta.Count = rawCount
+		if meta.Skip > rawCount {
+			meta.Skip = rawCount
+		}
+	}
+	if err := s.finishHistoryMutation(key, meta); err != nil {
+		return fmt.Errorf("memory: finish dirty history recovery: %w", err)
+	}
+	return nil
+}
+
+func digestFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("memory: open jsonl for digest: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("memory: digest jsonl: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func repairDirtyJSONL(path string) (bool, error) {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("memory: open jsonl for tail recovery: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: stat jsonl for tail recovery: %w", err)
+	}
+	size := info.Size()
+	if size == 0 {
+		return true, syncAndCloseRecoveredJSONL(file)
+	}
+	var last [1]byte
+	if _, err := file.ReadAt(last[:], size-1); err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: inspect jsonl tail: %w", err)
+	}
+	if last[0] == '\n' {
+		return true, syncAndCloseRecoveredJSONL(file)
+	}
+
+	const recoveryChunkSize = 64 * 1024
+	buffer := make([]byte, recoveryChunkSize)
+	truncateAt := int64(0)
+	for end := size; end > 0; {
+		start := max(int64(0), end-int64(len(buffer)))
+		chunk := buffer[:end-start]
+		read, readErr := file.ReadAt(chunk, start)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			_ = file.Close()
+			return true, fmt.Errorf("memory: scan jsonl tail: %w", readErr)
+		}
+		if index := bytes.LastIndexByte(chunk[:read], '\n'); index >= 0 {
+			truncateAt = start + int64(index) + 1
+			break
+		}
+		end = start
+	}
+	if err := file.Truncate(truncateAt); err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: truncate incomplete jsonl tail: %w", err)
+	}
+	return true, syncAndCloseRecoveredJSONL(file)
+}
+
+func syncAndCloseRecoveredJSONL(file *os.File) error {
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("memory: sync recovered jsonl tail: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("memory: close recovered jsonl tail: %w", err)
+	}
+	return nil
 }
 
 func cloneRawJSON(data json.RawMessage) json.RawMessage {
@@ -269,23 +441,8 @@ func (s *JSONLStore) GetHistoryRevision(
 	if err != nil {
 		return HistoryRevision{}, err
 	}
-	if meta.HistoryDirty {
-		rawCount, _, scanErr := scanRetainedMessageLines(s.jsonlPath(sessionKey))
-		if scanErr != nil {
-			return HistoryRevision{}, scanErr
-		}
-		if meta.HistoryHasPrevious && rawCount != meta.Count {
-			meta.Count = meta.HistoryPreviousCount
-			meta.Skip = meta.HistoryPreviousSkip
-		} else {
-			meta.Count = rawCount
-			if meta.Skip > rawCount {
-				meta.Skip = rawCount
-			}
-		}
-		if finishErr := s.finishHistoryMutation(sessionKey, &meta); finishErr != nil {
-			return HistoryRevision{}, finishErr
-		}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return HistoryRevision{}, recoveryErr
 	}
 	var size, modTimeNS int64
 	info, err := os.Stat(s.jsonlPath(sessionKey))
@@ -498,6 +655,9 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	if err != nil {
 		return false, err
 	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &canonicalMeta); recoveryErr != nil {
+		return false, recoveryErr
+	}
 	canonicalHasContent, err := s.sessionHasVisibleContentLocked(sessionKey, canonicalMeta)
 	if err != nil {
 		return false, err
@@ -509,6 +669,9 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	aliasMeta, err := s.readMeta(alias)
 	if err != nil {
 		return false, err
+	}
+	if recoveryErr := s.reconcileDirtyHistory(alias, &aliasMeta); recoveryErr != nil {
+		return false, recoveryErr
 	}
 	aliasHistory, err := readMessages(s.jsonlPath(alias), aliasMeta.Skip)
 	if err != nil {
@@ -540,11 +703,16 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	canonicalMeta.HistoryHasPrevious = true
 	canonicalMeta.HistoryPreviousCount = previousCount
 	canonicalMeta.HistoryPreviousSkip = previousSkip
+	encodedAliasHistory, encodeErr := encodeJSONL(aliasHistory)
+	if encodeErr != nil {
+		return false, encodeErr
+	}
+	canonicalMeta.HistoryTargetDigest = digestJSONL(encodedAliasHistory)
 
 	if err := s.beginHistoryMutation(sessionKey, &canonicalMeta, true); err != nil {
 		return false, err
 	}
-	if err := s.rewriteJSONL(sessionKey, aliasHistory); err != nil {
+	if err := s.rewriteJSONLBytes(sessionKey, encodedAliasHistory); err != nil {
 		return false, err
 	}
 	if err := s.finishHistoryMutation(sessionKey, &canonicalMeta); err != nil {
@@ -722,6 +890,9 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	if err != nil {
 		return err
 	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return recoveryErr
+	}
 	if meta.Count == 0 && meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
 	}
@@ -744,11 +915,12 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	}
 	line = append(line, '\n')
 
-	f, err := os.OpenFile(
-		s.jsonlPath(sessionKey),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0o644,
-	)
+	jsonlPath := s.jsonlPath(sessionKey)
+	f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
+	created := err == nil
+	if errors.Is(err, os.ErrExist) {
+		f, err = os.OpenFile(jsonlPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	}
 	if err != nil {
 		return fmt.Errorf("memory: open jsonl for append: %w", err)
 	}
@@ -756,9 +928,19 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		_ = f.Close()
 		return fmt.Errorf("memory: append message: %w", faultErr)
 	}
-	_, writeErr := f.Write(line)
+	writeAppend := s.appendWrite
+	if writeAppend == nil {
+		writeAppend = func(file *os.File, data []byte) (int, error) { return file.Write(data) }
+	}
+	written, writeErr := writeAppend(f, line)
+	if writeErr == nil && written != len(line) {
+		writeErr = io.ErrShortWrite
+	}
 	if writeErr != nil {
 		_ = f.Close()
+		if written > 0 {
+			return &IndeterminateAppendError{Err: fmt.Errorf("memory: append message: %w", writeErr)}
+		}
 		return fmt.Errorf("memory: append message: %w", writeErr)
 	}
 	// Flush to physical storage before closing. This matches the
@@ -767,23 +949,40 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	// leave the append in the kernel page cache only — lost on reboot.
 	if faultErr := s.injectJournalFault(jsonlJournalStageFsync); faultErr != nil {
 		_ = f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", faultErr)
+		return &IndeterminateAppendError{Err: fmt.Errorf("memory: sync jsonl: %w", faultErr)}
 	}
 	if syncErr := f.Sync(); syncErr != nil {
 		_ = f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+		return &IndeterminateAppendError{Err: fmt.Errorf("memory: sync jsonl: %w", syncErr)}
+	}
+	if created {
+		if faultErr := s.injectJournalFault(jsonlJournalStageDir); faultErr != nil {
+			_ = f.Close()
+			return &IndeterminateAppendError{
+				Err: fmt.Errorf("memory: sync jsonl directory: %w", faultErr),
+			}
+		}
+		if syncErr := fileutil.SyncDirectory(s.dir); syncErr != nil {
+			_ = f.Close()
+			return &IndeterminateAppendError{
+				Err: fmt.Errorf("memory: sync jsonl directory: %w", syncErr),
+			}
+		}
 	}
 	if closeErr := f.Close(); closeErr != nil {
-		return fmt.Errorf("memory: close jsonl: %w", closeErr)
+		return &CommittedAppendError{Err: fmt.Errorf("memory: close jsonl: %w", closeErr)}
 	}
 
 	meta.Count++
 	meta.UpdatedAt = now
 	if faultErr := s.injectJournalFault(jsonlJournalStageRename); faultErr != nil {
-		return fmt.Errorf("memory: commit journal metadata: %w", faultErr)
+		return &CommittedAppendError{Err: fmt.Errorf("memory: commit journal metadata: %w", faultErr)}
 	}
 
-	return s.finishHistoryMutation(sessionKey, &meta)
+	if finishErr := s.finishHistoryMutation(sessionKey, &meta); finishErr != nil {
+		return &CommittedAppendError{Err: finishErr}
+	}
+	return nil
 }
 
 func (s *JSONLStore) GetHistory(
@@ -854,6 +1053,9 @@ func (s *JSONLStore) TruncateHistory(
 	if err != nil {
 		return err
 	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return recoveryErr
+	}
 
 	rawCount, retainedRawLines, scanErr := scanRetainedMessageLines(s.jsonlPath(sessionKey))
 	if scanErr != nil {
@@ -898,8 +1100,20 @@ func (s *JSONLStore) SetHistory(
 	if err != nil {
 		return err
 	}
-	previousCount, previousSkip := meta.Count, meta.Skip
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return recoveryErr
+	}
 	now := time.Now()
+	for i := range history {
+		if history[i].CreatedAt == nil {
+			history[i].CreatedAt = &now
+		}
+	}
+	encodedHistory, encodeErr := encodeJSONL(history)
+	if encodeErr != nil {
+		return encodeErr
+	}
+	previousCount, previousSkip := meta.Count, meta.Skip
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
 	}
@@ -909,19 +1123,14 @@ func (s *JSONLStore) SetHistory(
 	meta.HistoryHasPrevious = true
 	meta.HistoryPreviousCount = previousCount
 	meta.HistoryPreviousSkip = previousSkip
+	meta.HistoryTargetDigest = digestJSONL(encodedHistory)
 	if err := s.beginHistoryMutation(sessionKey, &meta, true); err != nil {
 		return err
 	}
 
-	for i := range history {
-		if history[i].CreatedAt == nil {
-			history[i].CreatedAt = &now
-		}
-	}
-
 	// A dirty marker written before replacement forces derived stores to
 	// rebuild if the process exits between the metadata and JSONL writes.
-	if err := s.rewriteJSONL(sessionKey, history); err != nil {
+	if err := s.rewriteJSONLBytes(sessionKey, encodedHistory); err != nil {
 		return err
 	}
 	return s.finishHistoryMutation(sessionKey, &meta)
@@ -944,6 +1153,9 @@ func (s *JSONLStore) Compact(
 	if err != nil {
 		return err
 	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return recoveryErr
+	}
 	if meta.Skip == 0 {
 		return nil
 	}
@@ -962,35 +1174,47 @@ func (s *JSONLStore) Compact(
 	meta.HistoryHasPrevious = true
 	meta.HistoryPreviousCount = previousCount
 	meta.HistoryPreviousSkip = previousSkip
+	encodedActive, encodeErr := encodeJSONL(active)
+	if encodeErr != nil {
+		return encodeErr
+	}
+	meta.HistoryTargetDigest = digestJSONL(encodedActive)
 	// Compact preserves the visible history, so it uses a dirty marker but
 	// does not advance the logical history revision.
 	if err := s.beginHistoryMutation(sessionKey, &meta, false); err != nil {
 		return err
 	}
 
-	if err := s.rewriteJSONL(sessionKey, active); err != nil {
+	if err := s.rewriteJSONLBytes(sessionKey, encodedActive); err != nil {
 		return err
 	}
 	return s.finishHistoryMutation(sessionKey, &meta)
 }
 
-// rewriteJSONL atomically replaces the JSONL file with the given messages
-// using the project's standard WriteFileAtomic (temp + fsync + rename).
-func (s *JSONLStore) rewriteJSONL(
-	sessionKey string, msgs []providers.Message,
-) error {
+func encodeJSONL(msgs []providers.Message) ([]byte, error) {
 	msgs = messageutil.FilterInvalidHistoryMessages(msgs)
 
 	var buf bytes.Buffer
 	for i, msg := range msgs {
 		line, err := json.Marshal(msg)
 		if err != nil {
-			return fmt.Errorf("memory: marshal message %d: %w", i, err)
+			return nil, fmt.Errorf("memory: marshal message %d: %w", i, err)
 		}
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
-	return fileutil.WriteFileAtomic(s.jsonlPath(sessionKey), buf.Bytes(), 0o644)
+	return buf.Bytes(), nil
+}
+
+func digestJSONL(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
+
+// rewriteJSONLBytes atomically replaces the JSONL file using the project's
+// standard WriteFileAtomic (temp + fsync + rename).
+func (s *JSONLStore) rewriteJSONLBytes(sessionKey string, data []byte) error {
+	return fileutil.WriteFileAtomic(s.jsonlPath(sessionKey), data, 0o644)
 }
 
 // ListSessions returns all known session keys by reading .meta.json files.

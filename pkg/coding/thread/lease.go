@@ -63,11 +63,14 @@ func (e *LeaseBusyError) Unwrap() error {
 
 // Lease is an exclusive, process-scoped writer claim on one coding thread.
 type Lease struct {
-	threadID string
-	owner    LeaseOwner
-	file     *os.File
-	once     sync.Once
-	err      error
+	storeRoot string
+	threadID  string
+	owner     LeaseOwner
+	file      *os.File
+	mu        sync.Mutex
+	once      sync.Once
+	released  bool
+	err       error
 }
 
 // ThreadID returns the leased coding thread ID.
@@ -91,10 +94,31 @@ func (l *Lease) Release() error {
 	if l == nil {
 		return nil
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.once.Do(func() {
 		l.err = errors.Join(releaseThreadLeaseFile(l.file), l.file.Close())
+		l.released = true
 	})
 	return l.err
+}
+
+func (l *Lease) withActive(storeRoot string, threadID string, operation func() error) error {
+	if l == nil {
+		return fmt.Errorf("coding thread lease is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return fmt.Errorf("coding thread lease for %q was released", threadID)
+	}
+	if l.storeRoot != storeRoot {
+		return fmt.Errorf("coding thread lease for %q belongs to a different store", l.threadID)
+	}
+	if l.threadID != threadID {
+		return fmt.Errorf("coding thread lease for %q cannot write thread %q", l.threadID, threadID)
+	}
+	return operation()
 }
 
 // AcquireLease takes a non-blocking writer lease on an existing coding thread.
@@ -138,7 +162,7 @@ func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) 
 		_ = file.Close()
 		return nil, fmt.Errorf("coding thread lease: record owner for %q: %w", threadID, err)
 	}
-	return &Lease{threadID: threadID, owner: owner, file: file}, nil
+	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
 }
 
 func (s *Store) openLeaseFile(threadID string) (*os.File, error) {
