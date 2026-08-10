@@ -415,6 +415,7 @@ func (l *ChannelLifecycle) stopAll(
 	l.mu.Unlock()
 
 	logger.InfoC("channels", "Stopping all channels")
+	stopErrors := make([]error, 0)
 
 	// Shutdown shared HTTP server first
 	if httpServer != nil {
@@ -424,6 +425,7 @@ func (l *ChannelLifecycle) stopAll(
 			logger.ErrorCF("channels", "Shared HTTP server shutdown error", map[string]any{
 				"error": err.Error(),
 			})
+			stopErrors = append(stopErrors, fmt.Errorf("shutdown shared HTTP server: %w", err))
 		}
 	}
 
@@ -443,6 +445,7 @@ func (l *ChannelLifecycle) stopAll(
 				"channel": target.name,
 				"error":   err.Error(),
 			})
+			stopErrors = append(stopErrors, fmt.Errorf("stop channel %s: %w", target.name, err))
 			continue
 		}
 		publisher.publishChannelEvent(
@@ -455,5 +458,5 @@ func (l *ChannelLifecycle) stopAll(
 	}
 
 	logger.InfoC("channels", "All channels stopped")
-	return nil
+	return errors.Join(stopErrors...)
 }
