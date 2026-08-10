@@ -29,7 +29,28 @@ const (
 	interactionAnswerClaimDelay    = 10 * time.Millisecond
 	interactionCancelClaimAttempts = 100
 	interactionCancelClaimDelay    = 10 * time.Millisecond
+	interactionCancelFenceAttempts = 16
 )
+
+type interactionLifecycleBoundaryHook func(string)
+
+type interactionLifecycleBoundaryHookKey struct{}
+
+const (
+	interactionBoundaryCancelAfterLoad  = "cancel_after_load"
+	interactionBoundaryPrecomputedFinal = "precomputed_final"
+	interactionBoundaryModelFinal       = "model_final"
+)
+
+func runInteractionLifecycleBoundaryHook(ctx context.Context, boundary string) {
+	if ctx == nil {
+		return
+	}
+	if hook, ok := ctx.Value(interactionLifecycleBoundaryHookKey{}).(interactionLifecycleBoundaryHook); ok &&
+		hook != nil {
+		hook(boundary)
+	}
+}
 
 type interactionInboundOwnership int
 
@@ -92,6 +113,7 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Matched = true
 	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
 	result.Kind = record.Kind
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryCancelAfterLoad)
 
 	claimTurnID := fmt.Sprintf(
 		"pending-interaction-cancel-%s-%d",
@@ -102,8 +124,17 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 		target,
 		claimTurnID,
 	)
-	if !claimed && (record.Status == interactions.StatusClaimed ||
-		record.Status == interactions.StatusResuming) {
+	if !claimed {
+		current, err := al.beginInteractionCancellationFence(
+			registry, record, target, msg.Context, "session_control_"+name,
+		)
+		if err != nil {
+			result.Failed = true
+			return result, err
+		}
+		record = current
+		result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+		result.Kind = record.Kind
 		if err := al.abortInteractionContinuation(record, target); err != nil {
 			result.Failed = true
 			return result, fmt.Errorf("abort interaction continuation: %w", err)
@@ -162,6 +193,38 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	result.Canceled = true
 	result.CommandHandled = name == "stop"
 	return result, nil
+}
+
+func (al *AgentLoop) beginInteractionCancellationFence(
+	registry *interactions.Registry,
+	loaded interactions.Record,
+	target *inboundDispatchTarget,
+	inbound bus.InboundContext,
+	code string,
+) (interactions.Record, error) {
+	for attempt := 0; attempt < interactionCancelFenceAttempts; attempt++ {
+		current, active := activeInteractionForSession(registry, target.SessionKey)
+		if !active || current.ID != loaded.ID ||
+			!interactionRouteAuthorizes(current.Route, target, inbound) {
+			return interactions.Record{}, fmt.Errorf("interaction changed while preparing cancellation")
+		}
+		if current.Status == interactions.StatusCanceling {
+			return current, nil
+		}
+		if current.FinalDeliveryState == interactions.DeliveryStateSending ||
+			current.FinalDeliveryState == interactions.DeliveryStateDelivered ||
+			current.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
+			return interactions.Record{}, fmt.Errorf("interaction finalization already started")
+		}
+		fenced, err := registry.BeginCancellation(current.ID, current.Revision, code)
+		if err == nil {
+			return fenced, nil
+		}
+		if !errors.Is(err, interactions.ErrConflict) {
+			return interactions.Record{}, fmt.Errorf("begin cancellation fence: %w", err)
+		}
+	}
+	return interactions.Record{}, fmt.Errorf("interaction kept changing while preparing cancellation")
 }
 
 func (al *AgentLoop) abortInteractionContinuation(
@@ -1031,8 +1094,9 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
-		return al.deliverInteractionFinal(
+		return al.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, finalContent, nil,
+			interactionBoundaryPrecomputedFinal,
 		)
 	}
 
@@ -1087,7 +1151,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
 	}
-	deliveryErr := al.deliverInteractionFinal(
+	deliveryErr := al.finalizeResumedInteraction(
 		ctx,
 		registry,
 		interactionWorkspace,
@@ -1095,6 +1159,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		inbound,
 		finalContent,
 		traceScopes,
+		interactionBoundaryModelFinal,
 	)
 	if deliveryObservation != nil {
 		admission := finalResponseAdmission{status: finalResponseAdmissionAccepted}
@@ -1109,6 +1174,33 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		}
 	}
 	return deliveryErr
+}
+
+func (al *AgentLoop) finalizeResumedInteraction(
+	ctx context.Context,
+	registry *interactions.Registry,
+	interactionWorkspace string,
+	record interactions.Record,
+	inbound bus.InboundContext,
+	content string,
+	traceScopes []runtimeevents.TraceScope,
+	boundary string,
+) error {
+	runInteractionLifecycleBoundaryHook(ctx, boundary)
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		return interactions.ErrNotFound
+	}
+	switch current.Status {
+	case interactions.StatusCanceling, interactions.StatusCancelled:
+		return nil
+	case interactions.StatusResuming:
+		return al.deliverInteractionFinal(
+			ctx, registry, interactionWorkspace, current, inbound, content, traceScopes,
+		)
+	default:
+		return fmt.Errorf("cannot finalize interaction from status %q", current.Status)
+	}
 }
 
 func (al *AgentLoop) executeApprovedInteractionTool(
@@ -1264,7 +1356,6 @@ func (al *AgentLoop) deliverInteractionFinal(
 	content string,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
-	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
 		inbound.ReplyToMessageID = interactionResponseReplyTarget(record, inbound)
 	}
@@ -1284,6 +1375,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if record.FinalDelivered || strings.TrimSpace(content) == "" {
 		updated, err := registry.Resolve(record.ID, record.Revision)
 		if err == nil {
+			al.dismissInteractionToolFeedback(ctx, updated, inbound, traceScopes)
 			al.completeInteractionTask(
 				interactionWorkspace, updated, content, taskregistry.DeliveryNotApplicable,
 			)
@@ -1304,6 +1396,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if stateErr != nil {
 		return fmt.Errorf("begin final interaction delivery: %w", stateErr)
 	}
+	al.dismissInteractionToolFeedback(ctx, started, inbound, traceScopes)
 	if inbound.Raw == nil {
 		inbound.Raw = make(map[string]string)
 	}
@@ -1392,15 +1485,22 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if !ok {
 		return fmt.Errorf("owning task %q is unavailable", taskID)
 	}
-	if err := taskRegistry.CompleteInteractionTask(
-		taskID, record.ID, content, taskregistry.DeliveryPending,
-	); err != nil {
-		return err
-	}
 	started, stateErr := registry.BeginFinalDelivery(record.ID, record.Revision)
 	if stateErr != nil {
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
+	if err := taskRegistry.CompleteInteractionTask(
+		taskID, record.ID, content, taskregistry.DeliveryPending,
+	); err != nil {
+		_, recordErr := registry.CompleteFinalDelivery(
+			started.ID, started.Revision, false, false, err.Error(),
+		)
+		if recordErr != nil {
+			return errors.Join(err, fmt.Errorf("release task interaction delivery: %w", recordErr))
+		}
+		return err
+	}
+	al.dismissInteractionToolFeedback(ctx, started, inbound, traceScopes)
 	mode := toolshared.AsyncDeliveryMode(strings.TrimSpace(task.DeliveryMode))
 	switch mode {
 	case toolshared.AsyncDeliveryParentOnly, toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryUserAndParent:

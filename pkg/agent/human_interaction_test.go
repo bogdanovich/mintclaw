@@ -3747,7 +3747,7 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
-func TestStopCancellationReloadsClaimedInteractionAfterRouteWait(t *testing.T) {
+func TestStopCancellationFencesClaimedInteractionBeforeRouteWait(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	stop := testInboundMessage(bus.InboundMessage{
@@ -3783,19 +3783,17 @@ func TestStopCancellationReloadsClaimedInteractionAfterRouteWait(t *testing.T) {
 	continuationScope := newRuntimeSessionScope(agent.Workspace, target.SessionKey)
 	deadline := time.Now().Add(time.Second)
 	for {
-		if _, armed := al.pendingStops.Load(continuationScope); armed {
+		current, _ := registry.Get(record.ID)
+		if current.Status == interactions.StatusCanceling {
+			record = current
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("cancellation did not reach the claimed-to-resuming boundary")
+			t.Fatal("cancellation did not durably fence the claimed interaction")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	record, err = registry.MarkResuming(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resumingRevision := record.Revision
+	fencedRevision := record.Revision
 	activeClaim.releaseIfOwned()
 
 	select {
@@ -3811,11 +3809,100 @@ func TestStopCancellationReloadsClaimedInteractionAfterRouteWait(t *testing.T) {
 		t.Fatal("timed out waiting for boundary cancellation")
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusCancelled || record.Revision <= resumingRevision {
+	if record.Status != interactions.StatusCancelled || record.Revision <= fencedRevision {
 		t.Fatalf("boundary interaction = %#v", record)
 	}
 	if _, armed := al.pendingStops.Load(continuationScope); armed {
 		t.Fatal("boundary cancellation left a pending stop armed")
+	}
+}
+
+func TestStopCancellationReloadsWaitingInteractionAfterAnswerAdmission(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:waiting-admission-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	loaded := make(chan struct{})
+	continueCancel := make(chan struct{})
+	var hookOnce sync.Once
+	ctx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryCancelAfterLoad {
+				return
+			}
+			hookOnce.Do(func() { close(loaded) })
+			<-continueCancel
+		}),
+	)
+
+	type cancellationResult struct {
+		result interactionControlCancellationResult
+		err    error
+	}
+	done := make(chan cancellationResult, 1)
+	go func() {
+		result, cancelErr := al.cancelInteractionForControlMessage(ctx, stop, target)
+		done <- cancellationResult{result: result, err: cancelErr}
+	}()
+	select {
+	case <-loaded:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not pause after loading the waiting interaction")
+	}
+	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-answer")
+	if !claimed {
+		t.Fatal("failed to claim the route for answer admission")
+	}
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "continue", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumingRevision := record.Revision
+	close(continueCancel)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		if current.Status == interactions.StatusCanceling {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stop did not fence the interaction after answer admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	activeClaim.releaseIfOwned()
+	select {
+	case cancellation := <-done:
+		if cancellation.err != nil {
+			t.Fatal(cancellation.err)
+		}
+		if !cancellation.result.Matched || !cancellation.result.Canceled ||
+			cancellation.result.Failed || !cancellation.result.CommandHandled {
+			t.Fatalf("admission cancellation result = %#v", cancellation.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for admission-boundary cancellation")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled || record.Revision <= resumingRevision {
+		t.Fatalf("admission-boundary interaction = %#v", record)
 	}
 }
 
@@ -3875,6 +3962,229 @@ func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
 		t.Fatal("canceled interaction did not release the route for reuse")
 	}
 	claim.releaseIfOwned()
+}
+
+func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:model-final-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	boundaryReached := make(chan struct{})
+	releaseFinalization := make(chan struct{})
+	var hookOnce sync.Once
+	answerCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryModelFinal {
+				return
+			}
+			hookOnce.Do(func() { close(boundaryReached) })
+			<-releaseFinalization
+		}),
+	)
+	answer := stop
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-model-final-stop"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(answerCtx, answer, target) {
+		t.Fatal("interaction answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the interaction provider")
+	}
+	close(provider.release)
+	select {
+	case <-boundaryReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continuation did not pause after unregistering the model turn")
+	}
+
+	type cancellationResult struct {
+		result interactionControlCancellationResult
+		err    error
+	}
+	canceled := make(chan cancellationResult, 1)
+	go func() {
+		result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+		canceled <- cancellationResult{result: result, err: cancelErr}
+	}()
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		if current.Status == interactions.StatusCanceling {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stop did not fence model finalization")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFinalization)
+	select {
+	case cancellation := <-canceled:
+		if cancellation.err != nil {
+			t.Fatal(cancellation.err)
+		}
+		if !cancellation.result.Matched || !cancellation.result.Canceled ||
+			cancellation.result.Failed || !cancellation.result.CommandHandled {
+			t.Fatalf("model-final cancellation result = %#v", cancellation.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for model-final cancellation")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled {
+		t.Fatalf("model-final interaction = %#v", record)
+	}
+	if countInteractionToolResults(
+		agent.Sessions.GetHistory(target.SessionKey), record.Origin.ToolCallID,
+	) != 1 {
+		t.Fatal("model-final cancellation did not preserve exactly one tool result")
+	}
+	select {
+	case final := <-manager.sent:
+		t.Fatalf("model-final cancellation published a response: %#v", final)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestStopCancellationWinsPrecomputedFinalizationBoundary(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:precomputed-final-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	var err error
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "continue", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage(target.SessionKey, providers.Message{
+		Role: "tool", ToolCallID: record.Origin.ToolCallID,
+		Content: `{"interaction_id":"` + record.ID + `","outcome":"answered"}`,
+	})
+	agent.Sessions.AddFullMessage(target.SessionKey, providers.Message{
+		Role: "assistant", Content: "precomputed final response",
+	})
+	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-precomputed-final")
+	if !claimed {
+		t.Fatal("failed to claim the precomputed-final route")
+	}
+	boundaryReached := make(chan struct{})
+	releaseFinalization := make(chan struct{})
+	var hookOnce sync.Once
+	resumeCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryPrecomputedFinal {
+				return
+			}
+			hookOnce.Do(func() { close(boundaryReached) })
+			<-releaseFinalization
+		}),
+	)
+	resumeDone := make(chan error, 1)
+	go func() {
+		resumeDone <- al.resumeClaimedInteraction(
+			resumeCtx,
+			registry,
+			agent.Workspace,
+			agent,
+			&session.SessionScope{
+				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				RouteScopeKey: record.Route.RouteSessionKey,
+			},
+			inboundContextForInteraction(record.Route),
+			record,
+		)
+	}()
+	select {
+	case <-boundaryReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("precomputed continuation did not reach finalization boundary")
+	}
+
+	type cancellationResult struct {
+		result interactionControlCancellationResult
+		err    error
+	}
+	canceled := make(chan cancellationResult, 1)
+	go func() {
+		result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+		canceled <- cancellationResult{result: result, err: cancelErr}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		if current.Status == interactions.StatusCanceling {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stop did not fence precomputed finalization")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFinalization)
+	select {
+	case resumeErr := <-resumeDone:
+		if resumeErr != nil {
+			t.Fatal(resumeErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for precomputed finalizer to unwind")
+	}
+	activeClaim.releaseIfOwned()
+	select {
+	case cancellation := <-canceled:
+		if cancellation.err != nil {
+			t.Fatal(cancellation.err)
+		}
+		if !cancellation.result.Matched || !cancellation.result.Canceled ||
+			cancellation.result.Failed || !cancellation.result.CommandHandled {
+			t.Fatalf("precomputed-final cancellation result = %#v", cancellation.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for precomputed-final cancellation")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled {
+		t.Fatalf("precomputed-final interaction = %#v", record)
+	}
+	if countInteractionToolResults(
+		agent.Sessions.GetHistory(target.SessionKey), record.Origin.ToolCallID,
+	) != 1 {
+		t.Fatal("precomputed-final cancellation did not preserve exactly one tool result")
+	}
+	select {
+	case final := <-manager.sent:
+		t.Fatalf("precomputed-final cancellation published a response: %#v", final)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
