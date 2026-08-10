@@ -201,8 +201,10 @@ func truncateUTF8(value string, maxBytes int) string {
 // Store atomically persists direct-addressable thread metadata below one
 // external coding state root.
 type Store struct {
-	root        string
-	writeAtomic func(string, []byte, os.FileMode) error
+	root         string
+	durableRoot  string
+	mkdirDurable func(string, string, os.FileMode) error
+	writeAtomic  func(string, []byte, os.FileMode) error
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
@@ -215,11 +217,16 @@ func NewStore(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("coding thread store: resolve root: %w", err)
 	}
-	resolved, err := resolveStoreRoot(absolute)
+	resolved, durableRoot, err := resolveStoreRoot(absolute)
 	if err != nil {
 		return nil, fmt.Errorf("coding thread store: resolve root: %w", err)
 	}
-	return &Store{root: resolved, writeAtomic: fileutil.WriteFileAtomic}, nil
+	return &Store{
+		root:         resolved,
+		durableRoot:  durableRoot,
+		mkdirDurable: fileutil.MkdirAllDurable,
+		writeAtomic:  fileutil.WriteFileAtomic,
+	}, nil
 }
 
 // Root returns the external coding state root.
@@ -260,6 +267,17 @@ func (s *Store) Save(metadata Metadata) error {
 	path, err := s.metadataPath(metadata.ThreadID)
 	if err != nil {
 		return err
+	}
+	threadRoot := filepath.Dir(path)
+	relativeRoot, err := filepath.Rel(s.durableRoot, threadRoot)
+	if err != nil {
+		return fmt.Errorf("coding thread store: resolve durable thread directory: %w", err)
+	}
+	if !filepath.IsLocal(relativeRoot) {
+		return fmt.Errorf("coding thread store: durable thread directory escapes store root")
+	}
+	if err := s.mkdirDurable(s.durableRoot, relativeRoot, 0o700); err != nil {
+		return fmt.Errorf("coding thread store: create durable thread directory: %w", err)
 	}
 	if err := s.writeAtomic(path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("coding thread store: save %q: %w", metadata.ThreadID, err)
@@ -330,33 +348,33 @@ func validateThreadID(threadID string) error {
 	return nil
 }
 
-func resolveStoreRoot(root string) (string, error) {
+func resolveStoreRoot(root string) (string, string, error) {
 	cleaned := filepath.Clean(root)
 	for current := cleaned; ; current = filepath.Dir(current) {
 		_, err := os.Lstat(current)
 		if err == nil {
 			resolved, resolveErr := filepath.EvalSymlinks(current)
 			if resolveErr != nil {
-				return "", resolveErr
+				return "", "", resolveErr
 			}
 			resolvedInfo, statErr := os.Stat(resolved)
 			if statErr != nil {
-				return "", statErr
+				return "", "", statErr
 			}
 			if !resolvedInfo.IsDir() {
-				return "", fmt.Errorf("root ancestor is not a directory")
+				return "", "", fmt.Errorf("root ancestor is not a directory")
 			}
 			relative, relErr := filepath.Rel(current, cleaned)
 			if relErr != nil {
-				return "", relErr
+				return "", "", relErr
 			}
-			return filepath.Clean(filepath.Join(resolved, relative)), nil
+			return filepath.Clean(filepath.Join(resolved, relative)), filepath.Clean(resolved), nil
 		}
 		if !os.IsNotExist(err) {
-			return "", err
+			return "", "", err
 		}
 		if filepath.Dir(current) == current {
-			return "", fmt.Errorf("no existing root ancestor")
+			return "", "", fmt.Errorf("no existing root ancestor")
 		}
 	}
 }

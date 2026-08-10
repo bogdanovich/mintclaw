@@ -63,10 +63,13 @@ KiB before catalogue work begins. Future schema changes must increment the
 version and add an explicit migration; silently interpreting a different
 schema as version 1 is not admitted.
 
-`fileutil.WriteFileAtomic` supplies temp-file write, mode application, fsync,
-atomic replacement, and parent-directory sync. Metadata is owner-only `0600`.
-A returned committed-write error still means the rename happened and must not
-be retried as though the old file necessarily survived.
+Before the first replacement, `fileutil.MkdirAllDurable` creates the complete
+owner-only `0700` directory chain from the nearest existing canonical ancestor
+and syncs each new parent entry. `fileutil.WriteFileAtomic` then supplies
+temp-file write, mode application, fsync, atomic replacement, and final-parent
+sync. Metadata is owner-only `0600`. A committed-write error from either
+directory or file durability remains classified through `Store.Save`; callers
+must not retry as though no filesystem change occurred.
 
 ## Display derivation
 
@@ -92,12 +95,17 @@ For a Git worktree it records:
 - canonical invocation cwd;
 - canonical worktree root;
 - canonical Git common directory;
-- credential-stripped `origin` URL, when configured;
+- safely classified, credential-stripped `origin`, when configured;
 - branch, empty when detached; and
 - HEAD object ID, empty for an unborn branch.
 
 For a non-Git directory, both project root and invocation cwd are the canonical
 cwd and all Git fields are empty.
+
+Absolute and scheme-relative URLs lose userinfo, query, and fragment. SCP-like
+remotes lose the user component. Safe local paths remain intact; malformed or
+credential-bearing values that cannot be classified are omitted rather than
+persisted verbatim.
 
 The `project_key` is a typed SHA-256 digest of the canonical project root. The
 type separates a plain directory from a Git worktree at the same path. A linked
@@ -136,11 +144,15 @@ Focused tests prove:
 
 - construction is side-effect free and save/load round-trips the complete
   descriptor atomically with `0600` mode;
+- first-save directory creation durably syncs each parent and preserves
+  committed-write classification when a directory sync cannot be confirmed;
 - an injected pre-commit failure leaves the previous descriptor readable;
 - unknown, substituted, malformed, and oversized descriptors fail closed;
 - title and preview normalization remains valid UTF-8 at their byte bounds;
 - direct and symlinked cwd resolution produces identical restart-stable keys;
 - Git root, common directory, sanitized origin, branch, and HEAD are observed;
+- absolute, scheme-relative, SCP-like, local, and malformed remote forms obey
+  the credential-redaction contract;
 - unborn and detached repositories have explicit empty ref observations;
 - linked worktrees share a common directory but have different project keys;
 - available, missing, moved, and mismatched locations remain distinct; and

@@ -12,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 func TestMetadataAtomicRoundTrip(t *testing.T) {
@@ -116,6 +118,41 @@ func TestMetadataFailedAtomicReplacementPreservesOriginal(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded, metadata) {
 		t.Fatalf("failed replacement changed metadata: %#v", loaded)
+	}
+}
+
+func TestSavePreservesCommittedDirectorySyncFailure(t *testing.T) {
+	project, err := ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveProject() error = %v", err)
+	}
+	metadata, err := NewMetadata(uuid.NewString(), project, "request", time.Now())
+	if err != nil {
+		t.Fatalf("NewMetadata() error = %v", err)
+	}
+	storeRoot := filepath.Join(t.TempDir(), "missing", "coding")
+	store, err := NewStore(storeRoot)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	wantErr := &fileutil.CommittedWriteError{Err: errors.New("injected directory sync failure")}
+	var gotRoot, gotRelative string
+	store.mkdirDurable = func(root, relative string, mode os.FileMode) error {
+		gotRoot, gotRelative = root, relative
+		if mode != 0o700 {
+			t.Fatalf("directory mode = %o, want 700", mode)
+		}
+		return wantErr
+	}
+	store.writeAtomic = func(string, []byte, os.FileMode) error {
+		t.Fatal("metadata write ran after directory durability failure")
+		return nil
+	}
+	if err := store.Save(metadata); !fileutil.IsCommittedWriteError(err) {
+		t.Fatalf("Save() error = %v, want committed-write classification", err)
+	}
+	if gotRoot == "" || gotRelative == "" || !strings.HasSuffix(gotRelative, metadata.ThreadID) {
+		t.Fatalf("durable directory call = root %q relative %q", gotRoot, gotRelative)
 	}
 }
 

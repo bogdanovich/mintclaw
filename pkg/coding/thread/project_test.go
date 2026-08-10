@@ -59,6 +59,52 @@ func TestResolveProjectWithoutGitTreatsDirectoryAsNonGit(t *testing.T) {
 	}
 }
 
+func TestSanitizeGitRemote(t *testing.T) {
+	tests := []struct {
+		name   string
+		remote string
+		want   string
+	}{
+		{
+			name:   "absolute URL",
+			remote: "https://user:password@example.com/owner/repo.git?token=secret#fragment",
+			want:   "https://example.com/owner/repo.git",
+		},
+		{
+			name:   "scheme relative URL",
+			remote: "//user:password@example.com/owner/repo.git?token=secret#fragment",
+			want:   "//example.com/owner/repo.git",
+		},
+		{
+			name:   "SCP-like",
+			remote: "git@github.com:owner/repo.git",
+			want:   "github.com:owner/repo.git",
+		},
+		{
+			name:   "local path",
+			remote: "../repositories/repo.git",
+			want:   "../repositories/repo.git",
+		},
+		{
+			name:   "malformed URL",
+			remote: "https://%zz:secret@example.com/repo.git",
+			want:   "",
+		},
+		{
+			name:   "unclassified user info",
+			remote: "user:token@example.com",
+			want:   "",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sanitizeGitRemote(test.remote); got != test.want {
+				t.Fatalf("sanitizeGitRemote(%q) = %q, want %q", test.remote, got, test.want)
+			}
+		})
+	}
+}
+
 func TestResolveProjectGitWorktreeObservations(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()

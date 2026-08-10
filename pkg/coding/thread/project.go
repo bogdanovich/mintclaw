@@ -352,12 +352,48 @@ func isHex(value string) bool {
 
 func sanitizeGitRemote(remote string) string {
 	remote = strings.TrimSpace(remote)
-	parsed, err := url.Parse(remote)
-	if err != nil || parsed.Scheme == "" {
-		return remote
+	if remote == "" || !utf8.ValidString(remote) || len(remote) > gitOriginMaxBytes {
+		return ""
 	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
+	if strings.HasPrefix(remote, "//") || strings.Contains(remote, "://") ||
+		strings.HasPrefix(remote, "file:") {
+		parsed, err := url.Parse(remote)
+		if err != nil || (parsed.Host == "" && parsed.Scheme != "file") {
+			return ""
+		}
+		parsed.User = nil
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return parsed.String()
+	}
+	if sanitized, ok := sanitizeSCPLikeRemote(remote); ok {
+		return sanitized
+	}
+	if strings.ContainsAny(remote, "@?#") || strings.ContainsFunc(remote, func(r rune) bool {
+		return r < ' ' || r == 0x7f
+	}) {
+		return ""
+	}
+	return remote
+}
+
+func sanitizeSCPLikeRemote(remote string) (string, bool) {
+	colon := strings.IndexByte(remote, ':')
+	if colon <= 0 || colon == len(remote)-1 {
+		return "", false
+	}
+	at := strings.LastIndexByte(remote[:colon], '@')
+	hostStart := 0
+	if at >= 0 {
+		hostStart = at + 1
+	}
+	host := remote[hostStart:colon]
+	path := remote[colon+1:]
+	if host == "" || path == "" || strings.ContainsAny(host, "@/?#") ||
+		strings.ContainsAny(path, "@?#") || strings.ContainsFunc(remote, func(r rune) bool {
+		return r < ' ' || r == 0x7f
+	}) {
+		return "", false
+	}
+	return host + ":" + path, true
 }
