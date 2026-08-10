@@ -392,22 +392,25 @@ is a separate application concept which owns:
 The existing `SessionStore` can remain responsible for transcript reads and
 writes. A new `CodingThreadCatalog` or equivalent owns discovery and metadata.
 
-### Proposed on-disk layout
+### Admitted on-disk layout
 
 ```text
 ~/.mintclaw/coding/
   threads/
-    2026/08/08/
-      <uuid>.jsonl
-      <uuid>.meta.json
-      <uuid>.lock
-  context/
-    seahorse.db
+    <uuid>/
+      thread.meta.json
+      thread.lock
+      sessions/
+        <session-key>.jsonl
+      context/
+        seahorse.db
   diagnostics/
   config/
 ```
 
-The exact date partitioning may change, but these invariants may not:
+The per-thread root is admitted by P0.3 and P1.1. It gives every thread a
+separate canonical JSONL store and disposable Seahorse SQLite file rather than
+one ever-growing coding database. These invariants may not change silently:
 
 - no state file is created in the repository;
 - every path is schema-versioned and migratable;
@@ -430,19 +433,24 @@ updated_at
 title
 preview
 status
-project_key
-project_root
-invocation_cwd
-git_worktree_root
-git_common_dir
-git_origin
-git_branch
-git_head
+project {
+  kind
+  project_key
+  project_root
+  invocation_cwd
+  git_worktree_root
+  git_common_dir
+  git_origin
+  git_branch
+  git_head
+}
 model
 provider
 parent_thread_id
-last_compaction_at
-last_compaction_revision
+last_compaction {
+  at
+  revision
+}
 ```
 
 `project_key` should use the canonical Git worktree root when available and the
@@ -915,6 +923,9 @@ Goal: create and resume project-scoped threads safely across process restarts.
 #### P1.1 — Thread metadata and project identity
 
 Dependencies: P0.3
+
+Implementation evidence:
+[`local-coding-agent-p1-thread-metadata.md`](local-coding-agent-p1-thread-metadata.md)
 
 Scope:
 
