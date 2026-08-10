@@ -849,8 +849,9 @@ func TestKeyedCloseStopsAcceptanceSynchronously(t *testing.T) {
 	if err := sub.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
-	waitForSubscriptionDone(t, sub)
 
+	// Enqueue immediately after Close returns, before the run loop reaches
+	// its deferred cleanup, to exercise the synchronous close boundary.
 	es := sub.(*eventSubscription)
 	result := es.enqueue(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}}, false)
 	if !result.closed {
@@ -859,4 +860,5 @@ func TestKeyedCloseStopsAcceptanceSynchronously(t *testing.T) {
 	if got := es.counters.received.Load(); got != 1 {
 		t.Fatalf("received after close = %d, want 1 (post-close enqueue must not count)", got)
 	}
+	waitForSubscriptionDone(t, sub)
 }

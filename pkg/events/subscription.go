@@ -355,6 +355,12 @@ func (s *eventSubscription) closeInput() {
 		s.mu.Lock()
 		close(s.ch)
 		s.mu.Unlock()
+		if s.keyed != nil {
+			// Stop accepting keyed events before Close returns, matching the
+			// close contract of the bounded channel path. The deferred
+			// shutdown in run() stays as idempotent cleanup.
+			s.keyed.shutdown()
+		}
 		if s.handler == nil {
 			s.closeDone()
 		}
