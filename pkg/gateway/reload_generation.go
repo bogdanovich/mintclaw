@@ -111,9 +111,8 @@ func prepareReloadGeneration(
 	)
 	next.HeartbeatService.SetBus(msgBus)
 	next.HeartbeatService.SetHandler(createHeartbeatHandler(al))
-	cleanup.add("heartbeat service", func(context.Context) error {
-		next.HeartbeatService.Stop()
-		return nil
+	cleanup.add("heartbeat service", func(cleanupCtx context.Context) error {
+		return next.HeartbeatService.StopAndDrain(cleanupCtx)
 	})
 	if err = hooks.checkpoint(gatewayReloadHeartbeatPrepared); err != nil {
 		return nil, err

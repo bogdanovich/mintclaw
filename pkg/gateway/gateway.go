@@ -937,9 +937,8 @@ func setupAndStartServicesWithHooks(
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
-	cleanup.add("heartbeat service", func(context.Context) error {
-		generation.HeartbeatService.Stop()
-		return nil
+	cleanup.add("heartbeat service", func(cleanupCtx context.Context) error {
+		return generation.HeartbeatService.StopAndDrain(cleanupCtx)
 	})
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
@@ -1190,7 +1189,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		runningServices.DeviceService.Stop()
 	}
 	if runningServices.HeartbeatService != nil {
-		runningServices.HeartbeatService.Stop()
+		if err := runningServices.HeartbeatService.StopAndDrain(shutdownCtx); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("drain heartbeat service: %w", err))
+		}
 	}
 	if runningServices.CronService != nil {
 		if err := runningServices.CronService.StopAndDrain(shutdownCtx); err != nil {
@@ -1345,19 +1346,41 @@ func handleConfigReloadWithHooks(
 			)
 		}
 	}
+	if runningServices.HeartbeatService != nil {
+		heartbeatDrainCtx, cancelHeartbeatDrain := context.WithTimeout(ctx, shutdownTimeout)
+		err = runningServices.HeartbeatService.StopAndDrain(heartbeatDrainCtx)
+		cancelHeartbeatDrain()
+		if err != nil {
+			if runningServices.CronService != nil {
+				_ = runningServices.CronService.Start()
+			}
+			return errors.Join(
+				fmt.Errorf("freeze and drain heartbeat service before reload: %w", err),
+				errGatewayReloadRestartRequired,
+			)
+		}
+	}
 
 	quiesceCtx, cancelQuiesce := context.WithTimeout(ctx, shutdownTimeout)
 	resumeTurns, err := al.QuiesceTurns(quiesceCtx)
 	cancelQuiesce()
 	if err != nil {
+		var restoreErrors []error
 		if runningServices.CronService != nil {
 			if restartErr := runningServices.CronService.Start(); restartErr != nil {
-				return errors.Join(
-					fmt.Errorf("quiesce agent turns: %w", err),
-					fmt.Errorf("restore cron service: %w", restartErr),
-					errGatewayReloadRestartRequired,
-				)
+				restoreErrors = append(restoreErrors, fmt.Errorf("restore cron service: %w", restartErr))
 			}
+		}
+		if runningServices.HeartbeatService != nil {
+			if restartErr := runningServices.HeartbeatService.Start(); restartErr != nil {
+				restoreErrors = append(restoreErrors, fmt.Errorf("restore heartbeat service: %w", restartErr))
+			}
+		}
+		if len(restoreErrors) > 0 {
+			return errors.Join(
+				append([]error{fmt.Errorf("quiesce agent turns: %w", err), errGatewayReloadRestartRequired},
+					restoreErrors...)...,
+			)
 		}
 		return fmt.Errorf("quiesce agent turns: %w", err)
 	}

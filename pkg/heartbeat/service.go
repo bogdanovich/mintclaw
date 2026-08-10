@@ -45,6 +45,7 @@ type HeartbeatService struct {
 	enabled   bool
 	mu        sync.RWMutex
 	stopChan  chan struct{}
+	doneChan  chan struct{}
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -96,7 +97,8 @@ func (hs *HeartbeatService) Start() error {
 	}
 
 	hs.stopChan = make(chan struct{})
-	go hs.runLoop(hs.stopChan)
+	hs.doneChan = make(chan struct{})
+	go hs.runLoop(hs.stopChan, hs.doneChan)
 
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
 		"interval_minutes": hs.interval.Minutes(),
@@ -107,16 +109,36 @@ func (hs *HeartbeatService) Start() error {
 
 // Stop gracefully stops the heartbeat service
 func (hs *HeartbeatService) Stop() {
+	hs.requestStop()
+}
+
+// StopAndDrain stops scheduling and waits for any heartbeat handler that has
+// already started to finish.
+func (hs *HeartbeatService) StopAndDrain(ctx context.Context) error {
+	done := hs.requestStop()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (hs *HeartbeatService) requestStop() <-chan struct{} {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
 	if hs.stopChan == nil {
-		return
+		return hs.doneChan
 	}
 
 	logger.InfoC("heartbeat", "Stopping heartbeat service")
 	close(hs.stopChan)
 	hs.stopChan = nil
+	return hs.doneChan
 }
 
 // IsRunning returns whether the service is running
@@ -127,21 +149,30 @@ func (hs *HeartbeatService) IsRunning() bool {
 }
 
 // runLoop runs the heartbeat ticker
-func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
+func (hs *HeartbeatService) runLoop(stopChan chan struct{}, doneChan chan struct{}) {
+	initialTimer := time.NewTimer(time.Second)
 	ticker := time.NewTicker(hs.interval)
-	defer ticker.Stop()
-
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
-		hs.executeHeartbeat()
-	})
+	defer func() {
+		initialTimer.Stop()
+		ticker.Stop()
+		close(doneChan)
+		hs.mu.Lock()
+		if hs.doneChan == doneChan {
+			hs.doneChan = nil
+		}
+		hs.mu.Unlock()
+	}()
+	initial := initialTimer.C
 
 	for {
 		select {
 		case <-stopChan:
 			return
+		case <-initial:
+			initial = nil
+			hs.executeHeartbeatFor(stopChan)
 		case <-ticker.C:
-			hs.executeHeartbeat()
+			hs.executeHeartbeatFor(stopChan)
 		}
 	}
 }
@@ -149,9 +180,16 @@ func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 // executeHeartbeat performs a single heartbeat check
 func (hs *HeartbeatService) executeHeartbeat() {
 	hs.mu.RLock()
+	stopChan := hs.stopChan
+	hs.mu.RUnlock()
+	hs.executeHeartbeatFor(stopChan)
+}
+
+func (hs *HeartbeatService) executeHeartbeatFor(stopChan <-chan struct{}) {
+	hs.mu.RLock()
 	enabled := hs.enabled
 	handler := hs.handler
-	if !hs.enabled || hs.stopChan == nil {
+	if !hs.enabled || stopChan == nil || hs.stopChan != stopChan {
 		hs.mu.RUnlock()
 		return
 	}
