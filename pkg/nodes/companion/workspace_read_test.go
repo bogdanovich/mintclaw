@@ -400,11 +400,15 @@ func newWorkspaceReadSearchTestRuntime(t *testing.T) (*Runtime, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := testRuntimePolicy([]string{
+		nodes.WorkspaceCommandRead,
+		nodes.WorkspaceCommandSearch,
+		nodes.WorkspaceCommandWrite,
+		nodes.WorkspaceCommandPatch,
+	})
+	policy.MaximumRisk = nodes.RiskWrite
 	runtime, err := NewRuntime(
-		"node_test", "test", testRuntimePolicy([]string{
-			nodes.WorkspaceCommandRead,
-			nodes.WorkspaceCommandSearch,
-		}),
+		"node_test", "test", policy,
 		newMemoryInvocationLedger(), WithWorkspaceRead(router, execPolicy),
 	)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/patchformat"
 )
 
 type workspaceReadRuntime struct {
@@ -22,6 +23,14 @@ type workspaceReadHandler struct {
 }
 
 type workspaceSearchHandler struct {
+	runtime *workspaceReadRuntime
+}
+
+type workspaceWriteHandler struct {
+	runtime *workspaceReadRuntime
+}
+
+type workspacePatchHandler struct {
 	runtime *workspaceReadRuntime
 }
 
@@ -50,6 +59,23 @@ type workspaceSearchInput struct {
 	IncludeIgnored    bool    `json:"include_ignored,omitempty"`
 }
 
+type workspaceWriteInput struct {
+	ProfileRevision   string `json:"profile_revision"`
+	WorkspaceRevision string `json:"workspace_revision"`
+	WorkingScope      string `json:"working_scope"`
+	Path              string `json:"path"`
+	Content           string `json:"content"`
+	Overwrite         bool   `json:"overwrite"`
+	ExpectedSHA256    string `json:"expected_sha256,omitempty"`
+}
+
+type workspacePatchInput struct {
+	ProfileRevision   string `json:"profile_revision"`
+	WorkspaceRevision string `json:"workspace_revision"`
+	WorkingScope      string `json:"working_scope"`
+	Input             string `json:"input"`
+}
+
 func newWorkspaceReadRuntime(
 	files *FileTransferRouter,
 	systemExec SystemExecPolicy,
@@ -61,7 +87,7 @@ func newWorkspaceReadRuntime(
 		return nil, errors.New("workspace read requires system-exec working-scope discovery")
 	}
 	scopes := sortedSystemExecMapKeys(systemExec.workingScopeAliases)
-	descriptors, err := nodes.WorkspaceReadDescriptors(files.WorkspaceProfiles(), scopes)
+	descriptors, err := nodes.WorkspaceDescriptors(files.WorkspaceProfiles(), scopes)
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +102,117 @@ func (runtime *workspaceReadRuntime) handlers() []commandHandler {
 	if runtime == nil {
 		return nil
 	}
-	return []commandHandler{
-		workspaceReadHandler{runtime: runtime},
-		workspaceSearchHandler{runtime: runtime},
+	handlers := make([]commandHandler, 0, len(runtime.descriptors))
+	if _, available := runtime.descriptors[nodes.WorkspaceCommandRead]; available {
+		handlers = append(handlers, workspaceReadHandler{runtime: runtime})
 	}
+	if _, available := runtime.descriptors[nodes.WorkspaceCommandSearch]; available {
+		handlers = append(handlers, workspaceSearchHandler{runtime: runtime})
+	}
+	if _, available := runtime.descriptors[nodes.WorkspaceCommandWrite]; available {
+		handlers = append(handlers, workspaceWriteHandler{runtime: runtime})
+	}
+	if _, available := runtime.descriptors[nodes.WorkspaceCommandPatch]; available {
+		handlers = append(handlers, workspacePatchHandler{runtime: runtime})
+	}
+	return handlers
+}
+
+func (handler workspaceWriteHandler) descriptor() nodes.CommandDescriptor {
+	return handler.runtime.descriptors[nodes.WorkspaceCommandWrite]
+}
+
+func (handler workspaceWriteHandler) execute(
+	ctx context.Context,
+	invocation commandInvocation,
+) (any, error) {
+	var input workspaceWriteInput
+	if err := json.Unmarshal(invocation.Input, &input); err != nil {
+		return nil, &commandInputDeniedError{}
+	}
+	root, ok := handler.runtime.systemExec.workingScopeAliases[input.WorkingScope]
+	if !ok || !validWorkspaceRelativePath(input.Path) {
+		return nil, &commandInputDeniedError{}
+	}
+	prospective := WorkspaceWriteResult{
+		Path: input.Path, Action: "create", Size: len(input.Content), SHA256: strings.Repeat("0", 64),
+	}
+	if input.Overwrite {
+		prospective.Action = "replace"
+	}
+	if !workspaceOutputFits(prospective, handler.descriptor(), invocation.OutputLimitBytes) {
+		return nil, fmt.Errorf("%w: OUTPUT_LIMIT", nodes.ErrCommandDenied)
+	}
+	result, err := handler.runtime.files.WriteWorkspace(
+		ctx,
+		input.ProfileRevision,
+		root,
+		WorkspaceWriteOptions{
+			Path: input.Path, Content: input.Content, Overwrite: input.Overwrite,
+			ExpectedSHA256: input.ExpectedSHA256,
+		},
+	)
+	if errors.Is(err, ErrInvocationOutcomeUnknown) || errors.Is(err, errCommandCancellationConfirmed) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", nodes.ErrCommandDenied, safeFileFailureCode(err))
+	}
+	if !workspaceOutputFits(result, handler.descriptor(), invocation.OutputLimitBytes) {
+		return nil, fmt.Errorf("%w: workspace write result exceeded its prepared bound", ErrInvocationOutcomeUnknown)
+	}
+	return result, nil
+}
+
+func (handler workspacePatchHandler) descriptor() nodes.CommandDescriptor {
+	return handler.runtime.descriptors[nodes.WorkspaceCommandPatch]
+}
+
+func (handler workspacePatchHandler) execute(
+	ctx context.Context,
+	invocation commandInvocation,
+) (any, error) {
+	var input workspacePatchInput
+	if err := json.Unmarshal(invocation.Input, &input); err != nil {
+		return nil, &commandInputDeniedError{}
+	}
+	root, ok := handler.runtime.systemExec.workingScopeAliases[input.WorkingScope]
+	if !ok {
+		return nil, &commandInputDeniedError{}
+	}
+	operations, err := patchformat.Parse(input.Input, nodes.MaxWorkspacePatchFiles)
+	if err != nil {
+		return nil, &commandInputDeniedError{}
+	}
+	prospective := WorkspacePatchResult{
+		State: "partial", Code: "FILE_OPERATION_FAILED",
+		Committed: make([]WorkspacePatchEntry, 0, len(operations)),
+	}
+	for _, operation := range operations {
+		prospective.Committed = append(prospective.Committed, WorkspacePatchEntry{
+			Path: operation.Path, Action: string(operation.Kind),
+			Size: nodes.MaxWorkspaceWriteBytes, SHA256: strings.Repeat("0", 64),
+		})
+	}
+	if !workspaceOutputFits(prospective, handler.descriptor(), invocation.OutputLimitBytes) {
+		return nil, fmt.Errorf("%w: OUTPUT_LIMIT", nodes.ErrCommandDenied)
+	}
+	result, err := handler.runtime.files.PatchWorkspace(
+		ctx,
+		input.ProfileRevision,
+		root,
+		WorkspacePatchOptions{Input: input.Input},
+	)
+	if errors.Is(err, ErrInvocationOutcomeUnknown) || errors.Is(err, errCommandCancellationConfirmed) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", nodes.ErrCommandDenied, safeFileFailureCode(err))
+	}
+	if !workspaceOutputFits(result, handler.descriptor(), invocation.OutputLimitBytes) {
+		return nil, fmt.Errorf("%w: workspace patch result exceeded its prepared bound", ErrInvocationOutcomeUnknown)
+	}
+	return result, nil
 }
 
 func (handler workspaceSearchHandler) descriptor() nodes.CommandDescriptor {

@@ -201,7 +201,8 @@ func validateNodeModelConstraints(
 		return validateSystemExecModelConstraints(descriptor, input, constraints)
 	case "shell.exec.v1":
 		return validateShellExecModelConstraints(descriptor, input, constraints)
-	case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
+	case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch,
+		nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
 		profile, profileOK := input["profile_revision"].(string)
 		scope, scopeOK := input["working_scope"].(string)
 		if !profileOK || !scopeOK ||

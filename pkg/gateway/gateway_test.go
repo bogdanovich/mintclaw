@@ -265,7 +265,7 @@ func TestRemoteWorkspaceDecoratorsDoNotStackAcrossNodeToolReloads(t *testing.T) 
 	cfg.Execution.RemoteWorkspaces = map[string]config.RemoteWorkspace{
 		"project": {
 			Target: "build", WorkingScope: "project", Revision: "workspace-v1",
-			Tools: []string{"read_file", "search_files"},
+			Tools: []string{"read_file", "search_files", "write_file", "apply_patch"},
 		},
 	}
 	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"build"}}
@@ -282,15 +282,17 @@ func TestRemoteWorkspaceDecoratorsDoNotStackAcrossNodeToolReloads(t *testing.T) 
 		if !ok {
 			t.Fatal("main agent is unavailable")
 		}
-		tool, ok := instance.Tools.Get("read_file")
-		if !ok {
-			t.Fatal("read_file is unavailable")
-		}
-		if count := strings.Count(
-			tool.Description(),
-			"Omit workspace for the current gateway-local workspace",
-		); count != 1 {
-			t.Fatalf("remote workspace decorator layers = %d, want 1", count)
+		for _, name := range []string{"read_file", "search_files", "write_file", "apply_patch"} {
+			tool, ok := instance.Tools.Get(name)
+			if !ok {
+				t.Fatalf("%s is unavailable", name)
+			}
+			if count := strings.Count(
+				tool.Description(),
+				"Omit workspace for the current gateway-local workspace",
+			); count != 1 {
+				t.Fatalf("%s remote workspace decorator layers = %d, want 1", name, count)
+			}
 		}
 	}
 

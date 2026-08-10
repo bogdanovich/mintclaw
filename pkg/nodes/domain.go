@@ -368,7 +368,7 @@ func (descriptor CommandDescriptor) Validate() error {
 	if len(descriptor.FileProfiles) > 0 {
 		switch descriptor.Name {
 		case "file.info.v1", "file.download.v1", "file.upload.v1",
-			WorkspaceCommandRead, WorkspaceCommandSearch:
+			WorkspaceCommandRead, WorkspaceCommandSearch, WorkspaceCommandWrite, WorkspaceCommandPatch:
 		default:
 			return fmt.Errorf("%w: non-file command carries file profiles", ErrInvalidCapability)
 		}

@@ -27,10 +27,12 @@ type transferPolicyRevisionSource interface {
 	TransferPolicyRevisions() []string
 }
 
-type workspaceReadCapability interface {
+type workspaceCapability interface {
 	WorkspaceProfileRevisions() []string
 	ReadWorkspace(context.Context, string, string, WorkspaceReadOptions) (WorkspaceReadResult, error)
 	SearchWorkspace(context.Context, string, string, WorkspaceSearchOptions) (WorkspaceSearchResult, error)
+	WriteWorkspace(context.Context, string, string, WorkspaceWriteOptions) (WorkspaceWriteResult, error)
+	PatchWorkspace(context.Context, string, string, WorkspacePatchOptions) (WorkspacePatchResult, error)
 }
 
 func (router *FileTransferRouter) SearchWorkspace(
@@ -48,7 +50,7 @@ func (router *FileTransferRouter) SearchWorkspace(
 type FileTransferRouter struct {
 	descriptors []nodes.CommandDescriptor
 	byRevision  map[string]FileTransferCapability
-	workspace   map[string]workspaceReadCapability
+	workspace   map[string]workspaceCapability
 }
 
 func NewFileTransferRouter(
@@ -59,7 +61,7 @@ func NewFileTransferRouter(
 	}
 	router := &FileTransferRouter{
 		byRevision: make(map[string]FileTransferCapability),
-		workspace:  make(map[string]workspaceReadCapability),
+		workspace:  make(map[string]workspaceCapability),
 	}
 	descriptorSets := make([][]nodes.CommandDescriptor, 0, len(sources))
 	aliases := make(map[string]string)
@@ -97,7 +99,7 @@ func NewFileTransferRouter(
 				router.byRevision[revision] = source
 			}
 		}
-		if workspace, ok := source.(workspaceReadCapability); ok {
+		if workspace, ok := source.(workspaceCapability); ok {
 			for _, revision := range workspace.WorkspaceProfileRevisions() {
 				if revision == "" || router.workspace[revision] != nil {
 					return nil, errors.New("workspace file policy revision is duplicated or empty")
@@ -159,6 +161,30 @@ func (router *FileTransferRouter) ReadWorkspace(
 		return WorkspaceReadResult{}, ErrFileAccessDenied
 	}
 	return router.workspace[profileRevision].ReadWorkspace(ctx, profileRevision, path, options)
+}
+
+func (router *FileTransferRouter) WriteWorkspace(
+	ctx context.Context,
+	profileRevision string,
+	workspaceRoot string,
+	options WorkspaceWriteOptions,
+) (WorkspaceWriteResult, error) {
+	if router == nil || router.workspace[profileRevision] == nil {
+		return WorkspaceWriteResult{}, ErrFileAccessDenied
+	}
+	return router.workspace[profileRevision].WriteWorkspace(ctx, profileRevision, workspaceRoot, options)
+}
+
+func (router *FileTransferRouter) PatchWorkspace(
+	ctx context.Context,
+	profileRevision string,
+	workspaceRoot string,
+	options WorkspacePatchOptions,
+) (WorkspacePatchResult, error) {
+	if router == nil || router.workspace[profileRevision] == nil {
+		return WorkspacePatchResult{}, ErrFileAccessDenied
+	}
+	return router.workspace[profileRevision].PatchWorkspace(ctx, profileRevision, workspaceRoot, options)
 }
 
 func (router *FileTransferRouter) Descriptors() []nodes.CommandDescriptor {

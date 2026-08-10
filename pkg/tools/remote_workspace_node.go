@@ -2,15 +2,19 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"slices"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/patchformat"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -21,7 +25,16 @@ type remoteWorkspaceNodeBinding struct {
 	config config.RemoteWorkspace
 }
 
-// RemoteWorkspaceNodeRouter maps read-only local tool shapes onto the hidden
+type remoteWorkspaceMutationAudit struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+}
+
+type remoteWorkspacePatchAudit struct {
+	Committed []remoteWorkspaceMutationAudit `json:"committed"`
+}
+
+// RemoteWorkspaceNodeRouter maps compatible local file-tool shapes onto the hidden
 // typed workspace commands. Generic nodes_invoke cannot dispatch those
 // commands, so the configured workspace remains the only gateway authority.
 type RemoteWorkspaceNodeRouter struct {
@@ -89,6 +102,10 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 		command = nodes.WorkspaceCommandRead
 	case "search_files":
 		command = nodes.WorkspaceCommandSearch
+	case "write_file":
+		command = nodes.WorkspaceCommandWrite
+	case "apply_patch":
+		command = nodes.WorkspaceCommandPatch
 	default:
 		return toolshared.ErrorResult("tool is not remote-workspace compatible")
 	}
@@ -108,7 +125,7 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 	if err := json.Unmarshal(view.Result, &payload); err != nil {
 		return toolshared.ErrorResult("remote workspace result is malformed")
 	}
-	return nodeJSONResult(map[string]any{
+	toolResult := nodeJSONResult(map[string]any{
 		"placement":          "remote",
 		"workspace":          workspaceAlias,
 		"workspace_revision": binding.config.Revision,
@@ -117,6 +134,55 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 		"state":              view.State,
 		"result":             payload,
 	})
+	if toolResult.IsError {
+		return toolResult
+	}
+	return attachRemoteWorkspaceWriteAudit(
+		toolResult,
+		command,
+		workspaceAlias,
+		binding.config.Target,
+		view.Result,
+	)
+}
+
+func attachRemoteWorkspaceWriteAudit(
+	result *toolshared.ToolResult,
+	command string,
+	workspaceAlias string,
+	targetAlias string,
+	payload json.RawMessage,
+) *toolshared.ToolResult {
+	appendEntry := func(entry remoteWorkspaceMutationAudit, toolName string) {
+		result.WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind:   "file",
+			Target: "workspace:" + workspaceAlias + "/" + entry.Path,
+			Action: entry.Action,
+			Tool:   toolName,
+			Metadata: map[string]string{
+				"placement": "remote",
+				"workspace": workspaceAlias,
+				"target":    targetAlias,
+			},
+		})
+	}
+	switch command {
+	case nodes.WorkspaceCommandWrite:
+		var mutation remoteWorkspaceMutationAudit
+		if err := json.Unmarshal(payload, &mutation); err != nil {
+			return toolshared.ErrorResult("remote workspace result is malformed")
+		}
+		appendEntry(mutation, "write_file")
+	case nodes.WorkspaceCommandPatch:
+		var patch remoteWorkspacePatchAudit
+		if err := json.Unmarshal(payload, &patch); err != nil {
+			return toolshared.ErrorResult("remote workspace result is malformed")
+		}
+		for _, mutation := range patch.Committed {
+			appendEntry(mutation, "apply_patch")
+		}
+	}
+	return result
 }
 
 func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
@@ -129,7 +195,7 @@ func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
 	if !ok {
 		return nil, ErrRemoteWorkspaceUnavailable
 	}
-	command, err := remoteWorkspaceReadCommand(toolName)
+	command, err := remoteWorkspaceCommand(toolName)
 	if err != nil {
 		return nil, err
 	}
@@ -137,15 +203,52 @@ func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
 	if err != nil {
 		return nil, err
 	}
-	return router.invoke.approvalArguments(ctx, args, true)
+	approval, err := router.invoke.approvalArguments(ctx, args, true)
+	if err != nil {
+		return nil, err
+	}
+	approval["workspace"] = workspaceAlias
+	approval["workspace_revision"] = binding.config.Revision
+	approval["operation"] = toolName
+	if path, _ := toolArgs["path"].(string); path != "" {
+		approval["path"] = path
+	}
+	switch toolName {
+	case "write_file":
+		content, _ := toolArgs["content"].(string)
+		digest := sha256.Sum256([]byte(content))
+		approval["content_bytes"] = len(content)
+		approval["content_sha256"] = hex.EncodeToString(digest[:])
+		approval["publication"] = "create"
+		if overwrite, _ := toolArgs["overwrite"].(bool); overwrite {
+			approval["publication"] = "replace"
+		}
+	case "apply_patch":
+		input, _ := toolArgs["input"].(string)
+		operations, parseErr := patchformat.Parse(input, nodes.MaxWorkspacePatchFiles)
+		if parseErr != nil {
+			return nil, ErrRemoteWorkspaceUnavailable
+		}
+		paths := make([]string, 0, len(operations))
+		for _, operation := range operations {
+			paths = append(paths, operation.Path)
+		}
+		approval["paths"] = paths
+		approval["operation_count"] = len(paths)
+	}
+	return approval, nil
 }
 
-func remoteWorkspaceReadCommand(toolName string) (string, error) {
+func remoteWorkspaceCommand(toolName string) (string, error) {
 	switch toolName {
 	case "read_file":
 		return nodes.WorkspaceCommandRead, nil
 	case "search_files":
 		return nodes.WorkspaceCommandSearch, nil
+	case "write_file":
+		return nodes.WorkspaceCommandWrite, nil
+	case "apply_patch":
+		return nodes.WorkspaceCommandPatch, nil
 	default:
 		return "", ErrRemoteWorkspaceUnavailable
 	}
@@ -157,6 +260,9 @@ func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 	command string,
 	toolArgs map[string]any,
 ) (map[string]any, error) {
+	if err := validateRemoteWorkspaceMutationArguments(command, toolArgs); err != nil {
+		return nil, err
+	}
 	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
 	if err != nil || resolved.registration == nil || !resolved.available {
 		return nil, fmt.Errorf("resolve workspace target")
@@ -199,6 +305,55 @@ func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 		"input":              input,
 		"discovery_revision": revision,
 		"timeout_seconds":    min(30, descriptor.ModelContract.TimeoutSecondsMax),
-		"output_limit_bytes": min(nodes.MaxWorkspaceReadBytes, descriptor.ModelContract.OutputBytesMax),
+		"output_limit_bytes": min(workspaceCommandOutputLimit(command), descriptor.ModelContract.OutputBytesMax),
 	}, nil
+}
+
+func validateRemoteWorkspaceMutationArguments(command string, toolArgs map[string]any) error {
+	switch command {
+	case nodes.WorkspaceCommandWrite:
+		path, pathOK := toolArgs["path"].(string)
+		_, contentOK := toolArgs["content"].(string)
+		overwrite, overwriteOK := toolArgs["overwrite"].(bool)
+		_, hasExpected := toolArgs["expected_sha256"]
+		if !pathOK || !contentOK || !overwriteOK || !validRemoteWorkspacePath(path) || hasExpected && !overwrite {
+			return ErrRemoteWorkspaceUnavailable
+		}
+	case nodes.WorkspaceCommandPatch:
+		input, ok := toolArgs["input"].(string)
+		if !ok {
+			return ErrRemoteWorkspaceUnavailable
+		}
+		operations, err := patchformat.Parse(input, nodes.MaxWorkspacePatchFiles)
+		if err != nil {
+			return ErrRemoteWorkspaceUnavailable
+		}
+		seen := make(map[string]struct{}, len(operations))
+		for _, operation := range operations {
+			if !validRemoteWorkspacePath(operation.Path) {
+				return ErrRemoteWorkspaceUnavailable
+			}
+			if _, duplicate := seen[operation.Path]; duplicate {
+				return ErrRemoteWorkspaceUnavailable
+			}
+			seen[operation.Path] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validRemoteWorkspacePath(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value && !strings.ContainsRune(value, 0) &&
+		!strings.ContainsRune(value, '\\') && !strings.HasPrefix(value, "/") && pathpkg.Clean(value) == value &&
+		value != "." && value != ".." &&
+		!strings.HasPrefix(value, "../")
+}
+
+func workspaceCommandOutputLimit(command string) int {
+	switch command {
+	case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
+		return 64 * 1024
+	default:
+		return nodes.MaxWorkspaceReadBytes
+	}
 }

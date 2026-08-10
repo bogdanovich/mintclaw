@@ -3,7 +3,9 @@
 package companion
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -438,20 +440,8 @@ func (stage *stagedFile) publish(publication string) error {
 	if stage == nil || stage.file == nil || stage.parent == nil {
 		return ErrFileConflict
 	}
-	if err := stage.file.Sync(); err != nil {
-		return fmt.Errorf("sync staged transfer: %w", err)
-	}
-	info, err := stage.file.Stat()
-	if err != nil {
-		return classifyFileAccessError(err)
-	}
-	identity, err := identityFromInfo(info)
-	if err != nil ||
-		identity.Device != stage.identity.Device ||
-		identity.Inode != stage.identity.Inode ||
-		identity.Links != 1 ||
-		!info.Mode().IsRegular() {
-		return ErrFileConflict
+	if err := stage.validateForPublication(); err != nil {
+		return err
 	}
 	switch publication {
 	case filePublicationCreate:
@@ -485,6 +475,157 @@ func (stage *stagedFile) publish(publication string) error {
 		return &committedFileMutationError{err: err}
 	}
 	return nil
+}
+
+func (stage *stagedFile) validateForPublication() error {
+	if stage == nil || stage.file == nil || stage.parent == nil {
+		return ErrFileConflict
+	}
+	if err := stage.file.Sync(); err != nil {
+		return fmt.Errorf("sync staged transfer: %w", err)
+	}
+	info, err := stage.file.Stat()
+	if err != nil {
+		return classifyFileAccessError(err)
+	}
+	identity, err := identityFromInfo(info)
+	if err != nil ||
+		identity.Device != stage.identity.Device ||
+		identity.Inode != stage.identity.Inode ||
+		identity.Links != 1 ||
+		!info.Mode().IsRegular() {
+		return ErrFileConflict
+	}
+	return nil
+}
+
+// publishReplacing atomically removes the destination name before validating
+// the displaced inode. This closes the verify-then-replace race without ever
+// overwriting a concurrent replacement while restoring the expected file on
+// a mismatch or pre-publication failure.
+func (stage *stagedFile) publishReplacing(
+	ctx context.Context,
+	expected fileIdentity,
+	expectedSize int64,
+	expectedDigest [sha256.Size]byte,
+) error {
+	if err := stage.validateForPublication(); err != nil {
+		return err
+	}
+	parent := stage.parent
+	staging, err := parent.openStageDirectory(true)
+	if err != nil {
+		return err
+	}
+	backupName, err := randomFileStageName()
+	if err != nil {
+		return err
+	}
+	if renameErr := unix.Renameat(
+		int(parent.file.Fd()),
+		parent.basename,
+		int(staging.Fd()),
+		backupName,
+	); renameErr != nil {
+		return classifyFileAccessError(renameErr)
+	}
+	if err := parent.validateDisplacedFinal(ctx, backupName, expected, expectedSize, expectedDigest); err != nil {
+		return parent.restoreDisplacedFinal(backupName, err)
+	}
+	if err := publishFileStage(
+		int(stage.file.Fd()),
+		int(staging.Fd()),
+		stage.name,
+		int(parent.file.Fd()),
+		parent.basename,
+		filePublicationCreate,
+	); err != nil {
+		return parent.restoreDisplacedFinal(backupName, classifyFileAccessError(err))
+	}
+	if err := parent.removePublishedStage(stage.identity, stage.name); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	if err := unix.Unlinkat(int(staging.Fd()), backupName, 0); err != nil {
+		return &committedFileMutationError{err: classifyFileAccessError(err)}
+	}
+	if err := staging.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	if err := parent.file.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	return nil
+}
+
+func (parent *resolvedParent) validateDisplacedFinal(
+	ctx context.Context,
+	name string,
+	expected fileIdentity,
+	expectedSize int64,
+	expectedDigest [sha256.Size]byte,
+) error {
+	var observed unix.Stat_t
+	if err := unix.Fstatat(
+		int(parent.staging.Fd()),
+		name,
+		&observed,
+		unix.AT_SYMLINK_NOFOLLOW,
+	); err != nil {
+		return classifyFileAccessError(err)
+	}
+	if observed.Mode&unix.S_IFMT != unix.S_IFREG {
+		return ErrFileConflict
+	}
+	descriptor, err := unix.Openat(
+		int(parent.staging.Fd()),
+		name,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
+	if err != nil {
+		return classifyFileAccessError(err)
+	}
+	displaced := os.NewFile(uintptr(descriptor), name)
+	if displaced == nil {
+		_ = unix.Close(descriptor)
+		return errors.New("open displaced file descriptor")
+	}
+	defer func() { _ = displaced.Close() }()
+	info, err := displaced.Stat()
+	if err != nil {
+		return classifyFileAccessError(err)
+	}
+	identity, err := identityFromInfo(info)
+	if err != nil {
+		return err
+	}
+	digest, err := hashOpenedFile(ctx, displaced)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != expectedSize || identity.Device != expected.Device ||
+		identity.Inode != expected.Inode || identity.Links != expected.Links || digest != expectedDigest {
+		return ErrFileConflict
+	}
+	return nil
+}
+
+func (parent *resolvedParent) restoreDisplacedFinal(name string, original error) error {
+	if err := restoreMovedFileStage(
+		int(parent.staging.Fd()),
+		name,
+		int(parent.file.Fd()),
+		parent.basename,
+	); err != nil {
+		return &committedFileMutationError{err: classifyFileAccessError(err)}
+	}
+	if err := parent.staging.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	if err := parent.file.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	return original
 }
 
 func (parent *resolvedParent) ensureFinalAbsent() error {
@@ -629,6 +770,46 @@ func (parent *resolvedParent) openFinalRegular() (*resolvedFile, error) {
 		return nil, ErrFileAccessDenied
 	}
 	return &resolvedFile{file: file, info: info, identity: identity}, nil
+}
+
+func (parent *resolvedParent) removeFinalRegular(
+	ctx context.Context,
+	expected fileIdentity,
+	expectedSize int64,
+	expectedDigest [sha256.Size]byte,
+) error {
+	if parent == nil || parent.file == nil {
+		return ErrFileAccessDenied
+	}
+	staging, err := parent.openStageDirectory(true)
+	if err != nil {
+		return err
+	}
+	name, err := randomFileStageName()
+	if err != nil {
+		return err
+	}
+	if err := unix.Renameat(
+		int(parent.file.Fd()),
+		parent.basename,
+		int(staging.Fd()),
+		name,
+	); err != nil {
+		return classifyFileAccessError(err)
+	}
+	if err := parent.validateDisplacedFinal(ctx, name, expected, expectedSize, expectedDigest); err != nil {
+		return parent.restoreDisplacedFinal(name, err)
+	}
+	if err := unix.Unlinkat(int(staging.Fd()), name, 0); err != nil {
+		return &committedFileMutationError{err: classifyFileAccessError(err)}
+	}
+	if err := staging.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	if err := parent.file.Sync(); err != nil {
+		return &committedFileMutationError{err: err}
+	}
+	return nil
 }
 
 func (parent *resolvedParent) close() error {

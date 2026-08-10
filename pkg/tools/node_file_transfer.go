@@ -627,8 +627,8 @@ func isRemoteWorkspaceFileCall(toolName string, arguments map[string]any) bool {
 		toolName != "write_file" && toolName != "apply_patch" {
 		return false
 	}
-	workspace, _ := arguments["workspace"].(string)
-	return strings.TrimSpace(workspace) != ""
+	_, present := arguments["workspace"]
+	return present
 }
 
 func exactNodeFileApprovalSize(value any) (uint64, bool) {

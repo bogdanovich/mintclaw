@@ -640,10 +640,14 @@ func (runtime *Runtime) completeInvalidOutput(
 	plan nodes.ExecutionPlan,
 	err error,
 ) error {
-	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct {
+	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct ||
+		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
 		label := "service action"
-		if plan.Command == nodes.BrowserCommandAct {
+		switch plan.Command {
+		case nodes.BrowserCommandAct:
 			label = "browser action"
+		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
+			label = "workspace mutation"
 		}
 		if _, markErr := runtime.ledger.MarkUnknown(plan.InvocationID); markErr != nil {
 			return fmt.Errorf(
