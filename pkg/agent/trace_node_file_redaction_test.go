@@ -99,6 +99,7 @@ func TestSubTurnAdmissionDiagnosticTraceRetainsWaitLifecycle(t *testing.T) {
 			Time: started.Add(1250 * time.Millisecond),
 			Payload: SubTurnAdmissionPayload{
 				AgentID:      "browser",
+				ChildTurnID:  "child-browser-2",
 				Stage:        "target_agent",
 				State:        "queued",
 				Active:       1,
@@ -116,6 +117,7 @@ func TestSubTurnAdmissionDiagnosticTraceRetainsWaitLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.State != "queued" || payload.Stage != "target_agent" || payload.AgentID != "browser" ||
+		payload.ChildTurnID != "child-browser-2" ||
 		payload.Active != 1 || payload.Limit != 1 || payload.WaitMS != 1250 ||
 		payload.TimeoutMS != 30000 {
 		t.Fatalf("admission trace payload = %#v", payload)

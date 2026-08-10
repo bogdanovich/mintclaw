@@ -662,13 +662,14 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordSubTurnAdmission
 		payload = diagnostictrace.SubTurnAdmissionPayload{
-			State:     safeCode(value.State),
-			Stage:     safeCode(value.Stage),
-			AgentID:   safeCode(value.AgentID),
-			Active:    value.Active,
-			Limit:     value.Limit,
-			WaitMS:    value.WaitDuration.Milliseconds(),
-			TimeoutMS: value.WaitTimeout.Milliseconds(),
+			State:       safeCode(value.State),
+			Stage:       safeCode(value.Stage),
+			AgentID:     safeCode(value.AgentID),
+			ChildTurnID: safeCode(value.ChildTurnID),
+			Active:      value.Active,
+			Limit:       value.Limit,
+			WaitMS:      value.WaitDuration.Milliseconds(),
+			TimeoutMS:   value.WaitTimeout.Milliseconds(),
 		}
 	case runtimeevents.KindChannelMessageOutboundQueued,
 		runtimeevents.KindChannelMessageOutboundSent,

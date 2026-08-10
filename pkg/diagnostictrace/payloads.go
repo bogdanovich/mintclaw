@@ -84,13 +84,14 @@ type ContextPayload struct {
 }
 
 type SubTurnAdmissionPayload struct {
-	State     string `json:"state"`
-	Stage     string `json:"stage"`
-	AgentID   string `json:"agent_id,omitempty"`
-	Active    int    `json:"active,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	WaitMS    int64  `json:"wait_ms,omitempty"`
-	TimeoutMS int64  `json:"timeout_ms,omitempty"`
+	State       string `json:"state"`
+	Stage       string `json:"stage"`
+	AgentID     string `json:"agent_id,omitempty"`
+	ChildTurnID string `json:"child_turn_id,omitempty"`
+	Active      int    `json:"active,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+	WaitMS      int64  `json:"wait_ms,omitempty"`
+	TimeoutMS   int64  `json:"timeout_ms,omitempty"`
 }
 
 type RuntimeErrorPayload struct {
