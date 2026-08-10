@@ -521,13 +521,13 @@ func (stage *stagedFile) publishReplacing(
 	if err != nil {
 		return err
 	}
-	if err := unix.Renameat(
+	if renameErr := unix.Renameat(
 		int(parent.file.Fd()),
 		parent.basename,
 		int(staging.Fd()),
 		backupName,
-	); err != nil {
-		return classifyFileAccessError(err)
+	); renameErr != nil {
+		return classifyFileAccessError(renameErr)
 	}
 	descriptor, err := unix.Openat(
 		int(staging.Fd()),
