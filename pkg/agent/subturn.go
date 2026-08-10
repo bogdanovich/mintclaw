@@ -329,6 +329,34 @@ func effectiveSubTurnDeliveryMode(cfg SubTurnConfig) toolshared.AsyncDeliveryMod
 	return toolshared.AsyncDeliveryParentOnly
 }
 
+func (al *AgentLoop) emitSubTurnAdmission(
+	parentTS *turnState,
+	childTurnID string,
+	agentID string,
+	stage string,
+	state string,
+	active int,
+	limit int,
+	waitStarted time.Time,
+	timeout time.Duration,
+) {
+	al.emitEvent(
+		runtimeevents.KindAgentSubTurnAdmission,
+		parentTS.eventMeta("spawnSubTurn", "subturn.admission"),
+		SubTurnAdmissionPayload{
+			AgentID:      agentID,
+			ChildTurnID:  childTurnID,
+			ParentTurnID: parentTS.turnID,
+			Stage:        stage,
+			State:        state,
+			Active:       active,
+			Limit:        limit,
+			WaitDuration: time.Since(waitStarted),
+			WaitTimeout:  timeout,
+		},
+	)
+}
+
 func (al *AgentLoop) acquireSubTurnAgentAdmission(
 	waitCtx context.Context,
 	parentCtx context.Context,
@@ -341,19 +369,9 @@ func (al *AgentLoop) acquireSubTurnAgentAdmission(
 	active := 0
 	limit := 0
 	emitAdmission := func(state string) {
-		al.emitEvent(
-			runtimeevents.KindAgentSubTurnAdmission,
-			parentTS.eventMeta("spawnSubTurn", "subturn.admission"),
-			SubTurnAdmissionPayload{
-				AgentID:      agentID,
-				ChildTurnID:  childTurnID,
-				ParentTurnID: parentTS.turnID,
-				State:        state,
-				Active:       active,
-				Limit:        limit,
-				WaitDuration: time.Since(waitStarted),
-				WaitTimeout:  timeout,
-			},
+		al.emitSubTurnAdmission(
+			parentTS, childTurnID, agentID, "target_agent", state,
+			active, limit, waitStarted, timeout,
 		)
 	}
 	admittedCtx, releaseAdmission, err := al.acquireAgentTurnObserved(
@@ -363,11 +381,8 @@ func (al *AgentLoop) acquireSubTurnAgentAdmission(
 			active = currentActive
 			limit = currentLimit
 			emitAdmission("queued")
-			al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
-				parentCtx,
-				parentTS,
-				agentID,
-				timeout,
+			go al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
+				waitCtx, parentTS, agentID+" agent", timeout,
 			)
 		},
 	)
@@ -388,6 +403,21 @@ func (al *AgentLoop) acquireSubTurnAgentAdmission(
 		}
 		emitAdmission("failed")
 		return parentCtx, nil, err
+	}
+	if waitCtx.Err() != nil {
+		releaseAdmission()
+		if parentCtx.Err() != nil {
+			emitAdmission("canceled")
+			return parentCtx, nil, parentCtx.Err()
+		}
+		emitAdmission("timed_out")
+		return parentCtx, nil, fmt.Errorf(
+			"%w: agent %q became available after %v: %w",
+			ErrConcurrencyTimeout,
+			agentID,
+			timeout,
+			context.DeadlineExceeded,
+		)
 	}
 	emitAdmission("admitted")
 
@@ -413,6 +443,7 @@ func spawnSubTurn(
 	rtCfg := al.getSubTurnConfig()
 	admissionCtx, cancelAdmission := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
 	defer cancelAdmission()
+	childID := al.generateSubTurnID()
 
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
 	// Blocks if parent already has maxConcurrentSubTurns running, with a timeout to prevent indefinite blocking.
@@ -424,27 +455,55 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
+		waitStarted := time.Now()
+		active := len(parentTS.concurrencySem)
+		limit := cap(parentTS.concurrencySem)
+		emitParentAdmission := func(state string) {
+			al.emitSubTurnAdmission(
+				parentTS, childID, "", "parent_capacity", state,
+				active, limit, waitStarted, rtCfg.concurrencyTimeout,
+			)
+		}
 		select {
 		case parentTS.concurrencySem <- struct{}{}:
 			semAcquired = true
-			defer func() {
-				if semAcquired {
-					<-parentTS.concurrencySem
-				}
-			}()
-		case <-admissionCtx.Done():
-			// Check parent context first - if it was canceled, propagate that error
+		default:
+			emitParentAdmission("queued")
+			go al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
+				admissionCtx, parentTS, "parent subturn capacity", rtCfg.concurrencyTimeout,
+			)
+			select {
+			case parentTS.concurrencySem <- struct{}{}:
+				semAcquired = true
+			case <-admissionCtx.Done():
+			}
+		}
+		if semAcquired && admissionCtx.Err() != nil {
+			<-parentTS.concurrencySem
+			semAcquired = false
+		}
+		if !semAcquired {
+			state := "timed_out"
+			if ctx.Err() != nil {
+				state = "canceled"
+			}
+			emitParentAdmission(state)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			// Otherwise it's our timeout
 			return nil, fmt.Errorf("%w: all %d slots occupied for %v: %w",
 				ErrConcurrencyTimeout,
-				rtCfg.maxConcurrent,
+				limit,
 				rtCfg.concurrencyTimeout,
 				context.DeadlineExceeded,
 			)
 		}
+		emitParentAdmission("admitted")
+		defer func() {
+			if semAcquired {
+				<-parentTS.concurrencySem
+			}
+		}()
 	}
 
 	// 1. Depth limit check
@@ -468,8 +527,6 @@ func spawnSubTurn(
 	if timeout <= 0 {
 		timeout = rtCfg.defaultTimeout
 	}
-
-	childID := al.generateSubTurnID()
 
 	// Resolve the agent instance for the child turn.
 	// When TargetAgentID is set, look up that agent from the registry so the

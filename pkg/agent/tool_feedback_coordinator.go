@@ -17,15 +17,15 @@ import (
 func (tf *toolFeedbackPublisher) publishSubTurnAdmissionWait(
 	ctx context.Context,
 	ts *turnState,
-	agentID string,
+	resource string,
 	timeout time.Duration,
 ) {
 	if tf == nil || tf.bus == nil || !tf.shouldPublishToolFeedback(ts) || ts.channel == "mintclaw" {
 		return
 	}
 	feedback := fmt.Sprintf(
-		"Waiting for the %s agent to become available (up to %s).",
-		agentID,
+		"Waiting for %s to become available (up to %s).",
+		resource,
 		timeout.Round(time.Second),
 	)
 	fbCtx, fbCancel := context.WithTimeout(ctx, 500*time.Millisecond)

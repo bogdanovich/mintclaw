@@ -108,6 +108,10 @@ func (c *agentTurnAdmissionController) acquireObserved(
 	waitingReported := false
 	for {
 		c.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
 		limit := c.limits[agentID]
 		if limit <= 0 || c.active[agentID] < limit {
 			c.active[agentID]++

@@ -350,6 +350,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case SubTurnAdmissionPayload:
 		fields["child_agent_id"] = payload.AgentID
 		fields["child_turn_id"] = payload.ChildTurnID
+		fields["stage"] = payload.Stage
 		fields["state"] = payload.State
 		fields["active"] = payload.Active
 		fields["limit"] = payload.Limit

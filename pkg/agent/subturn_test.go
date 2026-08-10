@@ -572,7 +572,7 @@ func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
 				t.Fatal("timed-out child emitted subturn spawn")
 			}
 			payload, ok := event.Payload.(SubTurnAdmissionPayload)
-			if ok {
+			if ok && payload.Stage == "target_agent" {
 				states = append(states, payload.State)
 			}
 		case <-deadline:
@@ -581,6 +581,72 @@ func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
 	}
 	if !slices.Equal(states, []string{"queued", "timed_out"}) {
 		t.Fatalf("admission states = %v, want queued,timed_out", states)
+	}
+}
+
+func TestSpawnSubTurnReportsParentCapacityTimeout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 1
+	provider := &reloadBlockingProvider{
+		chatStarted: make(chan struct{}),
+		releaseChat: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentSubTurnAdmission,
+		runtimeevents.KindAgentSubTurnSpawn,
+	)
+	defer closeRuntimeEvents()
+
+	parentAgent := al.registry.GetDefaultAgent()
+	parentSlots := make(chan struct{}, 1)
+	parentSlots <- struct{}{}
+	parent := &turnState{
+		ctx:            t.Context(),
+		turnID:         "parent-at-capacity",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		concurrencySem: parentSlots,
+		session:        &ephemeralSessionStore{},
+		agent:          parentAgent,
+	}
+
+	_, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model:        "test-model",
+		SystemPrompt: "must not start",
+		Timeout:      time.Minute,
+	})
+	if !errors.Is(err, ErrConcurrencyTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("spawnSubTurn() error = %v, want admission deadline", err)
+	}
+	select {
+	case <-provider.chatStarted:
+		t.Fatal("provider call started without parent capacity")
+	default:
+	}
+	states := make([]string, 0, 2)
+	deadline := time.After(time.Second)
+	for len(states) < 2 {
+		select {
+		case event := <-runtimeCh:
+			if event.Kind == runtimeevents.KindAgentSubTurnSpawn {
+				t.Fatal("timed-out child emitted subturn spawn")
+			}
+			payload, ok := event.Payload.(SubTurnAdmissionPayload)
+			if ok && payload.Stage == "parent_capacity" {
+				states = append(states, payload.State)
+			}
+		case <-deadline:
+			t.Fatalf("parent admission states = %v, want queued,timed_out", states)
+		}
+	}
+	if !slices.Equal(states, []string{"queued", "timed_out"}) {
+		t.Fatalf("parent admission states = %v, want queued,timed_out", states)
 	}
 }
 

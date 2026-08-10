@@ -271,6 +271,7 @@ type SubTurnAdmissionPayload struct {
 	AgentID      string
 	ChildTurnID  string
 	ParentTurnID string
+	Stage        string
 	State        string
 	Active       int
 	Limit        int

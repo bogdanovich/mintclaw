@@ -85,6 +85,7 @@ type ContextPayload struct {
 
 type SubTurnAdmissionPayload struct {
 	State     string `json:"state"`
+	Stage     string `json:"stage"`
 	AgentID   string `json:"agent_id,omitempty"`
 	Active    int    `json:"active,omitempty"`
 	Limit     int    `json:"limit,omitempty"`
