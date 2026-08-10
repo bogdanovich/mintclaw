@@ -176,9 +176,13 @@ func runNew(
 	}
 	result, resultErr := resultFor("created", store, metadata, true)
 	if resultErr != nil {
-		return resultErr
+		return preserveCommittedPromptState(metadata.ThreadID, true, resultErr)
 	}
-	return renderResult(out, result, jsonOutput)
+	return preserveCommittedPromptState(
+		metadata.ThreadID,
+		true,
+		renderResult(out, result, jsonOutput),
+	)
 }
 
 type resumeOptions struct {
@@ -257,7 +261,11 @@ func runResume(
 	if resumeErr != nil {
 		return resumeErr
 	}
-	return renderResult(out, result, options.json)
+	return preserveCommittedPromptState(
+		result.ThreadID,
+		result.PromptStored,
+		renderResult(out, result, options.json),
+	)
 }
 
 func resumeSelectedThread(
@@ -274,11 +282,8 @@ func resumeSelectedThread(
 	}
 	promptStored := false
 	defer func() {
-		releaseErr := lease.Release()
-		if releaseErr != nil && promptStored {
-			releaseErr = committedPromptOperationError(threadID, releaseErr)
-		}
-		resultErr = errors.Join(resultErr, releaseErr)
+		resultErr = errors.Join(resultErr, lease.Release())
+		resultErr = preserveCommittedPromptState(threadID, promptStored, resultErr)
 	}()
 	metadata, loadErr := store.Load(threadID)
 	if loadErr != nil {
@@ -364,6 +369,14 @@ func committedPromptOperationError(threadID string, err error) error {
 
 func appendOutcomeAllowsMetadataSave(err error) bool {
 	return err == nil || thread.IsCommittedPromptError(err)
+}
+
+func preserveCommittedPromptState(threadID string, promptStored bool, err error) error {
+	if err == nil || !promptStored || thread.IsCommittedPromptError(err) ||
+		thread.IsIndeterminatePromptError(err) {
+		return err
+	}
+	return committedPromptOperationError(threadID, err)
 }
 
 func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectIdentity, *thread.Store, error) {

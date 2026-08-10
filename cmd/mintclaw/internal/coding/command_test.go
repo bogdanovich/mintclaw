@@ -420,6 +420,73 @@ func TestAppendOutcomeAllowsMetadataSave(t *testing.T) {
 	}
 }
 
+func TestCommittedPromptStateSurvivesOutputFailure(t *testing.T) {
+	t.Run("code", func(t *testing.T) {
+		home := t.TempDir()
+		project := t.TempDir()
+		now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
+		deps := testDependencies(home, project, &now)
+		threadID := uuid.NewString()
+		deps.newThreadID = func() string { return threadID }
+		outputErr := errors.New("injected output failure")
+		err := runNew(t.Context(), failingWriter{err: outputErr}, deps, "committed code prompt", "", true)
+		if !errors.Is(err, outputErr) || !thread.IsCommittedPromptError(err) ||
+			!strings.Contains(err.Error(), "do not blindly retry") {
+			t.Fatalf("runNew(output failure) error = %v", err)
+		}
+		store, err := thread.NewStore(filepath.Join(home, "coding"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata, err := store.Load(threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stateRoot, err := store.ThreadRoot(threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 1 ||
+			history[0] != "committed code prompt" {
+			t.Fatalf("committed code history = %#v", history)
+		}
+	})
+
+	t.Run("resume prompt", func(t *testing.T) {
+		home := t.TempDir()
+		project := t.TempDir()
+		now := time.Date(2026, time.August, 10, 16, 30, 0, 0, time.UTC)
+		deps := testDependencies(home, project, &now)
+		var created commandResult
+		if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "first", "--json"), &created); err != nil {
+			t.Fatal(err)
+		}
+		outputErr := errors.New("injected output failure")
+		err := runResume(
+			t.Context(),
+			failingWriter{err: outputErr},
+			deps,
+			resumeOptions{threadID: created.ThreadID, prompt: "committed resume prompt", promptSet: true, json: true},
+		)
+		if !errors.Is(err, outputErr) || !thread.IsCommittedPromptError(err) ||
+			!strings.Contains(err.Error(), "do not blindly retry") {
+			t.Fatalf("runResume(output failure) error = %v", err)
+		}
+		if history := readHistory(t, created.StateRoot, created.SessionKey); len(history) != 2 ||
+			history[1] != "committed resume prompt" {
+			t.Fatalf("committed resume history = %#v", history)
+		}
+	})
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
 func testDependencies(home, cwd string, now *time.Time) dependencies {
 	return dependencies{
 		home:        func() string { return home },

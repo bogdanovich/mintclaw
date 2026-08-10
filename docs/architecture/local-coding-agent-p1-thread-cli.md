@@ -96,9 +96,13 @@ directory, which list and exact-ID catalog queries cannot select. A file or
 partial write or file/directory fsync failure after `Write` is reported as
 indeterminate and unsafe to retry, but does not publish new thread metadata.
 Once the JSONL line and every new directory entry are durable, a later close,
-journal-metadata,
-thread-metadata, or lease-finalization failure is reported as a typed
-committed-prompt error with the thread ID and explicit do-not-retry guidance.
+journal-metadata, thread-metadata, or lease-finalization failure is reported
+as a typed committed-prompt error with the thread ID and explicit do-not-retry
+guidance.
+Before any later append under the session lock, a dirty journal is reconciled
+with completed JSONL records and an incomplete trailing fragment is durably
+truncated to the last newline. A different later prompt therefore cannot be
+concatenated onto or hidden behind a failed partial record.
 
 Catalog metadata is only a selection hint. Once a thread ID is selected,
 `resume` acquires its writer lease and reloads the authoritative metadata under
@@ -130,6 +134,11 @@ The default P1 renderer is stable plain text. `--json` emits one JSON document
 and no decorative prefix. List output exposes bounded catalog metadata and
 pagination/truncation fields; it never loads transcripts.
 
+Once a prompt is committed, result construction and plain/JSON output failures
+retain the typed committed-prompt state and do-not-retry guidance. A broken
+stdout consumer therefore cannot turn a completed `code` or `resume --prompt`
+operation into an apparently safe retry.
+
 The process-level ASCII banner, timezone diagnostics, and console logger are
 suppressed when the root command is `code` or `resume`. This keeps today's
 plain/JSON output clean and reserves the same entrypoints for P4's alternate
@@ -160,6 +169,10 @@ Automated tests prove:
   append;
 - lease and ordinary append failures during creation do not publish selectable
   metadata, while post-fsync failures retain committed-prompt classification;
+- dirty metadata and incomplete trailing JSONL fragments are reconciled before
+  a later distinct append;
+- output writer failures after `code` and `resume --prompt` preserve typed
+  committed-prompt errors;
 - canceled, empty, invalid, and oversized prompt appends fail before success;
 - root command registration and startup-output detection retain existing help
   expectations; and

@@ -242,6 +242,99 @@ func (s *JSONLStore) finishHistoryMutation(key string, meta *SessionMeta) error 
 	return s.writeMeta(key, *meta)
 }
 
+func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error {
+	if !meta.HistoryDirty {
+		return nil
+	}
+	jsonlExists, err := repairDirtyJSONL(s.jsonlPath(key))
+	if err != nil {
+		return err
+	}
+	if jsonlExists {
+		if syncErr := fileutil.SyncDirectory(s.dir); syncErr != nil {
+			return fmt.Errorf("memory: sync recovered jsonl directory: %w", syncErr)
+		}
+	}
+	rawCount, _, err := scanRetainedMessageLines(s.jsonlPath(key))
+	if err != nil {
+		return err
+	}
+	if meta.HistoryHasPrevious && rawCount != meta.Count {
+		meta.Count = meta.HistoryPreviousCount
+		meta.Skip = meta.HistoryPreviousSkip
+	} else {
+		meta.Count = rawCount
+		if meta.Skip > rawCount {
+			meta.Skip = rawCount
+		}
+	}
+	if err := s.finishHistoryMutation(key, meta); err != nil {
+		return fmt.Errorf("memory: finish dirty history recovery: %w", err)
+	}
+	return nil
+}
+
+func repairDirtyJSONL(path string) (bool, error) {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("memory: open jsonl for tail recovery: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: stat jsonl for tail recovery: %w", err)
+	}
+	size := info.Size()
+	if size == 0 {
+		return true, syncAndCloseRecoveredJSONL(file)
+	}
+	var last [1]byte
+	if _, err := file.ReadAt(last[:], size-1); err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: inspect jsonl tail: %w", err)
+	}
+	if last[0] == '\n' {
+		return true, syncAndCloseRecoveredJSONL(file)
+	}
+
+	const recoveryChunkSize = 64 * 1024
+	buffer := make([]byte, recoveryChunkSize)
+	truncateAt := int64(0)
+	for end := size; end > 0; {
+		start := max(int64(0), end-int64(len(buffer)))
+		chunk := buffer[:end-start]
+		read, readErr := file.ReadAt(chunk, start)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			_ = file.Close()
+			return true, fmt.Errorf("memory: scan jsonl tail: %w", readErr)
+		}
+		if index := bytes.LastIndexByte(chunk[:read], '\n'); index >= 0 {
+			truncateAt = start + int64(index) + 1
+			break
+		}
+		end = start
+	}
+	if err := file.Truncate(truncateAt); err != nil {
+		_ = file.Close()
+		return true, fmt.Errorf("memory: truncate incomplete jsonl tail: %w", err)
+	}
+	return true, syncAndCloseRecoveredJSONL(file)
+}
+
+func syncAndCloseRecoveredJSONL(file *os.File) error {
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("memory: sync recovered jsonl tail: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("memory: close recovered jsonl tail: %w", err)
+	}
+	return nil
+}
+
 func cloneRawJSON(data json.RawMessage) json.RawMessage {
 	if len(data) == 0 {
 		return nil
@@ -318,23 +411,8 @@ func (s *JSONLStore) GetHistoryRevision(
 	if err != nil {
 		return HistoryRevision{}, err
 	}
-	if meta.HistoryDirty {
-		rawCount, _, scanErr := scanRetainedMessageLines(s.jsonlPath(sessionKey))
-		if scanErr != nil {
-			return HistoryRevision{}, scanErr
-		}
-		if meta.HistoryHasPrevious && rawCount != meta.Count {
-			meta.Count = meta.HistoryPreviousCount
-			meta.Skip = meta.HistoryPreviousSkip
-		} else {
-			meta.Count = rawCount
-			if meta.Skip > rawCount {
-				meta.Skip = rawCount
-			}
-		}
-		if finishErr := s.finishHistoryMutation(sessionKey, &meta); finishErr != nil {
-			return HistoryRevision{}, finishErr
-		}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return HistoryRevision{}, recoveryErr
 	}
 	var size, modTimeNS int64
 	info, err := os.Stat(s.jsonlPath(sessionKey))
@@ -770,6 +848,9 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return err
+	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return recoveryErr
 	}
 	if meta.Count == 0 && meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
