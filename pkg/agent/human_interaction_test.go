@@ -3747,6 +3747,78 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
+func TestStopCancellationReloadsClaimedInteractionAfterRouteWait(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:claimed-resuming-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "continue", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-resume")
+	if !claimed {
+		t.Fatal("failed to claim the interaction route at the claimed boundary")
+	}
+
+	type cancellationResult struct {
+		result interactionControlCancellationResult
+		err    error
+	}
+	done := make(chan cancellationResult, 1)
+	go func() {
+		result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+		done <- cancellationResult{result: result, err: cancelErr}
+	}()
+	continuationScope := newRuntimeSessionScope(agent.Workspace, target.SessionKey)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, armed := al.pendingStops.Load(continuationScope); armed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancellation did not reach the claimed-to-resuming boundary")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumingRevision := record.Revision
+	activeClaim.releaseIfOwned()
+
+	select {
+	case cancellation := <-done:
+		if cancellation.err != nil {
+			t.Fatal(cancellation.err)
+		}
+		if !cancellation.result.Matched || !cancellation.result.Canceled ||
+			cancellation.result.Failed || !cancellation.result.CommandHandled {
+			t.Fatalf("boundary cancellation result = %#v", cancellation.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for boundary cancellation")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled || record.Revision <= resumingRevision {
+		t.Fatalf("boundary interaction = %#v", record)
+	}
+	if _, armed := al.pendingStops.Load(continuationScope); armed {
+		t.Fatal("boundary cancellation left a pending stop armed")
+	}
+}
+
 func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
 	provider := newBlockingInteractionProvider()
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)

@@ -116,6 +116,23 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	}
 	defer claim.releaseIfOwned()
 
+	current, active := activeInteractionForSession(registry, target.SessionKey)
+	if !active || current.ID != record.ID ||
+		!interactionRouteAuthorizes(current.Route, target, msg.Context) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction changed while waiting to cancel")
+	}
+	record = current
+	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+	result.Kind = record.Kind
+	continuationAgent := al.interactionContinuationAgent(record, target.Agent)
+	if continuationAgent != nil {
+		al.takePendingStop(newRuntimeSessionScope(
+			continuationAgent.Workspace,
+			interactionContinuationSessionKey(record),
+		))
+	}
+
 	if record.Status != interactions.StatusCanceling {
 		var err error
 		record, err = registry.BeginCancellation(
