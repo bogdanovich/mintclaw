@@ -71,7 +71,9 @@ locking or writing.
 On Windows, MintClaw opens the thread directory and lock relative to parent
 handles through `NtCreateFile`, uses `OBJ_DONT_REPARSE` and
 `FILE_OPEN_REPARSE_POINT`, and rejects reparse points from opened-handle
-attributes. `LockFileEx` acquires one byte nonblockingly. The file receives a
+attributes. It also requires exactly one hard link before applying security or
+writing diagnostics, so an NTFS hard link cannot redirect those mutations to
+another file. `LockFileEx` acquires one byte nonblockingly. The file receives a
 TokenUser owner SID and protected owner-only DACL in one handle-based security
 update; both are validated from the opened handle before use. This remains
 correct when an elevated token's default TokenOwner differs from TokenUser.
@@ -115,7 +117,9 @@ Focused contract tests prove:
 - current-project read-only catalog listing succeeds while the thread is leased;
 - missing threads and invalid owner records fail closed;
 - Unix lock files are private and symbolic links, hard links, and FIFOs are
-  rejected without blocking; and
+  rejected without blocking;
+- Windows hard links are rejected before security or content mutation, with a
+  native NTFS regression in the Windows CI job; and
 - the package passes race tests plus Darwin, Linux, and Windows compile checks.
 
 The tests exercise lease ownership itself rather than transcript writes

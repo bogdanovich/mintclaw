@@ -37,8 +37,11 @@ func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
 		return closeOnError(err)
 	}
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
-		info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
-		return closeOnError(fmt.Errorf("coding thread lease: lock file is a reparse point or directory"))
+		info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 ||
+		info.NumberOfLinks != 1 {
+		return closeOnError(fmt.Errorf(
+			"coding thread lease: lock file is a reparse point, directory, or has multiple hard links",
+		))
 	}
 	if err := secureWindowsThreadLease(handle); err != nil {
 		return closeOnError(err)
