@@ -161,6 +161,7 @@ func (al *AgentLoop) abortInteractionContinuation(
 	)
 	ts := al.getActiveTurnState(scope)
 	if ts == nil {
+		al.markPendingStop(scope)
 		return nil
 	}
 	if strings.HasPrefix(ts.snapshot().TurnID, pendingTurnPrefix) {
@@ -985,12 +986,15 @@ func (al *AgentLoop) resumeClaimedInteraction(
 					return err
 				}
 			} else {
-				control, err := al.executeApprovedInteractionTool(
+				control, aborted, err := al.executeApprovedInteractionTool(
 					ctx, registry, interactionWorkspace, agent, scope, resuming,
 				)
 				if err != nil {
 					_, _ = registry.RecordResumeFailure(resuming.ID, resuming.Revision, err.Error())
 					return err
+				}
+				if aborted {
+					return nil
 				}
 				if control == ToolControlSuspend {
 					return nil
@@ -1059,6 +1063,9 @@ func (al *AgentLoop) resumeClaimedInteraction(
 	if turnStatus == TurnEndStatusSuspended {
 		return nil
 	}
+	if turnStatus == TurnEndStatusAborted {
+		return nil
+	}
 	var traceScopes []runtimeevents.TraceScope
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
@@ -1094,11 +1101,11 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	agent *AgentInstance,
 	scope *session.SessionScope,
 	record interactions.Record,
-) (ToolControl, error) {
+) (ToolControl, bool, error) {
 	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
 	toolCall, ok := interactionOriginToolCall(history, record.Origin.ToolCallID)
 	if !ok {
-		return ToolControlBreak, fmt.Errorf(
+		return ToolControlBreak, false, fmt.Errorf(
 			"originating approval tool call %q is missing",
 			record.Origin.ToolCallID,
 		)
@@ -1116,9 +1123,9 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 					"context is unavailable after restart.",
 			},
 		); err != nil {
-			return ToolControlBreak, err
+			return ToolControlBreak, false, err
 		}
-		return ToolControlBreak, nil
+		return ToolControlBreak, false, nil
 	}
 	toolCall = providers.NormalizeToolCall(toolCall)
 	routeSessionKey := record.Route.RouteSessionKey
@@ -1150,7 +1157,7 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
-		return ToolControlBreak, fmt.Errorf("resolve approved tool profile: %w", err)
+		return ToolControlBreak, false, fmt.Errorf("resolve approved tool profile: %w", err)
 	}
 	turnScope := al.newTurnEventScope(
 		agent.ID,
@@ -1160,9 +1167,24 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	)
 	ts := newTurnState(agent, opts, turnScope)
 	pipeline := NewPipeline(al)
-	exec, err := pipeline.SetupTurn(ctx, ts)
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	defer turnCancel()
+	ts.setTurnCancel(turnCancel)
+	ts.ctx = turnCtx
+	turnCtx = withTurnState(turnCtx, ts)
+	turnCtx = WithAgentLoop(turnCtx, al)
+	al.registerActiveTurn(ts)
+	defer al.clearActiveTurn(ts)
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
+	if al.takePendingStop(ts.runtimeSessionScope()) {
+		_ = ts.requestHardAbort()
+	}
+	if ts.hardAbortRequested() {
+		return ToolControlBreak, true, nil
+	}
+	exec, err := pipeline.SetupTurn(turnCtx, ts)
 	if err != nil {
-		return ToolControlBreak, err
+		return ToolControlBreak, false, err
 	}
 	if exec.model.cleanup != nil {
 		defer exec.model.cleanup()
@@ -1172,24 +1194,27 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.toolResponseDisposition = toolResponseHandled
 	llm.assistantToolCallsPersisted = true
-	outcome := pipeline.ExecuteTools(ctx, ctx, ts, exec, llm)
-	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	outcome := pipeline.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
+	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	pipeline.dismissToolFeedbackForTurn(dismissCtx, ts)
 	dismissCancel()
+	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+		return outcome.Control, true, nil
+	}
 	if outcome.Control == ToolControlSuspend {
-		return outcome.Control, nil
+		return outcome.Control, false, nil
 	}
 	if _, resultIndex := interactionToolPairIndexes(
 		agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
 		record.Origin.ToolCallID,
 	); resultIndex < 0 {
-		return outcome.Control, fmt.Errorf("approved tool execution did not persist a matching result")
+		return outcome.Control, false, fmt.Errorf("approved tool execution did not persist a matching result")
 	}
 	_, ok = registry.Get(record.ID)
 	if !ok {
-		return outcome.Control, interactions.ErrNotFound
+		return outcome.Control, false, interactions.ErrNotFound
 	}
-	return outcome.Control, nil
+	return outcome.Control, false, nil
 }
 
 func (al *AgentLoop) interactionContinuationAgent(

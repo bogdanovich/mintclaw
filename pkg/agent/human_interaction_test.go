@@ -119,6 +119,42 @@ func (t *approvalCountingTool) Execute(context.Context, map[string]any) *toolsha
 	return toolshared.NewToolResult("protected action completed")
 }
 
+type blockingApprovalTool struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func newBlockingApprovalTool() *blockingApprovalTool {
+	return &blockingApprovalTool{
+		started:  make(chan struct{}, 1),
+		canceled: make(chan struct{}, 1),
+	}
+}
+
+func (*blockingApprovalTool) Name() string { return "approval_blocking" }
+
+func (*blockingApprovalTool) Description() string { return "Run a blocking protected test action" }
+
+func (*blockingApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *blockingApprovalTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	select {
+	case tool.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	select {
+	case tool.canceled <- struct{}{}:
+	default:
+	}
+	return &toolshared.ToolResult{ForLLM: ctx.Err().Error(), IsError: true}
+}
+
 type approvalBindingTool struct {
 	executions           int
 	bindingCalls         []string
@@ -2110,6 +2146,114 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 	}
 }
 
+func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-blocking-protected", Name: "approval_blocking",
+			Function: &providers.FunctionCall{Name: "approval_blocking", Arguments: `{}`},
+		}}},
+		{Content: "SHOULD_NOT_BE_DELIVERED", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	tool := newBlockingApprovalTool()
+	agent.Tools.Register(tool)
+	if err := al.MountHook(NamedHook("blocking-approval", &durableApprovalHook{
+		actionSummary: "Run the blocking protected action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	inbound := &bus.InboundContext{
+		Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+		SenderID: "user-1", MessageID: "approval-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus:            &turnStatus,
+		InteractionSessionKey: "owner-approval-stop",
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-approval-stop", SessionKey: "continuation-approval-stop",
+			UserMessage: "run blocking protected action", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	select {
+	case <-manager.sent:
+	case <-time.After(time.Second):
+		t.Fatal("approval prompt was not delivered")
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "owner-approval-stop")
+	if !ok || record.Kind != interactions.KindApproval {
+		t.Fatalf("approval interaction = %#v", record)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: record.Route.SessionKey,
+		RouteClaimKey: runtimeRouteClaimKey(record.Route.RouteSessionKey, ""),
+		Allocation:    session.Allocation{RouteScopeKey: record.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "/answer " + record.ShortID + " allow_once", SpoolID: "approval-answer-spool",
+		Context: inboundContextForInteraction(record.Route),
+	}
+	answer.Context.MessageID = "approval-answer"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(
+		t.Context(), answer, target,
+	) {
+		t.Fatal("approval answer did not enter the continuation worker")
+	}
+	select {
+	case <-tool.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the blocking approved tool")
+	}
+
+	stop := bus.InboundMessage{
+		Content: "/stop", Context: inboundContextForInteraction(record.Route),
+	}
+	stop.Context.MessageID = "approval-stop"
+	cancellation, err := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cancellation.Matched || !cancellation.Canceled || cancellation.Failed ||
+		!cancellation.CommandHandled {
+		t.Fatalf("approval stop cancellation = %#v", cancellation)
+	}
+	select {
+	case <-tool.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("blocking approved tool did not observe cancellation")
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled || record.ApprovalConsumedAt == 0 {
+		t.Fatalf("canceled approval interaction = %#v", record)
+	}
+	history := agent.Sessions.GetHistory("continuation-approval-stop")
+	if countInteractionToolResults(history, record.Origin.ToolCallID) != 1 {
+		t.Fatal("approval stop did not pair the protected tool call exactly once")
+	}
+	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, `"outcome":"canceled"`) {
+		t.Fatalf("approval cancellation tool result = %#v", history)
+	}
+	select {
+	case final := <-manager.sent:
+		t.Fatalf("aborted approved tool published a final response: %#v", final)
+	case <-time.After(100 * time.Millisecond):
+	}
+	claim, _, claimed := al.claimRuntimeRouteSession(target, "post-approval-stop-reuse")
+	if !claimed {
+		t.Fatal("canceled approved tool did not release the route for reuse")
+	}
+	claim.releaseIfOwned()
+}
+
 func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
@@ -3604,9 +3748,12 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 }
 
 func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
-	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	provider := newBlockingInteractionProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	msg := testInboundMessage(bus.InboundMessage{
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	stop := testInboundMessage(bus.InboundMessage{
 		Content:    "/stop",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:resuming-stop"),
 		Context: bus.InboundContext{
@@ -3614,95 +3761,48 @@ func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
 			SenderID: "user-1",
 		},
 	})
-	target, ok := al.resolveSteeringTarget(msg)
-	if !ok {
-		t.Fatal("failed to resolve interaction control target")
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	answer := stop
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-stop"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(
+		t.Context(), answer, target,
+	) {
+		t.Fatal("interaction answer did not enter the continuation worker")
 	}
-	continuationSessionKey := "interaction-resume-continuation"
-	origin := interactions.Origin{
-		TurnID: "turn-resume", ToolCallID: "call-resume-question",
-		ToolName: "request_user_input", ContinuationSessionKey: continuationSessionKey,
-	}
-	agent.Sessions.AddFullMessage(continuationSessionKey, providers.Message{
-		Role: "assistant",
-		ToolCalls: []providers.ToolCall{{
-			ID: origin.ToolCallID, Name: origin.ToolName,
-			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
-		}},
-	})
-	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	record, err := registry.Create(interactions.CreateRequest{
-		Kind: interactions.KindQuestion,
-		Route: interactions.Route{
-			AgentID: agent.ID, SessionKey: target.SessionKey,
-			RouteSessionKey: target.Allocation.RouteScopeKey,
-			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
-			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
-			SenderID: msg.Context.SenderID,
-		},
-		Origin:    origin,
-		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
-		ExpiresAt: time.Now().Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err == nil {
-		record, err = registry.MarkWaiting(record.ID, record.Revision)
-	}
-	if err == nil {
-		record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
-			Text: "continue", ReceivedAt: time.Now().UnixMilli(),
-		}, interactions.OutcomeAnswered)
-	}
-	if err == nil {
-		record, err = registry.MarkResuming(record.ID, record.Revision)
-	}
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the real interaction continuation")
 	}
 
-	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-resume")
-	if !claimed {
-		t.Fatal("failed to claim active interaction route")
-	}
-	continuationCtx, continuationCancel := context.WithCancel(t.Context())
-	continuationTurn := &turnState{
-		al: al, turnID: "interaction-resume-turn", workspace: agent.Workspace,
-		sessionKey: continuationSessionKey, phase: TurnPhaseTools,
-	}
-	continuationTurn.setTurnCancel(continuationCancel)
-	continuationScope := newRuntimeSessionScope(agent.Workspace, continuationSessionKey)
-	al.activeTurnStates.Store(continuationScope, continuationTurn)
-	defer al.activeTurnStates.Delete(continuationScope)
-	go func() {
-		<-continuationCtx.Done()
-		al.activeTurnStates.Delete(continuationScope)
-		activeClaim.releaseIfOwned()
-	}()
-
-	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
+	result, err := al.cancelInteractionForControlMessage(t.Context(), stop, target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Matched || !result.Canceled || result.Failed || !result.CommandHandled {
 		t.Fatalf("resuming stop cancellation result = %#v", result)
 	}
-	select {
-	case <-continuationCtx.Done():
-	default:
-		t.Fatal("active interaction continuation was not aborted")
-	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, _ = registry.Get(record.ID)
 	if record.Status != interactions.StatusCancelled {
 		t.Fatalf("record status = %q, want canceled", record.Status)
 	}
 	if countInteractionToolResults(
-		agent.Sessions.GetHistory(continuationSessionKey), origin.ToolCallID,
+		agent.Sessions.GetHistory(target.SessionKey), record.Origin.ToolCallID,
 	) != 1 {
 		t.Fatal("stop did not pair the continuation tool call exactly once")
 	}
+	select {
+	case final := <-manager.sent:
+		t.Fatalf("aborted interaction published a final response: %#v", final)
+	case <-time.After(100 * time.Millisecond):
+	}
+	claim, _, claimed := al.claimRuntimeRouteSession(target, "post-stop-reuse")
+	if !claimed {
+		t.Fatal("canceled interaction did not release the route for reuse")
+	}
+	claim.releaseIfOwned()
 }
 
 func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
