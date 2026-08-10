@@ -1050,6 +1050,15 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		continuationScope = session.CloneScope(scope)
 	}
 	if continuationScope != nil {
+		if continuationScope.RouteScopeKey == "" && scope != nil {
+			continuationScope.RouteScopeKey = scope.RouteScopeKey
+		}
+		if continuationScope.RouteScopeKey == "" {
+			continuationScope.RouteScopeKey = record.Route.RouteSessionKey
+			if continuationScope.RouteScopeKey == "" {
+				continuationScope.RouteScopeKey = record.Route.SessionKey
+			}
+		}
 		// Approval replies arrive on the parent route, but execution resumes in
 		// the agent that owns the durable continuation. This also repairs legacy
 		// metadata written before cross-agent ownership was persisted correctly.

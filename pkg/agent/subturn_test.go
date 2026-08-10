@@ -563,6 +563,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	}
 	legacyScope := session.CloneScope(persistedScope)
 	legacyScope.AgentID = alpha.ID
+	legacyScope.RouteScopeKey = ""
 	metaStore.EnsureSessionMetadata(continuationKey, legacyScope, nil)
 
 	registry := al.interactionRegistryForWorkspace(alpha.Workspace)
