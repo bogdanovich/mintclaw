@@ -133,7 +133,7 @@ func (runtime *FileTransferRuntime) WriteWorkspace(
 		if errors.As(publishErr, &uncertain) {
 			return WorkspaceWriteResult{}, fmt.Errorf("%w: %w", ErrInvocationOutcomeUnknown, publishErr)
 		}
-		return WorkspaceWriteResult{}, publishErr
+		return WorkspaceWriteResult{}, confirmedWorkspaceMutationCancellation(ctx, publishErr)
 	}
 	committed = true
 	digest := sha256.Sum256([]byte(options.Content))

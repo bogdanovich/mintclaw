@@ -319,6 +319,52 @@ func TestFileResolverExpectedReplaceRestoresConcurrentContent(t *testing.T) {
 	}
 }
 
+func TestFileResolverExpectedReplaceRestoresOnCancellation(t *testing.T) {
+	rootPath := canonicalTempDir(t)
+	path := filepath.Join(rootPath, "config.txt")
+	if err := os.WriteFile(path, []byte("expected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := openFileRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.close() })
+	parent, err := root.resolveParent(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = parent.close() })
+	expected, err := parent.openFinalRegular()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = expected.file.Close()
+	stage, err := parent.createStage("expected_cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stage.file.Close() })
+	if _, err := stage.file.Write([]byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	expectedDigest := sha256.Sum256([]byte("expected"))
+	if err := stage.publishReplacing(
+		ctx,
+		expected.identity,
+		int64(len("expected")),
+		expectedDigest,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation error = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != "expected" {
+		t.Fatalf("restored expected file = %q, err = %v", content, err)
+	}
+}
+
 func TestFileResolverDeleteRejectsAndRestoresReplacedIdentity(t *testing.T) {
 	rootPath := canonicalTempDir(t)
 	path := filepath.Join(rootPath, "config.txt")
