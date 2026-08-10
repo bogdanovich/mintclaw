@@ -759,3 +759,104 @@ func TestKeyedHandlerSeesSubscriptionContext(t *testing.T) {
 		t.Fatal("keyed handler did not observe subscription cancellation")
 	}
 }
+
+func TestKeyedBlockWakesEveryWaiterWithCapacity(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	startedA := make(chan struct{})
+	startedB := make(chan struct{})
+	first := make(chan struct{})
+	later := make(chan struct{})
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-block-liveness", Buffer: 2, Concurrency: Keyed, Backpressure: Block},
+		func(_ context.Context, evt Event) error {
+			switch evt.Payload.(int) {
+			case 1:
+				close(startedA)
+				<-first
+			case 2:
+				close(startedB)
+				<-first
+			default:
+				<-later
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "a"}, Payload: 1})
+	<-startedA
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 2})
+	<-startedB
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "a"}, Payload: 3})
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 4})
+
+	resultW1 := make(chan PublishResult, 1)
+	resultW2 := make(chan PublishResult, 1)
+	go func() {
+		resultW1 <- bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "a"}, Payload: 5})
+	}()
+	go func() {
+		resultW2 <- bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 6})
+	}()
+
+	// Both publishers must be blocked on capacity: pending == limit and both
+	// workers are pinned on the first gate, so no slot can free.
+	waitForStat(t, func() uint64 { return sub.Stats().Received }, 6)
+
+	close(first)
+	close(later)
+
+	for i, ch := range []chan PublishResult{resultW1, resultW2} {
+		select {
+		case result := <-ch:
+			if result.Delivered != 1 {
+				t.Fatalf("waiter %d Publish = %+v, want one delivered event", i+1, result)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("waiter %d remained blocked despite available capacity", i+1)
+		}
+	}
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 6)
+}
+
+func TestKeyedCloseStopsAcceptanceSynchronously(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-close", Buffer: 2, Concurrency: Keyed},
+		func(context.Context, Event) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}})
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 1)
+
+	if err := sub.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	waitForSubscriptionDone(t, sub)
+
+	es := sub.(*eventSubscription)
+	result := es.enqueue(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}}, false)
+	if !result.closed {
+		t.Fatalf("enqueue after Close = %+v, want closed result", result)
+	}
+	if got := es.counters.received.Load(); got != 1 {
+		t.Fatalf("received after close = %d, want 1 (post-close enqueue must not count)", got)
+	}
+}

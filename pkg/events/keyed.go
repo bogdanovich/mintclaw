@@ -50,7 +50,8 @@ type keyedDispatcher struct {
 	workers      map[string]*keyedWorker
 	pending      int
 	onceAccepted bool
-	notify       chan struct{}
+	waiting      int
+	wakeup       chan struct{}
 	closing      chan struct{}
 	closed       bool
 	wg           sync.WaitGroup
@@ -83,7 +84,7 @@ func newKeyedDispatcher(sub *eventSubscription, ctx context.Context, keyFunc fun
 		policy:  sub.opts.Backpressure,
 		limit:   sub.opts.Buffer,
 		workers: make(map[string]*keyedWorker),
-		notify:  make(chan struct{}, 1),
+		wakeup:  make(chan struct{}),
 		closing: make(chan struct{}),
 	}
 }
@@ -129,18 +130,32 @@ func (d *keyedDispatcher) enqueue(ctx context.Context, evt Event, nonBlocking bo
 		}
 
 		// Block: wait for capacity outside the lock so workers can drain.
+		// Every capacity release broadcasts to all waiters so a release can
+		// never be coalesced away while slots remain free.
+		d.waiting++
+		wakeup := d.wakeup
 		d.mu.Unlock()
 		select {
-		case <-d.notify:
+		case <-wakeup:
 		case <-d.sub.closing:
+			d.mu.Lock()
+			d.waiting--
+			d.mu.Unlock()
 			return deliveryResult{closed: true}
 		case <-d.closing:
+			d.mu.Lock()
+			d.waiting--
+			d.mu.Unlock()
 			return deliveryResult{closed: true}
 		case <-ctx.Done():
+			d.mu.Lock()
+			d.waiting--
+			d.mu.Unlock()
 			d.sub.counters.dropped.Add(1)
 			return deliveryResult{dropped: 1, blocked: 1}
 		}
 		d.mu.Lock()
+		d.waiting--
 		if d.closed {
 			d.mu.Unlock()
 			return deliveryResult{closed: true}
@@ -193,6 +208,7 @@ func (d *keyedDispatcher) dropOldestLocked() {
 	oldest.queue = oldest.queue[1:]
 	d.pending--
 	d.sub.counters.dropped.Add(1)
+	d.capacityFreedLocked()
 }
 
 func (d *keyedDispatcher) runWorker(key string, w *keyedWorker) {
@@ -212,7 +228,7 @@ func (d *keyedDispatcher) runWorker(key string, w *keyedWorker) {
 		w.queue = w.queue[1:]
 		d.pending--
 		w.active = true
-		d.signal()
+		d.capacityFreedLocked()
 		d.mu.Unlock()
 
 		d.handle(evt)
@@ -230,6 +246,7 @@ func (d *keyedDispatcher) runWorker(key string, w *keyedWorker) {
 				evt := w.queue[0].evt
 				w.queue = w.queue[1:]
 				d.pending--
+				d.capacityFreedLocked()
 				d.mu.Unlock()
 				d.handle(evt)
 				d.mu.Lock()
@@ -248,11 +265,14 @@ func (d *keyedDispatcher) handle(evt Event) {
 	d.sub.handle(d.ctx, evt)
 }
 
-func (d *keyedDispatcher) signal() {
-	select {
-	case d.notify <- struct{}{}:
-	default:
+// capacityFreedLocked wakes every waiter blocked on capacity so each one can
+// recheck whether a slot is now available. The caller holds d.mu.
+func (d *keyedDispatcher) capacityFreedLocked() {
+	if d.waiting == 0 {
+		return
 	}
+	close(d.wakeup)
+	d.wakeup = make(chan struct{})
 }
 
 // shutdown stops accepting events and lets workers drain their queues before
@@ -265,6 +285,6 @@ func (d *keyedDispatcher) shutdown() {
 	}
 	d.closed = true
 	close(d.closing)
-	d.signal()
+	d.capacityFreedLocked()
 	d.mu.Unlock()
 }
