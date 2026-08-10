@@ -16,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *testing.T) {
@@ -58,9 +59,16 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 func TestPlaywrightSelectContextKeepsIndexesPrivateAndObservesFrame(t *testing.T) {
 	raw := playwrightRawContextCatalog{Generation: 4, Selected: "p1", Pages: []playwrightRawPage{
 		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
-		{Token: "p2", Index: 1, Generation: 2, URL: "https://example.com/page", Title: "Page", Frames: []playwrightRawFrame{
-			{Token: "f2", Generation: 3, URL: "https://frame.example/inside", Label: "child"},
-		}},
+		{
+			Token:      "p2",
+			Index:      1,
+			Generation: 2,
+			URL:        "https://example.com/page",
+			Title:      "Page",
+			Frames: []playwrightRawFrame{
+				{Token: "f2", Generation: 3, URL: "https://frame.example/inside", Label: "child"},
+			},
+		},
 	}}
 	selected := raw
 	selected.Selected = "p2"
@@ -108,9 +116,16 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 	opened := initial
 	opened.Generation = 3
 	opened.Selected = "p2"
-	opened.Pages = append(opened.Pages, playwrightRawPage{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin})
+	opened.Pages = append(
+		opened.Pages,
+		playwrightRawPage{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+	)
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
-		"browser_run_code_unsafe": {contextProbeResult(t, initial), contextProbeResult(t, opened), contextProbeResult(t, opened)},
+		"browser_run_code_unsafe": {
+			contextProbeResult(t, initial),
+			contextProbeResult(t, opened),
+			contextProbeResult(t, opened),
+		},
 	}}
 	worker := contextTestWorker(client)
 	catalog, err := worker.OpenTab(t.Context())
@@ -162,7 +177,11 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 		case "/frame":
 			_, _ = fmt.Fprint(writer, `<!doctype html><title>Frame</title><main><h1>Nested frame content</h1></main>`)
 		default:
-			_, _ = fmt.Fprintf(writer, `<!doctype html><title>Context Fixture</title><main>root</main><iframe title="Child" src="%s/frame"></iframe>`, fixtureURLForRequest(request))
+			_, _ = fmt.Fprintf(
+				writer,
+				`<!doctype html><title>Context Fixture</title><main>root</main><iframe title="Child" src="%s/frame"></iframe>`,
+				fixtureURLForRequest(request),
+			)
 		}
 	}))
 	defer fixture.Close()
@@ -186,7 +205,10 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 		"--output-mode=stdout", "--output-dir=" + driverOutput,
 	}
 	if runtime.GOOS == "darwin" {
-		server.Args = append(server.Args, "--executable-path=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+		server.Args = append(
+			server.Args,
+			"--executable-path=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		)
 	}
 	root.Tools.MCP.Servers["playwright"] = server
 	factory, err := NewPlaywrightWorkerFactory(root)
@@ -206,8 +228,10 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 	fixtureURL.Host = "browser-context-fixture.test:" + fixtureURL.Port()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	opened, err := factory.Open(ctx, WorkerOpenRequest{SessionID: "context_real_fixture",
-		Target: "gateway", Profile: "managed", DryRun: true, Limits: config.BrowserLimitsConfig{}})
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "context_real_fixture",
+		Target:    "gateway", Profile: "managed", DryRun: true, Limits: config.BrowserLimitsConfig{},
+	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -242,9 +266,11 @@ func fixtureURLForRequest(request *http.Request) string {
 }
 
 func contextTestWorker(client *fakePlaywrightClient) *playwrightWorker {
-	return &playwrightWorker{client: client, networkProxy: &browserNetworkProxy{},
+	return &playwrightWorker{
+		client: client, networkProxy: &browserNetworkProxy{},
 		limits: config.BrowserLimitsConfig{}.Effective(), contextSessionID: "session_context_test",
-		contextSecret: []byte("01234567890123456789012345678901")}
+		contextSecret: []byte("01234567890123456789012345678901"),
+	}
 }
 
 func contextProbeResult(t *testing.T, catalog playwrightRawContextCatalog) *sdkmcp.CallToolResult {
@@ -253,7 +279,9 @@ func contextProbeResult(t *testing.T, catalog playwrightRawContextCatalog) *sdkm
 	if err != nil {
 		t.Fatal(err)
 	}
-	return playwrightTextResult("### Result\n\"" + playwrightContextMarker + "|ok|" + url.QueryEscape(string(encoded)) + "\"")
+	return playwrightTextResult(
+		"### Result\n\"" + playwrightContextMarker + "|ok|" + url.QueryEscape(string(encoded)) + "\"",
+	)
 }
 
 func contextFrameResult(t *testing.T, rawURL, title, snapshot string) *sdkmcp.CallToolResult {
@@ -262,5 +290,7 @@ func contextFrameResult(t *testing.T, rawURL, title, snapshot string) *sdkmcp.Ca
 	if err != nil {
 		t.Fatal(err)
 	}
-	return playwrightTextResult("### Result\n\"" + playwrightContextMarker + "|frame|" + url.QueryEscape(string(encoded)) + "\"")
+	return playwrightTextResult(
+		"### Result\n\"" + playwrightContextMarker + "|frame|" + url.QueryEscape(string(encoded)) + "\"",
+	)
 }

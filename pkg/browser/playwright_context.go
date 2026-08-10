@@ -174,7 +174,8 @@ func (worker *playwrightWorker) SelectContext(
 		return DriverObservation{}, ContextCatalog{}, ErrNotFound
 	}
 	if frameID != "" {
-		if rawToken, ok := worker.contextState.frames[frameID]; !ok || !rawCatalogHasFrame(raw, tabID, rawToken, worker.contextState.tabs) {
+		if rawToken, ok := worker.contextState.frames[frameID]; !ok ||
+			!rawCatalogHasFrame(raw, tabID, rawToken, worker.contextState.tabs) {
 			return DriverObservation{}, ContextCatalog{}, ErrNotFound
 		}
 		if !catalogFrameReady(catalog, tabID, frameID) {
@@ -396,9 +397,11 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 		if locationErr != nil {
 			return ContextCatalog{}, locationErr
 		}
-		tab := TabContext{ID: tabID, Kind: TabOpened, CreationSequence: state.tabSequence[tabID],
+		tab := TabContext{
+			ID: tabID, Kind: TabOpened, CreationSequence: state.tabSequence[tabID],
 			DocumentGeneration: page.Generation, URL: tabURL, Origin: tabOrigin,
-			Title: boundedContextLabel(page.Title)}
+			Title: boundedContextLabel(page.Title),
+		}
 		if state.tabSequence[tabID] == 1 {
 			tab.Kind = TabPrimary
 		}
@@ -414,12 +417,17 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 			if depth < 1 || depth > MaxContextFrameDepth {
 				return ContextCatalog{}, ErrDriverIncompatible
 			}
-			tab.Frames = append(tab.Frames, FrameContext{ID: frameID,
+			tab.Frames = append(tab.Frames, FrameContext{
+				ID:            frameID,
 				ParentFrameID: reverseFrames[frame.Parent], CreationSequence: state.frameSequence[frameID],
 				Depth: depth, DocumentGeneration: frame.Generation, URL: frameURL, Origin: frameOrigin,
-				Label: boundedContextLabel(frame.Label), Availability: availability, SafeFailure: safeFailure})
+				Label: boundedContextLabel(frame.Label), Availability: availability, SafeFailure: safeFailure,
+			})
 		}
-		sort.SliceStable(tab.Frames, func(i, j int) bool { return tab.Frames[i].CreationSequence < tab.Frames[j].CreationSequence })
+		sort.SliceStable(
+			tab.Frames,
+			func(i, j int) bool { return tab.Frames[i].CreationSequence < tab.Frames[j].CreationSequence },
+		)
 		tabs = append(tabs, tab)
 	}
 	for id := range state.tabs {
@@ -444,8 +452,10 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 	if state.selectedTabID == "" || state.selectedTabID != selected {
 		state.selectedTabID, state.selectedFrame = selected, ""
 	}
-	catalog := ContextCatalog{ID: state.catalogID, Generation: state.generation,
-		SelectedTabID: state.selectedTabID, SelectedFrameID: state.selectedFrame, Tabs: tabs}
+	catalog := ContextCatalog{
+		ID: state.catalogID, Generation: state.generation,
+		SelectedTabID: state.selectedTabID, SelectedFrameID: state.selectedFrame, Tabs: tabs,
+	}
 	if err := catalog.Validate(); err != nil {
 		return ContextCatalog{}, errors.Join(ErrDriverIncompatible, err)
 	}
@@ -462,7 +472,9 @@ func reverseContextIDs(values map[string]string) map[string]string {
 
 func (worker *playwrightWorker) opaqueContextID(kind, raw string) string {
 	digest := hmac.New(sha256.New, worker.contextSecret)
-	_, _ = digest.Write([]byte("mintclaw.browser.context.v1\x00" + kind + "\x00" + worker.contextSessionID + "\x00" + raw))
+	_, _ = digest.Write(
+		[]byte("mintclaw.browser.context.v1\x00" + kind + "\x00" + worker.contextSessionID + "\x00" + raw),
+	)
 	return kind + "_" + hex.EncodeToString(digest.Sum(nil)[:16])
 }
 
@@ -536,14 +548,22 @@ func (worker *playwrightWorker) observeLocked(ctx context.Context) (DriverObserv
 	if err != nil {
 		return DriverObservation{}, err
 	}
-	observation, err := parsePlaywrightObservation(text, worker.limits.SnapshotBytes, worker.limits.SnapshotRefs, worker.limits.ToolResultBytes)
+	observation, err := parsePlaywrightObservation(
+		text,
+		worker.limits.SnapshotBytes,
+		worker.limits.SnapshotRefs,
+		worker.limits.ToolResultBytes,
+	)
 	if err == nil {
 		worker.lastObservation = observation
 	}
 	return observation, err
 }
 
-func (worker *playwrightWorker) observeFrameLocked(ctx context.Context, tabID, frameID string) (DriverObservation, error) {
+func (worker *playwrightWorker) observeFrameLocked(
+	ctx context.Context,
+	tabID, frameID string,
+) (DriverObservation, error) {
 	rawTab, rawFrame := worker.contextState.tabs[tabID], worker.contextState.frames[frameID]
 	code := fmt.Sprintf(`async (page) => {
   const state = page.context()[Symbol.for("mintclaw.browser.context-registry.v1")];
@@ -581,7 +601,13 @@ func (worker *playwrightWorker) observeFrameLocked(ctx context.Context, tabID, f
 		result.Snapshot = truncateUTF8(result.Snapshot, worker.limits.SnapshotBytes)
 		truncated = true
 	}
-	return DriverObservation{URL: safeURL, Origin: origin, Title: boundedContextLabel(result.Title), Snapshot: result.Snapshot, Truncated: truncated}, nil
+	return DriverObservation{
+		URL:       safeURL,
+		Origin:    origin,
+		Title:     boundedContextLabel(result.Title),
+		Snapshot:  result.Snapshot,
+		Truncated: truncated,
+	}, nil
 }
 
 func truncateUTF8(value string, maximum int) string {
