@@ -66,7 +66,9 @@ type Lease struct {
 	threadID string
 	owner    LeaseOwner
 	file     *os.File
+	mu       sync.Mutex
 	once     sync.Once
+	released bool
 	err      error
 }
 
@@ -91,10 +93,28 @@ func (l *Lease) Release() error {
 	if l == nil {
 		return nil
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.once.Do(func() {
 		l.err = errors.Join(releaseThreadLeaseFile(l.file), l.file.Close())
+		l.released = true
 	})
 	return l.err
+}
+
+func (l *Lease) withActive(threadID string, operation func() error) error {
+	if l == nil {
+		return fmt.Errorf("coding thread lease is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return fmt.Errorf("coding thread lease for %q was released", threadID)
+	}
+	if l.threadID != threadID {
+		return fmt.Errorf("coding thread lease for %q cannot write thread %q", l.threadID, threadID)
+	}
+	return operation()
 }
 
 // AcquireLease takes a non-blocking writer lease on an existing coding thread.
