@@ -983,13 +983,6 @@ func isNodeDownloadTransferCommand(command string) bool {
 	return command == "file.download.v1" || command == nodes.InternalJobArtifactDownloadCommand
 }
 
-func (runtime *nodeInvocationToolRuntime) prepare(
-	ctx context.Context,
-	args map[string]any,
-) (nodes.GatewayInvocationRecord, error) {
-	return runtime.prepareInternal(ctx, args, false)
-}
-
 func (runtime *nodeInvocationToolRuntime) prepareInternal(
 	ctx context.Context,
 	args map[string]any,
