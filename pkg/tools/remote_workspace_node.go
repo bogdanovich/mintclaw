@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"slices"
 	"strings"
 
@@ -201,6 +202,9 @@ func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 	command string,
 	toolArgs map[string]any,
 ) (map[string]any, error) {
+	if err := validateRemoteWorkspaceMutationArguments(command, toolArgs); err != nil {
+		return nil, err
+	}
 	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
 	if err != nil || resolved.registration == nil || !resolved.available {
 		return nil, fmt.Errorf("resolve workspace target")
@@ -245,6 +249,46 @@ func (router *RemoteWorkspaceNodeRouter) prepareArguments(
 		"timeout_seconds":    min(30, descriptor.ModelContract.TimeoutSecondsMax),
 		"output_limit_bytes": min(workspaceCommandOutputLimit(command), descriptor.ModelContract.OutputBytesMax),
 	}, nil
+}
+
+func validateRemoteWorkspaceMutationArguments(command string, toolArgs map[string]any) error {
+	switch command {
+	case nodes.WorkspaceCommandWrite:
+		path, pathOK := toolArgs["path"].(string)
+		_, contentOK := toolArgs["content"].(string)
+		overwrite, overwriteOK := toolArgs["overwrite"].(bool)
+		_, hasExpected := toolArgs["expected_sha256"]
+		if !pathOK || !contentOK || !overwriteOK || !validRemoteWorkspacePath(path) || hasExpected && !overwrite {
+			return ErrRemoteWorkspaceUnavailable
+		}
+	case nodes.WorkspaceCommandPatch:
+		input, ok := toolArgs["input"].(string)
+		if !ok {
+			return ErrRemoteWorkspaceUnavailable
+		}
+		operations, err := patchformat.Parse(input, nodes.MaxWorkspacePatchFiles)
+		if err != nil {
+			return ErrRemoteWorkspaceUnavailable
+		}
+		seen := make(map[string]struct{}, len(operations))
+		for _, operation := range operations {
+			if !validRemoteWorkspacePath(operation.Path) {
+				return ErrRemoteWorkspaceUnavailable
+			}
+			if _, duplicate := seen[operation.Path]; duplicate {
+				return ErrRemoteWorkspaceUnavailable
+			}
+			seen[operation.Path] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validRemoteWorkspacePath(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value && !strings.ContainsRune(value, 0) &&
+		!strings.ContainsRune(value, '\\') && !strings.HasPrefix(value, "/") && pathpkg.Clean(value) == value &&
+		value != "." && value != ".." &&
+		!strings.HasPrefix(value, "../")
 }
 
 func workspaceCommandOutputLimit(command string) int {

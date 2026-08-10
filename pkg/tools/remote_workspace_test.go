@@ -199,6 +199,43 @@ func TestRemoteWorkspaceNodeRouterMapsPatch(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceNodeRouterRejectsMutationBeforePreparation(t *testing.T) {
+	cfg, source := remoteWorkspaceNodeTestSetup(t)
+	writeRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "write_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := writeRouter.ExecuteRemoteWorkspace(
+		nodeInvocationTestContext("owner", "workspace-write-invalid"),
+		"write_file",
+		"project",
+		map[string]any{
+			"path": "../outside", "content": "no", "overwrite": false,
+			"expected_sha256": strings.Repeat("a", 64),
+		},
+	)
+	if !result.IsError || source.prepareCalls != 0 || source.dispatchCalls != 0 {
+		t.Fatalf("invalid write = %#v; prepares=%d dispatches=%d", result, source.prepareCalls, source.dispatchCalls)
+	}
+	patchRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "apply_patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = patchRouter.ExecuteRemoteWorkspace(
+		nodeInvocationTestContext("owner", "workspace-patch-invalid"),
+		"apply_patch",
+		"project",
+		map[string]any{"input": `*** Begin Patch
+*** Add File: same.txt
++one
+*** Delete File: same.txt
+*** End Patch`},
+	)
+	if !result.IsError || source.prepareCalls != 0 || source.dispatchCalls != 0 {
+		t.Fatalf("invalid patch = %#v; prepares=%d dispatches=%d", result, source.prepareCalls, source.dispatchCalls)
+	}
+}
+
 func remoteWorkspaceNodeTestSetup(t *testing.T) (*config.Config, *fakeNodeInvocationSource) {
 	return remoteWorkspaceNodeTestSetupWithApproval(t, "none")
 }
