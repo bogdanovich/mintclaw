@@ -564,6 +564,18 @@ func (parent *resolvedParent) validateDisplacedFinal(
 	expectedSize int64,
 	expectedDigest [sha256.Size]byte,
 ) error {
+	var observed unix.Stat_t
+	if err := unix.Fstatat(
+		int(parent.staging.Fd()),
+		name,
+		&observed,
+		unix.AT_SYMLINK_NOFOLLOW,
+	); err != nil {
+		return classifyFileAccessError(err)
+	}
+	if observed.Mode&unix.S_IFMT != unix.S_IFREG {
+		return ErrFileConflict
+	}
 	descriptor, err := unix.Openat(
 		int(parent.staging.Fd()),
 		name,
