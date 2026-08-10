@@ -115,6 +115,24 @@ func openWindowsCatalogChild(
 	access uint32,
 	options uint32,
 ) (windows.Handle, error) {
+	return openWindowsCatalogChildWithDisposition(
+		parent,
+		name,
+		access,
+		windows.FILE_OPEN,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		options,
+	)
+}
+
+func openWindowsCatalogChildWithDisposition(
+	parent windows.Handle,
+	name string,
+	access uint32,
+	disposition uint32,
+	shareMode uint32,
+	options uint32,
+) (windows.Handle, error) {
 	objectName, err := windows.NewNTUnicodeString(name)
 	if err != nil {
 		return windows.InvalidHandle, err
@@ -133,8 +151,8 @@ func openWindowsCatalogChild(
 		&windows.IO_STATUS_BLOCK{},
 		nil,
 		windows.FILE_ATTRIBUTE_NORMAL,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		windows.FILE_OPEN,
+		shareMode,
+		disposition,
 		options,
 		0,
 		0,
