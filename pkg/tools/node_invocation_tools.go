@@ -211,7 +211,7 @@ func (tool *NodeInvokeTool) execute(
 				tool.runtime.publishInvocationEvent(
 					ctx,
 					NodeInvocationObservationDispatched,
-					"nodes_invoke",
+					tool.runtime.invocationEventSource(),
 					record,
 					string(nodes.GatewayInvocationDispatched),
 					"",
@@ -220,7 +220,7 @@ func (tool *NodeInvokeTool) execute(
 			tool.runtime.publishInvocationEvent(
 				ctx,
 				NodeInvocationObservationRejected,
-				"nodes_invoke",
+				tool.runtime.invocationEventSource(),
 				record,
 				state,
 				errorCode,
@@ -241,7 +241,7 @@ func (tool *NodeInvokeTool) execute(
 				tool.runtime.publishInvocationEvent(
 					ctx,
 					NodeInvocationObservationDispatched,
-					"nodes_invoke",
+					tool.runtime.invocationEventSource(),
 					record,
 					string(nodes.GatewayInvocationDispatched),
 					"",
@@ -250,7 +250,7 @@ func (tool *NodeInvokeTool) execute(
 			tool.runtime.publishInvocationEvent(
 				ctx,
 				NodeInvocationObservationUncertain,
-				"nodes_invoke",
+				tool.runtime.invocationEventSource(),
 				record,
 				string(nodes.InvocationUnknown),
 				"DISPATCH_UNCERTAIN",
@@ -289,7 +289,7 @@ func (tool *NodeInvokeTool) execute(
 	tool.runtime.publishInvocationEvent(
 		ctx,
 		NodeInvocationObservationDispatched,
-		"nodes_invoke",
+		tool.runtime.invocationEventSource(),
 		record,
 		string(nodes.GatewayInvocationDispatched),
 		"",
@@ -297,7 +297,7 @@ func (tool *NodeInvokeTool) execute(
 	tool.runtime.publishInvocationEvent(
 		ctx,
 		NodeInvocationObservationCompleted,
-		"nodes_invoke",
+		tool.runtime.invocationEventSource(),
 		record,
 		string(nodes.InvocationSucceeded),
 		"",

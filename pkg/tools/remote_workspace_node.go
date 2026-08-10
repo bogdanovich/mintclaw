@@ -21,8 +21,9 @@ import (
 var ErrRemoteWorkspaceUnavailable = errors.New("remote workspace unavailable")
 
 type remoteWorkspaceNodeBinding struct {
-	alias  string
-	config config.RemoteWorkspace
+	alias     string
+	config    config.RemoteWorkspace
+	allowJobs bool
 }
 
 type remoteWorkspaceMutationAudit struct {
@@ -63,7 +64,10 @@ func NewRemoteWorkspaceNodeRouter(
 			!slices.Contains(visible, workspace.Target) {
 			continue
 		}
-		byAlias[alias] = remoteWorkspaceNodeBinding{alias: alias, config: workspace}
+		_, allowJobs := cfg.RemoteWorkspaceAllows(alias, "jobs")
+		byAlias[alias] = remoteWorkspaceNodeBinding{
+			alias: alias, config: workspace, allowJobs: allowJobs,
+		}
 		aliases = append(aliases, alias)
 	}
 	slices.Sort(aliases)

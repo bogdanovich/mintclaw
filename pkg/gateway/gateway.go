@@ -618,6 +618,32 @@ func setupNodeTools(
 	); err != nil {
 		return err
 	}
+	if err := agentLoop.RegisterRuntimeAgentTool(
+		"workspace_exec",
+		func(reloadCfg *config.Config, agentID string) (toolshared.Tool, error) {
+			if !configuredRemoteWorkspaceForTool(reloadCfg, "workspace_exec") {
+				return nil, nil
+			}
+			source, sourceErr := newNodeInvocationSource(reloadCfg, runtime)
+			if errors.Is(sourceErr, errNodeDiscoveryAuthorityUnavailable) || source == nil {
+				return nil, nil
+			}
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			tool, toolErr := tools.NewWorkspaceExecTool(reloadCfg, source, agentID)
+			if errors.Is(toolErr, tools.ErrRemoteWorkspaceUnavailable) {
+				return nil, nil
+			}
+			if toolErr != nil {
+				return nil, toolErr
+			}
+			tool.SetEventPublisher(agentLoop.RuntimeEventBus())
+			return tool, nil
+		},
+	); err != nil {
+		return err
+	}
 	if err := agentLoop.RegisterRuntimeTool(
 		"nodes_file_info",
 		nodeFileTransferToolFactory(

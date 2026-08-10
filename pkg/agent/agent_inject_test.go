@@ -130,3 +130,39 @@ func TestRegisterRuntimeToolDecoratorDoesNotStackAcrossReloadRecovery(t *testing
 		t.Fatalf("decorator factory calls = first:%d second:%d, want 1 each", firstCalls, secondCalls)
 	}
 }
+
+func TestRegisterRuntimeAgentToolProjectsEachAgentSeparately(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.List = []config.AgentConfig{{ID: "alpha"}, {ID: "beta"}}
+	loop := NewAgentLoop(cfg, nil, nil, nil)
+	if err := loop.RegisterRuntimeAgentTool(
+		"scoped",
+		func(_ *config.Config, agentID string) (toolshared.Tool, error) {
+			return &runtimeAgentTestTool{agentID: agentID}, nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, agentID := range []string{"alpha", "beta"} {
+		instance, ok := loop.GetRegistry().GetAgent(agentID)
+		if !ok {
+			t.Fatalf("agent %s is missing", agentID)
+		}
+		registered, ok := instance.Tools.Get("scoped")
+		if !ok || registered.(*runtimeAgentTestTool).agentID != agentID {
+			t.Fatalf("agent %s received %#v", agentID, registered)
+		}
+	}
+}
+
+type runtimeAgentTestTool struct{ agentID string }
+
+func (*runtimeAgentTestTool) Name() string        { return "scoped" }
+func (*runtimeAgentTestTool) Description() string { return "agent-scoped runtime test tool" }
+func (tool *runtimeAgentTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "agent": tool.agentID}
+}
+
+func (*runtimeAgentTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}

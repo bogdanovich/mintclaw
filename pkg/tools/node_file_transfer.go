@@ -613,6 +613,7 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 		toolName == "nodes_invoke" ||
 		toolName == "nodes_status" ||
 		toolName == "nodes_cancel" ||
+		toolName == "workspace_exec" ||
 		isRemoteWorkspaceFileCall(toolName, arguments) {
 		return map[string]any{
 			"redacted":       true,

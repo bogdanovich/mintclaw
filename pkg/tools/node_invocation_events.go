@@ -12,6 +12,34 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+type nodeInvocationWorkspaceContextKey struct{}
+
+type nodeInvocationWorkspaceContext struct {
+	alias    string
+	revision string
+}
+
+func withNodeInvocationWorkspace(ctx context.Context, alias string, revision string) context.Context {
+	return context.WithValue(ctx, nodeInvocationWorkspaceContextKey{}, nodeInvocationWorkspaceContext{
+		alias: alias, revision: revision,
+	})
+}
+
+func nodeInvocationWorkspaceAuthority(ctx context.Context) string {
+	workspace, ok := ctx.Value(nodeInvocationWorkspaceContextKey{}).(nodeInvocationWorkspaceContext)
+	if !ok {
+		return ""
+	}
+	return stableNodeInvocationID("workspace", workspace.alias, workspace.revision)
+}
+
+func (runtime *nodeInvocationToolRuntime) invocationEventSource() string {
+	if runtime != nil && strings.TrimSpace(runtime.eventSource) != "" {
+		return runtime.eventSource
+	}
+	return "nodes_invoke"
+}
+
 func serviceProfileForInvocation(descriptor nodes.CommandDescriptor) string {
 	if len(descriptor.ServiceProfiles) == 1 {
 		return descriptor.ServiceProfiles[0].Alias
@@ -93,6 +121,10 @@ func publishNodeInvocationEvent(
 		State:        state,
 		ErrorCode:    errorCode,
 	}
+	if workspace, ok := ctx.Value(nodeInvocationWorkspaceContextKey{}).(nodeInvocationWorkspaceContext); ok {
+		payload.Workspace = workspace.alias
+		payload.WorkspaceRevision = workspace.revision
+	}
 	payload.Service, payload.Action, payload.LogEntries = serviceInvocationObservation(record.Plan)
 	observeJobInvocation(&payload, record.Plan, result...)
 	severity := runtimeevents.SeverityInfo
@@ -108,6 +140,10 @@ func publishNodeInvocationEvent(
 		"risk":          payload.Risk,
 		"gateway_state": payload.GatewayState,
 		"state":         payload.State,
+	}
+	if payload.Workspace != "" {
+		attrs["workspace"] = payload.Workspace
+		attrs["workspace_revision"] = payload.WorkspaceRevision
 	}
 	if payload.ErrorCode != "" {
 		attrs["error_code"] = payload.ErrorCode

@@ -81,6 +81,7 @@ type AgentLoop struct {
 	interactionCatalogMu       sync.Mutex
 	interactionRecoveryRunning atomic.Bool
 	runtimeTools               map[string]RuntimeToolFactory
+	runtimeAgentTools          map[string]RuntimeAgentToolFactory
 	runtimeToolDecorators      map[string]RuntimeToolDecoratorFactory
 	mu                         sync.RWMutex
 

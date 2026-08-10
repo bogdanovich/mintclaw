@@ -740,7 +740,7 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 	}
 	switch tool {
 	case "nodes", "nodes_invoke", "nodes_file_info", "nodes_upload", "nodes_download", "nodes_status", "nodes_cancel",
-		"request_user_input":
+		"request_user_input", "workspace_exec":
 		return false
 	default:
 		return true

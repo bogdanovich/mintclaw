@@ -321,6 +321,55 @@ func TestRemoteWorkspaceDecoratorsDoNotStackAcrossNodeToolReloads(t *testing.T) 
 	assertOneLayer(t)
 }
 
+func TestWorkspaceExecRegistersOnlyForAgentWithTargetGrant(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "builder", TargetPolicy: &config.TargetPolicy{AllowedTargets: []string{"build"}}},
+		{ID: "observer", TargetPolicy: &config.TargetPolicy{}},
+	}
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"build": {Type: "node", Node: "builder-node"},
+	}
+	cfg.Execution.RemoteWorkspaces = map[string]config.RemoteWorkspace{
+		"project": {
+			Target: "build", WorkingScope: "project", Revision: "workspace-v1",
+			Tools: []string{"workspace_exec"},
+		},
+	}
+	loop := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
+	runtime := &nodeAdmissionRuntime{
+		registryPath: nodes.RegistryPath(cfg.WorkspacePath()),
+		handler:      &fakeNodeAdmissionHandler{},
+		generation:   1,
+		mounted:      true,
+	}
+	if err := setupNodeTools(cfg, loop, runtime); err != nil {
+		t.Fatal(err)
+	}
+	builder, ok := loop.GetRegistry().GetAgent("builder")
+	if !ok {
+		t.Fatal("builder agent is unavailable")
+	}
+	observer, ok := loop.GetRegistry().GetAgent("observer")
+	if !ok {
+		t.Fatal("observer agent is unavailable")
+	}
+	tool, allowed := builder.Tools.Get("workspace_exec")
+	if !allowed {
+		t.Fatal("workspace_exec is unavailable to the granted agent")
+	}
+	aliases := tool.Parameters()["properties"].(map[string]any)["workspace"].(map[string]any)["enum"].([]string)
+	if len(aliases) != 1 || aliases[0] != "project" {
+		t.Fatalf("workspace_exec aliases = %#v", aliases)
+	}
+	if _, leaked := observer.Tools.Get("workspace_exec"); leaked {
+		t.Fatal("workspace_exec leaked to an agent without target authority")
+	}
+}
+
 func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	cfg.Agents.Defaults.ContextManager = "none"
