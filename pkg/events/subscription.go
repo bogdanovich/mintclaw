@@ -140,6 +140,7 @@ func normalizeSubscribeOptions(opts SubscribeOptions) SubscribeOptions {
 }
 
 func newSubscription(
+	ctx context.Context,
 	bus *EventBus,
 	id uint64,
 	filters []Filter,
@@ -161,7 +162,7 @@ func newSubscription(
 		closing: make(chan struct{}),
 	}
 	if opts.Concurrency == Keyed && handler != nil {
-		sub.keyed = newKeyedDispatcher(sub, opts.KeyFunc)
+		sub.keyed = newKeyedDispatcher(sub, ctx, opts.KeyFunc)
 	}
 	return sub
 }

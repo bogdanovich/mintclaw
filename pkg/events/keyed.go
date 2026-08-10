@@ -40,35 +40,45 @@ func defaultKeyFunc(evt Event) string {
 // different keys run concurrently.
 type keyedDispatcher struct {
 	sub     *eventSubscription
+	ctx     context.Context
 	keyFunc func(Event) string
 	policy  BackpressurePolicy
 	limit   int
 
-	mu      sync.Mutex
-	nextSeq uint64
-	workers map[string]*keyedWorker
-	pending int
-	notify  chan struct{}
-	closing chan struct{}
-	closed  bool
-	wg      sync.WaitGroup
+	mu           sync.Mutex
+	nextSeq      uint64
+	workers      map[string]*keyedWorker
+	pending      int
+	onceAccepted bool
+	notify       chan struct{}
+	closing      chan struct{}
+	closed       bool
+	wg           sync.WaitGroup
 
 	onceClose sync.Once
 }
 
+type queuedEvent struct {
+	seq uint64
+	evt Event
+}
+
 type keyedWorker struct {
 	key    string
-	seq    uint64
-	queue  []Event
+	queue  []queuedEvent
 	active bool
 }
 
-func newKeyedDispatcher(sub *eventSubscription, keyFunc func(Event) string) *keyedDispatcher {
+func newKeyedDispatcher(sub *eventSubscription, ctx context.Context, keyFunc func(Event) string) *keyedDispatcher {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if keyFunc == nil {
 		keyFunc = defaultKeyFunc
 	}
 	return &keyedDispatcher{
 		sub:     sub,
+		ctx:     ctx,
 		keyFunc: keyFunc,
 		policy:  sub.opts.Backpressure,
 		limit:   sub.opts.Buffer,
@@ -93,14 +103,15 @@ func (d *keyedDispatcher) enqueue(ctx context.Context, evt Event, nonBlocking bo
 		d.mu.Unlock()
 		return deliveryResult{closed: true}
 	}
+	if d.sub.once && d.onceAccepted {
+		d.mu.Unlock()
+		return deliveryResult{closed: true}
+	}
 	d.sub.counters.received.Add(1)
 
 	for {
 		if d.pending < d.limit {
-			d.enqueueLocked(key, evt)
-			if d.sub.once {
-				d.onceClose.Do(func() { go func() { _ = d.sub.Close() }() })
-			}
+			d.acceptLocked(key, evt)
 			d.mu.Unlock()
 			return deliveryResult{delivered: 1}
 		}
@@ -108,7 +119,7 @@ func (d *keyedDispatcher) enqueue(ctx context.Context, evt Event, nonBlocking bo
 		if nonBlocking || d.policy != Block {
 			if d.policy == DropOldest {
 				d.dropOldestLocked()
-				d.enqueueLocked(key, evt)
+				d.acceptLocked(key, evt)
 				d.mu.Unlock()
 				return deliveryResult{delivered: 1, dropped: 1}
 			}
@@ -134,32 +145,45 @@ func (d *keyedDispatcher) enqueue(ctx context.Context, evt Event, nonBlocking bo
 			d.mu.Unlock()
 			return deliveryResult{closed: true}
 		}
+		if d.sub.once && d.onceAccepted {
+			d.mu.Unlock()
+			return deliveryResult{closed: true}
+		}
 	}
 }
 
-func (d *keyedDispatcher) enqueueLocked(key string, evt Event) {
+// acceptLocked records the one event accepted by a Keyed SubscribeOnce,
+// starts the worker for its key, and enqueues the event.
+func (d *keyedDispatcher) acceptLocked(key string, evt Event) {
+	if d.sub.once {
+		d.onceAccepted = true
+	}
 	w := d.workers[key]
 	if w == nil {
-		d.nextSeq++
-		w = &keyedWorker{key: key, seq: d.nextSeq}
+		w = &keyedWorker{key: key}
 		d.workers[key] = w
 		d.wg.Add(1)
-		go d.runWorker(context.Background(), key, w)
+		go d.runWorker(key, w)
 	}
-	w.queue = append(w.queue, evt)
+	d.nextSeq++
+	w.queue = append(w.queue, queuedEvent{seq: d.nextSeq, evt: evt})
 	d.pending++
+	if d.sub.once {
+		d.onceClose.Do(func() { go func() { _ = d.sub.Close() }() })
+	}
 }
 
 // dropOldestLocked drops the earliest queued event and frees its slot. The
-// victim is the head of the queue of the oldest worker with queued events,
-// preserving FIFO for the remaining accepted events.
+// victim is the queue head with the smallest acceptance sequence, preserving
+// FIFO for the remaining accepted events. The worker stays mapped until its
+// goroutine exits so a retired worker can never remove a replacement.
 func (d *keyedDispatcher) dropOldestLocked() {
 	var oldest *keyedWorker
 	for _, w := range d.workers {
 		if len(w.queue) == 0 {
 			continue
 		}
-		if oldest == nil || w.seq < oldest.seq {
+		if oldest == nil || w.queue[0].seq < oldest.queue[0].seq {
 			oldest = w
 		}
 	}
@@ -169,30 +193,29 @@ func (d *keyedDispatcher) dropOldestLocked() {
 	oldest.queue = oldest.queue[1:]
 	d.pending--
 	d.sub.counters.dropped.Add(1)
-	if len(oldest.queue) == 0 && !oldest.active {
-		delete(d.workers, oldest.key)
-	}
 }
 
-func (d *keyedDispatcher) runWorker(ctx context.Context, key string, w *keyedWorker) {
+func (d *keyedDispatcher) runWorker(key string, w *keyedWorker) {
 	defer d.wg.Done()
 
 	for {
 		d.mu.Lock()
 		if len(w.queue) == 0 {
-			delete(d.workers, key)
+			if d.workers[key] == w {
+				delete(d.workers, key)
+			}
 			d.mu.Unlock()
 			return
 		}
 
-		evt := w.queue[0]
+		evt := w.queue[0].evt
 		w.queue = w.queue[1:]
 		d.pending--
 		w.active = true
 		d.signal()
 		d.mu.Unlock()
 
-		d.handle(ctx, evt)
+		d.handle(evt)
 
 		d.mu.Lock()
 		w.active = false
@@ -204,14 +227,16 @@ func (d *keyedDispatcher) runWorker(ctx context.Context, key string, w *keyedWor
 		}
 		if closing {
 			for len(w.queue) > 0 {
-				evt := w.queue[0]
+				evt := w.queue[0].evt
 				w.queue = w.queue[1:]
 				d.pending--
 				d.mu.Unlock()
-				d.handle(ctx, evt)
+				d.handle(evt)
 				d.mu.Lock()
 			}
-			delete(d.workers, key)
+			if d.workers[key] == w {
+				delete(d.workers, key)
+			}
 			d.mu.Unlock()
 			return
 		}
@@ -219,8 +244,8 @@ func (d *keyedDispatcher) runWorker(ctx context.Context, key string, w *keyedWor
 	}
 }
 
-func (d *keyedDispatcher) handle(ctx context.Context, evt Event) {
-	d.sub.handle(ctx, evt)
+func (d *keyedDispatcher) handle(evt Event) {
+	d.sub.handle(d.ctx, evt)
 }
 
 func (d *keyedDispatcher) signal() {

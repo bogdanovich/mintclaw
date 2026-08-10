@@ -628,3 +628,134 @@ func TestKeyedBlockBackpressureHonorsContext(t *testing.T) {
 	close(release)
 	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 2)
 }
+
+func TestKeyedSubscribeOnceHandlesSingleEvent(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	var handled atomic.Uint64
+	sub, err := bus.Channel().SubscribeOnce(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-once", Buffer: 16, Concurrency: Keyed},
+		func(context.Context, Event) error {
+			handled.Add(1)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubscribeOnce failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}})
+		}()
+	}
+	wg.Wait()
+	waitForSubscriptionDone(t, sub)
+
+	if got := handled.Load(); got != 1 {
+		t.Fatalf("handled = %d, want 1", got)
+	}
+}
+
+func TestKeyedDropOldestEvictsOldestQueuedEventAcrossWorkers(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	startedA := make(chan struct{})
+	startedB := make(chan struct{})
+	release := make(chan struct{})
+
+	var handledMu sync.Mutex
+	handled := []int{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-drop-oldest-cross", Buffer: 2, Concurrency: Keyed, Backpressure: DropOldest},
+		func(_ context.Context, evt Event) error {
+			payload := evt.Payload.(int)
+			if payload <= 2 {
+				if payload == 1 {
+					close(startedA)
+				} else {
+					close(startedB)
+				}
+				<-release
+			}
+			handledMu.Lock()
+			handled = append(handled, payload)
+			handledMu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "a"}, Payload: 1})
+	<-startedA
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 2})
+	<-startedB
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 3})
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "a"}, Payload: 4})
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "b"}, Payload: 5})
+
+	close(release)
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 4)
+
+	handledMu.Lock()
+	defer handledMu.Unlock()
+	got := append([]int(nil), handled...)
+	slices.Sort(got)
+	if !slices.Equal(got, []int{1, 2, 4, 5}) {
+		t.Fatalf("handled = %v, want [1 2 4 5] (event 3 evicted)", got)
+	}
+	if dropped := sub.Stats().Dropped; dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", dropped)
+	}
+}
+
+func TestKeyedHandlerSeesSubscriptionContext(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	handlerStarted := make(chan struct{})
+	handlerObservedCancel := make(chan struct{})
+
+	sub, err := bus.Channel().Subscribe(
+		ctx,
+		SubscribeOptions{Name: "keyed-ctx", Buffer: 2, Concurrency: Keyed},
+		func(hctx context.Context, evt Event) error {
+			if evt.Payload.(int) == 1 {
+				close(handlerStarted)
+				<-hctx.Done()
+				close(handlerObservedCancel)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 1})
+	<-handlerStarted
+	cancel()
+	waitForSubscriptionDone(t, sub)
+
+	select {
+	case <-handlerObservedCancel:
+	case <-time.After(time.Second):
+		t.Fatal("keyed handler did not observe subscription cancellation")
+	}
+}
