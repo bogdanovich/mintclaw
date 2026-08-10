@@ -94,7 +94,12 @@ func (*resolvedParent) ensureFinalAbsent() error {
 	return ErrFileAccessDenied
 }
 
-func (*resolvedParent) removeFinalRegular(fileIdentity) error {
+func (*resolvedParent) removeFinalRegular(
+	context.Context,
+	fileIdentity,
+	int64,
+	[sha256.Size]byte,
+) error {
 	return ErrFileAccessDenied
 }
 

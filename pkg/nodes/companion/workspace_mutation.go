@@ -398,7 +398,12 @@ func publishWorkspaceMutation(ctx context.Context, item *preparedWorkspaceMutati
 			item.digest,
 		)
 	case string(patchformat.Delete):
-		return item.parent.removeFinalRegular(item.before.identity)
+		return item.parent.removeFinalRegular(
+			ctx,
+			item.before.identity,
+			item.before.info.Size(),
+			item.digest,
+		)
 	default:
 		return ErrFileAccessDenied
 	}

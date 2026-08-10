@@ -3,6 +3,7 @@
 package companion
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"os"
@@ -349,7 +350,13 @@ func TestFileResolverDeleteRejectsAndRestoresReplacedIdentity(t *testing.T) {
 	if err := os.Rename(replacement, path); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.removeFinalRegular(expected); !errors.Is(err, ErrFileConflict) {
+	expectedDigest := sha256.Sum256([]byte("original"))
+	if err := parent.removeFinalRegular(
+		t.Context(),
+		expected,
+		int64(len("original")),
+		expectedDigest,
+	); !errors.Is(err, ErrFileConflict) {
 		t.Fatalf("remove replaced identity error = %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -399,7 +406,13 @@ func TestFileResolverDeleteRestoresNonRegularReplacement(t *testing.T) {
 	if err := os.Rename(replacement, path); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.removeFinalRegular(expected); !errors.Is(err, ErrFileConflict) {
+	expectedDigest := sha256.Sum256([]byte("original"))
+	if err := parent.removeFinalRegular(
+		t.Context(),
+		expected,
+		int64(len("original")),
+		expectedDigest,
+	); !errors.Is(err, ErrFileConflict) {
 		t.Fatalf("remove non-regular identity error = %v", err)
 	}
 	info, err := os.Lstat(path)
@@ -415,6 +428,73 @@ func TestFileResolverDeleteRestoresNonRegularReplacement(t *testing.T) {
 	}
 	if target != "outside.txt" {
 		t.Fatalf("restored symlink target = %q", target)
+	}
+}
+
+func TestFileResolverDeleteRestoresConcurrentContentAndCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		prepare     func(*testing.T, string) context.Context
+		wantContent string
+		wantErr     error
+	}{
+		{
+			name: "changed_content",
+			prepare: func(t *testing.T, path string) context.Context {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return t.Context()
+			},
+			wantContent: "changed",
+			wantErr:     ErrFileConflict,
+		},
+		{
+			name: "canceled",
+			prepare: func(t *testing.T, _ string) context.Context {
+				t.Helper()
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return ctx
+			},
+			wantContent: "original",
+			wantErr:     context.Canceled,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootPath := canonicalTempDir(t)
+			path := filepath.Join(rootPath, "config.txt")
+			if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			root, err := openFileRoot(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = root.close() })
+			parent, err := root.resolveParent(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = parent.close() })
+			original, err := parent.openFinalRegular()
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := original.identity
+			_ = original.file.Close()
+			ctx := test.prepare(t, path)
+			digest := sha256.Sum256([]byte("original"))
+			err = parent.removeFinalRegular(ctx, expected, int64(len("original")), digest)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("remove error = %v, want %v", err, test.wantErr)
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil || string(content) != test.wantContent {
+				t.Fatalf("restored content = %q, err = %v", content, readErr)
+			}
+		})
 	}
 }
 
@@ -442,7 +522,13 @@ func TestFileResolverDeleteRemovesExactIdentity(t *testing.T) {
 	if err := original.file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.removeFinalRegular(expected); err != nil {
+	expectedDigest := sha256.Sum256([]byte("original"))
+	if err := parent.removeFinalRegular(
+		t.Context(),
+		expected,
+		int64(len("original")),
+		expectedDigest,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
