@@ -4075,6 +4075,58 @@ func TestStopCancellationFencesClaimedInteractionBeforeRouteWait(t *testing.T) {
 	}
 }
 
+func TestStopCancellationRecoveryClearsTimedOutPendingStop(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:cancel-recovery-pending-stop"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-unregistered-continuation")
+	if !claimed {
+		t.Fatal("failed to hold the interaction route")
+	}
+
+	cancelCtx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	result, cancelErr := al.cancelInteractionForControlMessage(cancelCtx, stop, target)
+	if cancelErr == nil || !strings.Contains(cancelErr.Error(), "busy while canceling") {
+		t.Fatalf("timed-out stop error = %v", cancelErr)
+	}
+	if !result.Matched || result.Canceled || !result.Failed || result.CommandHandled {
+		t.Fatalf("timed-out stop result = %#v", result)
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCanceling {
+		t.Fatalf("interaction after timed-out stop = %#v", record)
+	}
+	continuationScope := newRuntimeSessionScope(
+		agent.Workspace,
+		interactionContinuationSessionKey(record),
+	)
+	if _, armed := al.pendingStops.Load(continuationScope); !armed {
+		t.Fatal("timed-out stop did not arm the continuation marker")
+	}
+	activeClaim.releaseIfOwned()
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+	}
+	record, _ = registry.Get(record.ID)
+	if record.Status != interactions.StatusCancelled {
+		t.Fatalf("interaction after cancellation recovery = %#v", record)
+	}
+	if al.takePendingStop(continuationScope) {
+		t.Fatal("next continuation turn consumed a stale recovered stop")
+	}
+}
+
 func TestStopCancellationReloadsWaitingInteractionAfterAnswerAdmission(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
