@@ -72,9 +72,11 @@ On Windows, MintClaw opens the thread directory and lock relative to parent
 handles through `NtCreateFile`, uses `OBJ_DONT_REPARSE` and
 `FILE_OPEN_REPARSE_POINT`, and rejects reparse points from opened-handle
 attributes. `LockFileEx` acquires one byte nonblockingly. The file receives a
-protected owner-only DACL which is validated from the opened handle before
-use. The locked byte sits immediately beyond the maximum owner-record range,
-so Windows contenders can read diagnostics without crossing the mandatory
+TokenUser owner SID and protected owner-only DACL in one handle-based security
+update; both are validated from the opened handle before use. This remains
+correct when an elevated token's default TokenOwner differs from TokenUser.
+The locked byte sits immediately beyond the maximum owner-record range, so
+Windows contenders can read diagnostics without crossing the mandatory
 byte-range lock; delete sharing remains disabled while the lease is live.
 
 Other Go targets compile with an explicit unsupported-platform result; they

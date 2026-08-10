@@ -19,7 +19,8 @@ func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
 	handle, err := openWindowsCatalogChildWithDisposition(
 		windows.Handle(root.file.Fd()),
 		leaseFileName,
-		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.READ_CONTROL|windows.WRITE_DAC,
+		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.READ_CONTROL|
+			windows.WRITE_DAC|windows.WRITE_OWNER,
 		windows.FILE_OPEN_IF,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_OPEN_REPARSE_POINT,
@@ -66,18 +67,20 @@ func secureWindowsThreadLease(handle windows.Handle) error {
 		return fmt.Errorf("coding thread lease: read owner-only Windows DACL: %w", err)
 	}
 	securityInformation := windows.SECURITY_INFORMATION(
-		windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		windows.OWNER_SECURITY_INFORMATION |
+			windows.DACL_SECURITY_INFORMATION |
+			windows.PROTECTED_DACL_SECURITY_INFORMATION,
 	)
 	if err := windows.SetSecurityInfo(
 		handle,
 		windows.SE_FILE_OBJECT,
 		securityInformation,
-		nil,
+		owner,
 		nil,
 		dacl,
 		nil,
 	); err != nil {
-		return fmt.Errorf("coding thread lease: apply owner-only Windows DACL: %w", err)
+		return fmt.Errorf("coding thread lease: apply owner-only Windows security descriptor: %w", err)
 	}
 	return validateWindowsThreadLeaseSecurity(handle, owner)
 }
