@@ -486,6 +486,13 @@ func spawnSubTurn(
 	if durableTask {
 		childSessionKey = durableTaskSessionKey(parentTS.workspace, cfg.TaskID)
 	}
+	childSessionScope := session.CloneScope(parentTS.opts.Dispatch.SessionScope)
+	if childSessionScope != nil {
+		// The route remains owned by the parent conversation, but the durable
+		// continuation is stored and compacted by the target agent. Persist that
+		// runtime ownership so context provenance remains stable across resumes.
+		childSessionScope.AgentID = agent.ID
+	}
 	dispatch := DispatchRequest{
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
 		SessionKey:      childSessionKey,
@@ -494,7 +501,10 @@ func spawnSubTurn(
 		Media:           nil,
 		InboundContext:  cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
 		RouteResult:     cloneResolvedRoute(parentTS.opts.Dispatch.RouteResult),
-		SessionScope:    session.CloneScope(parentTS.opts.Dispatch.SessionScope),
+		SessionScope:    childSessionScope,
+	}
+	if durableTask {
+		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope, dispatch.SessionAliases)
 	}
 	opts := processOptions{
 		TaskID:                  strings.TrimSpace(cfg.TaskID),
