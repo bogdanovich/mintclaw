@@ -1283,9 +1283,8 @@ func handleConfigReload(
 	shutdownTimeout time.Duration,
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
-	currentCfg := al.GetConfig()
-	if currentCfg != nil && filepath.Clean(currentCfg.WorkspacePath()) != filepath.Clean(newCfg.WorkspacePath()) {
-		return fmt.Errorf("workspace changes require a gateway restart")
+	if err := preflightConfigReload(al, newCfg); err != nil {
+		return err
 	}
 
 	newModel := newCfg.Agents.Defaults.ModelName
@@ -1345,6 +1344,30 @@ func handleConfigReload(
 		logger.Infof("Log level changing from current to %q", effectiveLogLevel)
 	}
 
+	return nil
+}
+
+func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is unavailable")
+	}
+	if err := al.ValidateConfigReload(newCfg); err != nil {
+		return err
+	}
+
+	currentCfg := al.GetConfig()
+	if currentCfg == nil {
+		return fmt.Errorf("active gateway config is unavailable")
+	}
+	if filepath.Clean(currentCfg.WorkspacePath()) != filepath.Clean(newCfg.WorkspacePath()) {
+		return fmt.Errorf("workspace changes require a gateway restart")
+	}
+	if currentCfg.Gateway.Host != newCfg.Gateway.Host || currentCfg.Gateway.Port != newCfg.Gateway.Port {
+		return fmt.Errorf("gateway listen address changes require a gateway restart")
+	}
+	if currentCfg.Gateway.HotReload != newCfg.Gateway.HotReload {
+		return fmt.Errorf("gateway hot reload mode changes require a gateway restart")
+	}
 	return nil
 }
 

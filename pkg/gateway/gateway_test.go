@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -424,6 +425,110 @@ func TestConfigReloadRequiresRestartForWorkspaceChange(t *testing.T) {
 	}
 	if al.GetConfig().WorkspacePath() != cfg.WorkspacePath() {
 		t.Fatalf("active workspace = %q, want %q", al.GetConfig().WorkspacePath(), cfg.WorkspacePath())
+	}
+}
+
+func TestConfigReloadPreflightRejectsBeforeQuiesce(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(current, next *config.Config)
+		wantErr string
+	}{
+		{
+			name: "active Seahorse",
+			mutate: func(current, next *config.Config) {
+				current.Agents.Defaults.ContextManager = "seahorse"
+				next.Agents.Defaults.ContextManager = "seahorse"
+			},
+			wantErr: "context manager changes require restart",
+		},
+		{
+			name: "enable Seahorse",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Agents.Defaults.ContextManager = "seahorse"
+			},
+			wantErr: "context manager changes require restart",
+		},
+		{
+			name: "workspace",
+			mutate: func(current *config.Config, next *config.Config) {
+				next.Agents.Defaults.Workspace = current.WorkspacePath() + "-other"
+			},
+			wantErr: "workspace changes require a gateway restart",
+		},
+		{
+			name: "listen host",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Gateway.Host = "127.0.0.1"
+			},
+			wantErr: "gateway listen address changes require a gateway restart",
+		},
+		{
+			name: "listen port",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Gateway.Port++
+			},
+			wantErr: "gateway listen address changes require a gateway restart",
+		},
+		{
+			name: "hot reload mode",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Gateway.HotReload = !next.Gateway.HotReload
+			},
+			wantErr: "gateway hot reload mode changes require a gateway restart",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := config.DefaultConfig()
+			current.Agents.Defaults.Workspace = t.TempDir()
+			current.Agents.Defaults.ContextManager = "none"
+			current.Agents.Defaults.ContextManagerConfig = nil
+			next := *current
+			test.mutate(current, &next)
+
+			msgBus := bus.NewMessageBus()
+			t.Cleanup(msgBus.Close)
+			oldProvider := &startupBlockedProvider{reason: "not used"}
+			provider := providers.LLMProvider(oldProvider)
+			al := agent.NewAgentLoop(current, msgBus, oldProvider)
+			t.Cleanup(al.Close)
+
+			heartbeatService := heartbeat.NewHeartbeatService(
+				current.WorkspacePath(),
+				current.Heartbeat.Interval,
+				true,
+			)
+			if err := heartbeatService.Start(); err != nil {
+				t.Fatalf("HeartbeatService.Start() error = %v", err)
+			}
+			t.Cleanup(heartbeatService.Stop)
+
+			err := handleConfigReload(
+				context.Background(),
+				al,
+				&next,
+				&provider,
+				&services{HeartbeatService: heartbeatService},
+				msgBus,
+				true,
+				false,
+				time.Second,
+			)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("handleConfigReload() error = %v, want %q", err, test.wantErr)
+			}
+			if !heartbeatService.IsRunning() {
+				t.Fatal("reload preflight stopped heartbeat before rejecting config")
+			}
+			if al.GetConfig() != current {
+				t.Fatal("reload preflight replaced the active config")
+			}
+			if provider != oldProvider {
+				t.Fatal("reload preflight replaced the active provider")
+			}
+		})
 	}
 }
 
