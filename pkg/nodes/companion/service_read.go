@@ -57,6 +57,7 @@ func parseSystemdStatus(raw []byte) (map[string]string, error) {
 	return properties, nil
 }
 
+//nolint:unused // Used by the Linux systemd status implementation.
 func unavailableServiceStatus(service string, observedAt int64, code string) ServiceStatus {
 	return ServiceStatus{
 		Service:     service,

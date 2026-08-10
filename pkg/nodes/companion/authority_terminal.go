@@ -91,6 +91,7 @@ type TerminalBrokerEvent struct {
 	TerminationConfirmed bool   `json:"termination_confirmed,omitempty"`
 }
 
+//nolint:unused // Used by the Linux authority-broker implementation.
 func (request TerminalBrokerOpenRequest) validate() error {
 	if !terminalIdentifierPattern.MatchString(strings.TrimSpace(request.OpenID)) ||
 		!authorityBrokerDigestPattern.MatchString(strings.TrimSpace(request.PlanHash)) ||

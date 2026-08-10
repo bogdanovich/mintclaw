@@ -272,6 +272,7 @@ func combineFileHelperAuthority(profileDigest, serviceDigest string) (string, er
 	return hex.EncodeToString(digest[:]), nil
 }
 
+//nolint:unused // Used by the Linux file-helper client and service.
 func (snapshot fileHelperSnapshot) descriptors() ([]nodes.CommandDescriptor, error) {
 	if err := snapshot.validate(); err != nil {
 		return nil, err
