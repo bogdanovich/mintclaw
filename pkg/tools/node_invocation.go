@@ -348,7 +348,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
 ) (map[string]any, error) {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.approvalArguments(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) approvalArguments(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) (map[string]any, error) {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +380,15 @@ func (tool *NodeInvokeTool) ApprovalArguments(
 }
 
 func (tool *NodeInvokeTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	record, err := tool.runtime.prepare(ctx, args)
+	return tool.execute(ctx, args, false)
+}
+
+func (tool *NodeInvokeTool) execute(
+	ctx context.Context,
+	args map[string]any,
+	allowWorkspace bool,
+) *toolshared.ToolResult {
+	record, err := tool.runtime.prepareInternal(ctx, args, allowWorkspace)
 	if err != nil {
 		var denial *nodeSafeDenialError
 		if errors.As(err, &denial) {
@@ -967,9 +983,10 @@ func isNodeDownloadTransferCommand(command string) bool {
 	return command == "file.download.v1" || command == nodes.InternalJobArtifactDownloadCommand
 }
 
-func (runtime *nodeInvocationToolRuntime) prepare(
+func (runtime *nodeInvocationToolRuntime) prepareInternal(
 	ctx context.Context,
 	args map[string]any,
+	allowWorkspace bool,
 ) (nodes.GatewayInvocationRecord, error) {
 	if runtime == nil || runtime.source == nil || runtime.access == nil {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
@@ -1011,13 +1028,37 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nil,
 		)
 	}
-	if isNodeFileTransferDescriptor(descriptor) {
+	if nodes.IsWorkspaceCommand(command) && !allowWorkspace {
+		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+			nodeDenialCommandUnavailable,
+			nodeConstraintCommandPolicy,
+			nodeActionAskOperator,
+			nil,
+		)
+	}
+	if isNodeFileTransferDescriptor(descriptor) &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
 			nodeActionRefreshDiscovery,
 			nil,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+				nodeDenialCommandUnavailable,
+				nodeConstraintCommandPolicy,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
 	}
 	if resolved.requiresReapproval {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
@@ -1109,7 +1150,8 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nil,
 		)
 	}
-	if descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialCommandUnavailable,
 			nodeConstraintCommandPolicy,
@@ -1125,6 +1167,16 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 			nodeActionRefreshDiscovery,
 			err,
 		)
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(
+			descriptor,
+			resolved.binding.FileProfile,
+		)
+		if !projected {
+			return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		var projected bool
@@ -1311,6 +1363,7 @@ func (runtime *nodeInvocationToolRuntime) prepare(
 				command,
 				requestedRevision,
 				current,
+				allowWorkspace,
 			)
 		},
 	)
@@ -1359,6 +1412,7 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	command string,
 	requestedRevision string,
 	current NodeDiscoveryRecord,
+	allowWorkspace bool,
 ) error {
 	if current.Registration == nil || current.Snapshot.ID == "" {
 		return errDiscoveryStale
@@ -1370,6 +1424,17 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	descriptor, err := current.Registration.ApprovedCommand(command)
 	if err != nil {
 		return errDiscoveryStale
+	}
+	if len(descriptor.FileProfiles) > 0 {
+		binding, exists := runtime.access.targets[target]
+		if !exists {
+			return errDiscoveryStale
+		}
+		var projected bool
+		descriptor, projected = projectFileDescriptorForTarget(descriptor, binding.FileProfile)
+		if !projected {
+			return errDiscoveryStale
+		}
 	}
 	if len(descriptor.ServiceProfiles) > 0 {
 		binding, exists := runtime.access.targets[target]
@@ -1428,8 +1493,8 @@ func (runtime *nodeInvocationToolRuntime) validatePreparationAuthority(
 	if !current.Connected {
 		return errDiscoveryStale
 	}
-	if descriptor.ModelContract != nil &&
-		descriptor.ModelContract.Availability == nodes.ModelUnavailable {
+	if descriptor.ModelContract != nil && descriptor.ModelContract.Availability == nodes.ModelUnavailable &&
+		(!allowWorkspace || !nodes.IsWorkspaceCommand(command)) {
 		return errDiscoveryStale
 	}
 	return nil
@@ -1886,6 +1951,20 @@ func validateNodeModelConstraints(
 		return validateSystemExecModelConstraints(descriptor, input, constraints)
 	case "shell.exec.v1":
 		return validateShellExecModelConstraints(descriptor, input, constraints)
+	case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
+		profile, profileOK := input["profile_revision"].(string)
+		scope, scopeOK := input["working_scope"].(string)
+		if !profileOK || !scopeOK ||
+			!containsSorted(constraints.ProfileAliases, profile) ||
+			!containsSorted(constraints.WorkingScopes, scope) {
+			return denyNodeInvocation(
+				nodeDenialConstraintViolation,
+				nodeConstraintProfile,
+				nodeActionRefreshDiscovery,
+				nil,
+			)
+		}
+		return nil
 	default:
 		return nil
 	}

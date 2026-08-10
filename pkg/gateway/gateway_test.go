@@ -253,6 +253,71 @@ func TestNodeToolsTrackNodeEnablementAcrossReload(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceDecoratorsDoNotStackAcrossNodeToolReloads(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"build": {Type: "node", Node: "builder-node", FileProfile: "project"},
+	}
+	cfg.Execution.RemoteWorkspaces = map[string]config.RemoteWorkspace{
+		"project": {
+			Target: "build", WorkingScope: "project", Revision: "workspace-v1",
+			Tools: []string{"read_file", "search_files"},
+		},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"build"}}
+	al := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
+	runtime := &nodeAdmissionRuntime{
+		registryPath: nodes.RegistryPath(cfg.WorkspacePath()),
+		handler:      &fakeNodeAdmissionHandler{},
+		generation:   1,
+		mounted:      true,
+	}
+	assertOneLayer := func(t *testing.T) {
+		t.Helper()
+		instance, ok := al.GetRegistry().GetAgent("main")
+		if !ok {
+			t.Fatal("main agent is unavailable")
+		}
+		tool, ok := instance.Tools.Get("read_file")
+		if !ok {
+			t.Fatal("read_file is unavailable")
+		}
+		if count := strings.Count(
+			tool.Description(),
+			"Omit workspace for the current gateway-local workspace",
+		); count != 1 {
+			t.Fatalf("remote workspace decorator layers = %d, want 1", count)
+		}
+	}
+
+	if err := setupNodeTools(cfg, al, runtime); err != nil {
+		t.Fatal(err)
+	}
+	assertOneLayer(t)
+	// Failed reload recovery retains the current registry and reruns setup.
+	if err := setupNodeTools(cfg, al, runtime); err != nil {
+		t.Fatal(err)
+	}
+	assertOneLayer(t)
+
+	// Successful reload builds and decorates a fresh registry before service
+	// setup is rerun against it.
+	if err := al.ReloadProviderAndConfig(
+		t.Context(),
+		&startupBlockedProvider{reason: "not used"},
+		cfg,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupNodeTools(cfg, al, runtime); err != nil {
+		t.Fatal(err)
+	}
+	assertOneLayer(t)
+}
+
 func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	cfg.Agents.Defaults.ContextManager = "none"

@@ -513,7 +513,9 @@ func projectFileDescriptorForTarget(
 			return nodes.CommandDescriptor{}, false
 		}
 		contract := *descriptor.ModelContract
-		contract.Availability = nodes.ModelAvailable
+		if !nodes.IsWorkspaceCommand(descriptor.Name) {
+			contract.Availability = nodes.ModelAvailable
+		}
 		switch descriptor.Name {
 		case "file.info.v1":
 			if profile.Approval.Metadata == "required" {
@@ -525,6 +527,10 @@ func projectFileDescriptorForTarget(
 			}
 		case "file.upload.v1":
 			if profile.Approval.Write == "required" {
+				contract.ApprovalMode = "each_command"
+			}
+		case nodes.WorkspaceCommandRead, nodes.WorkspaceCommandSearch:
+			if profile.Approval.Read == "required" {
 				contract.ApprovalMode = "each_command"
 			}
 		default:
