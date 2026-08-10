@@ -42,10 +42,8 @@ func newNodeInvocationSource(
 	); err != nil {
 		return nil, err
 	}
-	store, err := nodes.NewGatewayInvocationStore(
+	store, err := runtime.gatewayInvocationStore(
 		nodes.GatewayInvocationStorePath(workspace),
-		nodes.DefaultGatewayInvocationLimit,
-		nodes.DefaultGatewayInvocationStoreBytes,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open gateway node invocation store: %w", err)

@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -97,9 +98,16 @@ type GatewayInvocationStore struct {
 	retention  time.Duration
 	now        func() time.Time
 	writeFile  func(string, []byte, os.FileMode) error
+	readFile   func(string, int) (gatewayInvocationDocument, *os.File, error)
 
 	mu      sync.Mutex
 	records map[string]GatewayInvocationRecord
+	loaded  bool
+	// file pins the exact validated file identity so an atomic replacement
+	// cannot recycle it into a false unchanged-file cache hit.
+	file    *os.File
+	missing bool
+	closed  bool
 }
 
 func GatewayInvocationStorePath(workspace string) string {
@@ -152,6 +160,7 @@ func newGatewayInvocationStore(
 		retention:  DefaultGatewayInvocationRetention,
 		now:        now,
 		writeFile:  fileutil.WriteFileAtomic,
+		readFile:   readGatewayInvocationDocument,
 		records:    make(map[string]GatewayInvocationRecord),
 	}
 }
@@ -451,6 +460,9 @@ func (store *GatewayInvocationStore) MarkDispatched(
 }
 
 func (store *GatewayInvocationStore) lockAndReloadLocked() (func(), error) {
+	if store.closed {
+		return nil, os.ErrClosed
+	}
 	if store.path == "" {
 		return func() {}, nil
 	}
@@ -471,19 +483,37 @@ func (store *GatewayInvocationStore) lockAndReloadLocked() (func(), error) {
 func (store *GatewayInvocationStore) loadLocked() error {
 	info, err := os.Stat(store.path)
 	if errors.Is(err, os.ErrNotExist) {
+		if store.loaded && store.missing {
+			return nil
+		}
 		store.records = make(map[string]GatewayInvocationRecord)
+		store.loaded = true
+		store.replaceCachedFileLocked(nil)
+		store.missing = true
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("stat gateway node invocation store: %w", err)
 	}
+	if store.loaded && !store.missing && sameGatewayInvocationPathFile(store.file, info) {
+		return nil
+	}
 	if info.Size() > int64(store.maxBytes) {
 		return ErrGatewayInvocationStoreFull
 	}
-	document, err := readGatewayInvocationDocument(store.path, store.maxBytes)
+	document, validatedFile, err := store.readFile(store.path, store.maxBytes)
 	if err != nil {
 		return err
 	}
+	if validatedFile == nil {
+		return errors.New("gateway node invocation store reader did not retain its file")
+	}
+	keepValidatedFile := false
+	defer func() {
+		if !keepValidatedFile {
+			_ = validatedFile.Close()
+		}
+	}()
 	if document.Version != gatewayInvocationStoreVersion ||
 		document.Records == nil ||
 		len(document.Records) > store.maxRecords {
@@ -491,11 +521,12 @@ func (store *GatewayInvocationStore) loadLocked() error {
 	}
 	toolCalls := make(map[string]string, len(document.Records))
 	idempotency := make(map[string]string, len(document.Records))
+	validatedDescriptors := make(map[string][]CommandDescriptor)
 	for invocationID, record := range document.Records {
 		if invocationID != record.Plan.InvocationID {
 			return errors.New("gateway node invocation store has mismatched record identity")
 		}
-		if err := record.validate(); err != nil {
+		if err := record.validateWithDescriptorCache(validatedDescriptors); err != nil {
 			return fmt.Errorf("validate gateway node invocation %q: %w", invocationID, err)
 		}
 		toolCallKey := gatewayToolCallKey(
@@ -522,39 +553,115 @@ func (store *GatewayInvocationStore) loadLocked() error {
 		idempotency[record.Plan.IdempotencyKey] = invocationID
 	}
 	store.records = cloneGatewayInvocationRecords(document.Records)
+	store.loaded = true
+	store.replaceCachedFileLocked(validatedFile)
+	keepValidatedFile = true
+	store.missing = false
 	if err := store.pruneAndPersistLocked(store.now()); err != nil {
 		return fmt.Errorf("prune gateway node invocation store: %w", err)
 	}
 	return nil
 }
 
+func sameGatewayInvocationFileInfo(left, right os.FileInfo) bool {
+	return left != nil && right != nil && os.SameFile(left, right) &&
+		left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
+}
+
+func sameGatewayInvocationPathFile(file *os.File, pathInfo os.FileInfo) bool {
+	if file == nil {
+		return false
+	}
+	fileInfo, err := file.Stat()
+	return err == nil && sameGatewayInvocationFileInfo(fileInfo, pathInfo)
+}
+
+func (store *GatewayInvocationStore) replaceCachedFileLocked(file *os.File) {
+	previous := store.file
+	store.file = file
+	if previous != nil && previous != file {
+		_ = previous.Close()
+	}
+}
+
+func (store *GatewayInvocationStore) invalidateCachedFileLocked() {
+	store.loaded = false
+	store.replaceCachedFileLocked(nil)
+}
+
+// Close releases the retained file identity. It is safe to call repeatedly;
+// no store operation is admitted after the first close.
+func (store *GatewayInvocationStore) Close() error {
+	if store == nil {
+		return nil
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil
+	}
+	store.closed = true
+	store.loaded = false
+	file := store.file
+	store.file = nil
+	if file == nil {
+		return nil
+	}
+	return file.Close()
+}
+
 func readGatewayInvocationDocument(
 	path string,
 	maxBytes int,
-) (gatewayInvocationDocument, error) {
-	file, err := os.Open(path)
+) (document gatewayInvocationDocument, retained *os.File, returnErr error) {
+	file, err := openGatewayInvocationFile(path)
 	if err != nil {
-		return gatewayInvocationDocument{}, fmt.Errorf(
+		return gatewayInvocationDocument{}, nil, fmt.Errorf(
 			"open gateway node invocation store: %w",
 			err,
 		)
 	}
-	defer func() { _ = file.Close() }()
-	var document gatewayInvocationDocument
-	decoder := json.NewDecoder(io.LimitReader(file, int64(maxBytes)+1))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
-		return gatewayInvocationDocument{}, fmt.Errorf(
-			"decode gateway node invocation store: %w",
+	defer func() {
+		if returnErr != nil {
+			_ = file.Close()
+		}
+	}()
+	info, err := file.Stat()
+	if err != nil {
+		return gatewayInvocationDocument{}, nil, fmt.Errorf(
+			"stat open gateway node invocation store: %w",
 			err,
 		)
 	}
+	if info.Size() > int64(maxBytes) {
+		return gatewayInvocationDocument{}, nil, ErrGatewayInvocationStoreFull
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, int64(maxBytes)+1))
+	decoder.DisallowUnknownFields()
+	if decodeErr := decoder.Decode(&document); decodeErr != nil {
+		return gatewayInvocationDocument{}, nil, fmt.Errorf(
+			"decode gateway node invocation store: %w",
+			decodeErr,
+		)
+	}
 	if trailingErr := decoder.Decode(new(any)); !errors.Is(trailingErr, io.EOF) {
-		return gatewayInvocationDocument{}, errors.New(
+		return gatewayInvocationDocument{}, nil, errors.New(
 			"decode gateway node invocation store: trailing data",
 		)
 	}
-	return document, nil
+	after, err := file.Stat()
+	if err != nil {
+		return gatewayInvocationDocument{}, nil, fmt.Errorf(
+			"restat open gateway node invocation store: %w",
+			err,
+		)
+	}
+	if !sameGatewayInvocationFileInfo(info, after) {
+		return gatewayInvocationDocument{}, nil, errors.New(
+			"gateway node invocation store changed while reading",
+		)
+	}
+	return document, file, nil
 }
 
 func (store *GatewayInvocationStore) saveLocked() error {
@@ -572,7 +679,54 @@ func (store *GatewayInvocationStore) saveLocked() error {
 	if store.path == "" {
 		return nil
 	}
-	return store.writeFile(store.path, append(data, '\n'), 0o600)
+	data = append(data, '\n')
+	if writeErr := store.writeFile(store.path, data, 0o600); writeErr != nil {
+		store.invalidateCachedFileLocked()
+		return writeErr
+	}
+	file, err := identifyGatewayInvocationFile(store.path, data)
+	if err != nil {
+		store.invalidateCachedFileLocked()
+		return err
+	}
+	store.loaded = true
+	store.replaceCachedFileLocked(file)
+	store.missing = false
+	return nil
+}
+
+func identifyGatewayInvocationFile(path string, expected []byte) (retained *os.File, returnErr error) {
+	file, err := openGatewayInvocationFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("open persisted gateway node invocation store: %w", err)
+	}
+	defer func() {
+		if returnErr != nil {
+			_ = file.Close()
+		}
+	}()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat persisted gateway node invocation store: %w", err)
+	}
+	if info.Size() != int64(len(expected)) {
+		return nil, errors.New("persisted gateway node invocation store changed after write")
+	}
+	actual, err := io.ReadAll(io.LimitReader(file, int64(len(expected))+1))
+	if err != nil {
+		return nil, fmt.Errorf("read persisted gateway node invocation store: %w", err)
+	}
+	if !bytes.Equal(actual, expected) {
+		return nil, errors.New("persisted gateway node invocation store changed after write")
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("restat persisted gateway node invocation store: %w", err)
+	}
+	if !sameGatewayInvocationFileInfo(info, after) {
+		return nil, errors.New("persisted gateway node invocation store changed after write")
+	}
+	return file, nil
 }
 
 func (store *GatewayInvocationStore) pruneLocked(now time.Time) {
@@ -600,6 +754,10 @@ func (store *GatewayInvocationStore) pruneAndPersistLocked(now time.Time) error 
 func (store *GatewayInvocationStore) persistMutationLocked(
 	previous map[string]GatewayInvocationRecord,
 ) error {
+	if err := store.ensureCachedFileCanonicalLocked(); err != nil {
+		store.records = previous
+		return err
+	}
 	err := store.saveLocked()
 	if err != nil && !fileutil.IsCommittedWriteError(err) {
 		store.records = previous
@@ -607,7 +765,55 @@ func (store *GatewayInvocationStore) persistMutationLocked(
 	return err
 }
 
+func (store *GatewayInvocationStore) ensureCachedFileCanonicalLocked() error {
+	if store.path == "" {
+		return nil
+	}
+	info, err := os.Stat(store.path)
+	if store.loaded && store.missing && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil && store.loaded && !store.missing &&
+		sameGatewayInvocationPathFile(store.file, info) {
+		return nil
+	}
+	store.invalidateCachedFileLocked()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("verify canonical gateway node invocation store: %w", err)
+	}
+	return fmt.Errorf(
+		"%w: gateway node invocation store changed before mutation",
+		ErrGatewayInvocationConflict,
+	)
+}
+
 func (record GatewayInvocationRecord) validate() error {
+	return record.validateFields(false)
+}
+
+func (record GatewayInvocationRecord) validateWithDescriptorCache(
+	cache map[string][]CommandDescriptor,
+) error {
+	descriptorValidated := false
+	for _, descriptor := range cache[record.Plan.DescriptorHash] {
+		if reflect.DeepEqual(descriptor, record.Descriptor) {
+			descriptorValidated = true
+			break
+		}
+	}
+	if err := record.validateFields(descriptorValidated); err != nil {
+		return err
+	}
+	if !descriptorValidated {
+		cache[record.Plan.DescriptorHash] = append(
+			cache[record.Plan.DescriptorHash],
+			cloneCommandDescriptor(record.Descriptor),
+		)
+	}
+	return nil
+}
+
+func (record GatewayInvocationRecord) validateFields(descriptorValidated bool) error {
 	if len(record.Target) == 0 || len(record.Target) > maxGatewayTargetLength ||
 		!gatewayTargetPattern.MatchString(record.Target) {
 		return fmt.Errorf("%w: malformed execution target", ErrInvalidInvocation)
@@ -618,12 +824,16 @@ func (record GatewayInvocationRecord) validate() error {
 	if err := record.Plan.ValidateAgainstHash(record.ExpectedPlanHash); err != nil {
 		return err
 	}
-	if err := record.Descriptor.Validate(); err != nil {
-		return err
-	}
-	descriptorHash, err := record.Descriptor.Hash()
-	if err != nil {
-		return err
+	descriptorHash := record.Plan.DescriptorHash
+	if !descriptorValidated {
+		if err := record.Descriptor.Validate(); err != nil {
+			return err
+		}
+		var err error
+		descriptorHash, err = record.Descriptor.Hash()
+		if err != nil {
+			return err
+		}
 	}
 	if record.Descriptor.Name != record.Plan.Command ||
 		record.Descriptor.Risk != record.Plan.Risk ||
