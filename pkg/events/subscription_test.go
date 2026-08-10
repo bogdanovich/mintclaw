@@ -426,3 +426,205 @@ func TestKeyedDefaultKeyFunc(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyedDropNewestBoundsBacklog(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	var handledMu sync.Mutex
+	handled := []int{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-drop-newest", Buffer: 1, Concurrency: Keyed, Backpressure: DropNewest},
+		func(_ context.Context, evt Event) error {
+			if evt.Payload.(int) == 1 {
+				close(started)
+				<-release
+			}
+			handledMu.Lock()
+			handled = append(handled, evt.Payload.(int))
+			handledMu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 1})
+	<-started
+	for i := 2; i <= 6; i++ {
+		bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: i})
+	}
+	close(release)
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 2)
+
+	handledMu.Lock()
+	defer handledMu.Unlock()
+	if !slices.Equal(handled, []int{1, 2}) {
+		t.Fatalf("handled = %v, want [1 2]", handled)
+	}
+	if got := sub.Stats().Dropped; got != 4 {
+		t.Fatalf("dropped = %d, want 4", got)
+	}
+	if got := sub.Stats().Received; got != 6 {
+		t.Fatalf("received = %d, want 6", got)
+	}
+}
+
+func TestKeyedDropOldestKeepsNewest(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	var handledMu sync.Mutex
+	handled := []int{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-drop-oldest", Buffer: 1, Concurrency: Keyed, Backpressure: DropOldest},
+		func(_ context.Context, evt Event) error {
+			if evt.Payload.(int) == 1 {
+				close(started)
+				<-release
+			}
+			handledMu.Lock()
+			handled = append(handled, evt.Payload.(int))
+			handledMu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 1})
+	<-started
+	for i := 2; i <= 6; i++ {
+		bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: i})
+	}
+	close(release)
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 2)
+
+	handledMu.Lock()
+	defer handledMu.Unlock()
+	if !slices.Equal(handled, []int{1, 6}) {
+		t.Fatalf("handled = %v, want [1 6]", handled)
+	}
+	if got := sub.Stats().Dropped; got != 4 {
+		t.Fatalf("dropped = %d, want 4", got)
+	}
+}
+
+func TestKeyedBlockBackpressureBlocksPublisher(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	var handledMu sync.Mutex
+	handled := []int{}
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-block", Buffer: 1, Concurrency: Keyed, Backpressure: Block},
+		func(_ context.Context, evt Event) error {
+			if evt.Payload.(int) == 1 {
+				close(started)
+				<-release
+			}
+			handledMu.Lock()
+			handled = append(handled, evt.Payload.(int))
+			handledMu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 1})
+	<-started
+	if result := bus.Publish(
+		context.Background(),
+		Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 2},
+	); result.Delivered != 1 {
+		t.Fatalf("second Publish = %+v, want one delivered event", result)
+	}
+
+	publishReturned := make(chan PublishResult, 1)
+	go func() {
+		publishReturned <- bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 3})
+	}()
+
+	select {
+	case result := <-publishReturned:
+		t.Fatalf("blocking Publish returned before release: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case result := <-publishReturned:
+		if result.Delivered != 1 {
+			t.Fatalf("blocked Publish = %+v, want one delivered event", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked Publish to return")
+	}
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 3)
+
+	handledMu.Lock()
+	defer handledMu.Unlock()
+	if !slices.Equal(handled, []int{1, 2, 3}) {
+		t.Fatalf("handled = %v, want [1 2 3]", handled)
+	}
+}
+
+func TestKeyedBlockBackpressureHonorsContext(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "keyed-block-ctx", Buffer: 1, Concurrency: Keyed, Backpressure: Block},
+		func(_ context.Context, evt Event) error {
+			if evt.Payload.(int) == 1 {
+				close(started)
+				<-release
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 1})
+	<-started
+	bus.Publish(context.Background(), Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 2})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result := bus.Publish(ctx, Event{Kind: Kind("k"), Scope: Scope{SessionKey: "s"}, Payload: 3})
+	if result.Blocked != 1 {
+		t.Fatalf("Publish = %+v, want blocked result", result)
+	}
+	close(release)
+	waitForStat(t, func() uint64 { return sub.Stats().Handled }, 2)
+}

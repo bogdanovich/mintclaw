@@ -160,7 +160,7 @@ func newSubscription(
 		done:    make(chan struct{}),
 		closing: make(chan struct{}),
 	}
-	if opts.Concurrency == Keyed {
+	if opts.Concurrency == Keyed && handler != nil {
 		sub.keyed = newKeyedDispatcher(sub, opts.KeyFunc)
 	}
 	return sub
@@ -250,8 +250,6 @@ func (s *eventSubscription) dispatch(ctx context.Context, evt Event) {
 			}()
 			s.handle(ctx, evt)
 		}()
-	case Keyed:
-		s.keyed.dispatch(ctx, evt)
 	default:
 		s.handle(ctx, evt)
 	}
@@ -378,6 +376,10 @@ type deliveryResult struct {
 func (s *eventSubscription) enqueue(ctx context.Context, evt Event, nonBlocking bool) deliveryResult {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	if s.keyed != nil {
+		return s.keyed.enqueue(ctx, evt, nonBlocking)
 	}
 
 	if nonBlocking {
