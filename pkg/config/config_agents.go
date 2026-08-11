@@ -212,6 +212,7 @@ type SubTurnConfig struct {
 	MaxConcurrent         int `json:"max_concurrent"          env:"MINTCLAW_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"MINTCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
 	DefaultTokenBudget    int `json:"default_token_budget"    env:"MINTCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
+	// ConcurrencyTimeoutSec limits pre-start waits for parent and target-agent capacity.
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"MINTCLAW_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
 

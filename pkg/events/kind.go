@@ -57,6 +57,8 @@ const (
 
 	// KindAgentSubTurnSpawn is emitted when a sub-turn is spawned.
 	KindAgentSubTurnSpawn Kind = "agent.subturn.spawn"
+	// KindAgentSubTurnAdmission records target-agent capacity transitions before a sub-turn starts.
+	KindAgentSubTurnAdmission Kind = "agent.subturn.admission"
 	// KindAgentSubTurnEnd is emitted when a sub-turn ends.
 	KindAgentSubTurnEnd Kind = "agent.subturn.end"
 	// KindAgentSubTurnResultDelivered is emitted when a sub-turn result is delivered.
@@ -160,6 +162,7 @@ var knownKinds = []Kind{
 	KindAgentInteractionResume,
 	KindAgentInteractionEnd,
 	KindAgentSubTurnSpawn,
+	KindAgentSubTurnAdmission,
 	KindAgentSubTurnEnd,
 	KindAgentSubTurnResultDelivered,
 	KindAgentSubTurnOrphan,

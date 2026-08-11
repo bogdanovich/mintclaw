@@ -655,6 +655,22 @@ func runtimeEventRecord(
 			AfterMessages: value.MessageCount, SnapshotHash: value.SnapshotHash,
 			ProtectedFactRefs: protected,
 		}
+	case runtimeevents.KindAgentSubTurnAdmission:
+		value, ok := event.Payload.(SubTurnAdmissionPayload)
+		if !ok {
+			return diagnostictrace.Record{}, false, false
+		}
+		kind = diagnostictrace.RecordSubTurnAdmission
+		payload = diagnostictrace.SubTurnAdmissionPayload{
+			State:       safeCode(value.State),
+			Stage:       safeCode(value.Stage),
+			AgentID:     safeCode(value.AgentID),
+			ChildTurnID: safeCode(value.ChildTurnID),
+			Active:      value.Active,
+			Limit:       value.Limit,
+			WaitMS:      value.WaitDuration.Milliseconds(),
+			TimeoutMS:   value.WaitTimeout.Milliseconds(),
+		}
 	case runtimeevents.KindChannelMessageOutboundQueued,
 		runtimeevents.KindChannelMessageOutboundSent,
 		runtimeevents.KindChannelMessageOutboundFailed:

@@ -338,6 +338,7 @@ func validHookEventKinds() map[string]string {
 	kinds["async_completion"] = runtimeevents.KindAgentAsyncCompletion.String()
 	kinds["interrupt_received"] = runtimeevents.KindAgentInterruptReceived.String()
 	kinds["subturn_spawn"] = runtimeevents.KindAgentSubTurnSpawn.String()
+	kinds["subturn_admission"] = runtimeevents.KindAgentSubTurnAdmission.String()
 	kinds["subturn_end"] = runtimeevents.KindAgentSubTurnEnd.String()
 	kinds["subturn_result_delivered"] = runtimeevents.KindAgentSubTurnResultDelivered.String()
 	kinds["subturn_orphan"] = runtimeevents.KindAgentSubTurnOrphan.String()

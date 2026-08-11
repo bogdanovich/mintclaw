@@ -266,6 +266,19 @@ type SubTurnSpawnPayload struct {
 	ParentTurnID string
 }
 
+// SubTurnAdmissionPayload describes pre-start target-agent capacity state.
+type SubTurnAdmissionPayload struct {
+	AgentID      string
+	ChildTurnID  string
+	ParentTurnID string
+	Stage        string
+	State        string
+	Active       int
+	Limit        int
+	WaitDuration time.Duration
+	WaitTimeout  time.Duration
+}
+
 // SubTurnEndPayload describes the completion of a child turn.
 type SubTurnEndPayload struct {
 	AgentID string

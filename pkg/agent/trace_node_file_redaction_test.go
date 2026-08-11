@@ -89,6 +89,41 @@ func TestNodeFileDiagnosticTraceRetainsLifecycleWithoutSensitivePreviews(t *test
 	}
 }
 
+func TestSubTurnAdmissionDiagnosticTraceRetainsWaitLifecycle(t *testing.T) {
+	started := time.Now()
+	record, _, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+		&activeTraceCapture{startedAt: started, turnID: "turn-parent"},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentSubTurnAdmission,
+			Time: started.Add(1250 * time.Millisecond),
+			Payload: SubTurnAdmissionPayload{
+				AgentID:      "browser",
+				ChildTurnID:  "child-browser-2",
+				Stage:        "target_agent",
+				State:        "queued",
+				Active:       1,
+				Limit:        1,
+				WaitDuration: 1250 * time.Millisecond,
+				WaitTimeout:  30 * time.Second,
+			},
+		},
+	)
+	if !ok || record.Kind != diagnostictrace.RecordSubTurnAdmission {
+		t.Fatalf("admission event produced kind %q, ok=%v", record.Kind, ok)
+	}
+	var payload diagnostictrace.SubTurnAdmissionPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.State != "queued" || payload.Stage != "target_agent" || payload.AgentID != "browser" ||
+		payload.ChildTurnID != "child-browser-2" ||
+		payload.Active != 1 || payload.Limit != 1 || payload.WaitMS != 1250 ||
+		payload.TimeoutMS != 30000 {
+		t.Fatalf("admission trace payload = %#v", payload)
+	}
+}
+
 func traceNodeFileRecord(
 	t *testing.T,
 	settings traceCaptureSettings,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -679,6 +680,294 @@ func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	if result == nil {
 		t.Fatal("spawnSubTurn() result is nil")
 	}
+}
+
+func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 1
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "browser", MaxParallelTurns: 1, Workspace: t.TempDir()},
+	}
+	provider := &reloadBlockingProvider{
+		chatStarted: make(chan struct{}),
+		releaseChat: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentSubTurnAdmission,
+		runtimeevents.KindAgentSubTurnSpawn,
+	)
+	defer closeRuntimeEvents()
+
+	busyCtx, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	if err != nil {
+		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
+	}
+	defer releaseBusy()
+	_ = busyCtx
+
+	parentAgent := al.registry.GetDefaultAgent()
+	parentCtx, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	if err != nil {
+		t.Fatalf("acquireAgentTurn(main) error = %v", err)
+	}
+	defer releaseParent()
+	parent := &turnState{
+		ctx:            parentCtx,
+		turnID:         "parent-waiting-for-browser",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		session:        &ephemeralSessionStore{},
+		agent:          parentAgent,
+	}
+
+	startedAt := time.Now()
+	_, err = spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
+		TargetAgentID: "browser",
+		SystemPrompt:  "must not start",
+		Timeout:       time.Minute,
+	})
+	if !errors.Is(err, ErrConcurrencyTimeout) {
+		t.Fatalf("spawnSubTurn() error = %v, want ErrConcurrencyTimeout", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("spawnSubTurn() error = %v, want deadline classification", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("admission timeout elapsed = %v, want about 1s", elapsed)
+	}
+	select {
+	case <-provider.chatStarted:
+		t.Fatal("provider call started before target-agent admission")
+	default:
+	}
+	states := make([]string, 0, 2)
+	deadline := time.After(time.Second)
+	for len(states) < 2 {
+		select {
+		case event := <-runtimeCh:
+			if event.Kind == runtimeevents.KindAgentSubTurnSpawn {
+				t.Fatal("timed-out child emitted subturn spawn")
+			}
+			payload, ok := event.Payload.(SubTurnAdmissionPayload)
+			if ok && payload.Stage == "target_agent" {
+				states = append(states, payload.State)
+			}
+		case <-deadline:
+			t.Fatalf("admission states = %v, want queued,timed_out", states)
+		}
+	}
+	if !slices.Equal(states, []string{"queued", "timed_out"}) {
+		t.Fatalf("admission states = %v, want queued,timed_out", states)
+	}
+}
+
+func TestSpawnSubTurnReportsParentCapacityTimeout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 1
+	provider := &reloadBlockingProvider{
+		chatStarted: make(chan struct{}),
+		releaseChat: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentSubTurnAdmission,
+		runtimeevents.KindAgentSubTurnSpawn,
+	)
+	defer closeRuntimeEvents()
+
+	parentAgent := al.registry.GetDefaultAgent()
+	parentSlots := make(chan struct{}, 1)
+	parentSlots <- struct{}{}
+	parent := &turnState{
+		ctx:            t.Context(),
+		turnID:         "parent-at-capacity",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		concurrencySem: parentSlots,
+		session:        &ephemeralSessionStore{},
+		agent:          parentAgent,
+	}
+
+	_, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model:        "test-model",
+		SystemPrompt: "must not start",
+		Timeout:      time.Minute,
+	})
+	if !errors.Is(err, ErrConcurrencyTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("spawnSubTurn() error = %v, want admission deadline", err)
+	}
+	select {
+	case <-provider.chatStarted:
+		t.Fatal("provider call started without parent capacity")
+	default:
+	}
+	states := make([]string, 0, 2)
+	deadline := time.After(time.Second)
+	for len(states) < 2 {
+		select {
+		case event := <-runtimeCh:
+			if event.Kind == runtimeevents.KindAgentSubTurnSpawn {
+				t.Fatal("timed-out child emitted subturn spawn")
+			}
+			payload, ok := event.Payload.(SubTurnAdmissionPayload)
+			if ok && payload.Stage == "parent_capacity" {
+				states = append(states, payload.State)
+			}
+		case <-deadline:
+			t.Fatalf("parent admission states = %v, want queued,timed_out", states)
+		}
+	}
+	if !slices.Equal(states, []string{"queued", "timed_out"}) {
+		t.Fatalf("parent admission states = %v, want queued,timed_out", states)
+	}
+}
+
+func TestSpawnSubTurnExecutionTimeoutStartsAfterAdmission(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 1
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "browser", MaxParallelTurns: 1, Workspace: t.TempDir()},
+	}
+	provider := &reloadBlockingProvider{
+		chatStarted: make(chan struct{}),
+		releaseChat: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+
+	_, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	if err != nil {
+		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
+	}
+	parentAgent := al.registry.GetDefaultAgent()
+	parentCtx, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	if err != nil {
+		releaseBusy()
+		t.Fatalf("acquireAgentTurn(main) error = %v", err)
+	}
+	defer releaseParent()
+	parent := &turnState{
+		ctx:            parentCtx,
+		turnID:         "parent-admission-before-execution",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		session:        &ephemeralSessionStore{},
+		agent:          parentAgent,
+	}
+
+	childDone := make(chan error, 1)
+	go func() {
+		_, spawnErr := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
+			TargetAgentID: "browser",
+			SystemPrompt:  "finish after admission",
+			Timeout:       500 * time.Millisecond,
+		})
+		childDone <- spawnErr
+	}()
+	time.Sleep(300 * time.Millisecond)
+	releaseBusy()
+
+	select {
+	case <-provider.chatStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provider call after admission")
+	}
+	time.Sleep(300 * time.Millisecond)
+	close(provider.releaseChat)
+
+	select {
+	case err = <-childDone:
+		if err != nil {
+			t.Fatalf("spawnSubTurn() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for child completion")
+	}
+}
+
+func TestSpawnSubTurnCancellationWhileQueuedReleasesAdmissions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 1
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "browser", MaxParallelTurns: 1, Workspace: t.TempDir()},
+	}
+	provider := &reloadBlockingProvider{
+		chatStarted: make(chan struct{}),
+		releaseChat: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+
+	_, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	if err != nil {
+		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
+	}
+	parentAgent := al.registry.GetDefaultAgent()
+	parentBase, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	if err != nil {
+		releaseBusy()
+		t.Fatalf("acquireAgentTurn(main) error = %v", err)
+	}
+	parentCtx, cancelParent := context.WithCancel(parentBase)
+	parent := &turnState{
+		ctx:            parentCtx,
+		turnID:         "parent-canceled-during-admission",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		session:        &ephemeralSessionStore{},
+		agent:          parentAgent,
+	}
+
+	childDone := make(chan error, 1)
+	go func() {
+		_, spawnErr := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
+			TargetAgentID: "browser",
+			SystemPrompt:  "must be canceled before start",
+			Timeout:       time.Minute,
+		})
+		childDone <- spawnErr
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancelParent()
+	select {
+	case err = <-childDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("spawnSubTurn() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued child did not exit after cancellation")
+	}
+	select {
+	case <-provider.chatStarted:
+		t.Fatal("provider call started for canceled queued child")
+	default:
+	}
+
+	releaseBusy()
+	releaseParent()
+	nextCtx, nextCancel := context.WithTimeout(t.Context(), time.Second)
+	_, releaseNext, err := al.acquireAgentTurn(nextCtx, "browser")
+	nextCancel()
+	if err != nil {
+		t.Fatalf("browser admission leaked after queued cancellation: %v", err)
+	}
+	releaseNext()
 }
 
 func TestDurableTaskSessionKeyIncludesOwnerWorkspace(t *testing.T) {

@@ -347,6 +347,15 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case SubTurnSpawnPayload:
 		fields["child_agent_id"] = payload.AgentID
 		fields["label"] = payload.Label
+	case SubTurnAdmissionPayload:
+		fields["child_agent_id"] = payload.AgentID
+		fields["child_turn_id"] = payload.ChildTurnID
+		fields["stage"] = payload.Stage
+		fields["state"] = payload.State
+		fields["active"] = payload.Active
+		fields["limit"] = payload.Limit
+		fields["wait_ms"] = payload.WaitDuration.Milliseconds()
+		fields["wait_timeout_ms"] = payload.WaitTimeout.Milliseconds()
 	case SubTurnEndPayload:
 		fields["child_agent_id"] = payload.AgentID
 		fields["status"] = payload.Status

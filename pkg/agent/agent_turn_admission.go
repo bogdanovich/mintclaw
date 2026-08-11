@@ -99,16 +99,34 @@ func (c *agentTurnAdmissionController) update(registry *AgentRegistry) {
 }
 
 func (c *agentTurnAdmissionController) acquire(ctx context.Context, agentID string) (func(), error) {
+	return c.acquireObserved(ctx, agentID, nil)
+}
+
+func (c *agentTurnAdmissionController) acquireObserved(
+	ctx context.Context,
+	agentID string,
+	onWait func(active, limit int),
+) (func(), error) {
+	waitingReported := false
 	for {
 		c.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
 		limit := c.limits[agentID]
 		if c.pauses == 0 && (limit <= 0 || c.active[agentID] < limit) {
 			c.active[agentID]++
 			c.mu.Unlock()
 			return func() { c.release(agentID) }, nil
 		}
+		active := c.active[agentID]
 		changed := c.changed
 		c.mu.Unlock()
+		if !waitingReported && onWait != nil {
+			waitingReported = true
+			onWait(active, limit)
+		}
 
 		select {
 		case <-changed:
@@ -195,6 +213,14 @@ func (al *AgentLoop) acquireAgentTurn(
 	ctx context.Context,
 	agentID string,
 ) (context.Context, func(), error) {
+	return al.acquireAgentTurnObserved(ctx, agentID, nil)
+}
+
+func (al *AgentLoop) acquireAgentTurnObserved(
+	ctx context.Context,
+	agentID string,
+	onWait func(active, limit int),
+) (context.Context, func(), error) {
 	agentID = routing.NormalizeAgentID(agentID)
 	if agentID == "" || al == nil || al.agentTurnAdmissions == nil {
 		return ctx, func() {}, nil
@@ -205,7 +231,7 @@ func (al *AgentLoop) acquireAgentTurn(
 		}
 	}
 
-	release, err := al.agentTurnAdmissions.acquire(ctx, agentID)
+	release, err := al.agentTurnAdmissions.acquireObserved(ctx, agentID, onWait)
 	if err != nil {
 		return ctx, nil, err
 	}

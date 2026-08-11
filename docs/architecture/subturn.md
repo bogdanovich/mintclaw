@@ -13,7 +13,8 @@ By using a SubTurn, an agent can break down a problem and run a separate LLM inv
 - **Context Isolation**: Each SubTurn uses an `ephemeralSessionStore`. Its message history does not leak into the parent task and is destroyed upon completion. The ephemeral session holds at most **50 messages**; older messages are automatically truncated when this limit is reached.
 - **Depth & Concurrency Limits**: Prevents infinite loops and resource exhaustion.
   - **Maximum Depth**: Up to 3 nested levels.
-  - **Maximum Concurrency**: Up to 5 concurrent sub-turns per parent turn (managed via a semaphore with a 30-second timeout).
+  - **Maximum Concurrency**: Up to 5 concurrent sub-turns per parent turn.
+  - **Admission Timeout**: Waiting for either parent concurrency or target-agent capacity is limited to 30 seconds by default.
 - **Context Protection**: Supports soft context limits (`MaxContextRunes`). It proactively truncates old messages (while preserving system prompts and recent context) before hitting the provider's hard context window limit.
 - **Error Recovery**: Automatically detects and recovers from provider context length exceeded errors and truncation errors by compressing history and retrying.
 
@@ -32,6 +33,13 @@ When spawning a SubTurn, you must provide a `SubTurnConfig`:
 | `Critical` | `bool` | If `true`, the sub-turn continues running even if the parent finishes gracefully. |
 | `Timeout` | `time.Duration` | Maximum execution time (default: 5 minutes). |
 | `MaxContextRunes`| `int` | Soft context limit. `0` = auto-calculate (75% of model's context window, recommended), `-1` = no limit (disable soft truncation, rely only on hard context error recovery), `>0` = use specified rune limit. |
+
+Admission and execution use separate clocks. The configured
+`agents.defaults.subturn.concurrency_timeout_sec` applies only while waiting
+for parent-subturn or target-agent capacity. Once admitted, a fresh `Timeout`
+starts for the child execution. Queue time is never deducted from a running
+child, so a long workflow is not terminated merely because its target agent
+was briefly busy.
 
 > **Note:** The `Async` flag does **not** make the call non-blocking. It only controls whether the result is also delivered to the parent's `pendingResults` channel. Both modes block the caller until the sub-turn completes. For true non-blocking execution, the caller must spawn the sub-turn in a separate goroutine.
 

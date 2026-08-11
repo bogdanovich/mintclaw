@@ -74,6 +74,47 @@ func TestAcquireAgentTurnAllowsUnconfiguredAgent(t *testing.T) {
 	release()
 }
 
+func TestAgentTurnAdmissionDoesNotGrantAfterDeadlineDuringWaitCallback(t *testing.T) {
+	controller := &agentTurnAdmissionController{
+		limits:  map[string]int{"browser": 1},
+		active:  make(map[string]int),
+		changed: make(chan struct{}),
+	}
+	releaseBusy, err := controller.acquire(t.Context(), "browser")
+	if err != nil {
+		t.Fatalf("initial acquire() error = %v", err)
+	}
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelWait()
+	result := make(chan error, 1)
+	go func() {
+		_, acquireErr := controller.acquireObserved(waitCtx, "browser", func(_, _ int) {
+			close(callbackStarted)
+			<-releaseCallback
+		})
+		result <- acquireErr
+	}()
+
+	<-callbackStarted
+	releaseBusy()
+	<-waitCtx.Done()
+	close(releaseCallback)
+	if err = <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("acquireObserved() error = %v, want deadline exceeded", err)
+	}
+
+	nextCtx, cancelNext := context.WithTimeout(t.Context(), time.Second)
+	defer cancelNext()
+	releaseNext, err := controller.acquire(nextCtx, "browser")
+	if err != nil {
+		t.Fatalf("capacity leaked after expired acquire: %v", err)
+	}
+	releaseNext()
+}
+
 func TestAgentTurnAdmissionReloadPreservesActiveTurns(t *testing.T) {
 	controller := &agentTurnAdmissionController{
 		limits:  make(map[string]int),
