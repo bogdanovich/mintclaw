@@ -101,6 +101,7 @@ func listAvailableModels(cfg *config.Config) {
 
 func setDefaultModel(configPath, modelName string) error {
 	oldModel := ""
+	var selectionErr error
 	_, err := internal.UpdateConfigAt(configPath, func(cfg *config.Config) error {
 		modelFound := false
 		for _, model := range cfg.ModelList {
@@ -110,12 +111,16 @@ func setDefaultModel(configPath, modelName string) error {
 			}
 		}
 		if !modelFound && modelName != LocalModel {
-			return fmt.Errorf("cannot found model '%s' in config", modelName)
+			selectionErr = fmt.Errorf("cannot found model '%s' in config", modelName)
+			return selectionErr
 		}
 		oldModel = cfg.Agents.Defaults.ModelName
 		cfg.Agents.Defaults.ModelName = modelName
 		return nil
 	})
+	if selectionErr != nil {
+		return selectionErr
+	}
 	if err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}

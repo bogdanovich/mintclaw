@@ -103,6 +103,9 @@ func saveWeixinConfig(
 	allowFrom config.FlexibleStringSlice,
 ) error {
 	cfgPath := internal.GetConfigPath()
+	if _, err := internal.LoadConfigAt(cfgPath); err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
 
 	_, err := internal.UpdateConfigAt(cfgPath, func(cfg *config.Config) error {
 		bc := cfg.Channels.GetByType(config.ChannelWeixin)

@@ -254,7 +254,8 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 	}
 	require.NoError(t, config.SaveConfig(configPath, cfg))
 
-	assert.Error(t, setDefaultModel(configPath, "nonexistent-model"))
+	err := setDefaultModel(configPath, "nonexistent-model")
+	assert.EqualError(t, err, "cannot found model 'nonexistent-model' in config")
 }
 
 func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
