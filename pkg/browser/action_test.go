@@ -338,7 +338,13 @@ func TestBrokerUnknownActionRetryCompletesFailedQuarantineWithoutReplay(t *testi
 	}
 	second, secondErr := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
 	if secondErr != nil || second.State != InvocationUnknown || len(worker.actions) != 1 || worker.closed != 1 {
-		t.Fatalf("retry finalization = %+v, %v; actions = %+v; closes = %d", second, secondErr, worker.actions, worker.closed)
+		t.Fatalf(
+			"retry finalization = %+v, %v; actions = %+v; closes = %d",
+			second,
+			secondErr,
+			worker.actions,
+			worker.closed,
+		)
 	}
 	lost, getErr := store.GetSession(context.Background(), session.ID)
 	if getErr != nil || lost.State != SessionLost || lost.SafeFailure != "outcome_unknown" {
