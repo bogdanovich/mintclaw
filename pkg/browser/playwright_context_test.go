@@ -68,6 +68,55 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 	}
 }
 
+func TestPlaywrightContextCatalogRejectsConfiguredTabLimitOverflow(t *testing.T) {
+	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+		{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+	}}
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": contextProbeResult(t, raw),
+	}}
+	worker := contextTestWorker(client)
+	worker.limits.Tabs = 1
+	if _, err := worker.ContextCatalog(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("ContextCatalog(over limit) error = %v", err)
+	}
+	if !worker.lost {
+		t.Fatal("configured tab limit overflow did not retire the worker")
+	}
+}
+
+func TestPlaywrightContextCatalogAdvancesGenerationForExternalSelection(t *testing.T) {
+	firstRaw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+		{Token: "p2", Index: 1, Generation: 1, URL: "https://example.com/second"},
+	}}
+	secondRaw := firstRaw
+	secondRaw.Selected = "p2"
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			contextProbeResult(t, firstRaw), contextProbeResult(t, secondRaw), contextProbeResult(t, secondRaw),
+		},
+	}}
+	worker := contextTestWorker(client)
+	first, err := worker.ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := worker.ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable, err := worker.ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Generation != 1 || second.Generation != 2 || stable.Generation != second.Generation ||
+		first.SelectedTabID == second.SelectedTabID || stable.SelectedTabID != second.SelectedTabID {
+		t.Fatalf("selection generations = %#v, %#v, %#v", first, second, stable)
+	}
+}
+
 func TestPlaywrightSelectContextKeepsIndexesPrivateAndObservesFrame(t *testing.T) {
 	raw := playwrightRawContextCatalog{Generation: 4, Selected: "p1", Pages: []playwrightRawPage{
 		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
@@ -177,6 +226,88 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 			t.Fatal("final tab reached the driver close boundary")
 		}
 	}
+}
+
+func TestPlaywrightContextMutationsRetireWorkerAfterUncertainDispatch(t *testing.T) {
+	t.Run("open", func(t *testing.T) {
+		initial := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+			{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+		}}
+		client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_run_code_unsafe": contextProbeResult(t, initial),
+		}}
+		worker := contextTestWorker(client)
+		client.onCall = func(tool string) {
+			if tool == "browser_tabs" {
+				worker.networkProxy.denials.Add(1)
+			}
+		}
+		if _, err := worker.OpenTab(t.Context()); !errors.Is(err, ErrDenied) {
+			t.Fatalf("OpenTab(uncertain) error = %v", err)
+		}
+		if !worker.lost {
+			t.Fatal("uncertain open did not retire the worker")
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+			{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+			{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+		}}
+		client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_run_code_unsafe": contextProbeResult(t, raw),
+		}}
+		worker := contextTestWorker(client)
+		catalog, err := worker.ContextCatalog(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var runCodeCalls int
+		client.onCall = func(tool string) {
+			if tool != "browser_run_code_unsafe" {
+				return
+			}
+			runCodeCalls++
+			if runCodeCalls == 2 {
+				worker.networkProxy.denials.Add(1)
+			}
+		}
+		if _, err = worker.CloseTab(t.Context(), catalog.Tabs[1].ID); !errors.Is(err, ErrDenied) {
+			t.Fatalf("CloseTab(uncertain) error = %v", err)
+		}
+		if !worker.lost {
+			t.Fatal("uncertain close did not retire the worker")
+		}
+	})
+
+	t.Run("select", func(t *testing.T) {
+		raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+			{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+			{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+		}}
+		client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_run_code_unsafe": contextProbeResult(t, raw),
+		}}
+		worker := contextTestWorker(client)
+		catalog, err := worker.ContextCatalog(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.onCall = func(tool string) {
+			if tool == "browser_tabs" {
+				worker.networkProxy.denials.Add(1)
+			}
+		}
+		if _, _, err = worker.SelectContext(
+			t.Context(), catalog.Tabs[1].ID, "",
+		); !errors.Is(err, ErrDenied) {
+			t.Fatalf("SelectContext(uncertain) error = %v", err)
+		}
+		if !worker.lost {
+			t.Fatal("uncertain selection did not retire the worker")
+		}
+	})
 }
 
 func TestPlaywrightSelectContextRejectsIndexRaceBeforeObservation(t *testing.T) {

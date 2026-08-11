@@ -140,19 +140,22 @@ func (worker *playwrightWorker) OpenTab(ctx context.Context) (ContextCatalog, er
 	if err != nil {
 		return ContextCatalog{}, err
 	}
-	maximumTabs := worker.limits.Tabs
-	if maximumTabs < 1 || maximumTabs > MaxContextTabs {
-		maximumTabs = MaxContextTabs
-	}
+	maximumTabs := worker.contextTabLimit()
 	if len(current.Tabs) >= maximumTabs {
 		return ContextCatalog{}, ErrDenied
 	}
 	if _, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
 		"action": "new",
 	}, true); err != nil {
+		worker.lost = true
 		return ContextCatalog{}, err
 	}
-	return worker.contextCatalogLocked(ctx)
+	catalog, err := worker.contextCatalogLocked(ctx)
+	if err != nil {
+		worker.lost = true
+		return ContextCatalog{}, err
+	}
+	return catalog, nil
 }
 
 func (worker *playwrightWorker) SelectContext(
@@ -185,6 +188,7 @@ func (worker *playwrightWorker) SelectContext(
 	if _, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
 		"action": "select", "index": index,
 	}, true); err != nil {
+		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, err
 	}
 	worker.contextState.selectedTabID = tabID
@@ -192,6 +196,7 @@ func (worker *playwrightWorker) SelectContext(
 	worker.contextState.generation++
 	_, selectedRaw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
+		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, err
 	}
 	if selectedRaw.Selected != worker.contextState.tabs[tabID] {
@@ -205,10 +210,12 @@ func (worker *playwrightWorker) SelectContext(
 		observation, err = worker.observeFrameLocked(ctx, tabID, frameID)
 	}
 	if err != nil {
+		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, err
 	}
 	catalog, selectedRaw, err = worker.probeContextsLocked(ctx)
 	if err != nil {
+		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, err
 	}
 	if selectedRaw.Selected != worker.contextState.tabs[tabID] ||
@@ -248,6 +255,7 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 }`, strconv.Quote(rawToken), strconv.Quote(rawToken))
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
+		worker.lost = true
 		return ContextCatalog{}, err
 	}
 	line, parseErr := playwrightResultLine(text)
@@ -262,7 +270,12 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 		worker.contextState.selectedFrame = ""
 	}
 	worker.contextState.generation++
-	return worker.contextCatalogLocked(ctx)
+	closedCatalog, err := worker.contextCatalogLocked(ctx)
+	if err != nil {
+		worker.lost = true
+		return ContextCatalog{}, err
+	}
+	return closedCatalog, nil
 }
 
 func (worker *playwrightWorker) contextCatalogLocked(ctx context.Context) (ContextCatalog, error) {
@@ -287,6 +300,10 @@ func (worker *playwrightWorker) probeContextsLocked(
 		worker.lost = true
 		return ContextCatalog{}, playwrightRawContextCatalog{}, err
 	}
+	if len(raw.Pages) > worker.contextTabLimit() {
+		worker.lost = true
+		return ContextCatalog{}, playwrightRawContextCatalog{}, ErrDriverIncompatible
+	}
 	catalog, err := worker.projectContextCatalog(raw)
 	if err != nil {
 		worker.lost = true
@@ -303,6 +320,14 @@ func (worker *playwrightWorker) contextAvailableLocked() error {
 		return ErrDriverIncompatible
 	}
 	return nil
+}
+
+func (worker *playwrightWorker) contextTabLimit() int {
+	maximumTabs := worker.limits.Tabs
+	if maximumTabs < 1 || maximumTabs > MaxContextTabs {
+		return MaxContextTabs
+	}
+	return maximumTabs
 }
 
 func parsePlaywrightContextProbe(text string) (playwrightRawContextCatalog, error) {
@@ -479,8 +504,11 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 	}
 	sort.SliceStable(tabs, func(i, j int) bool { return tabs[i].CreationSequence < tabs[j].CreationSequence })
 	selected := reverseTabs[raw.Selected]
-	if state.selectedTabID == "" || state.selectedTabID != selected {
+	if state.selectedTabID == "" {
+		state.selectedTabID = selected
+	} else if state.selectedTabID != selected {
 		state.selectedTabID, state.selectedFrame = selected, ""
+		state.generation++
 	}
 	catalog := ContextCatalog{
 		ID: state.catalogID, Generation: state.generation,
