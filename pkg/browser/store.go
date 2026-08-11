@@ -170,8 +170,7 @@ func validContextTransition(current, next Session) bool {
 		return false
 	}
 	if !currentHasContext {
-		return next.ContextAuthority.Generation == 1 && current.TabID == next.TabID &&
-			(current.SnapshotID == "" || current.SnapshotID != next.SnapshotID)
+		return next.ContextAuthority.Generation == 1 && next.SnapshotID == ""
 	}
 	if current.ContextAuthority.ID != next.ContextAuthority.ID ||
 		next.ContextAuthority.Generation < current.ContextAuthority.Generation ||

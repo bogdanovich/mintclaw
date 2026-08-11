@@ -2,13 +2,17 @@ package browser
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+var errContextAuthorityStale = errors.New("browser context authority changed before dispatch")
 
 const (
 	MaxContextTabs         = 16
@@ -268,4 +272,75 @@ func cloneContextCatalog(catalog ContextCatalog) ContextCatalog {
 		cloned.Tabs[index].Frames = append([]FrameContext(nil), tab.Frames...)
 	}
 	return cloned
+}
+
+// ContextMutationAuthority is an immutable structural snapshot that a context
+// worker must revalidate under its own serialization lock immediately before
+// dispatching a tab or frame mutation. Generation is broker-local and frame
+// availability is policy-projected, so neither participates in the driver
+// comparison.
+type ContextMutationAuthority struct {
+	catalog ContextCatalog
+	tabID   string
+	frameID string
+}
+
+func newContextMutationAuthority(catalog ContextCatalog, tabID, frameID string) ContextMutationAuthority {
+	return ContextMutationAuthority{catalog: cloneContextCatalog(catalog), tabID: tabID, frameID: frameID}
+}
+
+func (authority ContextMutationAuthority) validateLive(live ContextCatalog) error {
+	if authority.catalog.Validate() != nil || live.Validate() != nil ||
+		authority.tabID == "" || authority.catalog.ID != live.ID {
+		return errors.Join(ErrStale, errContextAuthorityStale)
+	}
+	expected := contextCatalogDriverProjection(authority.catalog)
+	if expected.SelectedFrameID == "" && live.SelectedFrameID != "" &&
+		contextCatalogFrameUnavailable(authority.catalog, live.SelectedTabID, live.SelectedFrameID) {
+		live.SelectedFrameID = ""
+	}
+	actual := contextCatalogDriverProjection(live)
+	if !reflect.DeepEqual(expected, actual) {
+		return errors.Join(ErrStale, errContextAuthorityStale)
+	}
+	for _, tab := range live.Tabs {
+		if tab.ID != authority.tabID {
+			continue
+		}
+		if authority.frameID == "" {
+			return nil
+		}
+		for _, frame := range tab.Frames {
+			if frame.ID == authority.frameID && frame.Availability == FrameReady {
+				return nil
+			}
+		}
+	}
+	return errors.Join(ErrStale, errContextAuthorityStale)
+}
+
+func contextCatalogFrameUnavailable(catalog ContextCatalog, tabID, frameID string) bool {
+	for _, tab := range catalog.Tabs {
+		if tab.ID != tabID {
+			continue
+		}
+		for _, frame := range tab.Frames {
+			if frame.ID == frameID {
+				return frame.Availability == FrameUnavailable
+			}
+		}
+	}
+	return false
+}
+
+func contextCatalogDriverProjection(catalog ContextCatalog) ContextCatalog {
+	projected := cloneContextCatalog(catalog)
+	projected.Generation = 0
+	for tabIndex := range projected.Tabs {
+		for frameIndex := range projected.Tabs[tabIndex].Frames {
+			projected.Tabs[tabIndex].Frames[frameIndex].Availability = FrameReady
+			projected.Tabs[tabIndex].Frames[frameIndex].SafeFailure = ""
+		}
+	}
+	return projected
 }
