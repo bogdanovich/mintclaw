@@ -980,7 +980,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 		}},
 		execute: browser.Invocation{
 			ID: "invocation_1", SessionID: "browser_session_1",
-			Effect: browser.EffectRead, State: browser.InvocationSucceeded,
+			Effect: browser.EffectRead, State: browser.InvocationUnknown,
+			SafeFailure: "outcome_unknown",
+			Diagnostic:  &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
 		},
 		executeErr: browser.ErrSnapshotInvalidation,
 	}
@@ -994,7 +996,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 	)
 	if result == nil || !result.IsError ||
 		!strings.Contains(result.ContentForLLM(), `"code":"post_action_state_unavailable"`) ||
-		!strings.Contains(result.ContentForLLM(), `"state":"succeeded"`) ||
+		!strings.Contains(result.ContentForLLM(), `"state":"unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"outcome_reason":"outcome_unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"failure_class":"driver_rejected"`) ||
 		!strings.Contains(result.ContentForLLM(), `"action":"do_not_retry_reopen_session"`) {
 		t.Fatalf("post-action state result = %#v", result)
 	}

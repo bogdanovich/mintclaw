@@ -828,16 +828,25 @@ func browserPostActionStateError(invocation browser.Invocation, quarantined bool
 		action, reason = "do_not_retry_reopen_session", "session_quarantined"
 	}
 	encoded, _ := json.Marshal(map[string]any{
-		"status":        "failed",
-		"code":          "post_action_state_unavailable",
-		"message":       "The browser action reached a terminal state, but fresh snapshot authority could not be persisted.",
-		"action":        action,
-		"invocation_id": invocation.ID,
-		"effect":        invocation.Effect,
-		"state":         invocation.State,
-		"reason":        reason,
+		"status":         "failed",
+		"code":           "post_action_state_unavailable",
+		"message":        "The browser action reached a terminal state, but fresh snapshot authority could not be persisted.",
+		"action":         action,
+		"invocation_id":  invocation.ID,
+		"effect":         invocation.Effect,
+		"state":          invocation.State,
+		"reason":         reason,
+		"outcome_reason": invocation.SafeFailure,
+		"failure_class":  invocationFailureClass(invocation),
 	})
 	return toolshared.ErrorResult(string(encoded))
+}
+
+func invocationFailureClass(invocation browser.Invocation) browser.OutcomeFailureClass {
+	if invocation.Diagnostic == nil {
+		return ""
+	}
+	return invocation.Diagnostic.FailureClass
 }
 
 func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (browser.Preparation, error) {
