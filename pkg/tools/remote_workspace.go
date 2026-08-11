@@ -87,6 +87,7 @@ func (tool *RemoteWorkspaceTool) Name() string { return tool.local.Name() }
 func (tool *RemoteWorkspaceTool) Description() string {
 	return tool.local.Description() +
 		" Omit workspace for the current gateway-local workspace, or pass one configured remote workspace alias. " +
+		"Call this tool directly for remote workspace operations; do not use nodes discovery for workspace.* commands. " +
 		"A failed remote call never falls back to the local host."
 }
 
@@ -100,7 +101,8 @@ func (tool *RemoteWorkspaceTool) Parameters() map[string]any {
 	properties["workspace"] = map[string]any{
 		"type":        "string",
 		"enum":        append([]string(nil), tool.aliases...),
-		"description": "Optional operator-configured remote workspace alias. Omit for gateway-local execution.",
+		"description": "Optional operator-configured remote workspace alias. Pass an enum value to run this tool " +
+			"remotely; omit it for gateway-local execution. Do not inspect or invoke internal workspace.* commands.",
 	}
 	if tool.Name() == "write_file" {
 		properties["expected_sha256"] = map[string]any{

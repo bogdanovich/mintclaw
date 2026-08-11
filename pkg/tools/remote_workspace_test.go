@@ -465,6 +465,13 @@ func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	if len(aliases) != 2 || aliases[0] != "mac" || aliases[1] != "vpn" {
 		t.Fatalf("workspace aliases = %#v", aliases)
 	}
+	description, _ := workspace["description"].(string)
+	if !strings.Contains(tool.Description(), "Call this tool directly") ||
+		!strings.Contains(tool.Description(), "do not use nodes discovery") ||
+		!strings.Contains(description, "Pass an enum value") ||
+		!strings.Contains(description, "internal workspace.* commands") {
+		t.Fatalf("remote workspace guidance is incomplete: tool=%q parameter=%q", tool.Description(), description)
+	}
 	if _, changed := local.Parameters()["properties"].(map[string]any)["workspace"]; changed {
 		t.Fatal("decorator mutated local tool parameters")
 	}

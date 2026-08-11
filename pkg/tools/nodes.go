@@ -181,7 +181,9 @@ func (*NodeDiscoveryTool) Name() string { return "nodes" }
 
 func (*NodeDiscoveryTool) Description() string {
 	return "List execution targets visible to this agent or describe one visible target. " +
-		"Only operator-configured target names are accepted; connection details and raw node IDs are never exposed."
+		"Only operator-configured target names are accepted; connection details and raw node IDs are never exposed. " +
+		"Remote workspace file operations use read_file, search_files, write_file, or apply_patch with their " +
+		"workspace parameter, not this tool."
 }
 
 func (*NodeDiscoveryTool) Parameters() map[string]any {
@@ -281,6 +283,12 @@ func (tool *NodeDiscoveryTool) describe(
 	)
 	if command == "" {
 		return nodeJSONResult(description)
+	}
+	if nodes.IsWorkspaceCommand(command) {
+		return toolshared.ErrorResult(
+			"workspace.* commands are internal; use read_file, search_files, write_file, or apply_patch " +
+				"with a configured workspace alias",
+		)
 	}
 	descriptor, ok := visibleNodeCommand(snapshot.Catalog, registration, command)
 	if !ok || entry.RequiresReapproval {
@@ -476,7 +484,7 @@ func projectDescriptorForTarget(
 	updateProfile string,
 	jobProfile string,
 ) (nodes.CommandDescriptor, bool) {
-	if nodes.IsBrowserCommand(descriptor.Name) {
+	if nodes.IsBrowserCommand(descriptor.Name) || nodes.IsWorkspaceCommand(descriptor.Name) {
 		return nodes.CommandDescriptor{}, false
 	}
 	projected, available := projectFileDescriptorForTarget(descriptor, fileProfile)
