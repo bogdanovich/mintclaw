@@ -781,6 +781,42 @@ func TestRepositoryResetSerializesConcurrentUpdate(t *testing.T) {
 	}
 }
 
+func TestRepositoryResetRejectsUnreadableSecurityWithoutChangingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Gateway.Port = 23456
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	malformedSecurity := []byte("model_list: [")
+	if err := os.WriteFile(securityPath(path), malformedSecurity, 0o600); err != nil {
+		t.Fatalf("write malformed security: %v", err)
+	}
+	publicBefore, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read public before reset: %v", err)
+	}
+
+	if _, err = repository.ResetToDefaults(); err == nil {
+		t.Fatal("ResetToDefaults() error = nil, want security preservation failure")
+	}
+	publicAfter, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read public after reset: %v", readErr)
+	}
+	securityAfter, readErr := os.ReadFile(securityPath(path))
+	if readErr != nil {
+		t.Fatalf("read security after reset: %v", readErr)
+	}
+	if !slices.Equal(publicAfter, publicBefore) {
+		t.Fatal("reset changed public config after security preservation failure")
+	}
+	if !slices.Equal(securityAfter, malformedSecurity) {
+		t.Fatal("reset changed malformed security config after preservation failure")
+	}
+}
+
 func TestLoadConfigPropagatesMigrationPersistenceFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

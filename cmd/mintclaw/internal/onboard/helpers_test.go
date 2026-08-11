@@ -1,9 +1,12 @@
 package onboard
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func TestCopyEmbeddedToTargetUsesStructuredAgentFiles(t *testing.T) {
@@ -33,5 +36,35 @@ func TestCopyEmbeddedToTargetUsesStructuredAgentFiles(t *testing.T) {
 		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
 			t.Fatalf("expected legacy file %s to be absent, got err=%v", legacyPath, err)
 		}
+	}
+}
+
+func TestSaveOnboardConfigRejectsStaleExistingSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	repository := config.NewRepository(path)
+	if _, err := repository.Save(config.DefaultConfig()); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	stale, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if _, err = repository.Update(func(cfg *config.Config) error {
+		cfg.Gateway.Port = 23456
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	err = saveOnboardConfig(repository, stale.Config, true, stale.Revision)
+	if !errors.Is(err, config.ErrConfigConflict) {
+		t.Fatalf("saveOnboardConfig() error = %v, want config conflict", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() after conflict error = %v", err)
+	}
+	if current.Config.Gateway.Port != 23456 {
+		t.Fatalf("gateway port after conflict = %d, want concurrent value", current.Config.Gateway.Port)
 	}
 }

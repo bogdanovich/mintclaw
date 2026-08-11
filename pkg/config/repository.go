@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
-	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 const configTransactionVersion = 1
@@ -200,7 +199,7 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		cfg.Session.ApplyDmScope()
 		cfg.Session.DeriveDmScope()
 		if securityErr := cfg.SecurityCopyFrom(r.path); securityErr != nil {
-			logger.WarnF("could not preserve security config", map[string]any{"error": securityErr})
+			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
 
 		var saveErr error

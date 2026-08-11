@@ -65,6 +65,7 @@ func onboard(encrypt bool) {
 
 	repository := config.NewRepository(configPath)
 	var cfg *config.Config
+	var expectedRevision config.Revision
 	if configExists {
 		// Preserve the durable config; the repository will re-encrypt api_keys with the new passphrase.
 		var snapshot config.Snapshot
@@ -74,10 +75,11 @@ func onboard(encrypt bool) {
 			os.Exit(1)
 		}
 		cfg = snapshot.Config
+		expectedRevision = snapshot.Revision
 	} else {
 		cfg = config.DefaultConfig()
 	}
-	if _, err := repository.Save(cfg); err != nil {
+	if err = saveOnboardConfig(repository, cfg, configExists, expectedRevision); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
 	}
@@ -86,6 +88,20 @@ func onboard(encrypt bool) {
 	createWorkspaceTemplates(workspace)
 
 	cliui.PrintOnboardComplete(internal.Logo, encrypt, configPath)
+}
+
+func saveOnboardConfig(
+	repository *config.Repository,
+	cfg *config.Config,
+	configExists bool,
+	expectedRevision config.Revision,
+) error {
+	if configExists {
+		_, err := repository.Replace(expectedRevision, cfg)
+		return err
+	}
+	_, err := repository.Save(cfg)
+	return err
 }
 
 // promptPassphrase reads the encryption passphrase twice from the terminal
