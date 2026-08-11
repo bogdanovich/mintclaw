@@ -68,8 +68,6 @@ var (
 	oauthGetCredential            = auth.GetCredential
 	oauthSetCredential            = auth.SetCredential
 	oauthDeleteCredential         = auth.DeleteCredential
-	oauthLoadConfig               = config.LoadConfig
-	oauthSaveConfig               = config.SaveConfig
 	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectIDWithContext
 	oauthFetchGoogleUserEmailFunc = fetchGoogleUserEmail
 )
@@ -754,24 +752,20 @@ func (h *Handler) persistCredentialAndConfig(
 }
 
 func (h *Handler) syncProviderAuthMethod(provider, authMethod string) error {
-	cfg, err := oauthLoadConfig(h.configPath)
-	if err != nil {
-		return err
-	}
-
-	found := false
-	for i := range cfg.ModelList {
-		if modelBelongsToProvider(provider, cfg.ModelList[i]) {
-			cfg.ModelList[i].AuthMethod = authMethod
-			found = true
+	_, err := h.updateConfig(func(cfg *config.Config) error {
+		found := false
+		for i := range cfg.ModelList {
+			if modelBelongsToProvider(provider, cfg.ModelList[i]) {
+				cfg.ModelList[i].AuthMethod = authMethod
+				found = true
+			}
 		}
-	}
-
-	if !found && authMethod != "" {
-		cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
-	}
-
-	return oauthSaveConfig(h.configPath, cfg)
+		if !found && authMethod != "" {
+			cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
+		}
+		return nil
+	})
+	return err
 }
 
 func modelBelongsToProvider(provider string, modelCfg *config.ModelConfig) bool {

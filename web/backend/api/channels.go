@@ -68,7 +68,7 @@ func (h *Handler) handleGetChannelConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, "Failed to load config", http.StatusInternalServerError)
 		return

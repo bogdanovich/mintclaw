@@ -1,7 +1,7 @@
 import { IconAdjustments } from "@tabler/icons-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -27,6 +27,7 @@ import { refreshGatewayState } from "@/store/gateway"
 export function RawConfigPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const revisionRef = useRef<string | null>(null)
 
   const { data: config, isLoading } = useQuery({
     queryKey: ["config"],
@@ -35,6 +36,7 @@ export function RawConfigPage() {
       if (!res.ok) {
         throw new Error("Failed to fetch config")
       }
+      revisionRef.current = res.headers.get("ETag")
       return res.json()
     },
   })
@@ -43,12 +45,16 @@ export function RawConfigPage() {
     mutationFn: async (newConfig: string) => {
       const res = await launcherFetch("/api/config", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": revisionRef.current ?? "",
+        },
         body: newConfig,
       })
       if (!res.ok) {
         throw new Error("Failed to save config")
       }
+      revisionRef.current = res.headers.get("ETag")
     },
     onSuccess: (_, submittedConfig) => {
       try {

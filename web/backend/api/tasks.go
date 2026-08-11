@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
@@ -29,7 +28,7 @@ func (h *Handler) registerTaskRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return

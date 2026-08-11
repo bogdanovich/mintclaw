@@ -216,33 +216,30 @@ func (h *Handler) handlePollWecomFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) saveWecomBinding(botID, secret string) error {
-	cfg, err := config.LoadConfig(h.configPath)
+	_, err := h.updateConfig(func(cfg *config.Config) error {
+		bc := cfg.Channels.Get(config.ChannelWeCom)
+		if bc == nil {
+			bc = &config.Channel{Type: config.ChannelWeCom}
+			cfg.Channels["wecom"] = bc
+		}
+		if len(config.NormalizeAllowFrom(bc.AllowFrom)) == 0 {
+			return fmt.Errorf(
+				"configure channel_list.wecom.allow_from with trusted sender IDs or [\"*\"] before QR binding",
+			)
+		}
+		bc.Enabled = true
+		var wecomCfg config.WeComSettings
+		if decodeErr := bc.Decode(&wecomCfg); decodeErr != nil {
+			return fmt.Errorf("could not decode wecom channel config: %w", decodeErr)
+		}
+		wecomCfg.BotID = botID
+		wecomCfg.Secret = *config.NewSecureString(secret)
+		if strings.TrimSpace(wecomCfg.WebSocketURL) == "" {
+			wecomCfg.WebSocketURL = wecomDefaultWebSocketURL
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	bc := cfg.Channels.Get(config.ChannelWeCom)
-	if bc == nil {
-		bc = &config.Channel{Type: config.ChannelWeCom}
-		cfg.Channels["wecom"] = bc
-	}
-	if len(config.NormalizeAllowFrom(bc.AllowFrom)) == 0 {
-		return fmt.Errorf(
-			"configure channel_list.wecom.allow_from with trusted sender IDs or [\"*\"] before QR binding",
-		)
-	}
-	bc.Enabled = true
-
-	var wecomCfg config.WeComSettings
-	if err := bc.Decode(&wecomCfg); err != nil {
-		return fmt.Errorf("could not decode wecom channel config: %w", err)
-	}
-	wecomCfg.BotID = botID
-	wecomCfg.Secret = *config.NewSecureString(secret)
-	if strings.TrimSpace(wecomCfg.WebSocketURL) == "" {
-		wecomCfg.WebSocketURL = wecomDefaultWebSocketURL
-	}
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
 		return err
 	}
 

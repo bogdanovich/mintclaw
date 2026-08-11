@@ -313,8 +313,6 @@ func resetOAuthHooks(t *testing.T) {
 	origGetCredential := oauthGetCredential
 	origSetCredential := oauthSetCredential
 	origDeleteCredential := oauthDeleteCredential
-	origLoadConfig := oauthLoadConfig
-	origSaveConfig := oauthSaveConfig
 	origFetchProject := oauthFetchAntigravityProject
 	origFetchGoogleEmail := oauthFetchGoogleUserEmailFunc
 
@@ -329,8 +327,6 @@ func resetOAuthHooks(t *testing.T) {
 		oauthGetCredential = origGetCredential
 		oauthSetCredential = origSetCredential
 		oauthDeleteCredential = origDeleteCredential
-		oauthLoadConfig = origLoadConfig
-		oauthSaveConfig = origSaveConfig
 		oauthFetchAntigravityProject = origFetchProject
 		oauthFetchGoogleUserEmailFunc = origFetchGoogleEmail
 	})
