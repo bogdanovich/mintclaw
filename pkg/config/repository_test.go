@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -630,6 +631,49 @@ func TestRepositoryReadDurableDoesNotApplyRuntimeEnvironmentOverrides(t *testing
 	}
 	if durableSnapshot.Revision != runtimeSnapshot.Revision {
 		t.Fatalf("revision mismatch: durable %q, runtime %q", durableSnapshot.Revision, runtimeSnapshot.Revision)
+	}
+}
+
+func TestRepositoryUpdatePreservesDurableMultiKeyModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.ModelList = []*ModelConfig{{
+		ModelName: "multi-key",
+		Model:     "openai/multi-key",
+		APIKeys:   SimpleSecureStrings("key-one", "key-two"),
+		Enabled:   true,
+	}}
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := repository.Update(func(cfg *Config) error {
+		cfg.Gateway.Port = 23456
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	durable, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if len(durable.Config.ModelList) != 1 {
+		t.Fatalf("durable models = %d, want 1", len(durable.Config.ModelList))
+	}
+	model := durable.Config.ModelList[0]
+	if got := model.APIKeys.Values(); !slices.Equal(got, []string{"key-one", "key-two"}) {
+		t.Fatalf("durable API keys = %q, want both original keys", got)
+	}
+	if len(model.Fallbacks) != 0 {
+		t.Fatalf("durable fallbacks = %q, want no generated names", model.Fallbacks)
+	}
+	runtimeSnapshot, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	if len(runtimeSnapshot.Config.ModelList) != 2 {
+		t.Fatalf("runtime models = %d, want expanded key models", len(runtimeSnapshot.Config.ModelList))
 	}
 }
 

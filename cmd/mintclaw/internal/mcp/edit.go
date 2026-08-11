@@ -67,6 +67,9 @@ func newEditCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to load edited config: %w", err)
 			}
+			if err = reconcileEditedModelCredentials(snapshot.Config, edited.Config); err != nil {
+				return err
+			}
 			normalizedCfg, err := normalizeAndValidateConfig(edited.Config)
 			if err != nil {
 				return err
@@ -81,4 +84,48 @@ func newEditCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func reconcileEditedModelCredentials(original, edited *config.Config) error {
+	if original == nil || edited == nil {
+		return fmt.Errorf("config is nil")
+	}
+	originalByName := make(map[string]*config.ModelConfig, len(original.ModelList))
+	editedNames := make(map[string]struct{}, len(edited.ModelList))
+	for _, model := range original.ModelList {
+		if model != nil {
+			originalByName[model.ModelName] = model
+		}
+	}
+	var addedNames []string
+	for _, model := range edited.ModelList {
+		if model == nil {
+			continue
+		}
+		editedNames[model.ModelName] = struct{}{}
+		originalModel, exists := originalByName[model.ModelName]
+		if !exists {
+			addedNames = append(addedNames, model.ModelName)
+			continue
+		}
+		if len(model.APIKeys) == 0 {
+			model.APIKeys = originalModel.APIKeys
+		}
+	}
+	if len(addedNames) == 0 {
+		return nil
+	}
+	for _, model := range original.ModelList {
+		if model == nil || len(model.APIKeys) == 0 {
+			continue
+		}
+		if _, exists := editedNames[model.ModelName]; !exists {
+			return fmt.Errorf(
+				"cannot rename credential-bearing model %q to %q in mcp edit; model credentials are stored separately",
+				model.ModelName,
+				addedNames[0],
+			)
+		}
+	}
+	return nil
 }

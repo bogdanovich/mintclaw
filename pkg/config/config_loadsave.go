@@ -492,7 +492,9 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 		}
 		cfg.Gateway.Host = gatewayHost
 	}
-	cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
+	if applyRuntimeOverrides {
+		cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
+	}
 	if err := cfg.ValidateModelList(); err != nil {
 		return err
 	}
