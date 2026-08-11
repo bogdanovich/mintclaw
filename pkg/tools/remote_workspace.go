@@ -99,8 +99,8 @@ func (tool *RemoteWorkspaceTool) Parameters() map[string]any {
 		parameters["properties"] = properties
 	}
 	properties["workspace"] = map[string]any{
-		"type":        "string",
-		"enum":        append([]string(nil), tool.aliases...),
+		"type": "string",
+		"enum": append([]string(nil), tool.aliases...),
 		"description": "Optional operator-configured remote workspace alias. Pass an enum value to run this tool " +
 			"remotely; omit it for gateway-local execution. Do not inspect or invoke internal workspace.* commands.",
 	}

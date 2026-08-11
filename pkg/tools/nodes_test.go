@@ -43,6 +43,7 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 	visible := testNodeCommand("system.info.v1", nodes.RiskRead, false, false)
 	visible.ModelContract = &nodes.CommandModelContract{
 		Availability: nodes.ModelAvailable, TimeoutSecondsMax: 30, OutputBytesMax: 4096, ResultKind: "json",
+		Guidance: []string{}, Examples: []json.RawMessage{},
 	}
 	catalog := nodes.CapabilityCatalog{Commands: append([]nodes.CommandDescriptor{visible}, workspaceDescriptors...)}
 	catalogHash := mustCatalogHash(t, catalog)
@@ -54,7 +55,7 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 		allowedCommands = append(allowedCommands, descriptor.Name)
 	}
 	source := &fakeNodeDiscoverySource{
-		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
+		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
 		connected: map[nodes.ID]bool{snapshot.ID: true},
 		registrations: map[nodes.ID]nodes.Registration{
 			snapshot.ID: {
