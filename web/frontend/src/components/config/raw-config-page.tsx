@@ -40,7 +40,7 @@ export function RawConfigPage() {
   const [isDirty, setIsDirty] = useState(false)
 
   const { data: configSnapshot, isLoading } = useQuery({
-    queryKey: ["config"],
+    queryKey: ["config", "raw"],
     queryFn: async () => {
       const res = await launcherFetch("/api/config")
       if (!res.ok) {
@@ -83,7 +83,7 @@ export function RawConfigPage() {
           string,
           unknown
         >
-        queryClient.setQueryData(["config"], {
+        queryClient.setQueryData(["config", "raw"], {
           document: savedConfig,
           revision,
         })
