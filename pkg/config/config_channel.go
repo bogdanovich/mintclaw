@@ -726,6 +726,18 @@ func isValidChannelType(channelType string) bool {
 // After calling this method, callers can safely use b.extend via Decode()
 // without re-parsing raw Settings.
 func InitChannelList(channels ChannelsConfig) error {
+	return initChannelList(channels, true)
+}
+
+func initChannelList(channels ChannelsConfig, applyRuntimeOverrides bool) error {
+	return initializeChannelList(channels, applyRuntimeOverrides, false)
+}
+
+func initUndecodedChannelList(channels ChannelsConfig) error {
+	return initializeChannelList(channels, false, true)
+}
+
+func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, preserveDecoded bool) error {
 	// Step 1 & 3: validate type and decode into typed settings
 	for name, bc := range channels {
 		if bc == nil {
@@ -743,13 +755,18 @@ func InitChannelList(channels ChannelsConfig) error {
 		}
 		// Decode into the correct typed settings
 		if target := newChannelSettings(bc.Type); target != nil {
-			if err := bc.Decode(target); err != nil {
-				return fmt.Errorf("channel %q failed to decode settings: %w", name, err)
+			if preserveDecoded && bc.extend != nil {
+				target = bc.extend
+			} else {
+				if err := bc.Decode(target); err != nil {
+					return fmt.Errorf("channel %q failed to decode settings: %w", name, err)
+				}
 			}
-			// Apply env overrides for channel-specific fields via struct tags
-			// Non-fatal: some env vars may not apply
-			_ = env.Parse(target)
-			applyTelegramStreamingEnvCompat(target)
+			if applyRuntimeOverrides {
+				// Channel environment overrides are intentionally non-fatal.
+				_ = env.Parse(target)
+				applyTelegramStreamingEnvCompat(target)
+			}
 			if err := validateChannelStreamingConfig(name, target); err != nil {
 				return err
 			}
