@@ -20,6 +20,7 @@ func onboard(encrypt bool) {
 	configPath := internal.GetConfigPath()
 
 	configExists := false
+	resetConfig := false
 	if _, err := os.Stat(configPath); err == nil {
 		configExists = true
 		if encrypt {
@@ -36,7 +37,7 @@ func onboard(encrypt bool) {
 					fmt.Println("Aborted.")
 					return
 				}
-				configExists = false // user agreed to reset; treat as fresh
+				resetConfig = true
 			}
 			// Config exists but SSH key is missing — keep existing config, only add SSH key.
 		}
@@ -64,20 +65,10 @@ func onboard(encrypt bool) {
 	}
 
 	repository := config.NewRepository(configPath)
-	var cfg *config.Config
-	var expectedRevision config.Revision
-	if configExists {
-		// Preserve the durable config; the repository will re-encrypt api_keys with the new passphrase.
-		var snapshot config.Snapshot
-		snapshot, err = repository.ReadDurable()
-		if err != nil {
-			fmt.Printf("Error loading existing config: %v\n", err)
-			os.Exit(1)
-		}
-		cfg = snapshot.Config
-		expectedRevision = snapshot.Revision
-	} else {
-		cfg = config.DefaultConfig()
+	cfg, expectedRevision, err := prepareOnboardConfig(repository, configExists, resetConfig)
+	if err != nil {
+		fmt.Printf("Error loading existing config: %v\n", err)
+		os.Exit(1)
 	}
 	if err = saveOnboardConfig(repository, cfg, configExists, expectedRevision); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
@@ -88,6 +79,24 @@ func onboard(encrypt bool) {
 	createWorkspaceTemplates(workspace)
 
 	cliui.PrintOnboardComplete(internal.Logo, encrypt, configPath)
+}
+
+func prepareOnboardConfig(
+	repository *config.Repository,
+	configExists bool,
+	resetConfig bool,
+) (*config.Config, config.Revision, error) {
+	if !configExists {
+		return config.DefaultConfig(), "", nil
+	}
+	snapshot, err := repository.ReadDurable()
+	if err != nil {
+		return nil, "", err
+	}
+	if resetConfig {
+		return config.DefaultConfig(), snapshot.Revision, nil
+	}
+	return snapshot.Config, snapshot.Revision, nil
 }
 
 func saveOnboardConfig(

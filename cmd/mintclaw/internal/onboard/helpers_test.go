@@ -68,3 +68,39 @@ func TestSaveOnboardConfigRejectsStaleExistingSnapshot(t *testing.T) {
 		t.Fatalf("gateway port after conflict = %d, want concurrent value", current.Config.Gateway.Port)
 	}
 }
+
+func TestConfirmedResetRejectsStaleExistingSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	repository := config.NewRepository(path)
+	existing := config.DefaultConfig()
+	existing.Gateway.Port = 23456
+	if _, err := repository.Save(existing); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reset, expectedRevision, err := prepareOnboardConfig(repository, true, true)
+	if err != nil {
+		t.Fatalf("prepareOnboardConfig() error = %v", err)
+	}
+	if reset.Gateway.Port == 23456 {
+		t.Fatal("prepareOnboardConfig() retained existing config for confirmed reset")
+	}
+	if _, err = repository.Update(func(cfg *config.Config) error {
+		cfg.Gateway.Port = 34567
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	err = saveOnboardConfig(repository, reset, true, expectedRevision)
+	if !errors.Is(err, config.ErrConfigConflict) {
+		t.Fatalf("saveOnboardConfig() error = %v, want config conflict", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() after conflict error = %v", err)
+	}
+	if current.Config.Gateway.Port != 34567 {
+		t.Fatalf("gateway port after conflict = %d, want concurrent value", current.Config.Gateway.Port)
+	}
+}
