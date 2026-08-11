@@ -604,6 +604,35 @@ func TestRepositoryReadOnlyDoesNotPersistMigration(t *testing.T) {
 	assertNoConfigTransactionArtifacts(t, path)
 }
 
+func TestRepositoryReadDurableDoesNotApplyRuntimeEnvironmentOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Gateway.LogLevel = "warn"
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	t.Setenv("MINTCLAW_LOG_LEVEL", "debug")
+
+	runtimeSnapshot, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	durableSnapshot, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if runtimeSnapshot.Config.Gateway.LogLevel != "debug" {
+		t.Fatalf("ReadOnly() log level = %q, want runtime override", runtimeSnapshot.Config.Gateway.LogLevel)
+	}
+	if durableSnapshot.Config.Gateway.LogLevel != "warn" {
+		t.Fatalf("ReadDurable() log level = %q, want durable value", durableSnapshot.Config.Gateway.LogLevel)
+	}
+	if durableSnapshot.Revision != runtimeSnapshot.Revision {
+		t.Fatalf("revision mismatch: durable %q, runtime %q", durableSnapshot.Revision, runtimeSnapshot.Revision)
+	}
+}
+
 func TestLoadConfigPropagatesMigrationPersistenceFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
