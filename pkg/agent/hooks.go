@@ -1064,20 +1064,48 @@ func cloneHookAnyMap(src map[string]any) map[string]any {
 }
 
 func cloneHookAnyValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneHookAnyMap(typed)
-	case []any:
-		if typed == nil {
-			return []any(nil)
+	cloned := cloneHookContainerValue(reflect.ValueOf(value))
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+
+func cloneHookContainerValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
 		}
-		out := make([]any, len(typed))
-		for i, item := range typed {
-			out[i] = cloneHookAnyValue(item)
+		cloned := cloneHookContainerValue(value.Elem())
+		wrapped := reflect.New(value.Type()).Elem()
+		wrapped.Set(cloned)
+		return wrapped
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
 		}
-		return out
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			cloned.SetMapIndex(iterator.Key(), cloneHookContainerValue(iterator.Value()))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneHookContainerValue(value.Index(i)))
+		}
+		return cloned
 	default:
-		return typed
+		return value
 	}
 }
 

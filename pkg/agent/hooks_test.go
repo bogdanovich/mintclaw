@@ -259,6 +259,8 @@ func (h *llmInPlaceNestedMutationHook) BeforeLLM(
 	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
 	path := properties["path"].(map[string]any)
 	path["type"] = "number"
+	required := req.Tools[0].Function.Parameters["required"].([]string)
+	required[0] = "mutated"
 	return req, HookDecision{Action: HookActionModify}, nil
 }
 
@@ -274,6 +276,7 @@ type llmNestedValueObserverHook struct {
 	attachmentName   string
 	createdAt        time.Time
 	parameterType    string
+	requiredProperty string
 }
 
 func (h *llmNestedValueObserverHook) BeforeLLM(
@@ -286,6 +289,7 @@ func (h *llmNestedValueObserverHook) BeforeLLM(
 	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
 	path := properties["path"].(map[string]any)
 	h.parameterType = path["type"].(string)
+	h.requiredProperty = req.Tools[0].Function.Parameters["required"].([]string)[0]
 	return req, HookDecision{Action: HookActionContinue}, nil
 }
 
@@ -512,6 +516,7 @@ func TestHookManager_BeforeLLMControlsInPlaceNestedMutation(t *testing.T) {
 					"properties": map[string]any{
 						"path": map[string]any{"type": "string"},
 					},
+					"required": []string{"path"},
 				},
 			},
 		}},
@@ -543,6 +548,10 @@ func TestHookManager_BeforeLLMControlsInPlaceNestedMutation(t *testing.T) {
 	path := properties["path"].(map[string]any)
 	if path["type"] != "string" || observer.parameterType != "string" {
 		t.Fatalf("parameter type = final:%v observer:%q, want string", path["type"], observer.parameterType)
+	}
+	required := got.Tools[0].Function.Parameters["required"].([]string)
+	if required[0] != "path" || observer.requiredProperty != "path" {
+		t.Fatalf("required = final:%q observer:%q, want path", required[0], observer.requiredProperty)
 	}
 }
 
