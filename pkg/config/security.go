@@ -192,14 +192,25 @@ func applyLegacySkillsSecurityNode(cfg *Config, skillsNode *yaml.Node) error {
 
 // saveSecurityConfig saves the security configuration to security.yml
 func saveSecurityConfig(securityPath string, sec *Config) error {
+	data, err := marshalSecurityConfig(sec)
+	if err != nil {
+		return err
+	}
+	return fileutil.WriteFileAtomic(securityPath, data, 0o600)
+}
+
+func marshalSecurityConfig(sec *Config) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	err := enc.Encode(sec)
 	if err != nil {
-		return fmt.Errorf("failed to marshal security config: %w", err)
+		return nil, fmt.Errorf("failed to marshal security config: %w", err)
 	}
-	return fileutil.WriteFileAtomic(securityPath, buf.Bytes(), 0o600)
+	if err = enc.Close(); err != nil {
+		return nil, fmt.Errorf("close security config encoder: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // SensitiveDataCache caches the strings.Replacer for filtering sensitive data.
