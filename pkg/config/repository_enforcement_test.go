@@ -140,7 +140,8 @@ func collectConfigPathAliases(file *ast.File) map[string]struct{} {
 func isConfigFileMutation(functionName string, args []ast.Expr, aliases map[string]struct{}) bool {
 	pathArgumentCount := 1
 	switch functionName {
-	case "WriteFile", "WriteFileAtomic", "Create", "OpenFile", "Rename", "ReplaceFile", "CopyFile":
+	case "WriteFile", "WriteFileAtomic", "Create", "OpenFile", "Rename", "ReplaceFile", "CopyFile", "Remove",
+		"RemoveAll", "Truncate":
 		if functionName == "Rename" || functionName == "ReplaceFile" || functionName == "CopyFile" {
 			pathArgumentCount = 2
 		}
@@ -237,5 +238,32 @@ func writeDirectly() {
 	})
 	if !mutationFound {
 		t.Fatal("direct write through cfgPath alias was not detected")
+	}
+}
+
+func TestConfigWriterEnforcementRejectsDeleteThroughCanonicalPathAlias(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "fixture.go", `package fixture
+func deleteDirectly() {
+	cfgPath := internal.GetConfigPath()
+	_ = os.Remove(cfgPath)
+}`, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	aliases := collectConfigPathAliases(file)
+	mutationFound := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if function, ok := call.Fun.(*ast.SelectorExpr); ok {
+			mutationFound = mutationFound || isConfigFileMutation(function.Sel.Name, call.Args, aliases)
+		}
+		return true
+	})
+	if !mutationFound {
+		t.Fatal("direct delete through cfgPath alias was not detected")
 	}
 }

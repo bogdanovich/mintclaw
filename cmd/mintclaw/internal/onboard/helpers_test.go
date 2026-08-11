@@ -1,10 +1,12 @@
 package onboard
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
@@ -128,5 +130,46 @@ func TestFreshOnboardingRejectsConfigCreatedAfterPreparation(t *testing.T) {
 	}
 	if current.Config.Gateway.Port != 45678 {
 		t.Fatalf("gateway port after conflict = %d, want concurrently created value", current.Config.Gateway.Port)
+	}
+}
+
+func TestExistingLegacyOnboardingPreservesMigrationBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacyPublic := []byte(`{
+		"gateway": {"host": "127.0.0.1", "port": 18790},
+		"model_list": []
+	}`)
+	legacySecurity := []byte("{}\n")
+	if err := os.WriteFile(path, legacyPublic, 0o600); err != nil {
+		t.Fatalf("write legacy public config: %v", err)
+	}
+	securityPath := filepath.Join(filepath.Dir(path), config.SecurityConfigFile)
+	if err := os.WriteFile(securityPath, legacySecurity, 0o600); err != nil {
+		t.Fatalf("write legacy security config: %v", err)
+	}
+
+	repository := config.NewRepository(path)
+	migrated, expectedRevision, err := prepareOnboardConfig(repository, true)
+	if err != nil {
+		t.Fatalf("prepareOnboardConfig() error = %v", err)
+	}
+	if err = saveOnboardConfig(repository, migrated, expectedRevision); err != nil {
+		t.Fatalf("saveOnboardConfig() error = %v", err)
+	}
+
+	backupSuffix := time.Now().Format(".20060102.bak")
+	publicBackup, err := os.ReadFile(path + backupSuffix)
+	if err != nil {
+		t.Fatalf("read public migration backup: %v", err)
+	}
+	securityBackup, err := os.ReadFile(securityPath + backupSuffix)
+	if err != nil {
+		t.Fatalf("read security migration backup: %v", err)
+	}
+	if !bytes.Equal(publicBackup, legacyPublic) {
+		t.Fatal("public migration backup does not match legacy document")
+	}
+	if !bytes.Equal(securityBackup, legacySecurity) {
+		t.Fatal("security migration backup does not match legacy document")
 	}
 }
