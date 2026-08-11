@@ -64,21 +64,10 @@ func (al *AgentLoop) processCodingDirect(
 	if err := al.ensureMCPInitialized(ctx); err != nil {
 		return "", err
 	}
-	agent := al.GetRegistry().GetDefaultAgent()
-	if agent == nil {
-		return "", fmt.Errorf("coding runtime has no default agent")
-	}
-	layout, ok := al.runtimeLayoutForWorkspace(agent.Workspace)
-	if !ok || layout.Owner().Kind != RuntimeOwnerCodingThread {
-		return "", fmt.Errorf("coding runtime has no coding-thread owner")
-	}
-	wantSessionKey := "coding:" + layout.Owner().ID
-	if strings.TrimSpace(sessionKey) != wantSessionKey {
-		return "", fmt.Errorf(
-			"coding runtime session %q does not match admitted thread %q",
-			sessionKey,
-			wantSessionKey,
-		)
+	wantSessionKey := strings.TrimSpace(sessionKey)
+	agent, layout, err := al.codingRuntimeTargetForSession(wantSessionKey)
+	if err != nil {
+		return "", err
 	}
 
 	inboundContext := &bus.InboundContext{

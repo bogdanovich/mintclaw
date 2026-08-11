@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -266,6 +267,36 @@ func (al *AgentLoop) runtimeLayoutForWorkspace(workspace string) (RuntimeLayout,
 
 func (al *AgentLoop) hasCodingToolProfile() bool {
 	return al != nil && al.runtimeProfile != nil && al.runtimeProfile.toolProfile == RuntimeToolProfileCoding
+}
+
+func (al *AgentLoop) codingRuntimeTargetForSession(
+	sessionKey string,
+) (*AgentInstance, RuntimeLayout, error) {
+	if !al.hasCodingToolProfile() {
+		return nil, RuntimeLayout{}, fmt.Errorf("runtime does not use the coding profile")
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	var matchedAgent *AgentInstance
+	var matchedLayout RuntimeLayout
+	for agentID, layout := range al.runtimeProfile.agentLayouts {
+		owner := layout.Owner()
+		if owner.Kind != RuntimeOwnerCodingThread || "coding:"+owner.ID != sessionKey {
+			continue
+		}
+		if matchedAgent != nil {
+			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has multiple owners", sessionKey)
+		}
+		agent, ok := al.GetRegistry().GetAgent(agentID)
+		if !ok || agent == nil {
+			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime owner %q has no agent", owner.ID)
+		}
+		matchedAgent = agent
+		matchedLayout = layout
+	}
+	if matchedAgent == nil {
+		return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has no admitted owner", sessionKey)
+	}
+	return matchedAgent, matchedLayout, nil
 }
 
 func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {

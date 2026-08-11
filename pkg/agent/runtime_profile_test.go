@@ -430,7 +430,7 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 
 	const sessionKey = "coding:thread-isolated"
 	if _, err := loop.ProcessDirect(t.Context(), "wrong thread", "coding:another-thread"); err == nil ||
-		!strings.Contains(err.Error(), "does not match admitted thread") {
+		!strings.Contains(err.Error(), "has no admitted owner") {
 		t.Fatalf("ProcessDirect(wrong thread) error = %v, want owner rejection", err)
 	}
 	if _, err := loop.ProcessDirect(t.Context(), "persist only here", sessionKey); err != nil {
@@ -444,6 +444,72 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 	if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{sessionKey}) {
 		t.Fatalf("coding sessions = %v, want only %q", sessions, sessionKey)
+	}
+}
+
+func TestCodingDirectResolvesEachAdmittedThreadOwner(t *testing.T) {
+	root := t.TempDir()
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		filepath.Join(root, "project-main"),
+		filepath.Join(root, "state-main"),
+		[]string{filepath.Join(root, "project-main")},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		filepath.Join(root, "project-support"),
+		filepath.Join(root, "state-support"),
+		[]string{filepath.Join(root, "project-support")},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	for _, target := range []struct {
+		agentID    string
+		sessionKey string
+	}{
+		{agentID: "main", sessionKey: "coding:thread-main"},
+		{agentID: "support", sessionKey: "coding:thread-support"},
+	} {
+		if _, err := loop.ProcessDirect(t.Context(), "turn for "+target.agentID, target.sessionKey); err != nil {
+			t.Fatalf("ProcessDirect(%s) error = %v", target.agentID, err)
+		}
+		agent, ok := loop.GetRegistry().GetAgent(target.agentID)
+		if !ok {
+			t.Fatalf("agent %q is missing", target.agentID)
+		}
+		if history := agent.Sessions.GetHistory(target.sessionKey); len(history) != 2 {
+			t.Fatalf("%s history length = %d, want 2", target.agentID, len(history))
+		}
+		if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{target.sessionKey}) {
+			t.Fatalf("%s sessions = %v, want only %q", target.agentID, sessions, target.sessionKey)
+		}
+	}
+	if _, err := loop.ProcessDirect(t.Context(), "unknown", "coding:thread-unknown"); err == nil ||
+		!strings.Contains(err.Error(), "has no admitted owner") {
+		t.Fatalf("ProcessDirect(unknown) error = %v, want fail-closed owner rejection", err)
 	}
 }
 
