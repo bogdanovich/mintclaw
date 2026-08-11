@@ -256,7 +256,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 		ctx,
 		source,
 		func(ctx context.Context, broker *browser.Broker) (tools.BrowserTargetDiagnostics, error) {
-			actions, readinessByProfile, err := broker.PassiveTargetDiagnostics(ctx, target, profiles)
+			actions, readinessByProfile, contexts, err := broker.PassiveTargetDiagnostics(ctx, target, profiles)
 			if err != nil {
 				return tools.BrowserTargetDiagnostics{}, err
 			}
@@ -281,6 +281,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 				Download:   downloadAvailable,
 				HeadedView: handoffAvailable,
 				Handoff:    handoffAvailable,
+				Contexts:   contexts,
 			}
 			for _, profile := range profiles {
 				result.Profiles[profile] = readinessByProfile[profile]

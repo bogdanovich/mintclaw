@@ -196,7 +196,7 @@ func (worker *playwrightWorker) SelectContext(
 	rawToken := worker.contextState.tabs[tabID]
 	rawDocumentGeneration := rawPageDocumentGeneration(raw, rawToken)
 	if rawDocumentGeneration == 0 {
-		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if err = worker.armContextSelectLocked(
 		ctx, raw.Generation, rawToken, rawDocumentGeneration,
@@ -208,7 +208,7 @@ func (worker *playwrightWorker) SelectContext(
 		"action": "select", "index": index,
 	}, true)
 	if err != nil && errors.Is(err, ErrDriverRejected) && strings.Contains(selectText, playwrightContextSelectStale) {
-		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if err != nil {
 		worker.lost = true
@@ -300,7 +300,7 @@ func (worker *playwrightWorker) CloseTab(
 	}
 	line, parseErr := playwrightResultLine(text)
 	if parseErr == nil && strings.HasPrefix(line, playwrightContextMarker+"|stale|") {
-		return ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+		return ContextCatalog{}, errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if parseErr != nil || line != playwrightContextMarker+"|closed|"+rawToken {
 		worker.lost = true
@@ -368,7 +368,7 @@ func (worker *playwrightWorker) armContextSelectLocked(
 	}
 	line, parseErr := playwrightResultLine(text)
 	if parseErr == nil && strings.HasPrefix(line, playwrightContextMarker+"|stale|") {
-		return errors.Join(ErrStale, errContextAuthorityStale)
+		return errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if parseErr != nil || line != playwrightContextMarker+"|armed|"+rawToken {
 		worker.lost = true

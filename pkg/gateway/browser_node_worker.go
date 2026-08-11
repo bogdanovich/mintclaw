@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -121,7 +122,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 				browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
 			}
 		}
-		return browser.TargetDiagnostics{Actions: actions, Profiles: profiles}, nil
+		return browser.TargetDiagnostics{
+			Actions: actions, Profiles: profiles, Contexts: driver.Status != browser.ReadinessUnavailable,
+		}, nil
 	}
 	profiles := make(map[string]browser.DriverReadiness, len(profileNames))
 	unavailable := func(readiness browser.DriverReadiness) (browser.TargetDiagnostics, error) {
@@ -155,7 +158,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		profileReady := true
 		for _, command := range []string{
 			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
-			nodes.BrowserCommandObserve, nodes.BrowserCommandAct, nodes.BrowserCommandSessionClose,
+			nodes.BrowserCommandObserve, nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
+			nodes.BrowserCommandSessionClose,
 		} {
 			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
 			if !approved {
@@ -213,7 +217,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			}
 		}
 	}
-	return browser.TargetDiagnostics{Actions: actions, Profiles: profiles}, nil
+	return browser.TargetDiagnostics{Actions: actions, Profiles: profiles, Contexts: allProfilesReady}, nil
 }
 
 func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
@@ -284,7 +288,7 @@ func (factory *nodeBrowserWorkerFactory) Open(
 	}
 	if result.SessionID != request.SessionID || result.State != "ready" ||
 		result.TabID == "" || result.Controller != "agent" ||
-		!result.Features.Observe || !result.Features.Navigate {
+		!result.Features.Observe || !result.Features.Navigate || !result.Features.Contexts {
 		return browser.WorkerOpenResult{Owner: worker}, browser.ErrDriverIncompatible
 	}
 	worker.tabID = result.TabID
@@ -315,6 +319,7 @@ type nodeBrowserWorker struct {
 	elements           map[string]browser.DriverElement
 	currentOrigin      string
 	statusSequence     uint64
+	contextSequence    uint64
 	closed             bool
 }
 
@@ -757,6 +762,12 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
 				if remote.Failure != nil && remote.Failure.Code == "SESSION_LOST" {
 					return browser.ErrWorkerLost
+				}
+				if remote.Failure != nil && remote.Failure.Code == "STALE_BROWSER_STATE" {
+					if record.Plan.Command == nodes.BrowserCommandContexts {
+						return errors.Join(browser.ErrStale, browser.ErrContextAuthorityStale)
+					}
+					return browser.ErrStale
 				}
 				return browser.ErrWorkerUnavailable
 			case nodes.InvocationUnknown:

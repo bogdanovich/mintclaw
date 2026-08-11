@@ -614,6 +614,25 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
+	if plan.Command == nodes.BrowserCommandContexts {
+		var input nodes.BrowserContextInput
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return nil, fmt.Errorf("decode browser context for durable result: %w", err)
+		}
+		if input.Operation != "select" {
+			return result, nil
+		}
+		var contextResult nodes.BrowserContextResult
+		if err := json.Unmarshal(result, &contextResult); err != nil {
+			return nil, fmt.Errorf("decode context result for durable receipt: %w", err)
+		}
+		contextResult.Observation = nil
+		durable, err := json.Marshal(contextResult)
+		if err != nil {
+			return nil, fmt.Errorf("encode context durable receipt: %w", err)
+		}
+		return durable, nil
+	}
 	if plan.Command != nodes.BrowserCommandAct {
 		return result, nil
 	}
@@ -641,11 +660,14 @@ func (runtime *Runtime) completeInvalidOutput(
 	err error,
 ) error {
 	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct ||
+		plan.Command == nodes.BrowserCommandContexts ||
 		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
 		label := "service action"
 		switch plan.Command {
 		case nodes.BrowserCommandAct:
 			label = "browser action"
+		case nodes.BrowserCommandContexts:
+			label = "browser context mutation"
 		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:
 			label = "workspace mutation"
 		}

@@ -172,6 +172,7 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 	return BrowserTargetDiagnostics{
 		Profiles:   byProfile,
 		Actions:    actions,
+		Contexts:   true,
 		Screenshot: !source.screenshotUnavailable,
 		Upload:     !source.transferUnavailable,
 		Download:   !source.transferUnavailable && !source.downloadUnavailable,
@@ -472,6 +473,23 @@ func TestBrowserTargetsReportsExplicitApprovedActionMode(t *testing.T) {
 	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].DryRun || !result.Targets[0].Profiles[0].AllowApprovedActions {
 		t.Fatalf("approved-action browser targets = %#v", result)
+	}
+}
+
+func TestBrowserTargetsAdvertisesCompleteContextParityAndBounds(t *testing.T) {
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t, NewBrowserTargetsTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true}).Execute(
+			browserToolTestContext(), nil,
+		), &result,
+	)
+	if len(result.Targets) != 1 || !result.Targets[0].Features.Tabs ||
+		!result.Targets[0].Features.Popups || !result.Targets[0].Features.Frames ||
+		result.Targets[0].Limits.FramesPerTab != browser.MaxContextFramesPerTab ||
+		result.Targets[0].Limits.FrameDepth != browser.MaxContextFrameDepth ||
+		result.Targets[0].Limits.ContextCatalogBytes != browser.MaxContextCatalogBytes ||
+		result.Targets[0].Limits.ContextLabelBytes != browser.MaxContextLabelBytes {
+		t.Fatalf("browser context capabilities = %#v", result)
 	}
 }
 

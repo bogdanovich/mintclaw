@@ -153,8 +153,12 @@ func (dispatch InvocationDispatch) Validate() error {
 	if len(dispatch.EphemeralInput) == 0 {
 		return nil
 	}
-	if dispatch.Plan.Command != BrowserCommandAct ||
-		len(dispatch.EphemeralInput) > MaxBrowserEphemeralInputBytes {
+	maximum := MaxBrowserEphemeralInputBytes
+	if dispatch.Plan.Command == BrowserCommandContexts {
+		maximum = MaxBrowserContextInputBytes
+	}
+	if (dispatch.Plan.Command != BrowserCommandAct && dispatch.Plan.Command != BrowserCommandContexts) ||
+		len(dispatch.EphemeralInput) > maximum {
 		return fmt.Errorf("%w: ephemeral invocation input is unavailable", ErrInvalidInvocation)
 	}
 	value, err := jsonstrict.Decode(dispatch.EphemeralInput)

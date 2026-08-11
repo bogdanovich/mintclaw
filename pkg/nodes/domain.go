@@ -434,7 +434,8 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	wantRisk := RiskRead
 	if descriptor.Name == BrowserCommandSessionOpen ||
-		descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandSessionClose {
+		descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandContexts ||
+		descriptor.Name == BrowserCommandSessionClose {
 		wantRisk = RiskWrite
 	}
 	if descriptor.Risk != wantRisk {

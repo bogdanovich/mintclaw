@@ -68,6 +68,7 @@ type BrowserTargetDiagnostics struct {
 	Download   bool
 	HeadedView bool
 	Handoff    bool
+	Contexts   bool
 }
 
 type browserToolRuntime struct {
@@ -186,6 +187,9 @@ type browserTargetView struct {
 }
 
 type browserFeatureView struct {
+	Tabs        bool `json:"tabs"`
+	Popups      bool `json:"popups"`
+	Frames      bool `json:"frames"`
 	Screenshot  bool `json:"screenshot"`
 	Upload      bool `json:"upload"`
 	Download    bool `json:"download"`
@@ -205,20 +209,24 @@ type browserProfileView struct {
 }
 
 type browserLimitsView struct {
-	Sessions        int `json:"sessions"`
-	Tabs            int `json:"tabs"`
-	SessionSeconds  int `json:"session_seconds"`
-	IdleSeconds     int `json:"idle_seconds"`
-	PreparedSeconds int `json:"prepared_seconds"`
-	ActionSeconds   int `json:"action_seconds"`
-	SnapshotBytes   int `json:"snapshot_bytes"`
-	ScreenshotBytes int `json:"screenshot_bytes"`
-	UploadBytes     int `json:"upload_bytes"`
-	DownloadBytes   int `json:"download_bytes"`
-	SnapshotRefs    int `json:"snapshot_refs"`
-	TextInputBytes  int `json:"text_input_bytes"`
-	ToolResultBytes int `json:"tool_result_bytes"`
-	RetentionSecs   int `json:"retention_seconds"`
+	Sessions            int `json:"sessions"`
+	Tabs                int `json:"tabs"`
+	SessionSeconds      int `json:"session_seconds"`
+	IdleSeconds         int `json:"idle_seconds"`
+	PreparedSeconds     int `json:"prepared_seconds"`
+	ActionSeconds       int `json:"action_seconds"`
+	SnapshotBytes       int `json:"snapshot_bytes"`
+	ScreenshotBytes     int `json:"screenshot_bytes"`
+	UploadBytes         int `json:"upload_bytes"`
+	DownloadBytes       int `json:"download_bytes"`
+	SnapshotRefs        int `json:"snapshot_refs"`
+	TextInputBytes      int `json:"text_input_bytes"`
+	ToolResultBytes     int `json:"tool_result_bytes"`
+	RetentionSecs       int `json:"retention_seconds"`
+	FramesPerTab        int `json:"frames_per_tab,omitempty"`
+	FrameDepth          int `json:"frame_depth,omitempty"`
+	ContextCatalogBytes int `json:"context_catalog_bytes,omitempty"`
+	ContextLabelBytes   int `json:"context_label_bytes,omitempty"`
 }
 
 func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
@@ -302,10 +310,21 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			actions = append(actions, browser.ActionDownload)
 		}
 		slices.Sort(actions)
+		contextsAvailable := capabilitiesAvailable && diagnostics.Contexts
+		framesPerTab, frameDepth, contextCatalogBytes, contextLabelBytes := 0, 0, 0, 0
+		if contextsAvailable {
+			framesPerTab = browser.MaxContextFramesPerTab
+			frameDepth = browser.MaxContextFrameDepth
+			contextCatalogBytes = browser.MaxContextCatalogBytes
+			contextLabelBytes = browser.MaxContextLabelBytes
+		}
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
+				Tabs:        contextsAvailable,
+				Popups:      contextsAvailable,
+				Frames:      contextsAvailable,
 				Screenshot:  capabilitiesAvailable && diagnostics.Screenshot,
 				Upload:      uploadAvailable,
 				Download:    downloadAvailable,
@@ -322,6 +341,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				DownloadBytes: limits.DownloadBytes, SnapshotRefs: limits.SnapshotRefs,
 				TextInputBytes: limits.TextInputBytes, ToolResultBytes: limits.ToolResultBytes,
 				RetentionSecs: limits.RetentionSecs,
+				FramesPerTab:  framesPerTab, FrameDepth: frameDepth,
+				ContextCatalogBytes: contextCatalogBytes, ContextLabelBytes: contextLabelBytes,
 			},
 		})
 	}

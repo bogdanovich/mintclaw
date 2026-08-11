@@ -46,6 +46,7 @@ const (
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
 	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserContextInputBytes   = 64*1024 + 128
 	MaxBrowserToolResultBytes     = 320 * 1024
 	MaxBrowserRetentionSeconds    = 7 * 24 * 60 * 60
 	MinBrowserToolResultBytes     = 64 * 1024
@@ -56,6 +57,7 @@ const (
 	BrowserCommandSessionStatus = "browser.session.status.v1"
 	BrowserCommandObserve       = "browser.observe.v1"
 	BrowserCommandAct           = "browser.act.v1"
+	BrowserCommandContexts      = "browser.contexts.v1"
 	BrowserCommandSessionClose  = "browser.session.close.v1"
 )
 
@@ -431,8 +433,66 @@ func BrowserPressKeyValid(key string) bool {
 type BrowserHostFeatures struct {
 	Observe    bool `json:"observe"`
 	Navigate   bool `json:"navigate"`
+	Contexts   bool `json:"contexts"`
 	Screenshot bool `json:"screenshot"`
 	Download   bool `json:"download"`
+}
+
+type BrowserFrameContext struct {
+	ID                 string `json:"frame_id"`
+	ParentFrameID      string `json:"parent_frame_id,omitempty"`
+	CreationSequence   uint64 `json:"creation_sequence"`
+	Depth              int    `json:"depth"`
+	DocumentGeneration uint64 `json:"document_generation"`
+	URL                string `json:"url"`
+	Origin             string `json:"origin"`
+	Label              string `json:"label,omitempty"`
+	Availability       string `json:"availability"`
+	SafeFailure        string `json:"safe_failure,omitempty"`
+}
+
+type BrowserTabContext struct {
+	ID                 string                `json:"tab_id"`
+	Kind               string                `json:"kind"`
+	CreationSequence   uint64                `json:"creation_sequence"`
+	OpenerTabID        string                `json:"opener_tab_id,omitempty"`
+	OpenerInvocationID string                `json:"opener_invocation_id,omitempty"`
+	DocumentGeneration uint64                `json:"document_generation"`
+	URL                string                `json:"url"`
+	Origin             string                `json:"origin"`
+	Title              string                `json:"title,omitempty"`
+	Frames             []BrowserFrameContext `json:"frames,omitempty"`
+	OmittedFrameCount  int                   `json:"omitted_frame_count,omitempty"`
+	FramesTruncated    bool                  `json:"frames_truncated,omitempty"`
+}
+
+type BrowserContextCatalog struct {
+	ID              string              `json:"context_catalog_id"`
+	Generation      uint64              `json:"context_generation"`
+	SelectedTabID   string              `json:"selected_tab_id"`
+	SelectedFrameID string              `json:"selected_frame_id,omitempty"`
+	Tabs            []BrowserTabContext `json:"tabs"`
+	OmittedTabCount int                 `json:"omitted_tab_count,omitempty"`
+	Truncated       bool                `json:"truncated,omitempty"`
+}
+
+type BrowserContextInput struct {
+	SessionID         string `json:"session_id"`
+	ProfileRevision   string `json:"profile_revision"`
+	Operation         string `json:"operation"`
+	RequestID         string `json:"request_id"`
+	ContextCatalogID  string `json:"context_catalog_id,omitempty"`
+	ContextGeneration uint64 `json:"context_generation,omitempty"`
+	AuthorityDigest   string `json:"authority_digest,omitempty"`
+	AuthorityBytes    int    `json:"authority_bytes,omitempty"`
+	TabID             string `json:"tab_id,omitempty"`
+	FrameID           string `json:"frame_id,omitempty"`
+}
+
+type BrowserContextResult struct {
+	Operation   string                    `json:"operation"`
+	Catalog     BrowserContextCatalog     `json:"context_catalog"`
+	Observation *BrowserObservationResult `json:"observation,omitempty"`
 }
 
 type BrowserSessionResult struct {
@@ -628,6 +688,19 @@ type BrowserHostActRequest struct {
 	ActorID               string
 }
 
+type BrowserHostContextRequest struct {
+	SessionID       string
+	RoutedSessionID string
+	ProfileRevision string
+	Operation       string
+	RequestID       string
+	Authority       *BrowserContextCatalog
+	TabID           string
+	FrameID         string
+	AgentID         string
+	ActorID         string
+}
+
 func (profile BrowserProfileDescriptor) Validate() error {
 	if err := (Alias(profile.Alias)).Validate(); err != nil ||
 		!validInvocationIdentifier(profile.Revision) ||
@@ -655,7 +728,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 func IsBrowserCommand(name string) bool {
 	switch name {
 	case BrowserCommandSessionOpen, BrowserCommandSessionStatus, BrowserCommandObserve,
-		BrowserCommandAct, BrowserCommandSessionClose:
+		BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose:
 		return true
 	default:
 		return false
@@ -679,6 +752,7 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 		{BrowserCommandSessionStatus, RiskRead},
 		{BrowserCommandObserve, RiskRead},
 		{BrowserCommandAct, RiskWrite},
+		{BrowserCommandContexts, RiskWrite},
 		{BrowserCommandSessionClose, RiskWrite},
 	}
 	result := make([]CommandDescriptor, 0, len(commands))
@@ -919,6 +993,45 @@ func browserCommandInputSchema(
 		}
 		properties["approval_digest"] = digest
 		profileConstraint = map[string]any{"oneOf": actionBranches}
+	case BrowserCommandContexts:
+		add("session_id", identifier)
+		add("profile_revision", map[string]any{"enum": profileRevisions})
+		add("operation", map[string]any{"enum": []string{"list", "open", "select", "close"}})
+		add("request_id", identifier)
+		properties["authority_digest"] = digest
+		properties["context_catalog_id"] = identifier
+		properties["context_generation"] = map[string]any{"type": "integer", "minimum": 1}
+		properties["authority_bytes"] = map[string]any{
+			"type": "integer", "minimum": 1, "maximum": MaxBrowserContextInputBytes,
+		}
+		properties["tab_id"] = identifier
+		properties["frame_id"] = identifier
+		profileConstraint = map[string]any{"oneOf": []any{
+			map[string]any{
+				"properties": map[string]any{"operation": map[string]any{"enum": []string{"list", "open"}}},
+				"not": map[string]any{"anyOf": []any{
+					map[string]any{"required": []string{"authority_digest"}},
+					map[string]any{"required": []string{"authority_bytes"}},
+					map[string]any{"required": []string{"context_catalog_id"}},
+					map[string]any{"required": []string{"context_generation"}},
+					map[string]any{"required": []string{"tab_id"}},
+					map[string]any{"required": []string{"frame_id"}},
+				}},
+			},
+			map[string]any{
+				"required": []string{
+					"authority_digest", "authority_bytes", "context_catalog_id", "context_generation", "tab_id",
+				},
+				"properties": map[string]any{"operation": map[string]any{"const": "select"}},
+			},
+			map[string]any{
+				"required": []string{
+					"authority_digest", "authority_bytes", "context_catalog_id", "context_generation", "tab_id",
+				},
+				"properties": map[string]any{"operation": map[string]any{"const": "close"}},
+				"not":        map[string]any{"required": []string{"frame_id"}},
+			},
+		}}
 	default:
 		return json.RawMessage("false")
 	}
@@ -974,9 +1087,10 @@ func BrowserCommandOutputSchema(
 				"controller": map[string]any{"const": "agent"},
 				"features": map[string]any{
 					"type": "object", "additionalProperties": false,
-					"required": []string{"observe", "navigate", "screenshot", "download"},
+					"required": []string{"observe", "navigate", "contexts", "screenshot", "download"},
 					"properties": map[string]any{
 						"observe": map[string]any{"type": "boolean"}, "navigate": map[string]any{"type": "boolean"},
+						"contexts":   map[string]any{"type": "boolean"},
 						"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
 					},
 				},
@@ -998,8 +1112,82 @@ func BrowserCommandOutputSchema(
 				"artifact":             browserArtifactSchema(limits.DownloadBytes),
 			},
 		})
+	case BrowserCommandContexts:
+		return mustJSON(map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"operation", "context_catalog"},
+			"properties": map[string]any{
+				"operation":       map[string]any{"enum": []string{"list", "open", "select", "close"}},
+				"context_catalog": browserContextCatalogSchema(),
+				"observation":     rawSchema(browserObservationSchema(limits)),
+			},
+			"allOf": []any{map[string]any{"oneOf": []any{
+				map[string]any{
+					"properties": map[string]any{"operation": map[string]any{"const": "select"}},
+					"required":   []string{"observation"},
+				},
+				map[string]any{
+					"properties": map[string]any{
+						"operation": map[string]any{"enum": []string{"list", "open", "close"}},
+					},
+					"not": map[string]any{"required": []string{"observation"}},
+				},
+			}}},
+		})
 	default:
 		return json.RawMessage("false")
+	}
+}
+
+func browserContextCatalogSchema() map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	generation := map[string]any{"type": "integer", "minimum": 1}
+	location := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes}
+	frame := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"frame_id", "creation_sequence", "depth", "document_generation",
+			"url", "origin", "availability",
+		},
+		"properties": map[string]any{
+			"frame_id": identifier, "parent_frame_id": identifier,
+			"creation_sequence":   generation,
+			"depth":               map[string]any{"type": "integer", "minimum": 1, "maximum": 8},
+			"document_generation": generation,
+			"url":                 location, "origin": location,
+			"label":        map[string]any{"type": "string", "maxLength": 512},
+			"availability": map[string]any{"enum": []string{"ready", "unavailable"}},
+			"safe_failure": map[string]any{"type": "string", "maxLength": 128},
+		},
+	}
+	tab := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"tab_id", "kind", "creation_sequence", "document_generation", "url", "origin",
+		},
+		"properties": map[string]any{
+			"tab_id": identifier, "kind": map[string]any{"enum": []string{"primary", "tab", "popup"}},
+			"creation_sequence": generation, "opener_tab_id": identifier,
+			"opener_invocation_id": identifier, "document_generation": generation,
+			"url": location, "origin": location,
+			"title":               map[string]any{"type": "string", "maxLength": 512},
+			"frames":              map[string]any{"type": "array", "maxItems": 64, "items": frame},
+			"omitted_frame_count": map[string]any{"type": "integer", "minimum": 0},
+			"frames_truncated":    map[string]any{"type": "boolean"},
+		},
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"context_catalog_id", "context_generation", "selected_tab_id", "tabs",
+		},
+		"properties": map[string]any{
+			"context_catalog_id": identifier, "context_generation": generation,
+			"selected_tab_id": identifier, "selected_frame_id": identifier,
+			"tabs":              map[string]any{"type": "array", "minItems": 1, "maxItems": 16, "items": tab},
+			"omitted_tab_count": map[string]any{"type": "integer", "minimum": 0},
+			"truncated":         map[string]any{"type": "boolean"},
+		},
 	}
 }
 

@@ -65,6 +65,8 @@ type fakeBrowserHostWorker struct {
 	executeFunc             func(context.Context, browserworker.DriverAction) error
 	closeErr                error
 	closeCalls              int
+	contextCatalog          browserworker.ContextCatalog
+	contextObservation      browserworker.DriverObservation
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -127,6 +129,61 @@ func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
 }
 
 func (*fakeBrowserHostWorker) CatalogRevision() string { return "driver-v1" }
+
+func (worker *fakeBrowserHostWorker) ContextCatalog(context.Context) (browserworker.ContextCatalog, error) {
+	if worker.contextCatalog.ID == "" {
+		worker.contextCatalog = browserHostContextCatalogFixture(false)
+	}
+	return worker.contextCatalog, nil
+}
+
+func (worker *fakeBrowserHostWorker) OpenTab(context.Context) (browserworker.ContextCatalog, error) {
+	worker.contextCatalog = browserHostContextCatalogFixture(true)
+	return worker.contextCatalog, nil
+}
+
+func (worker *fakeBrowserHostWorker) SelectContext(
+	context.Context,
+	browserworker.ContextMutationAuthority,
+) (browserworker.DriverObservation, browserworker.ContextCatalog, error) {
+	worker.contextCatalog.Generation++
+	worker.contextCatalog.SelectedTabID = "context_tab_2"
+	return worker.contextObservation, worker.contextCatalog, nil
+}
+
+func (worker *fakeBrowserHostWorker) CloseTab(
+	context.Context,
+	browserworker.ContextMutationAuthority,
+) (browserworker.ContextCatalog, error) {
+	worker.contextCatalog.Generation++
+	worker.contextCatalog.SelectedTabID = "context_tab_1"
+	worker.contextCatalog.Tabs = worker.contextCatalog.Tabs[:1]
+	return worker.contextCatalog, nil
+}
+
+func browserHostContextCatalogFixture(opened bool) browserworker.ContextCatalog {
+	catalog := browserworker.ContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []browserworker.TabContext{{
+			ID: "context_tab_1", Kind: browserworker.TabPrimary, CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
+	if opened {
+		catalog.Generation = 2
+		catalog.SelectedTabID = "context_tab_2"
+		catalog.Tabs = append(catalog.Tabs, browserworker.TabContext{
+			ID: "context_tab_2", Kind: browserworker.TabOpened, CreationSequence: 2,
+			DocumentGeneration: 1, URL: "https://example.com/", Origin: "https://example.com",
+			Frames: []browserworker.FrameContext{{
+				ID: "context_frame_1", CreationSequence: 1, Depth: 1, DocumentGeneration: 1,
+				URL: "https://frame.example/", Origin: "https://frame.example",
+				Availability: browserworker.FrameReady,
+			}},
+		})
+	}
+	return catalog
+}
 
 func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
@@ -1164,6 +1221,54 @@ func browserHostProfileFixture() companion.BrowserProfilePolicy {
 		NetworkMode: nodes.BrowserNetworkAnyHTTP, DryRun: true,
 		AllowedActions: []string{"download", "navigate", "scroll"}, Headed: true,
 		Limits: nodes.BrowserLimits{}.Effective(),
+	}
+}
+
+func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com", Title: "Selected",
+		}},
+		navigationIdentities: []string{"navigation_selected", "navigation_selected"},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	opened, err := host.Open(t.Context(), browserHostOpenFixture())
+	if err != nil || !opened.Features.Contexts {
+		t.Fatalf("Open() = %#v, %v", opened, err)
+	}
+	request := nodes.BrowserHostContextRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
+		AgentID: "browser", ActorID: "telegram:owner", Operation: "list",
+	}
+	listed, err := host.Contexts(t.Context(), request)
+	if err != nil || listed.Catalog.SelectedTabID != "context_tab_1" {
+		t.Fatalf("Contexts(list) = %#v, %v", listed, err)
+	}
+	request.Operation = "open"
+	request.RequestID = "context_request_2"
+	openedContext, err := host.Contexts(t.Context(), request)
+	if err != nil || len(openedContext.Catalog.Tabs) != 2 {
+		t.Fatalf("Contexts(open) = %#v, %v", openedContext, err)
+	}
+	request.Operation = "select"
+	request.RequestID = "context_request_3"
+	request.Authority = &openedContext.Catalog
+	request.TabID = "context_tab_2"
+	request.FrameID = "context_frame_1"
+	selected, err := host.Contexts(t.Context(), request)
+	if err != nil || selected.Observation == nil || selected.Observation.SnapshotGeneration != 1 ||
+		selected.Catalog.SelectedTabID != "context_tab_2" {
+		t.Fatalf("Contexts(select) = %#v, %v", selected, err)
+	}
+	request.Operation = "close"
+	request.RequestID = "context_request_4"
+	request.Authority = &selected.Catalog
+	request.FrameID = ""
+	closed, err := host.Contexts(t.Context(), request)
+	if err != nil || len(closed.Catalog.Tabs) != 1 || closed.Catalog.SelectedTabID != "context_tab_1" {
+		t.Fatalf("Contexts(close) = %#v, %v", closed, err)
 	}
 }
 

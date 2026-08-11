@@ -24,6 +24,10 @@ type BrowserCommandHost interface {
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
 
+type browserContextCommandHost interface {
+	Contexts(context.Context, nodes.BrowserHostContextRequest) (nodes.BrowserContextResult, error)
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -55,6 +59,14 @@ func (handler *browserCommandHandler) authorizeEphemeral(
 	plan nodes.ExecutionPlan,
 	ephemeralInput json.RawMessage,
 ) error {
+	if handler.command == nodes.BrowserCommandContexts {
+		var input nodes.BrowserContextInput
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return nodes.ErrCommandDenied
+		}
+		_, err := browserEphemeralContextAuthority(input, ephemeralInput)
+		return err
+	}
 	if handler.command != nodes.BrowserCommandAct {
 		if len(ephemeralInput) != 0 {
 			return nodes.ErrCommandDenied
@@ -113,6 +125,32 @@ func (handler *browserCommandHandler) execute(
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandAct:
 		return handler.executeAct(ctx, invocation)
+	case nodes.BrowserCommandContexts:
+		contextHost, ok := handler.host.(browserContextCommandHost)
+		if !ok {
+			return nil, ErrCommandUnavailable
+		}
+		var input nodes.BrowserContextInput
+		if err := json.Unmarshal(invocation.Input, &input); err != nil {
+			return nil, browserCommandFailure(err)
+		}
+		authority, err := browserEphemeralContextAuthority(input, invocation.EphemeralInput)
+		if err != nil {
+			return nil, newCommandFailure(
+				"COMMAND_DENIED", "browser context authority is unavailable", nodes.ErrBrowserHostDenied,
+			)
+		}
+		result, err := contextHost.Contexts(ctx, nodes.BrowserHostContextRequest{
+			SessionID: input.SessionID, ProfileRevision: input.ProfileRevision,
+			RoutedSessionID: invocation.Plan.SessionID,
+			Operation:       input.Operation, RequestID: input.RequestID,
+			Authority: authority, TabID: input.TabID, FrameID: input.FrameID,
+			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		})
+		if err != nil && input.Operation != "list" && errors.Is(err, nodes.ErrBrowserHostLost) {
+			return nil, fmt.Errorf("%w: browser context outcome is unknown", ErrInvocationOutcomeUnknown)
+		}
+		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandSessionClose:
 		var input nodes.BrowserSessionStatusInput
 		if err := json.Unmarshal(invocation.Input, &input); err != nil {
@@ -123,6 +161,33 @@ func (handler *browserCommandHandler) execute(
 	default:
 		return nil, ErrCommandUnavailable
 	}
+}
+
+func browserEphemeralContextAuthority(
+	input nodes.BrowserContextInput,
+	ephemeralInput json.RawMessage,
+) (*nodes.BrowserContextCatalog, error) {
+	if input.Operation == "list" || input.Operation == "open" {
+		if len(ephemeralInput) != 0 || input.AuthorityDigest != "" || input.AuthorityBytes != 0 {
+			return nil, nodes.ErrCommandDenied
+		}
+		return nil, nil
+	}
+	if (input.Operation != "select" && input.Operation != "close") ||
+		input.AuthorityBytes < 1 || input.AuthorityBytes > nodes.MaxBrowserContextInputBytes ||
+		len(ephemeralInput) != input.AuthorityBytes {
+		return nil, nodes.ErrCommandDenied
+	}
+	var ephemeral struct {
+		Authority nodes.BrowserContextCatalog `json:"authority"`
+	}
+	if err := decodeStrictJSON(ephemeralInput, &ephemeral); err != nil ||
+		ephemeral.Authority.ID != input.ContextCatalogID ||
+		ephemeral.Authority.Generation != input.ContextGeneration ||
+		!nodes.BrowserContextAuthorityDigestMatches(input.AuthorityDigest, ephemeral.Authority) {
+		return nil, nodes.ErrCommandDenied
+	}
+	return &ephemeral.Authority, nil
 }
 
 func browserStatusResult(result nodes.BrowserSessionResult) nodes.BrowserSessionResult {

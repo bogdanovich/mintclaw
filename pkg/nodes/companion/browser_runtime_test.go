@@ -20,6 +20,8 @@ type fakeBrowserCommandHost struct {
 	selected       int
 	pressed        int
 	scrolled       int
+	contextCalls   int
+	contextError   error
 	closed         int
 	navigateError  error
 	invalidAction  bool
@@ -136,6 +138,30 @@ func (host *fakeBrowserCommandHost) Close(
 	}, nil
 }
 
+func (host *fakeBrowserCommandHost) Contexts(
+	_ context.Context,
+	request nodes.BrowserHostContextRequest,
+) (nodes.BrowserContextResult, error) {
+	host.contextCalls++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := nodes.BrowserContextResult{
+		Operation: request.Operation,
+		Catalog: nodes.BrowserContextCatalog{
+			ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+			Tabs: []nodes.BrowserTabContext{{
+				ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+				DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+			}},
+		},
+	}
+	if request.Operation == "select" {
+		observation := browserRuntimeObservation(request.SessionID, "tab_primary", 1)
+		observation.Snapshot = "transient_context_observation"
+		result.Observation = &observation
+	}
+	return result, host.contextError
+}
+
 func browserRuntimeObservation(sessionID, tabID string, generation uint64) nodes.BrowserObservationResult {
 	return nodes.BrowserObservationResult{
 		SessionID: sessionID, TabID: tabID, SnapshotGeneration: generation,
@@ -209,6 +235,64 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 		if routedSession != "session_test" {
 			t.Fatalf("routed session calls = %#v", host.routedSessions)
 		}
+	}
+}
+
+func TestRuntimeExecutesTypedBrowserContextCatalog(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	runtime := newBrowserRuntimeFixture(t, host)
+	result := invokeBrowserRuntime(t, runtime, nodes.BrowserCommandContexts, nodes.BrowserContextInput{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		Operation: "list", RequestID: "context_request_1",
+	})
+	var catalog nodes.BrowserContextResult
+	if err := json.Unmarshal(result, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if host.contextCalls != 1 || catalog.Operation != "list" ||
+		catalog.Catalog.SelectedTabID != "context_tab_1" {
+		t.Fatalf("Contexts() result = %#v, calls = %d", catalog, host.contextCalls)
+	}
+}
+
+func TestRuntimeBindsTransientBrowserContextAuthorityAndRedactsObservation(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	runtime := newBrowserRuntimeFixture(t, host)
+	authority := nodes.BrowserContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []nodes.BrowserTabContext{{
+			ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
+	ephemeral, err := json.Marshal(struct {
+		Authority nodes.BrowserContextCatalog `json:"authority"`
+	}{Authority: authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := nodes.BrowserContextAuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := json.Marshal(nodes.BrowserContextInput{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		Operation: "select", RequestID: "context_request_1",
+		ContextCatalogID: authority.ID, ContextGeneration: authority.Generation,
+		AuthorityDigest: digest, AuthorityBytes: len(ephemeral), TabID: "context_tab_1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandContexts, input)
+	result, err := runtime.InvokeWithEphemeral(t.Context(), plan, ephemeral)
+	if err != nil || !bytes.Contains(result, []byte("transient_context_observation")) {
+		t.Fatalf("InvokeWithEphemeral(context select) = %s, %v", result, err)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationSucceeded ||
+		bytes.Contains(record.Result, []byte("transient_context_observation")) {
+		t.Fatalf("durable context record = %#v, found %v", record, found)
 	}
 }
 
@@ -440,6 +524,31 @@ func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *test
 	}
 }
 
+func TestRuntimeMarksAmbiguousBrowserContextMutationUnknownWithoutReplay(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.contextError = nodes.ErrBrowserHostLost
+	runtime := newBrowserRuntimeFixture(t, host)
+	input, err := json.Marshal(nodes.BrowserContextInput{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		Operation: "open", RequestID: "context_request_1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandContexts, input)
+	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("Invoke() error = %v, want unknown", err)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationUnknown || host.contextCalls != 1 {
+		t.Fatalf("record = %#v, found %v, context calls %d", record, found, host.contextCalls)
+	}
+	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
+		host.contextCalls != 1 {
+		t.Fatalf("replay error = %v, context calls = %d", err, host.contextCalls)
+	}
+}
+
 func browserRuntimeHostFixture() *fakeBrowserCommandHost {
 	return &fakeBrowserCommandHost{profiles: []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
@@ -482,6 +591,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
+		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,
 	}
 }
