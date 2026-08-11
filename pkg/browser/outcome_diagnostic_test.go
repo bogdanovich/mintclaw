@@ -39,3 +39,28 @@ func TestClassifyAcceptedOutcomeFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagnoseRecoveredOutcomeIsEphemeralAndConservative(t *testing.T) {
+	tests := []struct {
+		reason string
+		want   OutcomeFailureClass
+	}{
+		{reason: "gateway_restarted", want: OutcomeFailureWorkerUnavailable},
+		{reason: "worker_lost", want: OutcomeFailureWorkerUnavailable},
+		{reason: "policy_changed", want: OutcomeFailurePolicyDenied},
+		{reason: "result_invalid", want: OutcomeFailureInvalidResult},
+		{reason: "outcome_unknown", want: OutcomeFailureUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			invocation := Invocation{State: InvocationUnknown, SafeFailure: test.reason}
+			diagnosed := diagnoseRecoveredOutcome(invocation)
+			if diagnosed.Diagnostic == nil || diagnosed.Diagnostic.FailureClass != test.want {
+				t.Fatalf("diagnoseRecoveredOutcome() = %+v, want %q", diagnosed, test.want)
+			}
+			if invocation.Diagnostic != nil {
+				t.Fatal("diagnosis mutated the durable invocation value")
+			}
+		})
+	}
+}

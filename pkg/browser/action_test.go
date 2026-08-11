@@ -590,6 +590,11 @@ func TestBrokerRestartMakesUncommittedAcceptedDownloadUnknown(t *testing.T) {
 		recovered.SafeFailure != "gateway_restarted" || recovered.CompletedAt == 0 {
 		t.Fatalf("uncommitted recovered invocation = %#v, %v", recovered, err)
 	}
+	projected, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || projected.Diagnostic == nil ||
+		projected.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
+		t.Fatalf("recovered action diagnostic = %#v, %v", projected, err)
+	}
 }
 
 func TestBrokerBlankSnapshotAuthorizesOnlyAllowedNavigation(t *testing.T) {

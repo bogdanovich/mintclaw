@@ -52,3 +52,23 @@ func classifyAcceptedOutcomeFailure(executeErr, executionContextErr error) Outco
 	}
 	return OutcomeFailureUnknown
 }
+
+// diagnoseRecoveredOutcome projects a safe class from durable terminal state
+// when the process that observed the original failure is no longer available.
+// The projection remains ephemeral and cannot authorize a retry.
+func diagnoseRecoveredOutcome(invocation Invocation) Invocation {
+	if invocation.State != InvocationUnknown || invocation.Diagnostic != nil {
+		return invocation
+	}
+	class := OutcomeFailureUnknown
+	switch invocation.SafeFailure {
+	case "gateway_restarted", "session_closed", "worker_lost":
+		class = OutcomeFailureWorkerUnavailable
+	case "policy_changed":
+		class = OutcomeFailurePolicyDenied
+	case "result_invalid":
+		class = OutcomeFailureInvalidResult
+	}
+	invocation.Diagnostic = &InvocationDiagnostic{FailureClass: class}
+	return invocation
+}

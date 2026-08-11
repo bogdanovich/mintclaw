@@ -1173,10 +1173,14 @@ func (broker *Broker) executePreparedLocked(
 		return Invocation{}, ErrNotFound
 	}
 	if invocation.State.Terminal() {
-		return invocation, nil
+		return diagnoseRecoveredOutcome(invocation), nil
 	}
 	if invocation.State == InvocationAccepted {
-		return broker.completeInvocationLocked(ctx, invocation, InvocationUnknown, nil, "worker_lost")
+		completed, completeErr := broker.completeInvocationLocked(
+			ctx, invocation, InvocationUnknown, nil, "worker_lost",
+		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureWorkerUnavailable}
+		return completed, completeErr
 	}
 	if ctx.Err() != nil {
 		return broker.completeInvocationLocked(

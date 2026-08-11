@@ -263,7 +263,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		return Invocation{}, err
 	}
 	if currentInvocation.State.Terminal() {
-		return currentInvocation, nil
+		return diagnoseRecoveredOutcome(currentInvocation), nil
 	}
 	if currentInvocation.State == InvocationAccepted {
 		return broker.executePreparedLocked(
