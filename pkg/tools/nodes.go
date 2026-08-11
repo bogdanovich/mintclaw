@@ -256,6 +256,12 @@ func (tool *NodeDiscoveryTool) describe(
 	if !containsSorted(names, target) {
 		return toolshared.ErrorResult(fmt.Sprintf("target %q is not visible to this agent", target))
 	}
+	if nodes.IsWorkspaceCommand(command) {
+		return toolshared.ErrorResult(
+			"workspace.* commands are internal; use read_file, search_files, write_file, or apply_patch " +
+				"with a configured workspace alias",
+		)
+	}
 	entry, snapshot, registration, err := tool.access.resolve(target, defaultTarget)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("describe node target %q: %v", target, err))
@@ -283,12 +289,6 @@ func (tool *NodeDiscoveryTool) describe(
 	)
 	if command == "" {
 		return nodeJSONResult(description)
-	}
-	if nodes.IsWorkspaceCommand(command) {
-		return toolshared.ErrorResult(
-			"workspace.* commands are internal; use read_file, search_files, write_file, or apply_patch " +
-				"with a configured workspace alias",
-		)
 	}
 	descriptor, ok := visibleNodeCommand(snapshot.Catalog, registration, command)
 	if !ok || entry.RequiresReapproval {
