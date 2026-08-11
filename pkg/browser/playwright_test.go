@@ -2152,6 +2152,7 @@ func playwrightCatalogFixture() []*sdkmcp.Tool {
 		"browser_close",
 		"browser_navigate",
 		"browser_snapshot",
+		"browser_tabs",
 		"browser_take_screenshot",
 		"browser_click",
 		"browser_type",

@@ -50,6 +50,18 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// ContextWorker is the private multi-document driver boundary. Implementations
+// retain every Playwright page, frame, and tab index behind opaque context IDs.
+// The broker must not advertise context support unless this complete interface
+// is available for the selected placement.
+type ContextWorker interface {
+	ActionWorker
+	ContextCatalog(context.Context) (ContextCatalog, error)
+	OpenTab(context.Context) (ContextCatalog, error)
+	SelectContext(context.Context, string, string) (DriverObservation, ContextCatalog, error)
+	CloseTab(context.Context, string) (ContextCatalog, error)
+}
+
 // NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
 // current main-frame navigation state. The identity is private runtime state:
 // callers use it to reject document and same-document transitions that

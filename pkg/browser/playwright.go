@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -609,7 +610,12 @@ func (factory *PlaywrightWorkerFactory) Open(
 	worker := &playwrightWorker{
 		client: client, networkProxy: networkProxy,
 		limits: request.Limits.Effective(), cancelLifetime: cancelLifetime,
-		outputDir: outputDir,
+		outputDir: outputDir, contextSessionID: request.SessionID,
+	}
+	worker.contextSecret = make([]byte, 32)
+	if _, err = rand.Read(worker.contextSecret); err != nil {
+		factory.readiness.Store(playwrightReadinessUnavailable)
+		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
 	}
 	stopStartupCancellation := context.AfterFunc(ctx, cancelLifetime)
 	catalog, err := client.Connect(
@@ -664,6 +670,10 @@ type playwrightWorker struct {
 	humanControl    bool
 	navigationID    playwrightNavigationIdentity
 	navigationToken string
+
+	contextSessionID string
+	contextSecret    []byte
+	contextState     playwrightContextState
 }
 
 func (worker *playwrightWorker) BeginHumanControl(context.Context) error {
@@ -1649,6 +1659,17 @@ var pinnedPlaywrightToolSchemas = map[string]json.RawMessage{
 			"filename":{"description":"Save snapshot to markdown file instead of returning it in the response.","type":"string"},
 			"target":{"description":"Exact target element reference from the page snapshot, or a unique element selector","type":"string"}
 		},
+		"type":"object"
+	}`),
+	"browser_tabs": json.RawMessage(`{
+		"$schema":"https://json-schema.org/draft/2020-12/schema",
+		"additionalProperties":false,
+		"properties":{
+			"action":{"description":"Operation to perform","enum":["list","new","close","select"],"type":"string"},
+			"index":{"description":"Tab index, used for close/select. If omitted for close, current tab is closed.","type":"number"},
+			"url":{"description":"URL to navigate to in the new tab, used for new.","type":"string"}
+		},
+		"required":["action"],
 		"type":"object"
 	}`),
 	"browser_take_screenshot": json.RawMessage(`{
