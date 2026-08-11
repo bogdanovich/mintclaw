@@ -1,7 +1,7 @@
 import { IconAdjustments } from "@tabler/icons-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -24,42 +24,71 @@ import { Textarea } from "@/components/ui/textarea"
 import { showSaveSuccessOrRestartToast } from "@/lib/restart-required"
 import { refreshGatewayState } from "@/store/gateway"
 
+class ConfigConflictError extends Error {
+  constructor() {
+    super(
+      "Configuration changed since this draft was loaded. The draft was kept.",
+    )
+  }
+}
+
 export function RawConfigPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const revisionRef = useRef<string | null>(null)
+  const [editorValue, setEditorValue] = useState("")
+  const [editorRevision, setEditorRevision] = useState<string | null>(null)
+  const [isDirty, setIsDirty] = useState(false)
 
-  const { data: config, isLoading } = useQuery({
+  const { data: configSnapshot, isLoading } = useQuery({
     queryKey: ["config"],
     queryFn: async () => {
       const res = await launcherFetch("/api/config")
       if (!res.ok) {
         throw new Error("Failed to fetch config")
       }
-      revisionRef.current = res.headers.get("ETag")
-      return res.json()
+      return {
+        document: (await res.json()) as Record<string, unknown>,
+        revision: res.headers.get("ETag"),
+      }
     },
   })
 
   const mutation = useMutation({
-    mutationFn: async (newConfig: string) => {
+    mutationFn: async ({
+      document,
+      revision,
+    }: {
+      document: string
+      revision: string | null
+    }) => {
       const res = await launcherFetch("/api/config", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "If-Match": revisionRef.current ?? "",
+          "If-Match": revision ?? "",
         },
-        body: newConfig,
+        body: document,
       })
+      if (res.status === 412) {
+        throw new ConfigConflictError()
+      }
       if (!res.ok) {
         throw new Error("Failed to save config")
       }
-      revisionRef.current = res.headers.get("ETag")
+      return { revision: res.headers.get("ETag") }
     },
-    onSuccess: (_, submittedConfig) => {
+    onSuccess: ({ revision }, submitted) => {
       try {
-        const savedConfig = JSON.parse(submittedConfig)
-        setLastSavedConfig(savedConfig)
+        const savedConfig = JSON.parse(submitted.document) as Record<
+          string,
+          unknown
+        >
+        queryClient.setQueryData(["config"], {
+          document: savedConfig,
+          revision,
+        })
+        setEditorValue("")
+        setEditorRevision(null)
         setIsDirty(false)
         queryClient.invalidateQueries({ queryKey: ["config"] })
       } catch {
@@ -74,25 +103,27 @@ export function RawConfigPage() {
         )
       })
     },
-    onError: () => {
+    onError: (error) => {
+      if (error instanceof ConfigConflictError) {
+        queryClient.invalidateQueries({ queryKey: ["config"] })
+        toast.error(error.message)
+        return
+      }
       toast.error(t("pages.config.save_error"))
     },
   })
 
-  const [editorValue, setEditorValue] = useState("")
-  const [isDirty, setIsDirty] = useState(false)
-  const [lastSavedConfig, setLastSavedConfig] = useState<Record<
-    string,
-    unknown
-  > | null>(null)
-
   const effectiveEditorValue =
-    editorValue || (config ? JSON.stringify(config, null, 2) : "")
+    editorValue ||
+    (configSnapshot ? JSON.stringify(configSnapshot.document, null, 2) : "")
 
   const handleSave = () => {
     try {
       JSON.parse(effectiveEditorValue)
-      mutation.mutate(effectiveEditorValue)
+      mutation.mutate({
+        document: effectiveEditorValue,
+        revision: isDirty ? editorRevision : (configSnapshot?.revision ?? null),
+      })
     } catch (error) {
       toast.error(
         t(
@@ -110,7 +141,11 @@ export function RawConfigPage() {
         null,
         2,
       )
+      if (!isDirty) {
+        setEditorRevision(configSnapshot?.revision ?? null)
+      }
       setEditorValue(formatted)
+      setIsDirty(true)
       toast.success(t("pages.config.format_success"))
     } catch (error) {
       toast.error(
@@ -125,11 +160,8 @@ export function RawConfigPage() {
   const [showResetDialog, setShowResetDialog] = useState(false)
 
   const confirmReset = () => {
-    if (lastSavedConfig) {
-      setEditorValue(JSON.stringify(lastSavedConfig, null, 2))
-    } else if (config) {
-      setEditorValue(JSON.stringify(config, null, 2))
-    }
+    setEditorValue("")
+    setEditorRevision(null)
     setIsDirty(false)
     toast.info(t("pages.config.reset_success"))
     setShowResetDialog(false)
@@ -166,6 +198,9 @@ export function RawConfigPage() {
                 <Textarea
                   value={effectiveEditorValue}
                   onChange={(e) => {
+                    if (!isDirty) {
+                      setEditorRevision(configSnapshot?.revision ?? null)
+                    }
                     setEditorValue(e.target.value)
                     setIsDirty(true)
                   }}

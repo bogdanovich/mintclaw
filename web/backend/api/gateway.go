@@ -49,10 +49,11 @@ var gateway = struct {
 // refreshMintClawTokensLocked reads the mintclaw token from config and caches it.
 // Caller must hold gateway.mu (or be sole writer).
 func refreshMintClawTokensLocked(configPath string) {
-	cfg, err := config.LoadConfig(configPath)
+	snapshot, err := config.NewRepository(configPath).ReadOnly()
 	if err != nil {
 		return
 	}
+	cfg := snapshot.Config
 	var mintclawCfg config.MintClawSettings
 	if bc := cfg.Channels.GetByType(config.ChannelMintClaw); bc != nil {
 		decoded, err := bc.GetDecoded()
