@@ -48,6 +48,78 @@ func TestShellTool_Success(t *testing.T) {
 	}
 }
 
+func TestShellTool_UnrestrictedRelativeCWDUsesExecutionRootAndInheritsEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertion uses POSIX syntax")
+	}
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MINTCLAW_TEST_INHERITED_ENV", "available")
+	t.Setenv("MINTCLAW_WORKSPACE_TMP", "stale-parent-value")
+	tool, err := NewExecTool(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "printf '%s|%s|%s' \"$PWD\" \"$MINTCLAW_TEST_INHERITED_ENV\" \"$MINTCLAW_WORKSPACE_TMP\"",
+		"cwd":     "nested",
+	})
+	if result.IsError {
+		t.Fatalf("exec result = %#v", result)
+	}
+	resolvedNested, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := resolvedNested + "|available|" + tool.workspaceTempDir; result.ForLLM != want {
+		t.Fatalf("exec output = %q, want %q", result.ForLLM, want)
+	}
+}
+
+func TestShellTool_CanceledCommandCannotReportSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertion uses POSIX syntax")
+	}
+	tool, err := NewExecTool(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := filepath.Join(tool.workingDir, "started")
+	done := make(chan *toolshared.ToolResult, 1)
+	go func() {
+		done <- tool.Execute(ctx, map[string]any{
+			"action":  "run",
+			"command": "touch started; while :; do sleep 1; done",
+		})
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, statErr := os.Stat(started); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case result := <-done:
+		if !result.IsError || !strings.Contains(result.ForLLM, "interrupted") {
+			t.Fatalf("canceled exec result = %#v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled command did not return")
+	}
+}
+
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
 	tool, err := NewExecTool("", false)

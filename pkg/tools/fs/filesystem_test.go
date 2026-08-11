@@ -45,6 +45,32 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	}
 }
 
+func TestHostFsRootsRelativePathsAndAllowsAbsolutePaths(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "relative.txt"), []byte("rooted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	absPath := filepath.Join(outside, "absolute.txt")
+	if err := os.WriteFile(absPath, []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host := &hostFs{workspace: root}
+	if got, err := host.ReadFile("relative.txt"); err != nil || string(got) != "rooted" {
+		t.Fatalf("relative ReadFile() = %q, %v", got, err)
+	}
+	if got, err := host.ReadFile(absPath); err != nil || string(got) != "host" {
+		t.Fatalf("absolute ReadFile() = %q, %v", got, err)
+	}
+	if err := host.WriteFile("written.txt", []byte("inside")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "written.txt")); err != nil || string(got) != "inside" {
+		t.Fatalf("rooted WriteFile() = %q, %v", got, err)
+	}
+}
+
 // TestFilesystemTool_ReadFile_NotFound verifies error handling for missing file
 func TestFilesystemTool_ReadFile_NotFound(t *testing.T) {
 	tool := NewReadFileBytesTool("", false, MaxReadFileSize)

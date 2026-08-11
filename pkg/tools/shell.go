@@ -383,6 +383,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *toolsha
 			cwd = resolvedWD
 		} else {
 			cwd = wd
+			if !filepath.IsAbs(cwd) && t.workingDir != "" {
+				cwd = filepath.Join(t.workingDir, cwd)
+			}
+			cwd = filepath.Clean(cwd)
 		}
 	}
 
@@ -449,14 +453,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(os.Environ(),
-		"MINTCLAW_TOOL_CHANNEL="+toolshared.ToolChannel(ctx),
-		"MINTCLAW_TOOL_CHAT_ID="+toolshared.ToolChatID(ctx),
-		"MINTCLAW_TOOL_TOPIC_ID="+toolshared.ToolTopicID(ctx),
-		"MINTCLAW_TOOL_MESSAGE_ID="+toolshared.ToolMessageID(ctx),
-		"MINTCLAW_TOOL_REPLY_TO_MESSAGE_ID="+toolshared.ToolReplyToMessageID(ctx),
-		"MINTCLAW_WORKSPACE_TMP="+t.workspaceTempDir,
-	)
+	cmd.Env = t.execEnvironment(ctx)
 
 	prepareCommandForTermination(cmd)
 
@@ -486,9 +483,11 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 	}()
 
 	var err error
+	interrupted := false
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
+		interrupted = true
 		_ = terminateProcessTree(cmd)
 		select {
 		case err = <-done:
@@ -499,13 +498,13 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 			err = <-done
 		}
 	}
+	interrupted = interrupted || cmdCtx.Err() != nil
 
 	output := stdout.String()
 	if stderr.Len() > 0 {
 		output += "\nSTDERR:\n" + stderr.String()
 	}
-
-	if err != nil {
+	if interrupted {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
 			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
 			if output != "" {
@@ -516,10 +515,23 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 				ForLLM:  msg,
 				ForUser: msg,
 				IsError: true,
-				Err:     fmt.Errorf("command timeout: %w", err),
+				Err:     fmt.Errorf("command timeout: %w", cmdCtx.Err()),
 			}
 		}
+		msg := "Command interrupted"
+		if output != "" {
+			msg += "\n\nPartial output before interruption:\n" + output
+		}
+		msg = truncateCommandOutput(msg)
+		return &toolshared.ToolResult{
+			ForLLM:  msg,
+			ForUser: msg,
+			IsError: true,
+			Err:     fmt.Errorf("command interrupted: %w", cmdCtx.Err()),
+		}
+	}
 
+	if err != nil {
 		// Extract detailed exit information
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -580,6 +592,34 @@ func truncateCommandOutput(output string) string {
 	)
 }
 
+func (t *ExecTool) execEnvironment(ctx context.Context) []string {
+	env := os.Environ()
+	overrides := []string{
+		"MINTCLAW_TOOL_CHANNEL=" + toolshared.ToolChannel(ctx),
+		"MINTCLAW_TOOL_CHAT_ID=" + toolshared.ToolChatID(ctx),
+		"MINTCLAW_TOOL_TOPIC_ID=" + toolshared.ToolTopicID(ctx),
+		"MINTCLAW_TOOL_MESSAGE_ID=" + toolshared.ToolMessageID(ctx),
+		"MINTCLAW_TOOL_REPLY_TO_MESSAGE_ID=" + toolshared.ToolReplyToMessageID(ctx),
+		"MINTCLAW_WORKSPACE_TMP=" + t.workspaceTempDir,
+	}
+	for _, override := range overrides {
+		key, _, _ := strings.Cut(override, "=")
+		filtered := env[:0]
+		for _, entry := range env {
+			entryKey, _, _ := strings.Cut(entry, "=")
+			matches := entryKey == key
+			if runtime.GOOS == "windows" {
+				matches = strings.EqualFold(entryKey, key)
+			}
+			if !matches {
+				filtered = append(filtered, entry)
+			}
+		}
+		env = append(filtered, override)
+	}
+	return env
+}
+
 func validUTF8Prefix(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
@@ -633,14 +673,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(os.Environ(),
-		"MINTCLAW_TOOL_CHANNEL="+toolshared.ToolChannel(ctx),
-		"MINTCLAW_TOOL_CHAT_ID="+toolshared.ToolChatID(ctx),
-		"MINTCLAW_TOOL_TOPIC_ID="+toolshared.ToolTopicID(ctx),
-		"MINTCLAW_TOOL_MESSAGE_ID="+toolshared.ToolMessageID(ctx),
-		"MINTCLAW_TOOL_REPLY_TO_MESSAGE_ID="+toolshared.ToolReplyToMessageID(ctx),
-		"MINTCLAW_WORKSPACE_TMP="+t.workspaceTempDir,
-	)
+	cmd.Env = t.execEnvironment(ctx)
 
 	prepareCommandForTermination(cmd)
 

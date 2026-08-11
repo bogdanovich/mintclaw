@@ -521,7 +521,10 @@ func initCodingAgentTools(
 	}
 	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 	registerTool(fstools.NewReadFileBytesTool(workspace, false, maxReadFileSize, nil))
-	registerTool(fstools.NewWriteFileTool(workspace, false, nil))
+	registerTool(fstools.NewAppendFileTool(workspace, false, nil))
+	writeTool := fstools.NewWriteFileTool(workspace, false, nil)
+	writeTool.SetAlternativeTools([]string{"append_file"})
+	registerTool(writeTool)
 	registerTool(fstools.NewListDirTool(workspace, false, nil))
 	registerTool(fstools.NewSearchFilesTool(workspace, false, maxReadFileSize, nil))
 

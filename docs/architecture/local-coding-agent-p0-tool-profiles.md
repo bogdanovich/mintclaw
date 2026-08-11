@@ -25,6 +25,7 @@ execution roots are rejected.
 The coding profile exposes exactly these core tools:
 
 - `read_file`
+- `append_file`
 - `write_file`
 - `list_dir`
 - `search_files`

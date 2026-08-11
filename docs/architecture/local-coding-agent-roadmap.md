@@ -1090,6 +1090,9 @@ Done when:
 
 Dependencies: P0.4, P2.3
 
+Implementation contract:
+[`local-coding-agent-p2-tool-execution.md`](local-coding-agent-p2-tool-execution.md)
+
 Scope:
 
 - Wire read, list, search, write/append, `apply_patch`, and `exec` to the coding

@@ -23,6 +23,7 @@ import (
 var errInjectedRuntimeStore = errors.New("injected runtime store failure")
 
 var codingRuntimeToolNames = []string{
+	"append_file",
 	"apply_patch",
 	"exec",
 	"list_dir",
