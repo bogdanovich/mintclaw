@@ -65,12 +65,12 @@ func onboard(encrypt bool) {
 	}
 
 	repository := config.NewRepository(configPath)
-	cfg, expectedRevision, err := prepareOnboardConfig(repository, configExists, resetConfig)
+	cfg, expectedRevision, err := prepareOnboardConfig(repository, configExists && !resetConfig)
 	if err != nil {
 		fmt.Printf("Error loading existing config: %v\n", err)
 		os.Exit(1)
 	}
-	if err = saveOnboardConfig(repository, cfg, configExists, expectedRevision); err != nil {
+	if err = saveOnboardConfig(repository, cfg, expectedRevision); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
 	}
@@ -83,17 +83,13 @@ func onboard(encrypt bool) {
 
 func prepareOnboardConfig(
 	repository *config.Repository,
-	configExists bool,
-	resetConfig bool,
+	preserveExisting bool,
 ) (*config.Config, config.Revision, error) {
-	if !configExists {
-		return config.DefaultConfig(), "", nil
-	}
 	snapshot, err := repository.ReadDurable()
 	if err != nil {
 		return nil, "", err
 	}
-	if resetConfig {
+	if !preserveExisting {
 		return config.DefaultConfig(), snapshot.Revision, nil
 	}
 	return snapshot.Config, snapshot.Revision, nil
@@ -102,14 +98,9 @@ func prepareOnboardConfig(
 func saveOnboardConfig(
 	repository *config.Repository,
 	cfg *config.Config,
-	configExists bool,
 	expectedRevision config.Revision,
 ) error {
-	if configExists {
-		_, err := repository.Replace(expectedRevision, cfg)
-		return err
-	}
-	_, err := repository.Save(cfg)
+	_, err := repository.Replace(expectedRevision, cfg)
 	return err
 }
 
