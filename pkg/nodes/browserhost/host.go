@@ -539,11 +539,11 @@ func (host *BrowserHost) Contexts(
 			return nodes.BrowserContextResult{}, ErrBrowserHostDenied
 		}
 		if request.Operation == "select" {
-			_, catalog, err = session.contextWorker.SelectContext(actionCtx, authority)
+			var observed browserworker.DriverObservation
+			observed, catalog, err = session.contextWorker.SelectContext(actionCtx, authority)
 			if err == nil {
-				var observed browserworker.DriverObservation
 				var navigationIdentity string
-				observed, navigationIdentity, err = observeBrowserHostNavigation(actionCtx, session)
+				navigationIdentity, err = stableBrowserHostNavigationIdentity(actionCtx, session)
 				if err == nil {
 					session.snapshotGeneration++
 					result := browserHostObservation(request.SessionID, session, observed, navigationIdentity)
@@ -720,7 +720,31 @@ func observeBrowserHostNavigation(
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
-	observation, err := session.worker.Observe(ctx)
+	var observation browserworker.DriverObservation
+	if session.contextCatalog != nil && session.contextCatalog.SelectedFrameID != "" &&
+		session.contextWorker != nil {
+		authority, authorityErr := browserworker.ContextMutationAuthorityFromBinding(
+			browserworker.ContextMutationBinding{
+				Catalog: *session.contextCatalog,
+				TabID:   session.contextCatalog.SelectedTabID,
+				FrameID: session.contextCatalog.SelectedFrameID,
+			},
+		)
+		if authorityErr != nil {
+			return browserworker.DriverObservation{}, "", authorityErr
+		}
+		var live browserworker.ContextCatalog
+		observation, live, err = session.contextWorker.SelectContext(ctx, authority)
+		if err == nil {
+			var canonicalLive browserworker.ContextCatalog
+			canonicalLive, err = browserContextCatalogValue(browserContextCatalogResult(live))
+			if err == nil && !reflect.DeepEqual(*session.contextCatalog, canonicalLive) {
+				err = browserworker.ErrStale
+			}
+		}
+	} else {
+		observation, err = session.worker.Observe(ctx)
+	}
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
@@ -732,6 +756,27 @@ func observeBrowserHostNavigation(
 		return browserworker.DriverObservation{}, "", browserworker.ErrStale
 	}
 	return observation, after, nil
+}
+
+func stableBrowserHostNavigationIdentity(
+	ctx context.Context,
+	session *browserHostSession,
+) (string, error) {
+	if session.navigationWorker == nil {
+		return "", browserworker.ErrDriverIncompatible
+	}
+	before, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	after, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	if before == "" || before != after {
+		return "", browserworker.ErrStale
+	}
+	return after, nil
 }
 
 func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {

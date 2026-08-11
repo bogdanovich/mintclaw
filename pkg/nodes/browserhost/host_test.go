@@ -67,6 +67,7 @@ type fakeBrowserHostWorker struct {
 	closeCalls              int
 	contextCatalog          browserworker.ContextCatalog
 	contextObservation      browserworker.DriverObservation
+	contextSelectCalls      int
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -146,8 +147,12 @@ func (worker *fakeBrowserHostWorker) SelectContext(
 	context.Context,
 	browserworker.ContextMutationAuthority,
 ) (browserworker.DriverObservation, browserworker.ContextCatalog, error) {
-	worker.contextCatalog.Generation++
+	if worker.contextSelectCalls == 0 {
+		worker.contextCatalog.Generation++
+	}
+	worker.contextSelectCalls++
 	worker.contextCatalog.SelectedTabID = "context_tab_2"
+	worker.contextCatalog.SelectedFrameID = "context_frame_1"
 	return worker.contextObservation, worker.contextCatalog, nil
 }
 
@@ -157,6 +162,7 @@ func (worker *fakeBrowserHostWorker) CloseTab(
 ) (browserworker.ContextCatalog, error) {
 	worker.contextCatalog.Generation++
 	worker.contextCatalog.SelectedTabID = "context_tab_1"
+	worker.contextCatalog.SelectedFrameID = ""
 	worker.contextCatalog.Tabs = worker.contextCatalog.Tabs[:1]
 	return worker.contextCatalog, nil
 }
@@ -1228,9 +1234,17 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{{
-			URL: "https://example.com/", Origin: "https://example.com", Title: "Selected",
+			URL: "https://example.com/", Origin: "https://example.com", Title: "Top level",
+			Snapshot: "top-level-only",
 		}},
 		navigationIdentities: []string{"navigation_selected", "navigation_selected"},
+		contextObservation: browserworker.DriverObservation{
+			URL: "https://frame.example/", Origin: "https://frame.example", Title: "Selected frame",
+			Snapshot: "frame-only [ref=frame_target]",
+			Elements: []browserworker.DriverElement{{
+				Target: "frame_target", Role: "button", Name: "Frame action",
+			}},
+		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
 	opened, err := host.Open(t.Context(), browserHostOpenFixture())
@@ -1259,8 +1273,19 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	request.FrameID = "context_frame_1"
 	selected, err := host.Contexts(t.Context(), request)
 	if err != nil || selected.Observation == nil || selected.Observation.SnapshotGeneration != 1 ||
-		selected.Catalog.SelectedTabID != "context_tab_2" {
+		selected.Catalog.SelectedTabID != "context_tab_2" ||
+		selected.Catalog.SelectedFrameID != "context_frame_1" ||
+		selected.Observation.URL != "https://frame.example/" ||
+		!strings.Contains(selected.Observation.Snapshot, "frame-only") || worker.observeCalls != 0 {
 		t.Fatalf("Contexts(select) = %#v, %v", selected, err)
+	}
+	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || observed.URL != "https://frame.example/" ||
+		!strings.Contains(observed.Snapshot, "frame-only") || worker.observeCalls != 0 {
+		t.Fatalf("Observe(selected frame) = %#v, %v", observed, err)
 	}
 	request.Operation = "close"
 	request.RequestID = "context_request_4"
