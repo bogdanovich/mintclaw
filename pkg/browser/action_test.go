@@ -314,6 +314,38 @@ func TestBrokerAcceptedActionRetryQuarantinesWithoutReplay(t *testing.T) {
 	}
 }
 
+func TestBrokerUnknownActionRetryCompletesFailedQuarantineWithoutReplay(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_retry_quarantine", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observed.Snapshot), Value: "Ada"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.executeErr = ErrDriverRejected
+	store.failAfter = 2
+	first, firstErr := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if firstErr == nil || first.State != InvocationUnknown || len(worker.actions) != 1 {
+		t.Fatalf("first execution = %+v, %v; actions = %+v", first, firstErr, worker.actions)
+	}
+	second, secondErr := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if secondErr != nil || second.State != InvocationUnknown || len(worker.actions) != 1 || worker.closed != 1 {
+		t.Fatalf("retry finalization = %+v, %v; actions = %+v; closes = %d", second, secondErr, worker.actions, worker.closed)
+	}
+	lost, getErr := store.GetSession(context.Background(), session.ID)
+	if getErr != nil || lost.State != SessionLost || lost.SafeFailure != "outcome_unknown" {
+		t.Fatalf("retried quarantine = %+v, %v", lost, getErr)
+	}
+}
+
 func TestBrokerHumanHandoffIsExclusiveAndResumeRequiresFreshObservation(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	owner := testOwner()
