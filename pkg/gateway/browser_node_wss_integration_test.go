@@ -453,6 +453,156 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 }
 
+func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
+	workspace := t.TempDir()
+	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
+	server := httptest.NewTLSServer(admission)
+	defer server.Close()
+	defer closeVerticalSliceAdmission(t, admission)
+
+	host := &wssBrowserHost{profile: wssBrowserProfile()}
+	identity, err := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := browserRuntimeCommands()
+	policy := nodes.LocalCommandPolicy{
+		Revision: "browser-context-wss-policy", AllowedCommands: commands,
+		MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: nodes.MaxBrowserActionSeconds,
+		MaxOutputBytes: nodes.MaxBrowserToolResultBytes,
+	}
+	ledgerPath := companion.InvocationLedgerPath(filepath.Join(t.TempDir(), "runtime"))
+	ledger, err := companion.NewFileInvocationLedger(
+		ledgerPath,
+		companion.DefaultInvocationLedgerLimit,
+		companion.DefaultInvocationLedgerBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	commandRuntime, err := companion.NewRuntime(
+		identity.ID, "browser-context-wss-test", policy, ledger, companion.WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig := wssBrowserCompanionConfig(t, server, policy)
+	client := wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	result, err := client.Authenticate(t.Context())
+	if err != nil || result.State != nodes.StatePendingPairing {
+		t.Fatalf("bootstrap admission = %#v, %v", result, err)
+	}
+	if _, err = registry.Approve(identity.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := startWSSBrowserClient(t, client)
+	defer run.stop(t)
+	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+
+	cfg := wssBrowserGatewayConfig(t, workspace)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtimeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "browser-context-wss-session", ExecutionID: "browser-context-wss-execution",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := broker.ListContexts(t.Context(), owner, session.ID)
+	if err != nil || len(listed.Tabs) != 1 {
+		t.Fatalf("ListContexts() = %#v, %v", listed, err)
+	}
+	openPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_open", SessionID: session.ID,
+		Operation: browser.ContextOpen,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := broker.ExecuteContext(t.Context(), openPreparation, nil)
+	if err != nil || len(opened.Catalog.Tabs) != 2 {
+		t.Fatalf("ExecuteContext(open) = %#v, %v", opened, err)
+	}
+	selectedTab := opened.Catalog.Tabs[1]
+	selectPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select_stale", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
+		TabID: selectedTab.ID, FrameID: selectedTab.Frames[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.failNextContextStale()
+	stale, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
+	if !errors.Is(err, browser.ErrStale) || stale.Invocation == nil ||
+		stale.Invocation.State != browser.InvocationFailed || stale.Invocation.SafeFailure != "context_stale" {
+		t.Fatalf("ExecuteContext(stale select) = %#v, %v", stale, err)
+	}
+	status, err := broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != browser.SessionReady {
+		t.Fatalf("Status(after stale select) = %#v, %v", status, err)
+	}
+	selectPreparation, err = broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
+		TabID: selectedTab.ID, FrameID: selectedTab.Frames[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
+	if err != nil || selected.Observation == nil ||
+		selected.Catalog.SelectedFrameID != selectedTab.Frames[0].ID ||
+		selected.Observation.URL != "https://example.com/popup" {
+		t.Fatalf("ExecuteContext(select) = %#v, %v", selected, err)
+	}
+	retained, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(retained, []byte(`"authority"`)) ||
+		bytes.Contains(retained, []byte(`host_ref_1`)) || bytes.Contains(retained, []byte(`Save`)) {
+		t.Fatalf("companion context ledger retained transient authority or observation: %s", retained)
+	}
+	closePreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_close", SessionID: session.ID,
+		Operation:        browser.ContextClose,
+		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		TabID: selectedTab.ID,
+	})
+	if err != nil || !closePreparation.RequiresApproval {
+		t.Fatalf("PrepareContext(close) = %#v, %v", closePreparation, err)
+	}
+	closedContext, err := broker.ExecuteContext(t.Context(), closePreparation, &closePreparation.Approval)
+	if err != nil || len(closedContext.Catalog.Tabs) != 1 {
+		t.Fatalf("ExecuteContext(close) = %#v, %v", closedContext, err)
+	}
+	closed, err := broker.Close(t.Context(), owner, session.ID)
+	if err != nil || closed.State != browser.SessionClosed {
+		t.Fatalf("Close() = %#v, %v", closed, err)
+	}
+	for _, operation := range []string{"contexts_list", "contexts_open", "contexts_select", "contexts_close"} {
+		if !slices.Contains(host.commandSequence(), operation) {
+			t.Fatalf("browser host sequence lacks %q: %#v", operation, host.commandSequence())
+		}
+	}
+}
+
 func TestCompanionBrowserClickDryRunDeniedOverProductionWSS(t *testing.T) {
 	workspace := t.TempDir()
 	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
@@ -614,9 +764,12 @@ type wssBrowserHost struct {
 	profile         nodes.BrowserProfileDescriptor
 	commands        []string
 	urls            map[string]string
+	contexts        map[string]nodes.BrowserContextCatalog
+	snapshots       map[string]uint64
 	navigateEntered chan struct{}
 	navigateRelease chan struct{}
 	navigateFailure bool
+	contextStale    bool
 }
 
 func (host *wssBrowserHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -632,8 +785,11 @@ func (host *wssBrowserHost) Open(
 	host.commands = append(host.commands, "open")
 	if host.urls == nil {
 		host.urls = make(map[string]string)
+		host.contexts = make(map[string]nodes.BrowserContextCatalog)
+		host.snapshots = make(map[string]uint64)
 	}
 	host.urls[request.SessionID] = "about:blank"
+	host.contexts[request.SessionID] = wssBrowserContextCatalog(false)
 	return wssBrowserSessionResult(request.SessionID, "ready"), nil
 }
 
@@ -661,7 +817,90 @@ func (host *wssBrowserHost) Observe(
 	if !found {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
 	}
+	host.snapshots[request.SessionID] = request.SnapshotGeneration
 	return wssBrowserObservation(request, url), nil
+}
+
+func (host *wssBrowserHost) Contexts(
+	_ context.Context,
+	request nodes.BrowserHostContextRequest,
+) (nodes.BrowserContextResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "contexts_"+request.Operation)
+	catalog, found := host.contexts[request.SessionID]
+	if !found {
+		return nodes.BrowserContextResult{}, nodes.ErrBrowserHostNotFound
+	}
+	if request.Operation != "list" && host.contextStale {
+		host.contextStale = false
+		return nodes.BrowserContextResult{}, nodes.ErrBrowserHostStale
+	}
+	result := nodes.BrowserContextResult{Operation: request.Operation}
+	switch request.Operation {
+	case "list":
+	case "open":
+		catalog = wssBrowserContextCatalog(true)
+	case "select":
+		if request.Authority == nil || request.Authority.ID != catalog.ID ||
+			request.Authority.Generation != catalog.Generation {
+			return nodes.BrowserContextResult{}, nodes.ErrBrowserHostStale
+		}
+		selected := false
+		for _, tab := range catalog.Tabs {
+			if tab.ID == request.TabID {
+				selected = true
+			}
+		}
+		if !selected {
+			return nodes.BrowserContextResult{}, nodes.ErrBrowserHostStale
+		}
+		catalog.Generation++
+		catalog.SelectedTabID = request.TabID
+		catalog.SelectedFrameID = request.FrameID
+		generation := host.snapshots[request.SessionID] + 1
+		host.snapshots[request.SessionID] = generation
+		observation := wssBrowserObservation(nodes.BrowserHostObserveRequest{
+			SessionID: request.SessionID, TabID: "tab_primary", SnapshotGeneration: generation,
+		}, "https://example.com/popup")
+		result.Observation = &observation
+	case "close":
+		if request.Authority == nil || request.Authority.ID != catalog.ID || len(catalog.Tabs) < 2 {
+			return nodes.BrowserContextResult{}, nodes.ErrBrowserHostStale
+		}
+		catalog.Generation++
+		catalog.SelectedTabID = catalog.Tabs[0].ID
+		catalog.SelectedFrameID = ""
+		catalog.Tabs = catalog.Tabs[:1]
+	default:
+		return nodes.BrowserContextResult{}, nodes.ErrBrowserHostDenied
+	}
+	host.contexts[request.SessionID] = catalog
+	result.Catalog = catalog
+	return result, nil
+}
+
+func wssBrowserContextCatalog(opened bool) nodes.BrowserContextCatalog {
+	catalog := nodes.BrowserContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []nodes.BrowserTabContext{{
+			ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
+	if opened {
+		catalog.Generation = 2
+		catalog.SelectedTabID = "context_tab_2"
+		catalog.Tabs = append(catalog.Tabs, nodes.BrowserTabContext{
+			ID: "context_tab_2", Kind: "tab", CreationSequence: 2,
+			DocumentGeneration: 1, URL: "https://example.com/popup", Origin: "https://example.com",
+			Frames: []nodes.BrowserFrameContext{{
+				ID: "context_frame_1", CreationSequence: 1, Depth: 1, DocumentGeneration: 1,
+				URL: "https://example.com/frame", Origin: "https://example.com", Availability: "ready",
+			}},
+		})
+	}
+	return catalog
 }
 
 func (host *wssBrowserHost) Navigate(
@@ -809,6 +1048,12 @@ func (host *wssBrowserHost) failNextNavigate() {
 	host.navigateFailure = true
 }
 
+func (host *wssBrowserHost) failNextContextStale() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.contextStale = true
+}
+
 func (host *wssBrowserHost) blockNextNavigate() (<-chan struct{}, chan struct{}) {
 	host.mu.Lock()
 	defer host.mu.Unlock()
@@ -827,6 +1072,8 @@ func (host *wssBrowserHost) Close(
 	defer host.mu.Unlock()
 	host.commands = append(host.commands, "close")
 	delete(host.urls, request.SessionID)
+	delete(host.contexts, request.SessionID)
+	delete(host.snapshots, request.SessionID)
 	return wssBrowserSessionResult(request.SessionID, "closed"), nil
 }
 
@@ -839,7 +1086,7 @@ func (host *wssBrowserHost) commandSequence() []string {
 func wssBrowserSessionResult(sessionID, state string) nodes.BrowserSessionResult {
 	return nodes.BrowserSessionResult{
 		SessionID: sessionID, State: state, TabID: "tab_primary", Controller: "agent",
-		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
+		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true, Contexts: true},
 		ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 	}
 }
@@ -882,6 +1129,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
+		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,
 	}
 }

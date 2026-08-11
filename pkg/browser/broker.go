@@ -443,28 +443,28 @@ func (broker *Broker) PassiveTargetDiagnostics(
 	ctx context.Context,
 	targetName string,
 	profileNames []string,
-) ([]ActionKind, map[string]PassiveReadiness, error) {
+) ([]ActionKind, map[string]PassiveReadiness, bool, error) {
 	factory, ok := broker.factory.(targetDiagnosticsFactory)
 	if !ok {
-		return nil, nil, ErrWorkerUnavailable
+		return nil, nil, false, ErrWorkerUnavailable
 	}
 	diagnostics, err := factory.PassiveTargetDiagnostics(ctx, targetName, profileNames)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	profiles := make(map[string]PassiveReadiness, len(profileNames))
 	for _, profileName := range profileNames {
 		driver, found := diagnostics.Profiles[profileName]
 		if !found {
-			return nil, nil, ErrWorkerUnavailable
+			return nil, nil, false, ErrWorkerUnavailable
 		}
 		availability, availabilityErr := broker.ProfileAvailability(ctx, targetName, profileName)
 		if availabilityErr != nil {
-			return nil, nil, availabilityErr
+			return nil, nil, false, availabilityErr
 		}
 		profiles[profileName] = passiveReadiness(availability, driver)
 	}
-	return diagnostics.Actions, profiles, nil
+	return diagnostics.Actions, profiles, diagnostics.Contexts, nil
 }
 
 func passiveReadiness(availability ProfileAvailability, driver DriverReadiness) PassiveReadiness {
@@ -1257,7 +1257,7 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
-		if executionContextErr == nil && errors.Is(executeErr, errContextAuthorityStale) {
+		if executionContextErr == nil && errors.Is(executeErr, ErrContextAuthorityStale) {
 			failed, failErr := broker.completeInvocationLocked(
 				completionCtx,
 				invocation,

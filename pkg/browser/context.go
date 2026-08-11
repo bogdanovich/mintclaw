@@ -12,7 +12,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-var errContextAuthorityStale = errors.New("browser context authority changed before dispatch")
+// ErrContextAuthorityStale marks a deterministic pre-dispatch context mismatch.
+var ErrContextAuthorityStale = errors.New("browser context authority changed before dispatch")
 
 const (
 	MaxContextTabs         = 16
@@ -285,14 +286,46 @@ type ContextMutationAuthority struct {
 	frameID string
 }
 
+// ContextMutationBinding is the typed transport projection of immutable
+// context-mutation authority. A remote worker may serialize this value and a
+// trusted companion host may reconstruct the private authority immediately
+// before driver dispatch.
+type ContextMutationBinding struct {
+	Catalog ContextCatalog
+	TabID   string
+	FrameID string
+}
+
 func newContextMutationAuthority(catalog ContextCatalog, tabID, frameID string) ContextMutationAuthority {
 	return ContextMutationAuthority{catalog: cloneContextCatalog(catalog), tabID: tabID, frameID: frameID}
+}
+
+func (authority ContextMutationAuthority) Binding() (ContextMutationBinding, error) {
+	binding := ContextMutationBinding{
+		Catalog: cloneContextCatalog(authority.catalog), TabID: authority.tabID, FrameID: authority.frameID,
+	}
+	if binding.Catalog.Validate() != nil || !validIdentifier(binding.TabID) ||
+		(binding.FrameID != "" && !validIdentifier(binding.FrameID)) {
+		return ContextMutationBinding{}, ErrInvalid
+	}
+	return binding, nil
+}
+
+// ContextMutationAuthorityFromBinding reconstructs authority only at the
+// trusted remote-driver boundary. The returned value still revalidates the
+// complete live catalog under the worker lock before a mutation is issued.
+func ContextMutationAuthorityFromBinding(binding ContextMutationBinding) (ContextMutationAuthority, error) {
+	if binding.Catalog.Validate() != nil || !validIdentifier(binding.TabID) ||
+		(binding.FrameID != "" && !validIdentifier(binding.FrameID)) {
+		return ContextMutationAuthority{}, ErrInvalid
+	}
+	return newContextMutationAuthority(binding.Catalog, binding.TabID, binding.FrameID), nil
 }
 
 func (authority ContextMutationAuthority) validateLive(live ContextCatalog) error {
 	if authority.catalog.Validate() != nil || live.Validate() != nil ||
 		authority.tabID == "" || authority.catalog.ID != live.ID {
-		return errors.Join(ErrStale, errContextAuthorityStale)
+		return errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	expected := contextCatalogDriverProjection(authority.catalog)
 	if expected.SelectedFrameID == "" && live.SelectedFrameID != "" &&
@@ -301,7 +334,7 @@ func (authority ContextMutationAuthority) validateLive(live ContextCatalog) erro
 	}
 	actual := contextCatalogDriverProjection(live)
 	if !reflect.DeepEqual(expected, actual) {
-		return errors.Join(ErrStale, errContextAuthorityStale)
+		return errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	for _, tab := range live.Tabs {
 		if tab.ID != authority.tabID {
@@ -316,7 +349,7 @@ func (authority ContextMutationAuthority) validateLive(live ContextCatalog) erro
 			}
 		}
 	}
-	return errors.Join(ErrStale, errContextAuthorityStale)
+	return errors.Join(ErrStale, ErrContextAuthorityStale)
 }
 
 func contextCatalogFrameUnavailable(catalog ContextCatalog, tabID, frameID string) bool {

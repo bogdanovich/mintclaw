@@ -68,6 +68,30 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 	}
 }
 
+func TestContextMutationBindingRoundTripRetainsImmutableAuthority(t *testing.T) {
+	catalog := ContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []TabContext{{
+			ID: "context_tab_1", Kind: TabPrimary, CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
+	authority := newContextMutationAuthority(catalog, "context_tab_1", "")
+	binding, err := authority.Binding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.Catalog.Tabs[0].Title = "mutated transport copy"
+	fresh, err := authority.Binding()
+	if err != nil || fresh.Catalog.Tabs[0].Title != "" {
+		t.Fatalf("authority binding was mutated: %#v, %v", fresh, err)
+	}
+	reconstructed, err := ContextMutationAuthorityFromBinding(fresh)
+	if err != nil || reconstructed.validateLive(catalog) != nil {
+		t.Fatalf("reconstructed authority = %#v, %v", reconstructed, err)
+	}
+}
+
 func TestPlaywrightContextCatalogRejectsConfiguredTabLimitOverflow(t *testing.T) {
 	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
 		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},

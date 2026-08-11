@@ -13,7 +13,7 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptors) != 5 {
+	if len(descriptors) != 6 {
 		t.Fatalf("descriptor count = %d", len(descriptors))
 	}
 	for _, descriptor := range descriptors {
@@ -38,7 +38,8 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[1].Name != BrowserCommandSessionStatus || descriptors[1].Risk != RiskRead ||
 		descriptors[2].Name != BrowserCommandObserve || descriptors[2].Risk != RiskRead ||
 		descriptors[3].Name != BrowserCommandAct || descriptors[3].Risk != RiskWrite ||
-		descriptors[4].Name != BrowserCommandSessionClose || descriptors[4].Risk != RiskWrite {
+		descriptors[4].Name != BrowserCommandContexts || descriptors[4].Risk != RiskWrite ||
+		descriptors[5].Name != BrowserCommandSessionClose || descriptors[5].Risk != RiskWrite {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
 	}
 }
@@ -514,7 +515,7 @@ func TestBrowserStatusAndCloseSchemasBindProfileRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, descriptor := range []CommandDescriptor{descriptors[1], descriptors[4]} {
+	for _, descriptor := range []CommandDescriptor{descriptors[1], descriptors[5]} {
 		input := map[string]any{"session_id": "session_1", "profile_revision": "managed-v1"}
 		if err = validateInvocationInput(descriptor.InputSchema, input); err != nil {
 			t.Fatalf("%s advertised revision rejected: %v", descriptor.Name, err)
@@ -523,6 +524,55 @@ func TestBrowserStatusAndCloseSchemasBindProfileRevision(t *testing.T) {
 		if err = validateInvocationInput(descriptor.InputSchema, input); err == nil {
 			t.Fatalf("%s accepted an unadvertised profile revision", descriptor.Name)
 		}
+	}
+}
+
+func TestBrowserContextsSchemaBindsOpaqueAuthorityAndCanonicalGenerations(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := descriptors[4]
+	list := map[string]any{
+		"session_id": "session_1", "profile_revision": "managed-v1",
+		"operation": "list", "request_id": "request_1",
+	}
+	if err = validateInvocationInput(descriptor.InputSchema, list); err != nil {
+		t.Fatalf("list input rejected: %v", err)
+	}
+	authority := map[string]any{
+		"context_catalog_id": "catalog_1", "context_generation": 1e1,
+		"selected_tab_id": "tab_1",
+		"tabs": []any{map[string]any{
+			"tab_id": "tab_1", "kind": "primary", "creation_sequence": 1e0,
+			"document_generation": 2e0, "url": "about:blank", "origin": "about:blank",
+		}},
+	}
+	selectInput := map[string]any{
+		"session_id": "session_1", "profile_revision": "managed-v1",
+		"operation": "select", "request_id": "request_2",
+		"authority_digest": strings.Repeat("a", 64), "authority_bytes": 1024,
+		"context_catalog_id": "catalog_1", "context_generation": 10,
+		"tab_id": "tab_1",
+	}
+	if err = validateInvocationInput(descriptor.InputSchema, selectInput); err != nil {
+		t.Fatalf("select input rejected: %v", err)
+	}
+	raw, err := json.Marshal(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded BrowserContextCatalog
+	if err = json.Unmarshal(raw, &decoded); err != nil ||
+		decoded.Generation != 10 || decoded.Tabs[0].DocumentGeneration != 2 {
+		t.Fatalf("canonical context input = %#v, %v", decoded, err)
+	}
+	selectInput["frame_id"] = "frame_1"
+	selectInput["operation"] = "close"
+	if err = validateInvocationInput(descriptor.InputSchema, selectInput); err == nil {
+		t.Fatal("close accepted a frame target")
 	}
 }
 

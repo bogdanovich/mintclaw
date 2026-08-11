@@ -71,7 +71,7 @@ func (handler *browserNodeTestHandler) Invoke(
 		}
 		result = nodes.BrowserSessionResult{
 			SessionID: input.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
-			Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true},
+			Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true, Contexts: true},
 			ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 		}
 	case nodes.BrowserCommandSessionStatus:
@@ -107,6 +107,12 @@ func (handler *browserNodeTestHandler) Invoke(
 		result = nodes.BrowserActResult{
 			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
 		}
+	case nodes.BrowserCommandContexts:
+		var input nodes.BrowserContextInput
+		_ = json.Unmarshal(plan.Input, &input)
+		result = nodes.BrowserContextResult{
+			Operation: input.Operation, Catalog: browserNodeTestContextCatalog(),
+		}
 	case nodes.BrowserCommandSessionClose:
 		var input nodes.BrowserSessionStatusInput
 		_ = json.Unmarshal(plan.Input, &input)
@@ -116,6 +122,16 @@ func (handler *browserNodeTestHandler) Invoke(
 	}
 	raw, err := json.Marshal(result)
 	return raw, true, err
+}
+
+func browserNodeTestContextCatalog() nodes.BrowserContextCatalog {
+	return nodes.BrowserContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []nodes.BrowserTabContext{{
+			ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
 }
 
 func (handler *browserNodeTestHandler) Invocation(

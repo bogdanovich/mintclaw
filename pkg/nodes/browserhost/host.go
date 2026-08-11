@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -64,6 +65,8 @@ type browserHostSession struct {
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
 	navigationWorker      browserworker.NavigationCheckedActionWorker
+	contextWorker         browserworker.ContextWorker
+	contextCatalog        *browserworker.ContextCatalog
 	cleanupOwner          browserworker.Worker
 	tabID                 string
 	snapshotGeneration    uint64
@@ -271,6 +274,7 @@ func (host *BrowserHost) Open(
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
 	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationCheckedActionWorker)
+	contextWorker, _ := opened.Owner.(browserworker.ContextWorker)
 	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
@@ -304,6 +308,7 @@ func (host *BrowserHost) Open(
 	}
 	session.worker = actionWorker
 	session.navigationWorker = navigationWorker
+	session.contextWorker = contextWorker
 	session.state = "ready"
 	session.mu.Unlock()
 	return host.sessionView(session), nil
@@ -484,6 +489,113 @@ func (host *BrowserHost) Scroll(
 	})
 }
 
+func (host *BrowserHost) Contexts(
+	ctx context.Context,
+	request nodes.BrowserHostContextRequest,
+) (nodes.BrowserContextResult, error) {
+	if !browserHostIdentifier(request.RequestID) ||
+		(request.Operation != "list" && request.Operation != "open" &&
+			request.Operation != "select" && request.Operation != "close") ||
+		((request.Operation == "list" || request.Operation == "open") &&
+			(request.Authority != nil || request.TabID != "" || request.FrameID != "")) ||
+		((request.Operation == "select" || request.Operation == "close") &&
+			(request.Authority == nil || !browserHostIdentifier(request.TabID))) ||
+		(request.Operation == "close" && request.FrameID != "") ||
+		(request.FrameID != "" && !browserHostIdentifier(request.FrameID)) {
+		return nodes.BrowserContextResult{}, ErrBrowserHostDenied
+	}
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return nodes.BrowserContextResult{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.worker == nil || session.contextWorker == nil {
+		return nodes.BrowserContextResult{}, ErrBrowserHostLost
+	}
+	if host.expireSessionLocked(ctx, session) {
+		return nodes.BrowserContextResult{}, ErrBrowserHostLost
+	}
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	defer cancelAction()
+	var catalog browserworker.ContextCatalog
+	var observation *nodes.BrowserObservationResult
+	switch request.Operation {
+	case "list":
+		catalog, err = session.contextWorker.ContextCatalog(actionCtx)
+	case "open":
+		catalog, err = session.contextWorker.OpenTab(actionCtx)
+	case "select", "close":
+		binding, bindingErr := browserContextMutationBinding(request)
+		if bindingErr != nil {
+			return nodes.BrowserContextResult{}, ErrBrowserHostDenied
+		}
+		authority, authorityErr := browserworker.ContextMutationAuthorityFromBinding(binding)
+		if authorityErr != nil {
+			return nodes.BrowserContextResult{}, ErrBrowserHostDenied
+		}
+		if request.Operation == "select" {
+			var observed browserworker.DriverObservation
+			observed, catalog, err = session.contextWorker.SelectContext(actionCtx, authority)
+			if err == nil {
+				var navigationIdentity string
+				navigationIdentity, err = stableBrowserHostNavigationIdentity(actionCtx, session)
+				if err == nil {
+					session.snapshotGeneration++
+					result := browserHostObservation(request.SessionID, session, observed, navigationIdentity)
+					observation = &result
+				}
+			}
+		} else {
+			catalog, err = session.contextWorker.CloseTab(actionCtx, authority)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, browserworker.ErrContextAuthorityStale) {
+			return nodes.BrowserContextResult{}, ErrBrowserHostStale
+		}
+		if request.Operation == "list" {
+			session.state = "lost"
+			session.safeFailure = "worker_unavailable"
+			session.elementRefs = make(map[string]browserworker.DriverElement)
+			session.observationDigest = nil
+		} else {
+			host.quarantineActionLocked(session)
+		}
+		return nodes.BrowserContextResult{}, ErrBrowserHostLost
+	}
+	if actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) || catalog.Validate() != nil {
+		if request.Operation == "list" {
+			session.state = "lost"
+			session.safeFailure = "worker_unavailable"
+			session.elementRefs = make(map[string]browserworker.DriverElement)
+			session.observationDigest = nil
+		} else {
+			host.quarantineActionLocked(session)
+		}
+		return nodes.BrowserContextResult{}, ErrBrowserHostLost
+	}
+	if request.Operation != "select" && session.contextCatalog != nil &&
+		!reflect.DeepEqual(*session.contextCatalog, catalog) {
+		session.elementRefs = make(map[string]browserworker.DriverElement)
+		session.observationDigest = nil
+	}
+	catalogCopy, cloneErr := browserContextCatalogValue(browserContextCatalogResult(catalog))
+	if cloneErr != nil {
+		host.quarantineActionLocked(session)
+		return nodes.BrowserContextResult{}, ErrBrowserHostLost
+	}
+	session.contextCatalog = &catalogCopy
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	return nodes.BrowserContextResult{
+		Operation: request.Operation, Catalog: browserContextCatalogResult(catalog), Observation: observation,
+	}, nil
+}
+
 func (host *BrowserHost) executeAction(
 	ctx context.Context,
 	request BrowserHostNavigateRequest,
@@ -608,7 +720,31 @@ func observeBrowserHostNavigation(
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
-	observation, err := session.worker.Observe(ctx)
+	var observation browserworker.DriverObservation
+	if session.contextCatalog != nil && session.contextCatalog.SelectedFrameID != "" &&
+		session.contextWorker != nil {
+		authority, authorityErr := browserworker.ContextMutationAuthorityFromBinding(
+			browserworker.ContextMutationBinding{
+				Catalog: *session.contextCatalog,
+				TabID:   session.contextCatalog.SelectedTabID,
+				FrameID: session.contextCatalog.SelectedFrameID,
+			},
+		)
+		if authorityErr != nil {
+			return browserworker.DriverObservation{}, "", authorityErr
+		}
+		var live browserworker.ContextCatalog
+		observation, live, err = session.contextWorker.SelectContext(ctx, authority)
+		if err == nil {
+			var canonicalLive browserworker.ContextCatalog
+			canonicalLive, err = browserContextCatalogValue(browserContextCatalogResult(live))
+			if err == nil && !reflect.DeepEqual(*session.contextCatalog, canonicalLive) {
+				err = browserworker.ErrStale
+			}
+		}
+	} else {
+		observation, err = session.worker.Observe(ctx)
+	}
 	if err != nil {
 		return browserworker.DriverObservation{}, "", err
 	}
@@ -620,6 +756,27 @@ func observeBrowserHostNavigation(
 		return browserworker.DriverObservation{}, "", browserworker.ErrStale
 	}
 	return observation, after, nil
+}
+
+func stableBrowserHostNavigationIdentity(
+	ctx context.Context,
+	session *browserHostSession,
+) (string, error) {
+	if session.navigationWorker == nil {
+		return "", browserworker.ErrDriverIncompatible
+	}
+	before, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	after, err := session.navigationWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	if before == "" || before != after {
+		return "", browserworker.ErrStale
+	}
+	return after, nil
 }
 
 func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
@@ -683,6 +840,8 @@ func (host *BrowserHost) Close(
 		}
 		session.state = "closed"
 		session.safeFailure = ""
+		session.contextWorker = nil
+		session.contextCatalog = nil
 		session.elementRefs = make(map[string]browserworker.DriverElement)
 		return browserHostSessionView(session), nil
 	}
@@ -693,6 +852,8 @@ func (host *BrowserHost) Close(
 		return browserHostSessionView(session), ErrBrowserHostLost
 	}
 	session.worker = nil
+	session.contextWorker = nil
+	session.contextCatalog = nil
 	session.state = "closed"
 	session.safeFailure = ""
 	session.elementRefs = make(map[string]browserworker.DriverElement)
@@ -756,6 +917,8 @@ func (host *BrowserHost) expireSessionLocked(
 			return true
 		}
 		session.worker = nil
+		session.contextWorker = nil
+		session.contextCatalog = nil
 	}
 	session.state = "closed"
 	session.safeFailure = "session_expired"
@@ -823,6 +986,7 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 		Features: BrowserHostFeatures{
 			Observe:    true,
 			Navigate:   slices.Contains(session.profile.AllowedActions, "navigate"),
+			Contexts:   session.contextWorker != nil,
 			Screenshot: false, Download: false,
 		},
 		ExpiresAt: session.expiresAt.Unix(), IdleExpiresAt: session.idleExpiresAt.Unix(),

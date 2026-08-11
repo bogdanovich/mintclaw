@@ -48,6 +48,7 @@ type PassiveReadiness struct {
 type TargetDiagnostics struct {
 	Actions  []ActionKind
 	Profiles map[string]DriverReadiness
+	Contexts bool
 }
 
 type targetDiagnosticsFactory interface {
