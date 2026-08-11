@@ -1921,6 +1921,9 @@ func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
 	agent.LightProvider = provider
 	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-name", Threshold: 1})
 	configureCodingPromptTestAgent(agent, "thread-light")
+	if err := loop.MountHook(NamedHook("json-round-trip", &llmJSONRoundTripUserAppendHook{})); err != nil {
+		t.Fatalf("MountHook() error = %v", err)
+	}
 
 	opts := makeTestProcessOpts("coding:thread-light")
 	opts.UserMessage = ""
