@@ -724,12 +724,13 @@ func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[stri
 }
 
 type browserActionResult struct {
-	InvocationID string                    `json:"invocation_id"`
-	Effect       browser.Effect            `json:"effect"`
-	State        browser.InvocationState   `json:"state"`
-	Reason       string                    `json:"reason,omitempty"`
-	Observation  *browserObservationView   `json:"observation,omitempty"`
-	Artifact     *browser.DownloadArtifact `json:"artifact,omitempty"`
+	InvocationID string                      `json:"invocation_id"`
+	Effect       browser.Effect              `json:"effect"`
+	State        browser.InvocationState     `json:"state"`
+	Reason       string                      `json:"reason,omitempty"`
+	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Observation  *browserObservationView     `json:"observation,omitempty"`
+	Artifact     *browser.DownloadArtifact   `json:"artifact,omitempty"`
 }
 
 func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -776,6 +777,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,
+	}
+	if invocation.Diagnostic != nil {
+		result.FailureClass = invocation.Diagnostic.FailureClass
 	}
 	result.Artifact = invocation.Download
 	if invocation.State == browser.InvocationSucceeded {

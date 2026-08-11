@@ -199,6 +199,11 @@ The companion host then:
 Failure before reservation is definitely unaccepted. Cancellation, timeout,
 disconnect, driver loss, or missing terminal proof after reservation becomes
 `unknown`, quarantines the session, and is never replayed with a new ID.
+The durable ledger intentionally records only the conservative
+`outcome_unknown` authority result. The returned tool result and structured
+gateway diagnostics may additionally carry one bounded failure class such as
+`timeout`, `driver_rejected`, or `worker_unavailable`. This class explains the
+failure without granting replay authority or exposing raw driver responses.
 
 ## Capability Discovery And Rolling Compatibility
 

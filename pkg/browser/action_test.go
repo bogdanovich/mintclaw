@@ -245,8 +245,15 @@ func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testi
 	}
 	worker.executeErr = ErrWorkerUnavailable
 	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
-	if err != nil || invocation.State != InvocationUnknown || invocation.SafeFailure != "outcome_unknown" {
+	if err != nil || invocation.State != InvocationUnknown || invocation.SafeFailure != "outcome_unknown" ||
+		invocation.Diagnostic == nil ||
+		invocation.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
 		t.Fatalf("ExecuteAction() = %+v, %v, want unknown outcome", invocation, err)
+	}
+	storedInvocation, getInvocationErr := store.GetInvocation(context.Background(), invocation.ID)
+	if getInvocationErr != nil || storedInvocation.Diagnostic != nil ||
+		storedInvocation.State != InvocationUnknown || storedInvocation.SafeFailure != "outcome_unknown" {
+		t.Fatalf("stored invocation = %+v, %v; want durable outcome without diagnostic", storedInvocation, getInvocationErr)
 	}
 	stored, getErr := store.GetSession(context.Background(), session.ID)
 	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "outcome_unknown" ||

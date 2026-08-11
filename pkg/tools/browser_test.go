@@ -885,6 +885,36 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
+	preparation := browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_unknown", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+		Action: browser.Action{Kind: browser.ActionClick, Ref: "element_1"},
+		Effect: browser.EffectLocalEdit,
+	}}
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare:   preparation,
+		execute: browser.Invocation{
+			ID: "invocation_unknown", SessionID: "browser_session_1", Effect: browser.EffectLocalEdit,
+			State: browser.InvocationUnknown, SafeFailure: "outcome_unknown",
+			Diagnostic: &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
+		},
+	}
+	args := map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+		"action": map[string]any{"kind": "click", "ref": "element_1"},
+	}
+	var result browserActionResult
+	decodeBrowserToolResult(t, NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(), args,
+	), &result)
+	if result.State != browser.InvocationUnknown || result.Reason != "outcome_unknown" ||
+		result.FailureClass != browser.OutcomeFailureDriverRejected {
+		t.Fatalf("action result = %#v", result)
+	}
+}
+
 func TestBrowserActDeliversRetainedDownloadWithRecovery(t *testing.T) {
 	recovery := &browser.ScreenshotRecovery{
 		WorkspaceID: "workspace", AgentID: "agent", ActorID: "actor", RouteID: "route",

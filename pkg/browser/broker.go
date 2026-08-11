@@ -1241,22 +1241,28 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
-		return broker.completeInvocationLocked(
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"outcome_unknown",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{
+			FailureClass: classifyAcceptedOutcomeFailure(executeErr, executionContextErr),
+		}
+		return completed, completeErr
 	}
 	if len(result) == 0 || len(result) > MaxTerminalBytes || !json.Valid(result) {
-		return broker.completeInvocationLocked(
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"result_invalid",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureInvalidResult}
+		return completed, completeErr
 	}
 	completed, err := broker.completeInvocationLocked(
 		completionCtx,
