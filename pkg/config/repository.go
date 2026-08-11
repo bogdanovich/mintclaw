@@ -87,12 +87,22 @@ func NewRepository(path string) *Repository {
 // persisting configuration migrations. It may finish recovery of a transaction
 // interrupted by an earlier writer.
 func (r *Repository) ReadOnly() (Snapshot, error) {
+	return r.readSnapshot(true)
+}
+
+// ReadDurable returns the durable public/security pair without applying runtime
+// environment overrides. It is intended for revision-checked document editing.
+func (r *Repository) ReadDurable() (Snapshot, error) {
+	return r.readSnapshot(false)
+}
+
+func (r *Repository) readSnapshot(applyRuntimeOverrides bool) (Snapshot, error) {
 	var snapshot Snapshot
 	err := r.withLock(func() error {
 		if _, err := r.recoverLocked(); err != nil {
 			return err
 		}
-		cfg, err := LoadConfigReadOnly(r.path)
+		cfg, err := loadConfigReadOnly(r.path, applyRuntimeOverrides)
 		if err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -226,6 +227,21 @@ func TestMCPAddShowsClearErrorForRemoteURLWithoutTransport(t *testing.T) {
 	assert.Contains(t, err.Error(), `Use --transport http or --transport sse`)
 }
 
+func TestMCPAddRejectsInvalidRuntimeOverrideWithoutWriting(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, nil)
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	t.Setenv("MINTCLAW_TOOLS_EXEC_PERMISSION_MODE", "readonly")
+
+	_, err = executeCommand(NewMCPCommand(), []string{"add", "filesystem", "npx"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load config")
+	after, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, before, after)
+}
+
 func TestMCPAddOverwritePromptDecline(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
@@ -317,9 +333,7 @@ func TestMCPAddSupportsStreamableHTTPAlias(t *testing.T) {
 	assert.Equal(t, "https://mcp.context7.com/mcp", server.URL)
 }
 
-func TestSaveValidatedConfigNormalizesStreamableHTTPAlias(t *testing.T) {
-	configPath := setupMCPConfigEnv(t)
-
+func TestNormalizeAndValidateConfigNormalizesStreamableHTTPAlias(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.MCP.Enabled = true
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
@@ -330,13 +344,68 @@ func TestSaveValidatedConfigNormalizesStreamableHTTPAlias(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, saveValidatedConfig(cfg))
-
-	saved := readMCPConfig(t, configPath)
-	server := saved.Tools.MCP.Servers["context7"]
+	normalized, err := normalizeAndValidateConfig(cfg)
+	require.NoError(t, err)
+	server := normalized.Tools.MCP.Servers["context7"]
 	assert.Equal(t, "http", server.Type)
 	assert.Equal(t, "https://mcp.context7.com/mcp", server.URL)
 	assert.Equal(t, "streamable-http", cfg.Tools.MCP.Servers["context7"].Type)
+}
+
+func TestMCPAddPreservesInterleavedDisjointConfigChange(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, nil)
+	snapshot, err := config.NewRepository(configPath).ReadDurable()
+	require.NoError(t, err)
+	_, exists := snapshot.Config.Tools.MCP.Servers["filesystem"]
+	require.False(t, exists)
+
+	_, err = config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Gateway.Port = 23456
+		return nil
+	})
+	require.NoError(t, err)
+	err = upsertMCPServer(
+		"filesystem",
+		config.MCPServerConfig{Enabled: true, Type: "stdio", Command: "npx"},
+		mcpServerExpectation{},
+	)
+	require.NoError(t, err)
+
+	current := readMCPConfig(t, configPath)
+	assert.Equal(t, 23456, current.Gateway.Port)
+	assert.Equal(t, "npx", current.Tools.MCP.Servers["filesystem"].Command)
+}
+
+func TestMCPAddRejectsInterleavedSameServerChange(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, &config.Config{
+		Tools: config.ToolsConfig{MCP: config.MCPConfig{
+			ToolConfig: config.ToolConfig{Enabled: true},
+			Servers: map[string]config.MCPServerConfig{
+				"filesystem": {Enabled: true, Type: "stdio", Command: "old"},
+			},
+		}},
+	})
+	snapshot, err := config.NewRepository(configPath).ReadDurable()
+	require.NoError(t, err)
+	expected := snapshot.Config.Tools.MCP.Servers["filesystem"]
+	_, err = config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		server := cfg.Tools.MCP.Servers["filesystem"]
+		server.Command = "concurrent"
+		cfg.Tools.MCP.Servers["filesystem"] = server
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = upsertMCPServer(
+		"filesystem",
+		config.MCPServerConfig{Enabled: true, Type: "stdio", Command: "replacement"},
+		mcpServerExpectation{server: expected, exists: true},
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, config.ErrConfigConflict)
+	assert.Equal(t, "concurrent", readMCPConfig(t, configPath).Tools.MCP.Servers["filesystem"].Command)
 }
 
 func TestMCPRemoveRemovesLastServerAndDisablesMCP(t *testing.T) {
@@ -435,15 +504,20 @@ func TestMCPEditUsesEditor(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 
 	originalEditor := editorCommand
-	defer func() { editorCommand = originalEditor }()
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
 
 	var gotName string
 	var gotArgs []string
 	editorCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
-		return exec.Command("sh", "-c", "exit 0")
+		return exec.Command(name, args...)
 	}
+	editorProcessRun = func(*exec.Cmd) error { return nil }
 
 	t.Setenv("EDITOR", `dummy-editor --wait`)
 
@@ -452,9 +526,313 @@ func TestMCPEditUsesEditor(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "dummy-editor", gotName)
-	assert.Equal(t, []string{"--wait", configPath}, gotArgs)
+	require.Len(t, gotArgs, 2)
+	assert.Equal(t, "--wait", gotArgs[0])
+	assert.Equal(t, filepath.Base(configPath), filepath.Base(gotArgs[1]))
+	assert.NotEqual(t, filepath.Dir(configPath), filepath.Dir(gotArgs[1]))
+	_, tempStatErr := os.Stat(gotArgs[1])
+	assert.True(t, os.IsNotExist(tempStatErr), "temporary editor config was not removed: %v", tempStatErr)
 	_, statErr := os.Stat(configPath)
 	assert.NoError(t, statErr)
+}
+
+func TestMCPEditCommitsEditedTemporaryConfig(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, nil)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		_, err := config.NewRepository(tempPath).Update(func(cfg *config.Config) error {
+			cfg.Gateway.Port = 23456
+			return nil
+		})
+		return err
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.NoError(t, err)
+	assert.Equal(t, 23456, readMCPConfig(t, configPath).Gateway.Port)
+}
+
+func TestMCPEditTemporaryDocumentMasksAndPreservesSecureValues(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		Model:     "openai/private",
+		APIKeys:   config.SimpleSecureStrings("editor-secret"),
+		Enabled:   true,
+	}}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		data, err := os.ReadFile(tempPath)
+		if err != nil {
+			return err
+		}
+		assert.NotContains(t, string(data), "editor-secret")
+		assert.NotContains(t, string(data), `"api_keys"`)
+		return nil
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.NoError(t, err)
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 1)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
+}
+
+func TestMCPEditRejectsCredentialBearingModelRename(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		Model:     "openai/private",
+		APIKeys:   config.SimpleSecureStrings("editor-secret"),
+		Enabled:   true,
+	}}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		data, err := os.ReadFile(tempPath)
+		if err != nil {
+			return err
+		}
+		var document map[string]any
+		if err = json.Unmarshal(data, &document); err != nil {
+			return err
+		}
+		models := document["model_list"].([]any)
+		models[0].(map[string]any)["model_name"] = "renamed"
+		data, err = json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(tempPath, data, 0o600)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 1)
+	assert.Equal(t, "private", saved.ModelList[0].ModelName)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
+}
+
+func TestMCPEditDoesNotCopyCredentialToAddedDuplicateModelName(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		Model:     "openai/private",
+		APIKeys:   config.SimpleSecureStrings("editor-secret"),
+		Enabled:   true,
+	}}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		_, err := config.NewRepository(tempPath).Update(func(edited *config.Config) error {
+			edited.ModelList = append(edited.ModelList, &config.ModelConfig{
+				ModelName: "private",
+				Model:     "openai/other-endpoint",
+				Enabled:   true,
+			})
+			return nil
+		})
+		return err
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.NoError(t, err)
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 2)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
+	assert.Empty(t, saved.ModelList[1].APIKeys)
+}
+
+func TestMCPEditRejectsCredentialRenameIntoExistingDuplicateIdentity(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{
+		{
+			ModelName: "private",
+			Model:     "openai/private",
+			APIKeys:   config.SimpleSecureStrings("private-secret"),
+			Enabled:   true,
+		},
+		{ModelName: "shared", Model: "openai/shared-a", Enabled: true},
+		{ModelName: "shared", Model: "openai/shared-b", Enabled: true},
+	}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		data, err := os.ReadFile(tempPath)
+		if err != nil {
+			return err
+		}
+		var document map[string]any
+		if err = json.Unmarshal(data, &document); err != nil {
+			return err
+		}
+		models := document["model_list"].([]any)
+		models[0].(map[string]any)["model_name"] = "shared"
+		document["model_list"] = models[:2]
+		data, err = json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(tempPath, data, 0o600)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 3)
+	assert.Equal(t, "private", saved.ModelList[0].ModelName)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "private-secret", saved.ModelList[0].APIKeys[0].String())
+}
+
+func TestMCPEditRejectsCredentialBearingModelRemoval(t *testing.T) {
+	original := config.DefaultConfig()
+	original.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		APIKeys:   config.SimpleSecureStrings("private-secret"),
+	}}
+	edited := config.DefaultConfig()
+
+	err := reconcileEditedModelCredentials(original, edited)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
+}
+
+func TestMCPEditRejectsConcurrentCanonicalChange(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, nil)
+	baseline := readMCPConfig(t, configPath)
+	baselinePort := baseline.Gateway.Port
+	baselineHeartbeat := baseline.Heartbeat.Enabled
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		if _, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+			cfg.Heartbeat.Enabled = !baselineHeartbeat
+			return nil
+		}); err != nil {
+			return err
+		}
+		_, err := config.NewRepository(tempPath).Update(func(cfg *config.Config) error {
+			cfg.Gateway.Port = 23456
+			return nil
+		})
+		return err
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, config.ErrConfigConflict)
+	assert.Contains(t, err.Error(), "config changed while editor was open")
+	current := readMCPConfig(t, configPath)
+	assert.Equal(t, !baselineHeartbeat, current.Heartbeat.Enabled)
+	assert.Equal(t, baselinePort, current.Gateway.Port)
+}
+
+func TestMCPEditRejectsMalformedTemporaryConfig(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, nil)
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		return os.WriteFile(tempPath, []byte("{"), 0o600)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err = executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load edited config")
+	after, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, before, after)
 }
 
 func TestMCPEditRequiresEditor(t *testing.T) {

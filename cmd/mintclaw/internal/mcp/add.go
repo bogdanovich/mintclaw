@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,15 +34,16 @@ func newAddCommand() *cobra.Command {
 				return err
 			}
 
-			cfg, err := loadConfig()
+			if _, err = loadConfig(); err != nil {
+				return err
+			}
+			snapshot, err := loadDurableConfig()
 			if err != nil {
 				return err
 			}
-			if cfg.Tools.MCP.Servers == nil {
-				cfg.Tools.MCP.Servers = make(map[string]config.MCPServerConfig)
-			}
 
-			if _, exists := cfg.Tools.MCP.Servers[name]; exists && !opts.Force {
+			initialServer, initialExists := snapshot.Config.Tools.MCP.Servers[name]
+			if initialExists && !opts.Force {
 				var overwrite bool
 
 				overwrite, err = confirmOverwrite(cmd.InOrStdin(), cmd.OutOrStdout(), name)
@@ -58,10 +60,8 @@ func newAddCommand() *cobra.Command {
 				return err
 			}
 
-			cfg.Tools.MCP.Enabled = true
-			cfg.Tools.MCP.Servers[name] = server
-
-			if err := saveValidatedConfig(cfg); err != nil {
+			expectation := mcpServerExpectation{server: initialServer, exists: initialExists}
+			if err := upsertMCPServer(name, server, expectation); err != nil {
 				return err
 			}
 
@@ -80,6 +80,30 @@ func newAddCommand() *cobra.Command {
 	flags.Bool("no-deferred", false, "Mark server as non-deferred (tools always active)")
 
 	return cmd
+}
+
+type mcpServerExpectation struct {
+	server config.MCPServerConfig
+	exists bool
+}
+
+func upsertMCPServer(
+	name string,
+	server config.MCPServerConfig,
+	expected mcpServerExpectation,
+) error {
+	return updateValidatedConfig(func(cfg *config.Config) error {
+		current, exists := cfg.Tools.MCP.Servers[name]
+		if exists != expected.exists || exists && !reflect.DeepEqual(current, expected.server) {
+			return fmt.Errorf("%w: MCP server %q changed while confirming overwrite", config.ErrConfigConflict, name)
+		}
+		if cfg.Tools.MCP.Servers == nil {
+			cfg.Tools.MCP.Servers = make(map[string]config.MCPServerConfig)
+		}
+		cfg.Tools.MCP.Enabled = true
+		cfg.Tools.MCP.Servers[name] = server
+		return nil
+	})
 }
 
 func parseAddArgs(args []string) (addOptions, string, string, []string, bool, error) {

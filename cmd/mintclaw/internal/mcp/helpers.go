@@ -27,8 +27,9 @@ type probeResult struct {
 }
 
 var (
-	editorCommand = exec.Command
-	serverProbe   = defaultServerProbe
+	editorCommand    = exec.Command
+	editorProcessRun = func(process *exec.Cmd) error { return process.Run() }
+	serverProbe      = defaultServerProbe
 
 	mcpConfigSchemaOnce sync.Once
 	mcpConfigSchema     *jsonschema.Resolved
@@ -107,34 +108,66 @@ const mcpConfigSchemaJSON = `{
 }`
 
 func loadConfig() (*config.Config, error) {
-	cfg, err := config.LoadConfig(internal.GetConfigPath())
+	snapshot, err := mcpConfigRepository().ReadOnly()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
-	return cfg, nil
+	return snapshot.Config, nil
 }
 
-func saveValidatedConfig(cfg *config.Config) error {
+func loadDurableConfig() (config.Snapshot, error) {
+	snapshot, err := mcpConfigRepository().ReadDurable()
+	if err != nil {
+		return config.Snapshot{}, fmt.Errorf("failed to load config: %w", err)
+	}
+	return snapshot, nil
+}
+
+func mcpConfigRepository() *config.Repository {
+	return config.NewRepository(internal.GetConfigPath())
+}
+
+func updateValidatedConfig(mutate func(*config.Config) error) error {
+	var callbackErr error
+	_, err := mcpConfigRepository().Update(func(cfg *config.Config) error {
+		if mutateErr := mutate(cfg); mutateErr != nil {
+			callbackErr = mutateErr
+			return mutateErr
+		}
+		normalizedCfg, normalizeErr := normalizeAndValidateConfig(cfg)
+		if normalizeErr != nil {
+			callbackErr = normalizeErr
+			return normalizeErr
+		}
+		*cfg = *normalizedCfg
+		return nil
+	})
+	if callbackErr != nil {
+		return callbackErr
+	}
+	if err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	return nil
+}
+
+func normalizeAndValidateConfig(cfg *config.Config) (*config.Config, error) {
 	if cfg == nil {
-		return fmt.Errorf("config is nil")
+		return nil, fmt.Errorf("config is nil")
 	}
 
 	normalizedCfg := normalizedConfigForSave(cfg)
 
 	data, err := json.Marshal(normalizedCfg)
 	if err != nil {
-		return fmt.Errorf("failed to serialize config: %w", err)
+		return nil, fmt.Errorf("failed to serialize config: %w", err)
 	}
 
 	if err := validateConfigDocument(data); err != nil {
-		return err
+		return nil, err
 	}
 
-	if err := config.SaveConfig(internal.GetConfigPath(), normalizedCfg); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-
-	return nil
+	return normalizedCfg, nil
 }
 
 func normalizedConfigForSave(cfg *config.Config) *config.Config {
