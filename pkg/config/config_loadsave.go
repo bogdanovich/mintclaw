@@ -18,6 +18,23 @@ import (
 )
 
 func LoadConfig(path string) (*Config, error) {
+	repository := NewRepository(path)
+	var cfg *Config
+	err := repository.withLock(func() error {
+		if _, recoverErr := repository.recoverLocked(); recoverErr != nil {
+			return recoverErr
+		}
+		var loadErr error
+		cfg, loadErr = loadConfigWithMigration(path, func(documents configDocuments) error {
+			_, saveErr := repository.saveDocumentsLocked(documents)
+			return saveErr
+		})
+		return loadErr
+	})
+	return cfg, err
+}
+
+func loadConfigWithMigration(path string, persistMigration func(configDocuments) error) (*Config, error) {
 	updateResolver(filepath.Dir(path))
 
 	data, err := os.ReadFile(path)
@@ -220,76 +237,28 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	applyLegacyBindingsMigration(data, cfg)
-
-	gatewayHostBeforeEnv := cfg.Gateway.Host
-
-	if err = env.Parse(cfg); err != nil {
-		return nil, err
-	}
-	applySkillsRegistryEnvCompat(cfg)
-
-	if err = InitChannelList(cfg.Channels); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateTurnProfile(); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateExecConfig(); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateToolApprovalConfig(); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateRequestUserInputConfig(); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateExecutionTargets(); err != nil {
-		return nil, err
-	}
-	if err = cfg.ValidateBrowserConfig(); err != nil {
-		return nil, err
-	}
-	if err = cfg.Tools.ResultRetention.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid tools.result_retention: %w", err)
-	}
-	if err = cfg.Agents.Defaults.validateContextManagerSelection(); err != nil {
-		return nil, err
-	}
-	if err = cfg.Agents.Defaults.validateResultRetentionOwnership(); err != nil {
-		return nil, err
-	}
-	if err = cfg.Agents.Defaults.PromptMemory.Validate(); err != nil {
-		return nil, err
-	}
-	if err = cfg.Session.Lifecycle.Validate(); err != nil {
-		return nil, err
-	}
-	cfg.Gateway.Host, err = resolveGatewayHostFromEnv(gatewayHostBeforeEnv)
-	if err != nil {
-		return nil, fmt.Errorf("invalid gateway host: %w", err)
+	var migrationDocuments configDocuments
+	if migrationFrom >= 0 {
+		if err = initChannelList(cfg.Channels, false); err != nil {
+			return nil, err
+		}
+		migrationDocuments, err = marshalConfigDocuments(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("prepare migrated configuration: %w", err)
+		}
 	}
 
-	// Expand multi-key configs into separate entries for key-level failover
-	cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
-
-	// Validate model_list for uniqueness and required fields
-	if err = cfg.ValidateModelList(); err != nil {
+	if err = finalizeLoadedConfig(cfg, true); err != nil {
 		return nil, err
 	}
-	// Ensure Workspace has a default if not set
-	if cfg.Agents.Defaults.Workspace == "" {
-		homePath := GetHome()
-		cfg.Agents.Defaults.Workspace = filepath.Join(homePath, pkg.WorkspaceName)
-	}
-
-	cfg.Session.ApplyDmScope()
-	cfg.Session.DeriveDmScope()
 
 	if migrationFrom >= 0 {
 		if err = MakeBackup(path); err != nil {
 			return nil, err
 		}
-		_ = SaveConfig(path, cfg)
+		if err = persistMigration(migrationDocuments); err != nil {
+			return nil, fmt.Errorf("persist migrated configuration: %w", err)
+		}
 		logger.InfoF(
 			"config migrate success",
 			map[string]any{"from": migrationFrom, "to": CurrentVersion},
@@ -305,6 +274,14 @@ func LoadConfig(path string) (*Config, error) {
 // It intentionally preserves LoadConfig behavior for callers that expect automatic
 // migration persistence; new read-only callers should use this helper instead.
 func LoadConfigReadOnly(path string) (*Config, error) {
+	return loadConfigReadOnly(path, true)
+}
+
+func loadConfigForUpdate(path string) (*Config, error) {
+	return loadConfigReadOnly(path, false)
+}
+
+func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error) {
 	updateResolver(filepath.Dir(path))
 
 	data, err := os.ReadFile(path)
@@ -457,63 +434,74 @@ func LoadConfigReadOnly(path string) (*Config, error) {
 
 	applyLegacyBindingsMigration(data, cfg)
 
+	if err = finalizeLoadedConfig(cfg, applyRuntimeOverrides); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	gatewayHostBeforeEnv := cfg.Gateway.Host
-	if err = env.Parse(cfg); err != nil {
-		return nil, err
+	if applyRuntimeOverrides {
+		if err := env.Parse(cfg); err != nil {
+			return err
+		}
+		applySkillsRegistryEnvCompat(cfg)
 	}
-	applySkillsRegistryEnvCompat(cfg)
-	if err = InitChannelList(cfg.Channels); err != nil {
-		return nil, err
+	if err := initChannelList(cfg.Channels, applyRuntimeOverrides); err != nil {
+		return err
 	}
-	if err = cfg.ValidateTurnProfile(); err != nil {
-		return nil, err
+	if err := cfg.ValidateTurnProfile(); err != nil {
+		return err
 	}
-	if err = cfg.ValidateExecConfig(); err != nil {
-		return nil, err
+	if err := cfg.ValidateExecConfig(); err != nil {
+		return err
 	}
-	if err = cfg.ValidateToolApprovalConfig(); err != nil {
-		return nil, err
+	if err := cfg.ValidateToolApprovalConfig(); err != nil {
+		return err
 	}
-	if err = cfg.ValidateRequestUserInputConfig(); err != nil {
-		return nil, err
+	if err := cfg.ValidateRequestUserInputConfig(); err != nil {
+		return err
 	}
-	if err = cfg.ValidateExecutionTargets(); err != nil {
-		return nil, err
+	if err := cfg.ValidateExecutionTargets(); err != nil {
+		return err
 	}
-	if err = cfg.ValidateBrowserConfig(); err != nil {
-		return nil, err
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		return err
 	}
-	if err = cfg.Tools.ResultRetention.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid tools.result_retention: %w", err)
+	if err := cfg.Tools.ResultRetention.Validate(); err != nil {
+		return fmt.Errorf("invalid tools.result_retention: %w", err)
 	}
-	if err = cfg.Agents.Defaults.validateContextManagerSelection(); err != nil {
-		return nil, err
+	if err := cfg.Agents.Defaults.validateContextManagerSelection(); err != nil {
+		return err
 	}
-	if err = cfg.Agents.Defaults.validateResultRetentionOwnership(); err != nil {
-		return nil, err
+	if err := cfg.Agents.Defaults.validateResultRetentionOwnership(); err != nil {
+		return err
 	}
-	if err = cfg.Agents.Defaults.PromptMemory.Validate(); err != nil {
-		return nil, err
+	if err := cfg.Agents.Defaults.PromptMemory.Validate(); err != nil {
+		return err
 	}
-	if err = cfg.Session.Lifecycle.Validate(); err != nil {
-		return nil, err
+	if err := cfg.Session.Lifecycle.Validate(); err != nil {
+		return err
 	}
-	cfg.Gateway.Host, err = resolveGatewayHostFromEnv(gatewayHostBeforeEnv)
-	if err != nil {
-		return nil, fmt.Errorf("invalid gateway host: %w", err)
+	if applyRuntimeOverrides {
+		gatewayHost, err := resolveGatewayHostFromEnv(gatewayHostBeforeEnv)
+		if err != nil {
+			return fmt.Errorf("invalid gateway host: %w", err)
+		}
+		cfg.Gateway.Host = gatewayHost
 	}
 	cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
-	if err = cfg.ValidateModelList(); err != nil {
-		return nil, err
+	if err := cfg.ValidateModelList(); err != nil {
+		return err
 	}
 	if cfg.Agents.Defaults.Workspace == "" {
-		homePath := GetHome()
-		cfg.Agents.Defaults.Workspace = filepath.Join(homePath, pkg.WorkspaceName)
+		cfg.Agents.Defaults.Workspace = filepath.Join(GetHome(), pkg.WorkspaceName)
 	}
 	cfg.Session.ApplyDmScope()
 	cfg.Session.DeriveDmScope()
-
-	return cfg, nil
+	return nil
 }
 
 func applySkillsRegistryEnvCompat(cfg *Config) {
@@ -635,34 +623,7 @@ func toNameIndex(list []*ModelConfig) []string {
 }
 
 func SaveConfig(path string, cfg *Config) error {
-	if cfg.Version < CurrentVersion {
-		cfg.Version = CurrentVersion
-	}
-	// Filter out virtual models before serializing to config file
-	nonVirtualModels := make([]*ModelConfig, 0, len(cfg.ModelList))
-	for _, m := range cfg.ModelList {
-		if !m.isVirtual {
-			nonVirtualModels = append(nonVirtualModels, m)
-		}
-	}
-	// Temporarily replace ModelList with filtered version for serialization
-	originalModelList := cfg.ModelList
-	defer func() {
-		// Restore original ModelList after serialization
-		cfg.ModelList = originalModelList
-	}()
-	cfg.ModelList = nonVirtualModels
-
-	if err := saveSecurityConfig(securityPath(path), cfg); err != nil {
-		logger.ErrorCF("config", "cannot save .security.yml", map[string]any{"error": err})
-		return err
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fileutil.WriteFileAtomic(path, data, 0o600)
+	return writeConfigDocuments(path, cfg)
 }
 
 func (c *Config) WorkspacePath() string {

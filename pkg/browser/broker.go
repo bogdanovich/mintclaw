@@ -58,8 +58,8 @@ type ContextWorker interface {
 	ActionWorker
 	ContextCatalog(context.Context) (ContextCatalog, error)
 	OpenTab(context.Context) (ContextCatalog, error)
-	SelectContext(context.Context, string, string) (DriverObservation, ContextCatalog, error)
-	CloseTab(context.Context, string) (ContextCatalog, error)
+	SelectContext(context.Context, ContextMutationAuthority) (DriverObservation, ContextCatalog, error)
+	CloseTab(context.Context, ContextMutationAuthority) (ContextCatalog, error)
 }
 
 // NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
@@ -1185,10 +1185,14 @@ func (broker *Broker) executePreparedLocked(
 		return Invocation{}, ErrNotFound
 	}
 	if invocation.State.Terminal() {
-		return invocation, nil
+		return diagnoseRecoveredOutcome(invocation), nil
 	}
 	if invocation.State == InvocationAccepted {
-		return broker.completeInvocationLocked(ctx, invocation, InvocationUnknown, nil, "worker_lost")
+		completed, completeErr := broker.completeInvocationLocked(
+			ctx, invocation, InvocationUnknown, nil, "worker_lost",
+		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureWorkerUnavailable}
+		return completed, completeErr
 	}
 	if ctx.Err() != nil {
 		return broker.completeInvocationLocked(
@@ -1253,22 +1257,38 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
-		return broker.completeInvocationLocked(
+		if executionContextErr == nil && errors.Is(executeErr, errContextAuthorityStale) {
+			failed, failErr := broker.completeInvocationLocked(
+				completionCtx,
+				invocation,
+				InvocationFailed,
+				nil,
+				"context_stale",
+			)
+			return failed, errors.Join(ErrStale, failErr)
+		}
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"outcome_unknown",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{
+			FailureClass: classifyAcceptedOutcomeFailure(executeErr, executionContextErr),
+		}
+		return completed, completeErr
 	}
 	if len(result) == 0 || len(result) > MaxTerminalBytes || !json.Valid(result) {
-		return broker.completeInvocationLocked(
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"result_invalid",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureInvalidResult}
+		return completed, completeErr
 	}
 	completed, err := broker.completeInvocationLocked(
 		completionCtx,
@@ -1280,7 +1300,14 @@ func (broker *Broker) executePreparedLocked(
 	if err != nil {
 		return completed, err
 	}
-	// A completed action is activity, but never extends the absolute lifetime.
+	// The accepted operation may have durably mutated the session (context
+	// open/select/close does). Reload before recording activity so a successful
+	// terminal receipt never attempts a stale session CAS.
+	session, err = broker.store.GetSession(completionCtx, invocation.SessionID)
+	if err != nil || session.State != SessionReady || !session.Owner.Equal(owner) {
+		return completed, errors.Join(err, ErrWorkerUnavailable)
+	}
+	// A completed operation is activity, but never extends the absolute lifetime.
 	session.Revision++
 	session.UpdatedAt = timestampAtLeast(broker.now().UTC().UnixNano(), session.UpdatedAt)
 	session.LastActivityAt = session.UpdatedAt

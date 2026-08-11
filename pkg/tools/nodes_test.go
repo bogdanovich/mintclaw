@@ -29,6 +29,68 @@ func TestGenericNodeDiscoveryHidesInternalBrowserCommands(t *testing.T) {
 	}
 }
 
+func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTools(t *testing.T) {
+	cfg := nodeDiscoveryTestConfig()
+	fileDescriptor := nodeFileInfoTestDescriptor("none")
+	profile := fileDescriptor.FileProfiles[0]
+	cfg.Execution.Targets["build"] = config.ExecutionTarget{
+		Type: "node", Node: "builder-node", FileProfile: profile.Alias,
+	}
+	workspaceDescriptors, err := nodes.WorkspaceDescriptors([]nodes.FileProfileDescriptor{profile}, []string{"project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := testNodeCommand("system.info.v1", nodes.RiskRead, false, false)
+	visible.ModelContract = &nodes.CommandModelContract{
+		Availability: nodes.ModelAvailable, TimeoutSecondsMax: 30, OutputBytesMax: 4096, ResultKind: "json",
+		Guidance: []string{}, Examples: []json.RawMessage{},
+	}
+	catalog := nodes.CapabilityCatalog{Commands: append([]nodes.CommandDescriptor{visible}, workspaceDescriptors...)}
+	catalogHash := mustCatalogHash(t, catalog)
+	snapshot := nodes.Snapshot{
+		ID: "private-node-id", State: nodes.StateConnected, Catalog: catalog, CatalogHash: catalogHash,
+	}
+	allowedCommands := []string{visible.Name}
+	for _, descriptor := range workspaceDescriptors {
+		allowedCommands = append(allowedCommands, descriptor.Name)
+	}
+	source := &fakeNodeDiscoverySource{
+		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
+		connected: map[nodes.ID]bool{snapshot.ID: true},
+		registrations: map[nodes.ID]nodes.Registration{
+			snapshot.ID: {
+				Snapshot: snapshot, AllowedCommands: allowedCommands,
+				ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+			},
+		},
+	}
+	tool := NewNodeDiscoveryTool(cfg, source)
+	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
+
+	summary := decodeNodeResult(t, tool.Execute(ctx, map[string]any{"action": "describe", "target": "build"}))
+	commands := summary["commands"].([]any)
+	if len(commands) != 1 || commands[0].(map[string]any)["name"] != visible.Name {
+		t.Fatalf("generic discovery exposed internal workspace commands: %#v", commands)
+	}
+	result := tool.Execute(ctx, map[string]any{
+		"action": "describe", "target": "build", "command": nodes.WorkspaceCommandRead,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "workspace.* commands are internal") ||
+		!strings.Contains(result.ForLLM, "use read_file") {
+		t.Fatalf("internal workspace discovery guidance = %#v", result)
+	}
+	if !strings.Contains(tool.Description(), "Remote workspace file operations use read_file") {
+		t.Fatalf("nodes tool description lacks workspace guidance: %q", tool.Description())
+	}
+	noSnapshot := NewNodeDiscoveryTool(cfg, &fakeNodeDiscoverySource{})
+	result = noSnapshot.Execute(ctx, map[string]any{
+		"action": "describe", "target": "build", "command": nodes.WorkspaceCommandRead,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "workspace.* commands are internal") {
+		t.Fatalf("no-snapshot workspace discovery guidance = %#v", result)
+	}
+}
+
 func (source *fakeNodeDiscoverySource) Lookup(
 	ref string,
 ) (NodeDiscoveryRecord, bool, error) {

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -59,7 +60,17 @@ type Preparation struct {
 	RequiresApproval bool
 }
 
+type ObserveRequest struct {
+	Owner             Owner
+	SessionID         string
+	TabID             string
+	FrameID           string
+	ContextCatalogID  string
+	ContextGeneration uint64
+}
+
 func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID string) (Observation, error) {
+	request := ObserveRequest{Owner: owner, SessionID: sessionID, TabID: tabID}
 	if err := owner.Validate(); err != nil {
 		return Observation{}, err
 	}
@@ -68,25 +79,132 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	}
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
-	session, slot, worker, err := broker.actionSessionLocked(ctx, owner, sessionID, tabID)
+	session, _, worker, err := broker.actionSessionLocked(ctx, owner, sessionID, tabID)
 	if err != nil {
 		return Observation{}, err
 	}
-	if session.FrameID != "" {
-		return Observation{}, ErrDriverIncompatible
+	if session.ContextAuthority != nil {
+		request.FrameID = session.FrameID
+		request.ContextCatalogID = session.ContextAuthority.ID
+		request.ContextGeneration = session.ContextAuthority.Generation
 	}
-	driverObservation, navigationID, err := observeWithNavigationCheck(ctx, worker)
+	return broker.observeBoundSessionLocked(ctx, request, session, worker)
+}
+
+func (broker *Broker) ObserveContext(ctx context.Context, request ObserveRequest) (Observation, error) {
+	if err := request.Owner.Validate(); err != nil {
+		return Observation{}, err
+	}
+	if !validIdentifier(request.SessionID) || !validIdentifier(request.TabID) ||
+		!validContextBinding(request.FrameID, request.ContextCatalogID, request.ContextGeneration) {
+		return Observation{}, fmt.Errorf("%w: malformed observation identity", ErrInvalid)
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	session, _, worker, err := broker.actionSessionLocked(
+		ctx, request.Owner, request.SessionID, request.TabID,
+	)
 	if err != nil {
-		if errors.Is(err, ErrWorkerLost) {
-			quarantineErr := broker.quarantineWorkerSessionLocked(
-				ctx,
-				session.ID,
-				"worker_lost",
-			)
-			return Observation{}, errors.Join(err, quarantineErr)
+		return Observation{}, err
+	}
+	return broker.observeBoundSessionLocked(ctx, request, session, worker)
+}
+
+func (broker *Broker) observeBoundSessionLocked(
+	ctx context.Context,
+	request ObserveRequest,
+	session Session,
+	worker ActionWorker,
+) (Observation, error) {
+	if !sessionMatchesContextBinding(
+		session, request.FrameID, request.ContextCatalogID, request.ContextGeneration,
+	) {
+		return Observation{}, ErrStale
+	}
+	if session.ContextAuthority == nil {
+		driverObservation, navigationID, observeErr := observeWithNavigationCheck(ctx, worker)
+		if observeErr != nil {
+			return Observation{}, broker.handleObservationErrorLocked(ctx, session, observeErr)
 		}
+		return broker.persistDriverObservationLocked(ctx, session, driverObservation, navigationID)
+	}
+	contextWorker, ok := worker.(ContextWorker)
+	if !ok {
+		if session.FrameID != "" {
+			return Observation{}, ErrDriverIncompatible
+		}
+		driverObservation, navigationID, observeErr := observeWithNavigationCheck(ctx, worker)
+		if observeErr != nil {
+			return Observation{}, broker.handleObservationErrorLocked(ctx, session, observeErr)
+		}
+		return broker.persistDriverObservationLocked(ctx, session, driverObservation, navigationID)
+	}
+	return broker.observeSelectedContextLocked(ctx, session, contextWorker)
+}
+
+func (broker *Broker) observeSelectedContextLocked(
+	ctx context.Context,
+	session Session,
+	worker ContextWorker,
+) (Observation, error) {
+	before := cloneContextCatalog(*session.ContextAuthority)
+	live, err := worker.ContextCatalog(ctx)
+	if err != nil {
+		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+	}
+	live = broker.applyContextFramePolicy(ctx, session, live)
+	normalized, changed, err := normalizeContextCatalog(session.ContextAuthority, live)
+	if err != nil {
 		return Observation{}, err
 	}
+	if changed {
+		_, persistErr := broker.persistContextCatalogLocked(ctx, session, normalized)
+		return Observation{}, errors.Join(ErrStale, persistErr)
+	}
+	var driverObservation DriverObservation
+	var navigationID string
+	if session.FrameID == "" {
+		driverObservation, navigationID, err = observeWithNavigationCheck(ctx, worker)
+	} else {
+		authority := newContextMutationAuthority(*session.ContextAuthority, session.TabID, session.FrameID)
+		driverObservation, live, err = worker.SelectContext(ctx, authority)
+	}
+	if err != nil {
+		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+	}
+	if session.FrameID == "" {
+		live, err = worker.ContextCatalog(ctx)
+		if err != nil {
+			return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+		}
+	}
+	live = broker.applyContextFramePolicy(ctx, session, live)
+	normalized, changed, err = normalizeContextCatalog(session.ContextAuthority, live)
+	if err != nil {
+		return Observation{}, err
+	}
+	if changed || !reflect.DeepEqual(before, normalized) {
+		_, persistErr := broker.persistContextCatalogLocked(ctx, session, normalized)
+		return Observation{}, errors.Join(ErrStale, persistErr)
+	}
+	return broker.persistDriverObservationLocked(ctx, session, driverObservation, navigationID)
+}
+
+func (broker *Broker) handleObservationErrorLocked(ctx context.Context, session Session, err error) error {
+	if !errors.Is(err, ErrWorkerLost) {
+		return err
+	}
+	quarantineErr := broker.quarantineWorkerSessionLocked(ctx, session.ID, "worker_lost")
+	return errors.Join(err, quarantineErr)
+}
+
+func (broker *Broker) persistDriverObservationLocked(
+	ctx context.Context,
+	session Session,
+	driverObservation DriverObservation,
+	navigationID ...string,
+) (Observation, error) {
+	var err error
 	if err = validateBlankObservation(driverObservation, ""); err != nil {
 		return Observation{}, err
 	}
@@ -117,10 +235,17 @@ func (broker *Broker) Observe(ctx context.Context, owner Owner, sessionID, tabID
 	if err = broker.store.UpdateSession(ctx, session.Revision-1, session); err != nil {
 		return Observation{}, err
 	}
+	slot := broker.slots[session.ID]
+	if slot == nil {
+		return Observation{}, ErrWorkerUnavailable
+	}
 	slot.refs = refs
 	slot.inputs = nil
 	slot.uploads = nil
-	slot.navigationID = navigationID
+	slot.navigationID = ""
+	if len(navigationID) > 0 {
+		slot.navigationID = navigationID[0]
+	}
 	observation := Observation{
 		SessionID: session.ID, TabID: session.TabID, FrameID: session.FrameID, SnapshotID: snapshotID,
 		SnapshotGeneration: session.SnapshotGeneration, URL: driverObservation.URL,
@@ -166,6 +291,18 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			request.ContextGeneration,
 		) {
 		return Preparation{}, ErrStale
+	}
+	if session.ContextAuthority != nil {
+		contextWorker, ok := worker.(ContextWorker)
+		if !ok && session.FrameID != "" {
+			return Preparation{}, ErrDriverIncompatible
+		}
+		if ok {
+			err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
+		}
+		if err != nil {
+			return Preparation{}, err
+		}
 	}
 	if session.FrameID != "" {
 		return Preparation{}, ErrDriverIncompatible
@@ -263,10 +400,16 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		return Invocation{}, err
 	}
 	if currentInvocation.State.Terminal() {
+		currentInvocation = diagnoseRecoveredOutcome(currentInvocation)
+		if currentInvocation.State == InvocationUnknown {
+			return currentInvocation, broker.finalizeActionInvocationLocked(
+				ctx, prepared.SessionID, currentInvocation,
+			)
+		}
 		return currentInvocation, nil
 	}
 	if currentInvocation.State == InvocationAccepted {
-		return broker.executePreparedLocked(
+		invocation, executeErr := broker.executePreparedLocked(
 			ctx,
 			owner,
 			invocationID,
@@ -274,6 +417,10 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			func(context.Context) (json.RawMessage, error) {
 				return nil, errors.New("accepted browser action cannot be replayed")
 			},
+		)
+		return invocation, errors.Join(
+			executeErr,
+			broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation),
 		)
 	}
 	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt {
@@ -364,21 +511,35 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			return json.RawMessage(`{"status":"completed"}`), nil
 		},
 	)
-	var postActionErr error
-	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
-		postActionErr = broker.invalidateSnapshotLocked(ctx, prepared.SessionID)
-	}
-	if invocation.State == InvocationUnknown {
-		safeFailure := invocation.SafeFailure
-		if safeFailure == "" {
-			safeFailure = "outcome_unknown"
-		}
-		postActionErr = errors.Join(
-			postActionErr,
-			broker.quarantineWorkerSessionLocked(ctx, prepared.SessionID, safeFailure),
-		)
-	}
+	postActionErr := broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation)
 	return invocation, errors.Join(executeErr, postActionErr)
+}
+
+func (broker *Broker) finalizeActionInvocationLocked(
+	ctx context.Context,
+	sessionID string,
+	invocation Invocation,
+) error {
+	finalizationCtx, cancelFinalization := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		time.Duration(broker.config.Limits.Effective().ActionSeconds)*time.Second,
+	)
+	defer cancelFinalization()
+	var finalizationErr error
+	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
+		finalizationErr = broker.invalidateSnapshotLocked(finalizationCtx, sessionID)
+	}
+	if invocation.State != InvocationUnknown {
+		return finalizationErr
+	}
+	safeFailure := invocation.SafeFailure
+	if safeFailure == "" {
+		safeFailure = "outcome_unknown"
+	}
+	return errors.Join(
+		finalizationErr,
+		broker.quarantineWorkerSessionLocked(finalizationCtx, sessionID, safeFailure),
+	)
 }
 
 func (broker *Broker) resolvePreparedActionLocked(
@@ -536,6 +697,17 @@ func (broker *Broker) revalidatePreparedLocked(
 	worker ActionWorker,
 	prepared PreparedAction,
 ) error {
+	if session.ContextAuthority != nil {
+		contextWorker, ok := worker.(ContextWorker)
+		if !ok && session.FrameID != "" {
+			return ErrDriverIncompatible
+		}
+		if ok {
+			if err := broker.ensureContextFreshLocked(ctx, session, contextWorker); err != nil {
+				return err
+			}
+		}
+	}
 	if prepared.FrameID != "" {
 		return ErrDriverIncompatible
 	}

@@ -19,6 +19,7 @@ import (
 
 const (
 	playwrightContextMarker        = "MINTCLAW_CONTEXT_V1"
+	playwrightContextSelectStale   = "MINTCLAW_CONTEXT_V1_STALE_SELECT"
 	playwrightContextResponseBytes = MaxContextCatalogBytes * 2
 )
 
@@ -164,8 +165,7 @@ func (worker *playwrightWorker) OpenTab(ctx context.Context) (ContextCatalog, er
 
 func (worker *playwrightWorker) SelectContext(
 	ctx context.Context,
-	tabID string,
-	frameID string,
+	authority ContextMutationAuthority,
 ) (DriverObservation, ContextCatalog, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
@@ -176,6 +176,10 @@ func (worker *playwrightWorker) SelectContext(
 	if err != nil {
 		return DriverObservation{}, ContextCatalog{}, err
 	}
+	if err = authority.validateLive(catalog); err != nil {
+		return DriverObservation{}, ContextCatalog{}, err
+	}
+	tabID, frameID := authority.tabID, authority.frameID
 	index, found := worker.contextState.tabIndexes[tabID]
 	if !found {
 		return DriverObservation{}, ContextCatalog{}, ErrNotFound
@@ -189,15 +193,32 @@ func (worker *playwrightWorker) SelectContext(
 			return DriverObservation{}, ContextCatalog{}, ErrDenied
 		}
 	}
-	if _, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
+	rawToken := worker.contextState.tabs[tabID]
+	rawDocumentGeneration := rawPageDocumentGeneration(raw, rawToken)
+	if rawDocumentGeneration == 0 {
+		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+	}
+	if err = worker.armContextSelectLocked(
+		ctx, raw.Generation, rawToken, rawDocumentGeneration,
+	); err != nil {
+		return DriverObservation{}, ContextCatalog{}, err
+	}
+	var selectText string
+	selectText, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
 		"action": "select", "index": index,
-	}, true); err != nil {
+	}, true)
+	if err != nil && errors.Is(err, ErrDriverRejected) && strings.Contains(selectText, playwrightContextSelectStale) {
+		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+	}
+	if err != nil {
 		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, err
 	}
-	worker.contextState.selectedTabID = tabID
-	worker.contextState.selectedFrame = frameID
-	worker.contextState.generation++
+	if worker.contextState.selectedTabID != tabID || worker.contextState.selectedFrame != frameID {
+		worker.contextState.selectedTabID = tabID
+		worker.contextState.selectedFrame = frameID
+		worker.contextState.generation++
+	}
 	_, selectedRaw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		worker.lost = true
@@ -230,7 +251,10 @@ func (worker *playwrightWorker) SelectContext(
 	return observation, catalog, nil
 }
 
-func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (ContextCatalog, error) {
+func (worker *playwrightWorker) CloseTab(
+	ctx context.Context,
+	authority ContextMutationAuthority,
+) (ContextCatalog, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if err := worker.contextAvailableLocked(); err != nil {
@@ -240,6 +264,10 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 	if err != nil {
 		return ContextCatalog{}, err
 	}
+	if err = authority.validateLive(catalog); err != nil {
+		return ContextCatalog{}, err
+	}
+	tabID := authority.tabID
 	if len(catalog.Tabs) <= 1 {
 		return ContextCatalog{}, ErrDenied
 	}
@@ -247,22 +275,33 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 	if !found {
 		return ContextCatalog{}, ErrNotFound
 	}
+	rawDocumentGeneration := rawPageDocumentGeneration(raw, rawToken)
+	if rawDocumentGeneration == 0 {
+		return ContextCatalog{}, ErrStale
+	}
 	code := fmt.Sprintf(`async (page) => {
   const state = page.context()[Symbol.for("mintclaw.browser.context-registry.v1")];
   if (!state) return "MINTCLAW_CONTEXT_V1|error|missing_registry";
+  if (state.generation !== %d) return "MINTCLAW_CONTEXT_V1|stale|catalog_generation";
   const pages = page.context().pages();
   if (pages.length <= 1) return "MINTCLAW_CONTEXT_V1|error|final_tab";
   const target = pages.find(candidate => state.pages.get(candidate)?.token === %s);
   if (!target) return "MINTCLAW_CONTEXT_V1|error|tab_not_found";
+  const mainRecord = state.frames.get(target.mainFrame());
+  if (!mainRecord || mainRecord.generation !== %d)
+    return "MINTCLAW_CONTEXT_V1|stale|document_generation";
   await target.close();
   return "MINTCLAW_CONTEXT_V1|closed|" + %s;
-}`, strconv.Quote(rawToken), strconv.Quote(rawToken))
+}`, raw.Generation, strconv.Quote(rawToken), rawDocumentGeneration, strconv.Quote(rawToken))
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
 		worker.lost = true
 		return ContextCatalog{}, err
 	}
 	line, parseErr := playwrightResultLine(text)
+	if parseErr == nil && strings.HasPrefix(line, playwrightContextMarker+"|stale|") {
+		return ContextCatalog{}, errors.Join(ErrStale, errContextAuthorityStale)
+	}
 	if parseErr != nil || line != playwrightContextMarker+"|closed|"+rawToken {
 		worker.lost = true
 		return ContextCatalog{}, ErrDriverIncompatible
@@ -282,6 +321,69 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 		return ContextCatalog{}, err
 	}
 	return closedCatalog, nil
+}
+
+func (worker *playwrightWorker) armContextSelectLocked(
+	ctx context.Context,
+	rawGeneration uint64,
+	rawToken string,
+	rawDocumentGeneration uint64,
+) error {
+	code := fmt.Sprintf(`async (page) => {
+  const registryKey = Symbol.for("mintclaw.browser.context-registry.v1");
+  const guardKey = Symbol.for("mintclaw.browser.context-select-guard.v1");
+  const context = page.context();
+  const state = context[registryKey];
+  if (!state) return "MINTCLAW_CONTEXT_V1|error|missing_registry";
+  if (state.generation !== %d) return "MINTCLAW_CONTEXT_V1|stale|catalog_generation";
+  const target = context.pages().find(candidate => state.pages.get(candidate)?.token === %s);
+  const mainRecord = target ? state.frames.get(target.mainFrame()) : null;
+  if (!target || !mainRecord || mainRecord.generation !== %d)
+    return "MINTCLAW_CONTEXT_V1|stale|document_generation";
+  for (const candidate of context.pages()) {
+    if (candidate[guardKey]) continue;
+    const originalBringToFront = candidate.bringToFront.bind(candidate);
+    Object.defineProperty(candidate, guardKey, { value: true });
+    candidate.bringToFront = () => {
+      const live = context[registryKey];
+      const pending = live?.pendingSelect;
+      if (pending) {
+        live.pendingSelect = null;
+        const record = live.pages.get(candidate);
+        const documentRecord = live.frames.get(candidate.mainFrame());
+        if (!record || record.token !== pending.token || live.generation !== pending.generation ||
+            !documentRecord || documentRecord.generation !== pending.documentGeneration)
+          throw new Error("MINTCLAW_CONTEXT_V1_STALE_SELECT");
+      }
+      return originalBringToFront();
+    };
+  }
+  state.pendingSelect = { token: %s, generation: %d, documentGeneration: %d };
+  return "MINTCLAW_CONTEXT_V1|armed|" + %s;
+}`, rawGeneration, strconv.Quote(rawToken), rawDocumentGeneration, strconv.Quote(rawToken),
+		rawGeneration, rawDocumentGeneration, strconv.Quote(rawToken))
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
+		return err
+	}
+	line, parseErr := playwrightResultLine(text)
+	if parseErr == nil && strings.HasPrefix(line, playwrightContextMarker+"|stale|") {
+		return errors.Join(ErrStale, errContextAuthorityStale)
+	}
+	if parseErr != nil || line != playwrightContextMarker+"|armed|"+rawToken {
+		worker.lost = true
+		return ErrDriverIncompatible
+	}
+	return nil
+}
+
+func rawPageDocumentGeneration(raw playwrightRawContextCatalog, rawToken string) uint64 {
+	for _, page := range raw.Pages {
+		if page.Token == rawToken {
+			return page.Generation
+		}
+	}
+	return 0
 }
 
 func (worker *playwrightWorker) contextCatalogLocked(ctx context.Context) (ContextCatalog, error) {

@@ -47,6 +47,15 @@ type BrowserToolSource interface {
 	ExecuteAction(context.Context, browser.Owner, string, *browser.ApprovalBinding) (browser.Invocation, error)
 }
 
+type BrowserContextToolSource interface {
+	ObserveContext(context.Context, browser.ObserveRequest) (browser.Observation, error)
+	ListContexts(context.Context, browser.Owner, string) (browser.ContextCatalog, error)
+	PrepareContext(context.Context, browser.ContextRequest) (browser.ContextPreparation, error)
+	ExecuteContext(
+		context.Context, browser.ContextPreparation, *browser.ApprovalBinding,
+	) (browser.ContextResult, error)
+}
+
 // BrowserTargetDiagnostics is one gateway-owned readiness and capability
 // snapshot. Implementations must compute every field while holding the same
 // runtime generation so discovery cannot combine stale capability flags with
@@ -68,10 +77,11 @@ type browserToolRuntime struct {
 }
 
 type (
-	BrowserTargetsTool struct{ runtime *browserToolRuntime }
-	BrowserSessionTool struct{ runtime *browserToolRuntime }
-	BrowserObserveTool struct{ runtime *browserToolRuntime }
-	BrowserActTool     struct{ runtime *browserToolRuntime }
+	BrowserTargetsTool  struct{ runtime *browserToolRuntime }
+	BrowserSessionTool  struct{ runtime *browserToolRuntime }
+	BrowserContextsTool struct{ runtime *browserToolRuntime }
+	BrowserObserveTool  struct{ runtime *browserToolRuntime }
+	BrowserActTool      struct{ runtime *browserToolRuntime }
 )
 
 func NewBrowserTargetsTool(cfg *config.Config, source BrowserToolSource) *BrowserTargetsTool {
@@ -84,6 +94,10 @@ func NewBrowserSessionTool(cfg *config.Config, source BrowserToolSource) *Browse
 
 func NewBrowserObserveTool(cfg *config.Config, source BrowserToolSource) *BrowserObserveTool {
 	return &BrowserObserveTool{runtime: newBrowserToolRuntime(cfg, source)}
+}
+
+func NewBrowserContextsTool(cfg *config.Config, source BrowserToolSource) *BrowserContextsTool {
+	return &BrowserContextsTool{runtime: newBrowserToolRuntime(cfg, source)}
 }
 
 func NewBrowserActTool(cfg *config.Config, source BrowserToolSource) *BrowserActTool {
@@ -110,6 +124,14 @@ func (runtime *browserToolRuntime) enabledForAgent(agentID string) bool {
 	return ok
 }
 
+func (runtime *browserToolRuntime) contextSource() (BrowserContextToolSource, bool) {
+	if runtime == nil || runtime.source == nil {
+		return nil, false
+	}
+	source, ok := runtime.source.(BrowserContextToolSource)
+	return source, ok
+}
+
 func (tool *BrowserTargetsTool) ToolEnabledForAgent(agentID string) bool {
 	return tool != nil && tool.runtime.enabledForAgent(agentID)
 }
@@ -120,6 +142,14 @@ func (tool *BrowserSessionTool) ToolEnabledForAgent(agentID string) bool {
 
 func (tool *BrowserObserveTool) ToolEnabledForAgent(agentID string) bool {
 	return tool != nil && tool.runtime.enabledForAgent(agentID)
+}
+
+func (tool *BrowserContextsTool) ToolEnabledForAgent(agentID string) bool {
+	if tool == nil || !tool.runtime.enabledForAgent(agentID) {
+		return false
+	}
+	_, ok := tool.runtime.contextSource()
+	return ok
 }
 
 func (tool *BrowserActTool) ToolEnabledForAgent(agentID string) bool {
@@ -456,6 +486,175 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	return result
 }
 
+func (*BrowserContextsTool) Name() string { return "browser_contexts" }
+func (*BrowserContextsTool) Description() string {
+	return "List, open, select, or close bounded opaque browser tabs and frames for one owned session."
+}
+
+func (*BrowserContextsTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{
+				"type": "string", "enum": []string{"list", "open", "select", "close"},
+			},
+			"browser_session_id": map[string]any{"type": "string"},
+			"context_catalog_id": map[string]any{"type": "string"},
+			"context_generation": map[string]any{"type": "integer"},
+			"tab_id":             map[string]any{"type": "string"},
+			"frame_id":           map[string]any{"type": "string"},
+		},
+		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+	}
+}
+
+func (*BrowserContextsTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsMutating
+}
+
+func (tool *BrowserContextsTool) ApprovalArguments(
+	ctx context.Context,
+	args map[string]any,
+) (map[string]any, error) {
+	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return nil, &browserSafeDenialError{cause: browser.ErrDenied}
+	}
+	operation, _ := args["operation"].(string)
+	if operation != string(browser.ContextClose) {
+		return args, nil
+	}
+	preparation, err := tool.prepare(ctx, args)
+	if err != nil {
+		return nil, &browserSafeDenialError{cause: err}
+	}
+	return map[string]any{
+		"context_invocation_id": preparation.Invocation.ID,
+		"action_hash":           preparation.Invocation.ActionHash,
+		"expires_at":            preparation.Invocation.ExpiresAt,
+		"preview":               browserContextApprovalSummary(preparation),
+	}, nil
+}
+
+type browserContextResultView struct {
+	ContextCatalog browser.ContextCatalog  `json:"context_catalog"`
+	Observation    *browserObservationView `json:"observation,omitempty"`
+	InvocationID   string                  `json:"invocation_id,omitempty"`
+	Effect         browser.Effect          `json:"effect,omitempty"`
+	State          browser.InvocationState `json:"state,omitempty"`
+}
+
+func (tool *BrowserContextsTool) Execute(
+	ctx context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return browserErrorResult(
+			"not_granted", "Browser access is not granted to this agent.", "use_an_authorized_agent",
+		)
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browserToolError(err)
+	}
+	operation, operationOK := args["operation"].(string)
+	sessionID, sessionOK := args["browser_session_id"].(string)
+	if !operationOK || !sessionOK {
+		return browserToolError(browser.ErrInvalid)
+	}
+	if operation == string(browser.ContextList) {
+		if len(args) != 2 {
+			return browserToolError(browser.ErrInvalid)
+		}
+		source, available := tool.runtime.contextSource()
+		if !available {
+			return browserContextToolError(browser.ErrDriverIncompatible)
+		}
+		catalog, listErr := source.ListContexts(ctx, owner, sessionID)
+		if listErr != nil {
+			return browserContextToolError(listErr)
+		}
+		return tool.runtime.result(browserContextResultView{ContextCatalog: catalog})
+	}
+	preparation, err := tool.prepare(ctx, args)
+	if err != nil {
+		return browserContextToolError(err)
+	}
+	if preparation.RequiresApproval &&
+		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
+		return &toolshared.ToolResult{Silent: true, Suspension: &interactions.SuspensionRequest{
+			Kind: interactions.KindApproval, PromptSummary: browserContextApprovalSummary(preparation),
+			Timeout: time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+		}}
+	}
+	var approval *browser.ApprovalBinding
+	if preparation.RequiresApproval {
+		binding := preparation.Approval
+		approval = &binding
+	}
+	source, available := tool.runtime.contextSource()
+	if !available {
+		return browserContextToolError(browser.ErrDriverIncompatible)
+	}
+	contextResult, err := source.ExecuteContext(ctx, preparation, approval)
+	if err != nil {
+		return browserContextToolError(err)
+	}
+	view := browserContextResultView{ContextCatalog: contextResult.Catalog}
+	if contextResult.Invocation != nil {
+		view.InvocationID = contextResult.Invocation.ID
+		view.Effect = contextResult.Invocation.Effect
+		view.State = contextResult.Invocation.State
+	}
+	if contextResult.Observation != nil {
+		observation := tool.runtime.observationResult(*contextResult.Observation)
+		view.Observation = &observation
+	}
+	return tool.runtime.result(view)
+}
+
+func (tool *BrowserContextsTool) prepare(
+	ctx context.Context,
+	args map[string]any,
+) (browser.ContextPreparation, error) {
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browser.ContextPreparation{}, err
+	}
+	requestID, err := browserRequestID(ctx)
+	if err != nil {
+		return browser.ContextPreparation{}, err
+	}
+	operation, operationOK := args["operation"].(string)
+	sessionID, sessionOK := args["browser_session_id"].(string)
+	if !operationOK || !sessionOK {
+		return browser.ContextPreparation{}, browser.ErrInvalid
+	}
+	request := browser.ContextRequest{
+		Owner: owner, RequestID: requestID, SessionID: sessionID,
+		Operation: browser.ContextOperation(operation),
+	}
+	request.ContextCatalogID, _ = args["context_catalog_id"].(string)
+	request.TabID, _ = args["tab_id"].(string)
+	request.FrameID, _ = args["frame_id"].(string)
+	generation, generationOK := browserInteger(args["context_generation"])
+	if _, present := args["context_generation"]; present && (!generationOK || generation < 1) {
+		return browser.ContextPreparation{}, browser.ErrInvalid
+	}
+	request.ContextGeneration = uint64(generation)
+	source, available := tool.runtime.contextSource()
+	if !available {
+		return browser.ContextPreparation{}, browser.ErrDriverIncompatible
+	}
+	return source.PrepareContext(ctx, request)
+}
+
+func browserContextApprovalSummary(preparation browser.ContextPreparation) string {
+	return fmt.Sprintf(
+		"Allow browser close action with unknown effect for tab %q?",
+		preparation.Request.TabID,
+	)
+}
+
 func (*BrowserObserveTool) Name() string { return "browser_observe" }
 func (*BrowserObserveTool) Description() string {
 	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot."
@@ -467,6 +666,9 @@ func (*BrowserObserveTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"browser_session_id": map[string]any{"type": "string"},
 			"tab_id":             map[string]any{"type": "string"},
+			"frame_id":           map[string]any{"type": "string"},
+			"context_catalog_id": map[string]any{"type": "string"},
+			"context_generation": map[string]any{"type": "integer"},
 			"screenshot":         map[string]any{"type": "boolean"},
 		},
 		"required": []string{"browser_session_id"}, "additionalProperties": false,
@@ -482,6 +684,9 @@ func (*BrowserObserveTool) ToolLoopSemantics() loopguard.Semantics {
 type browserObservationView struct {
 	BrowserSessionID   string                      `json:"browser_session_id"`
 	TabID              string                      `json:"tab_id"`
+	FrameID            string                      `json:"frame_id,omitempty"`
+	ContextCatalogID   string                      `json:"context_catalog_id,omitempty"`
+	ContextGeneration  uint64                      `json:"context_generation,omitempty"`
 	SnapshotID         string                      `json:"snapshot_id"`
 	SnapshotGeneration uint64                      `json:"snapshot_generation"`
 	URL                string                      `json:"url"`
@@ -506,7 +711,9 @@ func (runtime *browserToolRuntime) observationResult(observation browser.Observa
 	limits := runtime.config.Limits.Effective()
 	return browserObservationView{
 		BrowserSessionID: observation.SessionID, TabID: observation.TabID,
-		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		FrameID: observation.FrameID, ContextCatalogID: observation.ContextCatalogID,
+		ContextGeneration: observation.ContextGeneration,
+		SnapshotID:        observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		URL: observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: observation.Snapshot, PendingDialog: observation.PendingDialog,
 		Tabs: []browserTabView{{
@@ -585,7 +792,26 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		}
 		tabID = session.TabID
 	}
-	observation, err := tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+	frameID, _ := args["frame_id"].(string)
+	catalogID, _ := args["context_catalog_id"].(string)
+	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
+	if _, present := args["context_generation"]; present &&
+		(!contextGenerationOK || contextGeneration < 1) {
+		return browserToolError(browser.ErrInvalid)
+	}
+	var observation browser.Observation
+	contextSource, contextAvailable := tool.runtime.contextSource()
+	if frameID != "" || catalogID != "" || contextGeneration != 0 {
+		if !contextAvailable {
+			return browserToolError(browser.ErrDriverIncompatible)
+		}
+		observation, err = contextSource.ObserveContext(ctx, browser.ObserveRequest{
+			Owner: owner, SessionID: sessionID, TabID: tabID, FrameID: frameID,
+			ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
+		})
+	} else {
+		observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+	}
 	if err != nil {
 		return browserToolError(err)
 	}
@@ -690,6 +916,9 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"browser_session_id":  map[string]any{"type": "string"},
 			"tab_id":              map[string]any{"type": "string"},
+			"frame_id":            map[string]any{"type": "string"},
+			"context_catalog_id":  map[string]any{"type": "string"},
+			"context_generation":  map[string]any{"type": "integer"},
 			"snapshot_id":         map[string]any{"type": "string"},
 			"snapshot_generation": map[string]any{"type": "integer"},
 			"action": map[string]any{
@@ -724,12 +953,13 @@ func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[stri
 }
 
 type browserActionResult struct {
-	InvocationID string                    `json:"invocation_id"`
-	Effect       browser.Effect            `json:"effect"`
-	State        browser.InvocationState   `json:"state"`
-	Reason       string                    `json:"reason,omitempty"`
-	Observation  *browserObservationView   `json:"observation,omitempty"`
-	Artifact     *browser.DownloadArtifact `json:"artifact,omitempty"`
+	InvocationID string                      `json:"invocation_id"`
+	Effect       browser.Effect              `json:"effect"`
+	State        browser.InvocationState     `json:"state"`
+	Reason       string                      `json:"reason,omitempty"`
+	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Observation  *browserObservationView     `json:"observation,omitempty"`
+	Artifact     *browser.DownloadArtifact   `json:"artifact,omitempty"`
 }
 
 func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -777,11 +1007,26 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,
 	}
+	if invocation.Diagnostic != nil {
+		result.FailureClass = invocation.Diagnostic.FailureClass
+	}
 	result.Artifact = invocation.Download
 	if invocation.State == browser.InvocationSucceeded {
-		observation, observeErr := tool.runtime.source.Observe(
-			ctx, owner, invocation.SessionID, preparation.Action.TabID,
-		)
+		var observation browser.Observation
+		var observeErr error
+		contextSource, contextAvailable := tool.runtime.contextSource()
+		if preparation.Action.ContextCatalogID != "" && contextAvailable {
+			observation, observeErr = contextSource.ObserveContext(ctx, browser.ObserveRequest{
+				Owner: owner, SessionID: invocation.SessionID, TabID: preparation.Action.TabID,
+				FrameID:           preparation.Action.FrameID,
+				ContextCatalogID:  preparation.Action.ContextCatalogID,
+				ContextGeneration: preparation.Action.ContextGeneration,
+			})
+		} else {
+			observation, observeErr = tool.runtime.source.Observe(
+				ctx, owner, invocation.SessionID, preparation.Action.TabID,
+			)
+		}
 		if observeErr == nil {
 			view := tool.runtime.observationResult(observation)
 			result.Observation = &view
@@ -824,16 +1069,25 @@ func browserPostActionStateError(invocation browser.Invocation, quarantined bool
 		action, reason = "do_not_retry_reopen_session", "session_quarantined"
 	}
 	encoded, _ := json.Marshal(map[string]any{
-		"status":        "failed",
-		"code":          "post_action_state_unavailable",
-		"message":       "The browser action reached a terminal state, but fresh snapshot authority could not be persisted.",
-		"action":        action,
-		"invocation_id": invocation.ID,
-		"effect":        invocation.Effect,
-		"state":         invocation.State,
-		"reason":        reason,
+		"status":         "failed",
+		"code":           "post_action_state_unavailable",
+		"message":        "The browser action reached a terminal state, but fresh snapshot authority could not be persisted.",
+		"action":         action,
+		"invocation_id":  invocation.ID,
+		"effect":         invocation.Effect,
+		"state":          invocation.State,
+		"reason":         reason,
+		"outcome_reason": invocation.SafeFailure,
+		"failure_class":  invocationFailureClass(invocation),
 	})
 	return toolshared.ErrorResult(string(encoded))
+}
+
+func invocationFailureClass(invocation browser.Invocation) browser.OutcomeFailureClass {
+	if invocation.Diagnostic == nil {
+		return ""
+	}
+	return invocation.Diagnostic.FailureClass
 }
 
 func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (browser.Preparation, error) {
@@ -861,6 +1115,13 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	}
 	sessionID, sessionOK := args["browser_session_id"].(string)
 	tabID, tabOK := args["tab_id"].(string)
+	frameID, _ := args["frame_id"].(string)
+	catalogID, _ := args["context_catalog_id"].(string)
+	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
+	if _, present := args["context_generation"]; present &&
+		(!contextGenerationOK || contextGeneration < 1) {
+		return browser.Preparation{}, browser.ErrInvalid
+	}
 	snapshotID, snapshotOK := args["snapshot_id"].(string)
 	generation, generationOK := browserInteger(args["snapshot_generation"])
 	if !sessionOK || !tabOK || !snapshotOK || !generationOK || generation < 1 {
@@ -868,6 +1129,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	}
 	return tool.runtime.source.PrepareAction(ctx, browser.PrepareActionRequest{
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
+		FrameID: frameID, ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
 	})
 }
@@ -1025,6 +1287,23 @@ func browserToolError(err error) *toolshared.ToolResult {
 		return browserErrorResult("driver_unavailable", "The browser driver is unavailable.", "retry_or_reopen")
 	default:
 		return browserErrorResult("runtime_unavailable", "Browser automation is unavailable.", "retry")
+	}
+}
+
+func browserContextToolError(err error) *toolshared.ToolResult {
+	switch {
+	case errors.Is(err, browser.ErrStale):
+		return browserErrorResult(
+			"context_catalog_stale", "Browser context authority is stale.", "list_contexts_again",
+		)
+	case errors.Is(err, browser.ErrNotFound):
+		return browserErrorResult("tab_not_found", "The browser tab was not found.", "list_contexts_again")
+	case errors.Is(err, browser.ErrDriverIncompatible):
+		return browserErrorResult(
+			"context_unsupported", "Browser contexts are unavailable for this target.", "choose_supported_target",
+		)
+	default:
+		return browserToolError(err)
 	}
 }
 

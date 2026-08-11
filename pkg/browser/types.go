@@ -683,22 +683,23 @@ type ApprovalBinding struct {
 }
 
 type Invocation struct {
-	ID               string            `json:"id"`
-	PreparedActionID string            `json:"prepared_action_id,omitempty"`
-	SessionID        string            `json:"session_id"`
-	Owner            Owner             `json:"owner"`
-	ActionHash       string            `json:"action_hash"`
-	Effect           Effect            `json:"effect"`
-	State            InvocationState   `json:"state"`
-	Revision         uint64            `json:"revision"`
-	CreatedAt        int64             `json:"created_at"`
-	UpdatedAt        int64             `json:"updated_at"`
-	ExpiresAt        int64             `json:"expires_at"`
-	AcceptedAt       int64             `json:"accepted_at,omitempty"`
-	CompletedAt      int64             `json:"completed_at,omitempty"`
-	TerminalResult   json.RawMessage   `json:"terminal_result,omitempty"`
-	SafeFailure      string            `json:"safe_failure,omitempty"`
-	Download         *DownloadArtifact `json:"-"`
+	ID               string                `json:"id"`
+	PreparedActionID string                `json:"prepared_action_id,omitempty"`
+	SessionID        string                `json:"session_id"`
+	Owner            Owner                 `json:"owner"`
+	ActionHash       string                `json:"action_hash"`
+	Effect           Effect                `json:"effect"`
+	State            InvocationState       `json:"state"`
+	Revision         uint64                `json:"revision"`
+	CreatedAt        int64                 `json:"created_at"`
+	UpdatedAt        int64                 `json:"updated_at"`
+	ExpiresAt        int64                 `json:"expires_at"`
+	AcceptedAt       int64                 `json:"accepted_at,omitempty"`
+	CompletedAt      int64                 `json:"completed_at,omitempty"`
+	TerminalResult   json.RawMessage       `json:"terminal_result,omitempty"`
+	SafeFailure      string                `json:"safe_failure,omitempty"`
+	Download         *DownloadArtifact     `json:"-"`
+	Diagnostic       *InvocationDiagnostic `json:"-"`
 }
 
 func (invocation Invocation) Validate() error {

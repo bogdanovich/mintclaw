@@ -889,20 +889,37 @@ func (hm *HookManager) logUnsupportedAction(name, stage string, action HookActio
 }
 
 func cloneProviderMessages(messages []providers.Message) []providers.Message {
-	if len(messages) == 0 {
+	if messages == nil {
 		return nil
 	}
 
 	cloned := make([]providers.Message, len(messages))
 	for i, msg := range messages {
 		cloned[i] = msg
-		if len(msg.Media) > 0 {
-			cloned[i].Media = append([]string(nil), msg.Media...)
+		if msg.CreatedAt != nil {
+			createdAt := *msg.CreatedAt
+			cloned[i].CreatedAt = &createdAt
 		}
-		if len(msg.SystemParts) > 0 {
-			cloned[i].SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+		if msg.Media != nil {
+			cloned[i].Media = make([]string, len(msg.Media))
+			copy(cloned[i].Media, msg.Media)
 		}
-		if len(msg.ToolCalls) > 0 {
+		if msg.Attachments != nil {
+			cloned[i].Attachments = make([]providers.Attachment, len(msg.Attachments))
+			copy(cloned[i].Attachments, msg.Attachments)
+		}
+		if msg.SystemParts != nil {
+			cloned[i].SystemParts = make([]providers.ContentBlock, len(msg.SystemParts))
+			copy(cloned[i].SystemParts, msg.SystemParts)
+			for partIndex := range msg.SystemParts {
+				if msg.SystemParts[partIndex].CacheControl == nil {
+					continue
+				}
+				cacheControl := *msg.SystemParts[partIndex].CacheControl
+				cloned[i].SystemParts[partIndex].CacheControl = &cacheControl
+			}
+		}
+		if msg.ToolCalls != nil {
 			cloned[i].ToolCalls = cloneProviderToolCalls(msg.ToolCalls)
 		}
 	}
@@ -910,7 +927,7 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 }
 
 func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
-	if len(calls) == 0 {
+	if calls == nil {
 		return nil
 	}
 
@@ -937,7 +954,7 @@ func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
 }
 
 func cloneToolDefinitions(defs []providers.ToolDefinition) []providers.ToolDefinition {
-	if len(defs) == 0 {
+	if defs == nil {
 		return nil
 	}
 
@@ -955,8 +972,8 @@ func cloneLLMResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 	}
 	cloned := *resp
 	cloned.ToolCalls = cloneProviderToolCalls(resp.ToolCalls)
-	if len(resp.ReasoningDetails) > 0 {
-		cloned.ReasoningDetails = append(cloned.ReasoningDetails[:0:0], resp.ReasoningDetails...)
+	if resp.ReasoningDetails != nil {
+		cloned.ReasoningDetails = append(resp.ReasoningDetails[:0:0], resp.ReasoningDetails...)
 	}
 	if resp.Usage != nil {
 		usage := *resp.Usage
@@ -972,7 +989,7 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 
 	cloned := make(map[string]any, len(src))
 	for k, v := range src {
-		cloned[k] = v
+		cloned[k] = cloneHookAnyValue(v)
 	}
 	return cloned
 }
@@ -1073,7 +1090,7 @@ func cloneHookStringMap(src map[string]string) map[string]string {
 }
 
 func cloneHookAnyMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
+	if src == nil {
 		return nil
 	}
 	cloned := make(map[string]any, len(src))
@@ -1084,17 +1101,48 @@ func cloneHookAnyMap(src map[string]any) map[string]any {
 }
 
 func cloneHookAnyValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneHookAnyMap(typed)
-	case []any:
-		out := make([]any, len(typed))
-		for i, item := range typed {
-			out[i] = cloneHookAnyValue(item)
+	cloned := cloneHookContainerValue(reflect.ValueOf(value))
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+
+func cloneHookContainerValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
 		}
-		return out
+		cloned := cloneHookContainerValue(value.Elem())
+		wrapped := reflect.New(value.Type()).Elem()
+		wrapped.Set(cloned)
+		return wrapped
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			cloned.SetMapIndex(iterator.Key(), cloneHookContainerValue(iterator.Value()))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneHookContainerValue(value.Index(i)))
+		}
+		return cloned
 	default:
-		return typed
+		return value
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -95,6 +96,27 @@ func TestContextCatalogValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want ErrInvalid", err)
 			}
 		})
+	}
+}
+
+func TestContextMutationAuthorityNormalizesPolicyClearedSelectedFrame(t *testing.T) {
+	expected := testContextCatalog()
+	expected.Tabs[0].Frames[0].Availability = FrameUnavailable
+	expected.Tabs[0].Frames[0].SafeFailure = "frame_policy_denied"
+	live := cloneContextCatalog(expected)
+	live.Tabs[0].Frames[0].Availability = FrameReady
+	live.Tabs[0].Frames[0].SafeFailure = ""
+	live.SelectedFrameID = "frame_child"
+	authority := newContextMutationAuthority(expected, "tab_popup", "")
+	if err := authority.validateLive(live); err != nil {
+		t.Fatalf("policy-cleared selected frame error = %v", err)
+	}
+
+	genuine := cloneContextCatalog(expected)
+	genuine.Tabs[0].Frames[0].Availability = FrameReady
+	genuine.Tabs[0].Frames[0].SafeFailure = ""
+	if err := newContextMutationAuthority(genuine, "tab_popup", "").validateLive(live); !errors.Is(err, ErrStale) {
+		t.Fatalf("genuine selected frame change error = %v, want stale", err)
 	}
 }
 
@@ -384,6 +406,68 @@ func TestMemoryStoreContextAuthorityTransitionsAndCopies(t *testing.T) {
 	retainedSnapshot.LastActivityAt++
 	if err = store.UpdateSession(ctx, observed.Revision, retainedSnapshot); !errors.Is(err, ErrConflict) {
 		t.Fatalf("context change retaining snapshot error = %v, want ErrConflict", err)
+	}
+}
+
+func TestStoresInitializeContextAuthorityByInvalidatingExistingSnapshot(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) (Store, func())
+	}{
+		{name: "memory", open: func(*testing.T) (Store, func()) {
+			return NewMemoryStore(), func() {}
+		}},
+		{name: "file", open: func(t *testing.T) (Store, func()) {
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			store, err := NewFileStore(filepath.Join(directory, "browser.json"), 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store, func() { store.Close() }
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, closeStore := test.open(t)
+			defer closeStore()
+			session := testOpeningSession(testOwner())
+			if err := store.CreateSession(t.Context(), session); err != nil {
+				t.Fatal(err)
+			}
+			session.State = SessionReady
+			session.Revision++
+			session.UpdatedAt++
+			session.LastActivityAt++
+			if err := store.UpdateSession(t.Context(), 1, session); err != nil {
+				t.Fatal(err)
+			}
+			session.SnapshotID = "snapshot_before_contexts"
+			session.SnapshotGeneration = 1
+			session.SnapshotOrigin = "https://example.com"
+			session.Revision++
+			session.UpdatedAt++
+			session.LastActivityAt++
+			if err := store.UpdateSession(t.Context(), 2, session); err != nil {
+				t.Fatal(err)
+			}
+			catalog := testContextCatalog()
+			session.ContextAuthority = &catalog
+			session.SnapshotID = ""
+			session.SnapshotOrigin = ""
+			session.Revision++
+			session.UpdatedAt++
+			session.LastActivityAt++
+			if err := store.UpdateSession(t.Context(), 3, session); err != nil {
+				t.Fatalf("initialize context authority after observation: %v", err)
+			}
+			stored, err := store.GetSession(t.Context(), session.ID)
+			if err != nil || stored.ContextAuthority == nil || stored.SnapshotID != "" {
+				t.Fatalf("stored context transition = %#v, %v", stored, err)
+			}
+		})
 	}
 }
 

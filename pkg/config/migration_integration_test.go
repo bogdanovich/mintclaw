@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -635,6 +636,24 @@ web:
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	persistedPublic, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Read migrated public config: %v", err)
+	}
+	if strings.Contains(string(persistedPublic), "existing-telegram-token-from-env") {
+		t.Fatal("migrated public config contains the Telegram token")
+	}
+	persisted, err := LoadConfigReadOnly(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigReadOnly migrated config: %v", err)
+	}
+	persistedTelegram, err := persisted.Channels.Get("telegram").GetDecoded()
+	if err != nil {
+		t.Fatalf("Decode persisted Telegram config: %v", err)
+	}
+	if persistedTelegram.(*TelegramSettings).Token.String() != "existing-telegram-token-from-env" {
+		t.Fatal("migrated security config did not retain the Telegram token")
 	}
 
 	t.Logf("Migrated config: %#v", cfg.Channels["telegram"])

@@ -2590,10 +2590,10 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_WarnsForPlaintextAPIKey verifies that LoadConfig resolves a plaintext
+// TestLoadConfigReadOnly_WarnsForPlaintextAPIKey verifies that read-only loading resolves a plaintext
 // api_keys entry into memory but does NOT rewrite the config file. File writes are the sole
 // responsibility of SaveConfig.
-func TestLoadConfig_WarnsForPlaintextAPIKey(t *testing.T) {
+func TestLoadConfigReadOnly_WarnsForPlaintextAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	const original = `{"version":2,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
@@ -2604,9 +2604,9 @@ func TestLoadConfig_WarnsForPlaintextAPIKey(t *testing.T) {
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "test-passphrase")
 	t.Setenv("MINTCLAW_SSH_KEY_PATH", "")
 
-	cfg, err := LoadConfig(cfgPath)
+	cfg, err := LoadConfigReadOnly(cfgPath)
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatalf("LoadConfigReadOnly: %v", err)
 	}
 	// In-memory value must be the resolved plaintext.
 	if cfg.ModelList[0].APIKey() != "sk-plaintext" {
@@ -2615,7 +2615,7 @@ func TestLoadConfig_WarnsForPlaintextAPIKey(t *testing.T) {
 	// The file on disk must remain unchanged — no need upgrade version
 	raw, _ := os.ReadFile(cfgPath)
 	if string(raw) != original {
-		t.Errorf("LoadConfig must not modify the config file; got:\n%s", string(raw))
+		t.Errorf("LoadConfigReadOnly must not modify the config file; got:\n%s", string(raw))
 	}
 }
 

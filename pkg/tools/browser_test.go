@@ -31,6 +31,9 @@ type fakeBrowserToolSource struct {
 	resume                browser.Session
 	prepare               browser.Preparation
 	execute               browser.Invocation
+	contextCatalog        browser.ContextCatalog
+	contextPreparation    browser.ContextPreparation
+	contextResult         browser.ContextResult
 	err                   error
 	executeErr            error
 
@@ -47,10 +50,46 @@ type fakeBrowserToolSource struct {
 	executeApproval   *browser.ApprovalBinding
 	prepareCalls      int
 	executeCalls      int
+	contextRequest    browser.ContextRequest
+	contextApproval   *browser.ApprovalBinding
 	profileStatus     browser.ProfileAvailability
 	readiness         browser.PassiveReadiness
 	readinessCalls    int
 	actions           []browser.ActionKind
+}
+
+func (source *fakeBrowserToolSource) ObserveContext(
+	_ context.Context,
+	_ browser.ObserveRequest,
+) (browser.Observation, error) {
+	return source.observe, source.err
+}
+
+func (source *fakeBrowserToolSource) ListContexts(
+	_ context.Context,
+	_ browser.Owner,
+	_ string,
+) (browser.ContextCatalog, error) {
+	return source.contextCatalog, source.err
+}
+
+func (source *fakeBrowserToolSource) PrepareContext(
+	_ context.Context,
+	request browser.ContextRequest,
+) (browser.ContextPreparation, error) {
+	source.contextRequest = request
+	result := source.contextPreparation
+	result.Request = request
+	return result, source.err
+}
+
+func (source *fakeBrowserToolSource) ExecuteContext(
+	_ context.Context,
+	_ browser.ContextPreparation,
+	approval *browser.ApprovalBinding,
+) (browser.ContextResult, error) {
+	source.contextApproval = approval
+	return source.contextResult, source.executeErr
 }
 
 func (source *fakeBrowserToolSource) Available() bool { return source.available }
@@ -308,6 +347,73 @@ func decodeBrowserToolResult(t *testing.T, result *toolshared.ToolResult, target
 	}
 	if err := json.Unmarshal([]byte(result.ContentForLLM()), target); err != nil {
 		t.Fatalf("decode result: %v; content = %q", err, result.ContentForLLM())
+	}
+}
+
+func browserToolContextCatalog() browser.ContextCatalog {
+	return browser.ContextCatalog{
+		ID: "catalog_gateway", Generation: 2, SelectedTabID: "tab_primary",
+		Tabs: []browser.TabContext{{
+			ID: "tab_primary", Kind: browser.TabPrimary, CreationSequence: 1,
+			DocumentGeneration: 1, URL: "https://example.com", Origin: "https://example.com",
+		}},
+	}
+}
+
+func TestBrowserContextsListsBoundedCatalog(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, contextCatalog: browserToolContextCatalog()}
+	tool := NewBrowserContextsTool(browserToolTestConfig(), source)
+	if !tool.ToolEnabledForAgent("browser") {
+		t.Fatal("browser_contexts is not enabled for the admitted agent")
+	}
+	var result browserContextResultView
+	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), map[string]any{
+		"operation": "list", "browser_session_id": "browser_session_1",
+	}), &result)
+	if result.ContextCatalog.ID != source.contextCatalog.ID || result.ContextCatalog.Generation != 2 {
+		t.Fatalf("browser_contexts list = %#v", result)
+	}
+}
+
+func TestBrowserContextsCloseSuspendsAndUsesExactPreparedApproval(t *testing.T) {
+	catalog := browserToolContextCatalog()
+	invocation := browser.Invocation{
+		ID: "context_invocation_1", ActionHash: strings.Repeat("a", 64),
+		Effect: browser.EffectUnknown, State: browser.InvocationPrepared, ExpiresAt: 12345,
+	}
+	preparation := browser.ContextPreparation{
+		Invocation: invocation,
+		Approval: browser.ApprovalBinding{
+			PreparedActionID: invocation.ID, ActionHash: invocation.ActionHash, ExpiresAt: invocation.ExpiresAt,
+		},
+		RequiresApproval: true,
+	}
+	succeeded := invocation
+	succeeded.State = browser.InvocationSucceeded
+	source := &fakeBrowserToolSource{
+		available: true, contextPreparation: preparation,
+		contextResult: browser.ContextResult{Catalog: catalog, Invocation: &succeeded},
+	}
+	tool := NewBrowserContextsTool(browserToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "close", "browser_session_id": "browser_session_1",
+		"context_catalog_id": catalog.ID, "context_generation": 2,
+		"tab_id": "tab_secondary",
+	}
+	approval, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil || approval["context_invocation_id"] != invocation.ID ||
+		approval["action_hash"] != invocation.ActionHash {
+		t.Fatalf("ApprovalArguments() = %#v, %v", approval, err)
+	}
+	if suspended := tool.Execute(browserToolTestContext(), args); suspended.Suspension == nil {
+		t.Fatalf("close did not suspend: %#v", suspended)
+	}
+	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
+	var result browserContextResultView
+	decodeBrowserToolResult(t, tool.Execute(resumeCtx, args), &result)
+	if source.contextApproval == nil || source.contextApproval.PreparedActionID != invocation.ID ||
+		result.InvocationID != invocation.ID || result.State != browser.InvocationSucceeded {
+		t.Fatalf("approved close = %#v; binding = %#v", result, source.contextApproval)
 	}
 }
 
@@ -885,6 +991,36 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
+	preparation := browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_unknown", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+		Action: browser.Action{Kind: browser.ActionClick, Ref: "element_1"},
+		Effect: browser.EffectLocalEdit,
+	}}
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare:   preparation,
+		execute: browser.Invocation{
+			ID: "invocation_unknown", SessionID: "browser_session_1", Effect: browser.EffectLocalEdit,
+			State: browser.InvocationUnknown, SafeFailure: "outcome_unknown",
+			Diagnostic: &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
+		},
+	}
+	args := map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+		"action": map[string]any{"kind": "click", "ref": "element_1"},
+	}
+	var result browserActionResult
+	decodeBrowserToolResult(t, NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(), args,
+	), &result)
+	if result.State != browser.InvocationUnknown || result.Reason != "outcome_unknown" ||
+		result.FailureClass != browser.OutcomeFailureDriverRejected {
+		t.Fatalf("action result = %#v", result)
+	}
+}
+
 func TestBrowserActDeliversRetainedDownloadWithRecovery(t *testing.T) {
 	recovery := &browser.ScreenshotRecovery{
 		WorkspaceID: "workspace", AgentID: "agent", ActorID: "actor", RouteID: "route",
@@ -950,7 +1086,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 		}},
 		execute: browser.Invocation{
 			ID: "invocation_1", SessionID: "browser_session_1",
-			Effect: browser.EffectRead, State: browser.InvocationSucceeded,
+			Effect: browser.EffectRead, State: browser.InvocationUnknown,
+			SafeFailure: "outcome_unknown",
+			Diagnostic:  &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
 		},
 		executeErr: browser.ErrSnapshotInvalidation,
 	}
@@ -964,7 +1102,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 	)
 	if result == nil || !result.IsError ||
 		!strings.Contains(result.ContentForLLM(), `"code":"post_action_state_unavailable"`) ||
-		!strings.Contains(result.ContentForLLM(), `"state":"succeeded"`) ||
+		!strings.Contains(result.ContentForLLM(), `"state":"unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"outcome_reason":"outcome_unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"failure_class":"driver_rejected"`) ||
 		!strings.Contains(result.ContentForLLM(), `"action":"do_not_retry_reopen_session"`) {
 		t.Fatalf("post-action state result = %#v", result)
 	}

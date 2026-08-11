@@ -381,7 +381,9 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 		t.Fatalf("setupBrowserTools() error = %v", err)
 	}
 	toolNames := al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
-	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+	for _, name := range []string{
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_act",
+	} {
 		if !slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools = %#v, want %s", toolNames, name)
 		}
@@ -398,7 +400,9 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
 	}
 	toolNames = al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
-	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+	for _, name := range []string{
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_act",
+	} {
 		if slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools = %#v, %s should be disabled", toolNames, name)
 		}
@@ -441,7 +445,9 @@ func TestConfigReloadRetainsOldRegistryWhenBrowserLeaseCannotDrain(t *testing.T)
 		t.Fatalf("active config after failed reload = %#v", activeCfg)
 	}
 	toolNames := al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
-	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+	for _, name := range []string{
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_act",
+	} {
 		if !slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools after failed reload = %#v, want %s", toolNames, name)
 		}
