@@ -304,14 +304,6 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding catalog changed after dynamic injection: %v", got)
 	}
-	identity := agent.ContextBuilder.getIdentity(true)
-	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
-	if !strings.Contains(identity, externalMemoryFile) {
-		t.Fatalf("runtime identity does not advertise external memory file %q:\n%s", externalMemoryFile, identity)
-	}
-	if strings.Contains(identity, filepath.Join(executionRoot, "memory")) {
-		t.Fatalf("runtime identity advertises execution-root memory:\n%s", identity)
-	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		var created []string
 		_ = filepath.Walk(executionRoot, func(path string, _ os.FileInfo, _ error) error {
@@ -322,6 +314,136 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 	if _, statErr := os.Stat(layout.StatePaths().SessionsRoot); statErr != nil {
 		t.Fatalf("state sessions root was not created: %v", statErr)
+	}
+}
+
+func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
+		t.Fatalf("create execution root: %v", err)
+	}
+	personalFiles := map[string]string{
+		"AGENT.md":    "---\nname: Project Persona\nmodel: project-model\nskills: [personal]\n---\nPERSONAL AGENT BODY",
+		"SOUL.md":     "PERSONAL SOUL",
+		"USER.md":     "PERSONAL USER",
+		"IDENTITY.md": "PERSONAL IDENTITY",
+	}
+	for name, content := range personalFiles {
+		if err := os.WriteFile(filepath.Join(executionRoot, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-isolated"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	if profile.PromptProfile() != RuntimePromptProfileCoding {
+		t.Fatalf("PromptProfile() = %q, want coding", profile.PromptProfile())
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = "configured-model"
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	agent := loop.GetRegistry().GetDefaultAgent()
+	if agent.Name != "MintClaw coding agent" || agent.Model != "configured-model" || agent.Definition.Agent != nil {
+		t.Fatalf(
+			"coding identity = name:%q model:%q definition:%#v",
+			agent.Name,
+			agent.Model,
+			agent.Definition.Agent,
+		)
+	}
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{
+		CurrentMessage:    "fix the bug",
+		Channel:           "telegram",
+		ChatID:            "personal-chat",
+		SenderID:          "personal-sender",
+		SenderDisplayName: "Personal Sender",
+	})
+	if len(messages) != 2 || messages[0].Role != "system" || messages[1].Role != "user" {
+		t.Fatalf("coding prompt messages = %#v", messages)
+	}
+	wantSystem := strings.Join([]string{
+		codingAgentBaseInstructions,
+		"# Project\n\nProject root: " + layout.ExecutionRoot(),
+		"# Coding thread\n\nThread ID: thread-isolated\n" +
+			"Session key: coding:thread-isolated\n" +
+			"Working directory: " + layout.ExecutionRoot() + "\n" +
+			"Trust mode: yolo\nModel: configured-model",
+	}, "\n\n---\n\n")
+	if messages[0].Content != wantSystem {
+		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
+	}
+	for _, forbidden := range []string{
+		"PERSONAL AGENT BODY",
+		"PERSONAL SOUL",
+		"PERSONAL USER",
+		"PERSONAL IDENTITY",
+		"personal-chat",
+		"personal-sender",
+		"Personal Sender",
+		"helpful AI assistant",
+		"# Memory",
+	} {
+		if strings.Contains(messages[0].Content, forbidden) {
+			t.Fatalf("coding system prompt contains personal context %q:\n%s", forbidden, messages[0].Content)
+		}
+	}
+	if len(messages[0].SystemParts) != 2 || messages[0].SystemParts[0].CacheControl == nil ||
+		messages[0].SystemParts[0].CacheControl.Type != "ephemeral" ||
+		messages[0].SystemParts[1].CacheControl != nil {
+		t.Fatalf("coding cache blocks = %#v, want stable prefix then dynamic context", messages[0].SystemParts)
+	}
+	secondPrompt := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{
+		CurrentMessage: "continue",
+		CodingContext: CodingPromptContext{
+			WorkingDirectory: filepath.Join(layout.ExecutionRoot(), "nested"),
+			Provider:         "test-provider",
+		},
+	})
+	if secondPrompt[0].SystemParts[0].Text != messages[0].SystemParts[0].Text {
+		t.Fatal("coding stable prefix changed with turn metadata")
+	}
+	if secondPrompt[0].SystemParts[1].Text == messages[0].SystemParts[1].Text ||
+		!strings.Contains(secondPrompt[0].SystemParts[1].Text, "Provider: test-provider") {
+		t.Fatalf("coding dynamic block did not reflect turn metadata: %#v", secondPrompt[0].SystemParts[1])
+	}
+
+	const sessionKey = "coding:thread-isolated"
+	if _, err := loop.ProcessDirect(t.Context(), "wrong thread", "coding:another-thread"); err == nil ||
+		!strings.Contains(err.Error(), "does not match admitted thread") {
+		t.Fatalf("ProcessDirect(wrong thread) error = %v, want owner rejection", err)
+	}
+	if _, err := loop.ProcessDirect(t.Context(), "persist only here", sessionKey); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if history := agent.Sessions.GetHistory(sessionKey); len(history) != 2 {
+		t.Fatalf("coding history length = %d, want user and assistant", len(history))
+	}
+	if history := agent.Sessions.GetHistory(session.BuildMainSessionKey(agent.ID)); len(history) != 0 {
+		t.Fatalf("personal main history = %#v, want empty", history)
+	}
+	if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{sessionKey}) {
+		t.Fatalf("coding sessions = %v, want only %q", sessions, sessionKey)
 	}
 }
 

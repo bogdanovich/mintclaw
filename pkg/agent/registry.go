@@ -118,6 +118,7 @@ func newAgentRegistryWithRuntimeProfile(
 			layout,
 			profile.storeFactory,
 			profile.toolProfile,
+			profile.promptProfile,
 		)
 		if err != nil {
 			registry.Close()

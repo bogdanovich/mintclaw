@@ -17,9 +17,10 @@ import (
 
 // RuntimeProfile is the immutable set of layouts admitted before registry construction.
 type RuntimeProfile struct {
-	agentLayouts map[string]RuntimeLayout
-	storeFactory RuntimeStoreFactory
-	toolProfile  RuntimeToolProfile
+	agentLayouts  map[string]RuntimeLayout
+	storeFactory  RuntimeStoreFactory
+	toolProfile   RuntimeToolProfile
+	promptProfile RuntimePromptProfile
 }
 
 // RuntimeToolProfile selects the complete pre-construction tool and trust
@@ -29,6 +30,16 @@ type RuntimeToolProfile string
 const (
 	RuntimeToolProfilePersonal RuntimeToolProfile = "personal"
 	RuntimeToolProfileCoding   RuntimeToolProfile = "coding"
+)
+
+// RuntimePromptProfile selects the prompt identity and context admitted for a
+// homogeneous runtime owner domain. It is deliberately separate from the tool
+// profile so prompt and capability policy cannot become implicitly coupled.
+type RuntimePromptProfile string
+
+const (
+	RuntimePromptProfilePersonal RuntimePromptProfile = "personal"
+	RuntimePromptProfileCoding   RuntimePromptProfile = "coding"
 )
 
 // RuntimeStoreFactory opens the canonical and derived stores owned by a
@@ -105,8 +116,10 @@ func NewRuntimeProfileWithStoreFactory(
 			switch owner.Kind {
 			case RuntimeOwnerPersonalAgent:
 				profile.toolProfile = RuntimeToolProfilePersonal
+				profile.promptProfile = RuntimePromptProfilePersonal
 			case RuntimeOwnerCodingThread:
 				profile.toolProfile = RuntimeToolProfileCoding
+				profile.promptProfile = RuntimePromptProfileCoding
 			}
 		} else if owner.Kind != profileOwnerKind {
 			return RuntimeProfile{}, fmt.Errorf(
@@ -206,6 +219,11 @@ func NewRuntimeProfileWithStoreFactory(
 // ToolProfile returns the immutable tool/trust profile selected by the owner domain.
 func (p RuntimeProfile) ToolProfile() RuntimeToolProfile {
 	return p.toolProfile
+}
+
+// PromptProfile returns the immutable prompt identity selected by the owner domain.
+func (p RuntimeProfile) PromptProfile() RuntimePromptProfile {
+	return p.promptProfile
 }
 
 func runtimeDependencyIsNil(dependency any) bool {

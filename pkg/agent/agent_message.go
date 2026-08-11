@@ -43,7 +43,83 @@ func (al *AgentLoop) ProcessDirectWithOptions(
 	content, sessionKey, channel, chatID string,
 	opts DirectTurnOptions,
 ) (string, error) {
+	if al.hasCodingToolProfile() {
+		return al.processCodingDirect(ctx, content, sessionKey, opts)
+	}
 	return al.processDirectWithChannel(ctx, content, sessionKey, channel, chatID, false, opts)
+}
+
+// processCodingDirect bypasses personal routing and session allocation. The
+// coding frontend already owns a single admitted thread and must address its
+// canonical session exactly; hashing it through a chat route would silently
+// create a different personal-style session.
+func (al *AgentLoop) processCodingDirect(
+	ctx context.Context,
+	content, sessionKey string,
+	directOpts DirectTurnOptions,
+) (string, error) {
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		return "", fmt.Errorf("coding runtime has no default agent")
+	}
+	layout, ok := al.runtimeLayoutForWorkspace(agent.Workspace)
+	if !ok || layout.Owner().Kind != RuntimeOwnerCodingThread {
+		return "", fmt.Errorf("coding runtime has no coding-thread owner")
+	}
+	wantSessionKey := "coding:" + layout.Owner().ID
+	if strings.TrimSpace(sessionKey) != wantSessionKey {
+		return "", fmt.Errorf(
+			"coding runtime session %q does not match admitted thread %q",
+			sessionKey,
+			wantSessionKey,
+		)
+	}
+
+	inboundContext := &bus.InboundContext{
+		Channel:  "coding",
+		ChatID:   layout.Owner().ID,
+		ChatType: "direct",
+	}
+	route := &routing.ResolvedRoute{
+		AgentID:   agent.ID,
+		Channel:   "coding",
+		MatchedBy: "coding_runtime",
+	}
+	modelBinding := al.bindEffectiveModel(wantSessionKey, agent)
+	turn := inboundMessageTurn{
+		Message: bus.InboundMessage{
+			Context:    *inboundContext,
+			Content:    content,
+			SessionKey: wantSessionKey,
+		},
+		Agent: agent,
+		Options: processOptions{
+			Dispatch: DispatchRequest{
+				RouteSessionKey: wantSessionKey,
+				BaseSessionKey:  wantSessionKey,
+				SessionKey:      wantSessionKey,
+				InboundContext:  inboundContext,
+				RouteResult:     route,
+				UserMessage:     content,
+			},
+			ModelBinding:        modelBinding,
+			DefaultResponse:     defaultResponse,
+			EnableSummary:       !directOpts.Stateless,
+			SendResponse:        false,
+			ExpectFinalDelivery: true,
+			NoHistory:           directOpts.Stateless,
+		},
+		ScopeKey:     wantSessionKey,
+		SessionKey:   wantSessionKey,
+		ModelBinding: modelBinding,
+	}
+	return al.processInboundMessageTurn(ctx, turn)
 }
 
 func (al *AgentLoop) ProcessScheduledWithChannel(
