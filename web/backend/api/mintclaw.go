@@ -198,7 +198,7 @@ func (h *Handler) handleMintClawMediaProxy() http.HandlerFunc {
 //
 //	GET /api/mintclaw/info
 func (h *Handler) handleGetMintClawInfo(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -212,23 +212,19 @@ func (h *Handler) handleGetMintClawInfo(w http.ResponseWriter, r *http.Request) 
 //
 //	POST /api/mintclaw/token
 func (h *Handler) handleRegenMintClawToken(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	token := generateSecureToken()
-	if bc := cfg.Channels.GetByType(config.ChannelMintClaw); bc != nil {
-		decoded, err := bc.GetDecoded()
-		if err == nil && decoded != nil {
-			if settings, ok := decoded.(*config.MintClawSettings); ok {
-				settings.Token = *config.NewSecureString(token)
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if bc := cfg.Channels.GetByType(config.ChannelMintClaw); bc != nil {
+			decoded, decodeErr := bc.GetDecoded()
+			if decodeErr == nil && decoded != nil {
+				if settings, ok := decoded.(*config.MintClawSettings); ok {
+					settings.Token = *config.NewSecureString(token)
+				}
 			}
 		}
-	}
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
+		return nil
+	})
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -237,43 +233,36 @@ func (h *Handler) handleRegenMintClawToken(w http.ResponseWriter, r *http.Reques
 	gateway.mintclawToken = token
 	gateway.mu.Unlock()
 
-	h.writeMintClawInfoResponse(w, r, cfg, nil)
+	h.writeMintClawInfoResponse(w, r, snapshot.Config, nil)
 }
 
 // EnsureMintClawChannel enables the MintClaw channel with sane defaults if it isn't
 // already configured. Returns true when the config was modified.
 func (h *Handler) EnsureMintClawChannel() (bool, error) {
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to load config: %w", err)
-	}
-
 	changed := false
-
-	bc := cfg.Channels.GetByType(config.ChannelMintClaw)
-	if bc == nil {
-		bc = &config.Channel{Type: config.ChannelMintClaw}
-		cfg.Channels["mintclaw"] = bc
-	}
-
-	if !bc.Enabled {
-		bc.Enabled = true
-		changed = true
-	}
-
-	if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
-		if mintclawCfg, ok := decoded.(*config.MintClawSettings); ok {
-			if mintclawCfg.Token.String() == "" {
-				mintclawCfg.Token = *config.NewSecureString(generateSecureToken())
-				changed = true
+	_, err := h.updateConfig(func(cfg *config.Config) error {
+		bc := cfg.Channels.GetByType(config.ChannelMintClaw)
+		if bc == nil {
+			bc = &config.Channel{Type: config.ChannelMintClaw}
+			cfg.Channels["mintclaw"] = bc
+			changed = true
+		}
+		if !bc.Enabled {
+			bc.Enabled = true
+			changed = true
+		}
+		if decoded, decodeErr := bc.GetDecoded(); decodeErr == nil && decoded != nil {
+			if mintclawCfg, ok := decoded.(*config.MintClawSettings); ok {
+				if mintclawCfg.Token.String() == "" {
+					mintclawCfg.Token = *config.NewSecureString(generateSecureToken())
+					changed = true
+				}
 			}
 		}
-	}
-
-	if changed {
-		if err := config.SaveConfig(h.configPath, cfg); err != nil {
-			return false, fmt.Errorf("failed to save config: %w", err)
-		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to save config: %w", err)
 	}
 
 	return changed, nil
@@ -290,7 +279,7 @@ func (h *Handler) handleMintClawSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reload config (EnsureMintClawChannel may have modified it).
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return

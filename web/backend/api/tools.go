@@ -194,7 +194,7 @@ func (h *Handler) registerToolRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleListTools(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -207,29 +207,28 @@ func (h *Handler) handleListTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateToolState(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	var req toolStateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	if err := applyToolState(cfg, r.PathValue("name"), req.Enabled); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if applyErr := applyToolState(cfg, r.PathValue("name"), req.Enabled); applyErr != nil {
+			return &configMutationRequestError{status: http.StatusBadRequest, err: applyErr}
+		}
+		return nil
+	})
+	if writeConfigMutationError(w, err) {
 		return
 	}
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -396,7 +395,7 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 }
 
 func (h *Handler) handleGetWebSearchConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -409,12 +408,6 @@ func (h *Handler) handleGetWebSearchConfig(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) handleUpdateWebSearchConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	var req webSearchConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
@@ -427,6 +420,23 @@ func (h *Handler) handleUpdateWebSearchConfig(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		applyWebSearchConfig(cfg, provider, req)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
+	if err := json.NewEncoder(w).Encode(buildWebSearchConfigResponse(snapshot.Config)); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+func applyWebSearchConfig(cfg *config.Config, provider string, req webSearchConfigRequest) {
 	cfg.Tools.Web.Provider = provider
 	cfg.Tools.Web.PreferNative = req.PreferNative
 	cfg.Tools.Web.Proxy = strings.TrimSpace(req.Proxy)
@@ -497,16 +507,6 @@ func (h *Handler) handleUpdateWebSearchConfig(w http.ResponseWriter, r *http.Req
 		if key := strings.TrimSpace(settings.APIKey); key != "" {
 			cfg.Tools.Web.BaiduSearch.APIKey = *config.NewSecureString(key)
 		}
-	}
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(buildWebSearchConfigResponse(cfg)); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
 

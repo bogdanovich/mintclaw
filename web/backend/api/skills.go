@@ -116,7 +116,7 @@ func (h *Handler) registerSkillRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleListSkills(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -135,7 +135,7 @@ func (h *Handler) handleListSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -170,7 +170,7 @@ func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSearchSkills(w http.ResponseWriter, r *http.Request) {
-	cfg, loadErr := config.LoadConfig(h.configPath)
+	cfg, loadErr := h.readConfig()
 	if loadErr != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", loadErr), http.StatusInternalServerError)
 		return
@@ -283,7 +283,7 @@ func (h *Handler) handleSearchSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
-	cfg, loadErr := config.LoadConfig(h.configPath)
+	cfg, loadErr := h.readConfig()
 	if loadErr != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", loadErr), http.StatusInternalServerError)
 		return
@@ -440,7 +440,7 @@ func (h *Handler) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -482,7 +482,7 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return

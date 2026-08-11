@@ -49,10 +49,11 @@ var gateway = struct {
 // refreshMintClawTokensLocked reads the mintclaw token from config and caches it.
 // Caller must hold gateway.mu (or be sole writer).
 func refreshMintClawTokensLocked(configPath string) {
-	cfg, err := config.LoadConfig(configPath)
+	snapshot, err := config.NewRepository(configPath).ReadOnly()
 	if err != nil {
 		return
 	}
+	cfg := snapshot.Config
 	var mintclawCfg config.MintClawSettings
 	if bc := cfg.Channels.GetByType(config.ChannelMintClaw); bc != nil {
 		decoded, err := bc.GetDecoded()
@@ -369,7 +370,7 @@ func (h *Handler) TryAutoStartGateway() {
 
 // gatewayStartReady validates whether current config can start the gateway.
 func (h *Handler) gatewayStartReady() (bool, string, error) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		return false, "", fmt.Errorf("failed to load config: %w", err)
 	}
@@ -1000,7 +1001,7 @@ func stopGatewayProcessForRestart(cmd *exec.Cmd) error {
 }
 
 func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int, error) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		return 0, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -1063,7 +1064,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	// Already holding gateway.mu from caller.
 	if changed {
 		refreshMintClawTokensLocked(h.configPath)
-		cfg, err = config.LoadConfig(h.configPath)
+		cfg, err = h.readConfig()
 		if err != nil {
 			return 0, fmt.Errorf("failed to reload config after ensuring mintclaw channel: %w", err)
 		}
@@ -1141,7 +1142,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 			}
 
 			// Fallback: probe health endpoint to confirm liveness.
-			cfg, err := config.LoadConfig(h.configPath)
+			cfg, err := h.readConfig()
 			if err != nil {
 				continue
 			}
@@ -1413,7 +1414,7 @@ func (h *Handler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) gatewayStatusData() map[string]any {
 	data := map[string]any{}
 	var configDefaultModel string
-	cfg, cfgErr := config.LoadConfig(h.configPath)
+	cfg, cfgErr := h.readConfig()
 	if cfgErr == nil && cfg != nil {
 		configDefaultModel = strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 		if configDefaultModel != "" {

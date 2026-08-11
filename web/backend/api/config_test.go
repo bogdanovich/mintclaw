@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,6 +121,7 @@ func assertGatewayLogLevelApplied(t *testing.T, method, body string, want logger
 
 	req := httptest.NewRequest(method, "/api/config", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	setConfigIfMatch(t, req, configPath)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -134,6 +136,166 @@ func assertGatewayLogLevelApplied(t *testing.T, method, body string, want logger
 	}
 	if got := logger.GetLevel(); got != want {
 		t.Fatalf("logger.GetLevel() = %v, want %v", got, want)
+	}
+}
+
+func setConfigIfMatch(t *testing.T, req *http.Request, configPath string) {
+	t.Helper()
+	snapshot, err := config.NewRepository(configPath).ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+}
+
+func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	securityPath := filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile)
+	publicBefore, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	securityBefore, err := os.ReadFile(securityPath)
+	if err != nil {
+		t.Fatalf("ReadFile(security) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if etag := rec.Header().Get("ETag"); len(etag) != 66 || etag[0] != '"' || etag[len(etag)-1] != '"' {
+		t.Fatalf("ETag = %q, want quoted SHA-256 revision", etag)
+	}
+	publicAfter, _ := os.ReadFile(configPath)
+	securityAfter, _ := os.ReadFile(securityPath)
+	if !bytes.Equal(publicBefore, publicAfter) || !bytes.Equal(securityBefore, securityAfter) {
+		t.Fatal("GET /api/config modified durable config documents")
+	}
+}
+
+func TestHandleUpdateConfig_RequiresRevision(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusPreconditionRequired, rec.Body.String())
+	}
+}
+
+func TestHandleUpdateConfig_RejectsStaleRevisionWithoutLosingNewerWrite(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body=%s", getRec.Code, getRec.Body.String())
+	}
+	staleRevision := getRec.Header().Get("ETag")
+
+	newer, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Gateway.Port = 23456
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(getRec.Body.Bytes()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", staleRevision)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("PUT status = %d, want %d, body=%s", rec.Code, http.StatusPreconditionFailed, rec.Body.String())
+	}
+	if got := rec.Header().Get("ETag"); got != configRevisionETag(newer.Revision) {
+		t.Fatalf("conflict ETag = %q, want %q", got, configRevisionETag(newer.Revision))
+	}
+	current, err := config.NewRepository(configPath).ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	if current.Config.Gateway.Port != 23456 {
+		t.Fatalf("gateway.port = %d, want newer value 23456", current.Config.Gateway.Port)
+	}
+}
+
+type blockingRequestBody struct {
+	data    []byte
+	started chan struct{}
+	release chan struct{}
+	read    bool
+}
+
+func (b *blockingRequestBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, io.EOF
+	}
+	b.read = true
+	close(b.started)
+	<-b.release
+	return copy(p, b.data), nil
+}
+
+func (b *blockingRequestBody) Close() error { return nil }
+
+func TestHandlePatchConfig_PreservesConcurrentRepositoryUpdate(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	body := &blockingRequestBody{
+		data:    []byte(`{"agents":{"defaults":{"max_tokens":4321}}}`),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mux.ServeHTTP(rec, req)
+	}()
+	<-body.started
+	if _, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Gateway.Port = 23456
+		return nil
+	}); err != nil {
+		t.Fatalf("concurrent Update() error = %v", err)
+	}
+	close(body.release)
+	<-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	current, err := config.NewRepository(configPath).ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	if current.Config.Gateway.Port != 23456 {
+		t.Fatalf("gateway.port = %d, want concurrent value 23456", current.Config.Gateway.Port)
+	}
+	if current.Config.Agents.Defaults.MaxTokens != 4321 {
+		t.Fatalf("agents.defaults.max_tokens = %d, want patch value 4321", current.Config.Agents.Defaults.MaxTokens)
 	}
 }
 
@@ -161,6 +323,7 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	setConfigIfMatch(t, req, configPath)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -200,6 +363,7 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	setConfigIfMatch(t, req, configPath)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -842,6 +1006,7 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	setConfigIfMatch(t, req, configPath)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

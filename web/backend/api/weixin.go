@@ -206,31 +206,24 @@ func (h *Handler) handlePollWeixinFlow(w http.ResponseWriter, r *http.Request) {
 // saveWeixinBinding writes the token/account ID, enables the Weixin channel,
 // and best-effort restarts the gateway when it is currently running.
 func (h *Handler) saveWeixinBinding(token, accountID string) error {
-	cfg, err := config.LoadConfig(h.configPath)
+	_, err := h.updateConfig(func(cfg *config.Config) error {
+		bc := cfg.Channels.Get(config.ChannelWeixin)
+		if bc == nil {
+			bc = &config.Channel{Type: config.ChannelWeixin}
+			cfg.Channels[config.ChannelWeixin] = bc
+		}
+		bc.Enabled = true
+		var weixinCfg config.WeixinSettings
+		if decodeErr := bc.Decode(&weixinCfg); decodeErr != nil {
+			return fmt.Errorf("decode weixin settings: %w", decodeErr)
+		}
+		weixinCfg.Token = *config.NewSecureString(token)
+		if accountID != "" {
+			weixinCfg.AccountID = accountID
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	bc := cfg.Channels.Get(config.ChannelWeixin)
-	if bc == nil {
-		bc = &config.Channel{Type: config.ChannelWeixin}
-		cfg.Channels[config.ChannelWeixin] = bc
-	}
-	bc.Enabled = true
-
-	var weixinCfg config.WeixinSettings
-	if err := bc.Decode(&weixinCfg); err != nil {
-		logger.ErrorCF("weixin", "failed to decode weixin settings", map[string]any{
-			"error": err.Error(),
-		})
-		return fmt.Errorf("decode weixin settings: %w", err)
-	}
-	weixinCfg.Token = *config.NewSecureString(token)
-	if accountID != "" {
-		weixinCfg.AccountID = accountID
-	}
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
 		return err
 	}
 

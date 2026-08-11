@@ -240,7 +240,7 @@ func normalizeStoredModelProviders(cfg *config.Config) bool {
 //
 //	GET /api/models
 func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -336,24 +336,23 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		mc.SetAPIKey(mc.APIKey)
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
+	index := 0
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		cfg.ModelList = append(cfg.ModelList, &mc.ModelConfig)
+		normalizeStoredModelProviders(cfg)
+		index = len(cfg.ModelList) - 1
+		return nil
+	})
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	cfg.ModelList = append(cfg.ModelList, &mc.ModelConfig)
-	normalizeStoredModelProviders(cfg)
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
-		"index":  len(cfg.ModelList) - 1,
+		"index":  index,
 	})
 }
 
@@ -394,99 +393,103 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if idx < 0 || idx >= len(cfg.ModelList) {
+			return &configMutationRequestError{
+				status: http.StatusNotFound,
+				err:    fmt.Errorf("index %d out of range (0-%d)", idx, len(cfg.ModelList)-1),
+			}
+		}
 
-	if idx < 0 || idx >= len(cfg.ModelList) {
-		http.Error(w, fmt.Sprintf("Index %d out of range (0-%d)", idx, len(cfg.ModelList)-1), http.StatusNotFound)
-		return
-	}
-
-	// Preserve the existing API key when the caller omits it (empty string).
-	// This lets the UI update api_base / proxy without clearing the stored secret.
-	if mc.APIKey == "" {
-		mc.SetAPIKey(cfg.ModelList[idx].APIKey())
-	} else {
-		mc.SetAPIKey(mc.APIKey)
-	}
-	// Preserve existing ExtraBody when omitted (nil), but clear it when
-	// the frontend sends an empty object {} to indicate the field should
-	// be removed.
-	if mc.ExtraBody == nil {
-		mc.ExtraBody = cfg.ModelList[idx].ExtraBody
-	} else if len(mc.ExtraBody) == 0 {
-		mc.ExtraBody = nil
-	}
-	// Preserve existing CustomHeaders when omitted (nil), but clear it when
-	// the frontend sends an empty object {} to indicate the field should
-	// be removed.
-	if mc.CustomHeaders == nil {
-		mc.CustomHeaders = cfg.ModelList[idx].CustomHeaders
-	} else if len(mc.CustomHeaders) == 0 {
-		mc.CustomHeaders = nil
-	}
-	if _, ok := rawFields["tool_schema_transform"]; !ok {
-		mc.ToolSchemaTransform = cfg.ModelList[idx].ToolSchemaTransform
-	}
-	if _, ok := rawFields["streaming"]; !ok {
-		mc.Streaming = cfg.ModelList[idx].Streaming
-	}
-	// Preserve the existing Provider when the caller omits it. This keeps the
-	// update API backward-compatible for clients that haven't started sending
-	// the new field yet, while still allowing explicit clearing via "".
-	if _, ok := rawFields["provider"]; !ok {
-		mc.Provider = cfg.ModelList[idx].Provider
-		// Older clients still round-trip the legacy model field only. When the
-		// stored config encodes provider/model in Model and has no explicit
-		// Provider field yet, continue preserving that hidden provider prefix.
-		// This keeps provider-omitted updates backward-compatible even when an
-		// older client edits the visible model ID.
-		if strings.TrimSpace(cfg.ModelList[idx].Provider) == "" {
-			existingRawModel := strings.TrimSpace(cfg.ModelList[idx].Model)
-			incomingModel := strings.TrimSpace(mc.Model)
-			existingProtocol, existingModelID := providers.ExtractProtocol(cfg.ModelList[idx])
-			if existingRawModel != "" && existingRawModel != existingModelID && incomingModel != "" {
-				if incomingModel == existingModelID {
-					mc.Model = existingRawModel
-				} else if strings.Contains(incomingModel, "/") && !strings.Contains(existingModelID, "/") {
-					// Older clients never saw the hidden provider prefix for simple
-					// legacy entries such as "openai/gpt-4o". If they now send an
-					// explicit provider/model string, treat it as the caller's full
-					// intent instead of re-applying the old hidden prefix.
-					mc.Model = incomingModel
-				} else if !strings.HasPrefix(incomingModel, existingProtocol+"/") {
-					mc.Model = existingProtocol + "/" + incomingModel
+		// Preserve the existing API key when the caller omits it (empty string).
+		// This lets the UI update api_base / proxy without clearing the stored secret.
+		if mc.APIKey == "" {
+			mc.SetAPIKey(cfg.ModelList[idx].APIKey())
+		} else {
+			mc.SetAPIKey(mc.APIKey)
+		}
+		// Preserve existing ExtraBody when omitted (nil), but clear it when
+		// the frontend sends an empty object {} to indicate the field should
+		// be removed.
+		if mc.ExtraBody == nil {
+			mc.ExtraBody = cfg.ModelList[idx].ExtraBody
+		} else if len(mc.ExtraBody) == 0 {
+			mc.ExtraBody = nil
+		}
+		// Preserve existing CustomHeaders when omitted (nil), but clear it when
+		// the frontend sends an empty object {} to indicate the field should
+		// be removed.
+		if mc.CustomHeaders == nil {
+			mc.CustomHeaders = cfg.ModelList[idx].CustomHeaders
+		} else if len(mc.CustomHeaders) == 0 {
+			mc.CustomHeaders = nil
+		}
+		if _, ok := rawFields["tool_schema_transform"]; !ok {
+			mc.ToolSchemaTransform = cfg.ModelList[idx].ToolSchemaTransform
+		}
+		if _, ok := rawFields["streaming"]; !ok {
+			mc.Streaming = cfg.ModelList[idx].Streaming
+		}
+		// Preserve the existing Provider when the caller omits it. This keeps the
+		// update API backward-compatible for clients that haven't started sending
+		// the new field yet, while still allowing explicit clearing via "".
+		if _, ok := rawFields["provider"]; !ok {
+			mc.Provider = cfg.ModelList[idx].Provider
+			// Older clients still round-trip the legacy model field only. When the
+			// stored config encodes provider/model in Model and has no explicit
+			// Provider field yet, continue preserving that hidden provider prefix.
+			// This keeps provider-omitted updates backward-compatible even when an
+			// older client edits the visible model ID.
+			if strings.TrimSpace(cfg.ModelList[idx].Provider) == "" {
+				existingRawModel := strings.TrimSpace(cfg.ModelList[idx].Model)
+				incomingModel := strings.TrimSpace(mc.Model)
+				existingProtocol, existingModelID := providers.ExtractProtocol(cfg.ModelList[idx])
+				if existingRawModel != "" && existingRawModel != existingModelID && incomingModel != "" {
+					if incomingModel == existingModelID {
+						mc.Model = existingRawModel
+					} else if strings.Contains(incomingModel, "/") && !strings.Contains(existingModelID, "/") {
+						// Older clients never saw the hidden provider prefix for simple
+						// legacy entries such as "openai/gpt-4o". If they now send an
+						// explicit provider/model string, treat it as the caller's full
+						// intent instead of re-applying the old hidden prefix.
+						mc.Model = incomingModel
+					} else if !strings.HasPrefix(incomingModel, existingProtocol+"/") {
+						mc.Model = existingProtocol + "/" + incomingModel
+					}
 				}
 			}
 		}
-	}
 
-	normalizeIncomingModelConfig(&mc.ModelConfig)
-	if err = validateIncomingModelConfig(&mc.ModelConfig, cfg.ModelList[idx]); err != nil {
-		http.Error(w, fmt.Sprintf("Validation error: %v", err), http.StatusBadRequest)
+		normalizeIncomingModelConfig(&mc.ModelConfig)
+		if err = validateIncomingModelConfig(&mc.ModelConfig, cfg.ModelList[idx]); err != nil {
+			return &configMutationRequestError{
+				status: http.StatusBadRequest,
+				err:    fmt.Errorf("validation error: %w", err),
+			}
+		}
+		if cfg.Agents.Defaults.ModelName == cfg.ModelList[idx].ModelName &&
+			!defaultModelAllowedForModelConfig(&mc.ModelConfig) {
+			// Allow users to recover from legacy/invalid defaults by saving the model
+			// and clearing the default chat model reference in the same write.
+			cfg.Agents.Defaults.ModelName = ""
+		}
+
+		cfg.ModelList[idx] = &mc.ModelConfig
+		normalizeStoredModelProviders(cfg)
+
+		logger.Debugf("update model config: %#v", mc.ModelConfig)
+		return nil
+	})
+	if writeConfigMutationError(w, err) {
 		return
 	}
-	if cfg.Agents.Defaults.ModelName == cfg.ModelList[idx].ModelName &&
-		!defaultModelAllowedForModelConfig(&mc.ModelConfig) {
-		// Allow users to recover from legacy/invalid defaults by saving the model
-		// and clearing the default chat model reference in the same write.
-		cfg.Agents.Defaults.ModelName = ""
-	}
-
-	cfg.ModelList[idx] = &mc.ModelConfig
-	normalizeStoredModelProviders(cfg)
-
-	logger.Debugf("update model config: %#v", mc.ModelConfig)
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -500,32 +503,30 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if idx < 0 || idx >= len(cfg.ModelList) {
+			return &configMutationRequestError{
+				status: http.StatusNotFound,
+				err:    fmt.Errorf("index %d out of range (0-%d)", idx, len(cfg.ModelList)-1),
+			}
+		}
+		deletedModelName := cfg.ModelList[idx].ModelName
+		cfg.ModelList = append(cfg.ModelList[:idx], cfg.ModelList[idx+1:]...)
+		if cfg.Agents.Defaults.ModelName == deletedModelName {
+			cfg.Agents.Defaults.ModelName = ""
+		}
+		return nil
+	})
+	if writeConfigMutationError(w, err) {
+		return
+	}
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if idx < 0 || idx >= len(cfg.ModelList) {
-		http.Error(w, fmt.Sprintf("Index %d out of range (0-%d)", idx, len(cfg.ModelList)-1), http.StatusNotFound)
-		return
-	}
-
-	deletedModelName := cfg.ModelList[idx].ModelName
-
-	cfg.ModelList = append(cfg.ModelList[:idx], cfg.ModelList[idx+1:]...)
-
-	// If the deleted model was the default, clear it.
-	if cfg.Agents.Defaults.ModelName == deletedModelName {
-		cfg.Agents.Defaults.ModelName = ""
-	}
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -553,52 +554,41 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Verify the model_name exists in model_list and is not a virtual model
-	found := false
-	isVirtual := false
-	for _, m := range cfg.ModelList {
-		if m.ModelName == req.ModelName {
-			found = true
-			isVirtual = m.IsVirtual()
-			break
-		}
-	}
-	if !found {
-		http.Error(w, fmt.Sprintf("Model %q not found in model_list", req.ModelName), http.StatusNotFound)
-		return
-	}
-	if isVirtual {
-		http.Error(w, fmt.Sprintf("Cannot set virtual model %q as default", req.ModelName), http.StatusBadRequest)
-		return
-	}
-	for _, m := range cfg.ModelList {
-		if m.ModelName == req.ModelName {
-			if !defaultModelAllowedForModelConfig(m) {
-				http.Error(
-					w,
-					fmt.Sprintf("Model %q cannot be used as the default chat model", req.ModelName),
-					http.StatusBadRequest,
-				)
-				return
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		for _, model := range cfg.ModelList {
+			if model.ModelName != req.ModelName {
+				continue
 			}
-			break
+			if model.IsVirtual() {
+				return &configMutationRequestError{
+					status: http.StatusBadRequest,
+					err:    fmt.Errorf("cannot set virtual model %q as default", req.ModelName),
+				}
+			}
+			if !defaultModelAllowedForModelConfig(model) {
+				return &configMutationRequestError{
+					status: http.StatusBadRequest,
+					err:    fmt.Errorf("model %q cannot be used as the default chat model", req.ModelName),
+				}
+			}
+			cfg.Agents.Defaults.ModelName = req.ModelName
+			return nil
 		}
+		return &configMutationRequestError{
+			status: http.StatusNotFound,
+			err:    fmt.Errorf("model %q not found in model_list", req.ModelName),
+		}
+	})
+	if writeConfigMutationError(w, err) {
+		return
 	}
-
-	cfg.Agents.Defaults.ModelName = req.ModelName
-
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":        "ok",
 		"default_model": req.ModelName,
@@ -705,7 +695,7 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) lookupStoredAPIKey(index int, reqProvider, reqAPIBase string) string {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil || index < 0 || index >= len(cfg.ModelList) {
 		return ""
 	}
@@ -975,7 +965,7 @@ func (h *Handler) handleTestModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
@@ -1049,7 +1039,7 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 	// Only reuse the stored key when the provider and effective API base match
 	// the saved model, to prevent attaching a credential to a different endpoint.
 	if req.APIKey == "" && req.ModelIndex != nil {
-		cfg, err := config.LoadConfig(h.configPath)
+		cfg, err := h.readConfig()
 		if err == nil && *req.ModelIndex >= 0 && *req.ModelIndex < len(cfg.ModelList) {
 			stored := cfg.ModelList[*req.ModelIndex]
 			storedProvider, _ := providers.ExtractProtocol(stored)

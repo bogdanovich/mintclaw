@@ -779,7 +779,7 @@ func parseMessageToolContent(argsJSON string) (string, bool) {
 // sessionsDir resolves the path to the gateway's session storage directory.
 // It reads the workspace from config, falling back to ~/.mintclaw/workspace.
 func (h *Handler) sessionsDir() (string, error) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		return "", err
 	}
@@ -788,7 +788,7 @@ func (h *Handler) sessionsDir() (string, error) {
 }
 
 func (h *Handler) sessionRuntimeSettings() (string, int, error) {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	if err != nil {
 		return "", 0, err
 	}

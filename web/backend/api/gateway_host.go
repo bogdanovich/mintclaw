@@ -58,7 +58,7 @@ func gatewayProbeHost(bindHost string) string {
 }
 
 func (h *Handler) gatewayProxyURL() *url.URL {
-	cfg, err := config.LoadConfig(h.configPath)
+	cfg, err := h.readConfig()
 	port := 18790
 	bindHost := ""
 	if err == nil && cfg != nil {

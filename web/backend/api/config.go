@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,14 +35,15 @@ func (h *Handler) applyRuntimeLogLevel() {
 //
 //	GET /api/config
 func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadConfig(h.configPath)
+	snapshot, err := h.readConfigSnapshot()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+	writeConfigRevision(w, snapshot.Revision)
+	if err := json.NewEncoder(w).Encode(snapshot.Config); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -50,6 +52,15 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 //
 //	PUT /api/config
 func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	expectedRevision, err := expectedConfigRevision(r)
+	if errors.Is(err, errConfigPreconditionRequired) {
+		http.Error(w, err.Error(), http.StatusPreconditionRequired)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -101,7 +112,13 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.SaveConfig(h.configPath, &cfg); err != nil {
+	snapshot, err := h.configRepository().Replace(expectedRevision, &cfg)
+	var conflict *config.ConflictError
+	if errors.As(err, &conflict) {
+		writeConfigConflict(w, conflict)
+		return
+	}
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -110,6 +127,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("configuration updated successfully")
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -146,31 +164,67 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load existing config and marshal to a map for merging
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
+	var validationErrors []string
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		updated, updateErr := applyConfigMergePatch(cfg, patch, h.configPath)
+		if updateErr != nil {
+			return updateErr
+		}
+		if validationErrors = validateConfig(updated); len(validationErrors) > 0 {
+			return errors.New("config validation failed")
+		}
+		*cfg = *updated
+		return nil
+	})
+	if len(validationErrors) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "validation_error",
+			"errors": validationErrors,
+		})
 		return
 	}
-	existing, err := json.Marshal(cfg)
+	var requestErr *configPatchRequestError
+	if errors.As(err, &requestErr) {
+		http.Error(w, requestErr.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
-		http.Error(w, "Failed to serialize current config", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	h.applyRuntimeLogLevel()
+	logger.Infof("configuration updated successfully")
+
+	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+type configPatchRequestError struct {
+	err error
+}
+
+func (e *configPatchRequestError) Error() string {
+	return e.err.Error()
+}
+
+func (e *configPatchRequestError) Unwrap() error {
+	return e.err
+}
+
+func applyConfigMergePatch(current *config.Config, patch map[string]any, configPath string) (*config.Config, error) {
+	existing, err := json.Marshal(current)
+	if err != nil {
+		return nil, fmt.Errorf("serialize current config: %w", err)
+	}
 	var base map[string]any
 	if err = json.Unmarshal(existing, &base); err != nil {
-		http.Error(w, "Failed to parse current config", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("parse current config: %w", err)
 	}
-
-	// Recursively merge patch into base
 	mergeMap(base, patch)
-
-	// When the patch updates dm_scope, the old derived dimensions from the
-	// base must be cleared so that ApplyDmScope() can re-derive them from
-	// the new dm_scope value. Otherwise the stale dimensions survive the
-	// merge and ApplyDmScope() exits early due to its precedence guard.
 	if sess, ok := base["session"].(map[string]any); ok {
 		if patchSess, patchHasSession := patch["session"].(map[string]any); patchHasSession {
 			if _, hasDmScope := patchSess["dm_scope"]; hasDmScope {
@@ -181,53 +235,23 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err = normalizeChannelArrayFields(base); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
-		return
+		return nil, &configPatchRequestError{err: fmt.Errorf("invalid channel array field: %w", err)}
 	}
-
-	// Convert merged map back to Config struct
 	merged, err := json.Marshal(base)
 	if err != nil {
-		http.Error(w, "Failed to serialize merged config", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("serialize merged config: %w", err)
 	}
-
-	var newCfg config.Config
-	if err = json.Unmarshal(merged, &newCfg); err != nil {
-		http.Error(w, fmt.Sprintf("Merged config is invalid: %v", err), http.StatusBadRequest)
-		return
+	var updated config.Config
+	if err = json.Unmarshal(merged, &updated); err != nil {
+		return nil, &configPatchRequestError{err: fmt.Errorf("decode merged config: %w", err)}
 	}
-	newCfg.Session.ApplyDmScope()
-	newCfg.Session.DeriveDmScope()
-
-	// Restore security fields (tokens/keys) from the loaded config before validation,
-	// because private fields are lost during JSON round-trip.
-	if err = newCfg.SecurityCopyFrom(h.configPath); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to apply security config: %v", err), http.StatusInternalServerError)
-		return
+	updated.Session.ApplyDmScope()
+	updated.Session.DeriveDmScope()
+	if err = updated.SecurityCopyFrom(configPath); err != nil {
+		return nil, fmt.Errorf("apply security config: %w", err)
 	}
-	applyConfigSecretsFromMap(&newCfg, base)
-
-	if errs := validateConfig(&newCfg); len(errs) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "validation_error",
-			"errors": errs,
-		})
-		return
-	}
-
-	if err := config.SaveConfig(h.configPath, &newCfg); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	h.applyRuntimeLogLevel()
-	logger.Infof("configuration updated successfully")
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	applyConfigSecretsFromMap(&updated, base)
+	return &updated, nil
 }
 
 // handleResetConfig resets the configuration to factory defaults.
@@ -235,7 +259,20 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/config/reset
 func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
-	if err := config.ResetToDefaults(h.configPath); err != nil {
+	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if backupErr := config.MakeBackup(h.configPath); backupErr != nil {
+			return fmt.Errorf("backup before reset: %w", backupErr)
+		}
+		defaults := config.DefaultConfig()
+		defaults.Session.ApplyDmScope()
+		defaults.Session.DeriveDmScope()
+		if securityErr := defaults.SecurityCopyFrom(h.configPath); securityErr != nil {
+			logger.WarnF("could not preserve security config", map[string]any{"error": securityErr})
+		}
+		*cfg = *defaults
+		return nil
+	})
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to reset config: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -253,6 +290,7 @@ func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
