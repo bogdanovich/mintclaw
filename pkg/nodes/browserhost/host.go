@@ -555,7 +555,7 @@ func (host *BrowserHost) Contexts(
 		}
 	}
 	if err != nil {
-		if errors.Is(err, browserworker.ErrStale) {
+		if errors.Is(err, browserworker.ErrContextAuthorityStale) {
 			return nodes.BrowserContextResult{}, ErrBrowserHostStale
 		}
 		if request.Operation == "list" {

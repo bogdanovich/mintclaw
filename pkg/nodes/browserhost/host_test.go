@@ -68,6 +68,8 @@ type fakeBrowserHostWorker struct {
 	contextCatalog          browserworker.ContextCatalog
 	contextObservation      browserworker.DriverObservation
 	contextSelectCalls      int
+	contextSelectErr        error
+	contextSelectMutates    bool
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -147,13 +149,16 @@ func (worker *fakeBrowserHostWorker) SelectContext(
 	context.Context,
 	browserworker.ContextMutationAuthority,
 ) (browserworker.DriverObservation, browserworker.ContextCatalog, error) {
+	if worker.contextSelectErr != nil && !worker.contextSelectMutates {
+		return browserworker.DriverObservation{}, worker.contextCatalog, worker.contextSelectErr
+	}
 	if worker.contextSelectCalls == 0 {
 		worker.contextCatalog.Generation++
 	}
 	worker.contextSelectCalls++
 	worker.contextCatalog.SelectedTabID = "context_tab_2"
 	worker.contextCatalog.SelectedFrameID = "context_frame_1"
-	return worker.contextObservation, worker.contextCatalog, nil
+	return worker.contextObservation, worker.contextCatalog, worker.contextSelectErr
 }
 
 func (worker *fakeBrowserHostWorker) CloseTab(
@@ -1294,6 +1299,66 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	closed, err := host.Contexts(t.Context(), request)
 	if err != nil || len(closed.Catalog.Tabs) != 1 || closed.Catalog.SelectedTabID != "context_tab_1" {
 		t.Fatalf("Contexts(close) = %#v, %v", closed, err)
+	}
+}
+
+func TestBrowserHostClassifiesContextSelectionStaleByDispatchCertainty(t *testing.T) {
+	tests := []struct {
+		name       string
+		selectErr  error
+		mutates    bool
+		wantErr    error
+		wantState  string
+		wantReason string
+	}{
+		{
+			name: "authority changed before dispatch",
+			selectErr: errors.Join(
+				browserworker.ErrStale,
+				browserworker.ErrContextAuthorityStale,
+			),
+			wantErr: ErrBrowserHostStale, wantState: "ready",
+		},
+		{
+			name: "plain stale after dispatch", selectErr: browserworker.ErrStale, mutates: true,
+			wantErr: ErrBrowserHostLost, wantState: "lost", wantReason: "outcome_unknown",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &fakeBrowserHostWorker{
+				status:           browserworker.WorkerReady,
+				contextSelectErr: test.selectErr, contextSelectMutates: test.mutates,
+			}
+			host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+			if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+				t.Fatalf("Open() error = %v", err)
+			}
+			request := nodes.BrowserHostContextRequest{
+				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+				RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
+				AgentID: "browser", ActorID: "telegram:owner", Operation: "open",
+			}
+			opened, err := host.Contexts(t.Context(), request)
+			if err != nil {
+				t.Fatalf("Contexts(open) error = %v", err)
+			}
+			request.Operation = "select"
+			request.RequestID = "context_request_2"
+			request.Authority = &opened.Catalog
+			request.TabID = "context_tab_2"
+			request.FrameID = "context_frame_1"
+			if _, err = host.Contexts(t.Context(), request); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Contexts(select) error = %v, want %v", err, test.wantErr)
+			}
+			status, statusErr := host.Status(t.Context(), BrowserHostStatusRequest{
+				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			})
+			if statusErr != nil || status.State != test.wantState || status.Reason != test.wantReason {
+				t.Fatalf("Status() = %#v, %v", status, statusErr)
+			}
+		})
 	}
 }
 
