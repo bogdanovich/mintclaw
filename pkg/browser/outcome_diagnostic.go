@@ -62,8 +62,10 @@ func diagnoseRecoveredOutcome(invocation Invocation) Invocation {
 	}
 	class := OutcomeFailureUnknown
 	switch invocation.SafeFailure {
-	case "gateway_restarted", "session_closed", "worker_lost":
+	case "gateway_restarted", "worker_lost", "worker_unavailable":
 		class = OutcomeFailureWorkerUnavailable
+	case "canceled", "session_closed":
+		class = OutcomeFailureCanceled
 	case "policy_changed":
 		class = OutcomeFailurePolicyDenied
 	case "result_invalid":

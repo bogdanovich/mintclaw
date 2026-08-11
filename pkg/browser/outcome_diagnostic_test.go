@@ -47,6 +47,8 @@ func TestDiagnoseRecoveredOutcomeIsEphemeralAndConservative(t *testing.T) {
 	}{
 		{reason: "gateway_restarted", want: OutcomeFailureWorkerUnavailable},
 		{reason: "worker_lost", want: OutcomeFailureWorkerUnavailable},
+		{reason: "worker_unavailable", want: OutcomeFailureWorkerUnavailable},
+		{reason: "session_closed", want: OutcomeFailureCanceled},
 		{reason: "policy_changed", want: OutcomeFailurePolicyDenied},
 		{reason: "result_invalid", want: OutcomeFailureInvalidResult},
 		{reason: "outcome_unknown", want: OutcomeFailureUnknown},
