@@ -369,7 +369,6 @@ func TestMCPAddPreservesInterleavedDisjointConfigChange(t *testing.T) {
 		"filesystem",
 		config.MCPServerConfig{Enabled: true, Type: "stdio", Command: "npx"},
 		mcpServerExpectation{},
-		false,
 	)
 	require.NoError(t, err)
 
@@ -403,7 +402,6 @@ func TestMCPAddRejectsInterleavedSameServerChange(t *testing.T) {
 		"filesystem",
 		config.MCPServerConfig{Enabled: true, Type: "stdio", Command: "replacement"},
 		mcpServerExpectation{server: expected, exists: true},
-		false,
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, config.ErrConfigConflict)
@@ -654,6 +652,49 @@ func TestMCPEditRejectsCredentialBearingModelRename(t *testing.T) {
 	assert.Equal(t, "private", saved.ModelList[0].ModelName)
 	require.Len(t, saved.ModelList[0].APIKeys, 1)
 	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
+}
+
+func TestMCPEditDoesNotCopyCredentialToAddedDuplicateModelName(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		Model:     "openai/private",
+		APIKeys:   config.SimpleSecureStrings("editor-secret"),
+		Enabled:   true,
+	}}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		_, err := config.NewRepository(tempPath).Update(func(edited *config.Config) error {
+			edited.ModelList = append(edited.ModelList, &config.ModelConfig{
+				ModelName: "private",
+				Model:     "openai/other-endpoint",
+				Enabled:   true,
+			})
+			return nil
+		})
+		return err
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.NoError(t, err)
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 2)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
+	assert.Empty(t, saved.ModelList[1].APIKeys)
 }
 
 func TestMCPEditRejectsConcurrentCanonicalChange(t *testing.T) {

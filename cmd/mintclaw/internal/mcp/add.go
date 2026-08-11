@@ -61,7 +61,7 @@ func newAddCommand() *cobra.Command {
 			}
 
 			expectation := mcpServerExpectation{server: initialServer, exists: initialExists}
-			if err := upsertMCPServer(name, server, expectation, opts.Force); err != nil {
+			if err := upsertMCPServer(name, server, expectation); err != nil {
 				return err
 			}
 
@@ -91,11 +91,10 @@ func upsertMCPServer(
 	name string,
 	server config.MCPServerConfig,
 	expected mcpServerExpectation,
-	force bool,
 ) error {
 	return updateValidatedConfig(func(cfg *config.Config) error {
 		current, exists := cfg.Tools.MCP.Servers[name]
-		if !force && (exists != expected.exists || exists && !reflect.DeepEqual(current, expected.server)) {
+		if exists != expected.exists || exists && !reflect.DeepEqual(current, expected.server) {
 			return fmt.Errorf("%w: MCP server %q changed while confirming overwrite", config.ErrConfigConflict, name)
 		}
 		if cfg.Tools.MCP.Servers == nil {

@@ -90,40 +90,51 @@ func reconcileEditedModelCredentials(original, edited *config.Config) error {
 	if original == nil || edited == nil {
 		return fmt.Errorf("config is nil")
 	}
-	originalByName := make(map[string]*config.ModelConfig, len(original.ModelList))
-	editedNames := make(map[string]struct{}, len(edited.ModelList))
-	for _, model := range original.ModelList {
-		if model != nil {
-			originalByName[model.ModelName] = model
-		}
+	type modelIdentity struct {
+		name       string
+		occurrence int
 	}
-	var addedNames []string
+	originalByIdentity := make(map[modelIdentity]*config.ModelConfig, len(original.ModelList))
+	originalCounts := make(map[string]int)
+	for _, model := range original.ModelList {
+		if model == nil {
+			continue
+		}
+		identity := modelIdentity{name: model.ModelName, occurrence: originalCounts[model.ModelName]}
+		originalCounts[model.ModelName]++
+		originalByIdentity[identity] = model
+	}
+	editedIdentities := make(map[modelIdentity]struct{}, len(edited.ModelList))
+	editedCounts := make(map[string]int)
+	var addedIdentities []modelIdentity
 	for _, model := range edited.ModelList {
 		if model == nil {
 			continue
 		}
-		editedNames[model.ModelName] = struct{}{}
-		originalModel, exists := originalByName[model.ModelName]
+		identity := modelIdentity{name: model.ModelName, occurrence: editedCounts[model.ModelName]}
+		editedCounts[model.ModelName]++
+		editedIdentities[identity] = struct{}{}
+		originalModel, exists := originalByIdentity[identity]
 		if !exists {
-			addedNames = append(addedNames, model.ModelName)
+			addedIdentities = append(addedIdentities, identity)
 			continue
 		}
 		if len(model.APIKeys) == 0 {
 			model.APIKeys = originalModel.APIKeys
 		}
 	}
-	if len(addedNames) == 0 {
+	if len(addedIdentities) == 0 {
 		return nil
 	}
-	for _, model := range original.ModelList {
-		if model == nil || len(model.APIKeys) == 0 {
+	for identity, model := range originalByIdentity {
+		if len(model.APIKeys) == 0 {
 			continue
 		}
-		if _, exists := editedNames[model.ModelName]; !exists {
+		if _, exists := editedIdentities[identity]; !exists {
 			return fmt.Errorf(
 				"cannot rename credential-bearing model %q to %q in mcp edit; model credentials are stored separately",
 				model.ModelName,
-				addedNames[0],
+				addedIdentities[0].name,
 			)
 		}
 	}
