@@ -131,6 +131,67 @@ type PromptBuildRequest struct {
 	AllowedSkills               []string
 	AllowedTools                []string
 	ToolUseFallback             bool
+	CodingContext               CodingPromptContext
+}
+
+// CodingPromptContext is the runtime-owned, provider-neutral identity for one
+// local coding thread. Channel and sender data intentionally have no place in
+// this structure.
+type CodingPromptContext struct {
+	ProjectRoot      string
+	WorkingDirectory string
+	ThreadID         string
+	SessionKey       string
+	TrustMode        string
+	Model            string
+	Provider         string
+}
+
+const CodingTrustModeYolo = "yolo"
+
+const codingAgentBaseInstructions = `# MintClaw coding agent
+
+You are a coding agent operating in the user's project.
+
+- Inspect the relevant project state before changing it.
+- Use the available tools to complete requested coding work, not merely describe it.
+- Preserve unrelated user changes and keep edits scoped to the request.
+- Validate changes in proportion to their risk and report concrete results.
+- Follow project instructions supplied separately in the prompt.`
+
+func formatCodingProjectContext(context CodingPromptContext) string {
+	return fmt.Sprintf("# Project\n\nProject root: %s", strings.TrimSpace(context.ProjectRoot))
+}
+
+func formatCodingThreadContext(defaults, override CodingPromptContext) string {
+	context := defaults
+	mergeCodingPromptValue := func(target *string, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			*target = value
+		}
+	}
+	mergeCodingPromptValue(&context.ProjectRoot, override.ProjectRoot)
+	mergeCodingPromptValue(&context.WorkingDirectory, override.WorkingDirectory)
+	mergeCodingPromptValue(&context.ThreadID, override.ThreadID)
+	mergeCodingPromptValue(&context.SessionKey, override.SessionKey)
+	mergeCodingPromptValue(&context.TrustMode, override.TrustMode)
+	mergeCodingPromptValue(&context.Model, override.Model)
+	mergeCodingPromptValue(&context.Provider, override.Provider)
+	lines := []string{
+		"# Coding thread",
+		"",
+		"Thread ID: " + context.ThreadID,
+		"Session key: " + context.SessionKey,
+		"Working directory: " + context.WorkingDirectory,
+		"Trust mode: " + context.TrustMode,
+	}
+	if context.Model != "" {
+		lines = append(lines, "Model: "+context.Model)
+	}
+	if context.Provider != "" {
+		lines = append(lines, "Provider: "+context.Provider)
+	}
+	return strings.Join(lines, "\n")
 }
 
 type PromptContributor interface {

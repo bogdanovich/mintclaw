@@ -24,6 +24,8 @@ import (
 
 type ContextBuilder struct {
 	workspace      string
+	promptProfile  RuntimePromptProfile
+	codingContext  CodingPromptContext
 	skillsLoader   *skills.SkillsLoader
 	memory         *MemoryStore
 	splitOnMarker  bool
@@ -109,12 +111,38 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	return newContextBuilderWithMemoryOwner(workspace, workspace)
 }
 
-func newRuntimeContextBuilder(layout RuntimeLayout) (*ContextBuilder, error) {
+func newRuntimeContextBuilder(layout RuntimeLayout, promptProfile RuntimePromptProfile) (*ContextBuilder, error) {
 	memoryStore, err := newMemoryStoreChecked(layout.StateRoot())
 	if err != nil {
 		return nil, fmt.Errorf("initialize runtime prompt memory: %w", err)
 	}
-	return newContextBuilderWithMemoryStore(layout.ExecutionRoot(), memoryStore), nil
+	builder := newContextBuilderWithMemoryStore(layout.ExecutionRoot(), memoryStore)
+	builder.promptProfile = promptProfile
+	if promptProfile == RuntimePromptProfileCoding {
+		owner := layout.Owner()
+		builder.codingContext = CodingPromptContext{
+			ProjectRoot:      layout.ExecutionRoot(),
+			WorkingDirectory: layout.ExecutionRoot(),
+			ThreadID:         owner.ID,
+			SessionKey:       "coding:" + owner.ID,
+			TrustMode:        CodingTrustModeYolo,
+		}
+	}
+	return builder, nil
+}
+
+func (cb *ContextBuilder) WithCodingPromptModel(model string) *ContextBuilder {
+	cb.codingContext.Model = strings.TrimSpace(model)
+	cb.InvalidateCache()
+	return cb
+}
+
+func (cb *ContextBuilder) isolateSkillBootstrap() {
+	if cb == nil {
+		return
+	}
+	cb.skillsLoader = skills.NewSkillsLoader(cb.workspace, "", "")
+	cb.InvalidateCache()
 }
 
 func newContextBuilderWithMemoryOwner(workspace, memoryOwnerRoot string) *ContextBuilder {
@@ -139,20 +167,6 @@ func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore
 	return newContextBuilderWithMemoryStoreAndSkills(
 		workspace,
 		memoryStore,
-		globalSkillsDir,
-		builtinSkillsDir,
-	)
-}
-
-func newContextBuilderWithMemoryOwnerAndSkills(
-	workspace string,
-	memoryOwnerRoot string,
-	globalSkillsDir string,
-	builtinSkillsDir string,
-) *ContextBuilder {
-	return newContextBuilderWithMemoryStoreAndSkills(
-		workspace,
-		NewMemoryStore(memoryOwnerRoot),
 		globalSkillsDir,
 		builtinSkillsDir,
 	)
@@ -281,10 +295,42 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 }
 
 func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
-	return cb.buildSystemPromptParts(systemPromptBuildOptions{
+	return cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
 		IncludeSkillCatalog: true,
 		IncludeToolUseRule:  true,
 	})
+}
+
+func (cb *ContextBuilder) buildSystemPromptPartsForProfile(opts systemPromptBuildOptions) []PromptPart {
+	if cb.promptProfile == RuntimePromptProfileCoding {
+		return cb.buildCodingSystemPromptParts()
+	}
+	return cb.buildSystemPromptParts(opts)
+}
+
+func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
+	return []PromptPart{
+		{
+			ID:      "kernel.coding_identity",
+			Layer:   PromptLayerKernel,
+			Slot:    PromptSlotIdentity,
+			Source:  PromptSource{ID: PromptSourceKernel, Name: "coding_identity"},
+			Title:   "MintClaw coding identity",
+			Content: codingAgentBaseInstructions,
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		},
+		{
+			ID:      "instruction.coding_project",
+			Layer:   PromptLayerInstruction,
+			Slot:    PromptSlotWorkspace,
+			Source:  PromptSource{ID: PromptSourceWorkspace, Name: "coding_project"},
+			Title:   "coding project",
+			Content: formatCodingProjectContext(cb.codingContext),
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		},
+	}
 }
 
 type systemPromptBuildOptions struct {
@@ -469,7 +515,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		}
 	}
 
-	parts := cb.buildSystemPromptParts(systemPromptBuildOptions{
+	parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
 		IncludeSkillCatalog: !req.SuppressSkillContext,
 		IncludeToolUseRule:  !req.SuppressToolUseRule,
 		AllowedSkills:       req.AllowedSkills,
@@ -484,6 +530,49 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		blocks = append(blocks, promptContentBlock(part, cacheControlForPromptPart(part)))
 	}
 	return staticPrompt, blocks
+}
+
+func (cb *ContextBuilder) withCodingExecutionContext(
+	messages []providers.Message,
+	context CodingPromptContext,
+) []providers.Message {
+	if cb == nil || cb.promptProfile != RuntimePromptProfileCoding {
+		return messages
+	}
+
+	runtimeContext := formatCodingThreadContext(cb.codingContext, context)
+	for messageIndex := range messages {
+		message := messages[messageIndex]
+		if message.Role != "system" || len(message.SystemParts) == 0 {
+			continue
+		}
+
+		runtimeIndex := -1
+		for partIndex := range message.SystemParts {
+			part := message.SystemParts[partIndex]
+			if part.PromptSource == string(PromptSourceRuntime) &&
+				part.PromptSlot == string(PromptSlotRuntime) {
+				runtimeIndex = partIndex
+				break
+			}
+		}
+		if runtimeIndex < 0 {
+			continue
+		}
+
+		updated := cloneProviderMessages(messages)
+		updated[messageIndex].SystemParts[runtimeIndex].Text = runtimeContext
+		parts := make([]string, 0, len(updated[messageIndex].SystemParts))
+		for _, part := range updated[messageIndex].SystemParts {
+			if strings.TrimSpace(part.Text) != "" {
+				parts = append(parts, part.Text)
+			}
+		}
+		updated[messageIndex].Content = strings.Join(parts, "\n\n---\n\n")
+		return updated
+	}
+
+	return messages
 }
 
 func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
@@ -937,14 +1026,15 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)
-	if !req.SuppressDefaultSystemPrompt && !req.SuppressSkillContext {
+	personalPrompt := cb.promptProfile != RuntimePromptProfileCoding
+	if !req.SuppressDefaultSystemPrompt && personalPrompt && !req.SuppressSkillContext {
 		activeSkills := append([]string(nil), req.ActiveSkills...)
 		if len(req.AllowedSkills) > 0 {
 			activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
 		}
 		promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
 	}
-	if !req.SuppressDefaultSystemPrompt {
+	if !req.SuppressDefaultSystemPrompt && personalPrompt {
 		if contributedParts, err := cb.promptRegistryOrDefault().Collect(context.Background(), req); err != nil {
 			logger.WarnCF("agent", "Prompt contributor collection failed", map[string]any{
 				"error": err.Error(),
@@ -970,19 +1060,28 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 				continue
 			}
 			stringParts = append(stringParts, overlay.Content)
-			contentBlocks = append(contentBlocks, promptContentBlock(overlay, nil))
+			contentBlocks = append(
+				contentBlocks,
+				promptContentBlock(overlay, cacheControlForPromptPart(overlay)),
+			)
 		}
 	}
 
 	dynamicChars := 0
 	if !req.SuppressDefaultSystemPrompt {
-		// Build short dynamic context (time, runtime, session) — changes per request
-		dynamicCtx := cb.buildDynamicContext(
-			req.Channel,
-			req.ChatID,
-			req.SenderID,
-			req.SenderDisplayName,
-		)
+		// Build short dynamic context — changes per request and is kept after
+		// the stable provider-cache prefix.
+		var dynamicCtx string
+		if personalPrompt {
+			dynamicCtx = cb.buildDynamicContext(
+				req.Channel,
+				req.ChatID,
+				req.SenderID,
+				req.SenderDisplayName,
+			)
+		} else {
+			dynamicCtx = formatCodingThreadContext(cb.codingContext, req.CodingContext)
+		}
 		dynamicChars = len(dynamicCtx)
 		runtimePart := PromptPart{
 			ID:      "context.runtime",
@@ -994,8 +1093,10 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			Stable:  false,
 			Cache:   PromptCacheNone,
 		}
-		stringParts = append(stringParts, dynamicCtx)
-		contentBlocks = append(contentBlocks, promptContentBlock(runtimePart, nil))
+		if strings.TrimSpace(dynamicCtx) != "" {
+			stringParts = append(stringParts, dynamicCtx)
+			contentBlocks = append(contentBlocks, promptContentBlock(runtimePart, nil))
+		}
 
 		if req.Summary != "" {
 			summaryPart := PromptPart{

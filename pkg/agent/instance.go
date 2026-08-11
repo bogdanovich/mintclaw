@@ -145,8 +145,9 @@ type agentToolInitConfig struct {
 }
 
 type runtimeInstanceDependencies struct {
-	storeFactory RuntimeStoreFactory
-	toolProfile  RuntimeToolProfile
+	storeFactory  RuntimeStoreFactory
+	toolProfile   RuntimeToolProfile
+	promptProfile RuntimePromptProfile
 }
 
 type agentIdentityConfig struct {
@@ -197,10 +198,12 @@ func newAgentInstanceWithRuntimeLayout(
 	layout RuntimeLayout,
 	storeFactory RuntimeStoreFactory,
 	toolProfile RuntimeToolProfile,
+	promptProfile RuntimePromptProfile,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
-		storeFactory: storeFactory,
-		toolProfile:  toolProfile,
+		storeFactory:  storeFactory,
+		toolProfile:   toolProfile,
+		promptProfile: promptProfile,
 	})
 }
 
@@ -228,15 +231,20 @@ func newAgentInstance(
 		_ = os.MkdirAll(workspace, 0o755)
 	}
 
-	definition := loadAgentDefinition(workspace)
+	toolProfile := RuntimeToolProfilePersonal
+	promptProfile := RuntimePromptProfilePersonal
+	if runtimeDeps != nil {
+		toolProfile = runtimeDeps.toolProfile
+		promptProfile = runtimeDeps.promptProfile
+	}
+	definition := AgentContextDefinition{}
+	if promptProfile == RuntimePromptProfilePersonal {
+		definition = loadAgentDefinition(workspace)
+	}
 	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	agentToolPolicy := resolveAgentToolPolicy(definition)
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
-	toolProfile := RuntimeToolProfilePersonal
-	if runtimeDeps != nil {
-		toolProfile = runtimeDeps.toolProfile
-	}
 	if toolProfile == RuntimeToolProfileCoding {
 		// Repository frontmatter cannot mutate the admitted coding catalog.
 		agentToolPolicy = nil
@@ -262,7 +270,7 @@ func newAgentInstance(
 		if runtimeDependencyIsNil(sessions) {
 			return nil, fmt.Errorf("construct agent: runtime store factory returned a nil session store")
 		}
-		contextBuilder, err = newRuntimeContextBuilder(*layout)
+		contextBuilder, err = newRuntimeContextBuilder(*layout, promptProfile)
 		if err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
@@ -271,11 +279,19 @@ func newAgentInstance(
 		sessions = initSessionStore(sessionsDir)
 		contextBuilder = NewContextBuilder(workspace)
 	}
-	contextBuilder = contextBuilder.
-		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
-		WithPromptMemoryConfig(defaults.PromptMemory)
+	if promptProfile == RuntimePromptProfilePersonal {
+		contextBuilder = contextBuilder.
+			WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
+			WithPromptMemoryConfig(defaults.PromptMemory)
+	}
 
 	identity := buildAgentIdentityConfig(defaults, agentCfg, definition)
+	if promptProfile == RuntimePromptProfileCoding {
+		identity.agentName = "MintClaw coding agent"
+		identity.subagents = nil
+		identity.skillsFilter = nil
+		contextBuilder.WithCodingPromptModel(model)
+	}
 	if layout != nil {
 		owner := layout.Owner()
 		if owner.Kind == RuntimeOwnerPersonalAgent && owner.ID != identity.agentID {

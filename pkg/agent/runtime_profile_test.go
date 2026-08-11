@@ -8,11 +8,13 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -139,6 +141,63 @@ func (f *trackingRuntimeStoreFactory) NewSeahorseEngine(
 
 type countingStatefulProvider struct {
 	closeCount int
+}
+
+type promptCapturingProvider struct {
+	mu       sync.Mutex
+	messages []providers.Message
+}
+
+type codingPromptAttemptProvider struct {
+	mu       sync.Mutex
+	messages []providers.Message
+	err      error
+}
+
+func (p *codingPromptAttemptProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.messages = cloneProviderMessages(messages)
+	err := p.err
+	p.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &providers.LLMResponse{Content: "captured response", FinishReason: "stop"}, nil
+}
+
+func (p *codingPromptAttemptProvider) GetDefaultModel() string { return "captured-model" }
+
+func (p *codingPromptAttemptProvider) Messages() []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return cloneProviderMessages(p.messages)
+}
+
+func (p *promptCapturingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.messages = append([]providers.Message(nil), messages...)
+	return &providers.LLMResponse{Content: "captured response"}, nil
+}
+
+func (p *promptCapturingProvider) GetDefaultModel() string { return "captured-model" }
+
+func (p *promptCapturingProvider) Messages() []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]providers.Message(nil), p.messages...)
 }
 
 func (p *countingStatefulProvider) Chat(
@@ -304,14 +363,6 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding catalog changed after dynamic injection: %v", got)
 	}
-	identity := agent.ContextBuilder.getIdentity(true)
-	externalMemoryFile := filepath.Join(layout.StatePaths().MemoryRoot, "MEMORY.md")
-	if !strings.Contains(identity, externalMemoryFile) {
-		t.Fatalf("runtime identity does not advertise external memory file %q:\n%s", externalMemoryFile, identity)
-	}
-	if strings.Contains(identity, filepath.Join(executionRoot, "memory")) {
-		t.Fatalf("runtime identity advertises execution-root memory:\n%s", identity)
-	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		var created []string
 		_ = filepath.Walk(executionRoot, func(path string, _ os.FileInfo, _ error) error {
@@ -322,6 +373,234 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	}
 	if _, statErr := os.Stat(layout.StatePaths().SessionsRoot); statErr != nil {
 		t.Fatalf("state sessions root was not created: %v", statErr)
+	}
+}
+
+func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
+		t.Fatalf("create execution root: %v", err)
+	}
+	personalFiles := map[string]string{
+		"AGENT.md":    "---\nname: Project Persona\nmodel: project-model\nskills: [personal]\n---\nPERSONAL AGENT BODY",
+		"SOUL.md":     "PERSONAL SOUL",
+		"USER.md":     "PERSONAL USER",
+		"IDENTITY.md": "PERSONAL IDENTITY",
+	}
+	for name, content := range personalFiles {
+		if err := os.WriteFile(filepath.Join(executionRoot, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-isolated"},
+		executionRoot,
+		stateRoot,
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	if profile.PromptProfile() != RuntimePromptProfileCoding {
+		t.Fatalf("PromptProfile() = %q, want coding", profile.PromptProfile())
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.Provider = "test-provider"
+	cfg.Agents.Defaults.ModelName = "configured-model"
+	cfg.Agents.Defaults.TurnProfile = config.TurnProfileConfig{
+		Enabled: true,
+		Skills:  config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
+		Tools: config.TurnProfileBlock{
+			Mode:  config.TurnProfileModeCustom,
+			Allow: []string{"read_file"},
+		},
+	}
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
+	provider := &promptCapturingProvider{}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	agent := loop.GetRegistry().GetDefaultAgent()
+	if agent.Name != "MintClaw coding agent" || agent.Model != "configured-model" || agent.Definition.Agent != nil {
+		t.Fatalf(
+			"coding identity = name:%q model:%q definition:%#v",
+			agent.Name,
+			agent.Model,
+			agent.Definition.Agent,
+		)
+	}
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{
+		CurrentMessage:    "fix the bug",
+		Channel:           "telegram",
+		ChatID:            "personal-chat",
+		SenderID:          "personal-sender",
+		SenderDisplayName: "Personal Sender",
+	})
+	if len(messages) != 2 || messages[0].Role != "system" || messages[1].Role != "user" {
+		t.Fatalf("coding prompt messages = %#v", messages)
+	}
+	wantSystem := strings.Join([]string{
+		codingAgentBaseInstructions,
+		"# Project\n\nProject root: " + layout.ExecutionRoot(),
+		"# Coding thread\n\nThread ID: thread-isolated\n" +
+			"Session key: coding:thread-isolated\n" +
+			"Working directory: " + layout.ExecutionRoot() + "\n" +
+			"Trust mode: yolo\nModel: configured-model",
+	}, "\n\n---\n\n")
+	if messages[0].Content != wantSystem {
+		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
+	}
+	for _, forbidden := range []string{
+		"PERSONAL AGENT BODY",
+		"PERSONAL SOUL",
+		"PERSONAL USER",
+		"PERSONAL IDENTITY",
+		"personal-chat",
+		"personal-sender",
+		"Personal Sender",
+		"helpful AI assistant",
+		"# Memory",
+	} {
+		if strings.Contains(messages[0].Content, forbidden) {
+			t.Fatalf("coding system prompt contains personal context %q:\n%s", forbidden, messages[0].Content)
+		}
+	}
+	if len(messages[0].SystemParts) != 2 || messages[0].SystemParts[0].CacheControl == nil ||
+		messages[0].SystemParts[0].CacheControl.Type != "ephemeral" ||
+		messages[0].SystemParts[1].CacheControl != nil {
+		t.Fatalf("coding cache blocks = %#v, want stable prefix then dynamic context", messages[0].SystemParts)
+	}
+	secondPrompt := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{
+		CurrentMessage: "continue",
+		CodingContext: CodingPromptContext{
+			WorkingDirectory: filepath.Join(layout.ExecutionRoot(), "nested"),
+			Provider:         "test-provider",
+		},
+	})
+	if secondPrompt[0].SystemParts[0].Text != messages[0].SystemParts[0].Text {
+		t.Fatal("coding stable prefix changed with turn metadata")
+	}
+	if secondPrompt[0].SystemParts[1].Text == messages[0].SystemParts[1].Text ||
+		!strings.Contains(secondPrompt[0].SystemParts[1].Text, "Provider: test-provider") {
+		t.Fatalf("coding dynamic block did not reflect turn metadata: %#v", secondPrompt[0].SystemParts[1])
+	}
+
+	const sessionKey = "coding:thread-isolated"
+	if _, err := loop.ProcessDirect(t.Context(), "wrong thread", "coding:another-thread"); err == nil ||
+		!strings.Contains(err.Error(), "has no admitted owner") {
+		t.Fatalf("ProcessDirect(wrong thread) error = %v, want owner rejection", err)
+	}
+	if _, err := loop.ProcessDirect(t.Context(), "persist only here", sessionKey); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	providerMessages := provider.Messages()
+	if len(providerMessages) < 2 || providerMessages[0].Role != "system" {
+		t.Fatalf("provider messages = %#v, want system and user", providerMessages)
+	}
+	for _, required := range []string{
+		codingAgentBaseInstructions,
+		"Project root: " + layout.ExecutionRoot(),
+		"Working directory: " + layout.ExecutionRoot(),
+		"Thread ID: thread-isolated",
+		"Session key: " + sessionKey,
+		"Trust mode: yolo",
+		"Model: configured-model",
+		"Provider: test-provider",
+	} {
+		if !strings.Contains(providerMessages[0].Content, required) {
+			t.Fatalf("provider system prompt missing %q:\n%s", required, providerMessages[0].Content)
+		}
+	}
+	if strings.Contains(providerMessages[0].Content, "PERSONAL AGENT BODY") ||
+		strings.Contains(providerMessages[0].Content, "helpful AI assistant") {
+		t.Fatalf("provider observed personal context:\n%s", providerMessages[0].Content)
+	}
+	if history := agent.Sessions.GetHistory(sessionKey); len(history) != 2 {
+		t.Fatalf("coding history length = %d, want user and assistant", len(history))
+	}
+	if history := agent.Sessions.GetHistory(session.BuildMainSessionKey(agent.ID)); len(history) != 0 {
+		t.Fatalf("personal main history = %#v, want empty", history)
+	}
+	if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{sessionKey}) {
+		t.Fatalf("coding sessions = %v, want only %q", sessions, sessionKey)
+	}
+}
+
+func TestCodingDirectResolvesEachAdmittedThreadOwner(t *testing.T) {
+	root := t.TempDir()
+	mainLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+		filepath.Join(root, "project-main"),
+		filepath.Join(root, "state-main"),
+		[]string{filepath.Join(root, "project-main")},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+	}
+	supportLayout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+		filepath.Join(root, "project-support"),
+		filepath.Join(root, "state-support"),
+		[]string{filepath.Join(root, "project-support")},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+	}
+	profile, err := NewRuntimeProfile(
+		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
+		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeProfile() error = %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "support"},
+	}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	for _, target := range []struct {
+		agentID    string
+		sessionKey string
+	}{
+		{agentID: "main", sessionKey: "coding:thread-main"},
+		{agentID: "support", sessionKey: "coding:thread-support"},
+	} {
+		if _, err := loop.ProcessDirect(t.Context(), "turn for "+target.agentID, target.sessionKey); err != nil {
+			t.Fatalf("ProcessDirect(%s) error = %v", target.agentID, err)
+		}
+		agent, ok := loop.GetRegistry().GetAgent(target.agentID)
+		if !ok {
+			t.Fatalf("agent %q is missing", target.agentID)
+		}
+		if history := agent.Sessions.GetHistory(target.sessionKey); len(history) != 2 {
+			t.Fatalf("%s history length = %d, want 2", target.agentID, len(history))
+		}
+		if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{target.sessionKey}) {
+			t.Fatalf("%s sessions = %v, want only %q", target.agentID, sessions, target.sessionKey)
+		}
+	}
+	if _, err := loop.ProcessDirect(t.Context(), "unknown", "coding:thread-unknown"); err == nil ||
+		!strings.Contains(err.Error(), "has no admitted owner") {
+		t.Fatalf("ProcessDirect(unknown) error = %v, want fail-closed owner rejection", err)
 	}
 }
 
@@ -1611,6 +1890,12 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	if _, statErr := os.Stat(layout.StatePaths().MemoryRoot); statErr != nil {
 		t.Fatalf("external memory root was not created: %v", statErr)
 	}
+	agent := loop.GetRegistry().GetDefaultAgent()
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "inspect"})
+	if len(messages) == 0 || !strings.Contains(messages[0].Content, codingAgentBaseInstructions) ||
+		strings.Contains(messages[0].Content, "helpful AI assistant") {
+		t.Fatalf("isolated skills changed coding prompt profile: %#v", messages)
+	}
 
 	reloaded := *cfg
 	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err == nil {
@@ -1618,6 +1903,115 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected isolated-skill reload created execution root: %v", statErr)
+	}
+}
+
+func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
+	provider := &codingPromptAttemptProvider{}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	agent.Model = "primary-name"
+	agent.Candidates = []providers.FallbackCandidate{{
+		Provider: "openai", Model: "primary-model", DisplayName: "primary-name",
+	}}
+	agent.LightCandidates = []providers.FallbackCandidate{{
+		Provider: "anthropic", Model: "light-model", DisplayName: "light-name",
+	}}
+	agent.LightProvider = provider
+	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-name", Threshold: 1})
+	configureCodingPromptTestAgent(agent, "thread-light")
+	if err := loop.MountHook(NamedHook("json-round-trip", &llmJSONRoundTripUserAppendHook{})); err != nil {
+		t.Fatalf("MountHook() error = %v", err)
+	}
+
+	opts := makeTestProcessOpts("coding:thread-light")
+	opts.UserMessage = ""
+	opts.CodingContext = codingPromptTestContext(agent, "thread-light")
+	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+		turnID: "turn-light", context: newTurnContext(nil, nil, nil),
+	})
+	pipeline := NewPipeline(loop)
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if !exec.model.usedLight {
+		t.Fatal("SetupTurn() did not select light route")
+	}
+	if _, err = pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
+		t.Fatalf("CallLLM() error = %v", err)
+	}
+	assertCodingProviderIdentity(t, provider.Messages(), "light-name", "anthropic")
+}
+
+func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
+	primary := &codingPromptAttemptProvider{err: errors.New("status: 429 - rate limit exceeded")}
+	fallback := &codingPromptAttemptProvider{}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, primary)
+	defer cleanup()
+
+	primaryCandidate := providers.FallbackCandidate{
+		Provider: "openai", Model: "primary-model", DisplayName: "primary-name",
+	}
+	fallbackCandidate := providers.FallbackCandidate{
+		Provider: "anthropic", Model: "fallback-model", DisplayName: "fallback-name",
+	}
+	agent.Model = "primary-name"
+	agent.Candidates = []providers.FallbackCandidate{primaryCandidate, fallbackCandidate}
+	agent.CandidateProviders = map[string]providers.LLMProvider{
+		providers.ModelKey(fallbackCandidate.Provider, fallbackCandidate.Model): fallback,
+	}
+	configureCodingPromptTestAgent(agent, "thread-fallback")
+	loop.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
+
+	opts := makeTestProcessOpts("coding:thread-fallback")
+	opts.CodingContext = codingPromptTestContext(agent, "thread-fallback")
+	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+		turnID: "turn-fallback", context: newTurnContext(nil, nil, nil),
+	})
+	pipeline := NewPipeline(loop)
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if _, err = pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
+		t.Fatalf("CallLLM() error = %v", err)
+	}
+	assertCodingProviderIdentity(t, primary.Messages(), "primary-name", "openai")
+	assertCodingProviderIdentity(t, fallback.Messages(), "fallback-name", "anthropic")
+}
+
+func configureCodingPromptTestAgent(agent *AgentInstance, threadID string) {
+	agent.ContextBuilder.promptProfile = RuntimePromptProfileCoding
+	agent.ContextBuilder.codingContext = codingPromptTestContext(agent, threadID)
+	agent.ContextBuilder.InvalidateCache()
+}
+
+func codingPromptTestContext(agent *AgentInstance, threadID string) CodingPromptContext {
+	return CodingPromptContext{
+		ProjectRoot:      agent.Workspace,
+		WorkingDirectory: agent.Workspace,
+		ThreadID:         threadID,
+		SessionKey:       "coding:" + threadID,
+		TrustMode:        CodingTrustModeYolo,
+	}
+}
+
+func assertCodingProviderIdentity(
+	t *testing.T,
+	messages []providers.Message,
+	model string,
+	provider string,
+) {
+	t.Helper()
+	if len(messages) == 0 {
+		t.Fatal("provider received no messages")
+	}
+	for _, want := range []string{"Model: " + model, "Provider: " + provider} {
+		if !strings.Contains(messages[0].Content, want) {
+			t.Fatalf("provider coding prompt missing %q:\n%s", want, messages[0].Content)
+		}
 	}
 }
 

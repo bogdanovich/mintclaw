@@ -436,6 +436,14 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 	if got.Messages[2].Role != "user" || got.Messages[2].Content != "json extra user context" {
 		t.Fatalf("appended message = %#v, want json extra user context", got.Messages[2])
 	}
+	if got.Messages[0].PromptSource != string(PromptSourceKernel) ||
+		got.Messages[0].SystemParts[0].PromptSource != string(PromptSourceKernel) ||
+		got.Messages[0].SystemParts[0].PromptSlot != string(PromptSlotIdentity) {
+		t.Fatalf("system prompt metadata = %#v, want restored kernel identity", got.Messages[0])
+	}
+	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
+		t.Fatalf("tool prompt metadata = %#v, want restored mcp metadata", got.Tools[0])
+	}
 }
 
 func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {

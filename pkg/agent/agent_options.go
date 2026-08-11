@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
@@ -46,31 +45,19 @@ func WithIsolatedSkillBootstrap() AgentLoopOption {
 			return
 		}
 		al.isolatedSkillBootstrap = true
-		al.isolateSkillRegistry(al.registry, al.cfg)
+		al.isolateSkillRegistry(al.registry)
 	}
 }
 
-func (al *AgentLoop) isolateSkillRegistry(registry *AgentRegistry, cfg *config.Config) {
-	if registry == nil || cfg == nil {
+func (al *AgentLoop) isolateSkillRegistry(registry *AgentRegistry) {
+	if registry == nil {
 		return
 	}
 	for _, agentID := range registry.ListAgentIDs() {
 		instance, ok := registry.GetAgent(agentID)
-		if !ok || instance == nil {
+		if !ok || instance == nil || instance.ContextBuilder == nil {
 			continue
 		}
-		memoryOwnerRoot := instance.Workspace
-		if instance.Layout.StateRoot() != "" {
-			memoryOwnerRoot = instance.Layout.StateRoot()
-		}
-		instance.ContextBuilder = newContextBuilderWithMemoryOwnerAndSkills(
-			instance.Workspace,
-			memoryOwnerRoot,
-			"",
-			"",
-		).
-			WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
-			WithPromptMemoryConfig(cfg.Agents.Defaults.PromptMemory).
-			WithAgentDiscovery(instance.ID, registry.ListSpawnableAgents)
+		instance.ContextBuilder.isolateSkillBootstrap()
 	}
 }

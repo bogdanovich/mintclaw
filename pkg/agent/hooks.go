@@ -405,14 +405,48 @@ func (hm *HookManager) applyBeforeLLMControls(
 			"hook": hookName,
 		})
 		next.Messages = cloneProviderMessages(current.Messages)
+	} else {
+		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
 	}
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
 		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
 			"hook": hookName,
 		})
 		next.Tools = cloneToolDefinitions(current.Tools)
+	} else {
+		restoreToolDefinitionPromptMetadata(current.Tools, next.Tools)
 	}
 	return next
+}
+
+func restoreSystemMessagePromptMetadata(before, after []providers.Message) {
+	for messageIndex := range before {
+		if messageIndex >= len(after) || before[messageIndex].Role != "system" || after[messageIndex].Role != "system" {
+			continue
+		}
+		after[messageIndex].PromptLayer = before[messageIndex].PromptLayer
+		after[messageIndex].PromptSlot = before[messageIndex].PromptSlot
+		after[messageIndex].PromptSource = before[messageIndex].PromptSource
+		for partIndex := range before[messageIndex].SystemParts {
+			if partIndex >= len(after[messageIndex].SystemParts) {
+				break
+			}
+			after[messageIndex].SystemParts[partIndex].PromptLayer = before[messageIndex].SystemParts[partIndex].PromptLayer
+			after[messageIndex].SystemParts[partIndex].PromptSlot = before[messageIndex].SystemParts[partIndex].PromptSlot
+			after[messageIndex].SystemParts[partIndex].PromptSource = before[messageIndex].SystemParts[partIndex].PromptSource
+		}
+	}
+}
+
+func restoreToolDefinitionPromptMetadata(before, after []providers.ToolDefinition) {
+	for toolIndex := range before {
+		if toolIndex >= len(after) {
+			break
+		}
+		after[toolIndex].PromptLayer = before[toolIndex].PromptLayer
+		after[toolIndex].PromptSlot = before[toolIndex].PromptSlot
+		after[toolIndex].PromptSource = before[toolIndex].PromptSource
+	}
 }
 
 func llmHookSystemMessagesUnchanged(before, after []providers.Message) bool {

@@ -113,6 +113,14 @@ func (p *Pipeline) prepareLLMRequest(
 		}
 	}
 
+	llm.callMessages = codingMessagesForCandidate(
+		ts,
+		llm.callMessages,
+		exec.model.activeCandidates,
+		llm.llmModel,
+		primaryCandidateProvider(exec.model.activeCandidates),
+	)
+
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request"),

@@ -78,7 +78,7 @@ func (al *AgentLoop) PrepareConfigReload(
 		return nil, fmt.Errorf("context canceled after registry creation: %w", err)
 	}
 	if al.isolatedSkillBootstrap {
-		al.isolateSkillRegistry(result.registry, cfg)
+		al.isolateSkillRegistry(result.registry)
 	}
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, al.bus, result.registry, provider)

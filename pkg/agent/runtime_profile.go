@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -17,9 +18,10 @@ import (
 
 // RuntimeProfile is the immutable set of layouts admitted before registry construction.
 type RuntimeProfile struct {
-	agentLayouts map[string]RuntimeLayout
-	storeFactory RuntimeStoreFactory
-	toolProfile  RuntimeToolProfile
+	agentLayouts  map[string]RuntimeLayout
+	storeFactory  RuntimeStoreFactory
+	toolProfile   RuntimeToolProfile
+	promptProfile RuntimePromptProfile
 }
 
 // RuntimeToolProfile selects the complete pre-construction tool and trust
@@ -29,6 +31,16 @@ type RuntimeToolProfile string
 const (
 	RuntimeToolProfilePersonal RuntimeToolProfile = "personal"
 	RuntimeToolProfileCoding   RuntimeToolProfile = "coding"
+)
+
+// RuntimePromptProfile selects the prompt identity and context admitted for a
+// homogeneous runtime owner domain. It is deliberately separate from the tool
+// profile so prompt and capability policy cannot become implicitly coupled.
+type RuntimePromptProfile string
+
+const (
+	RuntimePromptProfilePersonal RuntimePromptProfile = "personal"
+	RuntimePromptProfileCoding   RuntimePromptProfile = "coding"
 )
 
 // RuntimeStoreFactory opens the canonical and derived stores owned by a
@@ -105,8 +117,10 @@ func NewRuntimeProfileWithStoreFactory(
 			switch owner.Kind {
 			case RuntimeOwnerPersonalAgent:
 				profile.toolProfile = RuntimeToolProfilePersonal
+				profile.promptProfile = RuntimePromptProfilePersonal
 			case RuntimeOwnerCodingThread:
 				profile.toolProfile = RuntimeToolProfileCoding
+				profile.promptProfile = RuntimePromptProfileCoding
 			}
 		} else if owner.Kind != profileOwnerKind {
 			return RuntimeProfile{}, fmt.Errorf(
@@ -208,6 +222,11 @@ func (p RuntimeProfile) ToolProfile() RuntimeToolProfile {
 	return p.toolProfile
 }
 
+// PromptProfile returns the immutable prompt identity selected by the owner domain.
+func (p RuntimeProfile) PromptProfile() RuntimePromptProfile {
+	return p.promptProfile
+}
+
 func runtimeDependencyIsNil(dependency any) bool {
 	if dependency == nil {
 		return true
@@ -248,6 +267,36 @@ func (al *AgentLoop) runtimeLayoutForWorkspace(workspace string) (RuntimeLayout,
 
 func (al *AgentLoop) hasCodingToolProfile() bool {
 	return al != nil && al.runtimeProfile != nil && al.runtimeProfile.toolProfile == RuntimeToolProfileCoding
+}
+
+func (al *AgentLoop) codingRuntimeTargetForSession(
+	sessionKey string,
+) (*AgentInstance, RuntimeLayout, error) {
+	if !al.hasCodingToolProfile() {
+		return nil, RuntimeLayout{}, fmt.Errorf("runtime does not use the coding profile")
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	var matchedAgent *AgentInstance
+	var matchedLayout RuntimeLayout
+	for agentID, layout := range al.runtimeProfile.agentLayouts {
+		owner := layout.Owner()
+		if owner.Kind != RuntimeOwnerCodingThread || "coding:"+owner.ID != sessionKey {
+			continue
+		}
+		if matchedAgent != nil {
+			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has multiple owners", sessionKey)
+		}
+		agent, ok := al.GetRegistry().GetAgent(agentID)
+		if !ok || agent == nil {
+			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime owner %q has no agent", owner.ID)
+		}
+		matchedAgent = agent
+		matchedLayout = layout
+	}
+	if matchedAgent == nil {
+		return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has no admitted owner", sessionKey)
+	}
+	return matchedAgent, matchedLayout, nil
 }
 
 func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
