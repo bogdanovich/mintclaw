@@ -40,7 +40,7 @@ Note: 'local-model' is a special value for using a local VLLM server
 			configPath := internal.GetConfigPath()
 
 			// Load current config
-			cfg, err := config.LoadConfig(configPath)
+			cfg, err := internal.LoadConfigAt(configPath)
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
@@ -53,7 +53,7 @@ Note: 'local-model' is a special value for using a local VLLM server
 
 			// Set new default model
 			modelName := args[0]
-			return setDefaultModel(configPath, cfg, modelName)
+			return setDefaultModel(configPath, modelName)
 		},
 	}
 
@@ -99,28 +99,29 @@ func listAvailableModels(cfg *config.Config) {
 	}
 }
 
-func setDefaultModel(configPath string, cfg *config.Config, modelName string) error {
-	// Validate that the model exists in model_list
-	modelFound := false
-	for _, model := range cfg.ModelList {
-		if model.Enabled && model.ModelName == modelName {
-			modelFound = true
-			break
+func setDefaultModel(configPath, modelName string) error {
+	oldModel := ""
+	var selectionErr error
+	_, err := internal.UpdateConfigAt(configPath, func(cfg *config.Config) error {
+		modelFound := false
+		for _, model := range cfg.ModelList {
+			if model.Enabled && model.ModelName == modelName {
+				modelFound = true
+				break
+			}
 		}
+		if !modelFound && modelName != LocalModel {
+			selectionErr = fmt.Errorf("cannot found model '%s' in config", modelName)
+			return selectionErr
+		}
+		oldModel = cfg.Agents.Defaults.ModelName
+		cfg.Agents.Defaults.ModelName = modelName
+		return nil
+	})
+	if selectionErr != nil {
+		return selectionErr
 	}
-
-	if !modelFound && modelName != LocalModel {
-		return fmt.Errorf("cannot found model '%s' in config", modelName)
-	}
-
-	// Update the default model
-	// Clear old model field and set new model_name
-	oldModel := cfg.Agents.Defaults.ModelName
-
-	cfg.Agents.Defaults.ModelName = modelName
-
-	// Save config back to file
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+	if err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 

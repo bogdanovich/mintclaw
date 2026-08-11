@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -128,7 +129,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		return result, &liveRunError{cause: errors.New("live timeout must be positive")}
 	}
 
-	cfg, loadErr := config.LoadConfig(strings.TrimSpace(options.ConfigPath))
+	cfg, loadErr := internal.LoadConfigAt(strings.TrimSpace(options.ConfigPath))
 	if loadErr != nil {
 		return result, &liveRunError{cause: fmt.Errorf("load config: %w", loadErr)}
 	}

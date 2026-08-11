@@ -25,10 +25,26 @@ func GetConfigPath() string {
 }
 
 func LoadConfig() (*config.Config, error) {
-	cfg, err := config.LoadConfig(GetConfigPath())
+	cfg, err := LoadConfigAt(GetConfigPath())
 	if err != nil {
 		return nil, err
 	}
 	logger.SetLevelFromString(cfg.Gateway.LogLevel)
 	return cfg, nil
+}
+
+func LoadConfigAt(path string) (*config.Config, error) {
+	snapshot, err := config.NewRepository(path).ReadOnly()
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.Config, nil
+}
+
+func UpdateConfig(mutate func(*config.Config) error) (config.Snapshot, error) {
+	return UpdateConfigAt(GetConfigPath(), mutate)
+}
+
+func UpdateConfigAt(path string, mutate func(*config.Config) error) (config.Snapshot, error) {
+	return config.NewRepository(path).Update(mutate)
 }

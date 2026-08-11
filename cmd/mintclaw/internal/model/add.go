@@ -164,40 +164,39 @@ func pickModel(stdin io.Reader, stdout io.Writer, entries []modelEntry) (string,
 
 func upsertModelDefault(apiBase, apiKey, alias, modelID string, stdout io.Writer) error {
 	configPath := internal.GetConfigPath()
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
+	if _, err := internal.LoadConfigAt(configPath); err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	secureKeys := config.SimpleSecureStrings(apiKey)
-
-	found := false
-	for _, m := range cfg.ModelList {
-		if m == nil {
-			continue
+	_, err := internal.UpdateConfigAt(configPath, func(cfg *config.Config) error {
+		found := false
+		for _, model := range cfg.ModelList {
+			if model == nil {
+				continue
+			}
+			if model.ModelName == alias {
+				model.Model = modelID
+				model.APIBase = apiBase
+				model.APIKeys = secureKeys
+				model.Enabled = true
+				found = true
+				break
+			}
 		}
-		if m.ModelName == alias {
-			m.Model = modelID
-			m.APIBase = apiBase
-			m.APIKeys = secureKeys
-			m.Enabled = true
-			found = true
-			break
+		if !found {
+			cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+				ModelName: alias,
+				Model:     modelID,
+				APIBase:   apiBase,
+				APIKeys:   secureKeys,
+				Enabled:   true,
+			})
 		}
-	}
-	if !found {
-		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
-			ModelName: alias,
-			Model:     modelID,
-			APIBase:   apiBase,
-			APIKeys:   secureKeys,
-			Enabled:   true,
-		})
-	}
-
-	cfg.Agents.Defaults.ModelName = alias
-
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+		cfg.Agents.Defaults.ModelName = alias
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
