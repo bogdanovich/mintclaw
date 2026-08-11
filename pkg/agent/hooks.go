@@ -862,11 +862,25 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 	cloned := make([]providers.Message, len(messages))
 	for i, msg := range messages {
 		cloned[i] = msg
+		if msg.CreatedAt != nil {
+			createdAt := *msg.CreatedAt
+			cloned[i].CreatedAt = &createdAt
+		}
 		if len(msg.Media) > 0 {
 			cloned[i].Media = append([]string(nil), msg.Media...)
 		}
+		if len(msg.Attachments) > 0 {
+			cloned[i].Attachments = append([]providers.Attachment(nil), msg.Attachments...)
+		}
 		if len(msg.SystemParts) > 0 {
 			cloned[i].SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+			for partIndex := range msg.SystemParts {
+				if msg.SystemParts[partIndex].CacheControl == nil {
+					continue
+				}
+				cacheControl := *msg.SystemParts[partIndex].CacheControl
+				cloned[i].SystemParts[partIndex].CacheControl = &cacheControl
+			}
 		}
 		if len(msg.ToolCalls) > 0 {
 			cloned[i].ToolCalls = cloneProviderToolCalls(msg.ToolCalls)
@@ -938,7 +952,7 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 
 	cloned := make(map[string]any, len(src))
 	for k, v := range src {
-		cloned[k] = v
+		cloned[k] = cloneHookAnyValue(v)
 	}
 	return cloned
 }

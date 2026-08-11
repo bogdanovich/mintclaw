@@ -247,6 +247,55 @@ func (h *llmJSONRoundTripUserAppendHook) AfterLLM(
 
 type llmToolRewriteHook struct{}
 
+type llmInPlaceNestedMutationHook struct{}
+
+func (h *llmInPlaceNestedMutationHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	*req.Messages[0].CreatedAt = req.Messages[0].CreatedAt.Add(time.Hour)
+	req.Messages[0].Attachments[0].Filename = "mutated.txt"
+	req.Messages[0].SystemParts[0].CacheControl.Type = "mutated"
+	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	path["type"] = "number"
+	return req, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *llmInPlaceNestedMutationHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+type llmNestedValueObserverHook struct {
+	cacheControlType string
+	attachmentName   string
+	createdAt        time.Time
+	parameterType    string
+}
+
+func (h *llmNestedValueObserverHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	h.createdAt = *req.Messages[0].CreatedAt
+	h.attachmentName = req.Messages[0].Attachments[0].Filename
+	h.cacheControlType = req.Messages[0].SystemParts[0].CacheControl.Type
+	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	h.parameterType = path["type"].(string)
+	return req, HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *llmNestedValueObserverHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
 func (h *llmToolRewriteHook) BeforeLLM(
 	ctx context.Context,
 	req *LLMHookRequest,
@@ -427,6 +476,73 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 	}
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want original mcp metadata", got.Tools[0])
+	}
+}
+
+func TestHookManager_BeforeLLMControlsInPlaceNestedMutation(t *testing.T) {
+	hm := NewHookManager(nil)
+	if err := hm.Mount(NamedHook("mutate-nested", &llmInPlaceNestedMutationHook{})); err != nil {
+		t.Fatalf("Mount(mutator) error = %v", err)
+	}
+	observer := &llmNestedValueObserverHook{}
+	if err := hm.Mount(NamedHook("observe-nested", observer)); err != nil {
+		t.Fatalf("Mount(observer) error = %v", err)
+	}
+
+	createdAt := time.Date(2026, time.August, 11, 8, 0, 0, 0, time.UTC)
+	req := &LLMHookRequest{
+		Model: "model",
+		Messages: []providers.Message{{
+			Role:        "system",
+			Content:     "system",
+			CreatedAt:   &createdAt,
+			Attachments: []providers.Attachment{{Filename: "original.txt"}},
+			SystemParts: []providers.ContentBlock{{
+				Type:         "text",
+				Text:         "system",
+				CacheControl: &providers.CacheControl{Type: "ephemeral"},
+			}},
+		}},
+		Tools: []providers.ToolDefinition{{
+			Type: "function",
+			Function: providers.ToolFunctionDefinition{
+				Name: "read_file",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}},
+	}
+
+	got, decision := hm.BeforeLLM(t.Context(), req)
+	if decision.normalizedAction() != HookActionContinue {
+		t.Fatalf("decision = %v, want continue", decision)
+	}
+	if got.Messages[0].SystemParts[0].CacheControl.Type != "ephemeral" ||
+		observer.cacheControlType != "ephemeral" {
+		t.Fatalf(
+			"cache control = final:%q observer:%q, want ephemeral",
+			got.Messages[0].SystemParts[0].CacheControl.Type,
+			observer.cacheControlType,
+		)
+	}
+	if !got.Messages[0].CreatedAt.Equal(createdAt) || !observer.createdAt.Equal(createdAt) {
+		t.Fatalf("created at = final:%v observer:%v, want %v", got.Messages[0].CreatedAt, observer.createdAt, createdAt)
+	}
+	if got.Messages[0].Attachments[0].Filename != "original.txt" || observer.attachmentName != "original.txt" {
+		t.Fatalf(
+			"attachment = final:%q observer:%q, want original.txt",
+			got.Messages[0].Attachments[0].Filename,
+			observer.attachmentName,
+		)
+	}
+	properties := got.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	if path["type"] != "string" || observer.parameterType != "string" {
+		t.Fatalf("parameter type = final:%v observer:%q, want string", path["type"], observer.parameterType)
 	}
 }
 
