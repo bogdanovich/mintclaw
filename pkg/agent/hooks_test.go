@@ -247,6 +247,59 @@ func (h *llmJSONRoundTripUserAppendHook) AfterLLM(
 
 type llmToolRewriteHook struct{}
 
+type llmInPlaceNestedMutationHook struct{}
+
+func (h *llmInPlaceNestedMutationHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	*req.Messages[0].CreatedAt = req.Messages[0].CreatedAt.Add(time.Hour)
+	req.Messages[0].Attachments[0].Filename = "mutated.txt"
+	req.Messages[0].SystemParts[0].CacheControl.Type = "mutated"
+	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	path["type"] = "number"
+	required := req.Tools[0].Function.Parameters["required"].([]string)
+	required[0] = "mutated"
+	return req, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *llmInPlaceNestedMutationHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+type llmNestedValueObserverHook struct {
+	cacheControlType string
+	attachmentName   string
+	createdAt        time.Time
+	parameterType    string
+	requiredProperty string
+}
+
+func (h *llmNestedValueObserverHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	h.createdAt = *req.Messages[0].CreatedAt
+	h.attachmentName = req.Messages[0].Attachments[0].Filename
+	h.cacheControlType = req.Messages[0].SystemParts[0].CacheControl.Type
+	properties := req.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	h.parameterType = path["type"].(string)
+	h.requiredProperty = req.Tools[0].Function.Parameters["required"].([]string)[0]
+	return req, HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *llmNestedValueObserverHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
 func (h *llmToolRewriteHook) BeforeLLM(
 	ctx context.Context,
 	req *LLMHookRequest,
@@ -427,6 +480,146 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 	}
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want original mcp metadata", got.Tools[0])
+	}
+}
+
+func TestHookManager_BeforeLLMControlsInPlaceNestedMutation(t *testing.T) {
+	hm := NewHookManager(nil)
+	if err := hm.Mount(NamedHook("mutate-nested", &llmInPlaceNestedMutationHook{})); err != nil {
+		t.Fatalf("Mount(mutator) error = %v", err)
+	}
+	observer := &llmNestedValueObserverHook{}
+	if err := hm.Mount(NamedHook("observe-nested", observer)); err != nil {
+		t.Fatalf("Mount(observer) error = %v", err)
+	}
+
+	createdAt := time.Date(2026, time.August, 11, 8, 0, 0, 0, time.UTC)
+	req := &LLMHookRequest{
+		Model: "model",
+		Messages: []providers.Message{{
+			Role:        "system",
+			Content:     "system",
+			CreatedAt:   &createdAt,
+			Attachments: []providers.Attachment{{Filename: "original.txt"}},
+			SystemParts: []providers.ContentBlock{{
+				Type:         "text",
+				Text:         "system",
+				CacheControl: &providers.CacheControl{Type: "ephemeral"},
+			}},
+		}},
+		Tools: []providers.ToolDefinition{{
+			Type: "function",
+			Function: providers.ToolFunctionDefinition{
+				Name: "read_file",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		}},
+	}
+
+	got, decision := hm.BeforeLLM(t.Context(), req)
+	if decision.normalizedAction() != HookActionContinue {
+		t.Fatalf("decision = %v, want continue", decision)
+	}
+	if got.Messages[0].SystemParts[0].CacheControl.Type != "ephemeral" ||
+		observer.cacheControlType != "ephemeral" {
+		t.Fatalf(
+			"cache control = final:%q observer:%q, want ephemeral",
+			got.Messages[0].SystemParts[0].CacheControl.Type,
+			observer.cacheControlType,
+		)
+	}
+	if !got.Messages[0].CreatedAt.Equal(createdAt) || !observer.createdAt.Equal(createdAt) {
+		t.Fatalf("created at = final:%v observer:%v, want %v", got.Messages[0].CreatedAt, observer.createdAt, createdAt)
+	}
+	if got.Messages[0].Attachments[0].Filename != "original.txt" || observer.attachmentName != "original.txt" {
+		t.Fatalf(
+			"attachment = final:%q observer:%q, want original.txt",
+			got.Messages[0].Attachments[0].Filename,
+			observer.attachmentName,
+		)
+	}
+	properties := got.Tools[0].Function.Parameters["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	if path["type"] != "string" || observer.parameterType != "string" {
+		t.Fatalf("parameter type = final:%v observer:%q, want string", path["type"], observer.parameterType)
+	}
+	required := got.Tools[0].Function.Parameters["required"].([]string)
+	if required[0] != "path" || observer.requiredProperty != "path" {
+		t.Fatalf("required = final:%q observer:%q, want path", required[0], observer.requiredProperty)
+	}
+}
+
+func TestCloneProviderToolCallsPreservesEmptyJSONContainers(t *testing.T) {
+	calls := []providers.ToolCall{{
+		ID:   "call-node",
+		Name: "nodes_invoke",
+		Arguments: map[string]any{
+			"input": map[string]any{
+				"env":  map[string]any{},
+				"argv": []any{},
+			},
+		},
+	}}
+
+	cloned := cloneProviderToolCalls(calls)
+	input := cloned[0].Arguments["input"].(map[string]any)
+	environment, ok := input["env"].(map[string]any)
+	if !ok || environment == nil {
+		t.Fatalf("cloned empty environment = %#v, want non-nil object", input["env"])
+	}
+	arguments, ok := input["argv"].([]any)
+	if !ok || arguments == nil {
+		t.Fatalf("cloned empty arguments = %#v, want non-nil array", input["argv"])
+	}
+}
+
+func TestCloneProviderMessagesDetachesNonNilEmptySlices(t *testing.T) {
+	media := []string{"original-media"}
+	attachments := []providers.Attachment{{Filename: "original.txt"}}
+	systemParts := []providers.ContentBlock{{Type: "text", Text: "original system part"}}
+	toolCalls := []providers.ToolCall{{ID: "original-call", Name: "original_tool"}}
+	messages := []providers.Message{{
+		Media:       media[:0],
+		Attachments: attachments[:0],
+		SystemParts: systemParts[:0],
+		ToolCalls:   toolCalls[:0],
+	}}
+
+	cloned := cloneProviderMessages(messages)
+	media[0] = "mutated-media"
+	attachments[0].Filename = "mutated.txt"
+	systemParts[0].Text = "mutated system part"
+	toolCalls[0].Name = "mutated_tool"
+
+	if cloned[0].Media == nil || len(cloned[0].Media) != 0 || cap(cloned[0].Media) != 0 {
+		t.Fatalf("cloned media = %#v (cap %d), want detached non-nil empty", cloned[0].Media, cap(cloned[0].Media))
+	}
+	if cloned[0].Attachments == nil || len(cloned[0].Attachments) != 0 || cap(cloned[0].Attachments) != 0 {
+		t.Fatalf(
+			"cloned attachments = %#v (cap %d), want detached non-nil empty",
+			cloned[0].Attachments,
+			cap(cloned[0].Attachments),
+		)
+	}
+	if cloned[0].SystemParts == nil || len(cloned[0].SystemParts) != 0 || cap(cloned[0].SystemParts) != 0 {
+		t.Fatalf(
+			"cloned system parts = %#v (cap %d), want detached non-nil empty",
+			cloned[0].SystemParts,
+			cap(cloned[0].SystemParts),
+		)
+	}
+	if cloned[0].ToolCalls == nil || len(cloned[0].ToolCalls) != 0 || cap(cloned[0].ToolCalls) != 0 {
+		t.Fatalf(
+			"cloned tool calls = %#v (cap %d), want detached non-nil empty",
+			cloned[0].ToolCalls,
+			cap(cloned[0].ToolCalls),
+		)
 	}
 }
 
