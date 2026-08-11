@@ -855,7 +855,7 @@ func (hm *HookManager) logUnsupportedAction(name, stage string, action HookActio
 }
 
 func cloneProviderMessages(messages []providers.Message) []providers.Message {
-	if len(messages) == 0 {
+	if messages == nil {
 		return nil
 	}
 
@@ -866,14 +866,17 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 			createdAt := *msg.CreatedAt
 			cloned[i].CreatedAt = &createdAt
 		}
-		if len(msg.Media) > 0 {
-			cloned[i].Media = append([]string(nil), msg.Media...)
+		if msg.Media != nil {
+			cloned[i].Media = make([]string, len(msg.Media))
+			copy(cloned[i].Media, msg.Media)
 		}
-		if len(msg.Attachments) > 0 {
-			cloned[i].Attachments = append([]providers.Attachment(nil), msg.Attachments...)
+		if msg.Attachments != nil {
+			cloned[i].Attachments = make([]providers.Attachment, len(msg.Attachments))
+			copy(cloned[i].Attachments, msg.Attachments)
 		}
-		if len(msg.SystemParts) > 0 {
-			cloned[i].SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+		if msg.SystemParts != nil {
+			cloned[i].SystemParts = make([]providers.ContentBlock, len(msg.SystemParts))
+			copy(cloned[i].SystemParts, msg.SystemParts)
 			for partIndex := range msg.SystemParts {
 				if msg.SystemParts[partIndex].CacheControl == nil {
 					continue
@@ -882,7 +885,7 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 				cloned[i].SystemParts[partIndex].CacheControl = &cacheControl
 			}
 		}
-		if len(msg.ToolCalls) > 0 {
+		if msg.ToolCalls != nil {
 			cloned[i].ToolCalls = cloneProviderToolCalls(msg.ToolCalls)
 		}
 	}
@@ -890,7 +893,7 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 }
 
 func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
-	if len(calls) == 0 {
+	if calls == nil {
 		return nil
 	}
 
@@ -917,7 +920,7 @@ func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
 }
 
 func cloneToolDefinitions(defs []providers.ToolDefinition) []providers.ToolDefinition {
-	if len(defs) == 0 {
+	if defs == nil {
 		return nil
 	}
 
@@ -935,8 +938,8 @@ func cloneLLMResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 	}
 	cloned := *resp
 	cloned.ToolCalls = cloneProviderToolCalls(resp.ToolCalls)
-	if len(resp.ReasoningDetails) > 0 {
-		cloned.ReasoningDetails = append(cloned.ReasoningDetails[:0:0], resp.ReasoningDetails...)
+	if resp.ReasoningDetails != nil {
+		cloned.ReasoningDetails = append(resp.ReasoningDetails[:0:0], resp.ReasoningDetails...)
 	}
 	if resp.Usage != nil {
 		usage := *resp.Usage

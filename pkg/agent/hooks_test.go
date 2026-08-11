@@ -579,6 +579,50 @@ func TestCloneProviderToolCallsPreservesEmptyJSONContainers(t *testing.T) {
 	}
 }
 
+func TestCloneProviderMessagesDetachesNonNilEmptySlices(t *testing.T) {
+	media := []string{"original-media"}
+	attachments := []providers.Attachment{{Filename: "original.txt"}}
+	systemParts := []providers.ContentBlock{{Type: "text", Text: "original system part"}}
+	toolCalls := []providers.ToolCall{{ID: "original-call", Name: "original_tool"}}
+	messages := []providers.Message{{
+		Media:       media[:0],
+		Attachments: attachments[:0],
+		SystemParts: systemParts[:0],
+		ToolCalls:   toolCalls[:0],
+	}}
+
+	cloned := cloneProviderMessages(messages)
+	media[0] = "mutated-media"
+	attachments[0].Filename = "mutated.txt"
+	systemParts[0].Text = "mutated system part"
+	toolCalls[0].Name = "mutated_tool"
+
+	if cloned[0].Media == nil || len(cloned[0].Media) != 0 || cap(cloned[0].Media) != 0 {
+		t.Fatalf("cloned media = %#v (cap %d), want detached non-nil empty", cloned[0].Media, cap(cloned[0].Media))
+	}
+	if cloned[0].Attachments == nil || len(cloned[0].Attachments) != 0 || cap(cloned[0].Attachments) != 0 {
+		t.Fatalf(
+			"cloned attachments = %#v (cap %d), want detached non-nil empty",
+			cloned[0].Attachments,
+			cap(cloned[0].Attachments),
+		)
+	}
+	if cloned[0].SystemParts == nil || len(cloned[0].SystemParts) != 0 || cap(cloned[0].SystemParts) != 0 {
+		t.Fatalf(
+			"cloned system parts = %#v (cap %d), want detached non-nil empty",
+			cloned[0].SystemParts,
+			cap(cloned[0].SystemParts),
+		)
+	}
+	if cloned[0].ToolCalls == nil || len(cloned[0].ToolCalls) != 0 || cap(cloned[0].ToolCalls) != 0 {
+		t.Fatalf(
+			"cloned tool calls = %#v (cap %d), want detached non-nil empty",
+			cloned[0].ToolCalls,
+			cap(cloned[0].ToolCalls),
+		)
+	}
+}
+
 func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
