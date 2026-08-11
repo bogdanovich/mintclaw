@@ -120,6 +120,32 @@ func TestShellTool_CanceledCommandCannotReportSuccess(t *testing.T) {
 	}
 }
 
+func TestShellTool_CodingChannelRequiresCodingRuntimeCapability(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.AllowRemote = false
+	ctx := toolshared.WithToolContext(context.Background(), "coding", "external-alias")
+	args := map[string]any{"action": "run", "command": "echo blocked"}
+
+	personal, err := NewExecToolWithRuntimeConfig(t.TempDir(), t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = personal.Close() })
+	if result := personal.Execute(ctx, args); !result.IsError ||
+		!strings.Contains(result.ForLLM, "restricted to internal channels") {
+		t.Fatalf("external coding alias result = %#v", result)
+	}
+
+	coding, err := NewCodingExecToolWithRuntimeConfig(t.TempDir(), t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coding.Close() })
+	if result := coding.Execute(ctx, args); result.IsError || !strings.Contains(result.ForLLM, "blocked") {
+		t.Fatalf("capability-bound coding result = %#v", result)
+	}
+}
+
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
 	tool, err := NewExecTool("", false)

@@ -51,6 +51,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	allowCodingChannel  bool
 	permissionMode      string
 	sessionManager      *SessionManager
 	ownsSessionManager  bool
@@ -167,6 +168,22 @@ func NewExecToolWithRuntimeConfig(
 	}
 	tool.sessionManager = NewSessionManager()
 	tool.ownsSessionManager = true
+	return tool, nil
+}
+
+// NewCodingExecToolWithRuntimeConfig constructs an exec tool whose instance
+// capability admits MintClaw's virtual coding channel without globally
+// trusting a user-configurable external channel with the same name.
+func NewCodingExecToolWithRuntimeConfig(
+	workingDir string,
+	scratchDir string,
+	cfg *config.Config,
+) (*ExecTool, error) {
+	tool, err := NewExecToolWithRuntimeConfig(workingDir, scratchDir, false, cfg)
+	if err != nil {
+		return nil, err
+	}
+	tool.allowCodingChannel = true
 	return tool, nil
 }
 
@@ -350,7 +367,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *toolsha
 			channel, _ = args["__channel"].(string)
 		}
 		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
+		codingChannelAllowed := t.allowCodingChannel && channel == "coding"
+		if channel == "" || (!constants.IsInternalChannel(channel) && !codingChannelAllowed) {
 			return toolshared.ErrorResult("exec is restricted to internal channels")
 		}
 	}

@@ -24,6 +24,11 @@ bypass added to the personal gateway: personal agents keep their configured
 tool enablement, allow paths, workspace restriction, command guard, and
 approval behavior.
 
+The virtual `coding` channel is not globally internal because external channel
+instance names are user-configurable. Only the exec instance constructed with
+the coding-runtime capability accepts that channel; a personal exec tool still
+rejects an external channel aliased to `coding`.
+
 The coding instruction gate canonicalizes model-supplied paths against the
 invocation cwd before execution. The tools also root direct relative paths so
 the execution contract does not depend on the MintClaw process cwd. Repository

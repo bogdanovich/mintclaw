@@ -5,7 +5,6 @@ package constants
 // and should not be exposed to external users or recorded as last active channel.
 var internalChannels = map[string]struct{}{
 	"cli":      {},
-	"coding":   {},
 	"system":   {},
 	"subagent": {},
 }

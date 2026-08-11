@@ -531,7 +531,7 @@ func initCodingAgentTools(
 	execCfg := *cfg
 	execCfg.Tools = cfg.Tools
 	execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
-	execTool, err := tools.NewExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, false, &execCfg)
+	execTool, err := tools.NewCodingExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, &execCfg)
 	if err != nil {
 		return fmt.Errorf("initialize coding exec tool: %w", err)
 	}
