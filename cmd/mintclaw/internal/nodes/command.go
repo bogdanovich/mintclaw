@@ -55,7 +55,7 @@ func newNodesCommand(deps commandDeps) *cobra.Command {
 		if path == "" {
 			path = deps.configPath()
 		}
-		cfg, err := config.LoadConfig(path)
+		cfg, err := internal.LoadConfigAt(path)
 		if err != nil {
 			return nil, fmt.Errorf("load config: %w", err)
 		}

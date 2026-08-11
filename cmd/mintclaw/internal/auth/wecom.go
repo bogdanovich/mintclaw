@@ -126,9 +126,7 @@ func authWeComCmdWithScanner(
 	if writer == nil {
 		writer = os.Stdout
 	}
-
-	cfg, err := internal.LoadConfig()
-	if err != nil {
+	if _, err := internal.LoadConfig(); err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
@@ -140,9 +138,10 @@ func authWeComCmdWithScanner(
 		return err
 	}
 
-	applyWeComAuthResult(cfg, botInfo, allowFrom)
-
-	if saveErr := config.SaveConfig(internal.GetConfigPath(), cfg); saveErr != nil {
+	if _, saveErr := internal.UpdateConfig(func(cfg *config.Config) error {
+		applyWeComAuthResult(cfg, botInfo, allowFrom)
+		return nil
+	}); saveErr != nil {
 		return fmt.Errorf("failed to save config: %w", saveErr)
 	}
 

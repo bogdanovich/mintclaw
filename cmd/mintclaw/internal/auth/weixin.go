@@ -104,33 +104,29 @@ func saveWeixinConfig(
 ) error {
 	cfgPath := internal.GetConfigPath()
 
-	cfg, err := config.LoadConfig(cfgPath)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	bc := cfg.Channels.GetByType(config.ChannelWeixin)
-	if bc == nil {
-		bc = &config.Channel{Type: config.ChannelWeixin}
-		cfg.Channels[config.ChannelWeixin] = bc
-	}
-	bc.Enabled = true
-	bc.AllowFrom = allowFrom
-
-	if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
-		if weixinCfg, ok := decoded.(*config.WeixinSettings); ok {
-			weixinCfg.Token = *config.NewSecureString(token)
-			const defaultBase = "https://ilinkai.weixin.qq.com/"
-			if baseURL != "" && baseURL != defaultBase {
-				weixinCfg.BaseURL = baseURL
-			}
-			if proxy != "" {
-				weixinCfg.Proxy = proxy
+	_, err := internal.UpdateConfigAt(cfgPath, func(cfg *config.Config) error {
+		bc := cfg.Channels.GetByType(config.ChannelWeixin)
+		if bc == nil {
+			bc = &config.Channel{Type: config.ChannelWeixin}
+			cfg.Channels[config.ChannelWeixin] = bc
+		}
+		bc.Enabled = true
+		bc.AllowFrom = allowFrom
+		if decoded, decodeErr := bc.GetDecoded(); decodeErr == nil && decoded != nil {
+			if weixinCfg, ok := decoded.(*config.WeixinSettings); ok {
+				weixinCfg.Token = *config.NewSecureString(token)
+				const defaultBase = "https://ilinkai.weixin.qq.com/"
+				if baseURL != "" && baseURL != defaultBase {
+					weixinCfg.BaseURL = baseURL
+				}
+				if proxy != "" {
+					weixinCfg.Proxy = proxy
+				}
 			}
 		}
-	}
-
-	return config.SaveConfig(cfgPath, cfg)
+		return nil
+	})
+	return err
 }
 
 func printManualWeixinConfig(token, baseURL string, allowFrom config.FlexibleStringSlice) {

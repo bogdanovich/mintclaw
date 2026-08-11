@@ -185,9 +185,10 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 			},
 		},
 	}
+	require.NoError(t, config.SaveConfig(configPath, cfg))
 
 	output := captureStdout(func() {
-		err := setDefaultModel(configPath, cfg, "new-model")
+		err := setDefaultModel(configPath, "new-model")
 		assert.NoError(t, err)
 	})
 
@@ -197,6 +198,40 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 	updatedCfg, err := config.LoadConfig(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", updatedCfg.Agents.Defaults.ModelName)
+}
+
+func TestSetDefaultModel_PreservesConcurrentConfigChange(t *testing.T) {
+	initTest(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "old-model", Model: "openai/old", Enabled: true},
+		{ModelName: "new-model", Model: "openai/new", Enabled: true},
+	}
+	cfg.Agents.Defaults.ModelName = "old-model"
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := repository.Update(func(current *config.Config) error {
+		current.Gateway.Port = 23456
+		return nil
+	}); err != nil {
+		t.Fatalf("concurrent Update() error = %v", err)
+	}
+	if err := setDefaultModel(configPath, "new-model"); err != nil {
+		t.Fatalf("setDefaultModel() error = %v", err)
+	}
+
+	current, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	if current.Config.Gateway.Port != 23456 {
+		t.Fatalf("gateway.port = %d, want concurrent value 23456", current.Config.Gateway.Port)
+	}
+	if current.Config.Agents.Defaults.ModelName != "new-model" {
+		t.Fatalf("default model = %q, want new-model", current.Config.Agents.Defaults.ModelName)
+	}
 }
 
 func TestSetDefaultModel_InvalidModel(t *testing.T) {
@@ -217,8 +252,9 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 			},
 		},
 	}
+	require.NoError(t, config.SaveConfig(configPath, cfg))
 
-	assert.Error(t, setDefaultModel(configPath, cfg, "nonexistent-model"))
+	assert.Error(t, setDefaultModel(configPath, "nonexistent-model"))
 }
 
 func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
@@ -240,31 +276,16 @@ func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 			{ModelName: "no-key-model", Model: "openai/nokey"},
 		},
 	}
+	require.NoError(t, config.SaveConfig(configPath, cfg))
 
-	assert.Error(t, setDefaultModel(configPath, cfg, "no-key-model"))
+	assert.Error(t, setDefaultModel(configPath, "no-key-model"))
 }
 
 func TestSetDefaultModel_SaveConfigError(t *testing.T) {
 	// Use an invalid path to trigger save error
 	invalidPath := "/nonexistent/directory/config.json"
 
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				ModelName: "old-model",
-			},
-		},
-		ModelList: []*config.ModelConfig{
-			{
-				ModelName: "new-model",
-				Model:     "openai/new-model",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
-			},
-		},
-	}
-
-	err := setDefaultModel(invalidPath, cfg, "new-model")
+	err := setDefaultModel(invalidPath, "new-model")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to save config")
