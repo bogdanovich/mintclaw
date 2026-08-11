@@ -106,7 +106,6 @@ func reconcileEditedModelCredentials(original, edited *config.Config) error {
 	}
 	editedIdentities := make(map[modelIdentity]struct{}, len(edited.ModelList))
 	editedCounts := make(map[string]int)
-	var addedIdentities []modelIdentity
 	for _, model := range edited.ModelList {
 		if model == nil {
 			continue
@@ -116,15 +115,11 @@ func reconcileEditedModelCredentials(original, edited *config.Config) error {
 		editedIdentities[identity] = struct{}{}
 		originalModel, exists := originalByIdentity[identity]
 		if !exists {
-			addedIdentities = append(addedIdentities, identity)
 			continue
 		}
 		if len(model.APIKeys) == 0 {
 			model.APIKeys = originalModel.APIKeys
 		}
-	}
-	if len(addedIdentities) == 0 {
-		return nil
 	}
 	for identity, model := range originalByIdentity {
 		if len(model.APIKeys) == 0 {
@@ -132,9 +127,8 @@ func reconcileEditedModelCredentials(original, edited *config.Config) error {
 		}
 		if _, exists := editedIdentities[identity]; !exists {
 			return fmt.Errorf(
-				"cannot rename credential-bearing model %q to %q in mcp edit; model credentials are stored separately",
+				"cannot rename or remove credential-bearing model %q in mcp edit; model credentials are stored separately",
 				model.ModelName,
-				addedIdentities[0].name,
 			)
 		}
 	}

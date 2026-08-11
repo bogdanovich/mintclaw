@@ -646,7 +646,7 @@ func TestMCPEditRejectsCredentialBearingModelRename(t *testing.T) {
 
 	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot rename credential-bearing model")
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
 	saved := readMCPConfig(t, configPath)
 	require.Len(t, saved.ModelList, 1)
 	assert.Equal(t, "private", saved.ModelList[0].ModelName)
@@ -695,6 +695,74 @@ func TestMCPEditDoesNotCopyCredentialToAddedDuplicateModelName(t *testing.T) {
 	require.Len(t, saved.ModelList[0].APIKeys, 1)
 	assert.Equal(t, "editor-secret", saved.ModelList[0].APIKeys[0].String())
 	assert.Empty(t, saved.ModelList[1].APIKeys)
+}
+
+func TestMCPEditRejectsCredentialRenameIntoExistingDuplicateIdentity(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{
+		{
+			ModelName: "private",
+			Model:     "openai/private",
+			APIKeys:   config.SimpleSecureStrings("private-secret"),
+			Enabled:   true,
+		},
+		{ModelName: "shared", Model: "openai/shared-a", Enabled: true},
+		{ModelName: "shared", Model: "openai/shared-b", Enabled: true},
+	}
+	writeMCPConfig(t, configPath, cfg)
+	originalEditor := editorCommand
+	originalRunner := editorProcessRun
+	defer func() {
+		editorCommand = originalEditor
+		editorProcessRun = originalRunner
+	}()
+	var tempPath string
+	editorCommand = func(name string, args ...string) *exec.Cmd {
+		tempPath = args[len(args)-1]
+		return exec.Command(name, args...)
+	}
+	editorProcessRun = func(*exec.Cmd) error {
+		data, err := os.ReadFile(tempPath)
+		if err != nil {
+			return err
+		}
+		var document map[string]any
+		if err = json.Unmarshal(data, &document); err != nil {
+			return err
+		}
+		models := document["model_list"].([]any)
+		models[0].(map[string]any)["model_name"] = "shared"
+		document["model_list"] = models[:2]
+		data, err = json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(tempPath, data, 0o600)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	_, err := executeCommand(NewMCPCommand(), []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
+	saved := readMCPConfig(t, configPath)
+	require.Len(t, saved.ModelList, 3)
+	assert.Equal(t, "private", saved.ModelList[0].ModelName)
+	require.Len(t, saved.ModelList[0].APIKeys, 1)
+	assert.Equal(t, "private-secret", saved.ModelList[0].APIKeys[0].String())
+}
+
+func TestMCPEditRejectsCredentialBearingModelRemoval(t *testing.T) {
+	original := config.DefaultConfig()
+	original.ModelList = []*config.ModelConfig{{
+		ModelName: "private",
+		APIKeys:   config.SimpleSecureStrings("private-secret"),
+	}}
+	edited := config.DefaultConfig()
+
+	err := reconcileEditedModelCredentials(original, edited)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rename or remove credential-bearing model")
 }
 
 func TestMCPEditRejectsConcurrentCanonicalChange(t *testing.T) {
