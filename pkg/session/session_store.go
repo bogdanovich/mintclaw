@@ -48,6 +48,11 @@ type SessionStore interface {
 type TurnHistoryStore interface {
 	ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
 	ReplaceTurnHistory(ctx context.Context, sessionKey string, history []providers.Message) error
+	MutateTurnHistory(
+		ctx context.Context,
+		sessionKey string,
+		mutate func([]providers.Message) ([]providers.Message, bool, error),
+	) (bool, error)
 	ClearSession(ctx context.Context, sessionKey string) error
 }
 

@@ -24,6 +24,7 @@ func NewPipeline(al *AgentLoop) *Pipeline {
 			PromptBuilder:         newConfigPipelinePromptBuilder(cfg),
 			ToolContentFilter:     newConfigToolContentFilter(cfg),
 			TrustAllToolExecution: al.hasCodingToolProfile(),
+			DurableToolLifecycle:  al.hasCodingToolProfile(),
 			HashToolArguments: func(workspace string, arguments map[string]any) (string, error) {
 				if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
 					return interactions.HashArgumentsAtPath(layout.StatePaths().InteractionKeyFile, arguments)

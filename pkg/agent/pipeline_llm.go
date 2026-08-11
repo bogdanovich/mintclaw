@@ -644,6 +644,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	for _, tc := range llm.response.ToolCalls {
 		llm.normalizedToolCalls = append(llm.normalizedToolCalls, providers.NormalizeToolCall(tc))
 	}
+	if p.Config.DurableToolLifecycle {
+		if err := validateDurableToolCallIDs(llm.normalizedToolCalls); err != nil {
+			return LLMCallOutcome{}, fmt.Errorf("invalid coding tool-call batch: %w", err)
+		}
+	}
 
 	toolNames := make([]string, 0, len(llm.normalizedToolCalls))
 	for _, tc := range llm.normalizedToolCalls {
@@ -723,6 +728,21 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	}
 
 	return LLMCallOutcome{Control: ControlToolLoop}, nil
+}
+
+func validateDurableToolCallIDs(calls []providers.ToolCall) error {
+	seen := make(map[string]struct{}, len(calls))
+	for index, call := range calls {
+		callID := strings.TrimSpace(call.ID)
+		if callID == "" {
+			return fmt.Errorf("tool call %d has an empty ID", index)
+		}
+		if _, duplicate := seen[callID]; duplicate {
+			return fmt.Errorf("tool call %d reuses ID %q", index, callID)
+		}
+		seen[callID] = struct{}{}
+	}
+	return nil
 }
 
 func turnIntroducedMedia(ts *turnState) bool {

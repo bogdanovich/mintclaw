@@ -7558,6 +7558,21 @@ func (s *replaceFailingSessionStore) ReplaceTurnHistory(
 	return s.err
 }
 
+func (s *replaceFailingSessionStore) MutateTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	if s.committed {
+		changed, err := s.SessionStore.MutateTurnHistory(ctx, sessionKey, mutate)
+		if err != nil {
+			return changed, err
+		}
+		return changed, &fileutil.CommittedWriteError{Err: s.err}
+	}
+	return false, s.err
+}
+
 func (p *visionUnsupportedMediaProvider) Chat(
 	ctx context.Context,
 	messages []providers.Message,

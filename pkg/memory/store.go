@@ -61,3 +61,14 @@ type HistoryRevision struct {
 type HistoryRevisionStore interface {
 	GetHistoryRevision(ctx context.Context, sessionKey string) (HistoryRevision, error)
 }
+
+// HistoryMutationStore atomically derives and persists a replacement from the
+// latest canonical history while excluding concurrent appends, truncation, and
+// compaction for the same session.
+type HistoryMutationStore interface {
+	MutateHistory(
+		ctx context.Context,
+		sessionKey string,
+		mutate func([]providers.Message) ([]providers.Message, bool, error),
+	) (bool, error)
+}

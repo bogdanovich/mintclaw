@@ -922,6 +922,9 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 		if msg.ToolCalls != nil {
 			cloned[i].ToolCalls = cloneProviderToolCalls(msg.ToolCalls)
 		}
+		if msg.ToolExecutions != nil {
+			cloned[i].ToolExecutions = append([]providers.ToolExecution(nil), msg.ToolExecutions...)
+		}
 	}
 	return cloned
 }

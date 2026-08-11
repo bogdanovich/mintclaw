@@ -205,6 +205,25 @@ func (b *JSONLBackend) ReplaceTurnHistory(
 	return b.store.SetHistory(ctx, resolvedKey, history)
 }
 
+func (b *JSONLBackend) MutateTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
+	if err != nil {
+		return false, err
+	}
+	store, ok := b.store.(memory.HistoryMutationStore)
+	if !ok {
+		return false, fmt.Errorf("session: atomic history mutation unsupported")
+	}
+	return store.MutateHistory(ctx, resolvedKey, mutate)
+}
+
 func (b *JSONLBackend) ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error) {
 	if err := contextCause(ctx); err != nil {
 		return nil, err

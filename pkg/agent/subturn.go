@@ -923,6 +923,11 @@ type ephemeralSessionStoreIface interface {
 	AppendTurnMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 	ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
 	ReplaceTurnHistory(ctx context.Context, sessionKey string, history []providers.Message) error
+	MutateTurnHistory(
+		ctx context.Context,
+		sessionKey string,
+		mutate func([]providers.Message) ([]providers.Message, bool, error),
+	) (bool, error)
 	ClearSession(ctx context.Context, sessionKey string) error
 	RestoreTurnSnapshot(ctx context.Context, sessionKey string, history []providers.Message, summary string) error
 	AddMessage(sessionKey, role, content string)
@@ -992,6 +997,30 @@ func (e *ephemeralSessionStore) ReplaceTurnHistory(
 	e.history = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
 	e.truncateLocked()
 	return nil
+}
+
+func (e *ephemeralSessionStore) MutateTurnHistory(
+	ctx context.Context,
+	_ string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return false, err
+		}
+	}
+	if mutate == nil {
+		return false, fmt.Errorf("history mutation callback is required")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	next, changed, err := mutate(append([]providers.Message(nil), e.history...))
+	if err != nil || !changed {
+		return false, err
+	}
+	e.history = messageutil.FilterInvalidHistoryMessages(next)
+	e.truncateLocked()
+	return true, nil
 }
 
 func (e *ephemeralSessionStore) ReadTurnHistory(

@@ -78,6 +78,9 @@ func TestAdd(t *testing.T) {
 		llmscenario.ProviderStep{
 			Name: "test fixture",
 			Assert: func(call llmscenario.ProviderCall) error {
+				if err := requireNoToolExecutionMetadata(call.Messages); err != nil {
+					return err
+				}
 				return requireToolResults(call.Messages, "write-1", "append-1")
 			},
 			Response: llmscenario.ToolCallResponse(
@@ -88,8 +91,13 @@ func TestAdd(t *testing.T) {
 			),
 		},
 		llmscenario.ProviderStep{
-			Name:     "report success",
-			Assert:   llmscenario.RequireLastMessage("tool", "ok"),
+			Name: "report success",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if err := requireNoToolExecutionMetadata(call.Messages); err != nil {
+					return err
+				}
+				return llmscenario.RequireLastMessage("tool", "ok")(call)
+			},
 			Response: llmscenario.TextResponse("fixed and tested"),
 		},
 	)
@@ -109,12 +117,25 @@ func TestAdd(t *testing.T) {
 		loop.Close()
 		t.Fatalf("response = %q", response)
 	}
+	liveHistory := loop.GetRegistry().GetDefaultAgent().Sessions.GetHistory("coding:thread-tools")
 	if err := requireToolPairs(
-		loop.GetRegistry().GetDefaultAgent().Sessions.GetHistory("coding:thread-tools"),
+		liveHistory,
 		"list-1", "search-1", "read-1", "patch-1", "write-1", "append-1", "exec-1",
 	); err != nil {
 		loop.Close()
 		t.Fatalf("live journal: %v", err)
+	}
+	for _, callID := range []string{"patch-1", "write-1", "append-1", "exec-1"} {
+		if !hasToolExecutionMarker(liveHistory, callID) {
+			loop.Close()
+			t.Fatalf("live journal is missing durable start marker for %q", callID)
+		}
+	}
+	for _, callID := range []string{"list-1", "search-1", "read-1"} {
+		if hasToolExecutionMarker(liveHistory, callID) {
+			loop.Close()
+			t.Fatalf("read-only tool %q unexpectedly received a durable start marker", callID)
+		}
 	}
 	loop.Close()
 	if err := provider.AssertExhausted(); err != nil {
@@ -146,6 +167,11 @@ func TestAdd(t *testing.T) {
 	}
 	if !hasToolResult(reopenedHistory, "exec-1", "ok") {
 		t.Fatal("reopened journal is missing the successful exec output")
+	}
+	for _, callID := range []string{"patch-1", "write-1", "append-1", "exec-1"} {
+		if !hasToolExecutionMarker(reopenedHistory, callID) {
+			t.Fatalf("reopened journal is missing durable start marker for %q", callID)
+		}
 	}
 	response, err = resumed.ProcessDirect(context.Background(), "what happened?", "coding:thread-tools")
 	if err != nil {
@@ -209,6 +235,30 @@ func hasToolResult(messages []providers.Message, callID, contains string) bool {
 		}
 	}
 	return false
+}
+
+func hasToolExecutionMarker(messages []providers.Message, callID string) bool {
+	callHash := toolLifecycleCallHash(callID)
+	for _, message := range messages {
+		if message.Role != "assistant" {
+			continue
+		}
+		for _, marker := range message.ToolExecutions {
+			if marker.CallIDHash == callHash && marker.State == toolExecutionStartedState {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requireNoToolExecutionMetadata(messages []providers.Message) error {
+	for _, message := range messages {
+		if len(message.ToolExecutions) > 0 {
+			return fmt.Errorf("provider context leaked %d durable tool start markers", len(message.ToolExecutions))
+		}
+	}
+	return nil
 }
 
 func newCodingToolTestProfile(t *testing.T, project, stateRoot string) (RuntimeLayout, RuntimeProfile) {

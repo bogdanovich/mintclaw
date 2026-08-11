@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
@@ -502,5 +504,63 @@ func TestJSONLBackend_EnsureSessionMetadata_DoesNotOverwriteNonEmptyCanonicalHis
 	history := b.GetHistory(canonicalKey)
 	if len(history) != 1 || history[0].Content != "current canonical history" {
 		t.Fatalf("canonical history overwritten: %+v", history)
+	}
+}
+
+func TestJSONLBackend_MutateTurnHistoryDoesNotLoseConcurrentAppend(t *testing.T) {
+	b := newBackend(t)
+	const sessionKey = "atomic-mutation"
+	if err := b.AppendTurnMessage(
+		context.Background(), sessionKey, providers.Message{Role: "assistant", Content: "intent"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	appendStarted := make(chan struct{})
+	appendDone := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var mutationErr, appendErr error
+	go func() {
+		defer wg.Done()
+		_, mutationErr = b.MutateTurnHistory(
+			context.Background(),
+			sessionKey,
+			func(history []providers.Message) ([]providers.Message, bool, error) {
+				close(mutationStarted)
+				<-releaseMutation
+				history[0].Content = "intent with marker"
+				return history, true, nil
+			},
+		)
+	}()
+	select {
+	case <-mutationStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for atomic mutation")
+	}
+	go func() {
+		defer wg.Done()
+		defer close(appendDone)
+		close(appendStarted)
+		appendErr = b.AppendTurnMessage(
+			context.Background(), sessionKey, providers.Message{Role: "user", Content: "concurrent append"},
+		)
+	}()
+	<-appendStarted
+	select {
+	case <-appendDone:
+		t.Fatal("concurrent append was not excluded by atomic history mutation")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseMutation)
+	wg.Wait()
+	if mutationErr != nil || appendErr != nil {
+		t.Fatalf("mutation/append errors = %v / %v", mutationErr, appendErr)
+	}
+	history := b.GetHistory(sessionKey)
+	if len(history) != 2 || history[0].Content != "intent with marker" || history[1].Content != "concurrent append" {
+		t.Fatalf("canonical history lost a concurrent operation: %#v", history)
 	}
 }

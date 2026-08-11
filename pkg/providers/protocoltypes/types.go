@@ -116,6 +116,7 @@ type Message struct {
 	ToolCalls        []ToolCall       `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ToolResultStatus ToolResultStatus `json:"tool_result_status,omitempty"`
+	ToolExecutions   []ToolExecution  `json:"tool_executions,omitempty"`
 
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.
@@ -125,14 +126,26 @@ type Message struct {
 	InboundSpoolID string `json:"-"`
 }
 
+// ToolExecution is canonical-journal-only evidence that a tool invocation
+// crossed the durable start boundary. It deliberately stores no argument
+// values; providers receive copies with this metadata removed.
+type ToolExecution struct {
+	CallIDHash string    `json:"call_id_hash"`
+	Tool       string    `json:"tool"`
+	State      string    `json:"state"`
+	StartedAt  time.Time `json:"started_at"`
+}
+
 // ToolResultStatus records whether a persisted tool result is safe to compact.
 // Empty means unknown and must be treated conservatively.
 type ToolResultStatus string
 
 const (
-	ToolResultStatusSuccess    ToolResultStatus = "success"
-	ToolResultStatusError      ToolResultStatus = "error"
-	ToolResultStatusUnresolved ToolResultStatus = "unresolved"
+	ToolResultStatusSuccess     ToolResultStatus = "success"
+	ToolResultStatusError       ToolResultStatus = "error"
+	ToolResultStatusUnresolved  ToolResultStatus = "unresolved"
+	ToolResultStatusInterrupted ToolResultStatus = "interrupted"
+	ToolResultStatusUnknown     ToolResultStatus = "unknown"
 )
 
 type ToolDefinition struct {
