@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -181,6 +182,25 @@ func TestRunAdd_WithExplicitModel_NoNetwork(t *testing.T) {
 	assert.True(t, added.Enabled)
 	require.Len(t, added.APIKeys, 1)
 	assert.Equal(t, "k", added.APIKeys[0].String())
+}
+
+func TestUpsertModelDefaultRejectsInvalidRuntimeOverrideWithoutWriting(t *testing.T) {
+	initTest(t)
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Save(config.DefaultConfig()); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	t.Setenv("MINTCLAW_TOOLS_EXEC_PERMISSION_MODE", "readonly")
+
+	err = upsertModelDefault("https://example.com/v1", "key", "alias", "model", &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load config")
+	assert.NotContains(t, err.Error(), "failed to save config")
+	after, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, before, after, "read-only preflight wrote config")
 }
 
 func findModelByName(cfg *config.Config, name string) *config.ModelConfig {

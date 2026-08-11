@@ -164,6 +164,10 @@ func pickModel(stdin io.Reader, stdout io.Writer, entries []modelEntry) (string,
 
 func upsertModelDefault(apiBase, apiKey, alias, modelID string, stdout io.Writer) error {
 	configPath := internal.GetConfigPath()
+	if _, err := internal.LoadConfigAt(configPath); err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
 	secureKeys := config.SimpleSecureStrings(apiKey)
 	_, err := internal.UpdateConfigAt(configPath, func(cfg *config.Config) error {
 		found := false
