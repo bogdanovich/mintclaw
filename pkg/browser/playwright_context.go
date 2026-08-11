@@ -136,7 +136,7 @@ func (worker *playwrightWorker) OpenTab(ctx context.Context) (ContextCatalog, er
 	if err := worker.contextAvailableLocked(); err != nil {
 		return ContextCatalog{}, err
 	}
-	current, _, err := worker.probeContextsLocked(ctx)
+	current, before, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		return ContextCatalog{}, err
 	}
@@ -150,10 +150,14 @@ func (worker *playwrightWorker) OpenTab(ctx context.Context) (ContextCatalog, er
 		worker.lost = true
 		return ContextCatalog{}, err
 	}
-	catalog, err := worker.contextCatalogLocked(ctx)
+	catalog, after, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		worker.lost = true
 		return ContextCatalog{}, err
+	}
+	if !verifiedOpenedTab(before, after) {
+		worker.lost = true
+		return ContextCatalog{}, ErrDriverIncompatible
 	}
 	return catalog, nil
 }
@@ -232,7 +236,7 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 	if err := worker.contextAvailableLocked(); err != nil {
 		return ContextCatalog{}, err
 	}
-	catalog, _, err := worker.probeContextsLocked(ctx)
+	catalog, raw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		return ContextCatalog{}, err
 	}
@@ -265,6 +269,8 @@ func (worker *playwrightWorker) CloseTab(ctx context.Context, tabID string) (Con
 	}
 	delete(worker.contextState.tabs, tabID)
 	delete(worker.contextState.tabIndexes, tabID)
+	delete(worker.contextState.tabSequence, tabID)
+	worker.removeRawTabFrames(raw, rawToken)
 	if worker.contextState.selectedTabID == tabID {
 		worker.contextState.selectedTabID = ""
 		worker.contextState.selectedFrame = ""
@@ -489,11 +495,13 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 		if _, live := liveTabs[id]; !live {
 			delete(state.tabs, id)
 			delete(state.tabIndexes, id)
+			delete(state.tabSequence, id)
 		}
 	}
 	for id := range state.frames {
 		if _, live := liveFrames[id]; !live {
 			delete(state.frames, id)
+			delete(state.frameSequence, id)
 		}
 	}
 	if state.selectedFrame != "" {
@@ -518,6 +526,49 @@ func (worker *playwrightWorker) projectContextCatalog(raw playwrightRawContextCa
 		return ContextCatalog{}, errors.Join(ErrDriverIncompatible, err)
 	}
 	return catalog, nil
+}
+
+func verifiedOpenedTab(before, after playwrightRawContextCatalog) bool {
+	if len(after.Pages) != len(before.Pages)+1 {
+		return false
+	}
+	beforeTokens := make(map[string]struct{}, len(before.Pages))
+	for _, page := range before.Pages {
+		beforeTokens[page.Token] = struct{}{}
+	}
+	retained := 0
+	var opened *playwrightRawPage
+	for index := range after.Pages {
+		page := &after.Pages[index]
+		if _, existed := beforeTokens[page.Token]; existed {
+			retained++
+			continue
+		}
+		if opened != nil {
+			return false
+		}
+		opened = page
+	}
+	return retained == len(beforeTokens) && opened != nil && after.Selected == opened.Token &&
+		opened.Opener == "" && opened.URL == initialBlankOrigin && opened.Generation == 1
+}
+
+func (worker *playwrightWorker) removeRawTabFrames(raw playwrightRawContextCatalog, rawTab string) {
+	for _, page := range raw.Pages {
+		if page.Token != rawTab {
+			continue
+		}
+		for _, frame := range page.Frames {
+			for id, rawFrame := range worker.contextState.frames {
+				if rawFrame != frame.Token {
+					continue
+				}
+				delete(worker.contextState.frames, id)
+				delete(worker.contextState.frameSequence, id)
+			}
+		}
+		return
+	}
 }
 
 func reverseContextIDs(values map[string]string) map[string]string {

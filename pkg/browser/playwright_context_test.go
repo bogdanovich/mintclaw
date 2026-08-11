@@ -180,7 +180,10 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 	opened.Selected = "p2"
 	opened.Pages = append(
 		opened.Pages,
-		playwrightRawPage{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+		playwrightRawPage{
+			Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin,
+			Frames: []playwrightRawFrame{{Token: "f2", Generation: 1, URL: initialBlankOrigin}},
+		},
 	)
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
@@ -204,6 +207,11 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 	if err != nil || len(closed.Tabs) != 1 || closed.SelectedTabID != closed.Tabs[0].ID {
 		t.Fatalf("CloseTab() = %#v, %v", closed, err)
 	}
+	if len(worker.contextState.tabs) != 1 || len(worker.contextState.tabIndexes) != 1 ||
+		len(worker.contextState.tabSequence) != 1 || len(worker.contextState.frames) != 0 ||
+		len(worker.contextState.frameSequence) != 0 {
+		t.Fatalf("post-close tab registries = %#v", worker.contextState)
+	}
 	for _, call := range client.calls {
 		if call.tool == "browser_tabs" && call.arguments["action"] == "close" {
 			t.Fatal("close crossed the Playwright boundary by stale index")
@@ -224,6 +232,92 @@ func TestPlaywrightOpenAndCloseTabsEnforceBoundsAndFinalTab(t *testing.T) {
 	for _, call := range finalClient.calls {
 		if call.tool == "browser_tabs" {
 			t.Fatal("final tab reached the driver close boundary")
+		}
+	}
+}
+
+func TestPlaywrightOpenTabRejectsAmbiguousTerminalState(t *testing.T) {
+	oneTab := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+	}}
+	twoTabs := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+		{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+	}}
+	for _, test := range []struct {
+		name   string
+		before playwrightRawContextCatalog
+		after  playwrightRawContextCatalog
+	}{
+		{name: "no new tab", before: oneTab, after: oneTab},
+		{name: "new tab not selected", before: oneTab, after: playwrightRawContextCatalog{
+			Generation: 3, Selected: "p1", Pages: []playwrightRawPage{
+				{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+			},
+		}},
+		{name: "popup substituted", before: oneTab, after: playwrightRawContextCatalog{
+			Generation: 3, Selected: "p2", Pages: []playwrightRawPage{
+				{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p2", Index: 1, Opener: "p1", Generation: 1, URL: initialBlankOrigin},
+			},
+		}},
+		{name: "multiple new tabs", before: oneTab, after: playwrightRawContextCatalog{
+			Generation: 4, Selected: "p3", Pages: []playwrightRawPage{
+				{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p2", Index: 1, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p3", Index: 2, Generation: 1, URL: initialBlankOrigin},
+			},
+		}},
+		{name: "old tab replaced", before: twoTabs, after: playwrightRawContextCatalog{
+			Generation: 4, Selected: "p4", Pages: []playwrightRawPage{
+				{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p3", Index: 1, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p4", Index: 2, Generation: 1, URL: initialBlankOrigin},
+			},
+		}},
+		{name: "new tab navigated", before: oneTab, after: playwrightRawContextCatalog{
+			Generation: 3, Selected: "p2", Pages: []playwrightRawPage{
+				{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+				{Token: "p2", Index: 1, Generation: 2, URL: "https://example.com/"},
+			},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": {
+					contextProbeResult(t, test.before), contextProbeResult(t, test.after),
+				},
+			}}
+			worker := contextTestWorker(client)
+			if _, err := worker.OpenTab(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+				t.Fatalf("OpenTab(ambiguous) error = %v", err)
+			}
+			if !worker.lost {
+				t.Fatal("ambiguous open did not retire the worker")
+			}
+		})
+	}
+}
+
+func TestPlaywrightContextCatalogBoundsSequenceRegistriesUnderChurn(t *testing.T) {
+	worker := contextTestWorker(&fakePlaywrightClient{})
+	for generation := uint64(1); generation <= 32; generation++ {
+		token := fmt.Sprintf("p%d", generation)
+		frameToken := fmt.Sprintf("f%d", generation)
+		raw := playwrightRawContextCatalog{Generation: generation, Selected: token, Pages: []playwrightRawPage{{
+			Token: token, Index: 0, Generation: 1, URL: initialBlankOrigin,
+			Frames: []playwrightRawFrame{{
+				Token: frameToken, Generation: 1, URL: initialBlankOrigin,
+			}},
+		}}}
+		if _, err := worker.projectContextCatalog(raw); err != nil {
+			t.Fatalf("project generation %d: %v", generation, err)
+		}
+		if len(worker.contextState.tabs) != 1 || len(worker.contextState.tabIndexes) != 1 ||
+			len(worker.contextState.tabSequence) != 1 || len(worker.contextState.frames) != 1 ||
+			len(worker.contextState.frameSequence) != 1 {
+			t.Fatalf("generation %d registries = %#v", generation, worker.contextState)
 		}
 	}
 }
