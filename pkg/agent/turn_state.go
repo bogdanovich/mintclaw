@@ -211,6 +211,7 @@ type LLMIterationState struct {
 	useNativeSearch             bool
 	assistantToolCallsPersisted bool
 	assistantToolCallsWriteErr  error
+	codingInstructionBarrier    bool
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {
@@ -307,16 +308,17 @@ type turnState struct {
 	profile config.EffectiveTurnProfile
 	scope   turnEventScope
 
-	turnID            string
-	executionID       string
-	agentID           string
-	sessionKey        string
-	activeSkills      []string
-	attemptedSkills   []string
-	skillContextTrace []SkillContextSnapshot
-	toolKinds         []string
-	toolExecutions    []ToolExecutionRecord
-	turnCtx           *TurnContext
+	turnID             string
+	executionID        string
+	agentID            string
+	sessionKey         string
+	activeSkills       []string
+	attemptedSkills    []string
+	skillContextTrace  []SkillContextSnapshot
+	toolKinds          []string
+	toolExecutions     []ToolExecutionRecord
+	turnCtx            *TurnContext
+	codingInstructions *codingInstructionTurnState
 
 	channel     string
 	chatID      string
@@ -420,11 +422,18 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	}
 
 	// Bind session store and capture initial history length for rollback logic
+	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		history = agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
 		ts.initialHistoryLength = len(history)
 		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(opts.Dispatch.SessionKey))
+	}
+	if agent != nil && agent.ContextBuilder != nil {
+		ts.codingInstructions = newCodingInstructionTurnState(
+			agent.ContextBuilder.codingInstructions,
+			history,
+		)
 	}
 
 	return ts

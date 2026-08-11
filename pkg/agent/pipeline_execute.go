@@ -922,6 +922,38 @@ func (runner *toolLoopRunner) invokeToolCall(
 		}, toolMessagePersistOnly)
 		return skipToolCall()
 	}
+	if llm.codingInstructionBarrier {
+		llm.toolResponseDisposition = toolResponseNeedsModel
+		content := "Tool execution was deferred because newly discovered project instructions must be " +
+			"reviewed first. Retry this tool call after reviewing the preceding instruction result."
+		p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: content},
+		)
+		_ = runner.appendToolMessage(providers.Message{
+			Role: "tool", Content: content, ToolCallID: tc.ID,
+		}, toolMessagePersistOnly)
+		return skipToolCall()
+	}
+	if instructions, discovered := ts.codingInstructions.discover(toolName, toolArgs); discovered {
+		llm.codingInstructionBarrier = true
+		llm.toolResponseDisposition = toolResponseNeedsModel
+		content := p.filterToolContentForLLM(renderCodingInstructionBundle(instructions, true))
+		p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{
+				ToolCallID: tc.ID,
+				Tool:       toolName,
+				Reason:     "new scoped project instructions must be reviewed before tool execution",
+			},
+		)
+		_ = runner.appendToolMessage(providers.Message{
+			Role: "tool", Content: content, ToolCallID: tc.ID,
+		}, toolMessagePersistOnly)
+		return skipToolCall()
+	}
 
 	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
 	argsJSON, _ := json.Marshal(auditArgs)

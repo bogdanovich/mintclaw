@@ -1039,10 +1039,16 @@ Done when:
 
 Dependencies: P2.1
 
+Implementation contract:
+[`local-coding-agent-p2-project-instructions.md`](local-coding-agent-p2-project-instructions.md)
+
 Scope:
 
-- Discover `AGENTS.md` from project root toward the invocation cwd for initial
-  context.
+- In each directory select exactly one of `AGENTS.override.md`, `AGENTS.md`, or
+  compatibility-fallback `CLAUDE.md`, in that priority order; never merge
+  same-directory files.
+- Discover the selected files from project root toward the invocation cwd for
+  initial context.
 - Define precedence for global coding instructions, repository instructions,
   and nested directory instructions.
 - When a tool first accesses a path below a more deeply nested instruction

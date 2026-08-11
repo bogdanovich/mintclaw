@@ -23,14 +23,15 @@ import (
 )
 
 type ContextBuilder struct {
-	workspace      string
-	promptProfile  RuntimePromptProfile
-	codingContext  CodingPromptContext
-	skillsLoader   *skills.SkillsLoader
-	memory         *MemoryStore
-	splitOnMarker  bool
-	agentDiscovery func(agentID string) []AgentDescriptor
-	promptRegistry *PromptRegistry
+	workspace          string
+	promptProfile      RuntimePromptProfile
+	codingContext      CodingPromptContext
+	codingInstructions *codingInstructionLoader
+	skillsLoader       *skills.SkillsLoader
+	memory             *MemoryStore
+	splitOnMarker      bool
+	agentDiscovery     func(agentID string) []AgentDescriptor
+	promptRegistry     *PromptRegistry
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -120,9 +121,10 @@ func newRuntimeContextBuilder(layout RuntimeLayout, promptProfile RuntimePromptP
 	builder.promptProfile = promptProfile
 	if promptProfile == RuntimePromptProfileCoding {
 		owner := layout.Owner()
+		builder.codingInstructions = newCodingInstructionLoader(layout)
 		builder.codingContext = CodingPromptContext{
 			ProjectRoot:      layout.ExecutionRoot(),
-			WorkingDirectory: layout.ExecutionRoot(),
+			WorkingDirectory: builder.codingInstructions.workingDirectory(),
 			ThreadID:         owner.ID,
 			SessionKey:       "coding:" + owner.ID,
 			TrustMode:        CodingTrustModeYolo,
@@ -309,7 +311,7 @@ func (cb *ContextBuilder) buildSystemPromptPartsForProfile(opts systemPromptBuil
 }
 
 func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
-	return []PromptPart{
+	parts := []PromptPart{
 		{
 			ID:      "kernel.coding_identity",
 			Layer:   PromptLayerKernel,
@@ -331,6 +333,22 @@ func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
 			Cache:   PromptCacheEphemeral,
 		},
 	}
+	if cb.codingInstructions != nil {
+		instructions := renderCodingInstructionBundle(cb.codingInstructions.initial(), false)
+		if instructions != "" {
+			parts = append(parts, PromptPart{
+				ID:      "instruction.coding_hierarchy",
+				Layer:   PromptLayerInstruction,
+				Slot:    PromptSlotWorkspace,
+				Source:  PromptSource{ID: PromptSourceWorkspace, Name: "project_instructions"},
+				Title:   "project instructions",
+				Content: instructions,
+				Stable:  true,
+				Cache:   PromptCacheEphemeral,
+			})
+		}
+	}
+	return parts
 }
 
 type systemPromptBuildOptions struct {
@@ -451,6 +469,12 @@ Each part separated by the marker will be sent as an independent message.`,
 // and source files haven't changed, otherwise builds and caches it.
 // Source file changes are detected via mtime checks (cheap stat calls).
 func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
+	// Coding instructions have their own path-identity cache and can change in
+	// directories that are intentionally outside the personal prompt cache's
+	// tracked bootstrap paths.
+	if cb.promptProfile == RuntimePromptProfileCoding {
+		return cb.BuildSystemPrompt()
+	}
 	// Try read lock first — fast path when cache is valid
 	cb.systemPromptMutex.RLock()
 	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
@@ -496,6 +520,17 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 ) (string, []providers.ContentBlock) {
 	if req.SuppressDefaultSystemPrompt {
 		return "", nil
+	}
+	if cb.promptProfile == RuntimePromptProfileCoding {
+		parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{})
+		staticPrompt := renderPromptPartsLegacy(parts)
+		return staticPrompt, []providers.ContentBlock{promptContentBlock(PromptPart{
+			ID:      "kernel.coding_static",
+			Layer:   PromptLayerKernel,
+			Slot:    PromptSlotIdentity,
+			Source:  PromptSource{ID: PromptSourceKernel, Name: "coding_static"},
+			Content: staticPrompt,
+		}, &providers.CacheControl{Type: "ephemeral"})}
 	}
 
 	useDefaultCache := !req.SuppressSkillContext &&

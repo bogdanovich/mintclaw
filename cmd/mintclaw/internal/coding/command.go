@@ -425,12 +425,23 @@ func runtimeLayoutFor(store *thread.Store, metadata thread.Metadata) (agent.Runt
 		agent.RuntimeOwner{Kind: agent.RuntimeOwnerCodingThread, ID: metadata.ThreadID},
 		metadata.Project.ProjectRoot,
 		stateRoot,
-		[]string{metadata.Project.ProjectRoot},
+		codingInstructionRoots(store, metadata),
 	)
 	if err != nil {
 		return agent.RuntimeLayout{}, fmt.Errorf("coding command: validate external runtime state: %w", err)
 	}
 	return layout, nil
+}
+
+func codingInstructionRoots(store *thread.Store, metadata thread.Metadata) []string {
+	roots := []string{
+		filepath.Join(store.Root(), "config"),
+		metadata.Project.ProjectRoot,
+	}
+	if metadata.Project.InvocationCWD != metadata.Project.ProjectRoot {
+		roots = append(roots, metadata.Project.InvocationCWD)
+	}
+	return roots
 }
 
 func renderResult(out io.Writer, result commandResult, jsonOutput bool) error {
