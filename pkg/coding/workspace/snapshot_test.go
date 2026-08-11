@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -117,7 +118,8 @@ func TestObserverPublishesOnlyChangedSnapshots(t *testing.T) {
 	root := initGitRepository(t)
 	observer := NewObserver(root, root, Limits{PromptBytes: 80})
 	observer.Refresh(t.Context())
-	if prompt := observer.RenderCurrent(t.Context()); len(prompt) != 80 || !utf8.ValidString(prompt) {
+	if prompt := observer.RenderCurrent(t.Context()); len(prompt) > 80 || !utf8.ValidString(prompt) ||
+		!strings.Contains(prompt, "prompt truncated") {
 		t.Fatalf("bounded observer prompt = %q (%d bytes)", prompt, len(prompt))
 	}
 	first, changed := observer.PendingUpdate(t.Context())
@@ -134,6 +136,77 @@ func TestObserverPublishesOnlyChangedSnapshots(t *testing.T) {
 	second, changed := observer.PendingUpdate(t.Context())
 	if !changed || !second.Git.Dirty || second.Identity() == first.Identity() {
 		t.Fatalf("changed update = %#v, %v", second, changed)
+	}
+}
+
+func TestCaptureDisablesConfiguredGitCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sentinel shell script is Unix-specific")
+	}
+	root := initGitRepository(t)
+	sentinel := filepath.Join(t.TempDir(), "git-command-ran")
+	script := filepath.Join(t.TempDir(), "git-command")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$1\"\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "config", "core.fsmonitor", script+" "+sentinel)
+	runGitTest(t, root, "config", "diff.external", script+" "+sentinel)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := Capture(t.Context(), root, root, Limits{})
+	if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || !snapshot.Git.Dirty {
+		t.Fatalf("snapshot with disabled Git extensions = %#v", snapshot)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("repository-configured Git command executed: %v", err)
+	}
+}
+
+func TestCaptureIgnoresAmbientGitRepositoryOverrides(t *testing.T) {
+	root := initGitRepository(t)
+	decoy := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(root, "root-only.txt"), []byte("root\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(decoy, "decoy-only.txt"), []byte("decoy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoy)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy, ".git", "index"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+
+	snapshot := Capture(t.Context(), root, root, Limits{})
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Git.TopLevel != canonicalRoot || len(snapshot.ChangedPaths) != 1 ||
+		snapshot.ChangedPaths[0].Path != "root-only.txt" {
+		t.Fatalf("ambient Git variables redirected snapshot = %#v", snapshot)
+	}
+}
+
+func TestRenderPromptTruncatesOnlyAtRecordBoundaryWithMarker(t *testing.T) {
+	snapshot := Snapshot{
+		ProjectRoot:       "/repo",
+		CWD:               "/repo",
+		Git:               GitState{Available: true, StatusAvailable: true, Branch: "main", Dirty: true},
+		DiffStatAvailable: true,
+		ChangedPaths: []ChangedPath{
+			{Path: strings.Repeat("a", 200), Status: "??"},
+			{Path: "must-not-appear.txt", Status: "??"},
+		},
+	}
+	rendered := RenderPrompt(snapshot, 320)
+	if len(rendered) > 320 || !utf8.ValidString(rendered) ||
+		!strings.Contains(rendered, "Snapshot status: prompt truncated to byte limit") ||
+		strings.Contains(rendered, "must-not-appear") || strings.Contains(rendered, strings.Repeat("a", 20)) {
+		t.Fatalf("record-bounded prompt = %q (%d bytes)", rendered, len(rendered))
 	}
 }
 

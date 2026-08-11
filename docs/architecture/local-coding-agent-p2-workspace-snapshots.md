@@ -37,6 +37,11 @@ stdout and stderr are drained through bounded writers. Paths are sorted before
 identity and rendering, and the observer hashes only structured bounded state.
 It never hashes or records file contents.
 
+Prompt rendering admits complete newline-delimited records only. When the next
+record would cross the prompt budget, rendering stops and reserves space for an
+explicit prompt-truncation marker; it never silently returns half of a quoted
+status path.
+
 For an unborn branch, the diff stat combines staged changes against the empty
 index view with unstaged changes against the index. Untracked paths are named
 by status but their contents and sizes are not treated as an implicit diff.
@@ -91,6 +96,11 @@ rule rather than preserving a stale repository claim in a summary.
 - Status paths are exposed because they are necessary repository state; file
   bodies, patch hunks, environment variables, remotes, and command output are
   excluded.
+- Observer Git commands discard ambient `GIT_*` variables, pin the locale,
+  disable `core.fsmonitor`, and pass `--no-ext-diff` to diff-stat commands.
+  Opening a repository therefore cannot redirect capture through ambient
+  repository/index variables or invoke configured fsmonitor/external-diff
+  commands.
 - The observer runs Git only at the admitted coding project root. Project
   identity resolution already makes a Git project's execution root its exact
   worktree root, keeping separate linked worktrees independent.
@@ -106,6 +116,11 @@ non-Git fallback, timeout behavior, and changed-only observer emission. A
 native scripted coding turn proves that the first model call sees clean state,
 an audited write refreshes the prompt before the next model call, file contents
 are not injected, and ordered clean/dirty workspace events are emitted.
+
+Sentinel regressions also prove that repository-configured fsmonitor and
+external-diff commands are not executed, ambient repository-selection variables
+cannot redirect capture, and prompt truncation ends at a record boundary with a
+visible marker.
 
 Frontend tests prove typed event projection, delta reduction, snapshot
 convergence, and slice isolation.

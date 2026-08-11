@@ -275,7 +275,7 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 
 func captureDiffStat(ctx context.Context, root string, unborn bool, limit int) (DiffStat, bool, string, bool) {
 	if !unborn {
-		diff, err := runGit(ctx, root, limit, "diff", "--numstat", "--no-renames", "-z", "HEAD")
+		diff, err := runGit(ctx, root, limit, "diff", "--no-ext-diff", "--numstat", "--no-renames", "-z", "HEAD")
 		if err != nil {
 			return DiffStat{}, false,
 				boundedWarning("Could not inspect Git diff stat", err, diff.stderr), diff.truncated
@@ -287,8 +287,18 @@ func captureDiffStat(ctx context.Context, root string, unborn bool, limit int) (
 	// worktree-to-index views so staged and unstaged changes are both visible.
 	// Untracked paths remain represented by ChangedPaths without reading their
 	// contents or implicitly treating their full size as a diff.
-	staged, stagedErr := runGit(ctx, root, limit, "diff", "--cached", "--numstat", "--no-renames", "-z")
-	unstaged, unstagedErr := runGit(ctx, root, limit, "diff", "--numstat", "--no-renames", "-z")
+	staged, stagedErr := runGit(
+		ctx,
+		root,
+		limit,
+		"diff",
+		"--no-ext-diff",
+		"--cached",
+		"--numstat",
+		"--no-renames",
+		"-z",
+	)
+	unstaged, unstagedErr := runGit(ctx, root, limit, "diff", "--no-ext-diff", "--numstat", "--no-renames", "-z")
 	warning := ""
 	if stagedErr != nil {
 		warning = joinWarning(
@@ -399,7 +409,7 @@ func RenderPrompt(snapshot Snapshot, maxBytes int) string {
 		builder.WriteString("\nSnapshot warning: ")
 		builder.WriteString(snapshot.Warning)
 	}
-	return truncateUTF8(builder.String(), maxBytes)
+	return boundPromptRecords(builder.String(), maxBytes)
 }
 
 type commandOutput struct {
@@ -430,8 +440,9 @@ func (buffer *limitedBuffer) Write(data []byte) (int, error) {
 func runGit(ctx context.Context, root string, limit int, args ...string) (commandOutput, error) {
 	stdout := &limitedBuffer{remaining: limit}
 	stderr := &limitedBuffer{remaining: min(limit, 4096)}
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	command.Env = append(os.Environ(), "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
+	commandArgs := append([]string{"-C", root, "-c", "core.fsmonitor=false"}, args...)
+	command := exec.CommandContext(ctx, "git", commandArgs...)
+	command.Env = sanitizedGitEnvironment()
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err := command.Run()
@@ -443,6 +454,19 @@ func runGit(ctx context.Context, root string, limit int, args ...string) (comman
 		stderr:    append([]byte(nil), stderr.buffer.Bytes()...),
 		truncated: stdout.truncated || stderr.truncated,
 	}, err
+}
+
+func sanitizedGitEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		upperKey := strings.ToUpper(key)
+		if strings.HasPrefix(upperKey, "GIT_") || upperKey == "LC_ALL" {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
 }
 
 func parseStatus(data []byte) []ChangedPath {
@@ -596,4 +620,23 @@ func truncateUTF8(value string, limit int) string {
 		data = data[:len(data)-1]
 	}
 	return string(data)
+}
+
+func boundPromptRecords(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	const marker = "\nSnapshot status: prompt truncated to byte limit"
+	if limit <= len(marker) {
+		return truncateUTF8(strings.TrimPrefix(marker, "\n"), limit)
+	}
+	budget := limit - len(marker)
+	var builder strings.Builder
+	for _, record := range strings.SplitAfter(value, "\n") {
+		if builder.Len()+len(record) > budget {
+			break
+		}
+		builder.WriteString(record)
+	}
+	return strings.TrimRight(builder.String(), "\n") + marker
 }
