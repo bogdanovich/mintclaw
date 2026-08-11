@@ -41,7 +41,7 @@ func newResetCommand() *cobra.Command {
 			}
 
 			configPath := internal.GetConfigPath()
-			if err := config.ResetToDefaults(configPath); err != nil {
+			if _, err := config.NewRepository(configPath).ResetToDefaults(); err != nil {
 				return fmt.Errorf("reset failed: %w", err)
 			}
 			fmt.Println("Configuration has been reset to factory defaults.")

@@ -20,6 +20,7 @@ func onboard(encrypt bool) {
 	configPath := internal.GetConfigPath()
 
 	configExists := false
+	resetConfig := false
 	if _, err := os.Stat(configPath); err == nil {
 		configExists = true
 		if encrypt {
@@ -36,7 +37,7 @@ func onboard(encrypt bool) {
 					fmt.Println("Aborted.")
 					return
 				}
-				configExists = false // user agreed to reset; treat as fresh
+				resetConfig = true
 			}
 			// Config exists but SSH key is missing — keep existing config, only add SSH key.
 		}
@@ -52,7 +53,7 @@ func onboard(encrypt bool) {
 			os.Exit(1)
 		}
 		// Expose the passphrase to credential.PassphraseProvider (which calls
-		// os.Getenv by default) so that SaveConfig can encrypt api_keys.
+		// os.Getenv by default) so that the repository can encrypt api_keys.
 		// This process is a one-shot CLI tool; the env var is never exposed outside
 		// the current process and disappears when it exits.
 		_ = os.Setenv(credential.PassphraseEnvVar, passphrase)
@@ -63,18 +64,13 @@ func onboard(encrypt bool) {
 		}
 	}
 
-	var cfg *config.Config
-	if configExists {
-		// Preserve the existing config; SaveConfig will re-encrypt api_keys with the new passphrase.
-		cfg, err = config.LoadConfig(configPath)
-		if err != nil {
-			fmt.Printf("Error loading existing config: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.DefaultConfig()
+	repository := config.NewRepository(configPath)
+	cfg, expectedRevision, err := prepareOnboardConfig(repository, configExists && !resetConfig)
+	if err != nil {
+		fmt.Printf("Error loading existing config: %v\n", err)
+		os.Exit(1)
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+	if err = saveOnboardConfig(repository, cfg, expectedRevision); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
 	}
@@ -83,6 +79,29 @@ func onboard(encrypt bool) {
 	createWorkspaceTemplates(workspace)
 
 	cliui.PrintOnboardComplete(internal.Logo, encrypt, configPath)
+}
+
+func prepareOnboardConfig(
+	repository *config.Repository,
+	preserveExisting bool,
+) (*config.Config, config.Revision, error) {
+	snapshot, err := repository.ReadDurable()
+	if err != nil {
+		return nil, "", err
+	}
+	if !preserveExisting {
+		return config.DefaultConfig(), snapshot.Revision, nil
+	}
+	return snapshot.Config, snapshot.Revision, nil
+}
+
+func saveOnboardConfig(
+	repository *config.Repository,
+	cfg *config.Config,
+	expectedRevision config.Revision,
+) error {
+	_, err := repository.Replace(expectedRevision, cfg)
+	return err
 }
 
 // promptPassphrase reads the encryption passphrase twice from the terminal

@@ -107,11 +107,8 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 	}
 
 	incoming := mintclawCfg.ToStandardConfig()
-	if err := os.MkdirAll(filepath.Dir(dstConfigPath), 0o755); err != nil {
-		return err
-	}
-
-	return config.SaveConfig(dstConfigPath, incoming)
+	_, err = config.NewRepository(dstConfigPath).Save(incoming)
+	return err
 }
 
 func resolveSourceHome(override string) (string, error) {

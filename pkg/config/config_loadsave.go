@@ -749,21 +749,6 @@ func (c *Config) SecurityCopyFrom(path string) error {
 	return loadSecurityConfig(c, securityPath(path))
 }
 
-// ResetToDefaults backs up the current config, creates a default config,
-// preserves security credentials from the existing config, and saves it.
-func ResetToDefaults(configPath string) error {
-	if err := MakeBackup(configPath); err != nil {
-		return fmt.Errorf("backup before reset: %w", err)
-	}
-	cfg := DefaultConfig()
-	cfg.Session.ApplyDmScope()
-	cfg.Session.DeriveDmScope()
-	if err := cfg.SecurityCopyFrom(configPath); err != nil {
-		logger.WarnF("could not preserve security config", map[string]any{"error": err})
-	}
-	return SaveConfig(configPath, cfg)
-}
-
 func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 	var expanded []*ModelConfig
 
