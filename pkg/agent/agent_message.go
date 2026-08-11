@@ -86,9 +86,13 @@ func (al *AgentLoop) processCodingDirect(
 	if cfg := al.GetConfig(); cfg != nil {
 		providerFallback = cfg.Agents.Defaults.Provider
 	}
+	workingDirectory := layout.ExecutionRoot()
+	if agent.ContextBuilder != nil && agent.ContextBuilder.codingInstructions != nil {
+		workingDirectory = agent.ContextBuilder.codingInstructions.workingDirectory()
+	}
 	codingContext := CodingPromptContext{
 		ProjectRoot:      layout.ExecutionRoot(),
-		WorkingDirectory: layout.ExecutionRoot(),
+		WorkingDirectory: workingDirectory,
 		ThreadID:         layout.Owner().ID,
 		SessionKey:       wantSessionKey,
 		TrustMode:        CodingTrustModeYolo,

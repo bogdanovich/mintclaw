@@ -391,6 +391,32 @@ func TestPlainResultDistinguishesProjectAndWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestCodingInstructionRootsIncludeGlobalProjectAndInvocationCWD(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "nested")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := codingInstructionRoots(store, thread.Metadata{Project: thread.ProjectIdentity{
+		ProjectRoot:   project,
+		InvocationCWD: cwd,
+	}})
+	want := []string{filepath.Join(store.Root(), "config"), project, cwd}
+	if len(roots) != len(want) {
+		t.Fatalf("instruction roots = %#v, want %#v", roots, want)
+	}
+	for index := range want {
+		if roots[index] != want[index] {
+			t.Fatalf("instruction root %d = %q, want %q", index, roots[index], want[index])
+		}
+	}
+}
+
 func TestAppendOutcomeAllowsMetadataSave(t *testing.T) {
 	cause := errors.New("fixture")
 	cases := []struct {
