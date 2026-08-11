@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 const (
@@ -256,6 +258,14 @@ func (p *Projector) ContextUsage(used, limit int) Delta {
 	})
 }
 
+func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) Delta {
+	return p.mutate(DeltaWorkspaceUpdated, func(state *ThreadSnapshot, delta *Delta) {
+		workspace := cloneWorkspaceSnapshot(snapshot)
+		state.Workspace = &workspace
+		delta.Workspace = &workspace
+	})
+}
+
 func (p *Projector) CompactionStarted() Delta {
 	return p.activity(DeltaCompactionStarted, ActivityCompacting, "compacting context")
 }
@@ -431,6 +441,10 @@ func contextError(ctx context.Context) error {
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = slices.Clone(snapshot.Tools)
+	if snapshot.Workspace != nil {
+		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
+		snapshot.Workspace = &workspace
+	}
 	return snapshot
 }
 
@@ -447,5 +461,14 @@ func cloneDelta(delta Delta) Delta {
 		usage := *delta.ContextUsage
 		delta.ContextUsage = &usage
 	}
+	if delta.Workspace != nil {
+		workspace := cloneWorkspaceSnapshot(*delta.Workspace)
+		delta.Workspace = &workspace
+	}
 	return delta
+}
+
+func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {
+	snapshot.ChangedPaths = slices.Clone(snapshot.ChangedPaths)
+	return snapshot
 }

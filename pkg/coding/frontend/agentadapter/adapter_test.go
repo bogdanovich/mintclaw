@@ -8,6 +8,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
@@ -68,6 +69,45 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
 		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
+	}
+}
+
+func TestAdapterProjectsWorkspaceSnapshot(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind:   runtimeevents.KindAgentWorkspaceSnapshot,
+		Source: runtimeevents.Source{Component: "agent", Name: "coding"},
+		Scope: runtimeevents.Scope{
+			SessionKey: "thread-1",
+			TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+		},
+		Payload: agent.WorkspaceSnapshotPayload{Snapshot: codingworkspace.Snapshot{
+			ProjectRoot: "/repo",
+			CWD:         "/repo",
+			Git:         codingworkspace.GitState{Available: true, Branch: "main", Dirty: true},
+			ChangedPaths: []codingworkspace.ChangedPath{
+				{Path: "changed.go", Status: " M"},
+			},
+		}},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 1 || snapshot.Workspace == nil ||
+		snapshot.Workspace.ChangedPaths[0].Path != "changed.go" {
+		t.Fatalf("projected workspace = %+v", snapshot.Workspace)
 	}
 }
 

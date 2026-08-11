@@ -21,6 +21,8 @@ const (
 	KindAgentContextCompress Kind = "agent.context.compress"
 	// KindAgentContextSnapshot captures a bounded final context identity.
 	KindAgentContextSnapshot Kind = "agent.context.snapshot"
+	// KindAgentWorkspaceSnapshot captures fresh deterministic coding workspace state.
+	KindAgentWorkspaceSnapshot Kind = "agent.workspace.snapshot"
 	// KindAgentSessionSummarize is emitted when session summarization completes.
 	KindAgentSessionSummarize Kind = "agent.session.summarize"
 	// KindAgentMemoryMutation records a stable or episodic memory mutation outcome.
@@ -145,6 +147,7 @@ var knownKinds = []Kind{
 	KindAgentLLMFallbackAttempt,
 	KindAgentContextCompress,
 	KindAgentContextSnapshot,
+	KindAgentWorkspaceSnapshot,
 	KindAgentSessionSummarize,
 	KindAgentMemoryMutation,
 	KindAgentToolExecStart,

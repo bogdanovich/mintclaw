@@ -544,6 +544,7 @@ func (runner *toolLoopRunner) admitToolCall(
 						),
 					},
 				)
+				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
 				ts.recordToolExecution(
 					toolName,
 					!hookResult.IsError,
@@ -1253,6 +1254,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			),
 		},
 	)
+	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)
 	ts.recordToolExecution(
 		toolName,
 		!toolResult.IsError,

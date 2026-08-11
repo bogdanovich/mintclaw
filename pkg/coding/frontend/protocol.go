@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 const ProtocolVersion = "mintclaw.coding.frontend.v1"
@@ -76,15 +78,16 @@ type ContextUsage struct {
 // ThreadSnapshot is the authoritative, bounded frontend projection. It is not
 // the canonical coding transcript and may omit old entries and large output.
 type ThreadSnapshot struct {
-	ProtocolVersion string            `json:"protocol_version"`
-	ThreadID        string            `json:"thread_id"`
-	Revision        Revision          `json:"revision"`
-	Activity        Activity          `json:"activity"`
-	Entries         []TranscriptEntry `json:"entries,omitempty"`
-	Tools           []ToolState       `json:"tools,omitempty"`
-	ContextUsage    ContextUsage      `json:"context_usage,omitempty"`
-	Status          string            `json:"status,omitempty"`
-	HasOlderEntries bool              `json:"has_older_entries,omitempty"`
+	ProtocolVersion string                    `json:"protocol_version"`
+	ThreadID        string                    `json:"thread_id"`
+	Revision        Revision                  `json:"revision"`
+	Activity        Activity                  `json:"activity"`
+	Entries         []TranscriptEntry         `json:"entries,omitempty"`
+	Tools           []ToolState               `json:"tools,omitempty"`
+	ContextUsage    ContextUsage              `json:"context_usage,omitempty"`
+	Workspace       *codingworkspace.Snapshot `json:"workspace,omitempty"`
+	Status          string                    `json:"status,omitempty"`
+	HasOlderEntries bool                      `json:"has_older_entries,omitempty"`
 }
 
 type DeltaKind string
@@ -99,6 +102,7 @@ const (
 	DeltaToolOutput         DeltaKind = "tool_output"
 	DeltaToolCompleted      DeltaKind = "tool_completed"
 	DeltaContextUsage       DeltaKind = "context_usage_updated"
+	DeltaWorkspaceUpdated   DeltaKind = "workspace_updated"
 	DeltaCompactionStarted  DeltaKind = "compaction_started"
 	DeltaCompactionComplete DeltaKind = "compaction_completed"
 	DeltaCompactionFailed   DeltaKind = "compaction_failed"
@@ -111,17 +115,18 @@ const (
 // Delta contains a complete bounded replacement for the entity it changes.
 // PreviousRevision makes missing or reordered progress detectable.
 type Delta struct {
-	ProtocolVersion  string           `json:"protocol_version"`
-	ThreadID         string           `json:"thread_id"`
-	PreviousRevision Revision         `json:"previous_revision"`
-	Revision         Revision         `json:"revision"`
-	Kind             DeltaKind        `json:"kind"`
-	Entry            *TranscriptEntry `json:"entry,omitempty"`
-	Tool             *ToolState       `json:"tool,omitempty"`
-	ContextUsage     *ContextUsage    `json:"context_usage,omitempty"`
-	Activity         Activity         `json:"activity,omitempty"`
-	Status           string           `json:"status,omitempty"`
-	RequiresSnapshot bool             `json:"requires_snapshot,omitempty"`
+	ProtocolVersion  string                    `json:"protocol_version"`
+	ThreadID         string                    `json:"thread_id"`
+	PreviousRevision Revision                  `json:"previous_revision"`
+	Revision         Revision                  `json:"revision"`
+	Kind             DeltaKind                 `json:"kind"`
+	Entry            *TranscriptEntry          `json:"entry,omitempty"`
+	Tool             *ToolState                `json:"tool,omitempty"`
+	ContextUsage     *ContextUsage             `json:"context_usage,omitempty"`
+	Workspace        *codingworkspace.Snapshot `json:"workspace,omitempty"`
+	Activity         Activity                  `json:"activity,omitempty"`
+	Status           string                    `json:"status,omitempty"`
+	RequiresSnapshot bool                      `json:"requires_snapshot,omitempty"`
 }
 
 // SnapshotSource is the read side of the frontend controller boundary.

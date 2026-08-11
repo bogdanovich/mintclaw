@@ -7,8 +7,59 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
+
+func TestWorkspaceUpdateConvergesAndDoesNotAliasCallerState(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := codingworkspace.Snapshot{
+		ProjectRoot: "/repo",
+		CWD:         "/repo/subdir",
+		Git:         codingworkspace.GitState{Available: true, Branch: "main", Dirty: true},
+		ChangedPaths: []codingworkspace.ChangedPath{
+			{Path: "changed.go", Status: " M"},
+		},
+	}
+	delta := projector.WorkspaceUpdated(workspace)
+	workspace.ChangedPaths[0].Path = "caller-mutated.go"
+	if delta.Kind != DeltaWorkspaceUpdated || delta.Workspace == nil {
+		t.Fatalf("workspace delta = %+v", delta)
+	}
+	if err = reducer.Apply(delta); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) || got.Workspace == nil ||
+		got.Workspace.ChangedPaths[0].Path != "changed.go" {
+		t.Fatalf("workspace state = %+v, want %+v", got.Workspace, want.Workspace)
+	}
+	got.Workspace.ChangedPaths[0].Path = "frontend-mutated.go"
+	stable, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stable.Workspace.ChangedPaths[0].Path != "changed.go" {
+		t.Fatalf("projector workspace was aliased: %+v", stable.Workspace)
+	}
+}
 
 func TestReducerResynchronizesAfterDroppedDelta(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})

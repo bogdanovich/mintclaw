@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -459,6 +460,10 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 			"Working directory: " + layout.ExecutionRoot() + "\n" +
 			"Trust mode: yolo\nModel: configured-model",
 	}, "\n\n---\n\n")
+	wantSystem += "\n\n---\n\n" + codingworkspace.RenderPrompt(
+		codingworkspace.Capture(t.Context(), layout.ExecutionRoot(), layout.ExecutionRoot(), codingworkspace.Limits{}),
+		0,
+	)
 	if messages[0].Content != wantSystem {
 		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
 	}

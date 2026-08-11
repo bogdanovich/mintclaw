@@ -166,8 +166,10 @@ P0.5 found bounded gaps rather than adding speculative events:
 3. Runtime tool completion exposes bounded lengths and a diagnostic result, but
    no stable redacted live-output protocol. P3.4 owns tool-output projection and
    secret policy.
-4. Repository file-change and diff updates do not yet exist as runtime events.
-   P2.3 owns the deterministic workspace snapshot and its frontend update.
+4. P2.3 added `agent.workspace.snapshot` and the typed
+   `workspace_updated` frontend delta. The frontend now receives bounded
+   repository state initially and after relevant tool writes; live file-by-file
+   streaming remains outside this protocol.
 5. Context usage is available on finalized streaming output, not as a complete
    provider-neutral live budget stream. P3.2 owns the durable compaction/usage
    lifecycle.

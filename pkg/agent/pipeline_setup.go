@@ -54,6 +54,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.media,
 		contextualSkills,
 	)
+	p.emitPendingCodingWorkspaceSnapshot(ts, "turn.workspace.initial")
 
 	messages = resolveMediaRefs(
 		messages,

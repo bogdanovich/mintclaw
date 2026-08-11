@@ -307,6 +307,13 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["has_goal"] = payload.GoalHash != ""
 		fields["steering_count"] = payload.SteeringCount
 		fields["tool_pairing_valid"] = payload.ToolPairingValid
+	case WorkspaceSnapshotPayload:
+		fields["git_available"] = payload.Snapshot.Git.Available
+		fields["git_status_available"] = payload.Snapshot.Git.StatusAvailable
+		fields["git_dirty"] = payload.Snapshot.Git.Dirty
+		fields["diff_stat_available"] = payload.Snapshot.DiffStatAvailable
+		fields["changed_paths"] = len(payload.Snapshot.ChangedPaths)
+		fields["snapshot_truncated"] = payload.Snapshot.Truncated
 	case SessionSummarizePayload:
 		fields["summarized_messages"] = payload.SummarizedMessages
 		fields["kept_messages"] = payload.KeptMessages

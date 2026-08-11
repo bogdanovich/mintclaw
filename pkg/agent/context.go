@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -27,6 +28,7 @@ type ContextBuilder struct {
 	promptProfile      RuntimePromptProfile
 	codingContext      CodingPromptContext
 	codingInstructions *codingInstructionLoader
+	codingWorkspace    *codingworkspace.Observer
 	skillsLoader       *skills.SkillsLoader
 	memory             *MemoryStore
 	splitOnMarker      bool
@@ -122,6 +124,11 @@ func newRuntimeContextBuilder(layout RuntimeLayout, promptProfile RuntimePromptP
 	if promptProfile == RuntimePromptProfileCoding {
 		owner := layout.Owner()
 		builder.codingInstructions = newCodingInstructionLoader(layout)
+		builder.codingWorkspace = codingworkspace.NewObserver(
+			layout.ExecutionRoot(),
+			builder.codingInstructions.workingDirectory(),
+			codingworkspace.Limits{},
+		)
 		builder.codingContext = CodingPromptContext{
 			ProjectRoot:      layout.ExecutionRoot(),
 			WorkingDirectory: builder.codingInstructions.workingDirectory(),
@@ -575,7 +582,7 @@ func (cb *ContextBuilder) withCodingExecutionContext(
 		return messages
 	}
 
-	runtimeContext := formatCodingThreadContext(cb.codingContext, context)
+	runtimeContext := cb.formatCodingRuntimeContext(context)
 	for messageIndex := range messages {
 		message := messages[messageIndex]
 		if message.Role != "system" || len(message.SystemParts) == 0 {
@@ -608,6 +615,37 @@ func (cb *ContextBuilder) withCodingExecutionContext(
 	}
 
 	return messages
+}
+
+func (cb *ContextBuilder) refreshCodingWorkspace(ctx context.Context) codingworkspace.Snapshot {
+	if cb == nil || cb.codingWorkspace == nil {
+		return codingworkspace.Snapshot{}
+	}
+	return cb.codingWorkspace.Refresh(ctx)
+}
+
+func (cb *ContextBuilder) pendingCodingWorkspaceUpdate(
+	ctx context.Context,
+) (codingworkspace.Snapshot, bool) {
+	if cb == nil || cb.codingWorkspace == nil {
+		return codingworkspace.Snapshot{}, false
+	}
+	return cb.codingWorkspace.PendingUpdate(ctx)
+}
+
+func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptContext) string {
+	if cb == nil {
+		return formatCodingThreadContext(CodingPromptContext{}, codingContext)
+	}
+	threadContext := formatCodingThreadContext(cb.codingContext, codingContext)
+	if cb.codingWorkspace == nil {
+		return threadContext
+	}
+	workspaceContext := cb.codingWorkspace.RenderCurrent(context.Background())
+	if strings.TrimSpace(workspaceContext) == "" {
+		return threadContext
+	}
+	return threadContext + "\n\n---\n\n" + workspaceContext
 }
 
 func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
@@ -1032,6 +1070,9 @@ func (cb *ContextBuilder) BuildMessages(
 
 func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []providers.Message {
 	messages := []providers.Message{}
+	if cb != nil && cb.promptProfile == RuntimePromptProfileCoding {
+		cb.refreshCodingWorkspace(context.Background())
+	}
 
 	// The default static part (identity, bootstrap, skills, memory) is cached
 	// locally to avoid repeated file I/O and string building on every call
@@ -1115,7 +1156,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 				req.SenderDisplayName,
 			)
 		} else {
-			dynamicCtx = formatCodingThreadContext(cb.codingContext, req.CodingContext)
+			dynamicCtx = cb.formatCodingRuntimeContext(req.CodingContext)
 		}
 		dynamicChars = len(dynamicCtx)
 		runtimePart := PromptPart{
