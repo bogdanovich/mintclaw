@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"time"
+
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+)
 
 // TurnEndStatus describes the terminal state of a turn.
 type TurnEndStatus string
@@ -164,6 +168,10 @@ type ContextSnapshotPayload struct {
 	GoalHash         string
 	SteeringCount    int
 	ToolPairingValid bool
+}
+
+type WorkspaceSnapshotPayload struct {
+	Snapshot codingworkspace.Snapshot
 }
 
 // SessionSummarizePayload describes a completed async session summarization.

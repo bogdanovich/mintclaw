@@ -1069,6 +1069,9 @@ Done when:
 
 Dependencies: P1.1, P2.1
 
+Implementation contract:
+[`local-coding-agent-p2-workspace-snapshots.md`](local-coding-agent-p2-workspace-snapshots.md)
+
 Scope:
 
 - Capture bounded project root, cwd, branch, HEAD, status, changed paths, and

@@ -64,6 +64,10 @@ func (r *Reducer) Apply(delta Delta) error {
 	if delta.ContextUsage != nil {
 		r.state.ContextUsage = *delta.ContextUsage
 	}
+	if delta.Workspace != nil {
+		workspace := cloneWorkspaceSnapshot(*delta.Workspace)
+		r.state.Workspace = &workspace
+	}
 	if delta.Entry != nil {
 		r.state.Entries = replaceEntry(r.state.Entries, *delta.Entry)
 	}

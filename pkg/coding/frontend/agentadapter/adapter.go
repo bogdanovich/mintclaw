@@ -116,6 +116,11 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		} else {
 			a.projector.CompactionCompleted("context compacted")
 		}
+	case runtimeevents.KindAgentWorkspaceSnapshot:
+		payload, ok := event.Payload.(agent.WorkspaceSnapshotPayload)
+		if ok {
+			a.projector.WorkspaceUpdated(payload.Snapshot)
+		}
 	case runtimeevents.KindAgentInterruptReceived:
 		a.projector.InterruptRequested()
 	case runtimeevents.KindAgentError:
