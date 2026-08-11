@@ -128,13 +128,13 @@ func (loader *codingInstructionLoader) forTargets(targets []codingInstructionTar
 
 	bundle := codingInstructionBundle{}
 	for _, target := range targets {
-		directory, diagnostic := loader.targetDirectory(target)
+		directory, recursive, diagnostic := loader.targetDirectory(target)
 		if diagnostic.Message != "" {
 			bundle.Diagnostics = append(bundle.Diagnostics, diagnostic)
 			continue
 		}
 		loader.appendProjectChain(&bundle, directory)
-		if target.Recursive {
+		if recursive {
 			loader.appendRecursiveInstructions(&bundle, directory)
 		}
 	}
@@ -143,28 +143,64 @@ func (loader *codingInstructionLoader) forTargets(targets []codingInstructionTar
 
 func (loader *codingInstructionLoader) targetDirectory(
 	target codingInstructionTarget,
-) (string, codingInstructionDiagnostic) {
+) (string, bool, codingInstructionDiagnostic) {
 	path := strings.TrimSpace(target.Path)
 	if path == "" {
 		path = "."
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(loader.projectRoot, path)
+		path = filepath.Join(loader.initialCWD, path)
 	}
 	path = filepath.Clean(path)
-	if !codingPathWithin(path, loader.projectRoot) {
-		return "", codingInstructionWarning(path, "path is outside the admitted project root")
+	resolved, err := resolveCodingTarget(path)
+	if err != nil {
+		return "", false, codingInstructionWarning(path, err.Error())
+	}
+	if !codingPathWithin(resolved, loader.projectRoot) {
+		return "", false, codingInstructionWarning(path, "path resolves outside the admitted project root")
 	}
 
-	directory := path
+	directory := resolved
+	recursive := target.Recursive
 	if !target.Directory {
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			directory = path
+		if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
+			directory = resolved
 		} else {
-			directory = filepath.Dir(path)
+			directory = filepath.Dir(resolved)
+		}
+	} else if info, statErr := os.Stat(resolved); statErr == nil && !info.IsDir() {
+		directory = filepath.Dir(resolved)
+		recursive = false
+	}
+	return directory, recursive, codingInstructionDiagnostic{}
+}
+
+func resolveCodingTarget(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	for current := cleaned; ; current = filepath.Dir(current) {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			suffix, relErr := filepath.Rel(current, cleaned)
+			if relErr != nil {
+				return "", relErr
+			}
+			if suffix == "." {
+				return filepath.Clean(resolved), nil
+			}
+			return filepath.Clean(filepath.Join(resolved, suffix)), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		if info, lstatErr := os.Lstat(current); lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", err
+		} else if lstatErr != nil && !os.IsNotExist(lstatErr) {
+			return "", lstatErr
+		}
+		if filepath.Dir(current) == current {
+			return "", os.ErrNotExist
 		}
 	}
-	return directory, codingInstructionDiagnostic{}
 }
 
 func (loader *codingInstructionLoader) appendProjectChain(
@@ -302,6 +338,9 @@ func (loader *codingInstructionLoader) loadFile(
 	content := strings.TrimSpace(string(data))
 	keyMaterial := strings.Join([]string{
 		resolved,
+		path,
+		scope,
+		strconv.FormatBool(global),
 		strconv.FormatInt(info.Size(), 10),
 		strconv.FormatInt(info.ModTime().UnixNano(), 10),
 		fmt.Sprintf("%x", sha256.Sum256(data)),

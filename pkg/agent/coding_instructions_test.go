@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestCodingInstructionsSelectOneFilePerDirectoryAndOrderByScope(t *testing.T) {
@@ -156,6 +157,79 @@ func TestCodingInstructionRecursiveSearchDiscoversNestedScopes(t *testing.T) {
 	}
 	if bundle.Documents[0].Scope == bundle.Documents[1].Scope {
 		t.Fatalf("recursive scopes collapsed: %#v", bundle.Documents)
+	}
+}
+
+func TestCodingInstructionSearchFileUsesContainingScope(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	nested := filepath.Join(project, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCodingInstructionTestFile(t, filepath.Join(nested, "AGENTS.md"), "nested file rules")
+	writeCodingInstructionTestFile(t, filepath.Join(nested, "file.go"), "package nested")
+	loader := newCodingInstructionTestLoader(t, project, filepath.Join(root, "state"), []string{project})
+	state := newCodingInstructionTurnState(loader, nil)
+
+	bundle, discovered := state.discover("search_files", map[string]any{
+		"path": "nested/file.go", "pattern": "package",
+	})
+	if !discovered || len(bundle.Documents) != 1 || bundle.Documents[0].Content != "nested file rules" {
+		t.Fatalf("file search discovery = %#v, %v", bundle, discovered)
+	}
+}
+
+func TestCodingInstructionTargetsResolveSymlinksAndKeepLogicalScopeIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	nested := filepath.Join(project, "nested")
+	sibling := filepath.Join(project, "sibling")
+	outside := filepath.Join(root, "outside")
+	for _, directory := range []string{nested, sibling, outside} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shared := filepath.Join(project, "shared.md")
+	writeCodingInstructionTestFile(t, shared, "shared scoped rules")
+	if err := os.Symlink(shared, filepath.Join(nested, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, filepath.Join(sibling, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeCodingInstructionTestFile(t, filepath.Join(nested, "file.go"), "package nested")
+	writeCodingInstructionTestFile(t, filepath.Join(outside, "file.go"), "package outside")
+	if err := os.Symlink(filepath.Join(nested, "file.go"), filepath.Join(project, "linked.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "file.go"), filepath.Join(project, "outside.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := newCodingInstructionTestLoader(t, project, filepath.Join(root, "state"), []string{project})
+	state := newCodingInstructionTurnState(loader, nil)
+	linked, discovered := state.discover("read_file", map[string]any{"path": "linked.go"})
+	canonicalNested, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !discovered || len(linked.Documents) != 1 || linked.Documents[0].Scope != canonicalNested {
+		t.Fatalf("symlink target discovery = %#v, %v", linked, discovered)
+	}
+	siblingBundle, discovered := state.discover("read_file", map[string]any{"path": "sibling/new.go"})
+	if !discovered || len(siblingBundle.Documents) != 1 ||
+		siblingBundle.Documents[0].Key == linked.Documents[0].Key {
+		t.Fatalf("logical scope identity collapsed = %#v, %v", siblingBundle, discovered)
+	}
+	escape, discovered := state.discover("read_file", map[string]any{"path": "outside.go"})
+	if !discovered || len(escape.Documents) != 0 || len(escape.Diagnostics) != 1 ||
+		!strings.Contains(escape.Diagnostics[0].Message, "outside") {
+		t.Fatalf("outside symlink discovery = %#v, %v", escape, discovered)
 	}
 }
 
@@ -420,10 +494,88 @@ func TestCodingInstructionTargetsCoverPathAwareCodingTools(t *testing.T) {
 	}
 }
 
+func TestCodingInstructionArgumentsResolveFromInvocationCWD(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "pkg")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loader := newCodingInstructionTestLoader(
+		t,
+		project,
+		filepath.Join(root, "state"),
+		[]string{project, cwd},
+	)
+	state := newCodingInstructionTurnState(loader, nil)
+
+	writeArgs := state.normalizeArguments("write_file", map[string]any{"path": "nested/out.txt"})
+	canonicalCWD := loader.workingDirectory()
+	if got := writeArgs["path"]; got != filepath.Join(canonicalCWD, "nested", "out.txt") {
+		t.Fatalf("write path = %v", got)
+	}
+	execArgs := state.normalizeArguments("exec", map[string]any{"action": "run", "command": "pwd"})
+	if got := execArgs["cwd"]; got != canonicalCWD {
+		t.Fatalf("exec cwd = %v, want %s", got, canonicalCWD)
+	}
+	patchArgs := state.normalizeArguments("apply_patch", map[string]any{
+		"input": "*** Begin Patch\n*** Add File: nested/out.txt\n+done\n*** End Patch",
+	})
+	if got, _ := patchArgs["input"].(string); !strings.Contains(
+		got,
+		"*** Add File: "+filepath.Join(canonicalCWD, "nested", "out.txt"),
+	) {
+		t.Fatalf("normalized patch = %q", got)
+	}
+}
+
+func TestCodingExecDefaultsToInvocationCWD(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "pkg")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewRuntimeLayout(
+		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-exec-cwd"},
+		project,
+		filepath.Join(root, "state"),
+		[]string{project, cwd},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	execTool, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("exec")
+	if !ok {
+		t.Fatal("coding exec tool is missing")
+	}
+	ctx := toolshared.WithToolInboundContext(context.Background(), "cli", "thread-exec-cwd", "", "")
+	result := execTool.Execute(ctx, map[string]any{"action": "run", "command": "pwd"})
+	canonicalCWD, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || !strings.Contains(result.ContentForLLM(), canonicalCWD) {
+		t.Fatalf("exec result = %#v, want cwd %s", result, canonicalCWD)
+	}
+}
+
 func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
-	nested := filepath.Join(project, "nested")
+	cwd := filepath.Join(project, "pkg")
+	nested := filepath.Join(cwd, "nested")
 	stateRoot := filepath.Join(root, "state")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
@@ -435,6 +587,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 		t.Fatal(err)
 	}
 	target := filepath.Join(canonicalNested, "result.txt")
+	relativeTarget := filepath.Join("nested", "result.txt")
 
 	provider := llmscenario.NewScriptedProvider(
 		"coding-instruction-model",
@@ -450,7 +603,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 			Response: llmscenario.ToolCallResponse(
 				"I will write the file.",
 				llmscenario.ToolCall("write-1", "write_file", map[string]any{
-					"path": target, "content": "done",
+					"path": relativeTarget, "content": "done",
 				}),
 			),
 		},
@@ -470,7 +623,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 			Response: llmscenario.ToolCallResponse(
 				"I reviewed the scoped rules and will retry.",
 				llmscenario.ToolCall("write-2", "write_file", map[string]any{
-					"path": target, "content": "done",
+					"path": relativeTarget, "content": "done",
 				}),
 			),
 		},
@@ -486,7 +639,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-barrier"},
 		project,
 		stateRoot,
-		[]string{project},
+		[]string{project, cwd},
 	)
 	if err != nil {
 		t.Fatal(err)

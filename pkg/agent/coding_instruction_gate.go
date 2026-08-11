@@ -1,12 +1,19 @@
 package agent
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/patchformat"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+var codingPatchPathPrefixes = []string{
+	"*** Add File: ",
+	"*** Update File: ",
+	"*** Delete File: ",
+}
 
 type codingInstructionTurnState struct {
 	mu        sync.Mutex
@@ -65,6 +72,69 @@ func (state *codingInstructionTurnState) discover(
 		unseen.Diagnostics = append(unseen.Diagnostics, diagnostic)
 	}
 	return unseen, len(unseen.Documents) > 0 || len(unseen.Diagnostics) > 0
+}
+
+func (state *codingInstructionTurnState) normalizeArguments(
+	toolName string,
+	arguments map[string]any,
+) map[string]any {
+	if state == nil || state.loader == nil {
+		return arguments
+	}
+	base := state.loader.workingDirectory()
+	normalized := cloneStringAnyMap(arguments)
+	normalizePath := func(name string, defaultPath bool) {
+		path, _ := normalized[name].(string)
+		path = strings.TrimSpace(path)
+		if path == "" {
+			if !defaultPath {
+				return
+			}
+			path = "."
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(base, path)
+		}
+		normalized[name] = filepath.Clean(path)
+	}
+
+	switch toolName {
+	case "read_file", "write_file", "append_file", "load_image", "send_file":
+		normalizePath("path", false)
+	case "list_dir", "search_files":
+		normalizePath("path", true)
+	case "exec":
+		if action, _ := normalized["action"].(string); action == "run" {
+			normalizePath("cwd", true)
+		}
+	case "apply_patch":
+		if input, ok := normalized["input"].(string); ok {
+			normalized["input"] = normalizeCodingPatchPaths(input, base)
+		}
+	}
+	return normalized
+}
+
+func normalizeCodingPatchPaths(input, base string) string {
+	lines := strings.Split(strings.ReplaceAll(input, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		for _, prefix := range codingPatchPathPrefixes {
+			if !strings.HasPrefix(trimmed, prefix) {
+				continue
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			if path == "" {
+				break
+			}
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(base, path)
+			}
+			lines[index] = prefix + filepath.Clean(path)
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func codingInstructionTargets(toolName string, arguments map[string]any) []codingInstructionTarget {

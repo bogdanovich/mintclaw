@@ -319,7 +319,11 @@ func newAgentInstance(
 		toolInit.execScratch = filepath.Join(layout.StatePaths().OperationalRoot, "tmp")
 	}
 	if toolProfile == RuntimeToolProfileCoding {
-		if err := initCodingAgentTools(workspace, cfg, toolInit); err != nil {
+		workingDirectory := workspace
+		if contextBuilder.codingInstructions != nil {
+			workingDirectory = contextBuilder.codingInstructions.workingDirectory()
+		}
+		if err := initCodingAgentTools(workspace, workingDirectory, cfg, toolInit); err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
@@ -506,7 +510,12 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 	}
 }
 
-func initCodingAgentTools(workspace string, cfg *config.Config, initCfg agentToolInitConfig) error {
+func initCodingAgentTools(
+	workspace string,
+	workingDirectory string,
+	cfg *config.Config,
+	initCfg agentToolInitConfig,
+) error {
 	registerTool := func(tool toolshared.Tool) {
 		initCfg.toolsRegistry.Register(tool)
 	}
@@ -519,7 +528,7 @@ func initCodingAgentTools(workspace string, cfg *config.Config, initCfg agentToo
 	execCfg := *cfg
 	execCfg.Tools = cfg.Tools
 	execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
-	execTool, err := tools.NewExecToolWithRuntimeConfig(workspace, initCfg.execScratch, false, &execCfg)
+	execTool, err := tools.NewExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, false, &execCfg)
 	if err != nil {
 		return fmt.Errorf("initialize coding exec tool: %w", err)
 	}

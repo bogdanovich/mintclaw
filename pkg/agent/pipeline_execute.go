@@ -605,6 +605,7 @@ func (runner *toolLoopRunner) admitToolCall(
 	if denyByTurnProfile() {
 		return skipToolCall()
 	}
+	toolArgs = ts.codingInstructions.normalizeArguments(toolName, toolArgs)
 
 	loopDecision, toolSemantics := p.beforeToolLoopDecision(ts, exec, toolName, toolArgs)
 	if !loopDecision.AllowsExecution() {

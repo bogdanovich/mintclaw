@@ -72,6 +72,11 @@ The current path projection is:
 | `apply_patch` | Every parsed patch target ancestry |
 | `exec run` | Explicit/default cwd ancestry plus bounded nested instruction scan |
 
+Relative filesystem paths, patch targets, and command working directories are
+resolved explicitly from the invocation cwd before both instruction projection
+and tool execution. `search_files` targets that resolve to a file use that
+file's containing-directory scope without a recursive directory scan.
+
 When one call in a provider tool-call batch opens an instruction barrier,
 remaining calls in that batch are deferred. They can be retried after the next
 model step. This prevents later writes in the same batch from racing ahead of
@@ -109,6 +114,13 @@ selected instruction symlink must resolve inside its global or project
 instruction authority. A symlink that escapes that root, a broken symlink, a
 directory masquerading as an instruction file, or an ambiguous read is
 reported and not loaded. Recursive scans do not follow directory symlinks.
+
+Tool targets are canonicalized for scope discovery, including resolution
+through the nearest existing ancestor for a path that will be created. This
+prevents a file or directory symlink from bypassing nested instructions and
+reports canonical paths that escape the project root. Delivery identity also
+includes the logical source and scope, so two allowed scoped symlinks to the
+same instruction content remain independent rules.
 
 Instruction discovery does not broaden tool filesystem authority and does not
 load executable extensions. Coding-root enforcement for all filesystem and
