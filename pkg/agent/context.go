@@ -137,6 +137,14 @@ func (cb *ContextBuilder) WithCodingPromptModel(model string) *ContextBuilder {
 	return cb
 }
 
+func (cb *ContextBuilder) isolateSkillBootstrap() {
+	if cb == nil {
+		return
+	}
+	cb.skillsLoader = skills.NewSkillsLoader(cb.workspace, "", "")
+	cb.InvalidateCache()
+}
+
 func newContextBuilderWithMemoryOwner(workspace, memoryOwnerRoot string) *ContextBuilder {
 	return newContextBuilderWithMemoryStore(workspace, NewMemoryStore(memoryOwnerRoot))
 }
@@ -159,20 +167,6 @@ func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore
 	return newContextBuilderWithMemoryStoreAndSkills(
 		workspace,
 		memoryStore,
-		globalSkillsDir,
-		builtinSkillsDir,
-	)
-}
-
-func newContextBuilderWithMemoryOwnerAndSkills(
-	workspace string,
-	memoryOwnerRoot string,
-	globalSkillsDir string,
-	builtinSkillsDir string,
-) *ContextBuilder {
-	return newContextBuilderWithMemoryStoreAndSkills(
-		workspace,
-		NewMemoryStore(memoryOwnerRoot),
 		globalSkillsDir,
 		builtinSkillsDir,
 	)
@@ -301,13 +295,17 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 }
 
 func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
-	if cb.promptProfile == RuntimePromptProfileCoding {
-		return cb.buildCodingSystemPromptParts()
-	}
-	return cb.buildSystemPromptParts(systemPromptBuildOptions{
+	return cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
 		IncludeSkillCatalog: true,
 		IncludeToolUseRule:  true,
 	})
+}
+
+func (cb *ContextBuilder) buildSystemPromptPartsForProfile(opts systemPromptBuildOptions) []PromptPart {
+	if cb.promptProfile == RuntimePromptProfileCoding {
+		return cb.buildCodingSystemPromptParts()
+	}
+	return cb.buildSystemPromptParts(opts)
 }
 
 func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
@@ -517,7 +515,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		}
 	}
 
-	parts := cb.buildSystemPromptParts(systemPromptBuildOptions{
+	parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
 		IncludeSkillCatalog: !req.SuppressSkillContext,
 		IncludeToolUseRule:  !req.SuppressToolUseRule,
 		AllowedSkills:       req.AllowedSkills,
@@ -532,6 +530,49 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		blocks = append(blocks, promptContentBlock(part, cacheControlForPromptPart(part)))
 	}
 	return staticPrompt, blocks
+}
+
+func (cb *ContextBuilder) withCodingExecutionContext(
+	messages []providers.Message,
+	context CodingPromptContext,
+) []providers.Message {
+	if cb == nil || cb.promptProfile != RuntimePromptProfileCoding {
+		return messages
+	}
+
+	runtimeContext := formatCodingThreadContext(cb.codingContext, context)
+	for messageIndex := range messages {
+		message := messages[messageIndex]
+		if message.Role != "system" || len(message.SystemParts) == 0 {
+			continue
+		}
+
+		runtimeIndex := -1
+		for partIndex := range message.SystemParts {
+			part := message.SystemParts[partIndex]
+			if part.PromptSource == string(PromptSourceRuntime) &&
+				part.PromptSlot == string(PromptSlotRuntime) {
+				runtimeIndex = partIndex
+				break
+			}
+		}
+		if runtimeIndex < 0 {
+			continue
+		}
+
+		updated := cloneProviderMessages(messages)
+		updated[messageIndex].SystemParts[runtimeIndex].Text = runtimeContext
+		parts := make([]string, 0, len(updated[messageIndex].SystemParts))
+		for _, part := range updated[messageIndex].SystemParts {
+			if strings.TrimSpace(part.Text) != "" {
+				parts = append(parts, part.Text)
+			}
+		}
+		updated[messageIndex].Content = strings.Join(parts, "\n\n---\n\n")
+		return updated
+	}
+
+	return messages
 }
 
 func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {

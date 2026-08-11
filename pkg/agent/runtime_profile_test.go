@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -145,6 +146,37 @@ type countingStatefulProvider struct {
 type promptCapturingProvider struct {
 	mu       sync.Mutex
 	messages []providers.Message
+}
+
+type codingPromptAttemptProvider struct {
+	mu       sync.Mutex
+	messages []providers.Message
+	err      error
+}
+
+func (p *codingPromptAttemptProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.messages = cloneProviderMessages(messages)
+	err := p.err
+	p.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &providers.LLMResponse{Content: "captured response", FinishReason: "stop"}, nil
+}
+
+func (p *codingPromptAttemptProvider) GetDefaultModel() string { return "captured-model" }
+
+func (p *codingPromptAttemptProvider) Messages() []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return cloneProviderMessages(p.messages)
 }
 
 func (p *promptCapturingProvider) Chat(
@@ -384,6 +416,14 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	cfg.Agents.Defaults.ContextManager = "none"
 	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "configured-model"
+	cfg.Agents.Defaults.TurnProfile = config.TurnProfileConfig{
+		Enabled: true,
+		Skills:  config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
+		Tools: config.TurnProfileBlock{
+			Mode:  config.TurnProfileModeCustom,
+			Allow: []string{"read_file"},
+		},
+	}
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
 	provider := &promptCapturingProvider{}
 	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
@@ -470,6 +510,7 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		t.Fatalf("provider messages = %#v, want system and user", providerMessages)
 	}
 	for _, required := range []string{
+		codingAgentBaseInstructions,
 		"Project root: " + layout.ExecutionRoot(),
 		"Working directory: " + layout.ExecutionRoot(),
 		"Thread ID: thread-isolated",
@@ -1849,6 +1890,12 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	if _, statErr := os.Stat(layout.StatePaths().MemoryRoot); statErr != nil {
 		t.Fatalf("external memory root was not created: %v", statErr)
 	}
+	agent := loop.GetRegistry().GetDefaultAgent()
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "inspect"})
+	if len(messages) == 0 || !strings.Contains(messages[0].Content, codingAgentBaseInstructions) ||
+		strings.Contains(messages[0].Content, "helpful AI assistant") {
+		t.Fatalf("isolated skills changed coding prompt profile: %#v", messages)
+	}
 
 	reloaded := *cfg
 	if err := loop.ReloadProviderAndConfig(context.Background(), &mockProvider{}, &reloaded); err == nil {
@@ -1856,6 +1903,112 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected isolated-skill reload created execution root: %v", statErr)
+	}
+}
+
+func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
+	provider := &codingPromptAttemptProvider{}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	agent.Model = "primary-name"
+	agent.Candidates = []providers.FallbackCandidate{{
+		Provider: "openai", Model: "primary-model", DisplayName: "primary-name",
+	}}
+	agent.LightCandidates = []providers.FallbackCandidate{{
+		Provider: "anthropic", Model: "light-model", DisplayName: "light-name",
+	}}
+	agent.LightProvider = provider
+	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-name", Threshold: 1})
+	configureCodingPromptTestAgent(agent, "thread-light")
+
+	opts := makeTestProcessOpts("coding:thread-light")
+	opts.UserMessage = ""
+	opts.CodingContext = codingPromptTestContext(agent, "thread-light")
+	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+		turnID: "turn-light", context: newTurnContext(nil, nil, nil),
+	})
+	pipeline := NewPipeline(loop)
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if !exec.model.usedLight {
+		t.Fatal("SetupTurn() did not select light route")
+	}
+	if _, err = pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
+		t.Fatalf("CallLLM() error = %v", err)
+	}
+	assertCodingProviderIdentity(t, provider.Messages(), "light-name", "anthropic")
+}
+
+func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
+	primary := &codingPromptAttemptProvider{err: errors.New("status: 429 - rate limit exceeded")}
+	fallback := &codingPromptAttemptProvider{}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, primary)
+	defer cleanup()
+
+	primaryCandidate := providers.FallbackCandidate{
+		Provider: "openai", Model: "primary-model", DisplayName: "primary-name",
+	}
+	fallbackCandidate := providers.FallbackCandidate{
+		Provider: "anthropic", Model: "fallback-model", DisplayName: "fallback-name",
+	}
+	agent.Model = "primary-name"
+	agent.Candidates = []providers.FallbackCandidate{primaryCandidate, fallbackCandidate}
+	agent.CandidateProviders = map[string]providers.LLMProvider{
+		providers.ModelKey(fallbackCandidate.Provider, fallbackCandidate.Model): fallback,
+	}
+	configureCodingPromptTestAgent(agent, "thread-fallback")
+	loop.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
+
+	opts := makeTestProcessOpts("coding:thread-fallback")
+	opts.CodingContext = codingPromptTestContext(agent, "thread-fallback")
+	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+		turnID: "turn-fallback", context: newTurnContext(nil, nil, nil),
+	})
+	pipeline := NewPipeline(loop)
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if _, err = pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
+		t.Fatalf("CallLLM() error = %v", err)
+	}
+	assertCodingProviderIdentity(t, primary.Messages(), "primary-name", "openai")
+	assertCodingProviderIdentity(t, fallback.Messages(), "fallback-name", "anthropic")
+}
+
+func configureCodingPromptTestAgent(agent *AgentInstance, threadID string) {
+	agent.ContextBuilder.promptProfile = RuntimePromptProfileCoding
+	agent.ContextBuilder.codingContext = codingPromptTestContext(agent, threadID)
+	agent.ContextBuilder.InvalidateCache()
+}
+
+func codingPromptTestContext(agent *AgentInstance, threadID string) CodingPromptContext {
+	return CodingPromptContext{
+		ProjectRoot:      agent.Workspace,
+		WorkingDirectory: agent.Workspace,
+		ThreadID:         threadID,
+		SessionKey:       "coding:" + threadID,
+		TrustMode:        CodingTrustModeYolo,
+	}
+}
+
+func assertCodingProviderIdentity(
+	t *testing.T,
+	messages []providers.Message,
+	model string,
+	provider string,
+) {
+	t.Helper()
+	if len(messages) == 0 {
+		t.Fatal("provider received no messages")
+	}
+	for _, want := range []string{"Model: " + model, "Provider: " + provider} {
+		if !strings.Contains(messages[0].Content, want) {
+			t.Fatalf("provider coding prompt missing %q:\n%s", want, messages[0].Content)
+		}
 	}
 }
 
