@@ -13,12 +13,18 @@ func TestClassifyAcceptedOutcomeFailure(t *testing.T) {
 		contextErr error
 		want       OutcomeFailureClass
 	}{
-		{name: "deadline", executeErr: ErrWorkerUnavailable, contextErr: context.DeadlineExceeded, want: OutcomeFailureTimeout},
+		{
+			name:       "deadline",
+			executeErr: ErrWorkerUnavailable,
+			contextErr: context.DeadlineExceeded,
+			want:       OutcomeFailureTimeout,
+		},
 		{name: "canceled", contextErr: context.Canceled, want: OutcomeFailureCanceled},
 		{name: "policy", executeErr: ErrDenied, want: OutcomeFailurePolicyDenied},
 		{
-			name: "rejection before joined worker loss", executeErr: errors.Join(ErrDriverRejected, ErrWorkerUnavailable),
-			want: OutcomeFailureDriverRejected,
+			name:       "rejection before joined worker loss",
+			executeErr: errors.Join(ErrDriverRejected, ErrWorkerUnavailable),
+			want:       OutcomeFailureDriverRejected,
 		},
 		{name: "transport", executeErr: ErrWorkerLost, want: OutcomeFailureWorkerUnavailable},
 		{name: "incompatible", executeErr: ErrDriverIncompatible, want: OutcomeFailureDriverIncompatible},

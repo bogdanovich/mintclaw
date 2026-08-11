@@ -253,7 +253,11 @@ func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testi
 	storedInvocation, getInvocationErr := store.GetInvocation(context.Background(), invocation.ID)
 	if getInvocationErr != nil || storedInvocation.Diagnostic != nil ||
 		storedInvocation.State != InvocationUnknown || storedInvocation.SafeFailure != "outcome_unknown" {
-		t.Fatalf("stored invocation = %+v, %v; want durable outcome without diagnostic", storedInvocation, getInvocationErr)
+		t.Fatalf(
+			"stored invocation = %+v, %v; want durable outcome without diagnostic",
+			storedInvocation,
+			getInvocationErr,
+		)
 	}
 	stored, getErr := store.GetSession(context.Background(), session.ID)
 	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "outcome_unknown" ||
