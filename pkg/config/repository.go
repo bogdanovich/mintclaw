@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 const configTransactionVersion = 1
@@ -179,6 +180,32 @@ func (r *Repository) Save(cfg *Config) (Snapshot, error) {
 		var err error
 		snapshot, err = r.saveLocked(cfg)
 		return err
+	})
+	return snapshot, err
+}
+
+// ResetToDefaults backs up the current durable pair and replaces it with the
+// default configuration while preserving credentials that match default entries.
+func (r *Repository) ResetToDefaults() (Snapshot, error) {
+	var snapshot Snapshot
+	err := r.withLock(func() error {
+		if _, recoverErr := r.recoverLocked(); recoverErr != nil {
+			return recoverErr
+		}
+		if backupErr := MakeBackup(r.path); backupErr != nil {
+			return fmt.Errorf("backup before reset: %w", backupErr)
+		}
+
+		cfg := DefaultConfig()
+		cfg.Session.ApplyDmScope()
+		cfg.Session.DeriveDmScope()
+		if securityErr := cfg.SecurityCopyFrom(r.path); securityErr != nil {
+			logger.WarnF("could not preserve security config", map[string]any{"error": securityErr})
+		}
+
+		var saveErr error
+		snapshot, saveErr = r.saveLocked(cfg)
+		return saveErr
 	})
 	return snapshot, err
 }

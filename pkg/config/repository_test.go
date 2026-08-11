@@ -677,6 +677,110 @@ func TestRepositoryUpdatePreservesDurableMultiKeyModel(t *testing.T) {
 	}
 }
 
+func TestRepositoryResetToDefaultsBacksUpAndPreservesDefaultModelCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Gateway.Port = 23456
+	for _, model := range baseline.ModelList {
+		if model.ModelName == "gpt-5.4" {
+			model.APIKeys = SimpleSecureStrings("reset-secret")
+		}
+	}
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	snapshot, err := repository.ResetToDefaults()
+	if err != nil {
+		t.Fatalf("ResetToDefaults() error = %v", err)
+	}
+	if snapshot.Config.Gateway.Port == 23456 {
+		t.Fatal("ResetToDefaults() retained non-default gateway port")
+	}
+	var preserved *ModelConfig
+	for _, model := range snapshot.Config.ModelList {
+		if model.ModelName == "gpt-5.4" {
+			preserved = model
+			break
+		}
+	}
+	if preserved == nil || !slices.Equal(preserved.APIKeys.Values(), []string{"reset-secret"}) {
+		t.Fatalf("ResetToDefaults() credential = %#v, want preserved key", preserved)
+	}
+
+	backupSuffix := time.Now().Format(".20060102.bak")
+	if _, err = os.Stat(path + backupSuffix); err != nil {
+		t.Fatalf("public backup: %v", err)
+	}
+	if _, err = os.Stat(securityPath(path) + backupSuffix); err != nil {
+		t.Fatalf("security backup: %v", err)
+	}
+	backup, err := loadConfigReadOnly(path+backupSuffix, false)
+	if err != nil {
+		t.Fatalf("load public backup: %v", err)
+	}
+	if backup.Gateway.Port != 23456 {
+		t.Fatalf("backup gateway port = %d, want 23456", backup.Gateway.Port)
+	}
+}
+
+func TestRepositoryResetSerializesConcurrentUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Gateway.Port = 23456
+	if _, err := NewRepository(path).Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	resetEnteredCommit := make(chan struct{})
+	releaseReset := make(chan struct{})
+	resetRepository := NewRepository(path)
+	resetRepository.hooks.checkpoint = func(name string) error {
+		if name == "before_security_commit" {
+			close(resetEnteredCommit)
+			<-releaseReset
+		}
+		return nil
+	}
+	resetErr := make(chan error, 1)
+	go func() {
+		_, err := resetRepository.ResetToDefaults()
+		resetErr <- err
+	}()
+	<-resetEnteredCommit
+
+	updateStarted := make(chan struct{})
+	updateErr := make(chan error, 1)
+	go func() {
+		close(updateStarted)
+		_, err := NewRepository(path).Update(func(cfg *Config) error {
+			cfg.Gateway.LogLevel = "debug"
+			return nil
+		})
+		updateErr <- err
+	}()
+	<-updateStarted
+	close(releaseReset)
+	if err := <-resetErr; err != nil {
+		t.Fatalf("ResetToDefaults() error = %v", err)
+	}
+	if err := <-updateErr; err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	current, err := NewRepository(path).ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if current.Config.Gateway.Port == 23456 {
+		t.Fatal("reset retained non-default gateway port")
+	}
+	if current.Config.Gateway.LogLevel != "debug" {
+		t.Fatalf("concurrent update log level = %q, want debug", current.Config.Gateway.LogLevel)
+	}
+}
+
 func TestLoadConfigPropagatesMigrationPersistenceFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

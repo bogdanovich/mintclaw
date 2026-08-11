@@ -52,7 +52,7 @@ func onboard(encrypt bool) {
 			os.Exit(1)
 		}
 		// Expose the passphrase to credential.PassphraseProvider (which calls
-		// os.Getenv by default) so that SaveConfig can encrypt api_keys.
+		// os.Getenv by default) so that the repository can encrypt api_keys.
 		// This process is a one-shot CLI tool; the env var is never exposed outside
 		// the current process and disappears when it exits.
 		_ = os.Setenv(credential.PassphraseEnvVar, passphrase)
@@ -63,18 +63,21 @@ func onboard(encrypt bool) {
 		}
 	}
 
+	repository := config.NewRepository(configPath)
 	var cfg *config.Config
 	if configExists {
-		// Preserve the existing config; SaveConfig will re-encrypt api_keys with the new passphrase.
-		cfg, err = config.LoadConfig(configPath)
+		// Preserve the durable config; the repository will re-encrypt api_keys with the new passphrase.
+		var snapshot config.Snapshot
+		snapshot, err = repository.ReadDurable()
 		if err != nil {
 			fmt.Printf("Error loading existing config: %v\n", err)
 			os.Exit(1)
 		}
+		cfg = snapshot.Config
 	} else {
 		cfg = config.DefaultConfig()
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+	if _, err := repository.Save(cfg); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
 	}

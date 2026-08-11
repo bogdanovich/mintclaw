@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func TestNewOpenclawHandler(t *testing.T) {
@@ -142,6 +144,21 @@ func TestOpenclawHandlerGetMigrateableDirs(t *testing.T) {
 	assert.NotEmpty(t, dirs)
 	assert.Contains(t, dirs, "memory")
 	assert.Contains(t, dirs, "skills")
+}
+
+func TestOpenclawHandlerExecuteConfigMigrationUsesRepository(t *testing.T) {
+	sourceHome := t.TempDir()
+	sourcePath := filepath.Join(sourceHome, "openclaw.json")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("{}"), 0o600))
+	handler, err := NewOpenclawHandler(Options{SourceHome: sourceHome})
+	require.NoError(t, err)
+	destination := filepath.Join(t.TempDir(), "nested", "config.json")
+
+	require.NoError(t, handler.ExecuteConfigMigration(sourcePath, destination))
+	snapshot, err := config.NewRepository(destination).ReadDurable()
+	require.NoError(t, err)
+	assert.Equal(t, config.CurrentVersion, snapshot.Config.Version)
+	assert.NotEmpty(t, snapshot.Revision)
 }
 
 func TestResolveSourceHome(t *testing.T) {
