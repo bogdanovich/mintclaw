@@ -1185,10 +1185,14 @@ func (broker *Broker) executePreparedLocked(
 		return Invocation{}, ErrNotFound
 	}
 	if invocation.State.Terminal() {
-		return invocation, nil
+		return diagnoseRecoveredOutcome(invocation), nil
 	}
 	if invocation.State == InvocationAccepted {
-		return broker.completeInvocationLocked(ctx, invocation, InvocationUnknown, nil, "worker_lost")
+		completed, completeErr := broker.completeInvocationLocked(
+			ctx, invocation, InvocationUnknown, nil, "worker_lost",
+		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureWorkerUnavailable}
+		return completed, completeErr
 	}
 	if ctx.Err() != nil {
 		return broker.completeInvocationLocked(
@@ -1253,22 +1257,28 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
-		return broker.completeInvocationLocked(
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"outcome_unknown",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{
+			FailureClass: classifyAcceptedOutcomeFailure(executeErr, executionContextErr),
+		}
+		return completed, completeErr
 	}
 	if len(result) == 0 || len(result) > MaxTerminalBytes || !json.Valid(result) {
-		return broker.completeInvocationLocked(
+		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
 			InvocationUnknown,
 			nil,
 			"result_invalid",
 		)
+		completed.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureInvalidResult}
+		return completed, completeErr
 	}
 	completed, err := broker.completeInvocationLocked(
 		completionCtx,

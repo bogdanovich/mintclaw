@@ -501,6 +501,16 @@ func (source *gatewayBrowserToolSource) ExecuteAction(
 					return json.Marshal(map[string]any{"status": "completed", "artifact": retained})
 				},
 			)
+			if invocation.Diagnostic != nil {
+				logger.WarnCF("browser", "Browser action outcome is unknown", map[string]any{
+					"action_kind":      prepared.Action.Kind,
+					"failure_class":    invocation.Diagnostic.FailureClass,
+					"invocation_id":    invocation.ID,
+					"safe_failure":     invocation.SafeFailure,
+					"session_id":       invocation.SessionID,
+					"invocation_state": invocation.State,
+				})
+			}
 			if executeErr == nil && prepared.Action.Kind == browser.ActionDownload {
 				if artifact == nil {
 					retained, found, lookupErr := source.lookupBrowserDownload(

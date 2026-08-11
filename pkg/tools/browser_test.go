@@ -885,6 +885,36 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
+	preparation := browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_unknown", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+		Action: browser.Action{Kind: browser.ActionClick, Ref: "element_1"},
+		Effect: browser.EffectLocalEdit,
+	}}
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare:   preparation,
+		execute: browser.Invocation{
+			ID: "invocation_unknown", SessionID: "browser_session_1", Effect: browser.EffectLocalEdit,
+			State: browser.InvocationUnknown, SafeFailure: "outcome_unknown",
+			Diagnostic: &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
+		},
+	}
+	args := map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+		"action": map[string]any{"kind": "click", "ref": "element_1"},
+	}
+	var result browserActionResult
+	decodeBrowserToolResult(t, NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(), args,
+	), &result)
+	if result.State != browser.InvocationUnknown || result.Reason != "outcome_unknown" ||
+		result.FailureClass != browser.OutcomeFailureDriverRejected {
+		t.Fatalf("action result = %#v", result)
+	}
+}
+
 func TestBrowserActDeliversRetainedDownloadWithRecovery(t *testing.T) {
 	recovery := &browser.ScreenshotRecovery{
 		WorkspaceID: "workspace", AgentID: "agent", ActorID: "actor", RouteID: "route",
@@ -950,7 +980,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 		}},
 		execute: browser.Invocation{
 			ID: "invocation_1", SessionID: "browser_session_1",
-			Effect: browser.EffectRead, State: browser.InvocationSucceeded,
+			Effect: browser.EffectRead, State: browser.InvocationUnknown,
+			SafeFailure: "outcome_unknown",
+			Diagnostic:  &browser.InvocationDiagnostic{FailureClass: browser.OutcomeFailureDriverRejected},
 		},
 		executeErr: browser.ErrSnapshotInvalidation,
 	}
@@ -964,7 +996,9 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 	)
 	if result == nil || !result.IsError ||
 		!strings.Contains(result.ContentForLLM(), `"code":"post_action_state_unavailable"`) ||
-		!strings.Contains(result.ContentForLLM(), `"state":"succeeded"`) ||
+		!strings.Contains(result.ContentForLLM(), `"state":"unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"outcome_reason":"outcome_unknown"`) ||
+		!strings.Contains(result.ContentForLLM(), `"failure_class":"driver_rejected"`) ||
 		!strings.Contains(result.ContentForLLM(), `"action":"do_not_retry_reopen_session"`) {
 		t.Fatalf("post-action state result = %#v", result)
 	}

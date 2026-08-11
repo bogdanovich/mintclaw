@@ -42,8 +42,9 @@ The inspected main deployment already has working browser automation:
   agent;
 - the specialist has its own workspace, instructions, job checkpoints, and
   learned patterns;
-- Playwright MCP is launched through `npx` with
-  `@playwright/mcp@0.0.78`;
+- Playwright MCP is installed from a workspace lockfile and launched through
+  its pinned local CLI entry point (`@playwright/mcp@0.0.78`), avoiding a
+  runtime `npx` package-resolution path;
 - the worker uses installed Chrome, a persistent browser profile, and a
   separate output directory;
 - the browser agent is limited to one parallel turn;
@@ -52,7 +53,8 @@ The inspected main deployment already has working browser automation:
 
 The absence of a globally installed `agent-browser` executable or Docker does
 not mean browser automation is unavailable. The active path uses Playwright
-MCP through `npx` and is independent of the older heavy-image skill.
+MCP through the pinned local package and is independent of the older
+heavy-image skill.
 
 ### Assessment of the earlier capability-gap report
 

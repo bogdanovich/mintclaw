@@ -263,10 +263,16 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		return Invocation{}, err
 	}
 	if currentInvocation.State.Terminal() {
+		currentInvocation = diagnoseRecoveredOutcome(currentInvocation)
+		if currentInvocation.State == InvocationUnknown {
+			return currentInvocation, broker.finalizeActionInvocationLocked(
+				ctx, prepared.SessionID, currentInvocation,
+			)
+		}
 		return currentInvocation, nil
 	}
 	if currentInvocation.State == InvocationAccepted {
-		return broker.executePreparedLocked(
+		invocation, executeErr := broker.executePreparedLocked(
 			ctx,
 			owner,
 			invocationID,
@@ -274,6 +280,10 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			func(context.Context) (json.RawMessage, error) {
 				return nil, errors.New("accepted browser action cannot be replayed")
 			},
+		)
+		return invocation, errors.Join(
+			executeErr,
+			broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation),
 		)
 	}
 	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt {
@@ -364,21 +374,35 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			return json.RawMessage(`{"status":"completed"}`), nil
 		},
 	)
-	var postActionErr error
-	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
-		postActionErr = broker.invalidateSnapshotLocked(ctx, prepared.SessionID)
-	}
-	if invocation.State == InvocationUnknown {
-		safeFailure := invocation.SafeFailure
-		if safeFailure == "" {
-			safeFailure = "outcome_unknown"
-		}
-		postActionErr = errors.Join(
-			postActionErr,
-			broker.quarantineWorkerSessionLocked(ctx, prepared.SessionID, safeFailure),
-		)
-	}
+	postActionErr := broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation)
 	return invocation, errors.Join(executeErr, postActionErr)
+}
+
+func (broker *Broker) finalizeActionInvocationLocked(
+	ctx context.Context,
+	sessionID string,
+	invocation Invocation,
+) error {
+	finalizationCtx, cancelFinalization := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		time.Duration(broker.config.Limits.Effective().ActionSeconds)*time.Second,
+	)
+	defer cancelFinalization()
+	var finalizationErr error
+	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
+		finalizationErr = broker.invalidateSnapshotLocked(finalizationCtx, sessionID)
+	}
+	if invocation.State != InvocationUnknown {
+		return finalizationErr
+	}
+	safeFailure := invocation.SafeFailure
+	if safeFailure == "" {
+		safeFailure = "outcome_unknown"
+	}
+	return errors.Join(
+		finalizationErr,
+		broker.quarantineWorkerSessionLocked(finalizationCtx, sessionID, safeFailure),
+	)
 }
 
 func (broker *Broker) resolvePreparedActionLocked(

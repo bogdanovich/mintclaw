@@ -346,7 +346,8 @@ func TestBrokerExecutePreparedNeverReplaysAcceptedInvocation(t *testing.T) {
 			return json.RawMessage(`{"unexpected":true}`), nil
 		},
 	)
-	if err != nil || got.State != InvocationUnknown || calls != 0 {
+	if err != nil || got.State != InvocationUnknown || calls != 0 || got.Diagnostic == nil ||
+		got.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
 		t.Fatalf("ExecutePrepared() = %+v, %v; calls = %d", got, err, calls)
 	}
 }
@@ -428,7 +429,8 @@ func TestBrokerExecutePreparedDoesNotDispatchAfterCommittedAcceptanceWarning(t *
 		t.Fatalf("executor calls after committed acceptance warning = %d", calls)
 	}
 	got, err := broker.ExecutePrepared(context.Background(), owner, invocation.ID, invocation.ActionHash, execute)
-	if err != nil || got.State != InvocationUnknown || calls != 0 {
+	if err != nil || got.State != InvocationUnknown || calls != 0 || got.Diagnostic == nil ||
+		got.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
 		t.Fatalf("second ExecutePrepared() = %+v, %v; calls = %d", got, err, calls)
 	}
 }

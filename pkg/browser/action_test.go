@@ -245,8 +245,19 @@ func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testi
 	}
 	worker.executeErr = ErrWorkerUnavailable
 	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
-	if err != nil || invocation.State != InvocationUnknown || invocation.SafeFailure != "outcome_unknown" {
+	if err != nil || invocation.State != InvocationUnknown || invocation.SafeFailure != "outcome_unknown" ||
+		invocation.Diagnostic == nil ||
+		invocation.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
 		t.Fatalf("ExecuteAction() = %+v, %v, want unknown outcome", invocation, err)
+	}
+	storedInvocation, getInvocationErr := store.GetInvocation(context.Background(), invocation.ID)
+	if getInvocationErr != nil || storedInvocation.Diagnostic != nil ||
+		storedInvocation.State != InvocationUnknown || storedInvocation.SafeFailure != "outcome_unknown" {
+		t.Fatalf(
+			"stored invocation = %+v, %v; want durable outcome without diagnostic",
+			storedInvocation,
+			getInvocationErr,
+		)
 	}
 	stored, getErr := store.GetSession(context.Background(), session.ID)
 	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "outcome_unknown" ||
@@ -260,6 +271,84 @@ func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testi
 	)
 	if availabilityErr != nil || availability.Status != "ready" {
 		t.Fatalf("ProfileAvailability() = %+v, %v, want ready", availability, availabilityErr)
+	}
+}
+
+func TestBrokerAcceptedActionRetryQuarantinesWithoutReplay(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_accepted_retry", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observed.Snapshot), Value: "Ada"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocationID := derivedIdentifier("invocation", owner, session.ID, "request_accepted_retry")
+	accepted, err := store.GetInvocation(context.Background(), invocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted.State = InvocationAccepted
+	accepted.AcceptedAt = accepted.UpdatedAt + 1
+	accepted.UpdatedAt = accepted.AcceptedAt
+	accepted.Revision++
+	if err = store.UpdateInvocation(context.Background(), accepted.Revision-1, accepted); err != nil {
+		t.Fatal(err)
+	}
+
+	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationUnknown || invocation.Diagnostic == nil ||
+		invocation.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable || len(worker.actions) != 0 {
+		t.Fatalf("accepted retry = %+v, %v; worker actions = %+v", invocation, err, worker.actions)
+	}
+	lost, statusErr := store.GetSession(context.Background(), session.ID)
+	if statusErr != nil || lost.State != SessionLost || lost.SafeFailure != "worker_lost" || worker.closed != 1 {
+		t.Fatalf("accepted retry quarantine = %+v, %v; worker = %+v", lost, statusErr, worker)
+	}
+}
+
+func TestBrokerUnknownActionRetryCompletesFailedQuarantineWithoutReplay(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_retry_quarantine", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observed.Snapshot), Value: "Ada"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.executeErr = ErrDriverRejected
+	store.failAfter = 2
+	first, firstErr := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if firstErr == nil || first.State != InvocationUnknown || len(worker.actions) != 1 {
+		t.Fatalf("first execution = %+v, %v; actions = %+v", first, firstErr, worker.actions)
+	}
+	second, secondErr := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if secondErr != nil || second.State != InvocationUnknown || len(worker.actions) != 1 || worker.closed != 1 {
+		t.Fatalf(
+			"retry finalization = %+v, %v; actions = %+v; closes = %d",
+			second,
+			secondErr,
+			worker.actions,
+			worker.closed,
+		)
+	}
+	lost, getErr := store.GetSession(context.Background(), session.ID)
+	if getErr != nil || lost.State != SessionLost || lost.SafeFailure != "outcome_unknown" {
+		t.Fatalf("retried quarantine = %+v, %v", lost, getErr)
 	}
 }
 
@@ -578,6 +667,11 @@ func TestBrokerRestartMakesUncommittedAcceptedDownloadUnknown(t *testing.T) {
 	if err != nil || recovered.State != InvocationUnknown ||
 		recovered.SafeFailure != "gateway_restarted" || recovered.CompletedAt == 0 {
 		t.Fatalf("uncommitted recovered invocation = %#v, %v", recovered, err)
+	}
+	projected, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || projected.Diagnostic == nil ||
+		projected.Diagnostic.FailureClass != OutcomeFailureWorkerUnavailable {
+		t.Fatalf("recovered action diagnostic = %#v, %v", projected, err)
 	}
 }
 
