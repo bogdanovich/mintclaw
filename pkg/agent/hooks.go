@@ -1053,7 +1053,7 @@ func cloneHookStringMap(src map[string]string) map[string]string {
 }
 
 func cloneHookAnyMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
+	if src == nil {
 		return nil
 	}
 	cloned := make(map[string]any, len(src))
@@ -1068,6 +1068,9 @@ func cloneHookAnyValue(value any) any {
 	case map[string]any:
 		return cloneHookAnyMap(typed)
 	case []any:
+		if typed == nil {
+			return []any(nil)
+		}
 		out := make([]any, len(typed))
 		for i, item := range typed {
 			out[i] = cloneHookAnyValue(item)

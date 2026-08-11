@@ -546,6 +546,30 @@ func TestHookManager_BeforeLLMControlsInPlaceNestedMutation(t *testing.T) {
 	}
 }
 
+func TestCloneProviderToolCallsPreservesEmptyJSONContainers(t *testing.T) {
+	calls := []providers.ToolCall{{
+		ID:   "call-node",
+		Name: "nodes_invoke",
+		Arguments: map[string]any{
+			"input": map[string]any{
+				"env":  map[string]any{},
+				"argv": []any{},
+			},
+		},
+	}}
+
+	cloned := cloneProviderToolCalls(calls)
+	input := cloned[0].Arguments["input"].(map[string]any)
+	environment, ok := input["env"].(map[string]any)
+	if !ok || environment == nil {
+		t.Fatalf("cloned empty environment = %#v, want non-nil object", input["env"])
+	}
+	arguments, ok := input["argv"].([]any)
+	if !ok || arguments == nil {
+		t.Fatalf("cloned empty arguments = %#v, want non-nil array", input["argv"])
+	}
+}
+
 func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
