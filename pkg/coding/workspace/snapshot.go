@@ -77,14 +77,15 @@ type GitState struct {
 }
 
 type Snapshot struct {
-	ProjectRoot       string        `json:"project_root"`
-	CWD               string        `json:"cwd"`
-	Git               GitState      `json:"git"`
-	ChangedPaths      []ChangedPath `json:"changed_paths,omitempty"`
-	DiffStat          DiffStat      `json:"diff_stat"`
-	DiffStatAvailable bool          `json:"diff_stat_available,omitempty"`
-	Truncated         bool          `json:"truncated,omitempty"`
-	Warning           string        `json:"warning,omitempty"`
+	ProjectRoot                   string        `json:"project_root"`
+	CWD                           string        `json:"cwd"`
+	Git                           GitState      `json:"git"`
+	ChangedPaths                  []ChangedPath `json:"changed_paths,omitempty"`
+	DiffStat                      DiffStat      `json:"diff_stat"`
+	DiffStatAvailable             bool          `json:"diff_stat_available,omitempty"`
+	SubmoduleWorktreeStateIgnored bool          `json:"submodule_worktree_state_ignored,omitempty"`
+	Truncated                     bool          `json:"truncated,omitempty"`
+	Warning                       string        `json:"warning,omitempty"`
 }
 
 func (snapshot Snapshot) Identity() string {
@@ -109,6 +110,7 @@ func (snapshot Snapshot) Identity() string {
 		strconv.Itoa(snapshot.DiffStat.Deletions),
 		strconv.Itoa(snapshot.DiffStat.BinaryFiles),
 		strconv.FormatBool(snapshot.DiffStatAvailable),
+		strconv.FormatBool(snapshot.SubmoduleWorktreeStateIgnored),
 		strconv.FormatBool(snapshot.Truncated),
 		snapshot.Warning,
 	}
@@ -223,6 +225,7 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 	snapshot.Git.GitDir = filepath.Clean(metadataLines[1])
 	snapshot.Git.CommonDir = filepath.Clean(metadataLines[2])
 	snapshot.Git.Worktree = snapshot.Git.GitDir != snapshot.Git.CommonDir
+	snapshot.SubmoduleWorktreeStateIgnored = true
 	snapshot.Truncated = metadata.truncated
 	filterOverrides, filterWarning, filtersSafe, filterTruncated := passiveFilterOverrides(
 		commandCtx,
@@ -256,7 +259,7 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 	}
 
 	status, statusErr := runGitWithConfig(commandCtx, snapshot.ProjectRoot, limits.CommandBytes, filterOverrides,
-		"status", "--porcelain=v1", "-z", "--untracked-files=all")
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=dirty")
 	if statusErr != nil {
 		snapshot.Warning = joinWarning(
 			snapshot.Warning,
@@ -303,6 +306,7 @@ func captureDiffStat(
 			"diff",
 			"--no-ext-diff",
 			"--no-textconv",
+			"--ignore-submodules=dirty",
 			"--numstat",
 			"--no-renames",
 			"-z",
@@ -327,6 +331,7 @@ func captureDiffStat(
 		"diff",
 		"--no-ext-diff",
 		"--no-textconv",
+		"--ignore-submodules=dirty",
 		"--cached",
 		"--numstat",
 		"--no-renames",
@@ -340,6 +345,7 @@ func captureDiffStat(
 		"diff",
 		"--no-ext-diff",
 		"--no-textconv",
+		"--ignore-submodules=dirty",
 		"--numstat",
 		"--no-renames",
 		"-z",
@@ -411,6 +417,9 @@ func RenderPrompt(snapshot Snapshot, maxBytes int) string {
 		}
 		builder.WriteString("\nWorktree: ")
 		builder.WriteString(strconv.FormatBool(snapshot.Git.Worktree))
+		if snapshot.SubmoduleWorktreeStateIgnored {
+			builder.WriteString("\nSubmodule worktree state: not inspected (passive capture)")
+		}
 		builder.WriteString("\nStatus: ")
 		if !snapshot.Git.StatusAvailable {
 			builder.WriteString("unavailable")

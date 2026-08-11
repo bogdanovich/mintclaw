@@ -207,6 +207,59 @@ func TestCaptureDisablesConfiguredContentFilters(t *testing.T) {
 	}
 }
 
+func TestCaptureDoesNotInspectDirtySubmoduleContentFilters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sentinel shell script is Unix-specific")
+	}
+	for _, filterKind := range []string{"clean", "process"} {
+		t.Run(filterKind, func(t *testing.T) {
+			source := initGitRepository(t)
+			if err := os.WriteFile(
+				filepath.Join(source, ".gitattributes"),
+				[]byte("filtered.txt filter=evil\n"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "filtered.txt"), []byte("baseline\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, source, "add", ".gitattributes", "filtered.txt")
+			runGitTest(t, source, "commit", "-m", "add filtered file")
+
+			root := initGitRepository(t)
+			runGitTest(t, root, "-c", "protocol.file.allow=always", "submodule", "add", source, "nested")
+			runGitTest(t, root, "commit", "-am", "add submodule")
+			nested := filepath.Join(root, "nested")
+			sentinel := filepath.Join(t.TempDir(), "submodule-content-filter-ran")
+			script := filepath.Join(t.TempDir(), "submodule-content-filter")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$1\"\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, nested, "config", "filter.evil."+filterKind, script+" "+sentinel)
+			runGitTest(t, nested, "config", "filter.evil.required", "true")
+			if err := os.WriteFile(filepath.Join(nested, "filtered.txt"), []byte("changed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			snapshot := Capture(t.Context(), root, root, Limits{})
+			if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || snapshot.Git.Dirty ||
+				!snapshot.SubmoduleWorktreeStateIgnored {
+				t.Fatalf("snapshot with ignored submodule %s filter = %#v", filterKind, snapshot)
+			}
+			if prompt := RenderPrompt(snapshot, 4096); !strings.Contains(
+				prompt,
+				"Submodule worktree state: not inspected (passive capture)",
+			) {
+				t.Fatalf("submodule omission prompt = %q", prompt)
+			}
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("submodule-configured %s filter executed: %v", filterKind, err)
+			}
+		})
+	}
+}
+
 func TestCaptureIgnoresAmbientGitRepositoryOverrides(t *testing.T) {
 	root := initGitRepository(t)
 	decoy := initGitRepository(t)

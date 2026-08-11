@@ -106,6 +106,11 @@ rule rather than preserving a stale repository claim in a summary.
   instead of risking command execution. This uses Git's documented
   [missing-filter passthrough semantics](https://git-scm.com/docs/gitattributes#_filter)
   while also forcing each discovered driver's `required` flag off.
+- Status and diff-stat capture use `--ignore-submodules=dirty`. They still
+  report a changed gitlink, but deliberately do not enter initialized
+  submodule worktrees, whose independent configuration could execute content
+  filters. The structured snapshot and prompt explicitly state that nested
+  submodule worktree state was not inspected.
 - The observer runs Git only at the admitted coding project root. Project
   identity resolution already makes a Git project's execution root its exact
   worktree root, keeping separate linked worktrees independent.
@@ -123,7 +128,7 @@ an audited write refreshes the prompt before the next model call, file contents
 are not injected, and ordered clean/dirty workspace events are emitted.
 
 Sentinel regressions also prove that repository-configured fsmonitor,
-external-diff, clean-filter, and long-running process-filter commands are not
+external-diff, and top-level or submodule clean/process-filter commands are not
 executed, ambient repository-selection variables cannot redirect capture, and
 prompt truncation ends at a record boundary with a visible marker.
 
