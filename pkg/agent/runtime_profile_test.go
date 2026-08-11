@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -139,6 +140,32 @@ func (f *trackingRuntimeStoreFactory) NewSeahorseEngine(
 
 type countingStatefulProvider struct {
 	closeCount int
+}
+
+type promptCapturingProvider struct {
+	mu       sync.Mutex
+	messages []providers.Message
+}
+
+func (p *promptCapturingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.messages = append([]providers.Message(nil), messages...)
+	return &providers.LLMResponse{Content: "captured response"}, nil
+}
+
+func (p *promptCapturingProvider) GetDefaultModel() string { return "captured-model" }
+
+func (p *promptCapturingProvider) Messages() []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]providers.Message(nil), p.messages...)
 }
 
 func (p *countingStatefulProvider) Chat(
@@ -355,9 +382,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "configured-model"
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	provider := &promptCapturingProvider{}
+	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
 	}
@@ -435,6 +464,27 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 	if _, err := loop.ProcessDirect(t.Context(), "persist only here", sessionKey); err != nil {
 		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	providerMessages := provider.Messages()
+	if len(providerMessages) < 2 || providerMessages[0].Role != "system" {
+		t.Fatalf("provider messages = %#v, want system and user", providerMessages)
+	}
+	for _, required := range []string{
+		"Project root: " + layout.ExecutionRoot(),
+		"Working directory: " + layout.ExecutionRoot(),
+		"Thread ID: thread-isolated",
+		"Session key: " + sessionKey,
+		"Trust mode: yolo",
+		"Model: configured-model",
+		"Provider: test-provider",
+	} {
+		if !strings.Contains(providerMessages[0].Content, required) {
+			t.Fatalf("provider system prompt missing %q:\n%s", required, providerMessages[0].Content)
+		}
+	}
+	if strings.Contains(providerMessages[0].Content, "PERSONAL AGENT BODY") ||
+		strings.Contains(providerMessages[0].Content, "helpful AI assistant") {
+		t.Fatalf("provider observed personal context:\n%s", providerMessages[0].Content)
 	}
 	if history := agent.Sessions.GetHistory(sessionKey); len(history) != 2 {
 		t.Fatalf("coding history length = %d, want user and assistant", len(history))

@@ -121,15 +121,16 @@ type processOptions struct {
 	InteractionRouteKey         string   // Routed scope key that owns interaction answers
 	InteractionOriginExecution  string   // Original non-approval execution identity for a continuation
 	TurnStatus                  *TurnEndStatus
-	ApprovalGrant               *ToolApprovalGrant // Internal one-time durable approval capability
-	Channel                     string             // Target channel for tool execution
-	ChatID                      string             // Target chat ID for tool execution
-	MessageID                   string             // Current inbound platform message ID
-	ReplyToMessageID            string             // Current inbound reply target message ID
-	SenderID                    string             // Current sender ID for dynamic context
-	SenderDisplayName           string             // Current sender display name for dynamic context
-	UserMessage                 string             // User message content (may include prefix)
-	ForcedSkills                []string           // Skills explicitly requested for this message
+	ApprovalGrant               *ToolApprovalGrant  // Internal one-time durable approval capability
+	Channel                     string              // Target channel for tool execution
+	ChatID                      string              // Target chat ID for tool execution
+	MessageID                   string              // Current inbound platform message ID
+	ReplyToMessageID            string              // Current inbound reply target message ID
+	SenderID                    string              // Current sender ID for dynamic context
+	SenderDisplayName           string              // Current sender display name for dynamic context
+	CodingContext               CodingPromptContext // Runtime-owned coding identity for prompt assembly
+	UserMessage                 string              // User message content (may include prefix)
+	ForcedSkills                []string            // Skills explicitly requested for this message
 	TurnProfile                 config.EffectiveTurnProfile
 	SystemPromptOverride        string                    // Override the default system prompt (Used by SubTurns)
 	Media                       []string                  // media:// refs from inbound message

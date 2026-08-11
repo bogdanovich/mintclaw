@@ -39,8 +39,9 @@ func promptBuildRequestForTurn(
 			history,
 			time.Now(),
 		),
-		ActiveSkills: activeSkillNames(ts.agent, ts.opts),
-		Overlays:     promptOverlaysForOptions(ts.opts),
+		ActiveSkills:  activeSkillNames(ts.agent, ts.opts),
+		Overlays:      promptOverlaysForOptions(ts.opts),
+		CodingContext: ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -115,8 +116,9 @@ func promptBuildRequestForProcessOptions(
 			history,
 			time.Now(),
 		),
-		ActiveSkills: activeSkillNames(agent, opts),
-		Overlays:     promptOverlaysForOptions(opts),
+		ActiveSkills:  activeSkillNames(agent, opts),
+		Overlays:      promptOverlaysForOptions(opts),
+		CodingContext: opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true

@@ -81,6 +81,20 @@ func (al *AgentLoop) processCodingDirect(
 		MatchedBy: "coding_runtime",
 	}
 	modelBinding := al.bindEffectiveModel(wantSessionKey, agent)
+	execution := modelBinding.ExecutionState()
+	providerFallback := ""
+	if cfg := al.GetConfig(); cfg != nil {
+		providerFallback = cfg.Agents.Defaults.Provider
+	}
+	codingContext := CodingPromptContext{
+		ProjectRoot:      layout.ExecutionRoot(),
+		WorkingDirectory: layout.ExecutionRoot(),
+		ThreadID:         layout.Owner().ID,
+		SessionKey:       wantSessionKey,
+		TrustMode:        CodingTrustModeYolo,
+		Model:            resolvedCandidateModelName(execution.Candidates, execution.Model),
+		Provider:         resolvedCandidateProvider(execution.Candidates, providerFallback),
+	}
 	turn := inboundMessageTurn{
 		Message: bus.InboundMessage{
 			Context:    *inboundContext,
@@ -98,6 +112,7 @@ func (al *AgentLoop) processCodingDirect(
 				UserMessage:     content,
 			},
 			ModelBinding:        modelBinding,
+			CodingContext:       codingContext,
 			DefaultResponse:     defaultResponse,
 			EnableSummary:       !directOpts.Stateless,
 			SendResponse:        false,
