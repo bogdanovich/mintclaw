@@ -164,6 +164,49 @@ func TestCaptureDisablesConfiguredGitCommands(t *testing.T) {
 	}
 }
 
+func TestCaptureDisablesConfiguredContentFilters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sentinel shell script is Unix-specific")
+	}
+	for _, filterKind := range []string{"clean", "process"} {
+		t.Run(filterKind, func(t *testing.T) {
+			root := initGitRepository(t)
+			if err := os.WriteFile(
+				filepath.Join(root, ".gitattributes"),
+				[]byte("filtered.txt filter=evil\n"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			filtered := filepath.Join(root, "filtered.txt")
+			if err := os.WriteFile(filtered, []byte("baseline\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, root, "add", ".gitattributes", "filtered.txt")
+			runGitTest(t, root, "commit", "-m", "add filtered file")
+
+			sentinel := filepath.Join(t.TempDir(), "content-filter-ran")
+			script := filepath.Join(t.TempDir(), "content-filter")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$1\"\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, root, "config", "filter.evil."+filterKind, script+" "+sentinel)
+			runGitTest(t, root, "config", "filter.evil.required", "true")
+			if err := os.WriteFile(filtered, []byte("changed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			snapshot := Capture(t.Context(), root, root, Limits{})
+			if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || !snapshot.Git.Dirty {
+				t.Fatalf("snapshot with disabled %s filter = %#v", filterKind, snapshot)
+			}
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("repository-configured %s filter executed: %v", filterKind, err)
+			}
+		})
+	}
+}
+
 func TestCaptureIgnoresAmbientGitRepositoryOverrides(t *testing.T) {
 	root := initGitRepository(t)
 	decoy := initGitRepository(t)

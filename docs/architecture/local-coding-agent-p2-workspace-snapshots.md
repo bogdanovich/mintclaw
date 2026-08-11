@@ -97,10 +97,15 @@ rule rather than preserving a stale repository claim in a summary.
   bodies, patch hunks, environment variables, remotes, and command output are
   excluded.
 - Observer Git commands discard ambient `GIT_*` variables, pin the locale,
-  disable `core.fsmonitor`, and pass `--no-ext-diff` to diff-stat commands.
+  disable `core.fsmonitor`, neutralize every configured clean/process content
+  filter, and pass `--no-ext-diff` plus `--no-textconv` to diff-stat commands.
   Opening a repository therefore cannot redirect capture through ambient
-  repository/index variables or invoke configured fsmonitor/external-diff
-  commands.
+  repository/index variables or invoke configured fsmonitor, external-diff,
+  textconv, or content-filter commands. When filter configuration cannot be read
+  completely within its bound, status and diff fields remain unavailable
+  instead of risking command execution. This uses Git's documented
+  [missing-filter passthrough semantics](https://git-scm.com/docs/gitattributes#_filter)
+  while also forcing each discovered driver's `required` flag off.
 - The observer runs Git only at the admitted coding project root. Project
   identity resolution already makes a Git project's execution root its exact
   worktree root, keeping separate linked worktrees independent.
@@ -117,10 +122,10 @@ native scripted coding turn proves that the first model call sees clean state,
 an audited write refreshes the prompt before the next model call, file contents
 are not injected, and ordered clean/dirty workspace events are emitted.
 
-Sentinel regressions also prove that repository-configured fsmonitor and
-external-diff commands are not executed, ambient repository-selection variables
-cannot redirect capture, and prompt truncation ends at a record boundary with a
-visible marker.
+Sentinel regressions also prove that repository-configured fsmonitor,
+external-diff, clean-filter, and long-running process-filter commands are not
+executed, ambient repository-selection variables cannot redirect capture, and
+prompt truncation ends at a record boundary with a visible marker.
 
 Frontend tests prove typed event projection, delta reduction, snapshot
 convergence, and slice isolation.

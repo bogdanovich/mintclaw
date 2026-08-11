@@ -224,13 +224,20 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 	snapshot.Git.CommonDir = filepath.Clean(metadataLines[2])
 	snapshot.Git.Worktree = snapshot.Git.GitDir != snapshot.Git.CommonDir
 	snapshot.Truncated = metadata.truncated
+	filterOverrides, filterWarning, filtersSafe, filterTruncated := passiveFilterOverrides(
+		commandCtx,
+		snapshot.ProjectRoot,
+		limits.CommandBytes,
+	)
+	snapshot.Warning = joinWarning(snapshot.Warning, filterWarning)
+	snapshot.Truncated = snapshot.Truncated || filterTruncated
 
-	branch, branchErr := runGit(commandCtx, snapshot.ProjectRoot, limits.CommandBytes,
+	branch, branchErr := runGitWithConfig(commandCtx, snapshot.ProjectRoot, limits.CommandBytes, filterOverrides,
 		"symbolic-ref", "--quiet", "--short", "HEAD")
 	if branchErr == nil {
 		snapshot.Git.Branch = strings.TrimSpace(string(branch.stdout))
 	}
-	head, headErr := runGit(commandCtx, snapshot.ProjectRoot, limits.CommandBytes,
+	head, headErr := runGitWithConfig(commandCtx, snapshot.ProjectRoot, limits.CommandBytes, filterOverrides,
 		"rev-parse", "--verify", "HEAD")
 	if headErr == nil {
 		snapshot.Git.Head = strings.TrimSpace(string(head.stdout))
@@ -238,11 +245,17 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 	} else if snapshot.Git.Branch != "" && isUnbornHeadError(headErr, head.stderr) {
 		snapshot.Git.Unborn = true
 	} else {
-		snapshot.Warning = boundedWarning("Could not resolve Git HEAD", headErr, head.stderr)
+		snapshot.Warning = joinWarning(
+			snapshot.Warning,
+			boundedWarning("Could not resolve Git HEAD", headErr, head.stderr),
+		)
 	}
 	snapshot.Truncated = snapshot.Truncated || branch.truncated || head.truncated
+	if !filtersSafe {
+		return snapshot
+	}
 
-	status, statusErr := runGit(commandCtx, snapshot.ProjectRoot, limits.CommandBytes,
+	status, statusErr := runGitWithConfig(commandCtx, snapshot.ProjectRoot, limits.CommandBytes, filterOverrides,
 		"status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if statusErr != nil {
 		snapshot.Warning = joinWarning(
@@ -265,6 +278,7 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 		snapshot.ProjectRoot,
 		snapshot.Git.Unborn,
 		limits.CommandBytes,
+		filterOverrides,
 	)
 	snapshot.DiffStat = diffStat
 	snapshot.DiffStatAvailable = diffStatAvailable
@@ -273,9 +287,27 @@ func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapsh
 	return snapshot
 }
 
-func captureDiffStat(ctx context.Context, root string, unborn bool, limit int) (DiffStat, bool, string, bool) {
+func captureDiffStat(
+	ctx context.Context,
+	root string,
+	unborn bool,
+	limit int,
+	config []string,
+) (DiffStat, bool, string, bool) {
 	if !unborn {
-		diff, err := runGit(ctx, root, limit, "diff", "--no-ext-diff", "--numstat", "--no-renames", "-z", "HEAD")
+		diff, err := runGitWithConfig(
+			ctx,
+			root,
+			limit,
+			config,
+			"diff",
+			"--no-ext-diff",
+			"--no-textconv",
+			"--numstat",
+			"--no-renames",
+			"-z",
+			"HEAD",
+		)
 		if err != nil {
 			return DiffStat{}, false,
 				boundedWarning("Could not inspect Git diff stat", err, diff.stderr), diff.truncated
@@ -287,18 +319,31 @@ func captureDiffStat(ctx context.Context, root string, unborn bool, limit int) (
 	// worktree-to-index views so staged and unstaged changes are both visible.
 	// Untracked paths remain represented by ChangedPaths without reading their
 	// contents or implicitly treating their full size as a diff.
-	staged, stagedErr := runGit(
+	staged, stagedErr := runGitWithConfig(
 		ctx,
 		root,
 		limit,
+		config,
 		"diff",
 		"--no-ext-diff",
+		"--no-textconv",
 		"--cached",
 		"--numstat",
 		"--no-renames",
 		"-z",
 	)
-	unstaged, unstagedErr := runGit(ctx, root, limit, "diff", "--no-ext-diff", "--numstat", "--no-renames", "-z")
+	unstaged, unstagedErr := runGitWithConfig(
+		ctx,
+		root,
+		limit,
+		config,
+		"diff",
+		"--no-ext-diff",
+		"--no-textconv",
+		"--numstat",
+		"--no-renames",
+		"-z",
+	)
 	warning := ""
 	if stagedErr != nil {
 		warning = joinWarning(
@@ -438,9 +483,23 @@ func (buffer *limitedBuffer) Write(data []byte) (int, error) {
 }
 
 func runGit(ctx context.Context, root string, limit int, args ...string) (commandOutput, error) {
+	return runGitWithConfig(ctx, root, limit, nil, args...)
+}
+
+func runGitWithConfig(
+	ctx context.Context,
+	root string,
+	limit int,
+	config []string,
+	args ...string,
+) (commandOutput, error) {
 	stdout := &limitedBuffer{remaining: limit}
 	stderr := &limitedBuffer{remaining: min(limit, 4096)}
-	commandArgs := append([]string{"-C", root, "-c", "core.fsmonitor=false"}, args...)
+	commandArgs := []string{"-C", root, "-c", "core.fsmonitor=false"}
+	for _, override := range config {
+		commandArgs = append(commandArgs, "-c", override)
+	}
+	commandArgs = append(commandArgs, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
 	command.Env = sanitizedGitEnvironment()
 	command.Stdout = stdout
@@ -454,6 +513,49 @@ func runGit(ctx context.Context, root string, limit int, args ...string) (comman
 		stderr:    append([]byte(nil), stderr.buffer.Bytes()...),
 		truncated: stdout.truncated || stderr.truncated,
 	}, err
+}
+
+func passiveFilterOverrides(
+	ctx context.Context,
+	root string,
+	limit int,
+) ([]string, string, bool, bool) {
+	result, err := runGit(ctx, root, limit, "config", "--null", "--name-only", "--get-regexp", "^filter\\.")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(result.stderr) == 0 {
+			return nil, "", true, result.truncated
+		}
+		return nil, boundedWarning("Could not inspect Git content-filter configuration", err, result.stderr),
+			false, result.truncated
+	}
+	if result.truncated {
+		return nil, "Git content-filter configuration exceeded the capture byte limit", false, true
+	}
+
+	drivers := make(map[string]struct{})
+	for _, rawKey := range bytes.Split(result.stdout, []byte{0}) {
+		key := string(rawKey)
+		lowerKey := strings.ToLower(key)
+		if !strings.HasPrefix(lowerKey, "filter.") {
+			continue
+		}
+		for _, suffix := range []string{".clean", ".process"} {
+			if strings.HasSuffix(lowerKey, suffix) && len(key) > len("filter.")+len(suffix) {
+				drivers[key[:len(key)-len(suffix)]] = struct{}{}
+			}
+		}
+	}
+	bases := make([]string, 0, len(drivers))
+	for base := range drivers {
+		bases = append(bases, base)
+	}
+	sort.Strings(bases)
+	overrides := make([]string, 0, len(bases)*3)
+	for _, base := range bases {
+		overrides = append(overrides, base+".clean=", base+".process=", base+".required=false")
+	}
+	return overrides, "", true, false
 }
 
 func sanitizedGitEnvironment() []string {
