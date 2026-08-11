@@ -31,6 +31,9 @@ type fakeBrowserToolSource struct {
 	resume                browser.Session
 	prepare               browser.Preparation
 	execute               browser.Invocation
+	contextCatalog        browser.ContextCatalog
+	contextPreparation    browser.ContextPreparation
+	contextResult         browser.ContextResult
 	err                   error
 	executeErr            error
 
@@ -47,10 +50,46 @@ type fakeBrowserToolSource struct {
 	executeApproval   *browser.ApprovalBinding
 	prepareCalls      int
 	executeCalls      int
+	contextRequest    browser.ContextRequest
+	contextApproval   *browser.ApprovalBinding
 	profileStatus     browser.ProfileAvailability
 	readiness         browser.PassiveReadiness
 	readinessCalls    int
 	actions           []browser.ActionKind
+}
+
+func (source *fakeBrowserToolSource) ObserveContext(
+	_ context.Context,
+	_ browser.ObserveRequest,
+) (browser.Observation, error) {
+	return source.observe, source.err
+}
+
+func (source *fakeBrowserToolSource) ListContexts(
+	_ context.Context,
+	_ browser.Owner,
+	_ string,
+) (browser.ContextCatalog, error) {
+	return source.contextCatalog, source.err
+}
+
+func (source *fakeBrowserToolSource) PrepareContext(
+	_ context.Context,
+	request browser.ContextRequest,
+) (browser.ContextPreparation, error) {
+	source.contextRequest = request
+	result := source.contextPreparation
+	result.Request = request
+	return result, source.err
+}
+
+func (source *fakeBrowserToolSource) ExecuteContext(
+	_ context.Context,
+	_ browser.ContextPreparation,
+	approval *browser.ApprovalBinding,
+) (browser.ContextResult, error) {
+	source.contextApproval = approval
+	return source.contextResult, source.executeErr
 }
 
 func (source *fakeBrowserToolSource) Available() bool { return source.available }
@@ -308,6 +347,73 @@ func decodeBrowserToolResult(t *testing.T, result *toolshared.ToolResult, target
 	}
 	if err := json.Unmarshal([]byte(result.ContentForLLM()), target); err != nil {
 		t.Fatalf("decode result: %v; content = %q", err, result.ContentForLLM())
+	}
+}
+
+func browserToolContextCatalog() browser.ContextCatalog {
+	return browser.ContextCatalog{
+		ID: "catalog_gateway", Generation: 2, SelectedTabID: "tab_primary",
+		Tabs: []browser.TabContext{{
+			ID: "tab_primary", Kind: browser.TabPrimary, CreationSequence: 1,
+			DocumentGeneration: 1, URL: "https://example.com", Origin: "https://example.com",
+		}},
+	}
+}
+
+func TestBrowserContextsListsBoundedCatalog(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, contextCatalog: browserToolContextCatalog()}
+	tool := NewBrowserContextsTool(browserToolTestConfig(), source)
+	if !tool.ToolEnabledForAgent("browser") {
+		t.Fatal("browser_contexts is not enabled for the admitted agent")
+	}
+	var result browserContextResultView
+	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), map[string]any{
+		"operation": "list", "browser_session_id": "browser_session_1",
+	}), &result)
+	if result.ContextCatalog.ID != source.contextCatalog.ID || result.ContextCatalog.Generation != 2 {
+		t.Fatalf("browser_contexts list = %#v", result)
+	}
+}
+
+func TestBrowserContextsCloseSuspendsAndUsesExactPreparedApproval(t *testing.T) {
+	catalog := browserToolContextCatalog()
+	invocation := browser.Invocation{
+		ID: "context_invocation_1", ActionHash: strings.Repeat("a", 64),
+		Effect: browser.EffectUnknown, State: browser.InvocationPrepared, ExpiresAt: 12345,
+	}
+	preparation := browser.ContextPreparation{
+		Invocation: invocation,
+		Approval: browser.ApprovalBinding{
+			PreparedActionID: invocation.ID, ActionHash: invocation.ActionHash, ExpiresAt: invocation.ExpiresAt,
+		},
+		RequiresApproval: true,
+	}
+	succeeded := invocation
+	succeeded.State = browser.InvocationSucceeded
+	source := &fakeBrowserToolSource{
+		available: true, contextPreparation: preparation,
+		contextResult: browser.ContextResult{Catalog: catalog, Invocation: &succeeded},
+	}
+	tool := NewBrowserContextsTool(browserToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "close", "browser_session_id": "browser_session_1",
+		"context_catalog_id": catalog.ID, "context_generation": 2,
+		"tab_id": "tab_secondary",
+	}
+	approval, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil || approval["context_invocation_id"] != invocation.ID ||
+		approval["action_hash"] != invocation.ActionHash {
+		t.Fatalf("ApprovalArguments() = %#v, %v", approval, err)
+	}
+	if suspended := tool.Execute(browserToolTestContext(), args); suspended.Suspension == nil {
+		t.Fatalf("close did not suspend: %#v", suspended)
+	}
+	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
+	var result browserContextResultView
+	decodeBrowserToolResult(t, tool.Execute(resumeCtx, args), &result)
+	if source.contextApproval == nil || source.contextApproval.PreparedActionID != invocation.ID ||
+		result.InvocationID != invocation.ID || result.State != browser.InvocationSucceeded {
+		t.Fatalf("approved close = %#v; binding = %#v", result, source.contextApproval)
 	}
 }
 

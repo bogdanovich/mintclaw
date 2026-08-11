@@ -403,6 +403,60 @@ func (source *gatewayBrowserToolSource) Observe(
 	)
 }
 
+func (source *gatewayBrowserToolSource) ObserveContext(
+	ctx context.Context,
+	request browser.ObserveRequest,
+) (browser.Observation, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.Observation, error) {
+			return broker.ObserveContext(ctx, request)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) ListContexts(
+	ctx context.Context,
+	owner browser.Owner,
+	sessionID string,
+) (browser.ContextCatalog, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.ContextCatalog, error) {
+			return broker.ListContexts(ctx, owner, sessionID)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) PrepareContext(
+	ctx context.Context,
+	request browser.ContextRequest,
+) (browser.ContextPreparation, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.ContextPreparation, error) {
+			return broker.PrepareContext(ctx, request)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) ExecuteContext(
+	ctx context.Context,
+	preparation browser.ContextPreparation,
+	approval *browser.ApprovalBinding,
+) (browser.ContextResult, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.ContextResult, error) {
+			return broker.ExecuteContext(ctx, preparation, approval)
+		},
+	)
+}
+
 func (source *gatewayBrowserToolSource) PrepareAction(
 	ctx context.Context,
 	request browser.PrepareActionRequest,
@@ -576,6 +630,13 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			}
 			return tools.NewBrowserObserveTool(reloadCfg, source), nil
 		},
+		"browser_contexts": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserContextsTool(reloadCfg, source), nil
+		},
 		"browser_act": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
@@ -584,7 +645,9 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			return tools.NewBrowserActTool(reloadCfg, source), nil
 		},
 	}
-	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+	for _, name := range []string{
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_act",
+	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
 			return err
 		}

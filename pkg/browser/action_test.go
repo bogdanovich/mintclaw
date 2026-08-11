@@ -36,6 +36,7 @@ type actionTestWorker struct {
 	uploads        []DriverAction
 	download       DriverDownload
 	closed         int
+	statusCalls    int
 	humanControl   bool
 	beginHumanErr  error
 	endHumanErr    error
@@ -64,6 +65,7 @@ func (worker *actionTestWorker) EndHumanControl(context.Context) error {
 }
 
 func (worker *actionTestWorker) Status(context.Context) (WorkerStatus, error) {
+	worker.statusCalls++
 	return WorkerReady, nil
 }
 
@@ -1821,6 +1823,30 @@ func TestPreparedRetentionWaitsForInvocationRetention(t *testing.T) {
 		context.Background(), prepared.Action.ID,
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unreferenced prepared action prune error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestObserveDoesNotProbeWorkerStatusBeforeReconnectableFailure(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	worker.observeErr = ErrWorkerUnavailable
+	if _, err := broker.Observe(
+		t.Context(),
+		testOwner(),
+		session.ID,
+		session.TabID,
+	); !errors.Is(
+		err,
+		ErrWorkerUnavailable,
+	) {
+		t.Fatalf("Observe() error = %v, want worker unavailable", err)
+	}
+	if worker.statusCalls != 0 {
+		t.Fatalf("Observe() probed worker status %d times", worker.statusCalls)
+	}
+	stored, err := store.GetSession(t.Context(), session.ID)
+	if err != nil || stored.State != SessionReady || stored.SafeFailure != "" {
+		t.Fatalf("reconnectable observation failure changed session = %#v, %v", stored, err)
 	}
 }
 

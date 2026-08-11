@@ -58,8 +58,8 @@ type ContextWorker interface {
 	ActionWorker
 	ContextCatalog(context.Context) (ContextCatalog, error)
 	OpenTab(context.Context) (ContextCatalog, error)
-	SelectContext(context.Context, string, string) (DriverObservation, ContextCatalog, error)
-	CloseTab(context.Context, string) (ContextCatalog, error)
+	SelectContext(context.Context, ContextMutationAuthority) (DriverObservation, ContextCatalog, error)
+	CloseTab(context.Context, ContextMutationAuthority) (ContextCatalog, error)
 }
 
 // NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
@@ -1257,6 +1257,16 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
+		if executionContextErr == nil && errors.Is(executeErr, errContextAuthorityStale) {
+			failed, failErr := broker.completeInvocationLocked(
+				completionCtx,
+				invocation,
+				InvocationFailed,
+				nil,
+				"context_stale",
+			)
+			return failed, errors.Join(ErrStale, failErr)
+		}
 		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
@@ -1290,7 +1300,14 @@ func (broker *Broker) executePreparedLocked(
 	if err != nil {
 		return completed, err
 	}
-	// A completed action is activity, but never extends the absolute lifetime.
+	// The accepted operation may have durably mutated the session (context
+	// open/select/close does). Reload before recording activity so a successful
+	// terminal receipt never attempts a stale session CAS.
+	session, err = broker.store.GetSession(completionCtx, invocation.SessionID)
+	if err != nil || session.State != SessionReady || !session.Owner.Equal(owner) {
+		return completed, errors.Join(err, ErrWorkerUnavailable)
+	}
+	// A completed operation is activity, but never extends the absolute lifetime.
 	session.Revision++
 	session.UpdatedAt = timestampAtLeast(broker.now().UTC().UnixNano(), session.UpdatedAt)
 	session.LastActivityAt = session.UpdatedAt
