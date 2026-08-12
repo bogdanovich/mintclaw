@@ -284,12 +284,29 @@ func nativeCodingFixtureConfig() *config.Config {
 	cfg.Agents.Defaults.Provider = "fixture"
 	cfg.Agents.Defaults.MaxLLMRetries = 1
 	cfg.Agents.Defaults.LLMRetryBackoffSecs = 1
-	cfg.ModelList = config.SecureModelList{&config.ModelConfig{
-		ModelName: "fixture-alias",
-		Provider:  "fixture",
-		Model:     "fixture-model-id",
-		Enabled:   true,
-	}}
+	// A threshold of one would route even simple prompts through the personal
+	// light model if the isolated coding profile accidentally inherited it.
+	cfg.Agents.Defaults.Routing = &config.RoutingConfig{
+		Enabled:    true,
+		LightModel: "personal-light",
+		Threshold:  1,
+	}
+	cfg.ModelList = config.SecureModelList{
+		&config.ModelConfig{
+			ModelName: "fixture-alias",
+			Provider:  "fixture",
+			Model:     "fixture-model-id",
+			Enabled:   true,
+		},
+		&config.ModelConfig{
+			ModelName: "personal-light",
+			Provider:  "openai",
+			Model:     "gpt-light",
+			APIBase:   "http://127.0.0.1:1",
+			APIKeys:   config.SimpleSecureStrings("test-key"),
+			Enabled:   true,
+		},
+	}
 	return cfg
 }
 

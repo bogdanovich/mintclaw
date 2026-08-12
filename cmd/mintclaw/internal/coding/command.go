@@ -154,14 +154,12 @@ func runNew(
 	if metadataErr != nil {
 		return metadataErr
 	}
-	if strings.TrimSpace(model) != "" {
-		resolvedModel, resolvedProvider, err := deps.resolveModel(model)
-		if err != nil {
-			return err
-		}
-		metadata.Model = resolvedModel
-		metadata.Provider = resolvedProvider
+	resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+	if err != nil {
+		return err
 	}
+	metadata.Model = resolvedModel
+	metadata.Provider = resolvedProvider
 	if err := metadata.Validate(); err != nil {
 		return err
 	}
@@ -353,6 +351,14 @@ func resumeSelectedThread(
 	}
 	if options.model != "" {
 		resolvedModel, resolvedProvider, err := deps.resolveModel(options.model)
+		if err != nil {
+			return commandResult{}, err
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
+	} else if options.promptSet &&
+		(strings.TrimSpace(metadata.Model) == "" || strings.TrimSpace(metadata.Provider) == "") {
+		resolvedModel, resolvedProvider, err := deps.resolveModel(metadata.Model)
 		if err != nil {
 			return commandResult{}, err
 		}

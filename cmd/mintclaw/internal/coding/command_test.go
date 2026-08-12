@@ -332,6 +332,109 @@ func TestResumeRejectsUnknownModelBeforeChangingDurableSelection(t *testing.T) {
 	}
 }
 
+func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 45, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	deps.resolveModel = func(model string) (string, string, error) {
+		if strings.TrimSpace(model) != "" {
+			t.Fatalf("default resolution input = %q, want empty", model)
+		}
+		return "default-coding", "default-provider", nil
+	}
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		persisted, err := request.Store.Load(request.Metadata.ThreadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" {
+			t.Fatalf("pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		}
+		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		return codingTurnOutcome{
+			Model:        request.Metadata.Model,
+			Provider:     request.Metadata.Provider,
+			PromptStored: appendOutcomeAllowsMetadataSave(err),
+		}, err
+	})
+
+	var created commandResult
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(deps), "use the default", "--json"),
+		&created,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if created.Model != "default-coding" || created.Provider != "default-provider" {
+		t.Fatalf("created selection = %#v", created)
+	}
+}
+
+func TestResumePersistsMissingSelectionBeforePromptAdmission(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 50, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "initial", "--json"), &created); err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = ""
+	metadata.Provider = ""
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	deps.resolveModel = func(model string) (string, string, error) {
+		return "recovered-default", "recovered-provider", nil
+	}
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		persisted, loadErr := request.Store.Load(request.Metadata.ThreadID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if persisted.Model != "recovered-default" || persisted.Provider != "recovered-provider" {
+			t.Fatalf("legacy pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		}
+		appendErr := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		return codingTurnOutcome{
+			Model:        request.Metadata.Model,
+			Provider:     request.Metadata.Provider,
+			PromptStored: appendOutcomeAllowsMetadataSave(appendErr),
+		}, appendErr
+	})
+
+	result := executeCommand(
+		t,
+		newResumeCommand(deps),
+		created.ThreadID,
+		"--prompt",
+		"continue safely",
+		"--json",
+	)
+	var resumed commandResult
+	if err := json.Unmarshal(result, &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Model != "recovered-default" || resumed.Provider != "recovered-provider" {
+		t.Fatalf("resumed selection = %#v", resumed)
+	}
+}
+
 func TestCodeAdmissionAndFailurePublication(t *testing.T) {
 	t.Run("lease busy", func(t *testing.T) {
 		home := t.TempDir()
@@ -568,7 +671,11 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		now:         func() time.Time { return *now },
 		newThreadID: thread.NewThreadID,
 		resolveModel: func(model string) (string, string, error) {
-			return strings.TrimSpace(model), "fixture", nil
+			resolved := strings.TrimSpace(model)
+			if resolved == "" {
+				resolved = "fixture-alias"
+			}
+			return resolved, "fixture", nil
 		},
 		turnRunner: codingTurnRunnerFunc(func(
 			ctx context.Context,
