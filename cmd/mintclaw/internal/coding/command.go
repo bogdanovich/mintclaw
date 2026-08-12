@@ -20,20 +20,22 @@ import (
 )
 
 type dependencies struct {
-	home        func() string
-	cwd         func() (string, error)
-	now         func() time.Time
-	newThreadID func() string
-	turnRunner  codingTurnRunner
+	home         func() string
+	cwd          func() (string, error)
+	now          func() time.Time
+	newThreadID  func() string
+	turnRunner   codingTurnRunner
+	resolveModel func(string) (string, string, error)
 }
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		home:        internal.GetMintClawHome,
-		cwd:         os.Getwd,
-		now:         time.Now,
-		newThreadID: thread.NewThreadID,
-		turnRunner:  newNativeCodingTurnRunner(),
+		home:         internal.GetMintClawHome,
+		cwd:          os.Getwd,
+		now:          time.Now,
+		newThreadID:  thread.NewThreadID,
+		turnRunner:   newNativeCodingTurnRunner(),
+		resolveModel: resolveNativeCodingModel,
 	}
 }
 
@@ -152,7 +154,14 @@ func runNew(
 	if metadataErr != nil {
 		return metadataErr
 	}
-	metadata.Model = strings.TrimSpace(model)
+	if strings.TrimSpace(model) != "" {
+		resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+		if err != nil {
+			return err
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
+	}
 	if err := metadata.Validate(); err != nil {
 		return err
 	}
@@ -343,8 +352,12 @@ func resumeSelectedThread(
 		updatedPreview = preview
 	}
 	if options.model != "" {
-		metadata.Model = strings.TrimSpace(options.model)
-		metadata.Provider = ""
+		resolvedModel, resolvedProvider, err := deps.resolveModel(options.model)
+		if err != nil {
+			return commandResult{}, err
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
 	}
 	metadata.Project = project
 	metadata.UpdatedAt = deps.now().UTC()

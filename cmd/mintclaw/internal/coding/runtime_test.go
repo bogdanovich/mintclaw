@@ -67,3 +67,29 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 		t.Fatal("runtime model slice aliases the source model")
 	}
 }
+
+func TestCodingRuntimeConfigCanonicalizesInferredModelBeforePersistedProvider(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{&config.ModelConfig{
+		ModelName: "coding-model",
+		Model:     "openai/gpt-4o",
+		Enabled:   true,
+	}}
+
+	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{
+		Model:    "coding-model",
+		Provider: "openai",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelName != "coding-model" || providerName != "openai" {
+		t.Fatalf("selection = model %q provider %q", modelName, providerName)
+	}
+	if got := runtimeCfg.ModelList[0].Model; got != "gpt-4o" {
+		t.Fatalf("canonical runtime model = %q, want gpt-4o", got)
+	}
+	if cfg.ModelList[0].Model != "openai/gpt-4o" {
+		t.Fatalf("source model was mutated: %q", cfg.ModelList[0].Model)
+	}
+}

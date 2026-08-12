@@ -53,6 +53,15 @@ func newNativeCodingTurnRunner() codingTurnRunner {
 	}
 }
 
+func resolveNativeCodingModel(model string) (string, string, error) {
+	cfg, err := internal.LoadConfig()
+	if err != nil {
+		return "", "", fmt.Errorf("coding runtime: load config: %w", err)
+	}
+	_, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{Model: strings.TrimSpace(model)})
+	return modelName, providerName, err
+}
+
 func (r nativeCodingTurnRunner) Run(
 	ctx context.Context,
 	request codingTurnRequest,
@@ -98,14 +107,14 @@ func (r nativeCodingTurnRunner) Run(
 		request.Metadata.SessionKey,
 		"coding",
 		request.Metadata.ThreadID,
-		agent.DirectTurnOptions{DisablePostTurnCompaction: true},
+		agent.DirectTurnOptions{SuppressBackgroundCompaction: true},
 	)
 	after, historyErr := sessions.ReadTurnHistory(context.WithoutCancel(ctx), request.Metadata.SessionKey)
 	outcome := codingTurnOutcome{
 		Model:        modelName,
 		Provider:     providerName,
 		Response:     response,
-		PromptStored: turnErr == nil || acceptedPromptAfter(after, len(beforeHistory), request.Prompt),
+		PromptStored: acceptedPromptAfter(after, len(beforeHistory), request.Prompt),
 	}
 	if historyErr != nil {
 		historyErr = fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr)
@@ -142,6 +151,8 @@ func codingRuntimeConfig(
 	}
 	selected := cloneModelConfig(modelCfg)
 	if persistedProvider := strings.TrimSpace(metadata.Provider); persistedProvider != "" {
+		_, canonicalModelID := providers.ExtractProtocol(selected)
+		selected.Model = canonicalModelID
 		selected.Provider = persistedProvider
 	}
 	runtimeCfg.Agents.Defaults.ModelName = modelName

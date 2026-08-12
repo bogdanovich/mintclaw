@@ -734,6 +734,39 @@ func TestPipeline_SetupTurn_SchedulesAbsoluteBudgetCompaction(t *testing.T) {
 	}
 }
 
+func TestPipelineSetupTurnSuppressesBackgroundCompactionForShortLivedCaller(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	agent.ContextWindow = 100_000
+	agent.MaxTokens = 1_000
+	cm := &blockingCompactContextManager{
+		history: []providers.Message{{Role: "user", Content: "recent"}},
+		budget: &ContextBudgetReport{
+			AvailableContext: 97_000,
+			NeedsCompaction:  true,
+			PressureReasons:  []string{"history_budget"},
+		},
+		compactStarted: make(chan struct{}),
+		releaseCompact: make(chan struct{}),
+	}
+	al.contextManager = cm
+	defer close(cm.releaseCompact)
+	opts := normalizeProcessOptions(makeTestProcessOpts("short-lived-pressure"))
+	opts.SuppressBackgroundCompaction = true
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID:  "turn-short-lived-pressure",
+		context: newTurnContext(nil, nil, nil),
+	})
+	if _, err := NewPipeline(al).SetupTurn(t.Context(), ts); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cm.compactStarted:
+		t.Fatal("short-lived caller scheduled background compaction")
+	default:
+	}
+}
+
 func TestPipeline_SetupTurn_ReportsDegradedTailWithoutCompaction(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

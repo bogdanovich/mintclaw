@@ -99,7 +99,7 @@ func newFinalizationContext(
 			sendResponse:                ts.opts.SendResponse,
 			allowInterimMintClawPublish: ts.opts.AllowInterimMintClawPublish,
 			preferNewOutboundReply:      exec.sawAdditionalUserInput,
-			compactAfterDelivery:        ts.opts.EnableSummary,
+			compactAfterDelivery:        ts.opts.EnableSummary && !ts.opts.SuppressBackgroundCompaction,
 		},
 	}
 }

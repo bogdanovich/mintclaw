@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -290,6 +291,47 @@ func TestInvalidPromptAndResumeMetadataFailBeforeCanonicalAppend(t *testing.T) {
 	}
 }
 
+func TestResumeRejectsUnknownModelBeforeChangingDurableSelection(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(deps), "accepted", "--model", "known", "--json"),
+		&created,
+	); err != nil {
+		t.Fatal(err)
+	}
+	deps.resolveModel = func(model string) (string, string, error) {
+		return "", "", fmt.Errorf("model %q not found", model)
+	}
+
+	for _, args := range [][]string{
+		{created.ThreadID, "--model", "unknown"},
+		{created.ThreadID, "--model", "unknown", "--prompt", "must not commit"},
+	} {
+		if _, err := executeCommandError(newResumeCommand(deps), args...); err == nil ||
+			!strings.Contains(err.Error(), `model "unknown" not found`) {
+			t.Fatalf("resume %v error = %v", args, err)
+		}
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Model != "known" || metadata.Provider != "fixture" {
+		t.Fatalf("durable selection changed: model %q provider %q", metadata.Model, metadata.Provider)
+	}
+	if history := readHistory(t, created.StateRoot, created.SessionKey); len(history) != 1 || history[0] != "accepted" {
+		t.Fatalf("unknown override mutated history = %#v", history)
+	}
+}
+
 func TestCodeAdmissionAndFailurePublication(t *testing.T) {
 	t.Run("lease busy", func(t *testing.T) {
 		home := t.TempDir()
@@ -525,6 +567,9 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		cwd:         func() (string, error) { return cwd, nil },
 		now:         func() time.Time { return *now },
 		newThreadID: thread.NewThreadID,
+		resolveModel: func(model string) (string, string, error) {
+			return strings.TrimSpace(model), "fixture", nil
+		},
 		turnRunner: codingTurnRunnerFunc(func(
 			ctx context.Context,
 			request codingTurnRequest,

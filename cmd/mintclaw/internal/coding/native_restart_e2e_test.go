@@ -197,7 +197,7 @@ func TestNativeCodingFailurePreservesInspectableThread(t *testing.T) {
 			return provider, "fixture-model-id", nil
 		},
 	}
-	_, runErr := executeCommandError(newCodeCommand(deps), "preserve this failed request")
+	_, runErr := executeCommandError(newCodeCommand(deps), "/help preserve this failed request")
 	if runErr == nil || !strings.Contains(runErr.Error(), "remains inspectable") ||
 		!strings.Contains(runErr.Error(), "mintclaw resume "+threadID) {
 		t.Fatalf("native failure = %v", runErr)
@@ -215,7 +215,7 @@ func TestNativeCodingFailurePreservesInspectableThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 1 ||
-		history[0] != "preserve this failed request" {
+		history[0] != "/help preserve this failed request" {
 		t.Fatalf("inspectable failed history = %#v", history)
 	}
 }

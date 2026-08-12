@@ -105,3 +105,23 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 		t.Fatalf("result models = (%q, %q)", result.modelName, result.defaultModelName)
 	}
 }
+
+func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) {
+	ts := &turnState{opts: processOptions{
+		EnableSummary:                true,
+		SuppressBackgroundCompaction: true,
+	}}
+	finalization := newFinalizationContext(
+		ts,
+		&turnExecution{},
+		&LLMIterationState{},
+		TurnEndStatusCompleted,
+		"done",
+	)
+	if finalization.delivery.compactAfterDelivery {
+		t.Fatal("short-lived caller requested post-delivery compaction")
+	}
+	if !ts.opts.EnableSummary {
+		t.Fatal("foreground compaction was disabled")
+	}
+}
