@@ -109,15 +109,16 @@ type gatewayInvocationMigrationMarker struct {
 }
 
 type gatewayInvocationSQLiteStore struct {
-	path      string
-	legacy    string
-	maxBytes  int64
-	retention time.Duration
-	now       func() time.Time
-	db        *sql.DB
-	identity  *os.File
-	mu        sync.RWMutex
-	closed    bool
+	path              string
+	legacy            string
+	maxBytes          int64
+	retention         time.Duration
+	now               func() time.Time
+	db                *sql.DB
+	identity          *os.File
+	startupValidation func(context.Context) error
+	mu                sync.RWMutex
+	closed            bool
 }
 
 type gatewayInvocationSQLiteSchemaEntry struct {
@@ -150,6 +151,15 @@ func newGatewayInvocationSQLiteStore(
 	path string,
 	maxBytes int64,
 	now func() time.Time,
+) (*gatewayInvocationSQLiteStore, error) {
+	return newGatewayInvocationSQLiteStoreWithStartupValidation(path, maxBytes, now, nil)
+}
+
+func newGatewayInvocationSQLiteStoreWithStartupValidation(
+	path string,
+	maxBytes int64,
+	now func() time.Time,
+	startupValidation func(context.Context) error,
 ) (*gatewayInvocationSQLiteStore, error) {
 	path = filepath.Clean(path)
 	if filepath.Ext(path) != ".db" || path == string(filepath.Separator) {
@@ -215,6 +225,7 @@ func newGatewayInvocationSQLiteStore(
 	store := &gatewayInvocationSQLiteStore{
 		path: path, legacy: legacy, maxBytes: maxBytes,
 		retention: DefaultGatewayInvocationRetention, now: now, db: db, identity: databaseIdentity,
+		startupValidation: startupValidation,
 	}
 	if err = store.initialize(databaseExisted, legacyKind, document); err != nil {
 		_ = db.Close()
@@ -311,8 +322,13 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 	legacyKind string,
 	document gatewayInvocationDocument,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayInvocationSQLiteBusyTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if store.startupValidation != nil {
+		if err := store.startupValidation(ctx); err != nil {
+			return fmt.Errorf("validate gateway node invocation SQLite startup context: %w", err)
+		}
+	}
 	hasSchema, err := store.hasSchema(ctx)
 	if err != nil {
 		return err

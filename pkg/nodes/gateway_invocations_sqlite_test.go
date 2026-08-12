@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -173,6 +174,39 @@ func TestGatewayInvocationSQLiteSchemaInitializationRollsBackAndRestarts(t *test
 		t.Fatalf("restart after interrupted schema initialization: %v", err)
 	}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+}
+
+func TestGatewayInvocationSQLiteStartupValidationHasNoBusyTimeoutDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	validated := false
+	store, err := newGatewayInvocationSQLiteStoreWithStartupValidation(
+		path,
+		16*1024*1024,
+		time.Now,
+		func(ctx context.Context) error {
+			if deadline, bounded := ctx.Deadline(); bounded {
+				return fmt.Errorf("startup context unexpectedly bounded by %s", time.Until(deadline))
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				validated = true
+				return nil
+			}
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := store.close(); closeErr != nil {
+			t.Errorf("close gateway invocation SQLite backend: %v", closeErr)
+		}
+	}()
+	if !validated {
+		t.Fatal("startup validation hook was not exercised")
+	}
 }
 
 func TestGatewayInvocationSQLitePreservesActorAndWorkspaceIsolation(t *testing.T) {
