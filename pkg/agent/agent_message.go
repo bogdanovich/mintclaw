@@ -35,6 +35,9 @@ type DirectTurnOptions struct {
 	// Stateless prevents the turn from loading or saving conversation history.
 	// Tool calls and results remain available for the duration of the turn.
 	Stateless bool
+	// SuppressBackgroundCompaction keeps durable history and foreground
+	// compaction enabled while preventing work from outliving a short-lived caller.
+	SuppressBackgroundCompaction bool
 }
 
 // ProcessDirectWithOptions processes a direct turn with explicit persistence semantics.
@@ -115,13 +118,15 @@ func (al *AgentLoop) processCodingDirect(
 				RouteResult:     route,
 				UserMessage:     content,
 			},
-			ModelBinding:        modelBinding,
-			CodingContext:       codingContext,
-			DefaultResponse:     defaultResponse,
-			EnableSummary:       !directOpts.Stateless,
-			SendResponse:        false,
-			ExpectFinalDelivery: true,
-			NoHistory:           directOpts.Stateless,
+			ModelBinding:                 modelBinding,
+			CodingContext:                codingContext,
+			DefaultResponse:              defaultResponse,
+			EnableSummary:                !directOpts.Stateless,
+			SuppressBackgroundCompaction: directOpts.SuppressBackgroundCompaction,
+			TreatInputAsPrompt:           true,
+			SendResponse:                 false,
+			ExpectFinalDelivery:          true,
+			NoHistory:                    directOpts.Stateless,
 		},
 		ScopeKey:     wantSessionKey,
 		SessionKey:   wantSessionKey,
@@ -384,8 +389,10 @@ func (al *AgentLoop) processInboundMessageTurn(
 
 	// context-dependent commands check their own Runtime fields and report
 	// "unavailable" when the required capability is nil.
-	if response, handled := al.handleCommand(ctx, msg, turn.ModelBinding, &opts); handled {
-		return response, nil
+	if !opts.TreatInputAsPrompt {
+		if response, handled := al.handleCommand(ctx, msg, turn.ModelBinding, &opts); handled {
+			return response, nil
+		}
 	}
 
 	if pending := al.takePendingSkills(

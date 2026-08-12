@@ -2,8 +2,10 @@ package coding
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -289,7 +291,151 @@ func TestInvalidPromptAndResumeMetadataFailBeforeCanonicalAppend(t *testing.T) {
 	}
 }
 
-func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
+func TestResumeRejectsUnknownModelBeforeChangingDurableSelection(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(deps), "accepted", "--model", "known", "--json"),
+		&created,
+	); err != nil {
+		t.Fatal(err)
+	}
+	deps.resolveModel = func(model string) (string, string, error) {
+		return "", "", fmt.Errorf("model %q not found", model)
+	}
+
+	for _, args := range [][]string{
+		{created.ThreadID, "--model", "unknown"},
+		{created.ThreadID, "--model", "unknown", "--prompt", "must not commit"},
+	} {
+		if _, err := executeCommandError(newResumeCommand(deps), args...); err == nil ||
+			!strings.Contains(err.Error(), `model "unknown" not found`) {
+			t.Fatalf("resume %v error = %v", args, err)
+		}
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Model != "known" || metadata.Provider != "fixture" {
+		t.Fatalf("durable selection changed: model %q provider %q", metadata.Model, metadata.Provider)
+	}
+	if history := readHistory(t, created.StateRoot, created.SessionKey); len(history) != 1 || history[0] != "accepted" {
+		t.Fatalf("unknown override mutated history = %#v", history)
+	}
+}
+
+func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 45, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	deps.resolveModel = func(model string) (string, string, error) {
+		if strings.TrimSpace(model) != "" {
+			t.Fatalf("default resolution input = %q, want empty", model)
+		}
+		return "default-coding", "default-provider", nil
+	}
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		persisted, err := request.Store.Load(request.Metadata.ThreadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" {
+			t.Fatalf("pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		}
+		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		return codingTurnOutcome{
+			Model:        request.Metadata.Model,
+			Provider:     request.Metadata.Provider,
+			PromptStored: appendOutcomeAllowsMetadataSave(err),
+		}, err
+	})
+
+	var created commandResult
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(deps), "use the default", "--json"),
+		&created,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if created.Model != "default-coding" || created.Provider != "default-provider" {
+		t.Fatalf("created selection = %#v", created)
+	}
+}
+
+func TestResumePersistsMissingSelectionBeforePromptAdmission(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 10, 14, 50, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "initial", "--json"), &created); err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = ""
+	metadata.Provider = ""
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	deps.resolveModel = func(model string) (string, string, error) {
+		return "recovered-default", "recovered-provider", nil
+	}
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		persisted, loadErr := request.Store.Load(request.Metadata.ThreadID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if persisted.Model != "recovered-default" || persisted.Provider != "recovered-provider" {
+			t.Fatalf("legacy pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		}
+		appendErr := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		return codingTurnOutcome{
+			Model:        request.Metadata.Model,
+			Provider:     request.Metadata.Provider,
+			PromptStored: appendOutcomeAllowsMetadataSave(appendErr),
+		}, appendErr
+	})
+
+	result := executeCommand(
+		t,
+		newResumeCommand(deps),
+		created.ThreadID,
+		"--prompt",
+		"continue safely",
+		"--json",
+	)
+	var resumed commandResult
+	if err := json.Unmarshal(result, &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Model != "recovered-default" || resumed.Provider != "recovered-provider" {
+		t.Fatalf("resumed selection = %#v", resumed)
+	}
+}
+
+func TestCodeAdmissionAndFailurePublication(t *testing.T) {
 	t.Run("lease busy", func(t *testing.T) {
 		home := t.TempDir()
 		project := t.TempDir()
@@ -345,8 +491,13 @@ func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
 		if runErr == nil || !strings.Contains(runErr.Error(), "sessions directory") {
 			t.Fatalf("code with append failure error = %v", runErr)
 		}
-		if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("failed append published metadata: %v", err)
+		metadata, loadErr := store.Load(threadID)
+		if loadErr != nil || metadata.ThreadID != threadID {
+			t.Fatalf("failed turn did not preserve inspectable metadata: %#v, %v", metadata, loadErr)
+		}
+		if !strings.Contains(runErr.Error(), "remains inspectable") ||
+			!strings.Contains(runErr.Error(), "mintclaw resume "+threadID) {
+			t.Fatalf("failed turn error is not actionable: %v", runErr)
 		}
 	})
 }
@@ -519,6 +670,25 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		cwd:         func() (string, error) { return cwd, nil },
 		now:         func() time.Time { return *now },
 		newThreadID: thread.NewThreadID,
+		resolveModel: func(model string) (string, string, error) {
+			resolved := strings.TrimSpace(model)
+			if resolved == "" {
+				resolved = "fixture-alias"
+			}
+			return resolved, "fixture", nil
+		},
+		turnRunner: codingTurnRunnerFunc(func(
+			ctx context.Context,
+			request codingTurnRequest,
+		) (codingTurnOutcome, error) {
+			err := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+			return codingTurnOutcome{
+				Model:        request.Metadata.Model,
+				Provider:     request.Metadata.Provider,
+				Response:     "fixture response",
+				PromptStored: appendOutcomeAllowsMetadataSave(err),
+			}, err
+		}),
 	}
 }
 

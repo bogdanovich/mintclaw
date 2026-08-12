@@ -66,7 +66,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	if !ts.opts.NoHistory {
 		if budgetReport != nil && len(budgetReport.PressureReasons) > 0 {
 			p.emitAbsoluteBudgetPressure(ts, budgetReport, len(history))
-			if budgetReport.NeedsCompaction {
+			if budgetReport.NeedsCompaction && !ts.opts.SuppressBackgroundCompaction {
 				p.scheduleBackgroundCompaction(
 					ts.agent,
 					ts.sessionKey,
@@ -90,13 +90,15 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					"reserve_tokens": reserveTokens,
 					"compact_budget": compactBudget,
 				})
-			p.scheduleBackgroundCompaction(
-				ts.agent,
-				ts.sessionKey,
-				ContextCompressReasonProactive,
-				compactBudget,
-				"proactive_pressure",
-			)
+			if !ts.opts.SuppressBackgroundCompaction {
+				p.scheduleBackgroundCompaction(
+					ts.agent,
+					ts.sessionKey,
+					ContextCompressReasonProactive,
+					compactBudget,
+					"proactive_pressure",
+				)
+			}
 			originalHistoryCount := len(history)
 			var fit bool
 			history, messages, fit = trimHistoryToFitContextWindow(

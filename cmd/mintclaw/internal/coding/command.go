@@ -20,18 +20,22 @@ import (
 )
 
 type dependencies struct {
-	home        func() string
-	cwd         func() (string, error)
-	now         func() time.Time
-	newThreadID func() string
+	home         func() string
+	cwd          func() (string, error)
+	now          func() time.Time
+	newThreadID  func() string
+	turnRunner   codingTurnRunner
+	resolveModel func(string) (string, string, error)
 }
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		home:        internal.GetMintClawHome,
-		cwd:         os.Getwd,
-		now:         time.Now,
-		newThreadID: thread.NewThreadID,
+		home:         internal.GetMintClawHome,
+		cwd:          os.Getwd,
+		now:          time.Now,
+		newThreadID:  thread.NewThreadID,
+		turnRunner:   newNativeCodingTurnRunner(),
+		resolveModel: resolveNativeCodingModel,
 	}
 }
 
@@ -43,7 +47,9 @@ type commandResult struct {
 	InvocationCWD string `json:"invocation_cwd"`
 	StateRoot     string `json:"state_root"`
 	Model         string `json:"model,omitempty"`
+	Provider      string `json:"provider,omitempty"`
 	PromptStored  bool   `json:"prompt_stored"`
+	Response      string `json:"response,omitempty"`
 }
 
 type listResult struct {
@@ -70,8 +76,8 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "code <prompt>",
 		Short: "Create a project coding thread",
-		Long: "Create a durable coding thread for the current project and store its first prompt. " +
-			"The native coding runtime is introduced by the next roadmap phase.",
+		Long: "Create a durable coding thread for the current project and run its first prompt " +
+			"through the native MintClaw coding runtime.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.Join(args, " ")
@@ -148,7 +154,12 @@ func runNew(
 	if metadataErr != nil {
 		return metadataErr
 	}
-	metadata.Model = strings.TrimSpace(model)
+	resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+	if err != nil {
+		return err
+	}
+	metadata.Model = resolvedModel
+	metadata.Provider = resolvedProvider
 	if err := metadata.Validate(); err != nil {
 		return err
 	}
@@ -162,19 +173,31 @@ func runNew(
 	if leaseErr != nil {
 		return leaseErr
 	}
-	appendErr := store.AppendUserMessage(ctx, lease, metadata, prompt)
-	if !appendOutcomeAllowsMetadataSave(appendErr) {
-		return errors.Join(appendErr, lease.Release())
+	if err := store.Save(metadata); err != nil {
+		return errors.Join(err, lease.Release())
+	}
+	outcome, turnErr := deps.turnRunner.Run(ctx, codingTurnRequest{
+		Store: store, Lease: lease, Metadata: metadata, Prompt: prompt,
+	})
+	if outcome.Model != "" {
+		metadata.Model = outcome.Model
+	}
+	if outcome.Provider != "" {
+		metadata.Provider = outcome.Provider
 	}
 	saveErr := store.Save(metadata)
 	releaseErr := lease.Release()
-	if appendErr != nil {
-		return errors.Join(appendErr, saveErr, releaseErr)
+	if turnErr != nil {
+		return inspectableTurnError(
+			metadata.ThreadID,
+			outcome.PromptStored,
+			errors.Join(turnErr, saveErr, releaseErr),
+		)
 	}
 	if saveErr != nil || releaseErr != nil {
 		return committedPromptOperationError(metadata.ThreadID, errors.Join(saveErr, releaseErr))
 	}
-	result, resultErr := resultFor("created", store, metadata, true)
+	result, resultErr := resultFor("created", store, metadata, outcome.PromptStored, outcome.Response)
 	if resultErr != nil {
 		return preserveCommittedPromptState(metadata.ThreadID, true, resultErr)
 	}
@@ -315,6 +338,7 @@ func resumeSelectedThread(
 			metadata.ThreadID,
 		)
 	}
+	updatedPreview := ""
 	if options.promptSet {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
 			return commandResult{}, err
@@ -323,10 +347,23 @@ func resumeSelectedThread(
 		if displayErr != nil {
 			return commandResult{}, displayErr
 		}
-		metadata.Preview = preview
+		updatedPreview = preview
 	}
 	if options.model != "" {
-		metadata.Model = strings.TrimSpace(options.model)
+		resolvedModel, resolvedProvider, err := deps.resolveModel(options.model)
+		if err != nil {
+			return commandResult{}, err
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
+	} else if options.promptSet &&
+		(strings.TrimSpace(metadata.Model) == "" || strings.TrimSpace(metadata.Provider) == "") {
+		resolvedModel, resolvedProvider, err := deps.resolveModel(metadata.Model)
+		if err != nil {
+			return commandResult{}, err
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
 	}
 	metadata.Project = project
 	metadata.UpdatedAt = deps.now().UTC()
@@ -336,27 +373,39 @@ func resumeSelectedThread(
 	if _, err := runtimeLayoutFor(store, metadata); err != nil {
 		return commandResult{}, err
 	}
-	var appendErr error
+	var outcome codingTurnOutcome
+	var turnErr error
 	if options.promptSet {
-		appendErr = store.AppendUserMessage(ctx, lease, metadata, options.prompt)
-		if !appendOutcomeAllowsMetadataSave(appendErr) {
-			return commandResult{}, appendErr
+		if err := store.Save(metadata); err != nil {
+			return commandResult{}, err
 		}
-		promptStored = true
+		outcome, turnErr = deps.turnRunner.Run(ctx, codingTurnRequest{
+			Store: store, Lease: lease, Metadata: metadata, Prompt: options.prompt,
+		})
+		promptStored = outcome.PromptStored
+		if promptStored {
+			metadata.Preview = updatedPreview
+		}
+		if outcome.Model != "" {
+			metadata.Model = outcome.Model
+		}
+		if outcome.Provider != "" {
+			metadata.Provider = outcome.Provider
+		}
 	}
 	if err := store.Save(metadata); err != nil {
 		if promptStored {
 			return commandResult{}, errors.Join(
-				appendErr,
+				turnErr,
 				committedPromptOperationError(metadata.ThreadID, err),
 			)
 		}
 		return commandResult{}, err
 	}
-	if appendErr != nil {
-		return commandResult{}, appendErr
+	if turnErr != nil {
+		return commandResult{}, inspectableTurnError(metadata.ThreadID, promptStored, turnErr)
 	}
-	result, buildErr := resultFor("resumed", store, metadata, promptStored)
+	result, buildErr := resultFor("resumed", store, metadata, promptStored, outcome.Response)
 	if buildErr != nil {
 		return commandResult{}, buildErr
 	}
@@ -365,6 +414,19 @@ func resumeSelectedThread(
 
 func committedPromptOperationError(threadID string, err error) error {
 	return &thread.CommittedPromptError{ThreadID: threadID, Err: err}
+}
+
+func inspectableTurnError(threadID string, promptStored bool, err error) error {
+	if err == nil {
+		return nil
+	}
+	inspectable := fmt.Errorf(
+		"coding thread %s remains inspectable with `mintclaw resume %s`: %w",
+		threadID,
+		threadID,
+		err,
+	)
+	return preserveCommittedPromptState(threadID, promptStored, inspectable)
 }
 
 func appendOutcomeAllowsMetadataSave(err error) bool {
@@ -399,7 +461,13 @@ func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectI
 	return project, store, nil
 }
 
-func resultFor(action string, store *thread.Store, metadata thread.Metadata, stored bool) (commandResult, error) {
+func resultFor(
+	action string,
+	store *thread.Store,
+	metadata thread.Metadata,
+	stored bool,
+	response string,
+) (commandResult, error) {
 	layout, err := runtimeLayoutFor(store, metadata)
 	if err != nil {
 		return commandResult{}, err
@@ -412,7 +480,9 @@ func resultFor(action string, store *thread.Store, metadata thread.Metadata, sto
 		InvocationCWD: metadata.Project.InvocationCWD,
 		StateRoot:     layout.StateRoot(),
 		Model:         metadata.Model,
+		Provider:      metadata.Provider,
 		PromptStored:  stored,
+		Response:      response,
 	}, nil
 }
 
@@ -450,14 +520,20 @@ func renderResult(out io.Writer, result commandResult, jsonOutput bool) error {
 	}
 	_, err := fmt.Fprintf(
 		out,
-		"Coding thread %s: %s\nProject: %q\nWorking directory: %q\nState: %q\nPrompt stored: %t\n",
+		"Coding thread %s: %s\nProject: %q\nWorking directory: %q\nState: %q\n"+
+			"Model: %q\nProvider: %q\nPrompt stored: %t\n",
 		result.Action,
 		result.ThreadID,
 		result.ProjectRoot,
 		result.InvocationCWD,
 		result.StateRoot,
+		result.Model,
+		result.Provider,
 		result.PromptStored,
 	)
+	if err == nil && result.Response != "" {
+		_, err = fmt.Fprintf(out, "\n%s\n", result.Response)
+	}
 	return err
 }
 

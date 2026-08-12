@@ -111,46 +111,48 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	Dispatch                    DispatchRequest // Normalized routed request boundary for this turn
-	ModelBinding                effectiveModelBinding
-	SessionKey                  string              // Session identifier for history/context
-	SessionAliases              []string            // Compatibility aliases for the session key
-	TaskID                      string              // Durable task owning this turn, when one exists
-	InteractionWorkspace        string              // Workspace owning inbound interaction routing
-	InteractionSessionKey       string              // User-facing session that owns interaction answers
-	InteractionRouteKey         string              // Routed scope key that owns interaction answers
-	InteractionOriginExecution  string              // Original non-approval execution identity for a continuation
-	InteractionOriginContext    *bus.InboundContext // Original tool identity for a continuation
-	TurnStatus                  *TurnEndStatus
-	ApprovalGrant               *ToolApprovalGrant  // Internal one-time durable approval capability
-	Channel                     string              // Target channel for tool execution
-	ChatID                      string              // Target chat ID for tool execution
-	MessageID                   string              // Current inbound platform message ID
-	ReplyToMessageID            string              // Current inbound reply target message ID
-	SenderID                    string              // Current sender ID for dynamic context
-	SenderDisplayName           string              // Current sender display name for dynamic context
-	CodingContext               CodingPromptContext // Runtime-owned coding identity for prompt assembly
-	UserMessage                 string              // User message content (may include prefix)
-	ForcedSkills                []string            // Skills explicitly requested for this message
-	TurnProfile                 config.EffectiveTurnProfile
-	SystemPromptOverride        string                    // Override the default system prompt (Used by SubTurns)
-	Media                       []string                  // media:// refs from inbound message
-	InitialSteeringMessages     []providers.Message       // Steering messages from refactor/agent
-	ActiveGoal                  string                    // Dynamic session goal reminder for normal LLM turns
-	DefaultResponse             string                    // Response when LLM returns empty
-	EnableSummary               bool                      // Whether to trigger summarization
-	SendResponse                bool                      // Whether to send response via bus
-	ExpectFinalDelivery         bool                      // Whether an outer coordinator will publish the final response
-	FinalDeliveryObservation    *finalDeliveryObservation // Collects state settled by an outer final response
-	AllowInterimMintClawPublish bool                      // Whether mintclaw tool-call interim text can be published when SendResponse is false
-	SuppressToolUserDelivery    bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
-	SuppressToolFeedback        bool                      // Whether to suppress inline tool feedback messages
-	NoHistory                   bool                      // If true, don't load session history (for heartbeat)
-	ExcludeInheritedNodeFiles   bool                      // Remove inherited node file tools from this internal turn
-	SkipInitialSteeringPoll     bool                      // If true, skip the steering poll at loop start (used by Continue)
-	InboundContext              *bus.InboundContext       // Normalized inbound facts for events/hooks
-	RouteResult                 *routing.ResolvedRoute    // Route decision snapshot for events/hooks
-	SessionScope                *session.SessionScope     // Session scope snapshot for events/hooks
+	Dispatch                     DispatchRequest // Normalized routed request boundary for this turn
+	ModelBinding                 effectiveModelBinding
+	SessionKey                   string              // Session identifier for history/context
+	SessionAliases               []string            // Compatibility aliases for the session key
+	TaskID                       string              // Durable task owning this turn, when one exists
+	InteractionWorkspace         string              // Workspace owning inbound interaction routing
+	InteractionSessionKey        string              // User-facing session that owns interaction answers
+	InteractionRouteKey          string              // Routed scope key that owns interaction answers
+	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
+	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
+	TurnStatus                   *TurnEndStatus
+	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
+	Channel                      string              // Target channel for tool execution
+	ChatID                       string              // Target chat ID for tool execution
+	MessageID                    string              // Current inbound platform message ID
+	ReplyToMessageID             string              // Current inbound reply target message ID
+	SenderID                     string              // Current sender ID for dynamic context
+	SenderDisplayName            string              // Current sender display name for dynamic context
+	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
+	UserMessage                  string              // User message content (may include prefix)
+	ForcedSkills                 []string            // Skills explicitly requested for this message
+	TurnProfile                  config.EffectiveTurnProfile
+	SystemPromptOverride         string                    // Override the default system prompt (Used by SubTurns)
+	Media                        []string                  // media:// refs from inbound message
+	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
+	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
+	DefaultResponse              string                    // Response when LLM returns empty
+	EnableSummary                bool                      // Whether to trigger summarization
+	SuppressBackgroundCompaction bool                      // Whether this short-lived caller can outlive background work
+	TreatInputAsPrompt           bool                      // Whether slash-prefixed input bypasses personal command dispatch
+	SendResponse                 bool                      // Whether to send response via bus
+	ExpectFinalDelivery          bool                      // Whether an outer coordinator will publish the final response
+	FinalDeliveryObservation     *finalDeliveryObservation // Collects state settled by an outer final response
+	AllowInterimMintClawPublish  bool                      // Whether mintclaw tool-call interim text can be published when SendResponse is false
+	SuppressToolUserDelivery     bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
+	SuppressToolFeedback         bool                      // Whether to suppress inline tool feedback messages
+	NoHistory                    bool                      // If true, don't load session history (for heartbeat)
+	ExcludeInheritedNodeFiles    bool                      // Remove inherited node file tools from this internal turn
+	SkipInitialSteeringPoll      bool                      // If true, skip the steering poll at loop start (used by Continue)
+	InboundContext               *bus.InboundContext       // Normalized inbound facts for events/hooks
+	RouteResult                  *routing.ResolvedRoute    // Route decision snapshot for events/hooks
+	SessionScope                 *session.SessionScope     // Session scope snapshot for events/hooks
 }
 
 type continuationTarget struct {
