@@ -5,6 +5,10 @@ MintClaw performs multiple complex interactions under the hood for every single 
 ## Inspecting A Completed Run
 
 Passive diagnostic traces preserve a bounded timeline after a turn completes.
+Fallback attempt records retain structured provider status, request ID, retry
+timing, and classification source. With `redacted_content`, they also retain a
+bounded credential-redacted provider message preview; raw response bodies and
+request content are never copied into fallback records.
 They are intended for direct human or Codex root-cause analysis, not runtime
 recovery or automated scoring. Trace capture is optional and disabled by
 default.

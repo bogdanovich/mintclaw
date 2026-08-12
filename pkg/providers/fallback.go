@@ -53,6 +53,60 @@ type FallbackAttempt struct {
 	Succeeded   bool
 }
 
+// FailureDiagnostic is the bounded, provider-independent projection retained
+// for fallback observability. Message never contains an unbounded raw body.
+type FailureDiagnostic struct {
+	ClassificationSource ErrorClassificationSource
+	ProviderErrorKind    string
+	HTTPStatus           int
+	RetryAfter           time.Duration
+	RequestID            string
+	Message              string
+}
+
+// Diagnostic projects one fallback attempt without exposing request content or
+// unbounded provider responses. Provider adapters own structured metadata;
+// compatibility classifications retain only the existing redacted preview.
+func (attempt FallbackAttempt) Diagnostic() FailureDiagnostic {
+	if attempt.Error == nil || attempt.Succeeded {
+		return FailureDiagnostic{}
+	}
+
+	diagnostic := FailureDiagnostic{}
+	var failErr *FailoverError
+	if errors.As(attempt.Error, &failErr) && failErr != nil {
+		diagnostic.ClassificationSource = failErr.ClassificationSource
+		diagnostic.HTTPStatus = failErr.Status
+	}
+
+	var providerErr *ProviderError
+	if errors.As(attempt.Error, &providerErr) && providerErr != nil {
+		diagnostic.ProviderErrorKind = string(providerErr.Kind.Canonical())
+		diagnostic.HTTPStatus = providerErr.HTTPStatus
+		diagnostic.RetryAfter = providerErr.RetryAfter
+		diagnostic.RequestID = providerErr.RequestID
+		diagnostic.Message = providerErr.SafeMessage
+		if diagnostic.ClassificationSource == "" {
+			diagnostic.ClassificationSource = ClassificationProviderStructured
+		}
+		return diagnostic
+	}
+
+	if diagnostic.ClassificationSource == "" {
+		if attempt.Skipped {
+			diagnostic.ClassificationSource = ClassificationLocalControl
+		} else {
+			diagnostic.ClassificationSource = ClassificationUnclassified
+		}
+	}
+	rawErr := attempt.Error
+	if failErr != nil && failErr.Wrapped != nil {
+		rawErr = failErr.Wrapped
+	}
+	diagnostic.Message = errorPreview(rawErr)
+	return diagnostic
+}
+
 type FallbackAttemptObserver func(FallbackAttempt)
 
 // NewFallbackChain creates a new fallback chain with the given cooldown tracker
@@ -415,10 +469,11 @@ func (fc *FallbackChain) ExecuteImage(
 				Duration: elapsed,
 			})
 			return nil, &FailoverError{
-				Reason:   FailoverFormat,
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Wrapped:  err,
+				Reason:               FailoverFormat,
+				Provider:             candidate.Provider,
+				Model:                candidate.Model,
+				ClassificationSource: ClassificationMessagePattern,
+				Wrapped:              err,
 			}
 		}
 

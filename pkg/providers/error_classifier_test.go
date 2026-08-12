@@ -134,6 +134,40 @@ func TestClassifyError_PreservesProviderErrorMetadata(t *testing.T) {
 	if !errors.As(classified, &got) || got != providerErr {
 		t.Fatalf("classified error lost ProviderError metadata: %+v", classified)
 	}
+	if classified.ClassificationSource != ClassificationProviderStructured {
+		t.Fatalf("classification source = %q, want provider_structured", classified.ClassificationSource)
+	}
+
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
+		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 2*time.Second ||
+		diagnostic.RequestID != "req-provider-1" || diagnostic.Message != "request rate limited" {
+		t.Fatalf("structured diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestFallbackAttemptDiagnosticRedactsHeuristicError(t *testing.T) {
+	secret := "sk-secret-that-must-not-appear"
+	err := errors.New(
+		`received error while streaming: {"type":"error","code":"rate_limit_exceeded",` +
+			`"message":"request rate limited","authorization":"Bearer ` + secret + `"}`,
+	)
+	classified := ClassifyError(err, "openai", "gpt-test")
+	if classified == nil || classified.Reason != FailoverRateLimit {
+		t.Fatalf("ClassifyError() = %#v, want rate limit", classified)
+	}
+
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	if diagnostic.ClassificationSource != ClassificationMessagePattern {
+		t.Fatalf("classification source = %q, want message_pattern", diagnostic.ClassificationSource)
+	}
+	if !strings.Contains(diagnostic.Message, `"code":"rate_limit_exceeded"`) {
+		t.Fatalf("diagnostic message omitted provider code: %q", diagnostic.Message)
+	}
+	if strings.Contains(diagnostic.Message, secret) || !strings.Contains(diagnostic.Message, "[REDACTED]") {
+		t.Fatalf("diagnostic message was not redacted: %q", diagnostic.Message)
+	}
 }
 
 func TestClassifyError_StatusCodes(t *testing.T) {

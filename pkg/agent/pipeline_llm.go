@@ -105,6 +105,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				},
 				func(attempt providers.FallbackAttempt) {
 					fallbackAttempt++
+					diagnostic := attempt.Diagnostic()
 					status := "failed"
 					if attempt.Skipped {
 						status = "skipped"
@@ -119,7 +120,12 @@ func (p *Pipeline) invokeLLMWithRetry(
 							Provider: attempt.Provider, Model: attempt.Model,
 							IdentityKey: attempt.IdentityKey, Attempt: fallbackAttempt,
 							Status: status, Reason: reason, ErrorCode: reason,
-							Skipped: attempt.Skipped,
+							ClassificationSource: string(diagnostic.ClassificationSource),
+							ProviderErrorKind:    diagnostic.ProviderErrorKind,
+							HTTPStatus:           diagnostic.HTTPStatus, RetryAfter: diagnostic.RetryAfter,
+							RequestID:         diagnostic.RequestID,
+							DiagnosticMessage: diagnostic.Message,
+							Skipped:           attempt.Skipped,
 						},
 					)
 				},

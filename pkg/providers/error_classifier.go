@@ -183,10 +183,11 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Context deadline exceeded: treat as timeout, always fallback.
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &FailoverError{
-			Reason:   FailoverTimeout,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               FailoverTimeout,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationContextDeadline,
+			Wrapped:              err,
 		}
 	}
 
@@ -196,20 +197,22 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// providers do not expose a structured HTTP status.
 	if reason := classifyByErrorType(err); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               reason,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationTransportError,
+			Wrapped:              err,
 		}
 	}
 
 	// Image dimension/size errors: non-retriable, non-fallback.
 	if IsImageDimensionError(msg) || IsImageSizeError(msg) {
 		return &FailoverError{
-			Reason:   FailoverFormat,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               FailoverFormat,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationMessagePattern,
+			Wrapped:              err,
 		}
 	}
 
@@ -221,11 +224,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 				reason = classifyBadRequestMessage(msg)
 			}
 			return &FailoverError{
-				Reason:   reason,
-				Provider: provider,
-				Model:    model,
-				Status:   httpErr.StatusCode,
-				Wrapped:  err,
+				Reason:               reason,
+				Provider:             provider,
+				Model:                model,
+				Status:               httpErr.StatusCode,
+				ClassificationSource: ClassificationHTTPStatus,
+				Wrapped:              err,
 			}
 		}
 	}
@@ -235,11 +239,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 				reason = classifyBadRequestMessage(msg)
 			}
 			return &FailoverError{
-				Reason:   reason,
-				Provider: provider,
-				Model:    model,
-				Status:   status,
-				Wrapped:  err,
+				Reason:               reason,
+				Provider:             provider,
+				Model:                model,
+				Status:               status,
+				ClassificationSource: ClassificationStatusText,
+				Wrapped:              err,
 			}
 		}
 	}
@@ -247,10 +252,11 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Message pattern matching (priority order from OpenClaw).
 	if reason := classifyByMessage(msg); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               reason,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationMessagePattern,
+			Wrapped:              err,
 		}
 	}
 
@@ -294,11 +300,12 @@ func classifyProviderError(
 		return nil
 	}
 	return &FailoverError{
-		Reason:   reason,
-		Provider: provider,
-		Model:    model,
-		Status:   providerErr.HTTPStatus,
-		Wrapped:  wrapped,
+		Reason:               reason,
+		Provider:             provider,
+		Model:                model,
+		Status:               providerErr.HTTPStatus,
+		ClassificationSource: ClassificationProviderStructured,
+		Wrapped:              wrapped,
 	}
 }
 

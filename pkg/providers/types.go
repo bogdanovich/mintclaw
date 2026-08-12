@@ -120,13 +120,29 @@ const (
 	FailoverUnknown         FailoverReason = "unknown"
 )
 
+// ErrorClassificationSource identifies the evidence used to classify a
+// provider failure. Values are persisted in diagnostic traces.
+type ErrorClassificationSource string
+
+const (
+	ClassificationProviderStructured ErrorClassificationSource = "provider_structured"
+	ClassificationContextDeadline    ErrorClassificationSource = "context_deadline"
+	ClassificationTransportError     ErrorClassificationSource = "transport_error"
+	ClassificationHTTPStatus         ErrorClassificationSource = "http_status"
+	ClassificationStatusText         ErrorClassificationSource = "status_text"
+	ClassificationMessagePattern     ErrorClassificationSource = "message_pattern"
+	ClassificationLocalControl       ErrorClassificationSource = "local_control"
+	ClassificationUnclassified       ErrorClassificationSource = "unclassified"
+)
+
 // FailoverError wraps an LLM provider error with classification metadata.
 type FailoverError struct {
-	Reason   FailoverReason
-	Provider string
-	Model    string
-	Status   int
-	Wrapped  error
+	Reason               FailoverReason
+	Provider             string
+	Model                string
+	Status               int
+	ClassificationSource ErrorClassificationSource
+	Wrapped              error
 }
 
 var failoverSecretPreviewPatterns = []*regexp.Regexp{

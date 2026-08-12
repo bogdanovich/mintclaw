@@ -292,6 +292,21 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["attempt"] = payload.Attempt
 		fields["status"] = payload.Status
 		fields["reason"] = payload.Reason
+		if payload.ClassificationSource != "" {
+			fields["classification_source"] = payload.ClassificationSource
+		}
+		if payload.ProviderErrorKind != "" {
+			fields["provider_error_kind"] = payload.ProviderErrorKind
+		}
+		if payload.HTTPStatus != 0 {
+			fields["http_status"] = payload.HTTPStatus
+		}
+		if payload.RetryAfter != 0 {
+			fields["retry_after_ms"] = payload.RetryAfter.Milliseconds()
+		}
+		if payload.RequestID != "" {
+			fields["request_id"] = payload.RequestID
+		}
 		fields["skipped"] = payload.Skipped
 	case ContextCompressPayload:
 		fields["reason"] = payload.Reason

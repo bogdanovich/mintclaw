@@ -496,14 +496,22 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordModelFallbackAttempt
 		payload = diagnostictrace.ModelPayload{
-			Provider:    value.Provider,
-			Model:       value.Model,
-			IdentityKey: value.IdentityKey,
-			Attempt:     value.Attempt,
-			Status:      value.Status,
-			Reason:      value.Reason,
-			Skipped:     value.Skipped,
-			ErrorCode:   value.ErrorCode,
+			Provider:             value.Provider,
+			Model:                value.Model,
+			IdentityKey:          value.IdentityKey,
+			Attempt:              value.Attempt,
+			Status:               value.Status,
+			Reason:               value.Reason,
+			Skipped:              value.Skipped,
+			ErrorCode:            value.ErrorCode,
+			ClassificationSource: value.ClassificationSource,
+			ProviderErrorKind:    value.ProviderErrorKind,
+			HTTPStatus:           value.HTTPStatus,
+			RetryAfterMS:         value.RetryAfter.Milliseconds(),
+			RequestID:            value.RequestID,
+			ErrorPreview: captureTextPreview(
+				settings, value.DiagnosticMessage, diagnosticErrorBytes,
+			),
 		}
 	case runtimeevents.KindAgentToolExecStart:
 		value, ok := event.Payload.(ToolExecStartPayload)
