@@ -462,6 +462,66 @@ func TestBrokerSweepReconcilesRepeatedTerminalPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestBrokerSweepRetriesTransientWorkerCleanupFailure(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := factory.workers[0]
+	worker.closeErr = errors.New("secret cleanup failure")
+	if err = broker.CloseOwner(context.Background(), owner); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("CloseOwner() error = %v, want ErrWorkerUnavailable", err)
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosing || worker.closed != 1 {
+		t.Fatalf("pending session = %+v, %v; worker = %+v", stored, err, worker)
+	}
+	worker.closeErr = nil
+	if err = broker.Sweep(context.Background()); err != nil {
+		t.Fatalf("Sweep() error = %v", err)
+	}
+	stored, err = store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosed || worker.closed != 2 {
+		t.Fatalf("reconciled session = %+v, %v; worker = %+v", stored, err, worker)
+	}
+	other := owner
+	other.ExecutionID = "execution_2"
+	reopened, err := broker.Open(context.Background(), OpenRequest{
+		Owner: other, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() after reconciliation error = %v", err)
+	}
+	if _, err = broker.Close(context.Background(), other, reopened.ID); err != nil {
+		t.Fatalf("Close() reopened session error = %v", err)
+	}
+}
+
+func TestBrokerSweepTerminalizesClosingSessionWithoutWorkerSlot(t *testing.T) {
+	store := NewMemoryStore()
+	broker := newTestBroker(t, admittedBrowserConfig(), store, &fakeWorkerFactory{})
+	session := createReadySession(t, store, testOwner())
+	session.State = SessionClosing
+	session.Revision++
+	session.UpdatedAt++
+	if err := store.UpdateSession(context.Background(), session.Revision-1, session); err != nil {
+		t.Fatalf("UpdateSession() error = %v", err)
+	}
+	if err := broker.Sweep(context.Background()); err != nil {
+		t.Fatalf("Sweep() error = %v", err)
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionLost || stored.SafeFailure != "worker_lost" {
+		t.Fatalf("reconciled session = %+v, %v", stored, err)
+	}
+}
+
 func TestBrokerDeniesUnadmittedAuthorityBeforeWorkerOpen(t *testing.T) {
 	tests := []struct {
 		name   string

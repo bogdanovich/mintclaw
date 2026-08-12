@@ -514,7 +514,12 @@ func (broker *Broker) finishFailedOpen(
 		return session, ErrWorkerUnavailable
 	}
 
-	slot := &workerSlot{worker: cleanup, safeFailure: "worker_unavailable"}
+	slot := &workerSlot{
+		worker:          cleanup,
+		safeFailure:     "worker_unavailable",
+		terminalState:   SessionLost,
+		terminalFailure: "worker_unavailable",
+	}
 	broker.slots[session.ID] = slot
 	closing := session
 	closing.State = SessionClosing
@@ -880,7 +885,16 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 	for _, session := range sessions {
 		if session.State == SessionClosing {
 			slot := broker.slots[session.ID]
-			if slot != nil && slot.cleanupComplete && slot.terminalState.Terminal() {
+			if slot == nil {
+				if _, err = broker.finishSessionLocked(
+					ctx,
+					session,
+					SessionLost,
+					"worker_lost",
+				); err != nil {
+					return err
+				}
+			} else if slot.terminalState.Terminal() {
 				if _, err = broker.finishSessionLocked(
 					ctx,
 					session,
@@ -1108,14 +1122,6 @@ func (broker *Broker) finishSessionLocked(
 		if safeFailure == "" {
 			safeFailure = "worker_lost"
 		}
-	} else if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Session{}, errors.Join(
-				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-				ctxErr,
-			)
-		}
-		return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
 	} else if slot.safeFailure != "" {
 		desired = SessionLost
 		safeFailure = slot.safeFailure
@@ -1125,6 +1131,15 @@ func (broker *Broker) finishSessionLocked(
 		slot.terminalFailure = safeFailure
 		if desired != SessionLost {
 			slot.terminalFailure = ""
+		}
+		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Session{}, errors.Join(
+					fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+					ctxErr,
+				)
+			}
+			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
 		}
 	}
 	session.State = desired
