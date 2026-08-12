@@ -1,13 +1,14 @@
 # Reliability and Refactoring Roadmap V2
 
-Status: proposed
+Status: completed 2026-08-11
+Completion: R0 through R2b merged; final milestone PR `#703`, merge commit `d1198cab`
 Audit baseline: `origin/main` at `f71ed1a0`, 2026-08-09
 Previous baseline: `d796943c`, 2026-08-01
 
 ## Purpose
 
 This is the second architecture and reliability pass after the original
-[Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md) was completed.
+[Reliability and Refactoring Roadmap](reliability-refactoring-roadmap.md) was completed.
 
 It is deliberately not a general cleanup mandate. A large file, repeated vocabulary, or a high package fan-out is
 not enough to justify a refactor. Work qualifies for this roadmap only when the current code demonstrates at least
