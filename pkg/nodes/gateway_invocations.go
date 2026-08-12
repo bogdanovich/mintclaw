@@ -20,7 +20,7 @@ import (
 
 const (
 	gatewayInvocationStoreVersion      = 1
-	DefaultGatewayInvocationLimit      = 256
+	DefaultGatewayInvocationLimit      = 8192
 	DefaultGatewayInvocationStoreBytes = 32 * 1024 * 1024
 	DefaultGatewayInvocationRetention  = 7 * 24 * time.Hour
 	maxGatewayToolCallIDLength         = 512

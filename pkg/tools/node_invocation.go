@@ -38,6 +38,7 @@ const (
 	nodeDenialSchemaInvalid       = "SCHEMA_INVALID"
 	nodeDenialConstraintViolation = "CONSTRAINT_VIOLATION"
 	nodeDenialApprovalRequired    = "APPROVAL_REQUIRED"
+	nodeDenialGatewayCapacity     = "GATEWAY_CAPACITY_EXHAUSTED"
 
 	nodeConstraintInputSchema   = "input_schema"
 	nodeConstraintInputSize     = "input_size"
@@ -49,6 +50,7 @@ const (
 	nodeConstraintOutputLimit   = "output_limit"
 	nodeConstraintCommandPolicy = "command_policy"
 	nodeConstraintApproval      = "approval"
+	nodeConstraintGatewayStore  = "gateway_store"
 
 	nodeActionRefreshDiscovery = "refresh_discovery"
 	nodeActionCorrectInput     = "correct_input"

@@ -421,6 +421,14 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 	if errors.Is(err, errDiscoveryStale) {
 		return nodes.GatewayInvocationRecord{}, denyStaleNodeDiscovery()
 	}
+	if errors.Is(err, nodes.ErrGatewayInvocationStoreFull) {
+		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
+			nodeDenialGatewayCapacity,
+			nodeConstraintGatewayStore,
+			nodeActionAskOperator,
+			err,
+		)
+	}
 	if err != nil {
 		return nodes.GatewayInvocationRecord{}, denyNodeInvocation(
 			nodeDenialTargetUnavailable,
