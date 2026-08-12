@@ -210,6 +210,38 @@ func TestFallbackAttemptDiagnosticBoundsHeuristicMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAttemptDiagnosticNormalizesShortMalformedUTF8(t *testing.T) {
+	malformed := string([]byte{'b', 'a', 'd', 0xff})
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "structured",
+			err:  &ProviderError{Kind: ProviderErrorRateLimit, SafeMessage: malformed},
+		},
+		{
+			name: "heuristic",
+			err: &FailoverError{
+				Reason: FailoverRateLimit, ClassificationSource: ClassificationMessagePattern,
+				Wrapped: errors.New(malformed),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostic := (FallbackAttempt{Error: test.err}).Diagnostic()
+			if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+				t.Fatalf(
+					"diagnostic message is not a valid 240-byte preview: len=%d %q",
+					len(diagnostic.Message),
+					diagnostic.Message,
+				)
+			}
+		})
+	}
+}
+
 func TestClassifyError_StatusCodes(t *testing.T) {
 	tests := []struct {
 		status int

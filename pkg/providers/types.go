@@ -179,6 +179,7 @@ func failureMetadataPreview(value string) string {
 	for _, pattern := range failoverSecretPreviewPatterns {
 		preview = pattern.ReplaceAllString(preview, "[REDACTED]")
 	}
+	preview = strings.ToValidUTF8(preview, "\uFFFD")
 	if len(preview) <= maxPreviewBytes {
 		return preview
 	}
