@@ -2,8 +2,6 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
-- [Reliability and Refactoring Roadmap V2](reliability-refactoring-roadmap-v2.md): evidence-based follow-up work for
-  turn-critical session mutation, transactional gateway generations, and versioned configuration writes.
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
@@ -95,3 +93,5 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   history.
 - [Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md): completed durability, security,
   ownership, provider-contract, and cross-platform verification program.
+- [Reliability and Refactoring Roadmap V2](archive/reliability-refactoring-roadmap-v2.md): completed turn-critical
+  session mutation, transactional gateway generation, and versioned configuration writer program.

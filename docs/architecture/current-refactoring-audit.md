@@ -1,7 +1,7 @@
 # Current Refactoring Audit
 
 Status: superseded by the
-[Reliability and Refactoring Roadmap V2](reliability-refactoring-roadmap-v2.md)
+[Reliability and Refactoring Roadmap V2](archive/reliability-refactoring-roadmap-v2.md)
 
 This note captures the architecture risks found in the July 2026 static review.
 It is intentionally scoped to near-term refactoring candidates rather than a
