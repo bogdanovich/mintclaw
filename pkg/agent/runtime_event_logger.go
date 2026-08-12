@@ -148,11 +148,28 @@ func (l *runtimeEventLogger) handle(_ context.Context, evt runtimeevents.Event) 
 
 	fields := runtimeEventLogFields(evt)
 	if l.configSnapshot().IncludePayload && evt.Payload != nil {
-		fields["payload"] = evt.Payload
+		fields["payload"] = runtimeEventLogSafePayload(evt.Payload)
 	}
 
 	logRuntimeEvent(evt, fields)
 	return nil
+}
+
+func runtimeEventLogSafePayload(payload any) any {
+	switch value := payload.(type) {
+	case LLMFallbackAttemptPayload:
+		value.DiagnosticMessage = ""
+		return value
+	case *LLMFallbackAttemptPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.DiagnosticMessage = ""
+		return &safe
+	default:
+		return payload
+	}
 }
 
 func (l *runtimeEventLogger) shouldLog(evt runtimeevents.Event) bool {

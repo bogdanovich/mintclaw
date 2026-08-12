@@ -220,30 +220,38 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	var httpErr *common.HTTPError
 	if errors.As(err, &httpErr) && httpErr != nil {
 		if reason := classifyByStatus(httpErr.StatusCode); reason != "" {
+			source := ClassificationHTTPStatus
 			if httpErr.StatusCode == 400 {
-				reason = classifyBadRequestMessage(msg)
+				if refined := classifyBadRequestMessage(msg); refined != reason {
+					reason = refined
+					source = ClassificationMessagePattern
+				}
 			}
 			return &FailoverError{
 				Reason:               reason,
 				Provider:             provider,
 				Model:                model,
 				Status:               httpErr.StatusCode,
-				ClassificationSource: ClassificationHTTPStatus,
+				ClassificationSource: source,
 				Wrapped:              err,
 			}
 		}
 	}
 	if status := extractHTTPStatus(msg); status > 0 {
 		if reason := classifyByStatus(status); reason != "" {
+			source := ClassificationStatusText
 			if status == 400 {
-				reason = classifyBadRequestMessage(msg)
+				if refined := classifyBadRequestMessage(msg); refined != reason {
+					reason = refined
+					source = ClassificationMessagePattern
+				}
 			}
 			return &FailoverError{
 				Reason:               reason,
 				Provider:             provider,
 				Model:                model,
 				Status:               status,
-				ClassificationSource: ClassificationStatusText,
+				ClassificationSource: source,
 				Wrapped:              err,
 			}
 		}

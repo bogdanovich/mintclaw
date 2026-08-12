@@ -325,6 +325,30 @@ func TestClassifyError_StatusCodes(t *testing.T) {
 	}
 }
 
+func TestClassifyError_HTTP400RefinementRecordsMessageEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "structured status",
+			err: &common.HTTPError{
+				StatusCode: 400, BodyPreview: "quota exceeded for this project",
+			},
+		},
+		{name: "status in text", err: errors.New("status: 400 quota exceeded for this project")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			classified := ClassifyError(test.err, "test", "model")
+			if classified == nil || classified.Reason != FailoverRateLimit ||
+				classified.ClassificationSource != ClassificationMessagePattern {
+				t.Fatalf("classification = %#v", classified)
+			}
+		})
+	}
+}
+
 func TestClassifyError_RepresentativeProviderBodies(t *testing.T) {
 	tests := []struct {
 		name     string

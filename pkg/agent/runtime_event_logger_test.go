@@ -152,6 +152,32 @@ func TestRuntimeEventLogFieldsRedactFallbackRequestID(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogSafePayloadOmitsFallbackDiagnosticMessage(t *testing.T) {
+	secret := "provider detail that must not reach journal payloads"
+	payload := LLMFallbackAttemptPayload{
+		Provider: "openai", RequestID: "req-safe", DiagnosticMessage: secret,
+	}
+
+	for _, input := range []any{payload, &payload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got LLMFallbackAttemptPayload
+		switch value := safe.(type) {
+		case LLMFallbackAttemptPayload:
+			got = value
+		case *LLMFallbackAttemptPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.DiagnosticMessage != "" || got.RequestID != "req-safe" {
+			t.Fatalf("safe fallback payload = %#v", got)
+		}
+	}
+	if payload.DiagnosticMessage != secret {
+		t.Fatal("log-safe projection mutated the event payload")
+	}
+}
+
 func runtimeEventLoggerStateForTest(
 	al *AgentLoop,
 ) (*runtimeEventLogger, runtimeevents.Subscription) {
