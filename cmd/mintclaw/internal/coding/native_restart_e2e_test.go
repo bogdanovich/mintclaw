@@ -1,6 +1,7 @@
 package coding
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 )
 
@@ -217,6 +219,59 @@ func TestNativeCodingFailurePreservesInspectableThread(t *testing.T) {
 	if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 1 ||
 		history[0] != "/help preserve this failed request" {
 		t.Fatalf("inspectable failed history = %#v", history)
+	}
+}
+
+func TestNativeCodingPostTurnConfirmationFailureIsIndeterminate(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 12, 4, 0, 0, 0, time.UTC)
+	threadID := uuid.NewString()
+	provider := llmscenario.NewScriptedProvider(
+		"fixture-model-id",
+		llmscenario.ProviderStep{Response: llmscenario.TextResponse("completed before confirmation")},
+	)
+	reads := 0
+	confirmationErr := errors.New("injected confirmation read failure")
+	deps := testDependencies(home, project, &now)
+	deps.newThreadID = func() string { return threadID }
+	deps.turnRunner = nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, "fixture-model-id", nil
+		},
+		readTurnHistory: func(
+			ctx context.Context,
+			store session.SessionStore,
+			sessionKey string,
+		) ([]providers.Message, error) {
+			reads++
+			if reads == 2 {
+				return nil, confirmationErr
+			}
+			return store.ReadTurnHistory(ctx, sessionKey)
+		},
+	}
+
+	_, runErr := executeCommandError(newCodeCommand(deps), "perform this once")
+	if !thread.IsIndeterminatePromptError(runErr) || !errors.Is(runErr, confirmationErr) ||
+		!strings.Contains(runErr.Error(), "do not blindly retry") {
+		t.Fatalf("confirmation failure = %v", runErr)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRoot, err := store.ThreadRoot(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history := readHistory(t, stateRoot, metadata.SessionKey); countExact(history, "perform this once") != 1 {
+		t.Fatalf("durably admitted prompt = %#v", history)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 type codingTurnRequest struct {
@@ -42,14 +43,22 @@ func (f codingTurnRunnerFunc) Run(
 }
 
 type nativeCodingTurnRunner struct {
-	loadConfig     func() (*config.Config, error)
-	createProvider func(*config.Config) (providers.LLMProvider, string, error)
+	loadConfig      func() (*config.Config, error)
+	createProvider  func(*config.Config) (providers.LLMProvider, string, error)
+	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
 }
 
 func newNativeCodingTurnRunner() codingTurnRunner {
 	return nativeCodingTurnRunner{
 		loadConfig:     internal.LoadConfig,
 		createProvider: providers.CreateProvider,
+		readTurnHistory: func(
+			ctx context.Context,
+			store session.SessionStore,
+			sessionKey string,
+		) ([]providers.Message, error) {
+			return store.ReadTurnHistory(ctx, sessionKey)
+		},
 	}
 }
 
@@ -96,7 +105,17 @@ func (r nativeCodingTurnRunner) Run(
 	}
 	defer loop.Close()
 	sessions := loop.GetRegistry().GetDefaultAgent().Sessions
-	beforeHistory, err := sessions.ReadTurnHistory(ctx, request.Metadata.SessionKey)
+	readTurnHistory := r.readTurnHistory
+	if readTurnHistory == nil {
+		readTurnHistory = func(
+			readCtx context.Context,
+			store session.SessionStore,
+			sessionKey string,
+		) ([]providers.Message, error) {
+			return store.ReadTurnHistory(readCtx, sessionKey)
+		}
+	}
+	beforeHistory, err := readTurnHistory(ctx, sessions, request.Metadata.SessionKey)
 	if err != nil {
 		return codingTurnOutcome{Model: modelName, Provider: providerName},
 			fmt.Errorf("coding runtime: read history before turn: %w", err)
@@ -109,17 +128,37 @@ func (r nativeCodingTurnRunner) Run(
 		request.Metadata.ThreadID,
 		agent.DirectTurnOptions{SuppressBackgroundCompaction: true},
 	)
-	after, historyErr := sessions.ReadTurnHistory(context.WithoutCancel(ctx), request.Metadata.SessionKey)
+	after, historyErr := readTurnHistory(
+		context.WithoutCancel(ctx),
+		sessions,
+		request.Metadata.SessionKey,
+	)
+	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), request.Prompt)
 	outcome := codingTurnOutcome{
 		Model:        modelName,
 		Provider:     providerName,
 		Response:     response,
-		PromptStored: acceptedPromptAfter(after, len(beforeHistory), request.Prompt),
+		PromptStored: promptStored,
 	}
 	if historyErr != nil {
-		historyErr = fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr)
+		return outcome, &thread.IndeterminatePromptError{
+			ThreadID: request.Metadata.ThreadID,
+			Err: errors.Join(
+				turnErr,
+				fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr),
+			),
+		}
 	}
-	return outcome, errors.Join(turnErr, historyErr)
+	if !promptStored {
+		return outcome, &thread.IndeterminatePromptError{
+			ThreadID: request.Metadata.ThreadID,
+			Err: errors.Join(
+				turnErr,
+				fmt.Errorf("coding runtime: confirmed history does not contain the admitted prompt"),
+			),
+		}
+	}
+	return outcome, turnErr
 }
 
 func codingRuntimeConfig(
