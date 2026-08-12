@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -738,6 +739,119 @@ func TestGatewayInvocationSQLiteCapacityIsByteBounded(t *testing.T) {
 		gatewayTestDescriptor(),
 	); prepareErr != nil || !created {
 		t.Fatalf("prepare after retention cleanup = (%v, %v)", created, prepareErr)
+	}
+}
+
+func TestGatewayInvocationSQLiteInspectAndDowngradeExport(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := gatewayTestPlan(t, "inv_sqlite_export", "idem_sqlite_export", time.Now())
+	prepared, created, prepareErr := store.Prepare(
+		"vpn",
+		"call-sqlite-export",
+		plan,
+		gatewayTestDescriptor(),
+	)
+	if prepareErr != nil || !created {
+		t.Fatalf("prepare export record = (%v, %v)", created, prepareErr)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := InspectGatewayInvocationSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != gatewayInvocationSQLiteSchemaVersion || report.Records != 1 ||
+		report.Prepared != 1 || report.Dispatched != 0 || !report.MigrationComplete ||
+		report.MaximumBytes < 16*1024*1024 || report.RetentionSeconds != int64(7*24*time.Hour/time.Second) {
+		t.Fatalf("inspection report = %#v", report)
+	}
+
+	output := filepath.Join(filepath.Dir(path), "node_invocations.rollback.json")
+	exportedReport, err := ExportGatewayInvocationSQLite(path, output, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exportedReport.Records != 1 {
+		t.Fatalf("export report = %#v", exportedReport)
+	}
+	legacy, err := NewGatewayInvocationStore(output, DefaultGatewayInvocationLimit, DefaultGatewayInvocationStoreBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = legacy.Close() }()
+	record, found, err := legacy.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
+	if err != nil || !found || !sameGatewayInvocationRecord(record, prepared) {
+		t.Fatalf("exported record = (%#v, %v, %v)", record, found, err)
+	}
+}
+
+func TestGatewayInvocationSQLiteDowngradeExportIsBoundedAndProtected(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ExportGatewayInvocationSQLite(path, filepath.Join(t.TempDir(), "export.json"), false); err == nil {
+		t.Fatal("export outside protected state directory succeeded")
+	}
+	if _, err = ExportGatewayInvocationSQLite(path, path, true); err == nil {
+		t.Fatal("export over database succeeded")
+	}
+	for _, protected := range []string{
+		filepath.Join(filepath.Dir(path), strings.ToUpper(filepath.Base(path))),
+		path + "-wal",
+		path + "-shm",
+		GatewayInvocationLegacyStorePath(workspace),
+	} {
+		if _, err = ExportGatewayInvocationSQLite(path, protected, true); err == nil {
+			t.Fatalf("export over protected SQLite artifact %q succeeded", protected)
+		}
+	}
+	alias := filepath.Join(filepath.Dir(path), "database-alias")
+	if err = os.Link(path, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if _, err = ExportGatewayInvocationSQLite(path, alias, true); err == nil {
+		t.Fatal("export over hard-link database alias succeeded")
+	}
+}
+
+func TestGatewayInvocationSQLiteDowngradeExportPublicationHonorsReplace(t *testing.T) {
+	directory := t.TempDir()
+	output := filepath.Join(directory, "node_invocations.rollback.json")
+	if err := os.WriteFile(output, []byte("retained"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishGatewayInvocationSQLiteExport(output, []byte("new"), false); err == nil {
+		t.Fatal("no-replace publication overwrote an existing target")
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "retained" {
+		t.Fatalf("no-replace publication changed target to %q", data)
+	}
+	if err = publishGatewayInvocationSQLiteExport(output, []byte("new"), true); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new" {
+		t.Fatalf("replace publication left target as %q", data)
 	}
 }
 
