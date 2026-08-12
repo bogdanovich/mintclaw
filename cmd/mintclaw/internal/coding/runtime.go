@@ -1,0 +1,196 @@
+package coding
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	"github.com/bogdanovich/mintclaw/pkg/agent"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
+)
+
+type codingTurnRequest struct {
+	Store    *thread.Store
+	Lease    *thread.Lease
+	Metadata thread.Metadata
+	Prompt   string
+}
+
+type codingTurnOutcome struct {
+	Model        string
+	Provider     string
+	Response     string
+	PromptStored bool
+}
+
+type codingTurnRunner interface {
+	Run(context.Context, codingTurnRequest) (codingTurnOutcome, error)
+}
+
+type codingTurnRunnerFunc func(context.Context, codingTurnRequest) (codingTurnOutcome, error)
+
+func (f codingTurnRunnerFunc) Run(
+	ctx context.Context,
+	request codingTurnRequest,
+) (codingTurnOutcome, error) {
+	return f(ctx, request)
+}
+
+type nativeCodingTurnRunner struct {
+	loadConfig     func() (*config.Config, error)
+	createProvider func(*config.Config) (providers.LLMProvider, string, error)
+}
+
+func newNativeCodingTurnRunner() codingTurnRunner {
+	return nativeCodingTurnRunner{
+		loadConfig:     internal.LoadConfig,
+		createProvider: providers.CreateProvider,
+	}
+}
+
+func (r nativeCodingTurnRunner) Run(
+	ctx context.Context,
+	request codingTurnRequest,
+) (codingTurnOutcome, error) {
+	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
+	if err != nil {
+		return codingTurnOutcome{}, err
+	}
+	cfg, err := r.loadConfig()
+	if err != nil {
+		return codingTurnOutcome{}, fmt.Errorf("coding runtime: load config: %w", err)
+	}
+	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, request.Metadata)
+	if err != nil {
+		return codingTurnOutcome{}, err
+	}
+	provider, _, err := r.createProvider(runtimeCfg)
+	if err != nil {
+		return codingTurnOutcome{Model: modelName, Provider: providerName},
+			fmt.Errorf("coding runtime: create provider: %w", err)
+	}
+	profile, err := agent.NewRuntimeProfile(agent.RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		return codingTurnOutcome{Model: modelName, Provider: providerName}, err
+	}
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	loop, err := agent.NewAgentLoopWithRuntimeProfile(runtimeCfg, messageBus, provider, profile)
+	if err != nil {
+		return codingTurnOutcome{Model: modelName, Provider: providerName},
+			fmt.Errorf("coding runtime: initialize agent: %w", err)
+	}
+	defer loop.Close()
+	sessions := loop.GetRegistry().GetDefaultAgent().Sessions
+	beforeHistory, err := sessions.ReadTurnHistory(ctx, request.Metadata.SessionKey)
+	if err != nil {
+		return codingTurnOutcome{Model: modelName, Provider: providerName},
+			fmt.Errorf("coding runtime: read history before turn: %w", err)
+	}
+	response, turnErr := loop.ProcessDirectWithOptions(
+		ctx,
+		request.Prompt,
+		request.Metadata.SessionKey,
+		"coding",
+		request.Metadata.ThreadID,
+		agent.DirectTurnOptions{DisablePostTurnCompaction: true},
+	)
+	after, historyErr := sessions.ReadTurnHistory(context.WithoutCancel(ctx), request.Metadata.SessionKey)
+	outcome := codingTurnOutcome{
+		Model:        modelName,
+		Provider:     providerName,
+		Response:     response,
+		PromptStored: turnErr == nil || acceptedPromptAfter(after, len(beforeHistory), request.Prompt),
+	}
+	if historyErr != nil {
+		historyErr = fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr)
+	}
+	return outcome, errors.Join(turnErr, historyErr)
+}
+
+func codingRuntimeConfig(
+	cfg *config.Config,
+	metadata thread.Metadata,
+) (*config.Config, string, string, error) {
+	if cfg == nil {
+		return nil, "", "", fmt.Errorf("coding runtime: config is required")
+	}
+	runtimeCfg := *cfg
+	runtimeCfg.Agents = cfg.Agents
+	runtimeCfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
+	runtimeCfg.Agents.Dispatch = nil
+	// Coding continuation depends on budget-aware assembly of canonical history.
+	// It always owns a disposable Seahorse index under this thread's StateRoot;
+	// personal-agent context mode and custom database paths are not inherited.
+	runtimeCfg.Agents.Defaults.ContextManager = "seahorse"
+	runtimeCfg.Agents.Defaults.ContextManagerConfig = nil
+	modelName := strings.TrimSpace(metadata.Model)
+	if modelName == "" {
+		modelName = strings.TrimSpace(runtimeCfg.Agents.Defaults.GetModelName())
+	}
+	if modelName == "" {
+		return nil, "", "", fmt.Errorf("coding runtime: model is required")
+	}
+	modelCfg, err := cfg.GetModelConfig(modelName)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("coding runtime: select model %q: %w", modelName, err)
+	}
+	selected := cloneModelConfig(modelCfg)
+	if persistedProvider := strings.TrimSpace(metadata.Provider); persistedProvider != "" {
+		selected.Provider = persistedProvider
+	}
+	runtimeCfg.Agents.Defaults.ModelName = modelName
+	runtimeCfg.ModelList = config.SecureModelList{selected}
+	for _, candidate := range cfg.ModelList {
+		if candidate == nil || candidate.ModelName == modelName {
+			continue
+		}
+		runtimeCfg.ModelList = append(runtimeCfg.ModelList, cloneModelConfig(candidate))
+	}
+	providerName, _ := providers.ExtractProtocol(selected)
+	providerName = providers.NormalizeProvider(providerName)
+	if providerName == "" {
+		return nil, "", "", fmt.Errorf("coding runtime: provider is required for model %q", modelName)
+	}
+	runtimeCfg.Agents.Defaults.Provider = providerName
+	return &runtimeCfg, modelName, providerName, nil
+}
+
+func cloneModelConfig(model *config.ModelConfig) *config.ModelConfig {
+	if model == nil {
+		return nil
+	}
+	cloned := *model
+	cloned.APIKeys = append(config.SecureStrings(nil), model.APIKeys...)
+	cloned.Fallbacks = append([]string(nil), model.Fallbacks...)
+	if model.ExtraBody != nil {
+		cloned.ExtraBody = make(map[string]any, len(model.ExtraBody))
+		for key, value := range model.ExtraBody {
+			cloned.ExtraBody[key] = value
+		}
+	}
+	if model.CustomHeaders != nil {
+		cloned.CustomHeaders = make(map[string]string, len(model.CustomHeaders))
+		for key, value := range model.CustomHeaders {
+			cloned.CustomHeaders[key] = value
+		}
+	}
+	return &cloned
+}
+
+func acceptedPromptAfter(history []providers.Message, before int, prompt string) bool {
+	if before < 0 || before > len(history) {
+		before = 0
+	}
+	for _, message := range history[before:] {
+		if message.Role == "user" && message.Content == prompt {
+			return true
+		}
+	}
+	return false
+}

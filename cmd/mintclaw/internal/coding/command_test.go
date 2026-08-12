@@ -2,6 +2,7 @@ package coding
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -289,7 +290,7 @@ func TestInvalidPromptAndResumeMetadataFailBeforeCanonicalAppend(t *testing.T) {
 	}
 }
 
-func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
+func TestCodeAdmissionAndFailurePublication(t *testing.T) {
 	t.Run("lease busy", func(t *testing.T) {
 		home := t.TempDir()
 		project := t.TempDir()
@@ -345,8 +346,13 @@ func TestCodeDoesNotPublishMetadataBeforeLeaseAndPromptCommit(t *testing.T) {
 		if runErr == nil || !strings.Contains(runErr.Error(), "sessions directory") {
 			t.Fatalf("code with append failure error = %v", runErr)
 		}
-		if _, err := store.Load(threadID); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("failed append published metadata: %v", err)
+		metadata, loadErr := store.Load(threadID)
+		if loadErr != nil || metadata.ThreadID != threadID {
+			t.Fatalf("failed turn did not preserve inspectable metadata: %#v, %v", metadata, loadErr)
+		}
+		if !strings.Contains(runErr.Error(), "remains inspectable") ||
+			!strings.Contains(runErr.Error(), "mintclaw resume "+threadID) {
+			t.Fatalf("failed turn error is not actionable: %v", runErr)
 		}
 	})
 }
@@ -519,6 +525,18 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		cwd:         func() (string, error) { return cwd, nil },
 		now:         func() time.Time { return *now },
 		newThreadID: thread.NewThreadID,
+		turnRunner: codingTurnRunnerFunc(func(
+			ctx context.Context,
+			request codingTurnRequest,
+		) (codingTurnOutcome, error) {
+			err := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+			return codingTurnOutcome{
+				Model:        request.Metadata.Model,
+				Provider:     request.Metadata.Provider,
+				Response:     "fixture response",
+				PromptStored: appendOutcomeAllowsMetadataSave(err),
+			}, err
+		}),
 	}
 }
 

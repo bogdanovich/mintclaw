@@ -35,6 +35,9 @@ type DirectTurnOptions struct {
 	// Stateless prevents the turn from loading or saving conversation history.
 	// Tool calls and results remain available for the duration of the turn.
 	Stateless bool
+	// DisablePostTurnCompaction keeps durable history assembly enabled while
+	// suppressing summarization work that would outlive a short-lived caller.
+	DisablePostTurnCompaction bool
 }
 
 // ProcessDirectWithOptions processes a direct turn with explicit persistence semantics.
@@ -118,7 +121,7 @@ func (al *AgentLoop) processCodingDirect(
 			ModelBinding:        modelBinding,
 			CodingContext:       codingContext,
 			DefaultResponse:     defaultResponse,
-			EnableSummary:       !directOpts.Stateless,
+			EnableSummary:       !directOpts.Stateless && !directOpts.DisablePostTurnCompaction,
 			SendResponse:        false,
 			ExpectFinalDelivery: true,
 			NoHistory:           directOpts.Stateless,

@@ -11,6 +11,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   Git observations, prompt freshness, post-write refresh, and frontend repository-state updates.
 - [Local Coding Agent P2.5 Durable Lifecycle](local-coding-agent-p2-durable-lifecycle.md): accepted-turn durability,
   redacted side-effect start markers, conservative startup repair, and no-replay crash semantics.
+- [Local Coding Agent P2.6 Native Turn](local-coding-agent-p2-native-turn.md): native CLI-to-AgentLoop execution,
+  provider selection, restart continuation, inspectable failures, and deterministic command-level evidence.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.
