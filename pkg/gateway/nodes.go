@@ -342,10 +342,9 @@ func (runtime *nodeAdmissionRuntime) gatewayInvocationStore(
 	if runtime.invocationStore != nil {
 		return nil, errors.New("gateway invocation store path changed before node runtime reconciliation")
 	}
-	store, err := nodes.NewGatewayInvocationStore(
+	store, err := nodes.NewGatewayInvocationSQLiteStore(
 		path,
-		nodes.DefaultGatewayInvocationLimit,
-		nodes.DefaultGatewayInvocationStoreBytes,
+		nodes.DefaultGatewayInvocationSQLiteBytes,
 	)
 	if err != nil {
 		return nil, err

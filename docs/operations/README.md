@@ -32,3 +32,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser Capability B2 deployment evidence](browser-capability-b2-deployment-evidence.md):
   merged revisions, live screenshot/upload/download proof, passive diagnostics,
   human handoff and resume, privacy checks, cleanup, health, and rollback.
+- [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
+  retention, health and size inspection, backup/restore, capacity exhaustion,
+  and fail-closed downgrade export.
+- [Gateway invocation SQLite production proof](gateway-invocation-sqlite-proof.md):
+  merged revisions, exact migration parity, deployment health, downgrade
+  export, remote-workspace/status recovery, and rollback evidence.

@@ -87,6 +87,7 @@ func newNodesCommand(deps commandDeps) *cobra.Command {
 		newDenyCommand(open, deps.now),
 		newRevokeCommand(open, deps.now),
 		newTerminalCommand(loadConfig),
+		newInvocationStoreCommand(loadConfig),
 	)
 	return cmd
 }
