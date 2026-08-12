@@ -121,7 +121,7 @@ func newInvocationStoreExportCommand(databasePath func() (string, error)) *cobra
 			if filepath.Clean(output) == strings.TrimSuffix(path, filepath.Ext(path))+".json" {
 				return errors.New("export to a staging path, then replace the migration marker only while downgrading")
 			}
-			report, err := nodepkg.ExportGatewayInvocationSQLite(path, output)
+			report, err := nodepkg.ExportGatewayInvocationSQLite(path, output, replace)
 			if err != nil {
 				return err
 			}

@@ -739,23 +739,16 @@ coalesce(min(updated_at), 0) FROM gateway_invocations`).Scan(
 // ExportGatewayInvocationSQLite recreates the bounded legacy JSON snapshot
 // required before installing a pre-SQLite binary. The caller must first stop
 // the gateway so no authority can be committed after this snapshot.
-func ExportGatewayInvocationSQLite(path, output string) (GatewayInvocationSQLiteReport, error) {
+func ExportGatewayInvocationSQLite(path, output string, replace bool) (GatewayInvocationSQLiteReport, error) {
 	path = filepath.Clean(path)
 	output = filepath.Clean(output)
-	if path == output {
-		return GatewayInvocationSQLiteReport{}, errors.New(
-			"gateway node invocation export must not overwrite the database",
-		)
-	}
-	if output == strings.TrimSuffix(path, filepath.Ext(path))+".json" {
-		return GatewayInvocationSQLiteReport{}, errors.New(
-			"gateway node invocation export must not overwrite the migration marker",
-		)
-	}
 	if filepath.Dir(path) != filepath.Dir(output) {
 		return GatewayInvocationSQLiteReport{}, errors.New(
 			"gateway node invocation export must stay in the protected state directory",
 		)
+	}
+	if err := protectGatewayInvocationSQLiteExportTarget(path, output); err != nil {
+		return GatewayInvocationSQLiteReport{}, err
 	}
 	report, err := InspectGatewayInvocationSQLite(path)
 	if err != nil {
@@ -825,7 +818,7 @@ func ExportGatewayInvocationSQLite(path, output string) (GatewayInvocationSQLite
 	if err = transaction.Commit(); err != nil {
 		return GatewayInvocationSQLiteReport{}, fmt.Errorf("commit gateway node invocation downgrade export: %w", err)
 	}
-	if err = fileutil.WriteFileAtomic(output, data, 0o600); err != nil {
+	if err = publishGatewayInvocationSQLiteExport(output, data, replace); err != nil {
 		return GatewayInvocationSQLiteReport{}, fmt.Errorf("publish gateway node invocation downgrade export: %w", err)
 	}
 	kind, exported, err := readGatewayInvocationMigrationSource(output)
@@ -835,6 +828,70 @@ func ExportGatewayInvocationSQLite(path, output string) (GatewayInvocationSQLite
 		)
 	}
 	return report, nil
+}
+
+func protectGatewayInvocationSQLiteExportTarget(path, output string) error {
+	protected := []string{
+		path,
+		strings.TrimSuffix(path, filepath.Ext(path)) + ".json",
+		path + "-wal",
+		path + "-shm",
+	}
+	for _, candidate := range protected {
+		if strings.EqualFold(output, candidate) {
+			return errors.New("gateway node invocation export target is a protected SQLite artifact")
+		}
+		outputInfo, outputErr := os.Stat(output)
+		candidateInfo, candidateErr := os.Stat(candidate)
+		if outputErr == nil && candidateErr == nil && os.SameFile(outputInfo, candidateInfo) {
+			return errors.New("gateway node invocation export target aliases a protected SQLite artifact")
+		}
+		if outputErr != nil && !errors.Is(outputErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect gateway node invocation export target: %w", outputErr)
+		}
+		if candidateErr != nil && !errors.Is(candidateErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect protected gateway node invocation SQLite artifact: %w", candidateErr)
+		}
+	}
+	return nil
+}
+
+func publishGatewayInvocationSQLiteExport(path string, data []byte, replace bool) error {
+	if replace {
+		return fileutil.WriteFileAtomic(path, data, 0o600)
+	}
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".node-invocations-export-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err = temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = temporary.Write(data); err != nil {
+		return err
+	}
+	if err = temporary.Sync(); err != nil {
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	if err = os.Link(temporaryPath, path); err != nil {
+		return err
+	}
+	if err = os.Remove(temporaryPath); err != nil {
+		return &fileutil.CommittedWriteError{Err: err}
+	}
+	if err = fileutil.SyncDirectory(directory); err != nil {
+		return &fileutil.CommittedWriteError{Err: err}
+	}
+	return nil
 }
 
 func openGatewayInvocationSQLiteReadOnly(path string) (*gatewayInvocationSQLiteStore, error) {
