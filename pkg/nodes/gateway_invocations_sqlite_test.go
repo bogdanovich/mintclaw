@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -456,6 +457,80 @@ func TestGatewayInvocationSQLiteFailsClosedForMarkerWithoutDatabase(t *testing.T
 	}
 	if _, statErr := os.Stat(GatewayInvocationStorePath(workspace)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("marker-only startup created database: %v", statErr)
+	}
+}
+
+func TestGatewayInvocationSQLiteFailsClosedForMarkerWithTruncatedDatabase(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = writeGatewayInvocationMigrationMarker(GatewayInvocationLegacyStorePath(workspace), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+		t.Fatal("marker-backed truncated database was accepted")
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	var schemaObjects int
+	if err = database.QueryRow("SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(
+		&schemaObjects,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if schemaObjects != 0 {
+		t.Fatalf("failed startup mutated truncated database with %d schema objects", schemaObjects)
+	}
+}
+
+func TestGatewayInvocationSQLiteFailsClosedForConstraintlessSchema(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`
+CREATE TABLE gateway_invocation_metadata(singleton INTEGER, schema_version INTEGER);
+INSERT INTO gateway_invocation_metadata(singleton, schema_version) VALUES(1, 1);
+CREATE TABLE gateway_invocations(
+invocation_id TEXT, idempotency_key TEXT, target TEXT, tool_call_id TEXT,
+agent_id TEXT, session_id TEXT, actor_id TEXT, workspace_id TEXT,
+execution_id TEXT, plan_hash TEXT, state TEXT, created_at INTEGER,
+updated_at INTEGER, dispatched_at INTEGER, plan_expires_at INTEGER,
+record_json BLOB);
+CREATE INDEX gateway_invocations_retention
+ON gateway_invocations(state, updated_at, plan_expires_at);`)
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = writeGatewayInvocationMigrationMarker(GatewayInvocationLegacyStorePath(workspace), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+		t.Fatal("marker-backed schema without authority constraints was accepted")
 	}
 }
 

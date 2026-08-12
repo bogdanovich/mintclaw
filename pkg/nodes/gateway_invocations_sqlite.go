@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -26,6 +27,80 @@ const (
 	gatewayInvocationMigrationVersion    = 2
 	gatewayInvocationSQLiteBusyTimeout   = 5 * time.Second
 )
+
+const gatewayInvocationSQLiteSchema = `
+CREATE TABLE IF NOT EXISTS gateway_invocation_metadata (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    schema_version INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gateway_invocations (
+    invocation_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    target TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    execution_id TEXT NOT NULL,
+    plan_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'dispatched')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    dispatched_at INTEGER NOT NULL,
+    plan_expires_at INTEGER NOT NULL,
+    record_json BLOB NOT NULL,
+    UNIQUE(agent_id, session_id, actor_id, tool_call_id, workspace_id, execution_id)
+);
+CREATE INDEX IF NOT EXISTS gateway_invocations_retention
+ON gateway_invocations(state, updated_at, plan_expires_at);`
+
+var gatewayInvocationSQLiteSchemaFingerprint = []gatewayInvocationSQLiteSchemaEntry{
+	{
+		entryType: "index",
+		name:      "gateway_invocations_retention",
+		table:     "gateway_invocations",
+		sql: normalizeGatewayInvocationSQLiteDDL(
+			"CREATE INDEX gateway_invocations_retention ON gateway_invocations(state, updated_at, plan_expires_at)",
+		),
+	},
+	{entryType: "index", name: "sqlite_autoindex_gateway_invocations_1", table: "gateway_invocations"},
+	{entryType: "index", name: "sqlite_autoindex_gateway_invocations_2", table: "gateway_invocations"},
+	{entryType: "index", name: "sqlite_autoindex_gateway_invocations_3", table: "gateway_invocations"},
+	{
+		entryType: "table",
+		name:      "gateway_invocation_metadata",
+		table:     "gateway_invocation_metadata",
+		sql: normalizeGatewayInvocationSQLiteDDL(
+			"CREATE TABLE gateway_invocation_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL)",
+		),
+	},
+	{
+		entryType: "table",
+		name:      "gateway_invocations",
+		table:     "gateway_invocations",
+		sql: normalizeGatewayInvocationSQLiteDDL(
+			`CREATE TABLE gateway_invocations (
+invocation_id TEXT PRIMARY KEY,
+idempotency_key TEXT NOT NULL UNIQUE,
+target TEXT NOT NULL,
+tool_call_id TEXT NOT NULL,
+agent_id TEXT NOT NULL,
+session_id TEXT NOT NULL,
+actor_id TEXT NOT NULL,
+workspace_id TEXT NOT NULL,
+execution_id TEXT NOT NULL,
+plan_hash TEXT NOT NULL,
+state TEXT NOT NULL CHECK (state IN ('prepared', 'dispatched')),
+created_at INTEGER NOT NULL,
+updated_at INTEGER NOT NULL,
+dispatched_at INTEGER NOT NULL,
+plan_expires_at INTEGER NOT NULL,
+record_json BLOB NOT NULL,
+UNIQUE(agent_id, session_id, actor_id, tool_call_id, workspace_id, execution_id))`,
+		),
+	},
+}
 
 type gatewayInvocationMigrationMarker struct {
 	Version  int    `json:"version"`
@@ -43,6 +118,13 @@ type gatewayInvocationSQLiteStore struct {
 	identity  *os.File
 	mu        sync.RWMutex
 	closed    bool
+}
+
+type gatewayInvocationSQLiteSchemaEntry struct {
+	entryType string
+	name      string
+	table     string
+	sql       string
 }
 
 type gatewayInvocationProjection struct {
@@ -231,6 +313,78 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 ) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayInvocationSQLiteBusyTimeout)
 	defer cancel()
+	hasSchema, err := store.hasSchema(ctx)
+	if err != nil {
+		return err
+	}
+	if legacyKind == "marker" && (!databaseExisted || !hasSchema) {
+		return errors.New("gateway node invocation migration marker has no valid durable database")
+	}
+	if hasSchema {
+		if err = store.verifySchema(ctx); err != nil {
+			return err
+		}
+		if err = store.verifyIntegrity(ctx); err != nil {
+			return err
+		}
+	}
+	if err = store.configure(ctx); err != nil {
+		return err
+	}
+	if !hasSchema {
+		if err = store.createSchema(ctx); err != nil {
+			return err
+		}
+		if err = store.verifySchema(ctx); err != nil {
+			return err
+		}
+		if err = store.verifyIntegrity(ctx); err != nil {
+			return err
+		}
+	}
+	if err = store.applyPageLimit(ctx); err != nil {
+		return err
+	}
+	switch legacyKind {
+	case "marker":
+		// Schema and record integrity were verified before any database mutation.
+	case "snapshot":
+		if err = store.importOrVerify(ctx, document); err != nil {
+			return err
+		}
+		if err = store.verifyIntegrity(ctx); err != nil {
+			return fmt.Errorf("verify imported gateway node invocation SQLite database: %w", err)
+		}
+		if err = writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
+			return err
+		}
+	case "missing":
+		if databaseExisted && hasSchema {
+			var count int
+			if err = store.db.QueryRowContext(ctx, "SELECT count(*) FROM gateway_invocations").
+				Scan(&count); err != nil {
+				return fmt.Errorf("count unmarked gateway node invocation SQLite database: %w", err)
+			}
+			if count != 0 {
+				return errors.New("gateway node invocation SQLite database lacks downgrade marker")
+			}
+		}
+		if err = writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unsupported gateway node invocation migration state")
+	}
+	if err = store.prune(ctx); err != nil {
+		return fmt.Errorf("prune gateway node invocation SQLite database: %w", err)
+	}
+	if err = store.maintain(ctx); err != nil {
+		return err
+	}
+	return chmodGatewayInvocationSQLiteSidecars(store.path)
+}
+
+func (store *gatewayInvocationSQLiteStore) configure(ctx context.Context) error {
 	for _, statement := range []string{
 		"PRAGMA auto_vacuum=INCREMENTAL",
 		"PRAGMA journal_mode=WAL",
@@ -244,54 +398,7 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 			return fmt.Errorf("configure gateway node invocation SQLite database: %w", err)
 		}
 	}
-	if err := store.applyPageLimit(ctx); err != nil {
-		return err
-	}
-	if err := store.createSchema(ctx); err != nil {
-		return err
-	}
-	if err := store.verifyIntegrity(ctx); err != nil {
-		return err
-	}
-	switch legacyKind {
-	case "marker":
-		if !databaseExisted {
-			return errors.New("gateway node invocation migration marker has no durable database")
-		}
-	case "snapshot":
-		if err := store.importOrVerify(ctx, document); err != nil {
-			return err
-		}
-		if err := store.verifyIntegrity(ctx); err != nil {
-			return fmt.Errorf("verify imported gateway node invocation SQLite database: %w", err)
-		}
-		if err := writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
-			return err
-		}
-	case "missing":
-		if databaseExisted {
-			var count int
-			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM gateway_invocations").
-				Scan(&count); err != nil {
-				return fmt.Errorf("count unmarked gateway node invocation SQLite database: %w", err)
-			}
-			if count != 0 {
-				return errors.New("gateway node invocation SQLite database lacks downgrade marker")
-			}
-		}
-		if err := writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
-			return err
-		}
-	default:
-		return errors.New("unsupported gateway node invocation migration state")
-	}
-	if err := store.prune(ctx); err != nil {
-		return fmt.Errorf("prune gateway node invocation SQLite database: %w", err)
-	}
-	if err := store.maintain(ctx); err != nil {
-		return err
-	}
-	return chmodGatewayInvocationSQLiteSidecars(store.path)
+	return nil
 }
 
 func (store *gatewayInvocationSQLiteStore) applyPageLimit(ctx context.Context) error {
@@ -317,48 +424,82 @@ func (store *gatewayInvocationSQLiteStore) applyPageLimit(ctx context.Context) e
 }
 
 func (store *gatewayInvocationSQLiteStore) createSchema(ctx context.Context) error {
-	const schema = `
-CREATE TABLE IF NOT EXISTS gateway_invocation_metadata (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    schema_version INTEGER NOT NULL
-);
-INSERT INTO gateway_invocation_metadata(singleton, schema_version)
-VALUES(1, 1) ON CONFLICT(singleton) DO NOTHING;
-CREATE TABLE IF NOT EXISTS gateway_invocations (
-    invocation_id TEXT PRIMARY KEY,
-    idempotency_key TEXT NOT NULL UNIQUE,
-    target TEXT NOT NULL,
-    tool_call_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    actor_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    execution_id TEXT NOT NULL,
-    plan_hash TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('prepared', 'dispatched')),
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    dispatched_at INTEGER NOT NULL,
-    plan_expires_at INTEGER NOT NULL,
-    record_json BLOB NOT NULL,
-    UNIQUE(agent_id, session_id, actor_id, tool_call_id, workspace_id, execution_id)
-);
-CREATE INDEX IF NOT EXISTS gateway_invocations_retention
-ON gateway_invocations(state, updated_at, plan_expires_at);`
-	if _, err := store.db.ExecContext(ctx, schema); err != nil {
+	if _, err := store.db.ExecContext(ctx, gatewayInvocationSQLiteSchema); err != nil {
 		return fmt.Errorf("create gateway node invocation SQLite schema: %w", err)
 	}
-	var version int
-	if err := store.db.QueryRowContext(
+	if _, err := store.db.ExecContext(
 		ctx,
-		"SELECT schema_version FROM gateway_invocation_metadata WHERE singleton = 1",
-	).Scan(&version); err != nil {
-		return fmt.Errorf("read gateway node invocation SQLite schema: %w", err)
-	}
-	if version != gatewayInvocationSQLiteSchemaVersion {
-		return fmt.Errorf("unsupported gateway node invocation SQLite schema version %d", version)
+		"INSERT INTO gateway_invocation_metadata(singleton, schema_version) VALUES(1, ?)",
+		gatewayInvocationSQLiteSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("record gateway node invocation SQLite schema: %w", err)
 	}
 	return nil
+}
+
+func (store *gatewayInvocationSQLiteStore) hasSchema(ctx context.Context) (bool, error) {
+	var count int
+	if err := store.db.QueryRowContext(
+		ctx,
+		"SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect gateway node invocation SQLite schema: %w", err)
+	}
+	return count != 0, nil
+}
+
+func (store *gatewayInvocationSQLiteStore) verifySchema(ctx context.Context) error {
+	rows, err := store.db.QueryContext(ctx, `SELECT type, name, tbl_name, coalesce(sql, '')
+FROM sqlite_master
+WHERE type IN ('table', 'index')
+ORDER BY type, name`)
+	if err != nil {
+		return fmt.Errorf("read gateway node invocation SQLite schema fingerprint: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	actual := make([]gatewayInvocationSQLiteSchemaEntry, 0, len(gatewayInvocationSQLiteSchemaFingerprint))
+	for rows.Next() {
+		var entry gatewayInvocationSQLiteSchemaEntry
+		if err = rows.Scan(&entry.entryType, &entry.name, &entry.table, &entry.sql); err != nil {
+			return fmt.Errorf("scan gateway node invocation SQLite schema fingerprint: %w", err)
+		}
+		entry.sql = normalizeGatewayInvocationSQLiteDDL(entry.sql)
+		actual = append(actual, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("scan gateway node invocation SQLite schema fingerprint: %w", err)
+	}
+	if !reflect.DeepEqual(actual, gatewayInvocationSQLiteSchemaFingerprint) {
+		return errors.New("gateway node invocation SQLite schema fingerprint mismatch")
+	}
+	var count, version int
+	if err = store.db.QueryRowContext(
+		ctx,
+		"SELECT count(*), coalesce(max(schema_version), 0) FROM gateway_invocation_metadata WHERE singleton = 1",
+	).Scan(&count, &version); err != nil {
+		return fmt.Errorf("read gateway node invocation SQLite schema version: %w", err)
+	}
+	if count != 1 || version != gatewayInvocationSQLiteSchemaVersion {
+		return fmt.Errorf("unsupported gateway node invocation SQLite schema version %d", version)
+	}
+	var metadataRows int
+	if err = store.db.QueryRowContext(ctx, "SELECT count(*) FROM gateway_invocation_metadata").
+		Scan(&metadataRows); err != nil {
+		return fmt.Errorf("count gateway node invocation SQLite schema metadata: %w", err)
+	}
+	if metadataRows != 1 {
+		return errors.New("gateway node invocation SQLite schema metadata mismatch")
+	}
+	return nil
+}
+
+func normalizeGatewayInvocationSQLiteDDL(statement string) string {
+	return strings.ToLower(strings.Map(func(character rune) rune {
+		if unicode.IsSpace(character) {
+			return -1
+		}
+		return character
+	}, statement))
 }
 
 func (store *gatewayInvocationSQLiteStore) verifyIntegrity(ctx context.Context) error {
