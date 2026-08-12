@@ -185,6 +185,26 @@ func (t *approvalCountingTool) Execute(context.Context, map[string]any) *toolsha
 	return toolshared.NewToolResult("protected action completed")
 }
 
+type hardAbortApprovalCountingTool struct{ executions int }
+
+func (*hardAbortApprovalCountingTool) Name() string { return "approval_hard_abort" }
+func (*hardAbortApprovalCountingTool) Description() string {
+	return "Run a protected test action that hard-aborts its turn"
+}
+func (*hardAbortApprovalCountingTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (tool *hardAbortApprovalCountingTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	if ts := turnStateFromContext(ctx); ts != nil {
+		_ = ts.requestHardAbort()
+	}
+	return toolshared.NewToolResult("protected action hard-aborted")
+}
+
 type blockingApprovalTool struct {
 	started        chan struct{}
 	canceled       chan struct{}
@@ -3244,6 +3264,79 @@ func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 		cleanupTool.executionID != originExecutionID || cleanupTool.inbound.ActorID != "actor-1" {
 		t.Fatalf(
 			"approved hard-abort = executions %d, cleanup calls %d, execution %q, inbound %#v",
+			tool.executions,
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
+	}
+}
+
+func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-hard-abort-journal", Name: "approval_hard_abort",
+			Function: &providers.FunctionCall{Name: "approval_hard_abort", Arguments: `{}`},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+	tool := &hardAbortApprovalCountingTool{}
+	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approved-hard-abort-journal-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
+	if err := al.MountHook(NamedHook("approved-hard-abort-journal", &durableApprovalHook{
+		actionSummary: "Run the aborting journal action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	original := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-journal",
+		MessageID: "hard-abort-journal-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus: &turnStatus,
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-hard-abort-journal", SessionKey: "session-hard-abort-journal",
+			UserMessage: "run aborting journal action", InboundContext: original,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	}); err != nil || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %v)", turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-hard-abort-journal")
+	if !ok {
+		t.Fatal("approval interaction is missing")
+	}
+	originExecutionID := record.Origin.ExecutionID
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "hard-abort-journal-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalErr := errors.New("persist approved hard-abort result")
+	agent.Sessions = &toolResultFailingJournal{SessionStore: agent.Sessions, err: journalErr}
+	answer := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-2",
+		MessageID: "hard-abort-journal-answer",
+	}
+	err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, answer, record,
+	)
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("resumeClaimedInteraction() error = %v, want %v", err, journalErr)
+	}
+	if tool.executions != 1 || cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != originExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-journal" {
+		t.Fatalf(
+			"journal hard-abort = executions %d, cleanup calls %d, execution %q, inbound %#v",
 			tool.executions,
 			cleanupTool.cleanupCalls,
 			cleanupTool.executionID,

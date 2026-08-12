@@ -1420,12 +1420,16 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	turnCtx = WithAgentLoop(turnCtx, al)
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
+	defer func() {
+		if ts.hardAbortRequested() {
+			al.cleanupInteractionOriginTools(ctx, agent, record)
+		}
+	}()
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	if al.takePendingStop(ts.runtimeSessionScope()) {
 		_ = ts.requestHardAbort()
 	}
 	if ts.hardAbortRequested() {
-		al.cleanupInteractionOriginTools(ctx, agent, record)
 		return ToolControlBreak, true, nil
 	}
 	exec, err := pipeline.SetupTurn(turnCtx, ts)
@@ -1448,7 +1452,6 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		return outcome.Control, false, outcome.JournalErr
 	}
 	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
-		al.cleanupInteractionOriginTools(ctx, agent, record)
 		return outcome.Control, true, nil
 	}
 	if outcome.Control == ToolControlSuspend {
