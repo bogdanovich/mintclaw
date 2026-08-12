@@ -154,6 +154,17 @@ func (store *failNextSessionUpdateStore) UpdateSession(
 	return store.MemoryStore.UpdateSession(ctx, expected, next)
 }
 
+func (store *failNextSessionUpdateStore) ListSessions(ctx context.Context) ([]Session, error) {
+	sessions, err := store.MemoryStore.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(sessions, func(a, b Session) int {
+		return strings.Compare(a.ID, b.ID)
+	})
+	return sessions, nil
+}
+
 func (factory *fakeWorkerFactory) Open(
 	_ context.Context,
 	request WorkerOpenRequest,
@@ -519,6 +530,69 @@ func TestBrokerSweepTerminalizesClosingSessionWithoutWorkerSlot(t *testing.T) {
 	stored, err := store.GetSession(context.Background(), session.ID)
 	if err != nil || stored.State != SessionLost || stored.SafeFailure != "worker_lost" {
 		t.Fatalf("reconciled session = %+v, %v", stored, err)
+	}
+}
+
+func TestBrokerSweepContinuesAfterEarlierCleanupFailure(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	firstOwner := testOwner()
+	first, err := broker.Open(context.Background(), OpenRequest{
+		Owner: firstOwner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	factory.workers[0].closeErr = errors.New("persistent cleanup failure")
+	if _, err = broker.Close(context.Background(), firstOwner, first.ID); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("Close(first) error = %v, want ErrWorkerUnavailable", err)
+	}
+	second := first
+	second.ID = "browser_session_2"
+	second.Owner.ExecutionID = "execution_2"
+	second.State = SessionClosing
+	second.Revision++
+	second.UpdatedAt++
+	store.mu.Lock()
+	store.sessions[second.ID] = cloneSession(second)
+	store.mu.Unlock()
+	laterWorker := &fakeWorker{closed: 1, rejectRepeatedClose: true}
+	broker.slots[second.ID] = &workerSlot{
+		worker: laterWorker, cleanupComplete: true, terminalState: SessionClosed,
+	}
+	if err = broker.Sweep(context.Background()); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("Sweep() error = %v, want ErrWorkerUnavailable", err)
+	}
+	stored, err := store.GetSession(context.Background(), second.ID)
+	if err != nil || stored.State != SessionClosed || laterWorker.closed != 1 {
+		t.Fatalf("later session = %+v, %v; worker = %+v", stored, err, laterWorker)
+	}
+}
+
+func TestBrokerTerminalIntentIsNotOverwrittenByLaterClose(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := factory.workers[0]
+	worker.closeErr = errors.New("transient cleanup failure")
+	broker.mu.Lock()
+	_, err = broker.finishSessionLocked(context.Background(), session, SessionExpired, "")
+	broker.mu.Unlock()
+	if !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("finishSessionLocked() error = %v, want ErrWorkerUnavailable", err)
+	}
+	worker.closeErr = nil
+	terminal, err := broker.Close(context.Background(), owner, session.ID)
+	if err != nil || terminal.State != SessionExpired || terminal.SafeFailure != "" {
+		t.Fatalf("Close() = %+v, %v; want retained expired intent", terminal, err)
 	}
 }
 

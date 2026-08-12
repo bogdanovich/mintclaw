@@ -882,7 +882,11 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 		return err
 	}
 	now := broker.now().UTC()
+	var sweepErr error
 	for _, session := range sessions {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(sweepErr, ctxErr)
+		}
 		if session.State == SessionClosing {
 			slot := broker.slots[session.ID]
 			if slot == nil {
@@ -892,7 +896,7 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 					SessionLost,
 					"worker_lost",
 				); err != nil {
-					return err
+					sweepErr = errors.Join(sweepErr, err)
 				}
 			} else if slot.terminalState.Terminal() {
 				if _, err = broker.finishSessionLocked(
@@ -901,7 +905,7 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 					slot.terminalState,
 					slot.terminalFailure,
 				); err != nil {
-					return err
+					sweepErr = errors.Join(sweepErr, err)
 				}
 			}
 			continue
@@ -913,15 +917,18 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 				state, failure = SessionLost, "policy_changed"
 			}
 			if _, err = broker.finishSessionLocked(ctx, session, state, failure); err != nil {
-				return err
+				sweepErr = errors.Join(sweepErr, err)
 			}
 		}
 	}
 	retention := time.Duration(broker.config.Limits.Effective().RetentionSecs) * time.Second
 	if err = broker.store.PruneInvocations(ctx, now.Add(-retention).UnixNano()); err != nil {
-		return err
+		sweepErr = errors.Join(sweepErr, err)
 	}
-	return broker.store.PrunePreparedActions(ctx, now.Add(-retention).UnixNano())
+	if err = broker.store.PrunePreparedActions(ctx, now.Add(-retention).UnixNano()); err != nil {
+		sweepErr = errors.Join(sweepErr, err)
+	}
+	return sweepErr
 }
 
 // Recover reconciles state after a gateway restart. B1 workers are
@@ -1127,11 +1134,15 @@ func (broker *Broker) finishSessionLocked(
 		safeFailure = slot.safeFailure
 	}
 	if slot != nil {
-		slot.terminalState = desired
-		slot.terminalFailure = safeFailure
-		if desired != SessionLost {
-			slot.terminalFailure = ""
+		if !slot.terminalState.Terminal() {
+			slot.terminalState = desired
+			slot.terminalFailure = safeFailure
+			if desired != SessionLost {
+				slot.terminalFailure = ""
+			}
 		}
+		desired = slot.terminalState
+		safeFailure = slot.terminalFailure
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Session{}, errors.Join(
