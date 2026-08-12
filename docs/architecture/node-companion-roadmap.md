@@ -22,7 +22,12 @@ P8a remote-workspace slice is complete under
 [`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
 Its merged-main and Linux/macOS deployment proof is recorded in
 [`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
-P8b and every other P8 extension remain unadmitted.
+P8b has an explicit
+[`remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md):
+its boundary is the Node Companion integration portion of Local Coding Agent
+P7.4, not a second implementation program. Code remains unadmitted until the
+checkpoint's merged P7.1–P7.3 readiness gate is satisfied. Every other P8
+extension remains unadmitted.
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -843,12 +848,17 @@ sticky selection, generic proxy, shell jobs, or P7 routing.
 
 Completion evidence is recorded in
 [`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
-Do not continue into P8b or broaden P8 without a new explicit admission.
+Do not implement P8b or broaden P8 until the
+[`P8b remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md)
+readiness gate is satisfied and a new P7.4 admission authorizes code.
 
 P5a establishes the durable job capability that P8a routes. The local
 coding-agent roadmap separately owns `CodingTask` and `CodingThread` semantics
 for repository-owning remote development; P8 must reuse that boundary rather
 than approximating a coding worker with remote file calls and shell jobs.
+The P8b checkpoint records the shared target/WSS/invocation boundary and stops
+implementation while the required native headless worker and isolated
+worktree ownership are absent from merged main.
 
 After shell, filesystem, artifact, and selected application capabilities have
 proven their individual contracts, consider a remote workspace abstraction.

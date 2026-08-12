@@ -1694,6 +1694,13 @@ Done when:
 
 Dependencies: P7.2, P7.3
 
+The Node Companion side of this packet is constrained by the
+[`P8b remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md).
+P8b is not a parallel roadmap: this P7.4 packet owns the eventual complete
+vertical slice. Implementation remains unadmitted until the checkpoint's
+merged readiness gate is met and a focused P7.4 admission replaces the
+checkpoint status.
+
 Scope:
 
 - Add an owner-scoped live-agent tool for starting, inspecting, steering, and
