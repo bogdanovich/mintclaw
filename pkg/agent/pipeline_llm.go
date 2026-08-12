@@ -105,7 +105,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				},
 				func(attempt providers.FallbackAttempt) {
 					fallbackAttempt++
-					diagnostic := attempt.Diagnostic()
+					diagnostic := attempt.Diagnostic(diagnosticContentEnabled(p.Cfg))
 					status := "failed"
 					if attempt.Skipped {
 						status = "skipped"

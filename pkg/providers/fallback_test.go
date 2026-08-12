@@ -177,6 +177,37 @@ func TestFallback_NestedExhaustionDoesNotCooldownOuterCandidate(t *testing.T) {
 	}
 }
 
+func TestFallbackAttemptDiagnosticUsesNestedExhaustionLeaf(t *testing.T) {
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		HTTPStatus:  429,
+		RetryAfter:  3 * time.Second,
+		RequestID:   "req-vision-leaf",
+		SafeMessage: "vision quota exceeded",
+	}
+	nested := &FallbackExhaustedError{Attempts: []FallbackAttempt{
+		{Error: errors.New("older timeout"), Reason: FailoverTimeout},
+		{
+			Error: &FailoverError{
+				Reason: FailoverRateLimit, ClassificationSource: ClassificationProviderStructured,
+				Status: 429, Wrapped: providerErr,
+			},
+			Reason: FailoverRateLimit,
+		},
+	}}
+
+	diagnostic := (FallbackAttempt{
+		Provider: "openrouter", Model: "text-wrapper", Error: nested, Reason: FailoverRateLimit,
+	}).Diagnostic(true)
+	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
+		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 3*time.Second ||
+		diagnostic.RequestID != "req-vision-leaf" ||
+		diagnostic.Message != "vision quota exceeded" {
+		t.Fatalf("nested diagnostic = %#v", diagnostic)
+	}
+}
+
 func TestFallback_ContextCanceled(t *testing.T) {
 	ct := NewCooldownTracker()
 	fc := NewFallbackChain(ct, nil)

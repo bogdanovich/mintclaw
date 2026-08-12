@@ -139,7 +139,7 @@ func TestClassifyError_PreservesProviderErrorMetadata(t *testing.T) {
 		t.Fatalf("classification source = %q, want provider_structured", classified.ClassificationSource)
 	}
 
-	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(true)
 	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
 		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
 		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 2*time.Second ||
@@ -159,7 +159,7 @@ func TestFallbackAttemptDiagnosticRedactsHeuristicError(t *testing.T) {
 		t.Fatalf("ClassifyError() = %#v, want rate limit", classified)
 	}
 
-	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(true)
 	if diagnostic.ClassificationSource != ClassificationMessagePattern {
 		t.Fatalf("classification source = %q, want message_pattern", diagnostic.ClassificationSource)
 	}
@@ -178,7 +178,7 @@ func TestFallbackAttemptDiagnosticBoundsStructuredMetadata(t *testing.T) {
 		RequestID:   secret,
 		SafeMessage: secret + " " + strings.Repeat("界", 100),
 	}
-	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic()
+	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic(true)
 	if diagnostic.RequestID != "[REDACTED]" {
 		t.Fatalf("request ID = %q, want redacted", diagnostic.RequestID)
 	}
@@ -200,7 +200,7 @@ func TestFallbackAttemptDiagnosticBoundsHeuristicMetadata(t *testing.T) {
 		ClassificationSource: ClassificationMessagePattern,
 		Wrapped:              errors.New(strings.Repeat("界", 100)),
 	}
-	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(true)
 	if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
 		t.Fatalf(
 			"diagnostic message is not a valid 240-byte preview: len=%d %q",
@@ -230,7 +230,7 @@ func TestFallbackAttemptDiagnosticNormalizesShortMalformedUTF8(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			diagnostic := (FallbackAttempt{Error: test.err}).Diagnostic()
+			diagnostic := (FallbackAttempt{Error: test.err}).Diagnostic(true)
 			if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
 				t.Fatalf(
 					"diagnostic message is not a valid 240-byte preview: len=%d %q",
@@ -239,6 +239,55 @@ func TestFallbackAttemptDiagnosticNormalizesShortMalformedUTF8(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestFallbackAttemptDiagnosticMetadataOnlyDoesNotMaterializeMessage(t *testing.T) {
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		HTTPStatus:  429,
+		RequestID:   "req-safe-id",
+		SafeMessage: "provider text must not enter the event bus",
+	}
+	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic(false)
+	if diagnostic.Message != "" {
+		t.Fatalf("metadata-only diagnostic message = %q, want empty", diagnostic.Message)
+	}
+	if diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RequestID != "req-safe-id" {
+		t.Fatalf("metadata-only structured fields = %#v", diagnostic)
+	}
+}
+
+func TestFallbackAttemptDiagnosticUsesCanonicalBoundedRedaction(t *testing.T) {
+	secrets := []string{
+		"Basic dXNlcjpzdXBlcnNlY3JldA==",
+		"PASSWORD=super-secret-value",
+		"github_pat_1234567890abcdefghijklmnop",
+		"xox" + "b-12345678-abcdefghijklmnop",
+		"AKIA1234567890ABCDEF",
+		"eyJabcdefgh.ijklmnop.qrstuvwx",
+		"https://admin:hunter2@example.com/path?token=secret-value",
+		"-----BEGIN PRIVATE KEY-----\nsecret-key-material\n-----END PRIVATE KEY-----",
+	}
+	for _, secret := range secrets {
+		diagnostic := (FallbackAttempt{Error: &ProviderError{
+			Kind: ProviderErrorRateLimit, SafeMessage: "failure " + secret,
+		}}).Diagnostic(true)
+		if strings.Contains(diagnostic.Message, secret) {
+			t.Fatalf("diagnostic leaked %q in %q", secret, diagnostic.Message)
+		}
+		if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+			t.Fatalf("invalid bounded diagnostic: len=%d %q", len(diagnostic.Message), diagnostic.Message)
+		}
+	}
+
+	oversized := strings.Repeat("x", 1<<20)
+	diagnostic := (FallbackAttempt{Error: &ProviderError{
+		Kind: ProviderErrorRateLimit, SafeMessage: oversized,
+	}}).Diagnostic(true)
+	if len(diagnostic.Message) > 240 || !strings.Contains(diagnostic.Message, "TRUNCATED") {
+		t.Fatalf("oversized diagnostic was not pre-bounded: len=%d %q", len(diagnostic.Message), diagnostic.Message)
 	}
 }
 

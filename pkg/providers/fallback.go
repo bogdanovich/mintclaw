@@ -65,11 +65,24 @@ type FailureDiagnostic struct {
 }
 
 // Diagnostic projects one fallback attempt without exposing request content or
-// unbounded provider responses. Provider adapters own structured metadata;
-// compatibility classifications retain only the existing redacted preview.
-func (attempt FallbackAttempt) Diagnostic() FailureDiagnostic {
+// unbounded provider responses. Text is only inspected when includeMessage is
+// true; metadata-only observers can retain structured fields without ever
+// materializing provider text.
+func (attempt FallbackAttempt) Diagnostic(includeMessage bool) FailureDiagnostic {
+	return attempt.diagnostic(includeMessage, 0)
+}
+
+func (attempt FallbackAttempt) diagnostic(includeMessage bool, depth int) FailureDiagnostic {
 	if attempt.Error == nil || attempt.Succeeded {
 		return FailureDiagnostic{}
+	}
+	if depth < 8 {
+		var exhausted *FallbackExhaustedError
+		if errors.As(attempt.Error, &exhausted) && exhausted != nil {
+			if leaf, ok := exhausted.lastDiagnosticAttempt(); ok {
+				return leaf.diagnostic(includeMessage, depth+1)
+			}
+		}
 	}
 
 	diagnostic := FailureDiagnostic{}
@@ -85,7 +98,9 @@ func (attempt FallbackAttempt) Diagnostic() FailureDiagnostic {
 		diagnostic.HTTPStatus = providerErr.HTTPStatus
 		diagnostic.RetryAfter = providerErr.RetryAfter
 		diagnostic.RequestID = failureMetadataPreview(providerErr.RequestID)
-		diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage)
+		if includeMessage {
+			diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage)
+		}
 		if diagnostic.ClassificationSource == "" {
 			diagnostic.ClassificationSource = ClassificationProviderStructured
 		}
@@ -103,7 +118,9 @@ func (attempt FallbackAttempt) Diagnostic() FailureDiagnostic {
 	if failErr != nil && failErr.Wrapped != nil {
 		rawErr = failErr.Wrapped
 	}
-	diagnostic.Message = errorPreview(rawErr)
+	if includeMessage {
+		diagnostic.Message = errorPreview(rawErr)
+	}
 	return diagnostic
 }
 
@@ -519,4 +536,21 @@ func (e *FallbackExhaustedError) lastReason() FailoverReason {
 		}
 	}
 	return ""
+}
+
+func (e *FallbackExhaustedError) lastDiagnosticAttempt() (FallbackAttempt, bool) {
+	if e == nil {
+		return FallbackAttempt{}, false
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Reason != "" {
+			return e.Attempts[i], true
+		}
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Error != nil {
+			return e.Attempts[i], true
+		}
+	}
+	return FallbackAttempt{}, false
 }

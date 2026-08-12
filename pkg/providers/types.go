@@ -3,10 +3,9 @@ package providers
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -146,17 +145,6 @@ type FailoverError struct {
 	Wrapped              error
 }
 
-var failoverSecretPreviewPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(
-		`(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\b\s*[:=]\s*"?[^"',\s}]+`,
-	),
-	regexp.MustCompile(`\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9._-]{7,}\b`),
-	regexp.MustCompile(`\bgsk_[A-Za-z0-9_-]{8,}\b`),
-	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{16,}\b`),
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9_]{16,}\b`),
-}
-
 func (e *FailoverError) Error() string {
 	return fmt.Sprintf("failover: provider=%s model=%s status=%d classification=%s raw_error=%q",
 		e.Provider, e.Model, e.Status, e.Reason, errorPreview(e.Wrapped))
@@ -175,20 +163,11 @@ func errorPreview(err error) string {
 
 func failureMetadataPreview(value string) string {
 	const maxPreviewBytes = 240
-	preview := strings.Join(strings.Fields(value), " ")
-	for _, pattern := range failoverSecretPreviewPatterns {
-		preview = pattern.ReplaceAllString(preview, "[REDACTED]")
-	}
+	redactor := diagnostictrace.Redactor{}
+	preview := redactor.RedactText(value, maxPreviewBytes)
 	preview = strings.ToValidUTF8(preview, "\uFFFD")
-	if len(preview) <= maxPreviewBytes {
-		return preview
-	}
-	const marker = "..."
-	preview = preview[:maxPreviewBytes-len(marker)]
-	for !utf8.ValidString(preview) {
-		preview = preview[:len(preview)-1]
-	}
-	return preview + marker
+	preview = strings.Join(strings.Fields(preview), " ")
+	return redactor.RedactText(preview, maxPreviewBytes)
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.
