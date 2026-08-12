@@ -105,10 +105,11 @@ func (factory *fakeWorkerFactory) PassiveReadiness() DriverReadiness {
 
 type failNextSessionUpdateStore struct {
 	*MemoryStore
-	failNext            bool
-	failAfter           int
-	failState           SessionState
-	failTerminalUpdates int
+	failNext              bool
+	failAfter             int
+	failState             SessionState
+	failTerminalUpdates   int
+	failInvocationUpdates int
 }
 
 type committedWarningSessionUpdateStore struct {
@@ -163,6 +164,18 @@ func (store *failNextSessionUpdateStore) ListSessions(ctx context.Context) ([]Se
 		return strings.Compare(a.ID, b.ID)
 	})
 	return sessions, nil
+}
+
+func (store *failNextSessionUpdateStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next Invocation,
+) error {
+	if store.failInvocationUpdates > 0 {
+		store.failInvocationUpdates--
+		return ErrStale
+	}
+	return store.MemoryStore.UpdateInvocation(ctx, expected, next)
 }
 
 func (factory *fakeWorkerFactory) Open(
@@ -593,6 +606,44 @@ func TestBrokerTerminalIntentIsNotOverwrittenByLaterClose(t *testing.T) {
 	terminal, err := broker.Close(context.Background(), owner, session.ID)
 	if err != nil || terminal.State != SessionExpired || terminal.SafeFailure != "" {
 		t.Fatalf("Close() = %+v, %v; want retained expired intent", terminal, err)
+	}
+}
+
+func TestBrokerTerminalIntentPrecedesInvocationReconciliation(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	invocation := Invocation{
+		ID: "invocation_1", SessionID: session.ID, Owner: owner,
+		ActionHash: strings.Repeat("a", 64), Effect: EffectLocalEdit,
+		State: InvocationPrepared, Revision: 1, CreatedAt: 100,
+		UpdatedAt: 100, ExpiresAt: 1000,
+	}
+	if err = store.CreateInvocation(context.Background(), invocation); err != nil {
+		t.Fatalf("CreateInvocation() error = %v", err)
+	}
+	store.failInvocationUpdates = 1
+	broker.mu.Lock()
+	_, err = broker.finishSessionLocked(context.Background(), session, SessionExpired, "")
+	broker.mu.Unlock()
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("finishSessionLocked() error = %v, want ErrStale", err)
+	}
+	terminal, err := broker.Close(context.Background(), owner, session.ID)
+	if err != nil || terminal.State != SessionExpired || terminal.SafeFailure != "" {
+		t.Fatalf("Close() = %+v, %v; want retained expired intent", terminal, err)
+	}
+	storedInvocation, err := store.GetInvocation(context.Background(), invocation.ID)
+	if err != nil || storedInvocation.State != InvocationCanceled ||
+		storedInvocation.SafeFailure != "session_expired" {
+		t.Fatalf("invocation = %+v, %v", storedInvocation, err)
 	}
 }
 

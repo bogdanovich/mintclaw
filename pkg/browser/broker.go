@@ -1103,6 +1103,27 @@ func (broker *Broker) finishSessionLocked(
 	if session.State.Terminal() {
 		return session, nil
 	}
+	slot := broker.slots[session.ID]
+	if slot == nil {
+		desired = SessionLost
+		if safeFailure == "" {
+			safeFailure = "worker_lost"
+		}
+	} else {
+		if slot.safeFailure != "" {
+			desired = SessionLost
+			safeFailure = slot.safeFailure
+		}
+		if !slot.terminalState.Terminal() {
+			slot.terminalState = desired
+			slot.terminalFailure = safeFailure
+			if desired != SessionLost {
+				slot.terminalFailure = ""
+			}
+		}
+		desired = slot.terminalState
+		safeFailure = slot.terminalFailure
+	}
 	if err := broker.terminateInvocationsLocked(
 		ctx,
 		session.ID,
@@ -1123,26 +1144,7 @@ func (broker *Broker) finishSessionLocked(
 			return Session{}, err
 		}
 	}
-	slot := broker.slots[session.ID]
-	if slot == nil {
-		desired = SessionLost
-		if safeFailure == "" {
-			safeFailure = "worker_lost"
-		}
-	} else if slot.safeFailure != "" {
-		desired = SessionLost
-		safeFailure = slot.safeFailure
-	}
 	if slot != nil {
-		if !slot.terminalState.Terminal() {
-			slot.terminalState = desired
-			slot.terminalFailure = safeFailure
-			if desired != SessionLost {
-				slot.terminalFailure = ""
-			}
-		}
-		desired = slot.terminalState
-		safeFailure = slot.terminalFailure
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Session{}, errors.Join(
