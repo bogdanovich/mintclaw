@@ -53,6 +53,13 @@ type ApprovalArgumentsProvider interface {
 	ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error)
 }
 
+// TurnCleanupTool releases resources scoped to one terminal agent turn. The
+// context carries the same trusted execution identity used for tool calls.
+// Suspended turns are not terminal and therefore do not enter this boundary.
+type TurnCleanupTool interface {
+	CleanupTurn(context.Context) error
+}
+
 type nodeTargetApprovalBypassProvider interface {
 	approvalBypassOwner() toolshared.Tool
 }
@@ -771,4 +778,22 @@ func (r *ToolRegistry) GetAll() []toolshared.Tool {
 		}
 	}
 	return tools
+}
+
+// CleanupTurn asks registered turn-scoped tools to release execution-owned
+// resources. Implementations must be idempotent because registries can be
+// shared with delegated agents and cleanup can follow partial setup.
+func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	var cleanupErr error
+	for _, tool := range r.GetAll() {
+		cleanup, ok := tool.(TurnCleanupTool)
+		if !ok {
+			continue
+		}
+		cleanupErr = errors.Join(cleanupErr, cleanup.CleanupTurn(ctx))
+	}
+	return cleanupErr
 }

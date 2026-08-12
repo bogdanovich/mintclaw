@@ -56,6 +56,10 @@ type BrowserContextToolSource interface {
 	) (browser.ContextResult, error)
 }
 
+type browserTurnCleanupSource interface {
+	CloseOwner(context.Context, browser.Owner) error
+}
+
 // BrowserTargetDiagnostics is one gateway-owned readiness and capability
 // snapshot. Implementations must compute every field while holding the same
 // runtime generation so discovery cannot combine stale capability flags with
@@ -91,6 +95,21 @@ func NewBrowserTargetsTool(cfg *config.Config, source BrowserToolSource) *Browse
 
 func NewBrowserSessionTool(cfg *config.Config, source BrowserToolSource) *BrowserSessionTool {
 	return &BrowserSessionTool{runtime: newBrowserToolRuntime(cfg, source)}
+}
+
+func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
+	if tool == nil || tool.runtime == nil || tool.runtime.source == nil {
+		return nil
+	}
+	source, ok := tool.runtime.source.(browserTurnCleanupSource)
+	if !ok {
+		return nil
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return source.CloseOwner(ctx, owner)
 }
 
 func NewBrowserObserveTool(cfg *config.Config, source BrowserToolSource) *BrowserObserveTool {

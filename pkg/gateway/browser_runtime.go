@@ -389,6 +389,20 @@ func (source *gatewayBrowserToolSource) Close(
 	)
 }
 
+func (source *gatewayBrowserToolSource) CloseOwner(
+	ctx context.Context,
+	owner browser.Owner,
+) error {
+	_, err := withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (struct{}, error) {
+			return struct{}{}, broker.CloseOwner(ctx, owner)
+		},
+	)
+	return err
+}
+
 func (source *gatewayBrowserToolSource) Observe(
 	ctx context.Context,
 	owner browser.Owner,

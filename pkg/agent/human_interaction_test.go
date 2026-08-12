@@ -94,6 +94,15 @@ type durableApprovalHook struct {
 	calls         int
 }
 
+type durableApprovalHardAbortHook struct{ durableApprovalHook }
+
+func (*durableApprovalHardAbortHook) AfterTool(
+	_ context.Context,
+	response *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision) {
+	return response, HookDecision{Action: HookActionHardAbort}
+}
+
 func (h *durableApprovalHook) ApproveTool(
 	context.Context,
 	*ToolApprovalRequest,
@@ -174,6 +183,28 @@ func (*approvalCountingTool) Parameters() map[string]any {
 func (t *approvalCountingTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
 	return toolshared.NewToolResult("protected action completed")
+}
+
+type hardAbortApprovalCountingTool struct{ executions int }
+
+func (*hardAbortApprovalCountingTool) Name() string { return "approval_hard_abort" }
+func (*hardAbortApprovalCountingTool) Description() string {
+	return "Run a protected test action that hard-aborts its turn"
+}
+
+func (*hardAbortApprovalCountingTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *hardAbortApprovalCountingTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	if ts := turnStateFromContext(ctx); ts != nil {
+		_ = ts.requestHardAbort()
+	}
+	return toolshared.NewToolResult("protected action hard-aborted")
 }
 
 type blockingApprovalTool struct {
@@ -3090,6 +3121,10 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	al.channelManager = newInteractionChannelManager()
 	tool := &approvalContextTool{}
 	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approval-context-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	if err := al.MountHook(NamedHook("context-approval", &durableApprovalHook{
 		actionSummary: "Run the context-sensitive action",
 	})); err != nil {
@@ -3126,6 +3161,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	if !ok || record.Origin.ExecutionContext == nil {
 		t.Fatalf("reloaded approval interaction = %#v", record)
 	}
+	originExecutionID := record.Origin.ExecutionID
 	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "allow_once", MessageID: "answer-message", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAllowed)
@@ -3153,6 +3189,161 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		tool.inbound.Raw["thread_ts"] != "original-thread" ||
 		tool.inbound.ActorID != "actor-1" || tool.inbound.SourceRef != "source-1" {
 		t.Fatalf("protected tool inbound context = %#v", tool.inbound)
+	}
+	if cleanupTool.cleanupCalls != 1 || cleanupTool.executionID != originExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-1" ||
+		cleanupTool.inbound.MessageID != "origin-message" {
+		t.Fatalf(
+			"continuation cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
+	}
+}
+
+func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-hard-abort", Name: "approval_counting",
+			Function: &providers.FunctionCall{Name: "approval_counting", Arguments: `{}`},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+	tool := &approvalCountingTool{}
+	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approved-hard-abort-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
+	if err := al.MountHook(NamedHook("approved-hard-abort", &durableApprovalHardAbortHook{
+		durableApprovalHook: durableApprovalHook{actionSummary: "Run the aborting action"},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	original := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-1",
+		MessageID: "hard-abort-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	if response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus: &turnStatus,
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-hard-abort", SessionKey: "session-hard-abort",
+			UserMessage: "run aborting action", InboundContext: original,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	}); err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	if cleanupTool.cleanupCalls != 0 {
+		t.Fatalf("suspended cleanup calls = %d, want 0", cleanupTool.cleanupCalls)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-hard-abort")
+	if !ok {
+		t.Fatal("approval interaction is missing")
+	}
+	originExecutionID := record.Origin.ExecutionID
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "hard-abort-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-2",
+		MessageID: "hard-abort-answer",
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, answer, record,
+	); err != nil {
+		t.Fatalf("resumeClaimedInteraction() error = %v", err)
+	}
+	if tool.executions != 1 || cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != originExecutionID || cleanupTool.inbound.ActorID != "actor-1" {
+		t.Fatalf(
+			"approved hard-abort = executions %d, cleanup calls %d, execution %q, inbound %#v",
+			tool.executions,
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
+	}
+}
+
+func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-hard-abort-journal", Name: "approval_hard_abort",
+			Function: &providers.FunctionCall{Name: "approval_hard_abort", Arguments: `{}`},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+	tool := &hardAbortApprovalCountingTool{}
+	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approved-hard-abort-journal-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
+	if err := al.MountHook(NamedHook("approved-hard-abort-journal", &durableApprovalHook{
+		actionSummary: "Run the aborting journal action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	original := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-journal",
+		MessageID: "hard-abort-journal-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus: &turnStatus,
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-hard-abort-journal", SessionKey: "session-hard-abort-journal",
+			UserMessage: "run aborting journal action", InboundContext: original,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	}); err != nil || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %v)", turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-hard-abort-journal")
+	if !ok {
+		t.Fatal("approval interaction is missing")
+	}
+	originExecutionID := record.Origin.ExecutionID
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "hard-abort-journal-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalErr := errors.New("persist approved hard-abort result")
+	agent.Sessions = &toolResultFailingJournal{SessionStore: agent.Sessions, err: journalErr}
+	answer := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-2",
+		MessageID: "hard-abort-journal-answer",
+	}
+	err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, answer, record,
+	)
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("resumeClaimedInteraction() error = %v, want %v", err, journalErr)
+	}
+	if tool.executions != 1 || cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != originExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-journal" {
+		t.Fatalf(
+			"journal hard-abort = executions %d, cleanup calls %d, execution %q, inbound %#v",
+			tool.executions,
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 
@@ -4140,6 +4331,14 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ExecutionID = "execution-stop-interaction"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-stop",
+	}
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "stop-interaction-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -4176,6 +4375,16 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	result := agent.Sessions.GetHistory(sessionKey)[resultIndex]
 	if !strings.Contains(result.Content, `"outcome":"canceled"`) {
 		t.Fatalf("cancellation tool result = %q", result.Content)
+	}
+	if cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != request.Origin.ExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-stop" {
+		t.Fatalf(
+			"stop cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 
@@ -5318,6 +5527,10 @@ func TestSessionControlCommandsCancelInteractionAndContinueNormally(t *testing.T
 func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "recovered-stop-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	sessionKey := "session-stop-cancel-recovery"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
@@ -5328,6 +5541,10 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ExecutionID = "execution-stop-recovery"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-recovery",
+	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -5357,6 +5574,16 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	result := agent.Sessions.GetHistory(sessionKey)[resultIndex]
 	if !strings.Contains(result.Content, `"outcome":"canceled"`) {
 		t.Fatalf("recovered cancellation result = %q", result.Content)
+	}
+	if cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != request.Origin.ExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-recovery" {
+		t.Fatalf(
+			"recovered cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 

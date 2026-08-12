@@ -822,14 +822,23 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	inbound := bus.InboundContext{
 		Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "group",
-		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace", SenderID: "user-1",
+		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace",
+		SenderID: "responder-2", ActorID: "actor-2",
+	}
+	originInbound := bus.InboundContext{
+		Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "group",
+		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace",
+		SenderID: "user-1", ActorID: "actor-1", MessageID: "origin-message",
 	}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-suspend", sessionKey: "session-suspend",
 		channel: inbound.Channel, chatID: inbound.ChatID,
-		opts: processOptions{TaskID: "task-suspend", Dispatch: DispatchRequest{
-			RouteSessionKey: "route-suspend", SessionKey: "session-suspend", InboundContext: &inbound,
-		}},
+		opts: processOptions{
+			TaskID: "task-suspend", InteractionOriginContext: &originInbound,
+			Dispatch: DispatchRequest{
+				RouteSessionKey: "route-suspend", SessionKey: "session-suspend", InboundContext: &inbound,
+			},
+		},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -863,9 +872,13 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	if request.Origin.ToolCallID != "call-question" || request.Origin.TurnID != ts.turnID ||
 		request.Origin.TaskID != "task-suspend" ||
 		request.Origin.ArgumentHash != "" || request.ApprovalAction != "" ||
-		request.Route.SenderID != "user-1" || request.Route.AccountID != "primary" ||
+		request.Route.SenderID != "responder-2" || request.Route.AccountID != "primary" ||
 		request.Route.TopicID != "topic-1" || request.Route.SpaceID != "space-1" {
 		t.Fatalf("trusted suspension request = %#v", request)
+	}
+	if request.ExecutionContext == nil || request.ExecutionContext.ActorID != "actor-1" ||
+		request.ExecutionContext.MessageID != "origin-message" {
+		t.Fatalf("chained suspension origin context = %#v", request.ExecutionContext)
 	}
 	if len(exec.messages) != 1 || exec.messages[0].ToolCallID != "call-deferred" {
 		t.Fatalf("messages = %#v, want only deferred sibling result", exec.messages)
