@@ -1695,6 +1695,10 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 
 	inbound := r.ts.opts.Dispatch.InboundContext
+	originInbound := inbound
+	if r.ts.opts.InteractionOriginContext != nil {
+		originInbound = r.ts.opts.InteractionOriginContext
+	}
 	interactionSessionKey := strings.TrimSpace(r.ts.opts.InteractionSessionKey)
 	if interactionSessionKey == "" {
 		interactionSessionKey = r.ts.sessionKey
@@ -1727,7 +1731,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		Prompt:           *result.Suspension,
 		Route:            route,
 		ApprovalAction:   strings.TrimSpace(approvalAction),
-		ExecutionContext: cloneInboundContext(inbound),
+		ExecutionContext: cloneInboundContext(originInbound),
 		Resolution:       result.SuspensionResolution,
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,

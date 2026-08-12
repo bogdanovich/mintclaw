@@ -1425,6 +1425,7 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		_ = ts.requestHardAbort()
 	}
 	if ts.hardAbortRequested() {
+		al.cleanupInteractionOriginTools(ctx, agent, record)
 		return ToolControlBreak, true, nil
 	}
 	exec, err := pipeline.SetupTurn(turnCtx, ts)
@@ -1447,6 +1448,7 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		return outcome.Control, false, outcome.JournalErr
 	}
 	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+		al.cleanupInteractionOriginTools(ctx, agent, record)
 		return outcome.Control, true, nil
 	}
 	if outcome.Control == ToolControlSuspend {
