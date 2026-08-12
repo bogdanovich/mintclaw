@@ -64,15 +64,23 @@ type FailureDiagnostic struct {
 	Message              string
 }
 
+// FailureDiagnosticOptions controls the safe projection of provider failures.
+// Filter is applied during the first bounded redaction pass so configured
+// secrets cannot be split by the output cutoff before they are recognized.
+type FailureDiagnosticOptions struct {
+	IncludeMessage bool
+	Filter         func(string) string
+}
+
 // Diagnostic projects one fallback attempt without exposing request content or
 // unbounded provider responses. Text is only inspected when includeMessage is
 // true; metadata-only observers can retain structured fields without ever
 // materializing provider text.
-func (attempt FallbackAttempt) Diagnostic(includeMessage bool) FailureDiagnostic {
-	return attempt.diagnostic(includeMessage, 0)
+func (attempt FallbackAttempt) Diagnostic(options FailureDiagnosticOptions) FailureDiagnostic {
+	return attempt.diagnostic(options, 0)
 }
 
-func (attempt FallbackAttempt) diagnostic(includeMessage bool, depth int) FailureDiagnostic {
+func (attempt FallbackAttempt) diagnostic(options FailureDiagnosticOptions, depth int) FailureDiagnostic {
 	if attempt.Error == nil || attempt.Succeeded {
 		return FailureDiagnostic{}
 	}
@@ -80,7 +88,7 @@ func (attempt FallbackAttempt) diagnostic(includeMessage bool, depth int) Failur
 		var exhausted *FallbackExhaustedError
 		if errors.As(attempt.Error, &exhausted) && exhausted != nil {
 			if leaf, ok := exhausted.lastDiagnosticAttempt(); ok {
-				return leaf.diagnostic(includeMessage, depth+1)
+				return leaf.diagnostic(options, depth+1)
 			}
 		}
 	}
@@ -97,9 +105,9 @@ func (attempt FallbackAttempt) diagnostic(includeMessage bool, depth int) Failur
 		diagnostic.ProviderErrorKind = string(providerErr.Kind.Canonical())
 		diagnostic.HTTPStatus = providerErr.HTTPStatus
 		diagnostic.RetryAfter = providerErr.RetryAfter
-		diagnostic.RequestID = failureMetadataPreview(providerErr.RequestID)
-		if includeMessage {
-			diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage)
+		diagnostic.RequestID = failureMetadataPreview(providerErr.RequestID, options.Filter)
+		if options.IncludeMessage {
+			diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage, options.Filter)
 		}
 		if diagnostic.ClassificationSource == "" {
 			diagnostic.ClassificationSource = ClassificationProviderStructured
@@ -118,8 +126,8 @@ func (attempt FallbackAttempt) diagnostic(includeMessage bool, depth int) Failur
 	if failErr != nil && failErr.Wrapped != nil {
 		rawErr = failErr.Wrapped
 	}
-	if includeMessage {
-		diagnostic.Message = errorPreview(rawErr)
+	if options.IncludeMessage {
+		diagnostic.Message = failureMetadataPreview(rawErr.Error(), options.Filter)
 	}
 	return diagnostic
 }

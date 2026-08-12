@@ -198,7 +198,7 @@ func TestFallbackAttemptDiagnosticUsesNestedExhaustionLeaf(t *testing.T) {
 
 	diagnostic := (FallbackAttempt{
 		Provider: "openrouter", Model: "text-wrapper", Error: nested, Reason: FailoverRateLimit,
-	}).Diagnostic(true)
+	}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
 	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
 		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
 		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 3*time.Second ||

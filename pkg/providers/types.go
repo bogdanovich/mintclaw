@@ -158,12 +158,12 @@ func errorPreview(err error) string {
 	if err == nil {
 		return ""
 	}
-	return failureMetadataPreview(err.Error())
+	return failureMetadataPreview(err.Error(), nil)
 }
 
-func failureMetadataPreview(value string) string {
+func failureMetadataPreview(value string, filter func(string) string) string {
 	const maxPreviewBytes = 240
-	redactor := diagnostictrace.Redactor{}
+	redactor := diagnostictrace.Redactor{Filter: filter}
 	preview := redactor.RedactText(value, maxPreviewBytes)
 	preview = strings.ToValidUTF8(preview, "\uFFFD")
 	preview = strings.Join(strings.Fields(preview), " ")
