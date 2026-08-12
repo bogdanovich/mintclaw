@@ -16,25 +16,30 @@ type TurnPayload struct {
 }
 
 type ModelPayload struct {
-	Provider         string `json:"provider,omitempty"`
-	Model            string `json:"model,omitempty"`
-	IdentityKey      string `json:"identity_key,omitempty"`
-	Attempt          int    `json:"attempt,omitempty"`
-	Status           string `json:"status,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	Messages         int    `json:"messages,omitempty"`
-	Tools            int    `json:"tools,omitempty"`
-	PromptHash       string `json:"prompt_hash,omitempty"`
-	ResponseHash     string `json:"response_hash,omitempty"`
-	PromptTokens     int    `json:"prompt_tokens,omitempty"`
-	ResponseTokens   int    `json:"response_tokens,omitempty"`
-	Skipped          bool   `json:"skipped,omitempty"`
-	ErrorCode        string `json:"error_code,omitempty"`
-	MessagesPreview  string `json:"messages_preview,omitempty"`
-	ResponsePreview  string `json:"response_preview,omitempty"`
-	ReasoningPreview string `json:"reasoning_preview,omitempty"`
-	ToolCallsPreview string `json:"tool_calls_preview,omitempty"`
-	ErrorPreview     string `json:"error_preview,omitempty"`
+	Provider             string `json:"provider,omitempty"`
+	Model                string `json:"model,omitempty"`
+	IdentityKey          string `json:"identity_key,omitempty"`
+	Attempt              int    `json:"attempt,omitempty"`
+	Status               string `json:"status,omitempty"`
+	Reason               string `json:"reason,omitempty"`
+	Messages             int    `json:"messages,omitempty"`
+	Tools                int    `json:"tools,omitempty"`
+	PromptHash           string `json:"prompt_hash,omitempty"`
+	ResponseHash         string `json:"response_hash,omitempty"`
+	PromptTokens         int    `json:"prompt_tokens,omitempty"`
+	ResponseTokens       int    `json:"response_tokens,omitempty"`
+	Skipped              bool   `json:"skipped,omitempty"`
+	ErrorCode            string `json:"error_code,omitempty"`
+	ClassificationSource string `json:"classification_source,omitempty"`
+	ProviderErrorKind    string `json:"provider_error_kind,omitempty"`
+	HTTPStatus           int    `json:"http_status,omitempty"`
+	RetryAfterMS         int64  `json:"retry_after_ms,omitempty"`
+	RequestID            string `json:"request_id,omitempty"`
+	MessagesPreview      string `json:"messages_preview,omitempty"`
+	ResponsePreview      string `json:"response_preview,omitempty"`
+	ReasoningPreview     string `json:"reasoning_preview,omitempty"`
+	ToolCallsPreview     string `json:"tool_calls_preview,omitempty"`
+	ErrorPreview         string `json:"error_preview,omitempty"`
 }
 
 type ToolPayload struct {

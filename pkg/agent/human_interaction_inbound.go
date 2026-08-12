@@ -203,10 +203,16 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 		result.Failed = true
 		return result, fmt.Errorf("persist %s cancellation result: %w", name, err)
 	}
-	if _, err := registry.CompleteCancellation(record.ID, record.Revision); err != nil {
+	completed, err := registry.CompleteCancellation(record.ID, record.Revision)
+	if err != nil {
 		result.Failed = true
 		return result, fmt.Errorf("complete %s cancellation: %w", name, err)
 	}
+	al.cleanupInteractionOriginTools(
+		ctx,
+		al.interactionContinuationAgent(completed, target.Agent),
+		completed,
+	)
 	result.Canceled = true
 	result.CommandHandled = name == "stop"
 	return result, nil
@@ -1246,6 +1252,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		InteractionSessionKey:      record.Route.SessionKey,
 		InteractionRouteKey:        routeSessionKey,
 		InteractionOriginExecution: record.Origin.ExecutionID,
+		InteractionOriginContext:   cloneInboundContext(record.Origin.ExecutionContext),
 		TurnStatus:                 &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: routeSessionKey,
@@ -1413,6 +1420,11 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	turnCtx = WithAgentLoop(turnCtx, al)
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
+	defer func() {
+		if ts.hardAbortRequested() {
+			al.cleanupInteractionOriginTools(ctx, agent, record)
+		}
+	}()
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	if al.takePendingStop(ts.runtimeSessionScope()) {
 		_ = ts.requestHardAbort()

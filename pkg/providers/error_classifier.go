@@ -183,10 +183,11 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Context deadline exceeded: treat as timeout, always fallback.
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &FailoverError{
-			Reason:   FailoverTimeout,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               FailoverTimeout,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationContextDeadline,
+			Wrapped:              err,
 		}
 	}
 
@@ -196,20 +197,22 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// providers do not expose a structured HTTP status.
 	if reason := classifyByErrorType(err); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               reason,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationTransportError,
+			Wrapped:              err,
 		}
 	}
 
 	// Image dimension/size errors: non-retriable, non-fallback.
 	if IsImageDimensionError(msg) || IsImageSizeError(msg) {
 		return &FailoverError{
-			Reason:   FailoverFormat,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               FailoverFormat,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationMessagePattern,
+			Wrapped:              err,
 		}
 	}
 
@@ -217,29 +220,39 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	var httpErr *common.HTTPError
 	if errors.As(err, &httpErr) && httpErr != nil {
 		if reason := classifyByStatus(httpErr.StatusCode); reason != "" {
+			source := ClassificationHTTPStatus
 			if httpErr.StatusCode == 400 {
-				reason = classifyBadRequestMessage(msg)
+				if refined := classifyBadRequestMessage(msg); refined != reason {
+					reason = refined
+					source = ClassificationMessagePattern
+				}
 			}
 			return &FailoverError{
-				Reason:   reason,
-				Provider: provider,
-				Model:    model,
-				Status:   httpErr.StatusCode,
-				Wrapped:  err,
+				Reason:               reason,
+				Provider:             provider,
+				Model:                model,
+				Status:               httpErr.StatusCode,
+				ClassificationSource: source,
+				Wrapped:              err,
 			}
 		}
 	}
 	if status := extractHTTPStatus(msg); status > 0 {
 		if reason := classifyByStatus(status); reason != "" {
+			source := ClassificationStatusText
 			if status == 400 {
-				reason = classifyBadRequestMessage(msg)
+				if refined := classifyBadRequestMessage(msg); refined != reason {
+					reason = refined
+					source = ClassificationMessagePattern
+				}
 			}
 			return &FailoverError{
-				Reason:   reason,
-				Provider: provider,
-				Model:    model,
-				Status:   status,
-				Wrapped:  err,
+				Reason:               reason,
+				Provider:             provider,
+				Model:                model,
+				Status:               status,
+				ClassificationSource: source,
+				Wrapped:              err,
 			}
 		}
 	}
@@ -247,10 +260,11 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Message pattern matching (priority order from OpenClaw).
 	if reason := classifyByMessage(msg); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:               reason,
+			Provider:             provider,
+			Model:                model,
+			ClassificationSource: ClassificationMessagePattern,
+			Wrapped:              err,
 		}
 	}
 
@@ -294,11 +308,12 @@ func classifyProviderError(
 		return nil
 	}
 	return &FailoverError{
-		Reason:   reason,
-		Provider: provider,
-		Model:    model,
-		Status:   providerErr.HTTPStatus,
-		Wrapped:  wrapped,
+		Reason:               reason,
+		Provider:             provider,
+		Model:                model,
+		Status:               providerErr.HTTPStatus,
+		ClassificationSource: ClassificationProviderStructured,
+		Wrapped:              wrapped,
 	}
 }
 

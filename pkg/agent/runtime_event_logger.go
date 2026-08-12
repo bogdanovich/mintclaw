@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
@@ -147,11 +148,28 @@ func (l *runtimeEventLogger) handle(_ context.Context, evt runtimeevents.Event) 
 
 	fields := runtimeEventLogFields(evt)
 	if l.configSnapshot().IncludePayload && evt.Payload != nil {
-		fields["payload"] = evt.Payload
+		fields["payload"] = runtimeEventLogSafePayload(evt.Payload)
 	}
 
 	logRuntimeEvent(evt, fields)
 	return nil
+}
+
+func runtimeEventLogSafePayload(payload any) any {
+	switch value := payload.(type) {
+	case LLMFallbackAttemptPayload:
+		value.DiagnosticMessage = ""
+		return value
+	case *LLMFallbackAttemptPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.DiagnosticMessage = ""
+		return &safe
+	default:
+		return payload
+	}
 }
 
 func (l *runtimeEventLogger) shouldLog(evt runtimeevents.Event) bool {
@@ -292,6 +310,21 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["attempt"] = payload.Attempt
 		fields["status"] = payload.Status
 		fields["reason"] = payload.Reason
+		if payload.ClassificationSource != "" {
+			fields["classification_source"] = payload.ClassificationSource
+		}
+		if payload.ProviderErrorKind != "" {
+			fields["provider_error_kind"] = payload.ProviderErrorKind
+		}
+		if payload.HTTPStatus != 0 {
+			fields["http_status"] = payload.HTTPStatus
+		}
+		if payload.RetryAfter != 0 {
+			fields["retry_after_ms"] = payload.RetryAfter.Milliseconds()
+		}
+		if payload.RequestID != "" {
+			fields["request_id"] = safeRuntimeEventMetadata(payload.RequestID)
+		}
 		fields["skipped"] = payload.Skipped
 	case ContextCompressPayload:
 		fields["reason"] = payload.Reason
@@ -378,6 +411,10 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["stage"] = payload.Stage
 		fields["error"] = payload.Message
 	}
+}
+
+func safeRuntimeEventMetadata(value string) string {
+	return diagnostictrace.Redactor{}.RedactText(value, 240)
 }
 
 func setStringField(fields map[string]any, key, value string) {

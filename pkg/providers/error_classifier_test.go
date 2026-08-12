@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 )
@@ -134,6 +135,188 @@ func TestClassifyError_PreservesProviderErrorMetadata(t *testing.T) {
 	if !errors.As(classified, &got) || got != providerErr {
 		t.Fatalf("classified error lost ProviderError metadata: %+v", classified)
 	}
+	if classified.ClassificationSource != ClassificationProviderStructured {
+		t.Fatalf("classification source = %q, want provider_structured", classified.ClassificationSource)
+	}
+
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
+		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 2*time.Second ||
+		diagnostic.RequestID != "req-provider-1" || diagnostic.Message != "request rate limited" {
+		t.Fatalf("structured diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestFallbackAttemptDiagnosticRedactsHeuristicError(t *testing.T) {
+	secret := "sk-secret-that-must-not-appear"
+	err := errors.New(
+		`received error while streaming: {"type":"error","code":"rate_limit_exceeded",` +
+			`"message":"request rate limited","authorization":"Bearer ` + secret + `"}`,
+	)
+	classified := ClassifyError(err, "openai", "gpt-test")
+	if classified == nil || classified.Reason != FailoverRateLimit {
+		t.Fatalf("ClassifyError() = %#v, want rate limit", classified)
+	}
+
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.ClassificationSource != ClassificationMessagePattern {
+		t.Fatalf("classification source = %q, want message_pattern", diagnostic.ClassificationSource)
+	}
+	if !strings.Contains(diagnostic.Message, `"code":"rate_limit_exceeded"`) {
+		t.Fatalf("diagnostic message omitted provider code: %q", diagnostic.Message)
+	}
+	if strings.Contains(diagnostic.Message, secret) || !strings.Contains(diagnostic.Message, "[REDACTED]") {
+		t.Fatalf("diagnostic message was not redacted: %q", diagnostic.Message)
+	}
+}
+
+func TestFallbackAttemptDiagnosticBoundsStructuredMetadata(t *testing.T) {
+	secret := "sk-secret-that-must-not-appear"
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		RequestID:   secret,
+		SafeMessage: secret + " " + strings.Repeat("界", 100),
+	}
+	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.RequestID != "[REDACTED]" {
+		t.Fatalf("request ID = %q, want redacted", diagnostic.RequestID)
+	}
+	if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+		t.Fatalf(
+			"diagnostic message is not a valid 240-byte preview: len=%d %q",
+			len(diagnostic.Message),
+			diagnostic.Message,
+		)
+	}
+	if strings.Contains(diagnostic.Message, secret) {
+		t.Fatalf("diagnostic message leaked secret: %q", diagnostic.Message)
+	}
+}
+
+func TestFallbackAttemptDiagnosticBoundsHeuristicMetadata(t *testing.T) {
+	classified := &FailoverError{
+		Reason:               FailoverRateLimit,
+		ClassificationSource: ClassificationMessagePattern,
+		Wrapped:              errors.New(strings.Repeat("界", 100)),
+	}
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+		t.Fatalf(
+			"diagnostic message is not a valid 240-byte preview: len=%d %q",
+			len(diagnostic.Message),
+			diagnostic.Message,
+		)
+	}
+}
+
+func TestFallbackAttemptDiagnosticNormalizesShortMalformedUTF8(t *testing.T) {
+	malformed := string([]byte{'b', 'a', 'd', 0xff})
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "structured",
+			err:  &ProviderError{Kind: ProviderErrorRateLimit, SafeMessage: malformed},
+		},
+		{
+			name: "heuristic",
+			err: &FailoverError{
+				Reason: FailoverRateLimit, ClassificationSource: ClassificationMessagePattern,
+				Wrapped: errors.New(malformed),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostic := (FallbackAttempt{Error: test.err}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+			if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+				t.Fatalf(
+					"diagnostic message is not a valid 240-byte preview: len=%d %q",
+					len(diagnostic.Message),
+					diagnostic.Message,
+				)
+			}
+		})
+	}
+}
+
+func TestFallbackAttemptDiagnosticMetadataOnlyDoesNotMaterializeMessage(t *testing.T) {
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		HTTPStatus:  429,
+		RequestID:   "req-safe-id",
+		SafeMessage: "provider text must not enter the event bus",
+	}
+	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic(FailureDiagnosticOptions{})
+	if diagnostic.Message != "" {
+		t.Fatalf("metadata-only diagnostic message = %q, want empty", diagnostic.Message)
+	}
+	if diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RequestID != "req-safe-id" {
+		t.Fatalf("metadata-only structured fields = %#v", diagnostic)
+	}
+}
+
+func TestFallbackAttemptDiagnosticUsesCanonicalBoundedRedaction(t *testing.T) {
+	secrets := []string{
+		"Basic dXNlcjpzdXBlcnNlY3JldA==",
+		"PASSWORD=super-secret-value",
+		"github_pat_1234567890abcdefghijklmnop",
+		"xox" + "b-12345678-abcdefghijklmnop",
+		"AKIA1234567890ABCDEF",
+		"eyJabcdefgh.ijklmnop.qrstuvwx",
+		"https://admin:hunter2@example.com/path?token=secret-value",
+		"-----BEGIN PRIVATE KEY-----\nsecret-key-material\n-----END PRIVATE KEY-----",
+	}
+	for _, secret := range secrets {
+		diagnostic := (FallbackAttempt{Error: &ProviderError{
+			Kind: ProviderErrorRateLimit, SafeMessage: "failure " + secret,
+		}}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+		if strings.Contains(diagnostic.Message, secret) {
+			t.Fatalf("diagnostic leaked %q in %q", secret, diagnostic.Message)
+		}
+		if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+			t.Fatalf("invalid bounded diagnostic: len=%d %q", len(diagnostic.Message), diagnostic.Message)
+		}
+	}
+
+	oversized := strings.Repeat("x", 1<<20)
+	diagnostic := (FallbackAttempt{Error: &ProviderError{
+		Kind: ProviderErrorRateLimit, SafeMessage: oversized,
+	}}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if len(diagnostic.Message) > 240 || !strings.Contains(diagnostic.Message, "TRUNCATED") {
+		t.Fatalf("oversized diagnostic was not pre-bounded: len=%d %q", len(diagnostic.Message), diagnostic.Message)
+	}
+}
+
+func TestFallbackAttemptDiagnosticFiltersConfiguredSecretBeforeBounding(t *testing.T) {
+	secret := "opaque-configured-secret-abcdefghijklmnopqrstuvwxyz-0123456789"
+	prefix := secret[:24]
+	message := "quota exceeded " + strings.Repeat("p", 190) + secret
+	options := FailureDiagnosticOptions{
+		IncludeMessage: true,
+		Filter: func(value string) string {
+			return strings.ReplaceAll(value, secret, "[FILTERED]")
+		},
+	}
+
+	for _, err := range []error{
+		&ProviderError{Kind: ProviderErrorRateLimit, SafeMessage: message},
+		&FailoverError{
+			Reason: FailoverRateLimit, ClassificationSource: ClassificationMessagePattern,
+			Wrapped: errors.New(message),
+		},
+	} {
+		diagnostic := (FallbackAttempt{Error: err}).Diagnostic(options)
+		if strings.Contains(diagnostic.Message, prefix) {
+			t.Fatalf("diagnostic retained configured-secret prefix: %q", diagnostic.Message)
+		}
+		if !strings.Contains(diagnostic.Message, "[FILTERED]") {
+			t.Fatalf("diagnostic did not filter configured secret: %q", diagnostic.Message)
+		}
+	}
 }
 
 func TestClassifyError_StatusCodes(t *testing.T) {
@@ -167,6 +350,30 @@ func TestClassifyError_StatusCodes(t *testing.T) {
 		if result.Reason != tt.reason {
 			t.Errorf("status %d: reason = %q, want %q", tt.status, result.Reason, tt.reason)
 		}
+	}
+}
+
+func TestClassifyError_HTTP400RefinementRecordsMessageEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "structured status",
+			err: &common.HTTPError{
+				StatusCode: 400, BodyPreview: "quota exceeded for this project",
+			},
+		},
+		{name: "status in text", err: errors.New("status: 400 quota exceeded for this project")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			classified := ClassifyError(test.err, "test", "model")
+			if classified == nil || classified.Reason != FailoverRateLimit ||
+				classified.ClassificationSource != ClassificationMessagePattern {
+				t.Fatalf("classification = %#v", classified)
+			}
+		})
 	}
 }
 

@@ -673,27 +673,8 @@ func (runner *toolLoopRunner) approveToolCall(
 	}
 	call.toolRegistry = toolRegistry
 
-	execCtx := toolshared.WithToolInboundContext(
-		turnCtx,
-		ts.channel,
-		ts.chatID,
-		ts.opts.Dispatch.MessageID(),
-		ts.opts.Dispatch.ReplyToMessageID(),
-	)
-	if ts.opts.Dispatch.InboundContext != nil {
-		execCtx = toolshared.WithToolInboundMetadata(execCtx, *ts.opts.Dispatch.InboundContext)
-	}
-	execCtx = toolshared.WithToolTopicID(execCtx, originTopicID(ts.opts.Dispatch.InboundContext))
-	execCtx = toolshared.WithToolSessionContext(
-		execCtx,
-		ts.agent.ID,
-		ts.sessionKey,
-		ts.opts.Dispatch.SessionScope,
-	)
-	execCtx = toolshared.WithToolRouteSessionKey(execCtx, ts.opts.Dispatch.RouteSessionKey)
+	execCtx := toolExecutionContextForTurn(turnCtx, ts)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
-	executionID := effectiveToolExecutionID(ts)
-	execCtx = toolshared.WithToolExecutionIdentity(execCtx, ts.workspace, executionID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
 	if p.Config.TrustAllToolExecution {
 		approvalBypass = true
@@ -1714,6 +1695,10 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 
 	inbound := r.ts.opts.Dispatch.InboundContext
+	originInbound := inbound
+	if r.ts.opts.InteractionOriginContext != nil {
+		originInbound = r.ts.opts.InteractionOriginContext
+	}
 	interactionSessionKey := strings.TrimSpace(r.ts.opts.InteractionSessionKey)
 	if interactionSessionKey == "" {
 		interactionSessionKey = r.ts.sessionKey
@@ -1746,7 +1731,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		Prompt:           *result.Suspension,
 		Route:            route,
 		ApprovalAction:   strings.TrimSpace(approvalAction),
-		ExecutionContext: cloneInboundContext(inbound),
+		ExecutionContext: cloneInboundContext(originInbound),
 		Resolution:       result.SuspensionResolution,
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,
@@ -1836,6 +1821,35 @@ func effectiveToolExecutionID(ts *turnState) string {
 		return executionID
 	}
 	return ts.executionID
+}
+
+func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Context {
+	if ts == nil {
+		return ctx
+	}
+	ctx = toolshared.WithToolInboundContext(
+		ctx,
+		ts.channel,
+		ts.chatID,
+		ts.opts.Dispatch.MessageID(),
+		ts.opts.Dispatch.ReplyToMessageID(),
+	)
+	toolInbound := ts.opts.Dispatch.InboundContext
+	if ts.opts.InteractionOriginContext != nil {
+		toolInbound = ts.opts.InteractionOriginContext
+	}
+	if toolInbound != nil {
+		ctx = toolshared.WithToolInboundMetadata(ctx, *toolInbound)
+	}
+	ctx = toolshared.WithToolTopicID(ctx, originTopicID(toolInbound))
+	ctx = toolshared.WithToolSessionContext(
+		ctx,
+		ts.agent.ID,
+		ts.sessionKey,
+		ts.opts.Dispatch.SessionScope,
+	)
+	ctx = toolshared.WithToolRouteSessionKey(ctx, ts.opts.Dispatch.RouteSessionKey)
+	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
 }
 
 func (r *toolLoopRunner) appendSkippedToolMessage(

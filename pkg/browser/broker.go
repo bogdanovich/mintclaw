@@ -242,6 +242,8 @@ type workerSlot struct {
 	navigationID    string
 	safeFailure     string
 	cleanupComplete bool
+	terminalState   SessionState
+	terminalFailure string
 }
 
 type Broker struct {
@@ -512,7 +514,12 @@ func (broker *Broker) finishFailedOpen(
 		return session, ErrWorkerUnavailable
 	}
 
-	slot := &workerSlot{worker: cleanup, safeFailure: "worker_unavailable"}
+	slot := &workerSlot{
+		worker:          cleanup,
+		safeFailure:     "worker_unavailable",
+		terminalState:   SessionLost,
+		terminalFailure: "worker_unavailable",
+	}
 	broker.slots[session.ID] = slot
 	closing := session
 	closing.State = SessionClosing
@@ -875,7 +882,34 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 		return err
 	}
 	now := broker.now().UTC()
+	var sweepErr error
 	for _, session := range sessions {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(sweepErr, ctxErr)
+		}
+		if session.State == SessionClosing {
+			slot := broker.slots[session.ID]
+			if slot == nil {
+				if _, err = broker.finishSessionLocked(
+					ctx,
+					session,
+					SessionLost,
+					"worker_lost",
+				); err != nil {
+					sweepErr = errors.Join(sweepErr, err)
+				}
+			} else if slot.terminalState.Terminal() {
+				if _, err = broker.finishSessionLocked(
+					ctx,
+					session,
+					slot.terminalState,
+					slot.terminalFailure,
+				); err != nil {
+					sweepErr = errors.Join(sweepErr, err)
+				}
+			}
+			continue
+		}
 		if !session.State.Terminal() &&
 			(session.PolicyRevision != broker.policyRevision || broker.sessionExpired(session, now)) {
 			state, failure := SessionExpired, ""
@@ -883,15 +917,18 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 				state, failure = SessionLost, "policy_changed"
 			}
 			if _, err = broker.finishSessionLocked(ctx, session, state, failure); err != nil {
-				return err
+				sweepErr = errors.Join(sweepErr, err)
 			}
 		}
 	}
 	retention := time.Duration(broker.config.Limits.Effective().RetentionSecs) * time.Second
 	if err = broker.store.PruneInvocations(ctx, now.Add(-retention).UnixNano()); err != nil {
-		return err
+		sweepErr = errors.Join(sweepErr, err)
 	}
-	return broker.store.PrunePreparedActions(ctx, now.Add(-retention).UnixNano())
+	if err = broker.store.PrunePreparedActions(ctx, now.Add(-retention).UnixNano()); err != nil {
+		sweepErr = errors.Join(sweepErr, err)
+	}
+	return sweepErr
 }
 
 // Recover reconciles state after a gateway restart. B1 workers are
@@ -1029,6 +1066,34 @@ func (broker *Broker) Close(ctx context.Context, owner Owner, sessionID string) 
 	return broker.finishSessionLocked(ctx, session, SessionClosed, "")
 }
 
+// CloseOwner closes every live session owned by one logical tool execution.
+// Agent turn cleanup uses this boundary so a terminal turn cannot retain a
+// profile lease merely because the model omitted an explicit close call.
+func (broker *Broker) CloseOwner(ctx context.Context, owner Owner) error {
+	if err := owner.Validate(); err != nil {
+		return err
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	var closeErr error
+	for _, session := range sessions {
+		if ctx.Err() != nil {
+			return errors.Join(closeErr, ctx.Err())
+		}
+		if session.State.Terminal() || !session.Owner.Equal(owner) {
+			continue
+		}
+		if _, err = broker.finishSessionLocked(ctx, session, SessionClosed, ""); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	return closeErr
+}
+
 func (broker *Broker) finishSessionLocked(
 	ctx context.Context,
 	session Session,
@@ -1037,6 +1102,27 @@ func (broker *Broker) finishSessionLocked(
 ) (Session, error) {
 	if session.State.Terminal() {
 		return session, nil
+	}
+	slot := broker.slots[session.ID]
+	if slot == nil {
+		desired = SessionLost
+		if safeFailure == "" {
+			safeFailure = "worker_lost"
+		}
+	} else {
+		if slot.safeFailure != "" {
+			desired = SessionLost
+			safeFailure = slot.safeFailure
+		}
+		if !slot.terminalState.Terminal() {
+			slot.terminalState = desired
+			slot.terminalFailure = safeFailure
+			if desired != SessionLost {
+				slot.terminalFailure = ""
+			}
+		}
+		desired = slot.terminalState
+		safeFailure = slot.terminalFailure
 	}
 	if err := broker.terminateInvocationsLocked(
 		ctx,
@@ -1058,23 +1144,16 @@ func (broker *Broker) finishSessionLocked(
 			return Session{}, err
 		}
 	}
-	slot := broker.slots[session.ID]
-	if slot == nil {
-		desired = SessionLost
-		if safeFailure == "" {
-			safeFailure = "worker_lost"
+	if slot != nil {
+		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Session{}, errors.Join(
+					fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+					ctxErr,
+				)
+			}
+			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
 		}
-	} else if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Session{}, errors.Join(
-				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-				ctxErr,
-			)
-		}
-		return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
-	} else if slot.safeFailure != "" {
-		desired = SessionLost
-		safeFailure = slot.safeFailure
 	}
 	session.State = desired
 	clearSessionSnapshot(&session)
@@ -1094,6 +1173,27 @@ func (broker *Broker) finishSessionLocked(
 				current.State.Terminal() {
 				delete(broker.slots, session.ID)
 				return current, err
+			}
+		}
+		current, getErr := broker.store.GetSession(context.WithoutCancel(ctx), session.ID)
+		slot = broker.slots[session.ID]
+		if getErr == nil && current.State == SessionClosing && slot != nil && slot.cleanupComplete {
+			current.State = desired
+			clearSessionSnapshot(&current)
+			current.SafeFailure = safeFailure
+			if desired != SessionLost {
+				current.SafeFailure = ""
+			}
+			current.Revision++
+			current.UpdatedAt = broker.now().UTC().UnixNano()
+			current.LastActivityAt = current.UpdatedAt
+			if retryErr := broker.store.UpdateSession(
+				ctx,
+				current.Revision-1,
+				current,
+			); retryErr == nil {
+				delete(broker.slots, current.ID)
+				return current, nil
 			}
 		}
 		return Session{}, err

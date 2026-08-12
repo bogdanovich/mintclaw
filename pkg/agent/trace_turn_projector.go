@@ -496,14 +496,22 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordModelFallbackAttempt
 		payload = diagnostictrace.ModelPayload{
-			Provider:    value.Provider,
-			Model:       value.Model,
-			IdentityKey: value.IdentityKey,
-			Attempt:     value.Attempt,
-			Status:      value.Status,
-			Reason:      value.Reason,
-			Skipped:     value.Skipped,
-			ErrorCode:   value.ErrorCode,
+			Provider:             value.Provider,
+			Model:                value.Model,
+			IdentityKey:          value.IdentityKey,
+			Attempt:              value.Attempt,
+			Status:               value.Status,
+			Reason:               value.Reason,
+			Skipped:              value.Skipped,
+			ErrorCode:            value.ErrorCode,
+			ClassificationSource: value.ClassificationSource,
+			ProviderErrorKind:    value.ProviderErrorKind,
+			HTTPStatus:           value.HTTPStatus,
+			RetryAfterMS:         value.RetryAfter.Milliseconds(),
+			RequestID:            captureMetadataPreview(settings, value.RequestID, 240),
+			ErrorPreview: captureTextPreview(
+				settings, value.DiagnosticMessage, diagnosticErrorBytes,
+			),
 		}
 	case runtimeevents.KindAgentToolExecStart:
 		value, ok := event.Payload.(ToolExecStartPayload)
@@ -885,6 +893,15 @@ func safeJSONHash(settings traceCaptureSettings, value any) string {
 
 func captureTextPreview(settings traceCaptureSettings, value string, maxBytes int) string {
 	if settings.contentMode != diagnostictrace.ContentRedacted || strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return diagnostictrace.Redactor{
+		Filter: settings.filter,
+	}.RedactText(value, maxBytes)
+}
+
+func captureMetadataPreview(settings traceCaptureSettings, value string, maxBytes int) string {
+	if strings.TrimSpace(value) == "" {
 		return ""
 	}
 	return diagnostictrace.Redactor{

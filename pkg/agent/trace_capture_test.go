@@ -98,11 +98,19 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		ID: "evt-fallback", Kind: runtimeevents.KindAgentLLMFallbackAttempt, Time: start.Add(6 * time.Millisecond),
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 		Payload: LLMFallbackAttemptPayload{
-			Provider:    "openai",
-			Model:       "fallback",
-			IdentityKey: "model:fallback",
-			Attempt:     2,
-			Status:      "succeeded",
+			Provider:             "openai",
+			Model:                "fallback",
+			IdentityKey:          "model:fallback",
+			Attempt:              2,
+			Status:               "failed",
+			Reason:               string(providers.FailoverRateLimit),
+			ErrorCode:            string(providers.FailoverRateLimit),
+			ClassificationSource: "provider_structured",
+			ProviderErrorKind:    string(providers.ProviderErrorRateLimit),
+			HTTPStatus:           429,
+			RetryAfter:           3 * time.Second,
+			RequestID:            secret,
+			DiagnosticMessage:    "Bearer " + secret + " request rate limited",
 		},
 	})
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
@@ -150,6 +158,14 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	if err := diagnostictrace.Validate(trace); err != nil {
 		t.Fatalf("validate trace: %v", err)
 	}
+	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
+	if fallbackPayload.ClassificationSource != "provider_structured" ||
+		fallbackPayload.ProviderErrorKind != string(providers.ProviderErrorRateLimit) ||
+		fallbackPayload.HTTPStatus != 429 || fallbackPayload.RetryAfterMS != 3000 ||
+		fallbackPayload.RequestID != "[REDACTED]" ||
+		!strings.Contains(fallbackPayload.ErrorPreview, "request rate limited") {
+		t.Fatalf("fallback payload = %#v", fallbackPayload)
+	}
 	if trace.Outcome == nil || trace.Outcome.Status != string(TurnEndStatusCompleted) {
 		t.Fatalf("outcome = %#v", trace.Outcome)
 	}
@@ -172,6 +188,7 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 	})
 
 	secret := "metadata-secret-content"
+	credential := "sk-secret-that-must-not-appear"
 	start := time.Now().UTC()
 	scope := runtimeevents.Scope{
 		TraceScope: runtimeevents.NewTraceScope(workspace, "turn-metadata"),
@@ -188,8 +205,17 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 		},
 	})
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
-		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		ID: "fallback", Kind: runtimeevents.KindAgentLLMFallbackAttempt,
 		Time: start.Add(2 * time.Millisecond), Scope: scope,
+		Payload: LLMFallbackAttemptPayload{
+			Provider: "openai", Model: "gpt-test", Attempt: 1, Status: "failed",
+			Reason: string(providers.FailoverRateLimit), ErrorCode: string(providers.FailoverRateLimit),
+			ClassificationSource: "message_pattern", RequestID: credential, DiagnosticMessage: secret,
+		},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: start.Add(3 * time.Millisecond), Scope: scope,
 		Payload: TurnEndPayload{
 			Status: TurnEndStatusCompleted, Workspace: workspace, FinalContent: secret,
 		},
@@ -201,6 +227,15 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 	}
 	if strings.Contains(string(data), secret) || strings.Contains(string(data), "_preview") {
 		t.Fatalf("metadata trace retained content: %s", data)
+	}
+	var trace diagnostictrace.Trace
+	if err := json.Unmarshal(data, &trace); err != nil {
+		t.Fatalf("decode trace: %v", err)
+	}
+	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
+	if fallbackPayload.ClassificationSource != "message_pattern" || fallbackPayload.ErrorPreview != "" ||
+		fallbackPayload.RequestID != "[REDACTED]" {
+		t.Fatalf("metadata fallback payload = %#v", fallbackPayload)
 	}
 }
 
@@ -596,6 +631,26 @@ func readCapturedTrace(t *testing.T, path string) diagnostictrace.Trace {
 		t.Fatal(err)
 	}
 	return trace
+}
+
+func findModelPayload(
+	t *testing.T,
+	trace diagnostictrace.Trace,
+	kind diagnostictrace.RecordKind,
+) diagnostictrace.ModelPayload {
+	t.Helper()
+	for _, record := range trace.Records {
+		if record.Kind != kind {
+			continue
+		}
+		var payload diagnostictrace.ModelPayload
+		if err := json.Unmarshal(record.Data, &payload); err != nil {
+			t.Fatalf("decode %s payload: %v", kind, err)
+		}
+		return payload
+	}
+	t.Fatalf("trace lacks %s record", kind)
+	return diagnostictrace.ModelPayload{}
 }
 
 func assertCapturedTools(t *testing.T, trace diagnostictrace.Trace, want ...string) {

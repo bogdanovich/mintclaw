@@ -97,6 +97,7 @@ type fakeNodeInvocationSource struct {
 	cancelErr               error
 	remote                  nodes.InvocationRecord
 	lookupMiss              bool
+	prepareErr              error
 	beforeAuthorityValidate func()
 	prepareMu               sync.Mutex
 	prepareCalls            int
@@ -171,6 +172,9 @@ func (source *fakeNodeInvocationSource) PrepareInvocation(
 		return nodes.GatewayInvocationRecord{}, false, nodes.ErrGatewayInvocationNotFound
 	}
 	source.prepareCalls++
+	if source.prepareErr != nil {
+		return nodes.GatewayInvocationRecord{}, false, source.prepareErr
+	}
 	return source.store.PrepareOwned(principal, target, toolCallID, plan, descriptor)
 }
 
@@ -312,6 +316,27 @@ func TestNodeInvokeToolReusesPreparedAuthorityAndDispatches(t *testing.T) {
 	if strings.Contains(result.ForLLM, "private-node-id") ||
 		strings.Contains(result.ForLLM, "plan_hash") {
 		t.Fatalf("invoke result leaked internal authority: %s", result.ForLLM)
+	}
+}
+
+func TestNodeInvokeToolReportsGatewayCapacityWithoutBlamingDiscovery(t *testing.T) {
+	source := newFakeNodeInvocationSource(t)
+	source.prepareErr = nodes.ErrGatewayInvocationStoreFull
+	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+
+	result := tool.Execute(
+		nodeInvocationTestContext("actor-1", "call-store-full"),
+		nodeInvocationTestArgs(),
+	)
+	assertNodeDenialResult(
+		t,
+		result,
+		nodeDenialGatewayCapacity,
+		nodeConstraintGatewayStore,
+		nodeActionAskOperator,
+	)
+	if source.dispatchCalls != 0 {
+		t.Fatalf("capacity failure dispatched invocation: %d", source.dispatchCalls)
 	}
 }
 

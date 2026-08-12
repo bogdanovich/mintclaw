@@ -3,8 +3,11 @@ package providers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
 func makeCandidate(provider, model string) FallbackCandidate {
@@ -174,6 +177,78 @@ func TestFallback_NestedExhaustionDoesNotCooldownOuterCandidate(t *testing.T) {
 	var nestedExhausted *FallbackExhaustedError
 	if !errors.As(result.Attempts[0].Error, &nestedExhausted) {
 		t.Fatalf("outer attempt error = %T, want FallbackExhaustedError", result.Attempts[0].Error)
+	}
+}
+
+func TestFallbackAttemptDiagnosticUsesNestedExhaustionLeaf(t *testing.T) {
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		HTTPStatus:  429,
+		RetryAfter:  3 * time.Second,
+		RequestID:   "req-vision-leaf",
+		SafeMessage: "vision quota exceeded",
+	}
+	nested := &FallbackExhaustedError{Attempts: []FallbackAttempt{
+		{Error: errors.New("older timeout"), Reason: FailoverTimeout},
+		{
+			Error: &FailoverError{
+				Reason: FailoverRateLimit, ClassificationSource: ClassificationProviderStructured,
+				Status: 429, Wrapped: providerErr,
+			},
+			Reason: FailoverRateLimit,
+		},
+	}}
+
+	diagnostic := (FallbackAttempt{
+		Provider: "openrouter", Model: "text-wrapper", Error: nested, Reason: FailoverRateLimit,
+	}).Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.ClassificationSource != ClassificationProviderStructured ||
+		diagnostic.ProviderErrorKind != string(ProviderErrorRateLimit) ||
+		diagnostic.HTTPStatus != 429 || diagnostic.RetryAfter != 3*time.Second ||
+		diagnostic.RequestID != "req-vision-leaf" ||
+		diagnostic.Message != "vision quota exceeded" {
+		t.Fatalf("nested diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestFallbackAttemptDiagnosticFiltersConstructorLookaheadIncludingNested(t *testing.T) {
+	secret := "opaque-configured-secret-abcdefghijklmnopqrstuvwxyz-0123456789"
+	prefix := secret[:24]
+	providerErr := providererrors.FromStructuredError(
+		providererrors.KindRateLimit,
+		429,
+		nil,
+		strings.Repeat("r", 100)+secret,
+		"quota exceeded "+strings.Repeat("m", 200)+secret,
+		nil,
+	)
+	if !strings.Contains(providerErr.RequestID, prefix) ||
+		!strings.Contains(providerErr.SafeMessage, prefix) {
+		t.Fatal("test fixture does not straddle constructor bounds")
+	}
+	options := FailureDiagnosticOptions{
+		IncludeMessage: true,
+		Filter: func(value string) string {
+			return strings.ReplaceAll(value, secret, "[FILTERED]")
+		},
+	}
+	direct := FallbackAttempt{Error: providerErr}.Diagnostic(options)
+	nested := FallbackAttempt{Error: &FallbackExhaustedError{Attempts: []FallbackAttempt{{
+		Error: providerErr, Reason: FailoverRateLimit,
+	}}}}.Diagnostic(options)
+
+	for _, diagnostic := range []FailureDiagnostic{direct, nested} {
+		if strings.Contains(diagnostic.RequestID, prefix) ||
+			strings.Contains(diagnostic.Message, prefix) {
+			t.Fatalf("diagnostic retained configured-secret prefix: %#v", diagnostic)
+		}
+		if !strings.Contains(diagnostic.RequestID, "[FILTERED]") ||
+			!strings.Contains(diagnostic.Message, "[FILTERED]") {
+			t.Fatalf("diagnostic did not filter constructor lookahead: %#v", diagnostic)
+		}
+		if len(diagnostic.RequestID) > 128 || len(diagnostic.Message) > 240 {
+			t.Fatalf("diagnostic exceeded final bounds: %#v", diagnostic)
+		}
 	}
 }
 

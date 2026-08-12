@@ -105,6 +105,16 @@ func (p *Pipeline) invokeLLMWithRetry(
 				},
 				func(attempt providers.FallbackAttempt) {
 					fallbackAttempt++
+					diagnosticOptions := providers.FailureDiagnosticOptions{
+						IncludeMessage: diagnosticContentEnabled(p.Cfg),
+					}
+					if p.Cfg != nil {
+						diagnosticOptions.Filter = p.Cfg.SensitiveDataReplacer().Replace
+					}
+					diagnostic := attempt.Diagnostic(diagnosticOptions)
+					diagnostic.RequestID = diagnosticMetadataPreview(
+						p.Cfg, diagnostic.RequestID, fallbackDiagnosticMetadataBytes,
+					)
 					status := "failed"
 					if attempt.Skipped {
 						status = "skipped"
@@ -119,7 +129,12 @@ func (p *Pipeline) invokeLLMWithRetry(
 							Provider: attempt.Provider, Model: attempt.Model,
 							IdentityKey: attempt.IdentityKey, Attempt: fallbackAttempt,
 							Status: status, Reason: reason, ErrorCode: reason,
-							Skipped: attempt.Skipped,
+							ClassificationSource: string(diagnostic.ClassificationSource),
+							ProviderErrorKind:    diagnostic.ProviderErrorKind,
+							HTTPStatus:           diagnostic.HTTPStatus, RetryAfter: diagnostic.RetryAfter,
+							RequestID:         diagnostic.RequestID,
+							DiagnosticMessage: diagnostic.Message,
+							Skipped:           attempt.Skipped,
 						},
 					)
 				},

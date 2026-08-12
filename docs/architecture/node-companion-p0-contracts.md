@@ -373,6 +373,8 @@ Allowed codes:
 - `DISCOVERY_STALE`;
 - `SCHEMA_INVALID`;
 - `CONSTRAINT_VIOLATION`;
+- `GATEWAY_CAPACITY_EXHAUSTED`, when bounded durable gateway storage cannot
+  admit another invocation;
 - `APPROVAL_REQUIRED`, only through the existing durable interaction flow.
 
 Allowed constraint labels:
@@ -383,7 +385,8 @@ Allowed constraint labels:
 - `environment_name`;
 - `timeout`;
 - `output_limit`;
-- `command_policy`.
+- `command_policy`;
+- `gateway_store`.
 
 Denials do not echo rejected input, executable/path candidates, hidden
 allowlists, environment values, node identity, policy/catalog hashes, or

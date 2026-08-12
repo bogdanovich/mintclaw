@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -658,6 +659,28 @@ func TestGatewayInvocationStoreRejectsOversizedOpenedReplacement(t *testing.T) {
 		replacementPlan.InvocationID,
 	); !errors.Is(lookupErr, ErrGatewayInvocationStoreFull) {
 		t.Fatalf("oversized opened replacement error = %v", lookupErr)
+	}
+}
+
+func TestGatewayInvocationStoreDefaultCapacityExceedsLegacyLimit(t *testing.T) {
+	store := newGatewayInvocationStore("", 0, 0, time.Now)
+	now := time.Now()
+	for index := range 257 {
+		invocationID := fmt.Sprintf("inv_default_capacity_%d", index)
+		plan := gatewayTestPlan(
+			t,
+			invocationID,
+			fmt.Sprintf("idem_default_capacity_%d", index),
+			now,
+		)
+		if _, _, err := store.Prepare(
+			"vpn",
+			fmt.Sprintf("call-default-capacity-%d", index),
+			plan,
+			gatewayTestDescriptor(),
+		); err != nil {
+			t.Fatalf("Prepare() invocation %d error = %v", index, err)
+		}
 	}
 }
 

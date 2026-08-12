@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const (
@@ -22,6 +23,54 @@ const (
 
 type humanInteractionRuntime struct {
 	al *AgentLoop
+}
+
+func (al *AgentLoop) cleanupInteractionOriginTools(
+	ctx context.Context,
+	agent *AgentInstance,
+	record interactions.Record,
+) {
+	if agent == nil || agent.Tools == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
+		return
+	}
+	inbound := cloneInboundContext(record.Origin.ExecutionContext)
+	if inbound == nil {
+		fallback := inboundContextForInteraction(record.Route)
+		inbound = &fallback
+	}
+	routeSessionKey := strings.TrimSpace(record.Route.RouteSessionKey)
+	if routeSessionKey == "" {
+		routeSessionKey = strings.TrimSpace(record.Route.SessionKey)
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	cleanupCtx = toolshared.WithToolInboundContext(
+		cleanupCtx,
+		inbound.Channel,
+		inbound.ChatID,
+		inbound.MessageID,
+		inbound.ReplyToMessageID,
+	)
+	cleanupCtx = toolshared.WithToolInboundMetadata(cleanupCtx, *inbound)
+	cleanupCtx = toolshared.WithToolTopicID(cleanupCtx, originTopicID(inbound))
+	cleanupCtx = toolshared.WithToolSessionContext(
+		cleanupCtx,
+		agent.ID,
+		record.Route.SessionKey,
+		nil,
+	)
+	cleanupCtx = toolshared.WithToolRouteSessionKey(cleanupCtx, routeSessionKey)
+	cleanupCtx = toolshared.WithToolExecutionIdentity(
+		cleanupCtx,
+		agent.Workspace,
+		record.Origin.ExecutionID,
+	)
+	if err := agent.Tools.CleanupTurn(cleanupCtx); err != nil {
+		logger.WarnCF("agent", "Terminal interaction resource cleanup failed", map[string]any{
+			"agent_id":       agent.ID,
+			"interaction_id": record.ID,
+		})
+	}
 }
 
 type InteractionEventPayload struct {

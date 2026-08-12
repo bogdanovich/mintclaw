@@ -5,6 +5,15 @@ MintClaw performs multiple complex interactions under the hood for every single 
 ## Inspecting A Completed Run
 
 Passive diagnostic traces preserve a bounded timeline after a turn completes.
+Fallback attempt records retain structured provider status, request ID, retry
+timing, and classification source. With `redacted_content`, they also retain a
+bounded credential-redacted provider message preview; raw response bodies and
+request content are never retained. Only the bounded preview may be projected
+from an unstructured provider error. Provider-controlled request IDs are also
+credential-redacted before the final byte bound is applied and before trace or
+journal persistence. Provider adapters retain only bounded diagnostic
+lookahead in memory so configured secrets crossing the output boundary can be
+removed without retaining an unbounded response body.
 They are intended for direct human or Codex root-cause analysis, not runtime
 recovery or automated scoring. Trace capture is optional and disabled by
 default.
