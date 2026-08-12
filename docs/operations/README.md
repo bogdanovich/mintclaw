@@ -35,3 +35,6 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and fail-closed downgrade export.
+- [Gateway invocation SQLite production proof](gateway-invocation-sqlite-proof.md):
+  merged revisions, exact migration parity, deployment health, downgrade
+  export, remote-workspace/status recovery, and rollback evidence.

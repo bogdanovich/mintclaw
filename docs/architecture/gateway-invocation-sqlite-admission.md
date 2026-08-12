@@ -1,6 +1,7 @@
 # Gateway Invocation SQLite Admission
 
-Status: admitted for implementation after this document merges.
+Status: implemented, deployed, and proven on merged main. See the
+[production proof](../operations/gateway-invocation-sqlite-proof.md).
 
 ## Problem
 
@@ -218,9 +219,11 @@ downgrade export.
 ## Implementation PR Sequence
 
 1. SQLite store and migration behind the existing `GatewayInvocationStore`
-   API, including schema, transactions, fail-closed marker, and focused tests.
-2. Operations proof: exporter/downgrade procedure, metrics/events, production
-   migration evidence, latest-main deployment, and remote-workspace smoke.
+   API, including schema, transactions, fail-closed marker, and focused tests:
+   merged in #711.
+2. Inspection, downgrade export, operations guidance, production migration,
+   latest-main deployment, and remote-workspace/status proof: merged in #714
+   and recorded in the production proof.
 
 The second PR may be docs-only only if the first PR already contains every
 runtime operation needed for safe deployment. No prerequisite persistence
