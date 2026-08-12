@@ -218,7 +218,8 @@ func selectCodingModelConfig(
 	persistedProvider string,
 ) (*config.ModelConfig, error) {
 	for _, candidate := range cfg.ModelList {
-		if candidate == nil || candidate.ModelName != modelName {
+		if candidate == nil || candidate.ModelName != modelName ||
+			!candidate.IsEffectivelyEnabled() || candidate.IsVirtual() {
 			continue
 		}
 		if persistedProvider == "" {

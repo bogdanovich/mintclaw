@@ -163,3 +163,37 @@ func TestCodingRuntimeConfigPinsSameProviderAliasToFirstConfiguredEntry(t *testi
 		}
 	}
 }
+
+func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{
+		&config.ModelConfig{
+			ModelName: "coding-model",
+			Provider:  "openai",
+			Model:     "disabled-model",
+		},
+		&config.ModelConfig{
+			ModelName: "coding-model",
+			Provider:  "anthropic",
+			Model:     "enabled-model",
+			Enabled:   true,
+		},
+	}
+
+	runtimeCfg, _, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{Model: "coding-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := runtimeCfg.ModelList[0]
+	if providerName != "anthropic" || selected.Model != "enabled-model" {
+		t.Fatalf("selected disabled alias entry: provider=%q config=%#v", providerName, selected)
+	}
+
+	_, _, _, err = codingRuntimeConfig(cfg, thread.Metadata{
+		Model:    "coding-model",
+		Provider: "openai",
+	})
+	if err == nil {
+		t.Fatal("disabled persisted provider selection unexpectedly succeeded")
+	}
+}
