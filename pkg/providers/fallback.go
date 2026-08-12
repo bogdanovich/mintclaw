@@ -105,9 +105,13 @@ func (attempt FallbackAttempt) diagnostic(options FailureDiagnosticOptions, dept
 		diagnostic.ProviderErrorKind = string(providerErr.Kind.Canonical())
 		diagnostic.HTTPStatus = providerErr.HTTPStatus
 		diagnostic.RetryAfter = providerErr.RetryAfter
-		diagnostic.RequestID = failureMetadataPreview(providerErr.RequestID, options.Filter)
+		diagnostic.RequestID = failureMetadataPreview(
+			providerErr.DiagnosticRequestID(), 128, options.Filter,
+		)
 		if options.IncludeMessage {
-			diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage, options.Filter)
+			diagnostic.Message = failureMetadataPreview(
+				providerErr.DiagnosticSafeMessage(), 240, options.Filter,
+			)
 		}
 		if diagnostic.ClassificationSource == "" {
 			diagnostic.ClassificationSource = ClassificationProviderStructured
@@ -127,7 +131,7 @@ func (attempt FallbackAttempt) diagnostic(options FailureDiagnosticOptions, dept
 		rawErr = failErr.Wrapped
 	}
 	if options.IncludeMessage {
-		diagnostic.Message = failureMetadataPreview(rawErr.Error(), options.Filter)
+		diagnostic.Message = failureMetadataPreview(rawErr.Error(), 240, options.Filter)
 	}
 	return diagnostic
 }

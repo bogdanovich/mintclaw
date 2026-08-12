@@ -44,9 +44,7 @@ func normalizeCopilotError(err error, event *copilot.SessionEvent) error {
 		return normalized
 	}
 	if transport, ok := providererrors.FromTransportError(err); ok {
-		transportCopy := *transport
-		transportCopy.RequestID = requestID
-		return &transportCopy
+		return transport.WithRequestID(requestID)
 	}
 	compatibilityKind := classifyCLICompatibilityText(diagnostic)
 	return providererrors.FromStructuredError(

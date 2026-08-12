@@ -22,12 +22,11 @@ func FromStructuredError(
 		requestID = firstHeader(header, "X-Request-Id", "Request-Id", "X-Goog-Request-Id")
 	}
 
-	return &ProviderError{
-		Kind:        kind,
-		HTTPStatus:  status,
-		RetryAfter:  parseRetryAfter(header.Get("Retry-After"), time.Now()),
-		RequestID:   normalizeSafeText(requestID, 128),
-		SafeMessage: normalizeSafeText(safeMessage, 240),
-		Cause:       cause,
+	providerErr := &ProviderError{
+		Kind:       kind,
+		HTTPStatus: status,
+		RetryAfter: parseRetryAfter(header.Get("Retry-After"), time.Now()),
+		Cause:      cause,
 	}
+	return providerErr.WithRequestID(requestID).WithSafeMessage(safeMessage)
 }

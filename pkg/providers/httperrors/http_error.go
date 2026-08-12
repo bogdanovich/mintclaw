@@ -141,8 +141,9 @@ func wrapHTMLResponse(
 	}
 	cause := withReadError(httpCause, readErr)
 	providerErr := providererrors.FromHTTPResponse(statusCode, header, nil, cause)
-	providerErr.SafeMessage = "provider returned HTML instead of JSON; check api_base or proxy configuration"
-	return providerErr
+	return providerErr.WithSafeMessage(
+		"provider returned HTML instead of JSON; check api_base or proxy configuration",
+	)
 }
 
 func withReadError(httpCause *common.HTTPError, readErr error) error {
