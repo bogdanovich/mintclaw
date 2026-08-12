@@ -109,7 +109,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 			ProviderErrorKind:    string(providers.ProviderErrorRateLimit),
 			HTTPStatus:           429,
 			RetryAfter:           3 * time.Second,
-			RequestID:            "req-fallback-1",
+			RequestID:            secret,
 			DiagnosticMessage:    "Bearer " + secret + " request rate limited",
 		},
 	})
@@ -162,7 +162,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	if fallbackPayload.ClassificationSource != "provider_structured" ||
 		fallbackPayload.ProviderErrorKind != string(providers.ProviderErrorRateLimit) ||
 		fallbackPayload.HTTPStatus != 429 || fallbackPayload.RetryAfterMS != 3000 ||
-		fallbackPayload.RequestID != "req-fallback-1" ||
+		fallbackPayload.RequestID != "[REDACTED]" ||
 		!strings.Contains(fallbackPayload.ErrorPreview, "request rate limited") {
 		t.Fatalf("fallback payload = %#v", fallbackPayload)
 	}
@@ -188,6 +188,7 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 	})
 
 	secret := "metadata-secret-content"
+	credential := "sk-secret-that-must-not-appear"
 	start := time.Now().UTC()
 	scope := runtimeevents.Scope{
 		TraceScope: runtimeevents.NewTraceScope(workspace, "turn-metadata"),
@@ -209,7 +210,7 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 		Payload: LLMFallbackAttemptPayload{
 			Provider: "openai", Model: "gpt-test", Attempt: 1, Status: "failed",
 			Reason: string(providers.FailoverRateLimit), ErrorCode: string(providers.FailoverRateLimit),
-			ClassificationSource: "message_pattern", DiagnosticMessage: secret,
+			ClassificationSource: "message_pattern", RequestID: credential, DiagnosticMessage: secret,
 		},
 	})
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
@@ -232,7 +233,8 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 		t.Fatalf("decode trace: %v", err)
 	}
 	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
-	if fallbackPayload.ClassificationSource != "message_pattern" || fallbackPayload.ErrorPreview != "" {
+	if fallbackPayload.ClassificationSource != "message_pattern" || fallbackPayload.ErrorPreview != "" ||
+		fallbackPayload.RequestID != "[REDACTED]" {
 		t.Fatalf("metadata fallback payload = %#v", fallbackPayload)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 )
@@ -167,6 +168,45 @@ func TestFallbackAttemptDiagnosticRedactsHeuristicError(t *testing.T) {
 	}
 	if strings.Contains(diagnostic.Message, secret) || !strings.Contains(diagnostic.Message, "[REDACTED]") {
 		t.Fatalf("diagnostic message was not redacted: %q", diagnostic.Message)
+	}
+}
+
+func TestFallbackAttemptDiagnosticBoundsStructuredMetadata(t *testing.T) {
+	secret := "sk-secret-that-must-not-appear"
+	providerErr := &ProviderError{
+		Kind:        ProviderErrorRateLimit,
+		RequestID:   secret,
+		SafeMessage: secret + " " + strings.Repeat("界", 100),
+	}
+	diagnostic := (FallbackAttempt{Error: providerErr}).Diagnostic()
+	if diagnostic.RequestID != "[REDACTED]" {
+		t.Fatalf("request ID = %q, want redacted", diagnostic.RequestID)
+	}
+	if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+		t.Fatalf(
+			"diagnostic message is not a valid 240-byte preview: len=%d %q",
+			len(diagnostic.Message),
+			diagnostic.Message,
+		)
+	}
+	if strings.Contains(diagnostic.Message, secret) {
+		t.Fatalf("diagnostic message leaked secret: %q", diagnostic.Message)
+	}
+}
+
+func TestFallbackAttemptDiagnosticBoundsHeuristicMetadata(t *testing.T) {
+	classified := &FailoverError{
+		Reason:               FailoverRateLimit,
+		ClassificationSource: ClassificationMessagePattern,
+		Wrapped:              errors.New(strings.Repeat("界", 100)),
+	}
+	diagnostic := (FallbackAttempt{Error: classified}).Diagnostic()
+	if len(diagnostic.Message) > 240 || !utf8.ValidString(diagnostic.Message) {
+		t.Fatalf(
+			"diagnostic message is not a valid 240-byte preview: len=%d %q",
+			len(diagnostic.Message),
+			diagnostic.Message,
+		)
 	}
 }
 

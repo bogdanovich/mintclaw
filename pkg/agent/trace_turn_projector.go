@@ -508,7 +508,7 @@ func runtimeEventRecord(
 			ProviderErrorKind:    value.ProviderErrorKind,
 			HTTPStatus:           value.HTTPStatus,
 			RetryAfterMS:         value.RetryAfter.Milliseconds(),
-			RequestID:            value.RequestID,
+			RequestID:            captureMetadataPreview(settings, value.RequestID, 240),
 			ErrorPreview: captureTextPreview(
 				settings, value.DiagnosticMessage, diagnosticErrorBytes,
 			),
@@ -893,6 +893,15 @@ func safeJSONHash(settings traceCaptureSettings, value any) string {
 
 func captureTextPreview(settings traceCaptureSettings, value string, maxBytes int) string {
 	if settings.contentMode != diagnostictrace.ContentRedacted || strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return diagnostictrace.Redactor{
+		Filter: settings.filter,
+	}.RedactText(value, maxBytes)
+}
+
+func captureMetadataPreview(settings traceCaptureSettings, value string, maxBytes int) string {
+	if strings.TrimSpace(value) == "" {
 		return ""
 	}
 	return diagnostictrace.Redactor{

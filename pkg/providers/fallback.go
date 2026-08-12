@@ -84,8 +84,8 @@ func (attempt FallbackAttempt) Diagnostic() FailureDiagnostic {
 		diagnostic.ProviderErrorKind = string(providerErr.Kind.Canonical())
 		diagnostic.HTTPStatus = providerErr.HTTPStatus
 		diagnostic.RetryAfter = providerErr.RetryAfter
-		diagnostic.RequestID = providerErr.RequestID
-		diagnostic.Message = providerErr.SafeMessage
+		diagnostic.RequestID = failureMetadataPreview(providerErr.RequestID)
+		diagnostic.Message = failureMetadataPreview(providerErr.SafeMessage)
 		if diagnostic.ClassificationSource == "" {
 			diagnostic.ClassificationSource = ClassificationProviderStructured
 		}

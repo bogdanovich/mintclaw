@@ -132,6 +132,26 @@ func TestRuntimeEventLogFieldsIncludeSafeAttrs(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsRedactFallbackRequestID(t *testing.T) {
+	secret := "sk-secret-that-must-not-appear"
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentLLMFallbackAttempt,
+		Payload: LLMFallbackAttemptPayload{
+			Provider: "openai", Model: "gpt-test", Status: "failed",
+			RequestID: secret, DiagnosticMessage: secret,
+		},
+	})
+
+	if fields["request_id"] != "[REDACTED]" {
+		t.Fatalf("request ID was not redacted: %#v", fields)
+	}
+	for _, value := range fields {
+		if text, ok := value.(string); ok && strings.Contains(text, secret) {
+			t.Fatalf("runtime event fields leaked secret: %#v", fields)
+		}
+	}
+}
+
 func runtimeEventLoggerStateForTest(
 	al *AgentLoop,
 ) (*runtimeEventLogger, runtimeevents.Subscription) {

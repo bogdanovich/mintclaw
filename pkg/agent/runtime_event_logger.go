@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
@@ -305,7 +306,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 			fields["retry_after_ms"] = payload.RetryAfter.Milliseconds()
 		}
 		if payload.RequestID != "" {
-			fields["request_id"] = payload.RequestID
+			fields["request_id"] = safeRuntimeEventMetadata(payload.RequestID)
 		}
 		fields["skipped"] = payload.Skipped
 	case ContextCompressPayload:
@@ -393,6 +394,10 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["stage"] = payload.Stage
 		fields["error"] = payload.Message
 	}
+}
+
+func safeRuntimeEventMetadata(value string) string {
+	return diagnostictrace.Redactor{}.RedactText(value, 240)
 }
 
 func setStringField(fields map[string]any, key, value string) {

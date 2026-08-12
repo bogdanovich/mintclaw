@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
@@ -169,15 +170,24 @@ func errorPreview(err error) string {
 	if err == nil {
 		return ""
 	}
-	const maxPreviewLen = 240
-	preview := strings.Join(strings.Fields(err.Error()), " ")
+	return failureMetadataPreview(err.Error())
+}
+
+func failureMetadataPreview(value string) string {
+	const maxPreviewBytes = 240
+	preview := strings.Join(strings.Fields(value), " ")
 	for _, pattern := range failoverSecretPreviewPatterns {
 		preview = pattern.ReplaceAllString(preview, "[REDACTED]")
 	}
-	if len(preview) <= maxPreviewLen {
+	if len(preview) <= maxPreviewBytes {
 		return preview
 	}
-	return preview[:maxPreviewLen] + "..."
+	const marker = "..."
+	preview = preview[:maxPreviewBytes-len(marker)]
+	for !utf8.ValidString(preview) {
+		preview = preview[:len(preview)-1]
+	}
+	return preview + marker
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.
