@@ -126,3 +126,40 @@ func TestCodingRuntimeConfigKeepsLoadBalancedAliasBoundToPersistedProvider(t *te
 		t.Fatalf("selected mismatched alias entry: provider=%q config=%#v", providerName, selected)
 	}
 }
+
+func TestCodingRuntimeConfigPinsSameProviderAliasToFirstConfiguredEntry(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{
+		&config.ModelConfig{
+			ModelName: "balanced",
+			Provider:  "openai",
+			Model:     "gpt-first",
+			APIBase:   "https://first.example.test",
+			Enabled:   true,
+		},
+		&config.ModelConfig{
+			ModelName: "balanced",
+			Provider:  "openai",
+			Model:     "gpt-second",
+			APIBase:   "https://second.example.test",
+			Enabled:   true,
+		},
+	}
+
+	for _, metadata := range []thread.Metadata{
+		{Model: "balanced"},
+		{Model: "balanced", Provider: "openai"},
+	} {
+		for attempt := 0; attempt < 4; attempt++ {
+			runtimeCfg, _, providerName, err := codingRuntimeConfig(cfg, metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected := runtimeCfg.ModelList[0]
+			if providerName != "openai" || selected.Model != "gpt-first" ||
+				selected.APIBase != "https://first.example.test" {
+				t.Fatalf("attempt %d reconstructed %#v with provider %q", attempt, selected, providerName)
+			}
+		}
+	}
+}

@@ -178,17 +178,20 @@ func selectCodingModelConfig(
 	modelName string,
 	persistedProvider string,
 ) (*config.ModelConfig, error) {
-	if persistedProvider == "" {
-		return cfg.GetModelConfig(modelName)
-	}
 	for _, candidate := range cfg.ModelList {
 		if candidate == nil || candidate.ModelName != modelName {
 			continue
+		}
+		if persistedProvider == "" {
+			return candidate, nil
 		}
 		providerName, _ := providers.ExtractProtocol(candidate)
 		if providers.NormalizeProvider(providerName) == persistedProvider {
 			return candidate, nil
 		}
+	}
+	if persistedProvider == "" {
+		return nil, fmt.Errorf("model not found in model_list or providers")
 	}
 	return nil, fmt.Errorf("provider %q has no configured entry for this model alias", persistedProvider)
 }
