@@ -135,6 +135,46 @@ func TestGatewayInvocationSQLiteLifecycleSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestGatewayInvocationSQLiteSchemaInitializationRollsBackAndRestarts(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := errors.New("schema commit interrupted")
+	backend := &gatewayInvocationSQLiteStore{db: database}
+	if err = backend.createSchemaWithHook(t.Context(), func() error { return interrupted }); !errors.Is(
+		err,
+		interrupted,
+	) {
+		t.Fatalf("interrupted schema creation error = %v", err)
+	}
+	var schemaObjects int
+	if err = database.QueryRow("SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(
+		&schemaObjects,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if schemaObjects != 0 {
+		t.Fatalf("rolled-back schema objects = %d, want 0", schemaObjects)
+	}
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatalf("restart after interrupted schema initialization: %v", err)
+	}
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+}
+
 func TestGatewayInvocationSQLitePreservesActorAndWorkspaceIsolation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
 	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
@@ -183,6 +223,51 @@ func TestGatewayInvocationSQLitePreservesActorAndWorkspaceIsolation(t *testing.T
 		ErrGatewayInvocationConflict,
 	) {
 		t.Fatalf("wrong-actor cancellation error = %v", cancelErr)
+	}
+}
+
+func TestGatewayInvocationSQLiteByToolCallSelectsExactExecutionScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+	clock := time.Now()
+	for index, executionID := range []string{"execution-a", "execution-b"} {
+		plan := gatewayTestPlan(
+			t,
+			fmt.Sprintf("inv_sqlite_execution_%d", index),
+			fmt.Sprintf("idem_sqlite_execution_%d", index),
+			clock,
+		)
+		principal := gatewayTestPrincipal(plan)
+		principal.WorkspaceID = "workspace-shared"
+		principal.ExecutionID = executionID
+		if _, created, prepareErr := store.PrepareOwned(
+			principal,
+			"vpn",
+			"call-sqlite-shared",
+			plan,
+			gatewayTestDescriptor(),
+		); prepareErr != nil || !created {
+			t.Fatalf("prepare execution %q = (%v, %v)", executionID, created, prepareErr)
+		}
+	}
+	for index, executionID := range []string{"execution-a", "execution-b"} {
+		plan := gatewayTestPlan(
+			t,
+			fmt.Sprintf("inv_sqlite_execution_%d", index),
+			fmt.Sprintf("idem_sqlite_execution_%d", index),
+			clock,
+		)
+		principal := gatewayTestPrincipal(plan)
+		principal.WorkspaceID = "workspace-shared"
+		principal.ExecutionID = executionID
+		record, found, lookupErr := store.ByToolCall(principal, "call-sqlite-shared")
+		if lookupErr != nil || !found || record.Plan.InvocationID != plan.InvocationID {
+			t.Fatalf("lookup execution %q = (%q, %v, %v)", executionID, record.Plan.InvocationID, found, lookupErr)
+		}
 	}
 }
 

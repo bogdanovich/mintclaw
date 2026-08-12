@@ -424,15 +424,35 @@ func (store *gatewayInvocationSQLiteStore) applyPageLimit(ctx context.Context) e
 }
 
 func (store *gatewayInvocationSQLiteStore) createSchema(ctx context.Context) error {
-	if _, err := store.db.ExecContext(ctx, gatewayInvocationSQLiteSchema); err != nil {
+	return store.createSchemaWithHook(ctx, nil)
+}
+
+func (store *gatewayInvocationSQLiteStore) createSchemaWithHook(
+	ctx context.Context,
+	beforeCommit func() error,
+) error {
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin gateway node invocation SQLite schema: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	if _, err = transaction.ExecContext(ctx, gatewayInvocationSQLiteSchema); err != nil {
 		return fmt.Errorf("create gateway node invocation SQLite schema: %w", err)
 	}
-	if _, err := store.db.ExecContext(
+	if _, err = transaction.ExecContext(
 		ctx,
 		"INSERT INTO gateway_invocation_metadata(singleton, schema_version) VALUES(1, ?)",
 		gatewayInvocationSQLiteSchemaVersion,
 	); err != nil {
 		return fmt.Errorf("record gateway node invocation SQLite schema: %w", err)
+	}
+	if beforeCommit != nil {
+		if err = beforeCommit(); err != nil {
+			return fmt.Errorf("interrupt gateway node invocation SQLite schema: %w", err)
+		}
+	}
+	if err = transaction.Commit(); err != nil {
+		return fmt.Errorf("commit gateway node invocation SQLite schema: %w", err)
 	}
 	return nil
 }
@@ -962,31 +982,22 @@ func (store *gatewayInvocationSQLiteStore) byToolCall(
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayInvocationSQLiteBusyTimeout)
 	defer cancel()
 	now := store.now()
-	rows, err := store.db.QueryContext(ctx, gatewayInvocationSelect+`
+	record, err := scanGatewayInvocationRecord(store.db.QueryRowContext(ctx, gatewayInvocationSelect+`
 	 WHERE agent_id=? AND session_id=? AND actor_id=? AND tool_call_id=?
+	 AND workspace_id=? AND execution_id=?
 	 AND NOT (state='prepared' AND plan_expires_at <= ?)
 	 AND NOT (state='dispatched' AND updated_at < ?)`,
 		principal.AgentID, principal.SessionID, principal.ActorID, toolCallID,
+		principal.WorkspaceID, principal.ExecutionID,
 		now.Unix(), now.Add(-store.retention).UnixNano(),
-	)
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return GatewayInvocationRecord{}, false, nil
+	}
 	if err != nil {
 		return GatewayInvocationRecord{}, false, err
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		record, scanErr := scanGatewayInvocationRecord(rows)
-		if scanErr != nil {
-			return GatewayInvocationRecord{}, false, scanErr
-		}
-		if !gatewayInvocationWorkspaceMatches(record, principal) {
-			continue
-		}
-		if !gatewayInvocationScopeMatches(record, principal) {
-			return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-		}
-		return record, true, nil
-	}
-	return GatewayInvocationRecord{}, false, rows.Err()
+	return record, true, nil
 }
 
 func (store *gatewayInvocationSQLiteStore) lookup(
