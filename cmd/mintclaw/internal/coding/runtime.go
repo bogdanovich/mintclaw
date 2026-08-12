@@ -173,6 +173,7 @@ func codingRuntimeConfig(
 	runtimeCfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
 	runtimeCfg.Agents.Dispatch = nil
 	runtimeCfg.Agents.Defaults.Routing = nil
+	runtimeCfg.Agents.Defaults.ModelFallbacks = nil
 	// Coding continuation depends on budget-aware assembly of canonical history.
 	// It always owns a disposable Seahorse index under this thread's StateRoot;
 	// personal-agent context mode and custom database paths are not inherited.

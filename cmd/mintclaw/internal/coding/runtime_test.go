@@ -14,6 +14,7 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	cfg.Agents.Defaults.ContextManagerConfig = json.RawMessage(`{"dbPath":"/personal/context.db"}`)
 	cfg.Agents.Defaults.ModelName = "default-model"
 	cfg.Agents.Defaults.Provider = "personal-provider"
+	cfg.Agents.Defaults.ModelFallbacks = []string{"personal-fallback"}
 	cfg.Agents.Defaults.Routing = &config.RoutingConfig{
 		Enabled:    true,
 		LightModel: "personal-light-model",
@@ -54,7 +55,8 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 		)
 	}
 	if len(runtimeCfg.Agents.List) != 1 || runtimeCfg.Agents.List[0].ID != "main" ||
-		runtimeCfg.Agents.Dispatch != nil || runtimeCfg.Agents.Defaults.Routing != nil {
+		runtimeCfg.Agents.Dispatch != nil || runtimeCfg.Agents.Defaults.Routing != nil ||
+		len(runtimeCfg.Agents.Defaults.ModelFallbacks) != 0 {
 		t.Fatalf("coding agents = %#v dispatch = %#v", runtimeCfg.Agents.List, runtimeCfg.Agents.Dispatch)
 	}
 	if len(runtimeCfg.ModelList) != 2 || runtimeCfg.ModelList[0].Provider != "configured-provider" {
@@ -63,6 +65,7 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	if cfg.Agents.Defaults.ContextManager != "none" ||
 		string(cfg.Agents.Defaults.ContextManagerConfig) != `{"dbPath":"/personal/context.db"}` ||
 		cfg.Agents.Defaults.Routing == nil ||
+		len(cfg.Agents.Defaults.ModelFallbacks) != 1 ||
 		selected.Provider != "configured-provider" ||
 		cfg.Agents.List[0].ID != "personal" {
 		t.Fatalf("source config was mutated: %#v %#v", cfg.Agents, selected)

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 )
@@ -219,6 +223,63 @@ func TestNativeCodingFailurePreservesInspectableThread(t *testing.T) {
 	if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 1 ||
 		history[0] != "/help preserve this failed request" {
 		t.Fatalf("inspectable failed history = %#v", history)
+	}
+}
+
+func TestNativeCodingRetryableFailureDoesNotUsePersonalFallback(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 12, 3, 30, 0, 0, time.UTC)
+	threadID := uuid.NewString()
+	var fallbackCalls atomic.Int32
+	fallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(
+			w,
+			`{"choices":[{"message":{"role":"assistant","content":"personal fallback invoked"},`+
+				`"finish_reason":"stop"}]}`,
+		)
+	}))
+	t.Cleanup(fallbackServer.Close)
+
+	rateLimitError := func() error {
+		return &providererrors.ProviderError{
+			Kind:        providererrors.KindRateLimit,
+			HTTPStatus:  http.StatusTooManyRequests,
+			SafeMessage: "fixture rate limit",
+		}
+	}
+	provider := llmscenario.NewScriptedProvider(
+		"fixture-model-id",
+		llmscenario.ProviderStep{Name: "retryable primary failure", Err: rateLimitError()},
+		llmscenario.ProviderStep{Name: "retryable primary failure after retry", Err: rateLimitError()},
+	)
+	cfg := nativeCodingFixtureConfig()
+	cfg.Agents.Defaults.ModelFallbacks = []string{"personal-fallback"}
+	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+		ModelName: "personal-fallback",
+		Provider:  "openai",
+		Model:     "gpt-personal-fallback",
+		APIBase:   fallbackServer.URL,
+		APIKeys:   config.SimpleSecureStrings("test-key"),
+		Enabled:   true,
+	})
+	deps := testDependencies(home, project, &now)
+	deps.newThreadID = func() string { return threadID }
+	deps.turnRunner = nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return cfg, nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, "fixture-model-id", nil
+		},
+	}
+
+	_, runErr := executeCommandError(newCodeCommand(deps), "do not change models")
+	if runErr == nil || !strings.Contains(runErr.Error(), "rate_limit") {
+		t.Fatalf("retryable primary failure = %v", runErr)
+	}
+	if got := fallbackCalls.Load(); got != 0 {
+		t.Fatalf("personal fallback calls = %d, want 0", got)
 	}
 }
 
