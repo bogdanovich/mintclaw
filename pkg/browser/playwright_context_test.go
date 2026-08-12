@@ -503,6 +503,26 @@ func TestPlaywrightContextMutationsRetireWorkerAfterUncertainDispatch(t *testing
 	})
 }
 
+func TestPlaywrightContextCatalogDoesNotAttributeAmbientProxyDenial(t *testing.T) {
+	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
+		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},
+	}}
+	proxy := &browserNetworkProxy{}
+	client := &fakePlaywrightClient{
+		callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_run_code_unsafe": contextProbeResult(t, raw),
+		},
+		onCall: func(string) { proxy.denials.Add(1) },
+	}
+	worker := contextTestWorker(client)
+	worker.networkProxy = proxy
+
+	catalog, err := worker.ContextCatalog(t.Context())
+	if err != nil || catalog.SelectedTabID == "" || len(catalog.Tabs) != 1 || proxy.Denials() != 1 {
+		t.Fatalf("ContextCatalog() = %#v, %v; denials = %d", catalog, err, proxy.Denials())
+	}
+}
+
 func TestPlaywrightSelectContextRejectsIndexRaceBeforeObservation(t *testing.T) {
 	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{
 		{Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin},

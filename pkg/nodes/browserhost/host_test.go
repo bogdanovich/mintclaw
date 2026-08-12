@@ -1302,6 +1302,48 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserHostContextListPreservesEquivalentObservationAuthority(t *testing.T) {
+	observation := browserworker.DriverObservation{
+		URL: "about:blank", Origin: "about:blank", Snapshot: "stable blank page",
+	}
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			observation, observation, observation,
+		},
+		navigationIdentities: []string{
+			"navigation_stable", "navigation_stable",
+			"navigation_stable", "navigation_stable",
+			"navigation_stable", "navigation_stable",
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	contextRequest := nodes.BrowserHostContextRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
+		AgentID: "browser", ActorID: "telegram:owner", Operation: "list",
+	}
+	if _, err := host.Contexts(t.Context(), contextRequest); err != nil {
+		t.Fatalf("first Contexts(list) error = %v", err)
+	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	contextRequest.RequestID = "context_request_2"
+	if _, err := host.Contexts(t.Context(), contextRequest); err != nil {
+		t.Fatalf("equivalent Contexts(list) error = %v", err)
+	}
+	navigate := browserHostNavigateFixture()
+	navigate.SnapshotGeneration = 1
+	result, err := host.Navigate(t.Context(), navigate)
+	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
+		t.Fatalf("Navigate() = %#v, %v; actions = %#v", result, err, worker.actions)
+	}
+}
+
 func TestBrowserHostClassifiesContextSelectionStaleByDispatchCertainty(t *testing.T) {
 	tests := []struct {
 		name       string

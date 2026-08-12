@@ -1184,11 +1184,13 @@ func (worker *playwrightWorker) callAndConsume(
 ) (string, error) {
 	denialsBefore := worker.networkProxy.Denials()
 	result, err := worker.client.CallTool(ctx, tool, arguments)
-	// A snapshot can overlap browser/profile background traffic. The proxy still
-	// enforces every request, while the broker independently validates the
-	// observed page origin. Do not attribute an unrelated denied background
-	// request to the read-only snapshot itself.
-	if tool != "browser_snapshot" && worker.networkProxy.Denials() > denialsBefore {
+	// A snapshot or the fixed context-catalog probe can overlap browser/profile
+	// background traffic. The proxy still enforces every request, while the
+	// broker independently validates projected origins. Do not attribute an
+	// unrelated denied background request to either read-only observation.
+	passiveRead := tool == "browser_snapshot" ||
+		(tool == "browser_run_code_unsafe" && arguments["code"] == playwrightContextProbeCode)
+	if !passiveRead && worker.networkProxy.Denials() > denialsBefore {
 		return "", ErrDenied
 	}
 	if err != nil || result == nil {
