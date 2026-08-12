@@ -56,6 +56,14 @@ type fakeBrowserToolSource struct {
 	readiness         browser.PassiveReadiness
 	readinessCalls    int
 	actions           []browser.ActionKind
+	cleanupOwner      browser.Owner
+	cleanupCalls      int
+}
+
+func (source *fakeBrowserToolSource) CloseOwner(_ context.Context, owner browser.Owner) error {
+	source.cleanupOwner = owner
+	source.cleanupCalls++
+	return source.err
 }
 
 func (source *fakeBrowserToolSource) ObserveContext(
@@ -832,6 +840,19 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 	})
 	if invalid == nil || !invalid.IsError || source.openRequest.Target != "gateway" {
 		t.Fatalf("invalid open result = %#v", invalid)
+	}
+}
+
+func TestBrowserSessionCleanupReleasesOpaqueExecutionOwner(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	ctx := browserToolTestContext()
+	if err := tool.CleanupTurn(ctx); err != nil {
+		t.Fatalf("CleanupTurn() error = %v", err)
+	}
+	if source.cleanupCalls != 1 || source.cleanupOwner.Validate() != nil ||
+		!strings.HasPrefix(source.cleanupOwner.ExecutionID, "execution_") {
+		t.Fatalf("cleanup calls = %d, owner = %#v", source.cleanupCalls, source.cleanupOwner)
 	}
 }
 

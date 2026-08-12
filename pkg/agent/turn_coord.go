@@ -10,6 +10,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -88,6 +89,20 @@ func (al *AgentLoop) runTurn(
 				InteractionID:         result.suspendedInteractionID,
 			},
 		)
+	}()
+	defer func() {
+		if turnStatus == TurnEndStatusSuspended || ts.agent == nil || ts.agent.Tools == nil {
+			return
+		}
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(turnCtx), time.Minute)
+		defer cancelCleanup()
+		cleanupCtx = toolExecutionContextForTurn(cleanupCtx, ts)
+		if cleanupErr := ts.agent.Tools.CleanupTurn(cleanupCtx); cleanupErr != nil {
+			logger.WarnCF("agent", "Terminal turn resource cleanup failed", map[string]any{
+				"agent_id": ts.agentID,
+				"turn_id":  ts.turnID,
+			})
+		}
 	}()
 	defer func() {
 		acceptedSteering := ts.acceptedSteeringSnapshot()

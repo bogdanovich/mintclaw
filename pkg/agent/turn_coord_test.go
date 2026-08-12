@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 // =============================================================================
@@ -29,6 +30,18 @@ import (
 
 // simpleConvProvider returns a simple text response without tools
 type simpleConvProvider struct{}
+
+type turnCleanupTestTool struct {
+	*countingTestTool
+	cleanupCalls int
+	executionID  string
+}
+
+func (tool *turnCleanupTestTool) CleanupTurn(ctx context.Context) error {
+	tool.cleanupCalls++
+	tool.executionID = toolshared.ToolExecutionID(ctx)
+	return nil
+}
 
 type afterToolHardAbortHook struct{}
 
@@ -1798,6 +1811,32 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 	}
 }
 
+func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
+	provider := &simpleConvProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	cleanupTool := &turnCleanupTestTool{countingTestTool: &countingTestTool{name: "turn-cleanup"}}
+	agent.Tools.Register(cleanupTool)
+	pipeline := NewPipeline(al)
+	opts := normalizeProcessOptions(makeTestProcessOpts("terminal-cleanup"))
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "turn-terminal-cleanup", context: newTurnContext(nil, nil, nil),
+	})
+	result, err := al.runTurn(t.Context(), ts, pipeline)
+	if err != nil || result.status != TurnEndStatusCompleted {
+		t.Fatalf("runTurn() = %#v, %v", result, err)
+	}
+	if cleanupTool.cleanupCalls != 1 || cleanupTool.executionID == "" ||
+		cleanupTool.executionID != effectiveToolExecutionID(ts) {
+		t.Fatalf(
+			"cleanup calls = %d, execution = %q, want %q",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			effectiveToolExecutionID(ts),
+		)
+	}
+}
+
 func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {
 	tool := &countingTestTool{name: "side-effect"}
 	provider := &toolCallRespProvider{toolName: tool.Name(), response: "must not continue"}
@@ -1964,6 +2003,8 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 		t.Fatalf("NewRequestUserInputTool() error = %v", err)
 	}
 	agent.Tools.Register(requestTool)
+	cleanupTool := &turnCleanupTestTool{countingTestTool: &countingTestTool{name: "turn-cleanup"}}
+	agent.Tools.Register(cleanupTool)
 	manager := &fakeToolSuspensionManager{
 		disposition: ToolSuspensionDisposition{InteractionID: "interaction-turn", Durable: true},
 	}
@@ -2005,6 +2046,9 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 	}
 	if provider.callCount != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.callCount)
+	}
+	if cleanupTool.cleanupCalls != 0 {
+		t.Fatalf("suspended turn cleanup calls = %d, want 0", cleanupTool.cleanupCalls)
 	}
 	history := agent.Sessions.GetHistory("session-suspend")
 	if len(history) != 2 || history[0].Role != "user" || history[1].Role != "assistant" ||

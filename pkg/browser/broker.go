@@ -1029,6 +1029,34 @@ func (broker *Broker) Close(ctx context.Context, owner Owner, sessionID string) 
 	return broker.finishSessionLocked(ctx, session, SessionClosed, "")
 }
 
+// CloseOwner closes every live session owned by one logical tool execution.
+// Agent turn cleanup uses this boundary so a terminal turn cannot retain a
+// profile lease merely because the model omitted an explicit close call.
+func (broker *Broker) CloseOwner(ctx context.Context, owner Owner) error {
+	if err := owner.Validate(); err != nil {
+		return err
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	var closeErr error
+	for _, session := range sessions {
+		if ctx.Err() != nil {
+			return errors.Join(closeErr, ctx.Err())
+		}
+		if session.State.Terminal() || !session.Owner.Equal(owner) {
+			continue
+		}
+		if _, err = broker.finishSessionLocked(ctx, session, SessionClosed, ""); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	return closeErr
+}
+
 func (broker *Broker) finishSessionLocked(
 	ctx context.Context,
 	session Session,

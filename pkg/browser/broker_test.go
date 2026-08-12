@@ -205,6 +205,38 @@ func TestBrokerOpenAndCloseSession(t *testing.T) {
 	}
 }
 
+func TestBrokerCloseOwnerReleasesOnlyMatchingLiveSessions(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	other := owner
+	other.ExecutionID = "execution_2"
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = broker.CloseOwner(t.Context(), other); err != nil {
+		t.Fatalf("CloseOwner(other) error = %v", err)
+	}
+	status, err := broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != SessionReady || factory.workers[0].closed != 0 {
+		t.Fatalf("foreign cleanup status = %+v, %v; closes = %d", status, err, factory.workers[0].closed)
+	}
+	if err = broker.CloseOwner(t.Context(), owner); err != nil {
+		t.Fatalf("CloseOwner(owner) error = %v", err)
+	}
+	status, err = broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != SessionClosed || factory.workers[0].closed != 1 {
+		t.Fatalf("owner cleanup status = %+v, %v; closes = %d", status, err, factory.workers[0].closed)
+	}
+	if err = broker.CloseOwner(t.Context(), owner); err != nil || factory.workers[0].closed != 1 {
+		t.Fatalf("second CloseOwner() error = %v; closes = %d", err, factory.workers[0].closed)
+	}
+}
+
 func TestBrokerProfileAvailabilityIsReadOnly(t *testing.T) {
 	store := NewMemoryStore()
 	broker := newTestBroker(t, admittedBrowserConfig(), store, &fakeWorkerFactory{})
