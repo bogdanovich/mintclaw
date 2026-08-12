@@ -375,6 +375,13 @@ func (registry *FileRegistry) Approve(id ID, approval PairingApproval) (Registra
 	if !exists || record.Snapshot.State == StateRevoked {
 		return Registration{}, fmt.Errorf("%w: node %q cannot be approved", ErrInvalidNode, id)
 	}
+	if validationErr := record.Snapshot.Validate(); validationErr != nil {
+		return Registration{}, fmt.Errorf(
+			"%w: node %q must reconnect with a current catalog",
+			validationErr,
+			id,
+		)
+	}
 	if approval.At < record.RequestedAt || approval.At < record.ApprovedAt {
 		return Registration{}, fmt.Errorf("%w: approval predates node lifecycle", ErrInvalidNode)
 	}
@@ -545,8 +552,14 @@ func (registry *FileRegistry) load() error {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
-		if err := record.Snapshot.Validate(); err != nil {
+		legacyCatalog, err := validateStoredSnapshot(record.Snapshot)
+		if err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
+		}
+		if legacyCatalog {
+			record.AllowedCommands = nil
+			record.ApprovedCatalogHash = ""
+			document.Records[id] = record
 		}
 		if record.Snapshot.State == StatePendingPairing &&
 			(len(record.PublicKey) != ed25519.PublicKeySize ||
@@ -568,6 +581,60 @@ func (registry *FileRegistry) load() error {
 	}
 	registry.records = document.Records
 	return nil
+}
+
+func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
+	if err := snapshot.Validate(); err == nil {
+		return false, nil
+	}
+
+	compatible := cloneSnapshot(snapshot)
+	legacyCatalog := false
+	for index := range compatible.Catalog.Commands {
+		descriptor := &compatible.Catalog.Commands[index]
+		if err := descriptor.Validate(); err == nil {
+			continue
+		}
+		if !storedLegacyBrowserDescriptor(*descriptor) {
+			return false, snapshot.Validate()
+		}
+		descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+		legacyCatalog = true
+	}
+	if !legacyCatalog {
+		return false, snapshot.Validate()
+	}
+
+	compatible.CatalogHash = ""
+	if err := compatible.Validate(); err != nil {
+		return false, err
+	}
+	if snapshot.CatalogHash == "" {
+		return true, nil
+	}
+	if !validSHA256Digest(snapshot.CatalogHash) {
+		return false, fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
+	}
+	catalogHash, err := snapshot.Catalog.canonicalHash()
+	if err != nil {
+		return false, err
+	}
+	if snapshot.CatalogHash != catalogHash {
+		return false, fmt.Errorf("%w: catalog hash does not match catalog", ErrInvalidNode)
+	}
+	return true, nil
+}
+
+func storedLegacyBrowserDescriptor(descriptor CommandDescriptor) bool {
+	if descriptor.Name != BrowserCommandSessionOpen {
+		return false
+	}
+	want, err := canonicalJSON(legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles))
+	if err != nil {
+		return false
+	}
+	got, err := canonicalJSON(descriptor.OutputSchema)
+	return err == nil && bytes.Equal(got, want)
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {

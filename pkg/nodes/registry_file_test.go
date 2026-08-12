@@ -74,6 +74,139 @@ func TestFileRegistryPersistsPendingPairingSecurely(t *testing.T) {
 	}
 }
 
+func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := DeriveID(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := browserProfileDescriptorFixture()
+	currentDescriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDescriptors := make([]CommandDescriptor, 0, len(currentDescriptors)-1)
+	for _, descriptor := range currentDescriptors {
+		if descriptor.Name == BrowserCommandContexts {
+			continue
+		}
+		if descriptor.Name == BrowserCommandSessionOpen {
+			descriptor.OutputSchema = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
+		}
+		legacyDescriptors = append(legacyDescriptors, descriptor)
+	}
+	legacyCatalog := CapabilityCatalog{Commands: legacyDescriptors}
+	legacyHash, err := legacyCatalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(id): {
+			Snapshot: Snapshot{
+				ID: id, State: StateDisconnected, ProtocolVersion: ProtocolV1,
+				Catalog: legacyCatalog, CatalogHash: legacyHash,
+			},
+			PublicKey: publicKey, RequestedRole: "companion", RequestedAt: 1,
+			AllowedCommands: []string{BrowserCommandSessionOpen}, ApprovedCatalogHash: legacyHash,
+			ApprovedAt: 2,
+		},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+	registration, exists, err := registry.Registration(id)
+	if err != nil || !exists {
+		t.Fatalf("Registration() = exists %v, error %v", exists, err)
+	}
+	if len(registration.AllowedCommands) != 0 || registration.ApprovedCatalogHash != "" {
+		t.Fatalf("legacy authority was not suspended: %#v", registration)
+	}
+	if _, err = registration.ApprovedCommand(BrowserCommandSessionOpen); !errors.Is(err, ErrCommandDenied) {
+		t.Fatalf("legacy ApprovedCommand() error = %v", err)
+	}
+	if _, err = registry.Approve(id, PairingApproval{
+		AllowedCommands: []string{BrowserCommandSessionOpen}, At: 3,
+	}); !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("legacy Approve() error = %v", err)
+	}
+
+	currentCatalog := CapabilityCatalog{Commands: currentDescriptors}
+	currentHash, err := currentCatalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := registration.Snapshot
+	current.State = StateConnected
+	current.Catalog = currentCatalog
+	current.CatalogHash = currentHash
+	if err = registry.Upsert(current); err != nil {
+		t.Fatalf("Upsert(current catalog) error = %v", err)
+	}
+	registration, exists, err = registry.Registration(id)
+	if err != nil || !exists {
+		t.Fatalf("current Registration() = exists %v, error %v", exists, err)
+	}
+	if len(registration.AllowedCommands) != 0 || registration.ApprovedCatalogHash != "" {
+		t.Fatalf("catalog reconnect restored authority: %#v", registration)
+	}
+	renewed, err := registry.Approve(id, PairingApproval{
+		AllowedCommands: []string{BrowserCommandContexts}, At: 3,
+	})
+	if err != nil {
+		t.Fatalf("Approve(current catalog) error = %v", err)
+	}
+	if _, err = renewed.ApprovedCommand(BrowserCommandContexts); err != nil {
+		t.Fatalf("renewed ApprovedCommand() error = %v", err)
+	}
+}
+
+func TestFileRegistryRejectsUnknownLegacyBrowserSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	pairing := testPendingPairing(t, 1)
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandSessionOpen {
+			descriptors[index].OutputSchema = json.RawMessage(`{"type":"object"}`)
+		}
+	}
+	catalog := CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing.Node.Catalog = catalog
+	pairing.Node.CatalogHash = catalogHash
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(pairing.Node.ID): {Snapshot: pairing.Node},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+}
+
 func TestFileRegistryBoundsPendingPairings(t *testing.T) {
 	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 1)
 	if err != nil {
