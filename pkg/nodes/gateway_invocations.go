@@ -27,6 +27,8 @@ const (
 	maxGatewayTargetLength             = 64
 )
 
+const DefaultGatewayInvocationSQLiteBytes int64 = 4 * 1024 * 1024 * 1024
+
 var (
 	ErrGatewayInvocationConflict      = errors.New("gateway node invocation conflicts with durable state")
 	ErrGatewayInvocationDispatched    = errors.New("gateway node invocation was already dispatched")
@@ -89,9 +91,12 @@ type gatewayInvocationDocument struct {
 }
 
 // GatewayInvocationStore persists prepared plan ownership across gateway
-// restarts. A cross-instance file lock keeps the snapshot canonical while
-// atomic replacement prevents crash recovery from observing a partial write.
+// restarts. Runtime gateways use the transactional SQLite backend; the legacy
+// JSON backend remains available only for migration and focused compatibility
+// tests.
 type GatewayInvocationStore struct {
+	sqlite *gatewayInvocationSQLiteStore
+
 	path       string
 	maxRecords int
 	maxBytes   int
@@ -111,7 +116,22 @@ type GatewayInvocationStore struct {
 }
 
 func GatewayInvocationStorePath(workspace string) string {
+	return filepath.Join(workspace, "state", "node_invocations.db")
+}
+
+func GatewayInvocationLegacyStorePath(workspace string) string {
 	return filepath.Join(workspace, "state", "node_invocations.json")
+}
+
+func NewGatewayInvocationSQLiteStore(
+	path string,
+	maxBytes int64,
+) (*GatewayInvocationStore, error) {
+	backend, err := newGatewayInvocationSQLiteStore(path, maxBytes, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	return &GatewayInvocationStore{sqlite: backend}, nil
 }
 
 func NewGatewayInvocationStore(
@@ -189,6 +209,9 @@ func (store *GatewayInvocationStore) PrepareOwned(
 	plan ExecutionPlan,
 	descriptor CommandDescriptor,
 ) (GatewayInvocationRecord, bool, error) {
+	if store != nil && store.sqlite != nil {
+		return store.sqlite.prepareOwned(principal, target, toolCallID, plan, descriptor)
+	}
 	principal.AgentID = strings.TrimSpace(principal.AgentID)
 	principal.SessionID = strings.TrimSpace(principal.SessionID)
 	principal.ActorID = strings.TrimSpace(principal.ActorID)
@@ -303,6 +326,9 @@ func (store *GatewayInvocationStore) ByToolCall(
 	principal GatewayInvocationPrincipal,
 	toolCallID string,
 ) (GatewayInvocationRecord, bool, error) {
+	if store != nil && store.sqlite != nil {
+		return store.sqlite.byToolCall(principal, toolCallID)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	release, err := store.lockAndReloadLocked()
@@ -331,6 +357,9 @@ func (store *GatewayInvocationStore) Lookup(
 	principal GatewayInvocationPrincipal,
 	invocationID string,
 ) (GatewayInvocationRecord, bool, error) {
+	if store != nil && store.sqlite != nil {
+		return store.sqlite.lookup(principal, invocationID)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	release, err := store.lockAndReloadLocked()
@@ -356,6 +385,9 @@ func (store *GatewayInvocationStore) RequestCancellation(
 	principal GatewayInvocationPrincipal,
 	invocationID string,
 ) (GatewayInvocationRecord, bool, error) {
+	if store != nil && store.sqlite != nil {
+		return store.sqlite.requestCancellation(principal, invocationID)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	release, err := store.lockAndReloadLocked()
@@ -409,6 +441,9 @@ func (store *GatewayInvocationStore) MarkDispatched(
 	invocationID string,
 	expectedPlanHash string,
 ) (GatewayInvocationRecord, bool, error) {
+	if store != nil && store.sqlite != nil {
+		return store.sqlite.markDispatched(owner, invocationID, expectedPlanHash)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := owner.validate(); err != nil {
@@ -594,6 +629,9 @@ func (store *GatewayInvocationStore) invalidateCachedFileLocked() {
 func (store *GatewayInvocationStore) Close() error {
 	if store == nil {
 		return nil
+	}
+	if store.sqlite != nil {
+		return store.sqlite.close()
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
