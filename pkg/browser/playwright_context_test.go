@@ -686,8 +686,17 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 		openedCatalog.SelectedTabID == catalog.SelectedTabID {
 		t.Fatalf("OpenTab() = %#v, %v", openedCatalog, err)
 	}
+	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureURL.String() + "/secondary"}); err != nil {
+		t.Fatalf("navigate selected secondary tab error = %v", err)
+	}
+	secondaryCatalog, err := worker.ContextCatalog(ctx)
+	if err != nil || secondaryCatalog.SelectedTabID != openedCatalog.SelectedTabID ||
+		len(secondaryCatalog.Tabs) != 2 || secondaryCatalog.Tabs[1].URL != fixtureURL.String()+"/secondary" ||
+		len(secondaryCatalog.Tabs[1].Frames) != 1 {
+		t.Fatalf("secondary ContextCatalog() = %#v, %v", secondaryCatalog, err)
+	}
 	closedCatalog, err := worker.CloseTab(
-		ctx, newContextMutationAuthority(openedCatalog, openedCatalog.SelectedTabID, ""),
+		ctx, newContextMutationAuthority(secondaryCatalog, secondaryCatalog.SelectedTabID, ""),
 	)
 	if err != nil || len(closedCatalog.Tabs) != 1 || closedCatalog.SelectedTabID != catalog.SelectedTabID {
 		t.Fatalf("CloseTab() = %#v, %v", closedCatalog, err)
