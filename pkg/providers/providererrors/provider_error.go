@@ -31,7 +31,12 @@ type ProviderError struct {
 	RequestID   string
 	SafeMessage string
 	Cause       error
+
+	diagnosticRequestID   string
+	diagnosticSafeMessage string
 }
+
+const diagnosticLookaheadRunes = 1024
 
 func (e *ProviderError) Error() string {
 	if e == nil {
@@ -73,6 +78,52 @@ func (e *ProviderError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+// DiagnosticRequestID returns bounded lookahead for config-aware redaction.
+// Public RequestID remains at its established smaller metadata bound.
+func (e *ProviderError) DiagnosticRequestID() string {
+	if e == nil {
+		return ""
+	}
+	if e.diagnosticRequestID == "" {
+		return e.RequestID
+	}
+	return e.diagnosticRequestID
+}
+
+// DiagnosticSafeMessage returns bounded lookahead for config-aware redaction.
+// Public SafeMessage remains safe for ordinary classification and logging.
+func (e *ProviderError) DiagnosticSafeMessage() string {
+	if e == nil {
+		return ""
+	}
+	if e.diagnosticSafeMessage == "" {
+		return e.SafeMessage
+	}
+	return e.diagnosticSafeMessage
+}
+
+// WithRequestID returns a copy with synchronized public and diagnostic views.
+func (e *ProviderError) WithRequestID(value string) *ProviderError {
+	if e == nil {
+		return nil
+	}
+	copy := *e
+	copy.RequestID = normalizeSafeText(value, 128)
+	copy.diagnosticRequestID = normalizeSafeText(value, 128+diagnosticLookaheadRunes)
+	return &copy
+}
+
+// WithSafeMessage returns a copy with synchronized public and diagnostic views.
+func (e *ProviderError) WithSafeMessage(value string) *ProviderError {
+	if e == nil {
+		return nil
+	}
+	copy := *e
+	copy.SafeMessage = normalizeSafeText(value, 240)
+	copy.diagnosticSafeMessage = normalizeSafeText(value, 240+diagnosticLookaheadRunes)
+	return &copy
 }
 
 func normalizeSafeText(value string, limit int) string {

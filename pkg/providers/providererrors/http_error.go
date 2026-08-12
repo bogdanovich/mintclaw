@@ -27,19 +27,18 @@ func FromHTTPResponse(status int, header http.Header, body []byte, cause error) 
 		retryAfter = metadata.retryAfter
 	}
 
-	safeMessage := normalizeSafeText(metadata.message, 240)
+	safeMessage := metadata.message
 	if safeMessage == "" {
 		safeMessage = http.StatusText(status)
 	}
 
-	return &ProviderError{
-		Kind:        kind,
-		HTTPStatus:  status,
-		RetryAfter:  retryAfter,
-		RequestID:   normalizeSafeText(requestID, 128),
-		SafeMessage: safeMessage,
-		Cause:       cause,
+	providerErr := &ProviderError{
+		Kind:       kind,
+		HTTPStatus: status,
+		RetryAfter: retryAfter,
+		Cause:      cause,
 	}
+	return providerErr.WithRequestID(requestID).WithSafeMessage(safeMessage)
 }
 
 type httpErrorMetadata struct {

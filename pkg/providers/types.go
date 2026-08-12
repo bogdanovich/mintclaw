@@ -3,9 +3,9 @@ package providers
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
@@ -120,24 +120,29 @@ const (
 	FailoverUnknown         FailoverReason = "unknown"
 )
 
+// ErrorClassificationSource identifies the evidence used to classify a
+// provider failure. Values are persisted in diagnostic traces.
+type ErrorClassificationSource string
+
+const (
+	ClassificationProviderStructured ErrorClassificationSource = "provider_structured"
+	ClassificationContextDeadline    ErrorClassificationSource = "context_deadline"
+	ClassificationTransportError     ErrorClassificationSource = "transport_error"
+	ClassificationHTTPStatus         ErrorClassificationSource = "http_status"
+	ClassificationStatusText         ErrorClassificationSource = "status_text"
+	ClassificationMessagePattern     ErrorClassificationSource = "message_pattern"
+	ClassificationLocalControl       ErrorClassificationSource = "local_control"
+	ClassificationUnclassified       ErrorClassificationSource = "unclassified"
+)
+
 // FailoverError wraps an LLM provider error with classification metadata.
 type FailoverError struct {
-	Reason   FailoverReason
-	Provider string
-	Model    string
-	Status   int
-	Wrapped  error
-}
-
-var failoverSecretPreviewPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(
-		`(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\b\s*[:=]\s*"?[^"',\s}]+`,
-	),
-	regexp.MustCompile(`\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9._-]{7,}\b`),
-	regexp.MustCompile(`\bgsk_[A-Za-z0-9_-]{8,}\b`),
-	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{16,}\b`),
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9_]{16,}\b`),
+	Reason               FailoverReason
+	Provider             string
+	Model                string
+	Status               int
+	ClassificationSource ErrorClassificationSource
+	Wrapped              error
 }
 
 func (e *FailoverError) Error() string {
@@ -153,15 +158,15 @@ func errorPreview(err error) string {
 	if err == nil {
 		return ""
 	}
-	const maxPreviewLen = 240
-	preview := strings.Join(strings.Fields(err.Error()), " ")
-	for _, pattern := range failoverSecretPreviewPatterns {
-		preview = pattern.ReplaceAllString(preview, "[REDACTED]")
-	}
-	if len(preview) <= maxPreviewLen {
-		return preview
-	}
-	return preview[:maxPreviewLen] + "..."
+	return failureMetadataPreview(err.Error(), 240, nil)
+}
+
+func failureMetadataPreview(value string, maxPreviewBytes int, filter func(string) string) string {
+	redactor := diagnostictrace.Redactor{Filter: filter}
+	preview := redactor.RedactText(value, maxPreviewBytes)
+	preview = strings.ToValidUTF8(preview, "\uFFFD")
+	preview = strings.Join(strings.Fields(preview), " ")
+	return redactor.RedactText(preview, maxPreviewBytes)
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.

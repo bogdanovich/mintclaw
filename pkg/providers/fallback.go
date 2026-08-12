@@ -53,6 +53,89 @@ type FallbackAttempt struct {
 	Succeeded   bool
 }
 
+// FailureDiagnostic is the bounded, provider-independent projection retained
+// for fallback observability. Message never contains an unbounded raw body.
+type FailureDiagnostic struct {
+	ClassificationSource ErrorClassificationSource
+	ProviderErrorKind    string
+	HTTPStatus           int
+	RetryAfter           time.Duration
+	RequestID            string
+	Message              string
+}
+
+// FailureDiagnosticOptions controls the safe projection of provider failures.
+// Filter is applied during the first bounded redaction pass so configured
+// secrets cannot be split by the output cutoff before they are recognized.
+type FailureDiagnosticOptions struct {
+	IncludeMessage bool
+	Filter         func(string) string
+}
+
+// Diagnostic projects one fallback attempt without exposing request content or
+// unbounded provider responses. Text is only inspected when includeMessage is
+// true; metadata-only observers can retain structured fields without ever
+// materializing provider text.
+func (attempt FallbackAttempt) Diagnostic(options FailureDiagnosticOptions) FailureDiagnostic {
+	return attempt.diagnostic(options, 0)
+}
+
+func (attempt FallbackAttempt) diagnostic(options FailureDiagnosticOptions, depth int) FailureDiagnostic {
+	if attempt.Error == nil || attempt.Succeeded {
+		return FailureDiagnostic{}
+	}
+	if depth < 8 {
+		var exhausted *FallbackExhaustedError
+		if errors.As(attempt.Error, &exhausted) && exhausted != nil {
+			if leaf, ok := exhausted.lastDiagnosticAttempt(); ok {
+				return leaf.diagnostic(options, depth+1)
+			}
+		}
+	}
+
+	diagnostic := FailureDiagnostic{}
+	var failErr *FailoverError
+	if errors.As(attempt.Error, &failErr) && failErr != nil {
+		diagnostic.ClassificationSource = failErr.ClassificationSource
+		diagnostic.HTTPStatus = failErr.Status
+	}
+
+	var providerErr *ProviderError
+	if errors.As(attempt.Error, &providerErr) && providerErr != nil {
+		diagnostic.ProviderErrorKind = string(providerErr.Kind.Canonical())
+		diagnostic.HTTPStatus = providerErr.HTTPStatus
+		diagnostic.RetryAfter = providerErr.RetryAfter
+		diagnostic.RequestID = failureMetadataPreview(
+			providerErr.DiagnosticRequestID(), 128, options.Filter,
+		)
+		if options.IncludeMessage {
+			diagnostic.Message = failureMetadataPreview(
+				providerErr.DiagnosticSafeMessage(), 240, options.Filter,
+			)
+		}
+		if diagnostic.ClassificationSource == "" {
+			diagnostic.ClassificationSource = ClassificationProviderStructured
+		}
+		return diagnostic
+	}
+
+	if diagnostic.ClassificationSource == "" {
+		if attempt.Skipped {
+			diagnostic.ClassificationSource = ClassificationLocalControl
+		} else {
+			diagnostic.ClassificationSource = ClassificationUnclassified
+		}
+	}
+	rawErr := attempt.Error
+	if failErr != nil && failErr.Wrapped != nil {
+		rawErr = failErr.Wrapped
+	}
+	if options.IncludeMessage {
+		diagnostic.Message = failureMetadataPreview(rawErr.Error(), 240, options.Filter)
+	}
+	return diagnostic
+}
+
 type FallbackAttemptObserver func(FallbackAttempt)
 
 // NewFallbackChain creates a new fallback chain with the given cooldown tracker
@@ -415,10 +498,11 @@ func (fc *FallbackChain) ExecuteImage(
 				Duration: elapsed,
 			})
 			return nil, &FailoverError{
-				Reason:   FailoverFormat,
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Wrapped:  err,
+				Reason:               FailoverFormat,
+				Provider:             candidate.Provider,
+				Model:                candidate.Model,
+				ClassificationSource: ClassificationMessagePattern,
+				Wrapped:              err,
 			}
 		}
 
@@ -464,4 +548,21 @@ func (e *FallbackExhaustedError) lastReason() FailoverReason {
 		}
 	}
 	return ""
+}
+
+func (e *FallbackExhaustedError) lastDiagnosticAttempt() (FallbackAttempt, bool) {
+	if e == nil {
+		return FallbackAttempt{}, false
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Reason != "" {
+			return e.Attempts[i], true
+		}
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Error != nil {
+			return e.Attempts[i], true
+		}
+	}
+	return FallbackAttempt{}, false
 }

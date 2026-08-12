@@ -55,6 +55,21 @@ func TestDiagnosticContentHelpersAreOptInAndExcludeProviderSecrets(t *testing.T)
 	}
 }
 
+func TestDiagnosticMetadataPreviewFiltersConfiguredSecretWhenContentDisabled(t *testing.T) {
+	secret := "opaque-provider-request-id"
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
+	cfg.ModelList = config.SecureModelList{&config.ModelConfig{
+		ModelName: "test", APIKeys: config.SimpleSecureStrings(secret),
+	}}
+
+	preview := diagnosticMetadataPreview(cfg, secret, fallbackDiagnosticMetadataBytes)
+	if preview != "[FILTERED]" {
+		t.Fatalf("metadata preview = %q, want configured secret filtered", preview)
+	}
+}
+
 func TestDiagnosticMessagesPreviewBoundsCollectionAndKeepsContextEnds(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

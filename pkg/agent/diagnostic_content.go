@@ -10,19 +10,20 @@ import (
 )
 
 const (
-	diagnosticTurnInputBytes      = 4 * 1024
-	diagnosticTurnFinalBytes      = 8 * 1024
-	diagnosticModelMessagesBytes  = 10 * 1024
-	diagnosticModelResponseBytes  = 6 * 1024
-	diagnosticModelReasoningBytes = 3 * 1024
-	diagnosticModelToolCallsBytes = 2 * 1024
-	diagnosticToolArgumentsBytes  = 6 * 1024
-	diagnosticToolResultBytes     = 8 * 1024
-	diagnosticErrorBytes          = 2 * 1024
-	diagnosticSteeringBytes       = 4 * 1024
-	diagnosticSerializedArgsBytes = 4 * 1024
-	maxDiagnosticMessages         = 64
-	maxDiagnosticToolCalls        = 64
+	diagnosticTurnInputBytes        = 4 * 1024
+	diagnosticTurnFinalBytes        = 8 * 1024
+	diagnosticModelMessagesBytes    = 10 * 1024
+	diagnosticModelResponseBytes    = 6 * 1024
+	diagnosticModelReasoningBytes   = 3 * 1024
+	diagnosticModelToolCallsBytes   = 2 * 1024
+	diagnosticToolArgumentsBytes    = 6 * 1024
+	diagnosticToolResultBytes       = 8 * 1024
+	diagnosticErrorBytes            = 2 * 1024
+	diagnosticSteeringBytes         = 4 * 1024
+	diagnosticSerializedArgsBytes   = 4 * 1024
+	fallbackDiagnosticMetadataBytes = 240
+	maxDiagnosticMessages           = 64
+	maxDiagnosticToolCalls          = 64
 )
 
 func diagnosticContentEnabled(cfg *config.Config) bool {
@@ -33,6 +34,15 @@ func diagnosticContentEnabled(cfg *config.Config) bool {
 
 func diagnosticTextPreview(cfg *config.Config, value string, maxBytes int) string {
 	if !diagnosticContentEnabled(cfg) || strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return diagnostictrace.Redactor{
+		Filter: cfg.SensitiveDataReplacer().Replace,
+	}.RedactText(value, maxBytes)
+}
+
+func diagnosticMetadataPreview(cfg *config.Config, value string, maxBytes int) string {
+	if cfg == nil || strings.TrimSpace(value) == "" {
 		return ""
 	}
 	return diagnostictrace.Redactor{

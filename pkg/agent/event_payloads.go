@@ -29,14 +29,20 @@ type TurnStartPayload struct {
 }
 
 type LLMFallbackAttemptPayload struct {
-	Provider    string
-	Model       string
-	IdentityKey string
-	Attempt     int
-	Status      string
-	Reason      string
-	ErrorCode   string
-	Skipped     bool
+	Provider             string
+	Model                string
+	IdentityKey          string
+	Attempt              int
+	Status               string
+	Reason               string
+	ErrorCode            string
+	ClassificationSource string
+	ProviderErrorKind    string
+	HTTPStatus           int
+	RetryAfter           time.Duration
+	RequestID            string
+	DiagnosticMessage    string
+	Skipped              bool
 }
 
 const (
