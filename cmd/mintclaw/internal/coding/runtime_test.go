@@ -33,12 +33,12 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 
 	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{
 		Model:    "coding-model",
-		Provider: "persisted-provider",
+		Provider: "configured-provider",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if modelName != "coding-model" || providerName != "persisted-provider" {
+	if modelName != "coding-model" || providerName != "configured-provider" {
 		t.Fatalf("selection = model %q provider %q", modelName, providerName)
 	}
 	if runtimeCfg.Agents.Defaults.ContextManager != "seahorse" ||
@@ -53,7 +53,7 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 		runtimeCfg.Agents.Dispatch != nil {
 		t.Fatalf("coding agents = %#v dispatch = %#v", runtimeCfg.Agents.List, runtimeCfg.Agents.Dispatch)
 	}
-	if len(runtimeCfg.ModelList) != 2 || runtimeCfg.ModelList[0].Provider != "persisted-provider" {
+	if len(runtimeCfg.ModelList) != 2 || runtimeCfg.ModelList[0].Provider != "configured-provider" {
 		t.Fatalf("runtime models = %#v", runtimeCfg.ModelList)
 	}
 	if cfg.Agents.Defaults.ContextManager != "none" ||
@@ -91,5 +91,38 @@ func TestCodingRuntimeConfigCanonicalizesInferredModelBeforePersistedProvider(t 
 	}
 	if cfg.ModelList[0].Model != "openai/gpt-4o" {
 		t.Fatalf("source model was mutated: %q", cfg.ModelList[0].Model)
+	}
+}
+
+func TestCodingRuntimeConfigKeepsLoadBalancedAliasBoundToPersistedProvider(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{
+		&config.ModelConfig{
+			ModelName: "balanced",
+			Provider:  "openai",
+			Model:     "gpt-4o",
+			APIBase:   "https://openai.example.test",
+			Enabled:   true,
+		},
+		&config.ModelConfig{
+			ModelName: "balanced",
+			Provider:  "anthropic",
+			Model:     "claude-sonnet",
+			APIBase:   "https://anthropic.example.test",
+			Enabled:   true,
+		},
+	}
+
+	runtimeCfg, _, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{
+		Model:    "balanced",
+		Provider: "anthropic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := runtimeCfg.ModelList[0]
+	if providerName != "anthropic" || selected.Provider != "anthropic" ||
+		selected.Model != "claude-sonnet" || selected.APIBase != "https://anthropic.example.test" {
+		t.Fatalf("selected mismatched alias entry: provider=%q config=%#v", providerName, selected)
 	}
 }

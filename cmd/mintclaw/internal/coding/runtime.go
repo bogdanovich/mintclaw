@@ -145,12 +145,13 @@ func codingRuntimeConfig(
 	if modelName == "" {
 		return nil, "", "", fmt.Errorf("coding runtime: model is required")
 	}
-	modelCfg, err := cfg.GetModelConfig(modelName)
+	persistedProvider := providers.NormalizeProvider(strings.TrimSpace(metadata.Provider))
+	modelCfg, err := selectCodingModelConfig(cfg, modelName, persistedProvider)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("coding runtime: select model %q: %w", modelName, err)
 	}
 	selected := cloneModelConfig(modelCfg)
-	if persistedProvider := strings.TrimSpace(metadata.Provider); persistedProvider != "" {
+	if persistedProvider != "" {
 		_, canonicalModelID := providers.ExtractProtocol(selected)
 		selected.Model = canonicalModelID
 		selected.Provider = persistedProvider
@@ -170,6 +171,26 @@ func codingRuntimeConfig(
 	}
 	runtimeCfg.Agents.Defaults.Provider = providerName
 	return &runtimeCfg, modelName, providerName, nil
+}
+
+func selectCodingModelConfig(
+	cfg *config.Config,
+	modelName string,
+	persistedProvider string,
+) (*config.ModelConfig, error) {
+	if persistedProvider == "" {
+		return cfg.GetModelConfig(modelName)
+	}
+	for _, candidate := range cfg.ModelList {
+		if candidate == nil || candidate.ModelName != modelName {
+			continue
+		}
+		providerName, _ := providers.ExtractProtocol(candidate)
+		if providers.NormalizeProvider(providerName) == persistedProvider {
+			return candidate, nil
+		}
+	}
+	return nil, fmt.Errorf("provider %q has no configured entry for this model alias", persistedProvider)
 }
 
 func cloneModelConfig(model *config.ModelConfig) *config.ModelConfig {
