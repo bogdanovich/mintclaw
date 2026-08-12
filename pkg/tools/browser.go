@@ -387,7 +387,9 @@ func readinessRank(status string) int {
 
 func (*BrowserSessionTool) Name() string { return "browser_session" }
 func (*BrowserSessionTool) Description() string {
-	return "Open, inspect, or close one broker-owned browser session."
+	return "Open, inspect, or close one broker-owned browser session. " +
+		"For open, target is the browser target name from browser_targets (for example gateway or companion), " +
+		"and profile is the profile name nested under that target (for example managed)."
 }
 
 func (*BrowserSessionTool) Parameters() map[string]any {
@@ -397,9 +399,18 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			"operation": map[string]any{
 				"type": "string", "enum": []string{"open", "status", "close", "handoff", "resume"},
 			},
-			"target":             map[string]any{"type": "string"},
-			"profile":            map[string]any{"type": "string"},
-			"browser_session_id": map[string]any{"type": "string"},
+			"target": map[string]any{
+				"type":        "string",
+				"description": "For open only: exact browser target name returned by browser_targets, such as gateway or companion.",
+			},
+			"profile": map[string]any{
+				"type":        "string",
+				"description": "For open only: exact profile name listed inside the selected browser target, such as managed.",
+			},
+			"browser_session_id": map[string]any{
+				"type":        "string",
+				"description": "For status, close, handoff, and resume only: broker-issued browser session ID.",
+			},
 		},
 		"required": []string{"operation"}, "additionalProperties": false,
 	}
@@ -528,7 +539,10 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 
 func (*BrowserContextsTool) Name() string { return "browser_contexts" }
 func (*BrowserContextsTool) Description() string {
-	return "List, open, select, or close bounded opaque browser tabs and frames for one owned session."
+	return "List, open, select, or close bounded opaque browser tabs and frames for one owned session. " +
+		"For list and open, send only operation and browser_session_id; open creates and selects a new tab. " +
+		"For select and close, use the fresh context_catalog_id, context_generation, and tab_id from list; " +
+		"select may also include a frame_id, while close must not."
 }
 
 func (*BrowserContextsTool) Parameters() map[string]any {
@@ -536,13 +550,30 @@ func (*BrowserContextsTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"operation": map[string]any{
-				"type": "string", "enum": []string{"list", "open", "select", "close"},
+				"type":        "string",
+				"enum":        []string{"list", "open", "select", "close"},
+				"description": "List current contexts, open and select a new tab, select a fresh listed tab/frame, or close a fresh listed tab.",
 			},
-			"browser_session_id": map[string]any{"type": "string"},
-			"context_catalog_id": map[string]any{"type": "string"},
-			"context_generation": map[string]any{"type": "integer"},
-			"tab_id":             map[string]any{"type": "string"},
-			"frame_id":           map[string]any{"type": "string"},
+			"browser_session_id": map[string]any{
+				"type":        "string",
+				"description": "Owned browser session. This and operation are the only arguments allowed for list and open.",
+			},
+			"context_catalog_id": map[string]any{
+				"type":        "string",
+				"description": "Fresh broker-issued catalog ID required for select and close; omit for list and open.",
+			},
+			"context_generation": map[string]any{
+				"type":        "integer",
+				"description": "Fresh catalog generation required for select and close; omit for list and open.",
+			},
+			"tab_id": map[string]any{
+				"type":        "string",
+				"description": "Fresh broker-issued tab ID required for select and close; omit for list and open.",
+			},
+			"frame_id": map[string]any{
+				"type":        "string",
+				"description": "Optional fresh broker-issued frame ID for select only; omit for list, open, and close.",
+			},
 		},
 		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
 	}

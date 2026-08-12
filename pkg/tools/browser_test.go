@@ -384,6 +384,64 @@ func TestBrowserContextsListsBoundedCatalog(t *testing.T) {
 	}
 }
 
+func TestBrowserContextsSchemaExplainsOperationSpecificAuthority(t *testing.T) {
+	tool := NewBrowserContextsTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
+	description := tool.Description()
+	parameters := tool.Parameters()
+	properties := parameters["properties"].(map[string]any)
+
+	for _, want := range []string{
+		"For list and open, send only operation and browser_session_id",
+		"open creates and selects a new tab",
+		"For select and close, use the fresh context_catalog_id",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("browser_contexts description %q does not contain %q", description, want)
+		}
+	}
+	for _, name := range []string{
+		"operation", "browser_session_id", "context_catalog_id", "context_generation", "tab_id", "frame_id",
+	} {
+		property := properties[name].(map[string]any)
+		if property["description"] == "" {
+			t.Fatalf("browser_contexts property %q has no operation guidance: %#v", name, property)
+		}
+	}
+	if description := properties["context_catalog_id"].(map[string]any)["description"].(string); !strings.Contains(
+		description,
+		"omit for list and open",
+	) {
+		t.Fatalf("context_catalog_id description = %q", description)
+	}
+}
+
+func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
+	tool := NewBrowserSessionTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
+	description := tool.Description()
+	properties := tool.Parameters()["properties"].(map[string]any)
+
+	for _, want := range []string{
+		"target is the browser target name from browser_targets",
+		"profile is the profile name nested under that target",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("browser_session description %q does not contain %q", description, want)
+		}
+	}
+	if target := properties["target"].(map[string]any)["description"].(string); !strings.Contains(
+		target,
+		"gateway or companion",
+	) {
+		t.Fatalf("target description = %q", target)
+	}
+	if profile := properties["profile"].(map[string]any)["description"].(string); !strings.Contains(
+		profile,
+		"such as managed",
+	) {
+		t.Fatalf("profile description = %q", profile)
+	}
+}
+
 func TestBrowserContextsCloseSuspendsAndUsesExactPreparedApproval(t *testing.T) {
 	catalog := browserToolContextCatalog()
 	invocation := browser.Invocation{
