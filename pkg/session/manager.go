@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +198,44 @@ func (sm *SessionManager) ReplaceTurnHistory(
 	history []providers.Message,
 ) error {
 	return sm.replaceTurnSnapshot(ctx, sessionKey, history, "", false)
+}
+
+func (sm *SessionManager) MutateTurnHistory(
+	ctx context.Context,
+	sessionKey string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+	if mutate == nil {
+		return false, fmt.Errorf("session: history mutation callback is required")
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+
+	now := time.Now()
+	next := Session{Key: sessionKey, Messages: []providers.Message{}, Created: now, Updated: now}
+	if current := sm.sessions[sessionKey]; current != nil {
+		next = cloneSession(*current)
+	}
+	history, changed, err := mutate(append([]providers.Message(nil), next.Messages...))
+	if err != nil || !changed {
+		return false, err
+	}
+	next.Messages = messageutil.FilterInvalidHistoryMessages(history)
+	normalizeHistoryCreatedAt(next.Messages)
+	advanceHistoryRevision(&next)
+	next.Updated = now
+
+	writeErr := sm.writeSessionSnapshot(sessionKey, next)
+	if writeErr == nil || fileutil.IsCommittedWriteError(writeErr) {
+		sm.sessions[sessionKey] = &next
+	}
+	return true, writeErr
 }
 
 func (sm *SessionManager) ClearSession(ctx context.Context, sessionKey string) error {

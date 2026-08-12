@@ -1086,15 +1086,21 @@ func (s *JSONLStore) TruncateHistory(
 }
 
 func (s *JSONLStore) SetHistory(
-	_ context.Context,
+	ctx context.Context,
 	sessionKey string,
 	history []providers.Message,
 ) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 	history = messageutil.FilterInvalidHistoryMessages(history)
 
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
@@ -1103,6 +1109,58 @@ func (s *JSONLStore) SetHistory(
 	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
 		return recoveryErr
 	}
+	return s.setHistoryLocked(sessionKey, history, &meta)
+}
+
+// MutateHistory applies mutate to the latest visible history while holding the
+// same per-session lock used by appends, truncation, replacement, and compaction.
+func (s *JSONLStore) MutateHistory(
+	ctx context.Context,
+	sessionKey string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+	if mutate == nil {
+		return false, fmt.Errorf("memory: history mutation callback is required")
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return false, err
+	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return false, recoveryErr
+	}
+	history, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	if err != nil {
+		return false, err
+	}
+	next, changed, err := mutate(append([]providers.Message(nil), history...))
+	if err != nil || !changed {
+		return false, err
+	}
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
+	next = messageutil.FilterInvalidHistoryMessages(next)
+	if err := s.setHistoryLocked(sessionKey, next, &meta); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *JSONLStore) setHistoryLocked(
+	sessionKey string,
+	history []providers.Message,
+	meta *SessionMeta,
+) error {
 	now := time.Now()
 	for i := range history {
 		if history[i].CreatedAt == nil {
@@ -1124,7 +1182,7 @@ func (s *JSONLStore) SetHistory(
 	meta.HistoryPreviousCount = previousCount
 	meta.HistoryPreviousSkip = previousSkip
 	meta.HistoryTargetDigest = digestJSONL(encodedHistory)
-	if err := s.beginHistoryMutation(sessionKey, &meta, true); err != nil {
+	if err := s.beginHistoryMutation(sessionKey, meta, true); err != nil {
 		return err
 	}
 
@@ -1133,7 +1191,7 @@ func (s *JSONLStore) SetHistory(
 	if err := s.rewriteJSONLBytes(sessionKey, encodedHistory); err != nil {
 		return err
 	}
-	return s.finishHistoryMutation(sessionKey, &meta)
+	return s.finishHistoryMutation(sessionKey, meta)
 }
 
 // Compact physically rewrites the JSONL file, dropping all logically

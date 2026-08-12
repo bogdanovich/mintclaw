@@ -1112,6 +1112,9 @@ Done when:
 
 Dependencies: P2.4
 
+Implementation contract:
+[`local-coding-agent-p2-durable-lifecycle.md`](local-coding-agent-p2-durable-lifecycle.md)
+
 Scope:
 
 - Persist the accepted user turn before provider or tool execution.

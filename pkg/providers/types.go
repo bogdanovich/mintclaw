@@ -18,6 +18,7 @@ type (
 	UsageInfo                   = protocoltypes.UsageInfo
 	Message                     = protocoltypes.Message
 	ToolResultStatus            = protocoltypes.ToolResultStatus
+	ToolExecution               = protocoltypes.ToolExecution
 	ToolDefinition              = protocoltypes.ToolDefinition
 	ToolFunctionDefinition      = protocoltypes.ToolFunctionDefinition
 	ExtraContent                = protocoltypes.ExtraContent
@@ -35,9 +36,11 @@ type (
 )
 
 const (
-	ToolResultStatusSuccess    = protocoltypes.ToolResultStatusSuccess
-	ToolResultStatusError      = protocoltypes.ToolResultStatusError
-	ToolResultStatusUnresolved = protocoltypes.ToolResultStatusUnresolved
+	ToolResultStatusSuccess     = protocoltypes.ToolResultStatusSuccess
+	ToolResultStatusError       = protocoltypes.ToolResultStatusError
+	ToolResultStatusUnresolved  = protocoltypes.ToolResultStatusUnresolved
+	ToolResultStatusInterrupted = protocoltypes.ToolResultStatusInterrupted
+	ToolResultStatusUnknown     = protocoltypes.ToolResultStatusUnknown
 )
 
 type LLMProvider interface {

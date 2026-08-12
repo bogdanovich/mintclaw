@@ -53,6 +53,7 @@ type PipelineConfigServices struct {
 	PromptBuilder         pipelinePromptBuilder
 	ToolContentFilter     toolContentFilter
 	TrustAllToolExecution bool
+	DurableToolLifecycle  bool
 	HashToolArguments     func(string, map[string]any) (string, error)
 }
 

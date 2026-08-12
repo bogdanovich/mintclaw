@@ -188,6 +188,10 @@ func NewAgentLoopWithRuntimeProfile(
 		al.Close()
 		return nil, err
 	}
+	if err := al.repairCodingToolLifecycles(context.Background()); err != nil {
+		al.Close()
+		return nil, fmt.Errorf("repair coding tool lifecycle: %w", err)
+	}
 	return al, nil
 }
 

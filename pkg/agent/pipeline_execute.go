@@ -1033,6 +1033,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if !ts.tryMarkToolExecutionStarted() {
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
+	if p.Config.DurableToolLifecycle && call.loopSemantics != loopguard.SemanticsReadOnlyIdempotent {
+		if err := runner.journalToolExecutionStart(turnCtx, tc, toolName); err != nil {
+			runner.journalErr = fmt.Errorf("persist tool start marker: %w", err)
+			return stopToolBatch(ToolLoopOutcome{})
+		}
+	}
 	var toolResult *toolshared.ToolResult
 	if trustedExecution != nil {
 		toolResult = toolRegistry.ExecuteTrustedWithContext(
