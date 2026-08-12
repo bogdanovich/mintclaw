@@ -1124,6 +1124,27 @@ func (broker *Broker) finishSessionLocked(
 				return current, err
 			}
 		}
+		current, getErr := broker.store.GetSession(context.WithoutCancel(ctx), session.ID)
+		slot = broker.slots[session.ID]
+		if getErr == nil && current.State == SessionClosing && slot != nil && slot.cleanupComplete {
+			current.State = desired
+			clearSessionSnapshot(&current)
+			current.SafeFailure = safeFailure
+			if desired != SessionLost {
+				current.SafeFailure = ""
+			}
+			current.Revision++
+			current.UpdatedAt = broker.now().UTC().UnixNano()
+			current.LastActivityAt = current.UpdatedAt
+			if retryErr := broker.store.UpdateSession(
+				ctx,
+				current.Revision-1,
+				current,
+			); retryErr == nil {
+				delete(broker.slots, current.ID)
+				return current, nil
+			}
+		}
 		return Session{}, err
 	}
 	delete(broker.slots, session.ID)

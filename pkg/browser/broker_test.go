@@ -393,16 +393,36 @@ func TestBrokerCloseRetriesOnlyTerminalPersistenceAfterCleanup(t *testing.T) {
 	worker := factory.workers[0]
 	worker.rejectRepeatedClose = true
 	store.failState = SessionClosed
-	if _, err = broker.Close(context.Background(), owner, session.ID); !errors.Is(err, ErrStale) {
-		t.Fatalf("Close() persistence error = %v, want ErrStale", err)
-	}
-	stored, err := store.GetSession(context.Background(), session.ID)
-	if err != nil || stored.State != SessionClosing || worker.closed != 1 {
-		t.Fatalf("stored session after persistence failure = %+v, %v; worker = %+v", stored, err, worker)
-	}
 	closed, err := broker.Close(context.Background(), owner, session.ID)
 	if err != nil || closed.State != SessionClosed || worker.closed != 1 {
-		t.Fatalf("Close() persistence retry = %+v, %v; worker = %+v", closed, err, worker)
+		t.Fatalf("Close() reconciled persistence = %+v, %v; worker = %+v", closed, err, worker)
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosed || stored != closed {
+		t.Fatalf("stored reconciled session = %+v, %v; want %+v", stored, err, closed)
+	}
+}
+
+func TestBrokerCloseOwnerReconcilesTerminalPersistenceWithoutClosingWorkerTwice(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := factory.workers[0]
+	worker.rejectRepeatedClose = true
+	store.failState = SessionClosed
+	if err = broker.CloseOwner(context.Background(), owner); err != nil {
+		t.Fatalf("CloseOwner() error = %v", err)
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosed || worker.closed != 1 {
+		t.Fatalf("stored session = %+v, %v; worker = %+v", stored, err, worker)
 	}
 }
 
