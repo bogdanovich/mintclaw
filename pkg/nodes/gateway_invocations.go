@@ -90,6 +90,25 @@ type gatewayInvocationDocument struct {
 	Records map[string]GatewayInvocationRecord `json:"records"`
 }
 
+// GatewayInvocationSQLiteReport is a redacted operational view of the
+// gateway invocation database. It intentionally contains no authority,
+// identities, plans, arguments, or record payloads.
+type GatewayInvocationSQLiteReport struct {
+	SchemaVersion     int   `json:"schema_version"`
+	Records           int64 `json:"records"`
+	Prepared          int64 `json:"prepared"`
+	Dispatched        int64 `json:"dispatched"`
+	DatabaseBytes     int64 `json:"database_bytes"`
+	WALBytes          int64 `json:"wal_bytes"`
+	SHMBytes          int64 `json:"shm_bytes"`
+	PageBytes         int64 `json:"page_bytes"`
+	FreePageBytes     int64 `json:"free_page_bytes"`
+	MaximumBytes      int64 `json:"maximum_bytes"`
+	OldestUpdatedAt   int64 `json:"oldest_updated_at,omitempty"`
+	RetentionSeconds  int64 `json:"retention_seconds"`
+	MigrationComplete bool  `json:"migration_complete"`
+}
+
 // GatewayInvocationStore persists prepared plan ownership across gateway
 // restarts. Runtime gateways use the transactional SQLite backend; the legacy
 // JSON backend remains available only for migration and focused compatibility

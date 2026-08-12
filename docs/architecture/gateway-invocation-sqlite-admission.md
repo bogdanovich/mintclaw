@@ -155,6 +155,9 @@ Rollback after migration requires a version-aware exporter that recreates a
 validated JSON snapshot before installing an older binary. Operations must not
 delete the database or marker as a shortcut.
 
+The implemented inspection and downgrade procedure is documented in
+[Gateway Invocation SQLite Operations](../operations/gateway-invocation-sqlite.md).
+
 ## Filesystem And Concurrency Safety
 
 The database, WAL, shared-memory file, lock, migration temporary file, and

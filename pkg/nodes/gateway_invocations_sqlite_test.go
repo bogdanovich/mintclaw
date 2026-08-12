@@ -741,6 +741,74 @@ func TestGatewayInvocationSQLiteCapacityIsByteBounded(t *testing.T) {
 	}
 }
 
+func TestGatewayInvocationSQLiteInspectAndDowngradeExport(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := gatewayTestPlan(t, "inv_sqlite_export", "idem_sqlite_export", time.Now())
+	prepared, created, prepareErr := store.Prepare(
+		"vpn",
+		"call-sqlite-export",
+		plan,
+		gatewayTestDescriptor(),
+	)
+	if prepareErr != nil || !created {
+		t.Fatalf("prepare export record = (%v, %v)", created, prepareErr)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := InspectGatewayInvocationSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != gatewayInvocationSQLiteSchemaVersion || report.Records != 1 ||
+		report.Prepared != 1 || report.Dispatched != 0 || !report.MigrationComplete ||
+		report.MaximumBytes < 16*1024*1024 || report.RetentionSeconds != int64(7*24*time.Hour/time.Second) {
+		t.Fatalf("inspection report = %#v", report)
+	}
+
+	output := filepath.Join(filepath.Dir(path), "node_invocations.rollback.json")
+	exportedReport, err := ExportGatewayInvocationSQLite(path, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exportedReport.Records != 1 {
+		t.Fatalf("export report = %#v", exportedReport)
+	}
+	legacy, err := NewGatewayInvocationStore(output, DefaultGatewayInvocationLimit, DefaultGatewayInvocationStoreBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = legacy.Close() }()
+	record, found, err := legacy.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
+	if err != nil || !found || !sameGatewayInvocationRecord(record, prepared) {
+		t.Fatalf("exported record = (%#v, %v, %v)", record, found, err)
+	}
+}
+
+func TestGatewayInvocationSQLiteDowngradeExportIsBoundedAndProtected(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ExportGatewayInvocationSQLite(path, filepath.Join(t.TempDir(), "export.json")); err == nil {
+		t.Fatal("export outside protected state directory succeeded")
+	}
+	if _, err = ExportGatewayInvocationSQLite(path, path); err == nil {
+		t.Fatal("export over database succeeded")
+	}
+}
+
 func closeGatewayInvocationSQLiteTestStore(t *testing.T, store *GatewayInvocationStore) func() {
 	t.Helper()
 	return func() {
