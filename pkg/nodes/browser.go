@@ -1139,6 +1139,50 @@ func BrowserCommandOutputSchema(
 	}
 }
 
+// legacyBrowserSessionOpenOutputSchema is the exact session-open result
+// contract advertised before browser context discovery was introduced. It is
+// retained only to recognize durable registry records during a fail-closed
+// upgrade; live catalogs must always advertise BrowserCommandOutputSchema.
+func legacyBrowserSessionOpenOutputSchema(profiles []BrowserProfileDescriptor) json.RawMessage {
+	if len(profiles) == 0 {
+		return json.RawMessage("false")
+	}
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	state := map[string]any{
+		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
+	}
+	return mustJSON(map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required": []string{
+			"session_id",
+			"state",
+			"tab_id",
+			"controller",
+			"features",
+			"expires_at",
+			"idle_expires_at",
+		},
+		"properties": map[string]any{
+			"session_id": identifier, "state": state, "tab_id": identifier,
+			"controller": map[string]any{"const": "agent"},
+			"features": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"observe", "navigate", "screenshot", "download"},
+				"properties": map[string]any{
+					"observe":    map[string]any{"type": "boolean"},
+					"navigate":   map[string]any{"type": "boolean"},
+					"screenshot": map[string]any{"type": "boolean"},
+					"download":   map[string]any{"type": "boolean"},
+				},
+			},
+			"expires_at":      map[string]any{"type": "integer", "minimum": 1},
+			"idle_expires_at": map[string]any{"type": "integer", "minimum": 1},
+		},
+	})
+}
+
 func browserContextCatalogSchema() map[string]any {
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	generation := map[string]any{"type": "integer", "minimum": 1}

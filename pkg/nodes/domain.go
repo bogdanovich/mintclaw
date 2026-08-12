@@ -697,6 +697,12 @@ func (catalog CapabilityCatalog) Hash() (string, error) {
 	if err := catalog.Validate(); err != nil {
 		return "", err
 	}
+	return catalog.canonicalHash()
+}
+
+// canonicalHash hashes an already-validated catalog. Registry migrations use
+// it only after applying their own exact compatibility validation.
+func (catalog CapabilityCatalog) canonicalHash() (string, error) {
 	commands := append([]CommandDescriptor(nil), catalog.Commands...)
 	if commands == nil {
 		commands = make([]CommandDescriptor, 0)
