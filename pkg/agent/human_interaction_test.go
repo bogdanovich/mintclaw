@@ -191,9 +191,11 @@ func (*hardAbortApprovalCountingTool) Name() string { return "approval_hard_abor
 func (*hardAbortApprovalCountingTool) Description() string {
 	return "Run a protected test action that hard-aborts its turn"
 }
+
 func (*hardAbortApprovalCountingTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
+
 func (tool *hardAbortApprovalCountingTool) Execute(
 	ctx context.Context,
 	_ map[string]any,
