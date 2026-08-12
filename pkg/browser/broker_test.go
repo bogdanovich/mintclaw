@@ -105,9 +105,10 @@ func (factory *fakeWorkerFactory) PassiveReadiness() DriverReadiness {
 
 type failNextSessionUpdateStore struct {
 	*MemoryStore
-	failNext  bool
-	failAfter int
-	failState SessionState
+	failNext            bool
+	failAfter           int
+	failState           SessionState
+	failTerminalUpdates int
 }
 
 type committedWarningSessionUpdateStore struct {
@@ -135,6 +136,10 @@ func (store *failNextSessionUpdateStore) UpdateSession(
 	expected uint64,
 	next Session,
 ) error {
+	if next.State.Terminal() && store.failTerminalUpdates > 0 {
+		store.failTerminalUpdates--
+		return ErrStale
+	}
 	if store.failAfter > 0 {
 		store.failAfter--
 		if store.failAfter == 0 {
@@ -423,6 +428,37 @@ func TestBrokerCloseOwnerReconcilesTerminalPersistenceWithoutClosingWorkerTwice(
 	stored, err := store.GetSession(context.Background(), session.ID)
 	if err != nil || stored.State != SessionClosed || worker.closed != 1 {
 		t.Fatalf("stored session = %+v, %v; worker = %+v", stored, err, worker)
+	}
+}
+
+func TestBrokerSweepReconcilesRepeatedTerminalPersistenceFailure(t *testing.T) {
+	store := &failNextSessionUpdateStore{
+		MemoryStore: NewMemoryStore(), failTerminalUpdates: 2,
+	}
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := factory.workers[0]
+	worker.rejectRepeatedClose = true
+	if err = broker.CloseOwner(context.Background(), owner); !errors.Is(err, ErrStale) {
+		t.Fatalf("CloseOwner() error = %v, want ErrStale", err)
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosing || worker.closed != 1 {
+		t.Fatalf("pending session = %+v, %v; worker = %+v", stored, err, worker)
+	}
+	if err = broker.Sweep(context.Background()); err != nil {
+		t.Fatalf("Sweep() error = %v", err)
+	}
+	stored, err = store.GetSession(context.Background(), session.ID)
+	if err != nil || stored.State != SessionClosed || worker.closed != 1 {
+		t.Fatalf("reconciled session = %+v, %v; worker = %+v", stored, err, worker)
 	}
 }
 

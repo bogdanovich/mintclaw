@@ -242,6 +242,8 @@ type workerSlot struct {
 	navigationID    string
 	safeFailure     string
 	cleanupComplete bool
+	terminalState   SessionState
+	terminalFailure string
 }
 
 type Broker struct {
@@ -876,6 +878,20 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 	}
 	now := broker.now().UTC()
 	for _, session := range sessions {
+		if session.State == SessionClosing {
+			slot := broker.slots[session.ID]
+			if slot != nil && slot.cleanupComplete && slot.terminalState.Terminal() {
+				if _, err = broker.finishSessionLocked(
+					ctx,
+					session,
+					slot.terminalState,
+					slot.terminalFailure,
+				); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		if !session.State.Terminal() &&
 			(session.PolicyRevision != broker.policyRevision || broker.sessionExpired(session, now)) {
 			state, failure := SessionExpired, ""
@@ -1103,6 +1119,13 @@ func (broker *Broker) finishSessionLocked(
 	} else if slot.safeFailure != "" {
 		desired = SessionLost
 		safeFailure = slot.safeFailure
+	}
+	if slot != nil {
+		slot.terminalState = desired
+		slot.terminalFailure = safeFailure
+		if desired != SessionLost {
+			slot.terminalFailure = ""
+		}
 	}
 	session.State = desired
 	clearSessionSnapshot(&session)
