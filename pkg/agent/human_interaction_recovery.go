@@ -198,6 +198,7 @@ func (al *AgentLoop) recoverPromptDeliveryExhaustion(
 		return false
 	}
 	if !al.failRecoveredInteraction(
+		ctx,
 		workspace,
 		registry,
 		record,
@@ -216,6 +217,7 @@ func (al *AgentLoop) recoverPromptDeliveryExhaustion(
 }
 
 func (al *AgentLoop) failRecoveredInteraction(
+	ctx context.Context,
 	workspace string,
 	registry *interactions.Registry,
 	record interactions.Record,
@@ -245,6 +247,11 @@ func (al *AgentLoop) failRecoveredInteraction(
 		return false
 	}
 	al.syncInteractionControls(workspace, failed, bus.OutboundInteractionControlsRemove)
+	if agents := al.GetRegistry(); agents != nil {
+		if agent, ok := agents.GetAgent(record.Route.AgentID); ok {
+			al.cleanupInteractionOriginTools(ctx, agent, failed)
+		}
+	}
 	return true
 }
 
@@ -329,9 +336,11 @@ func (al *AgentLoop) recoverCancelingInteraction(
 	); err != nil {
 		return false
 	}
-	if _, err := registry.CompleteCancellation(record.ID, record.Revision); err != nil {
+	completed, err := registry.CompleteCancellation(record.ID, record.Revision)
+	if err != nil {
 		return false
 	}
+	al.cleanupInteractionOriginTools(ctx, agent, completed)
 	_ = al.drainDeferredInteractionIngress(
 		ctx,
 		workspace,
@@ -408,6 +417,7 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		if record.FinalDeliveryState == interactions.DeliveryStateSending ||
 			record.FinalDeliveryState == interactions.DeliveryStateAmbiguous {
 			if !al.failRecoveredInteraction(
+				ctx,
 				workspace,
 				registry,
 				record,
@@ -425,6 +435,7 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		if !record.FinalDelivered &&
 			record.FinalDeliveryTries >= interactions.MaxDeliveryAttempts {
 			if !al.failRecoveredInteraction(
+				ctx,
 				workspace,
 				registry,
 				record,

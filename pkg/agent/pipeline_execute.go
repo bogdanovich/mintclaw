@@ -1830,10 +1830,14 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 		ts.opts.Dispatch.MessageID(),
 		ts.opts.Dispatch.ReplyToMessageID(),
 	)
-	if ts.opts.Dispatch.InboundContext != nil {
-		ctx = toolshared.WithToolInboundMetadata(ctx, *ts.opts.Dispatch.InboundContext)
+	toolInbound := ts.opts.Dispatch.InboundContext
+	if ts.opts.InteractionOriginContext != nil {
+		toolInbound = ts.opts.InteractionOriginContext
 	}
-	ctx = toolshared.WithToolTopicID(ctx, originTopicID(ts.opts.Dispatch.InboundContext))
+	if toolInbound != nil {
+		ctx = toolshared.WithToolInboundMetadata(ctx, *toolInbound)
+	}
+	ctx = toolshared.WithToolTopicID(ctx, originTopicID(toolInbound))
 	ctx = toolshared.WithToolSessionContext(
 		ctx,
 		ts.agent.ID,

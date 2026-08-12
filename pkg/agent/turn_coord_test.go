@@ -35,11 +35,13 @@ type turnCleanupTestTool struct {
 	*countingTestTool
 	cleanupCalls int
 	executionID  string
+	inbound      bus.InboundContext
 }
 
 func (tool *turnCleanupTestTool) CleanupTurn(ctx context.Context) error {
 	tool.cleanupCalls++
 	tool.executionID = toolshared.ToolExecutionID(ctx)
+	tool.inbound = toolshared.ToolInboundContext(ctx)
 	return nil
 }
 

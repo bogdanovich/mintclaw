@@ -3090,6 +3090,10 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	al.channelManager = newInteractionChannelManager()
 	tool := &approvalContextTool{}
 	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approval-context-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	if err := al.MountHook(NamedHook("context-approval", &durableApprovalHook{
 		actionSummary: "Run the context-sensitive action",
 	})); err != nil {
@@ -3126,6 +3130,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	if !ok || record.Origin.ExecutionContext == nil {
 		t.Fatalf("reloaded approval interaction = %#v", record)
 	}
+	originExecutionID := record.Origin.ExecutionID
 	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "allow_once", MessageID: "answer-message", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAllowed)
@@ -3153,6 +3158,16 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		tool.inbound.Raw["thread_ts"] != "original-thread" ||
 		tool.inbound.ActorID != "actor-1" || tool.inbound.SourceRef != "source-1" {
 		t.Fatalf("protected tool inbound context = %#v", tool.inbound)
+	}
+	if cleanupTool.cleanupCalls != 1 || cleanupTool.executionID != originExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-1" ||
+		cleanupTool.inbound.MessageID != "origin-message" {
+		t.Fatalf(
+			"continuation cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 
@@ -4140,6 +4155,14 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ExecutionID = "execution-stop-interaction"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-stop",
+	}
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "stop-interaction-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -4176,6 +4199,16 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	result := agent.Sessions.GetHistory(sessionKey)[resultIndex]
 	if !strings.Contains(result.Content, `"outcome":"canceled"`) {
 		t.Fatalf("cancellation tool result = %q", result.Content)
+	}
+	if cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != request.Origin.ExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-stop" {
+		t.Fatalf(
+			"stop cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 
@@ -5318,6 +5351,10 @@ func TestSessionControlCommandsCancelInteractionAndContinueNormally(t *testing.T
 func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "recovered-stop-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
 	sessionKey := "session-stop-cancel-recovery"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
@@ -5328,6 +5365,10 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ExecutionID = "execution-stop-recovery"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", ActorID: "actor-recovery",
+	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -5357,6 +5398,16 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	result := agent.Sessions.GetHistory(sessionKey)[resultIndex]
 	if !strings.Contains(result.Content, `"outcome":"canceled"`) {
 		t.Fatalf("recovered cancellation result = %q", result.Content)
+	}
+	if cleanupTool.cleanupCalls != 1 ||
+		cleanupTool.executionID != request.Origin.ExecutionID ||
+		cleanupTool.inbound.ActorID != "actor-recovery" {
+		t.Fatalf(
+			"recovered cleanup = calls %d, execution %q, inbound %#v",
+			cleanupTool.cleanupCalls,
+			cleanupTool.executionID,
+			cleanupTool.inbound,
+		)
 	}
 }
 
