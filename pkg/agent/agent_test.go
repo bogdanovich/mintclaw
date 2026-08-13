@@ -3201,6 +3201,27 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				t.Fatal("immediate media was not queued")
 			}
 		})
+
+		t.Run("canonical immediate overrides stale handled/"+scopeCase.name, func(t *testing.T) {
+			result := (&toolshared.ToolResult{}).
+				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "still working"}).
+				WithResponseHandled().
+				WithImmediateDelivery()
+			if _, outcome, err := al.deliverToolResultToUserWithScopes(
+				t.Context(), ts, result, "message", scopeCase.scopes,
+			); err != nil || outcome != toolResultDeliveryQueued {
+				t.Fatalf("delivery = (%v, %v)", outcome, err)
+			}
+			select {
+			case outbound := <-msgBus.OutboundChan():
+				metadata := bus.OutboundMetadataFromMessage(outbound)
+				if !metadata.IsInterim() || metadata.IsFinal() {
+					t.Fatalf("outbound metadata = %#v, want interim", metadata)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("immediate text was not queued")
+			}
+		})
 	}
 }
 

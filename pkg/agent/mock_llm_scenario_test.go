@@ -243,6 +243,10 @@ func TestMockLLMScenario_QueuedMediaFallbackContinuesToFinalAnswer(t *testing.T)
 		if len(outbound.Parts) != 1 {
 			t.Fatalf("outbound media parts = %d, want 1", len(outbound.Parts))
 		}
+		metadata := bus.OutboundMetadataFromContext(outbound.Context)
+		if !metadata.IsInterim() || metadata.IsFinal() {
+			t.Fatalf("outbound metadata = %#v, want interim", metadata)
+		}
 	default:
 		t.Fatal("expected queued outbound media message")
 	}
@@ -318,6 +322,10 @@ func TestMockLLMScenario_DirectMediaDeliverySkipsFollowUpLLM(t *testing.T) {
 	}
 	if telegramChannel.sentMedia[0].Channel != "telegram" || telegramChannel.sentMedia[0].ChatID != "chat-direct" {
 		t.Fatalf("unexpected sent media target: %+v", telegramChannel.sentMedia[0])
+	}
+	metadata := bus.OutboundMetadataFromContext(telegramChannel.sentMedia[0].Context)
+	if !metadata.IsFinal() || metadata.IsInterim() {
+		t.Fatalf("direct media metadata = %#v, want final", metadata)
 	}
 
 	msgBus := al.bus.(*bus.MessageBus)

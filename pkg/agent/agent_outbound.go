@@ -540,6 +540,12 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			return buildProviderAttachments(al.mediaStore, mediaRefs), toolResultDeliveryDirect, nil
 		}
 		if al.bus != nil {
+			if result.ResponseHandled {
+				// Queued implicit media is not the final turn output: sync delivery
+				// gives ownership back to the model when no direct media route exists.
+				bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.
+					ApplyToContext(&outboundMedia.Context)
+			}
 			if _, err := al.publishTransactionMedia(ctx, ts.workspace, outboundMedia); err != nil {
 				return nil, toolResultDeliveryNone, err
 			}
@@ -692,11 +698,20 @@ func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx 
 		return
 	}
 	kind := ""
-	switch {
-	case result.ResponseHandled || result.DeliveryIntent == toolshared.DeliveryFinalHandled:
-		kind = bus.OutboundKindFinal
-	case result.ImmediateDelivery || result.DeliveryIntent == toolshared.DeliveryImmediateContinue:
-		kind = bus.OutboundKindInterim
+	if result.DeliveryIntent != toolshared.DeliveryDefault {
+		switch result.DeliveryIntent {
+		case toolshared.DeliveryFinalHandled:
+			kind = bus.OutboundKindFinal
+		case toolshared.DeliveryImmediateContinue:
+			kind = bus.OutboundKindInterim
+		}
+	} else {
+		switch {
+		case result.ImmediateDelivery:
+			kind = bus.OutboundKindInterim
+		case result.ResponseHandled:
+			kind = bus.OutboundKindFinal
+		}
 	}
 	if kind != "" {
 		bus.OutboundMetadata{OutboundKind: kind}.ApplyToContext(outboundCtx)
