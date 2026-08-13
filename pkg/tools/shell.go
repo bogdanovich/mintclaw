@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
@@ -52,6 +55,8 @@ type ExecTool struct {
 	restrictToWorkspace bool
 	allowRemote         bool
 	allowCodingChannel  bool
+	retainCommandOutput bool
+	commandOutputMu     sync.Mutex
 	permissionMode      string
 	sessionManager      *SessionManager
 	ownsSessionManager  bool
@@ -184,6 +189,7 @@ func NewCodingExecToolWithRuntimeConfig(
 		return nil, err
 	}
 	tool.allowCodingChannel = true
+	tool.retainCommandOutput = true
 	return tool, nil
 }
 
@@ -528,25 +534,13 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
-			msg = truncateCommandOutput(msg)
-			return &toolshared.ToolResult{
-				ForLLM:  msg,
-				ForUser: msg,
-				IsError: true,
-				Err:     fmt.Errorf("command timeout: %w", cmdCtx.Err()),
-			}
+			return t.commandOutputResult(msg, true, fmt.Errorf("command timeout: %w", cmdCtx.Err()))
 		}
 		msg := "Command interrupted"
 		if output != "" {
 			msg += "\n\nPartial output before interruption:\n" + output
 		}
-		msg = truncateCommandOutput(msg)
-		return &toolshared.ToolResult{
-			ForLLM:  msg,
-			ForUser: msg,
-			IsError: true,
-			Err:     fmt.Errorf("command interrupted: %w", cmdCtx.Err()),
-		}
+		return t.commandOutputResult(msg, true, fmt.Errorf("command interrupted: %w", cmdCtx.Err()))
 	}
 
 	if err != nil {
@@ -569,29 +563,119 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 		output = "(no output)"
 	}
 
-	output = truncateCommandOutput(output)
+	return t.commandOutputResult(output, err != nil, nil)
+}
 
+func (t *ExecTool) commandOutputResult(output string, isError bool, resultErr error) *toolshared.ToolResult {
+	bounded := truncateCommandOutput(output)
+	result := &toolshared.ToolResult{
+		ForLLM:  bounded,
+		ForUser: bounded,
+		IsError: isError,
+		Err:     resultErr,
+	}
+	if !t.retainCommandOutput || len(output) <= maxCommandOutputBytes {
+		return result
+	}
+
+	digest := sha256.Sum256([]byte(output))
+	dir := filepath.Join(t.workspaceTempDir, "command-output")
+	path := filepath.Join(dir, fmt.Sprintf("%x.log", digest[:12]))
+	t.commandOutputMu.Lock()
+	defer t.commandOutputMu.Unlock()
+	if err := fileutil.WriteFileAtomic(path, []byte(output), 0o600); err != nil {
+		result.ForLLM += fmt.Sprintf("\n[Full command output could not be retained: %v]", err)
+		return result
+	}
+	pruneErr := pruneCommandOutputArtifacts(
+		dir,
+		path,
+		time.Now(),
+		maxCommandOutputArtifactFiles,
+		maxCommandOutputArtifactBytes,
+		maxCommandOutputArtifactAge,
+	)
+	tag := "[file:" + path + "]"
+	result.ForLLM += "\n[Full command output retained at " + tag + "]"
+	if pruneErr != nil {
+		result.ForLLM += fmt.Sprintf("\n[Older command output artifacts could not be fully pruned: %v]", pruneErr)
+	}
+	result.ArtifactTags = []string{tag}
+	return result
+}
+
+type commandOutputArtifact struct {
+	path    string
+	name    string
+	size    int64
+	modTime time.Time
+}
+
+func pruneCommandOutputArtifacts(
+	dir string,
+	currentPath string,
+	now time.Time,
+	maxFiles int,
+	maxBytes int64,
+	maxAge time.Duration,
+) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return &toolshared.ToolResult{
-			ForLLM:  output,
-			ForUser: output,
-			IsError: true,
+		return err
+	}
+	currentPath = filepath.Clean(currentPath)
+	artifacts := make([]commandOutputArtifact, 0, len(entries))
+	var pruneErrors []error
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
 		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			pruneErrors = append(pruneErrors, infoErr)
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if filepath.Clean(path) != currentPath && maxAge > 0 && info.ModTime().Before(now.Add(-maxAge)) {
+			if removeErr := os.Remove(path); removeErr != nil {
+				pruneErrors = append(pruneErrors, removeErr)
+			} else {
+				continue
+			}
+		}
+		artifacts = append(artifacts, commandOutputArtifact{
+			path: path, name: entry.Name(), size: info.Size(), modTime: info.ModTime(),
+		})
 	}
-
-	return &toolshared.ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+	sort.Slice(artifacts, func(left, right int) bool {
+		if artifacts[left].modTime.Equal(artifacts[right].modTime) {
+			return artifacts[left].name < artifacts[right].name
+		}
+		return artifacts[left].modTime.Before(artifacts[right].modTime)
+	})
+	totalBytes := int64(0)
+	for _, artifact := range artifacts {
+		totalBytes += artifact.size
 	}
+	remainingFiles := len(artifacts)
+	for _, artifact := range artifacts {
+		if remainingFiles <= maxFiles && totalBytes <= maxBytes {
+			break
+		}
+		if filepath.Clean(artifact.path) == currentPath {
+			continue
+		}
+		if removeErr := os.Remove(artifact.path); removeErr != nil {
+			pruneErrors = append(pruneErrors, removeErr)
+			continue
+		}
+		totalBytes -= artifact.size
+		remainingFiles--
+	}
+	return errors.Join(pruneErrors...)
 }
 
 func truncateCommandOutput(output string) string {
-	const (
-		maxCommandOutputBytes  = 10000
-		commandOutputHeadBytes = 4000
-		commandOutputTailBytes = 6000
-	)
 	if len(output) <= maxCommandOutputBytes {
 		return output
 	}
@@ -609,6 +693,15 @@ func truncateCommandOutput(output string) string {
 		tail,
 	)
 }
+
+const (
+	maxCommandOutputBytes         = 10000
+	commandOutputHeadBytes        = 4000
+	commandOutputTailBytes        = 6000
+	maxCommandOutputArtifactFiles = 32
+	maxCommandOutputArtifactBytes = 64 << 20
+	maxCommandOutputArtifactAge   = 7 * 24 * time.Hour
+)
 
 func (t *ExecTool) execEnvironment(ctx context.Context) []string {
 	env := os.Environ()
