@@ -1021,7 +1021,7 @@ func TestPublishGatewayEvent(t *testing.T) {
 	}
 }
 
-func TestShutdownGatewayClosesMessageBus(t *testing.T) {
+func TestShutdownGatewayCancelsAgentRuntimeAndClosesMessageBus(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := agent.NewAgentLoop(
 		config.DefaultConfig(),
@@ -1043,7 +1043,25 @@ func TestShutdownGatewayClosesMessageBus(t *testing.T) {
 		_ = sub.Close()
 	}()
 
-	shutdownGateway(&services{}, al, &startupBlockedProvider{reason: "not used"}, msgBus, true)
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	runDone := make(chan struct{})
+	go func() {
+		<-runCtx.Done()
+		close(runDone)
+	}()
+	if err := shutdownGateway(
+		&services{},
+		al,
+		&startupBlockedProvider{reason: "not used"},
+		msgBus,
+		gatewayAgentRuntime{cancel: cancelRun, done: runDone},
+		true,
+	); err != nil {
+		t.Fatalf("shutdownGateway() error = %v", err)
+	}
+	if !errors.Is(runCtx.Err(), context.Canceled) {
+		t.Fatalf("agent runtime context error = %v, want canceled", runCtx.Err())
+	}
 
 	evt := receiveGatewayRuntimeEvent(t, eventsCh)
 	if evt.Kind != runtimeevents.KindBusCloseCompleted {
@@ -1051,6 +1069,30 @@ func TestShutdownGatewayClosesMessageBus(t *testing.T) {
 	}
 	if err := msgBus.PublishVoiceControl(context.Background(), bus.VoiceControl{}); !errors.Is(err, bus.ErrBusClosed) {
 		t.Fatalf("PublishVoiceControl after shutdown error = %v, want %v", err, bus.ErrBusClosed)
+	}
+}
+
+func TestGatewayAgentRuntimeStopBoundsRunLoopWait(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	al := agent.NewAgentLoop(
+		config.DefaultConfig(),
+		msgBus,
+		&startupBlockedProvider{reason: "not used"},
+	)
+	t.Cleanup(func() {
+		msgBus.Close()
+		al.Close()
+	})
+
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	err := (gatewayAgentRuntime{cancel: cancelRun, done: make(chan struct{})}).stop(ctx, al)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop() error = %v, want deadline exceeded", err)
+	}
+	if !errors.Is(runCtx.Err(), context.Canceled) {
+		t.Fatalf("agent runtime context error = %v, want canceled", runCtx.Err())
 	}
 }
 

@@ -870,8 +870,18 @@ func (m *Manager) reconnectServer(
 	return currentConn, nil
 }
 
-// Close closes all server connections
+// Close closes all server connections.
 func (m *Manager) Close() error {
+	return m.CloseContext(context.Background())
+}
+
+// CloseContext closes all server connections after in-flight operations drain.
+// A canceled context leaves connection cleanup owned by the manager so a later
+// call can retry it instead of releasing process leases prematurely.
+func (m *Manager) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Closing prevents new calls immediately, but failed server cleanup remains
 	// retryable and retains its exclusive lease. A second Close is therefore a
 	// real cleanup retry rather than an unconditional no-op.
@@ -879,9 +889,18 @@ func (m *Manager) Close() error {
 	m.closed.Store(true)
 	m.mu.Unlock()
 
-	// Wait for all in-flight CallTool calls to finish before closing sessions
-	// After closed=true is set, no new CallTool can start (they check closed first)
-	m.wg.Wait()
+	// Wait for all in-flight operations before closing sessions. After
+	// closed=true is set, no new operation can join the wait group.
+	drained := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for in-flight MCP operations: %w", ctx.Err())
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

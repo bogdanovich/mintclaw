@@ -981,6 +981,79 @@ func TestCloseWaitsForConnectionRejectionCleanupHandoff(t *testing.T) {
 	lease.release()
 }
 
+func TestCloseContextBoundsInflightOperationWaitAndRetainsCleanup(t *testing.T) {
+	cleanup := &retryableTestCleanup{}
+	mgr := NewManager()
+	mgr.servers["playwright"] = &ServerConnection{
+		Name: "playwright", cleanup: cleanup, cleanupFailed: true,
+	}
+	mgr.wg.Add(1)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	err := mgr.CloseContext(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CloseContext() error = %v, want deadline exceeded", err)
+	}
+	if cleanup.calls != 0 {
+		t.Fatalf("cleanup calls before in-flight drain = %d, want 0", cleanup.calls)
+	}
+	if len(mgr.servers) != 1 {
+		t.Fatalf("owned server count after timeout = %d, want 1", len(mgr.servers))
+	}
+
+	mgr.wg.Done()
+	if err = mgr.CloseContext(t.Context()); err != nil {
+		t.Fatalf("CloseContext() retry error = %v", err)
+	}
+	if cleanup.calls != 1 {
+		t.Fatalf("cleanup calls after retry = %d, want 1", cleanup.calls)
+	}
+}
+
+func TestCanceledToolCallDrainsBeforeCloseContextDeadline(t *testing.T) {
+	connection, transport, err := newScriptedServerConnection(
+		"session-1",
+		&sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "late"}}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("newScriptedServerConnection() error = %v", err)
+	}
+	transport.toolCallStarted = make(chan struct{})
+	transport.releaseToolCall = make(chan struct{})
+	mgr := NewManager()
+	mgr.servers["playwright"] = connection
+
+	callCtx, cancelCall := context.WithCancel(t.Context())
+	callErr := make(chan error, 1)
+	go func() {
+		_, callError := mgr.CallTool(callCtx, "playwright", "echo", nil)
+		callErr <- callError
+	}()
+	select {
+	case <-transport.toolCallStarted:
+	case <-time.After(time.Second):
+		t.Fatal("tool call did not reach the transport")
+	}
+
+	cancelCall()
+	closeCtx, cancelClose := context.WithTimeout(t.Context(), time.Second)
+	defer cancelClose()
+	if err = mgr.CloseContext(closeCtx); err != nil {
+		t.Fatalf("CloseContext() error = %v", err)
+	}
+	if err = <-callErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallTool() error = %v, want canceled", err)
+	}
+	transport.mu.Lock()
+	closed := transport.closed
+	transport.mu.Unlock()
+	if !closed {
+		t.Fatal("transport remained open after canceled call drained")
+	}
+}
+
 type retryableTestCleanup struct {
 	err   error
 	calls int
@@ -1417,10 +1490,13 @@ type scriptedTransport struct {
 	toolCallErr    error
 	closeErr       error
 
-	mu            sync.Mutex
-	toolCallCalls int
-	closed        bool
-	incoming      chan jsonrpc.Message
+	mu              sync.Mutex
+	toolCallCalls   int
+	closed          bool
+	incoming        chan jsonrpc.Message
+	toolCallOnce    sync.Once
+	toolCallStarted chan struct{}
+	releaseToolCall <-chan struct{}
 }
 
 func (t *scriptedTransport) Connect(context.Context) (sdkmcp.Connection, error) {
@@ -1477,6 +1553,16 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 		t.mu.Lock()
 		t.toolCallCalls++
 		t.mu.Unlock()
+		if t.toolCallStarted != nil {
+			t.toolCallOnce.Do(func() { close(t.toolCallStarted) })
+		}
+		if t.releaseToolCall != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.releaseToolCall:
+			}
+		}
 
 		if t.toolCallErr != nil {
 			return t.toolCallErr

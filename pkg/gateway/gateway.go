@@ -328,8 +328,14 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		select {
 		case <-sigChan:
 			logger.Info("Shutting down...")
-			shutdownGateway(runningServices, agentLoop, provider, msgBus, true)
-			return nil
+			return shutdownGateway(
+				runningServices,
+				agentLoop,
+				provider,
+				msgBus,
+				gatewayAgentRuntime{cancel: cancel, done: agentRunDone},
+				true,
+			)
 		case newCfg := <-configReloadChan:
 			if !runningServices.reloading.CompareAndSwap(false, true) {
 				logger.Warn("Config reload skipped: another reload is in progress")
@@ -1289,29 +1295,68 @@ func rollbackBrowserRuntime(runningServices *services) error {
 	return closeBrowserRuntime(ctx, runningServices)
 }
 
+type gatewayAgentRuntime struct {
+	cancel context.CancelFunc
+	done   <-chan struct{}
+}
+
+func (runtime gatewayAgentRuntime) stop(ctx context.Context, agentLoop *agent.AgentLoop) error {
+	if runtime.cancel != nil {
+		runtime.cancel()
+	}
+	agentLoop.Stop()
+	if runtime.done != nil {
+		select {
+		case <-runtime.done:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for agent runtime: %w", ctx.Err())
+		}
+	}
+	if err := agentLoop.CloseContext(ctx); err != nil {
+		return fmt.Errorf("closing agent runtime: %w", err)
+	}
+	return nil
+}
+
 func shutdownGateway(
 	runningServices *services,
 	agentLoop *agent.AgentLoop,
 	provider providers.LLMProvider,
 	msgBus *bus.MessageBus,
+	agentRuntime gatewayAgentRuntime,
 	fullShutdown bool,
-) {
+) error {
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayShutdown, time.Time{}, nil)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), serviceShutdownTimeout)
+	defer cancelShutdown()
+	if agentRuntime.cancel != nil {
+		agentRuntime.cancel()
+	}
 
 	if cp, ok := provider.(providers.StatefulProvider); ok && fullShutdown {
 		cp.Close()
 	}
 
-	_ = stopAndCleanupServices(runningServices, gracefulShutdownTimeout, false)
+	var shutdownErrors []error
+	if err := stopAndCleanupServices(runningServices, gracefulShutdownTimeout, false); err != nil {
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("stopping gateway services: %w", err))
+	}
 
 	if fullShutdown && msgBus != nil {
 		msgBus.Close()
 	}
 
-	agentLoop.Stop()
-	agentLoop.Close()
+	if err := agentRuntime.stop(shutdownCtx, agentLoop); err != nil {
+		shutdownErrors = append(shutdownErrors, err)
+	}
+	if len(shutdownErrors) > 0 {
+		err := errors.Join(shutdownErrors...)
+		logger.ErrorCF("gateway", "Gateway stopped with cleanup failures", map[string]any{"error": err.Error()})
+		return err
+	}
 
 	logger.Info("✓ Gateway stopped")
+	return nil
 }
 
 func handleConfigReload(

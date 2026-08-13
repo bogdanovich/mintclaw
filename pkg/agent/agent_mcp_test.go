@@ -44,6 +44,17 @@ func TestMCPRuntimeResetClearsState(t *testing.T) {
 	}
 }
 
+func TestMCPRuntimeRestoreManagerPreservesCurrentOwner(t *testing.T) {
+	var runtime mcpRuntime
+	first := mcp.NewManager()
+	second := mcp.NewManager()
+	runtime.restoreManager(first)
+	runtime.restoreManager(second)
+	if got := runtime.takeManager(); got != first {
+		t.Fatalf("takeManager() = %p, want first restored manager %p", got, first)
+	}
+}
+
 func TestReloadProviderAndConfig_ResetsMCPRuntime(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
