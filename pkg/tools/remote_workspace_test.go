@@ -427,6 +427,25 @@ func TestRemoteWorkspaceReadToolRoutesOnlyExplicitAlias(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspacePatchDescriptionExplainsRemoteDeletion(t *testing.T) {
+	local := fstools.NewApplyPatchTool(t.TempDir(), true)
+	remote := &remoteWorkspaceReadSource{}
+	tool, err := NewRemoteWorkspaceTool(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, guidance := range []string{
+		"there is no separate delete-file tool",
+		"pass its workspace alias",
+		"*** Delete File: path",
+		"never falls back to the local host",
+	} {
+		if !strings.Contains(tool.Description(), guidance) {
+			t.Fatalf("remote apply_patch description does not contain %q: %q", guidance, tool.Description())
+		}
+	}
+}
+
 func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
 	remote := &remoteWorkspaceReadSource{}
 	local := fstools.NewReadFileLinesTool(t.TempDir(), false, fstools.MaxReadFileSize)

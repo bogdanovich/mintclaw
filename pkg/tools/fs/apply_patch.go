@@ -29,7 +29,10 @@ func (t *ApplyPatchTool) Name() string {
 }
 
 func (t *ApplyPatchTool) Description() string {
-	return "Apply a structured multi-file patch. Use the Codex patch format with *** Begin Patch, one or more *** Add File / *** Update File / *** Delete File sections, and *** End Patch. Prefer this over write_file for code edits spanning multiple files."
+	return "Apply a structured patch to add, update, or delete files. " +
+		"To delete a file, use a *** Delete File: path section; there is no separate delete-file tool. " +
+		"Use the Codex patch format with *** Begin Patch, one or more *** Add File / *** Update File / " +
+		"*** Delete File sections, and *** End Patch. Prefer this over write_file for targeted or multi-file edits."
 }
 
 func (t *ApplyPatchTool) Parameters() map[string]any {

@@ -183,7 +183,7 @@ func (*NodeDiscoveryTool) Description() string {
 	return "List execution targets visible to this agent or describe one visible target. " +
 		"Only operator-configured target names are accepted; connection details and raw node IDs are never exposed. " +
 		"Remote workspace file operations use read_file, search_files, write_file, or apply_patch with their " +
-		"workspace parameter, not this tool."
+		"workspace parameter, not this tool. Delete remote files with an apply_patch *** Delete File section."
 }
 
 func (*NodeDiscoveryTool) Parameters() map[string]any {
@@ -259,7 +259,7 @@ func (tool *NodeDiscoveryTool) describe(
 	if nodes.IsWorkspaceCommand(command) {
 		return toolshared.ErrorResult(
 			"workspace.* commands are internal; use read_file, search_files, write_file, or apply_patch " +
-				"with a configured workspace alias",
+				"with a configured workspace alias; delete files with an apply_patch *** Delete File section",
 		)
 	}
 	entry, snapshot, registration, err := tool.access.resolve(target, defaultTarget)

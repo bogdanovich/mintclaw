@@ -76,10 +76,12 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 		"action": "describe", "target": "build", "command": nodes.WorkspaceCommandRead,
 	})
 	if !result.IsError || !strings.Contains(result.ForLLM, "workspace.* commands are internal") ||
-		!strings.Contains(result.ForLLM, "use read_file") {
+		!strings.Contains(result.ForLLM, "use read_file") ||
+		!strings.Contains(result.ForLLM, "delete files with an apply_patch *** Delete File section") {
 		t.Fatalf("internal workspace discovery guidance = %#v", result)
 	}
-	if !strings.Contains(tool.Description(), "Remote workspace file operations use read_file") {
+	if !strings.Contains(tool.Description(), "Remote workspace file operations use read_file") ||
+		!strings.Contains(tool.Description(), "Delete remote files with an apply_patch *** Delete File section") {
 		t.Fatalf("nodes tool description lacks workspace guidance: %q", tool.Description())
 	}
 	noSnapshot := NewNodeDiscoveryTool(cfg, &fakeNodeDiscoverySource{})

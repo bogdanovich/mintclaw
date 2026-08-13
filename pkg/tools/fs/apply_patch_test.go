@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func TestApplyPatchDescriptionMakesFileDeletionDiscoverable(t *testing.T) {
+	description := NewApplyPatchTool(t.TempDir(), true).Description()
+	for _, guidance := range []string{"delete a file", "*** Delete File: path", "no separate delete-file tool"} {
+		if !strings.Contains(description, guidance) {
+			t.Fatalf("apply_patch description does not contain %q: %q", guidance, description)
+		}
+	}
+}
+
 func TestApplyPatchTool_UpdateFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "main.go")
