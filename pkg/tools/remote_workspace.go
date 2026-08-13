@@ -85,10 +85,14 @@ func NewRemoteWorkspaceTool(
 func (tool *RemoteWorkspaceTool) Name() string { return tool.local.Name() }
 
 func (tool *RemoteWorkspaceTool) Description() string {
-	return tool.local.Description() +
+	description := tool.local.Description() +
 		" Omit workspace for the current gateway-local workspace, or pass one configured remote workspace alias. " +
 		"Call this tool directly for remote workspace operations; do not use nodes discovery for workspace.* commands. " +
 		"A failed remote call never falls back to the local host."
+	if tool.Name() == "apply_patch" {
+		description += " To delete a remote file, pass its workspace alias and a *** Delete File: path patch."
+	}
+	return description
 }
 
 func (tool *RemoteWorkspaceTool) Parameters() map[string]any {
