@@ -579,20 +579,20 @@ func (host *BrowserHost) Contexts(
 		}
 		return nodes.BrowserContextResult{}, ErrBrowserHostLost
 	}
-	if request.Operation != "select" && session.contextCatalog != nil &&
-		!reflect.DeepEqual(*session.contextCatalog, catalog) {
-		session.elementRefs = make(map[string]browserworker.DriverElement)
-		session.observationDigest = nil
-	}
 	catalogCopy, cloneErr := browserContextCatalogValue(browserContextCatalogResult(catalog))
 	if cloneErr != nil {
 		host.quarantineActionLocked(session)
 		return nodes.BrowserContextResult{}, ErrBrowserHostLost
 	}
+	if request.Operation != "select" && session.contextCatalog != nil &&
+		!reflect.DeepEqual(*session.contextCatalog, catalogCopy) {
+		session.elementRefs = make(map[string]browserworker.DriverElement)
+		session.observationDigest = nil
+	}
 	session.contextCatalog = &catalogCopy
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
 	return nodes.BrowserContextResult{
-		Operation: request.Operation, Catalog: browserContextCatalogResult(catalog), Observation: observation,
+		Operation: request.Operation, Catalog: browserContextCatalogResult(catalogCopy), Observation: observation,
 	}, nil
 }
 
