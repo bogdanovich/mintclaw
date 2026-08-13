@@ -6,6 +6,7 @@ const (
 	InvocationDispatchCommandDenied       = "COMMAND_DENIED"
 	InvocationDispatchCommandUnavailable  = "COMMAND_UNAVAILABLE"
 	InvocationDispatchExecutionFailed     = "EXECUTION_FAILED"
+	InvocationDispatchFileNotFound        = "FILE_NOT_FOUND"
 	InvocationDispatchIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
 	InvocationDispatchInvalidPlan         = "INVALID_PLAN"
 	InvocationDispatchNodeBusy            = "NODE_BUSY"
@@ -47,6 +48,7 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 	case InvocationDispatchCommandDenied,
 		InvocationDispatchCommandUnavailable,
 		InvocationDispatchExecutionFailed,
+		InvocationDispatchFileNotFound,
 		InvocationDispatchIdempotencyConflict,
 		InvocationDispatchInvalidPlan,
 		InvocationDispatchNodeBusy,

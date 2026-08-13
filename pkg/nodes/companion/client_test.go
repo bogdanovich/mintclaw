@@ -42,6 +42,21 @@ func TestInvocationRejectionReasonDistinguishesAuthorizationLayers(t *testing.T)
 	}
 }
 
+func TestInvocationCommandFailurePreservesAuthorizedFileNotFound(t *testing.T) {
+	err := newCommandFailure(
+		nodes.InvocationDispatchFileNotFound,
+		"workspace file was not found",
+		ErrFileNotFound,
+	)
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchFileNotFound || message != "workspace file was not found" {
+		t.Fatalf("invocationCommandFailure() = %q, %q", code, message)
+	}
+	if reason := invocationRejectionReason(err); reason != "execution_failed" {
+		t.Fatalf("file-not-found rejection reason = %q", reason)
+	}
+}
+
 func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 	registry, handler := testGatewayAdmission(t)
 	server := httptest.NewTLSServer(handler)

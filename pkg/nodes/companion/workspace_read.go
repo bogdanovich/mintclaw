@@ -305,6 +305,13 @@ func (handler workspaceReadHandler) execute(
 		},
 	)
 	if err != nil {
+		if errors.Is(err, ErrFileNotFound) {
+			return nil, newCommandFailure(
+				nodes.InvocationDispatchFileNotFound,
+				"workspace file was not found",
+				err,
+			)
+		}
 		return nil, fmt.Errorf("%w: %s", nodes.ErrCommandDenied, safeFileFailureCode(err))
 	}
 	result.Path = filepath.ToSlash(input.Path)

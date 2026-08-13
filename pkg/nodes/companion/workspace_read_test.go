@@ -4,6 +4,7 @@ package companion
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -86,6 +87,44 @@ func TestWorkspaceReadRejectsEscapeAndWrongProfile(t *testing.T) {
 		_, err := handler.execute(t.Context(), commandInvocation{Input: json.RawMessage(input)})
 		if err == nil || !strings.Contains(err.Error(), "denied") {
 			t.Fatalf("Invoke(%s) error = %v", input, err)
+		}
+	}
+}
+
+func TestWorkspaceReadMissingFileIsDurableNotFoundWithoutReplay(t *testing.T) {
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	input := json.RawMessage(`{
+		"profile_revision":"project-v1",
+		"workspace_revision":"workspace-v1",
+		"working_scope":"project",
+		"path":"missing.txt",
+		"start_line":1,
+		"max_lines":10
+	}`)
+	plan := testRuntimePlan(t, runtime, nodes.WorkspaceCommandRead, input)
+	if _, err := runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrFileNotFound) {
+		t.Fatalf("missing workspace read error = %v", err)
+	} else {
+		var failure *commandFailureError
+		if !errors.As(err, &failure) || failure.failure.Code != nodes.InvocationDispatchFileNotFound ||
+			failure.failure.Message != "workspace file was not found" {
+			t.Fatalf("missing workspace read failure = %#v, %v", failure, err)
+		}
+	}
+	record, found, err := runtime.Invocation(plan.InvocationID)
+	if err != nil || !found || record.State != nodes.InvocationFailed || record.Failure == nil ||
+		record.Failure.Code != nodes.InvocationDispatchFileNotFound {
+		t.Fatalf("durable missing workspace read = %#v, found %v, error %v", record, found, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "missing.txt"), []byte("created after failure"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Invoke(t.Context(), plan); err == nil {
+		t.Fatal("duplicate missing-file invocation replayed after the file appeared")
+	} else {
+		var recorded *recordedInvocationError
+		if !errors.As(err, &recorded) || recorded.failure.Code != nodes.InvocationDispatchFileNotFound {
+			t.Fatalf("duplicate missing workspace read error = %T %v", err, err)
 		}
 	}
 }
