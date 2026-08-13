@@ -3204,6 +3204,38 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 	}
 }
 
+func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	defer al.Close()
+	channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "rid-mintclaw"}}
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t, cfg, msgBus, media.NewFileMediaStore(), "mintclaw", channel,
+	))
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-handled",
+		channel: "mintclaw", chatID: "mintclaw:live", sessionKey: "session-handled",
+		opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
+		}}},
+	}
+	result := toolshared.UserResult("handled response").WithResponseHandled()
+	if _, outcome, err := al.deliverToolResultToUser(
+		t.Context(), ts, result, "delegate",
+	); err != nil || outcome != toolResultDeliveryQueued {
+		t.Fatalf("handled delivery = (%v, %v)", outcome, err)
+	}
+	waitForSentMessages(t, channel, 1)
+	sent := channel.messagesSnapshot()[0]
+	metadata := bus.OutboundMetadataFromMessage(sent)
+	if !metadata.IsFinal() || metadata.IsInterim() {
+		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)
+	}
+}
+
 func TestRecoverableToolOutboundRejectsNonDurableRoute(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()

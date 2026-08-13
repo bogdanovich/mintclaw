@@ -688,10 +688,19 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 }
 
 func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx *bus.InboundContext) {
-	if result == nil || !result.ImmediateDelivery {
+	if result == nil {
 		return
 	}
-	bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.ApplyToContext(outboundCtx)
+	kind := ""
+	switch {
+	case result.ResponseHandled || result.DeliveryIntent == toolshared.DeliveryFinalHandled:
+		kind = bus.OutboundKindFinal
+	case result.ImmediateDelivery || result.DeliveryIntent == toolshared.DeliveryImmediateContinue:
+		kind = bus.OutboundKindInterim
+	}
+	if kind != "" {
+		bus.OutboundMetadata{OutboundKind: kind}.ApplyToContext(outboundCtx)
+	}
 }
 
 func firstNonEmptyString(values ...string) string {
