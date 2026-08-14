@@ -13,8 +13,10 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-type durableProjectionTestTool struct{}
-type resultOnlyDurabilityTestTool struct{}
+type (
+	durableProjectionTestTool    struct{}
+	resultOnlyDurabilityTestTool struct{}
+)
 
 func (durableProjectionTestTool) Name() string        { return "protected_test" }
 func (durableProjectionTestTool) Description() string { return "test protected arguments" }
@@ -39,15 +41,18 @@ func (resultOnlyDurabilityTestTool) Name() string { return "result_only_test" }
 func (resultOnlyDurabilityTestTool) Description() string {
 	return "test result-only durability classification"
 }
+
 func (resultOnlyDurabilityTestTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
 		"required": []string{"value"}, "additionalProperties": false,
 	}
 }
+
 func (resultOnlyDurabilityTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	return &toolshared.ToolResult{ForLLM: "live private result"}
 }
+
 func (resultOnlyDurabilityTestTool) DurableArguments(args map[string]any) (map[string]any, error) {
 	return args, nil
 }
