@@ -973,9 +973,37 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       const tag = String(element.tagName || "").toLowerCase();
       const type = String(element.getAttribute("type") || "").toLowerCase();
       const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
-      const identity = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
+      const role = String(element.getAttribute("role") || "").toLowerCase().trim();
+      const ariaDisabled = String(element.getAttribute("aria-disabled") || "").toLowerCase().trim();
+      const ariaReadOnly = String(element.getAttribute("aria-readonly") || "").toLowerCase().trim();
+      const labelledBy = String(element.getAttribute("aria-labelledby") || "").trim();
+      const identityParts = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
         String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
-        String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
+        String(label.textContent || "")));
+      let labelledByValid = labelledBy.length <= 1024;
+      if (labelledBy) {
+        const ids = labelledBy.split(/\s+/u).filter(Boolean);
+        const wanted = new Set(ids);
+        const references = new Map(ids.map(id => [id, []]));
+        if (ids.length === 0 || ids.length > 16 || wanted.size !== ids.length) labelledByValid = false;
+        if (labelledByValid) {
+          for (const candidate of element.ownerDocument.querySelectorAll("[id]")) {
+            if (wanted.has(candidate.id)) references.get(candidate.id).push(candidate);
+          }
+          for (const id of ids) {
+            const candidates = references.get(id);
+            const text = candidates && candidates.length === 1 ? String(candidates[0].textContent || "") : "";
+            if (!candidates || candidates.length !== 1 || !text.trim() || text.length > 1024) {
+              labelledByValid = false;
+              break;
+            }
+            identityParts.push(text);
+          }
+        }
+      }
+      const identityPartsValid = identityParts.length <= 32 &&
+        identityParts.every(part => part.length <= 1024);
+      const identity = identityParts.join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
       const style = element.ownerDocument.defaultView.getComputedStyle(element);
       const bounds = element.getBoundingClientRect();
       const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
@@ -983,7 +1011,11 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
         tag === "textarea" || element.isContentEditable;
       const effectivelyDisabled = element.disabled || element.matches(":disabled");
+      const compatibleRole = role === "" || role === "textbox" || role === "searchbox";
+      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
+      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
       return args.policy.valid && visible && inputLike && !effectivelyDisabled && !element.readOnly &&
+        labelledByValid && identityPartsValid && identity.length <= 4096 && compatibleRole && ariaEnabled && ariaWritable &&
         ordinaryAutocomplete.has(autocomplete) && !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
         args.policy.ordinary.some(term => matchesTerm(identity, term));
     };
@@ -996,9 +1028,22 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       element.textContent = args.value;
     } else {
       const prototype = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(prototype, "value").set;
-      if (typeof setter !== "function") return "error|missing_value_setter";
+      const valueDescriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+      const setter = valueDescriptor && valueDescriptor.set;
+      const getter = valueDescriptor && valueDescriptor.get;
+      if (typeof setter !== "function" || typeof getter !== "function") return "error|missing_value_setter";
+      if (tag === "input" && String(element.getAttribute("type") || "").toLowerCase() === "number") {
+        const probe = element.ownerDocument.createElement("input");
+        probe.type = "number";
+        setter.call(probe, args.value);
+        if (getter.call(probe) !== args.value) return "denied";
+      }
+      const priorValue = getter.call(element);
       setter.call(element, args.value);
+      if (getter.call(element) !== args.value) {
+        setter.call(element, priorValue);
+        return "denied";
+      }
     }
     const inputEvent = typeof InputEvent === "function" ?
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: args.value }) :

@@ -221,7 +221,9 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 	for _, required := range []string{
 		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
 		`args.policy.sensitive.some(term => matchesTerm(identity, term))`, `element.matches(":disabled")`,
+		`element.getAttribute("aria-labelledby")`, `candidate.id`, `compatibleRole`, `ariaEnabled`, `ariaWritable`,
 		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
+		`probe.type = "number"`, `getter.call(probe) !== args.value`, `setter.call(element, priorValue)`,
 		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
 		`return "denied"`, `return "MINTCLAW_NAV_ACT_V1|" + fillOutcome`,
 	} {
@@ -1950,6 +1952,102 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	if err != nil || !strings.Contains(focusText, "MINTCLAW_FOCUS_DENIAL_V1|password|true") {
 		t.Fatalf("focus mutation denial result = %q, %v", focusText, err)
 	}
+	accessibilityCases := []struct {
+		name     string
+		mutation string
+		want     string
+		value    string
+	}{
+		{
+			name: "labelledby_password",
+			mutation: `const label = document.createElement("span");
+			label.id = "focus-sensitive-label";
+			label.textContent = "Password";
+			document.body.append(label);
+			element.onfocus = () => { element.setAttribute("aria-labelledby", label.id); };`,
+			want:  "text|keep||false|false|focus-sensitive-label|keep",
+			value: "labelledby-fill-canary",
+		},
+		{
+			name:     "incompatible_role",
+			mutation: `element.onfocus = () => { element.setAttribute("role", "button"); };`,
+			want:     "text|keep|button|false|false||keep",
+			value:    "role-fill-canary",
+		},
+		{
+			name:     "aria_disabled",
+			mutation: `element.onfocus = () => { element.setAttribute("aria-disabled", "true"); };`,
+			want:     "text|keep||true|false||keep",
+			value:    "aria-disabled-fill-canary",
+		},
+		{
+			name:     "aria_readonly",
+			mutation: `element.onfocus = () => { element.setAttribute("aria-readonly", "true"); };`,
+			want:     "text|keep||false|true||keep",
+			value:    "aria-readonly-fill-canary",
+		},
+		{
+			name: "number_rejects_nonnumeric",
+			mutation: `element.value = "7";
+			element.onfocus = () => { element.type = "number"; };`,
+			want:  "number|7||false|false||7",
+			value: "not-a-number",
+		},
+	}
+	for _, testCase := range accessibilityCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupCode := `async (page) => page.evaluate(() => {
+				const element = document.querySelector("#race-name");
+				element.blur();
+				element.onfocus = null;
+				element.type = "text";
+				element.value = "keep";
+				element.removeAttribute("role");
+				element.removeAttribute("aria-disabled");
+				element.removeAttribute("aria-readonly");
+				element.removeAttribute("aria-labelledby");
+				document.querySelector("#focus-sensitive-label")?.remove();
+				` + testCase.mutation + `
+				return "armed";
+			})`
+			setup, setupErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+				"code": setupCode,
+			})
+			if setupErr != nil || setup == nil || setup.IsError {
+				t.Fatalf("setup = %#v, %v", setup, setupErr)
+			}
+			freshObservation, observeErr := worker.Observe(ctx)
+			if observeErr != nil {
+				t.Fatalf("Observe() after setup = %v", observeErr)
+			}
+			freshRef := mustSnapshotRef(t, freshObservation.Snapshot, `textbox "Race name" \[ref=(e[0-9]+)\]`)
+			fillErr := executeAtCurrentNavigation(DriverAction{
+				Kind: DriverFill, Target: freshRef, Element: "Race name", Value: testCase.value,
+			})
+			if !errors.Is(fillErr, ErrDenied) {
+				t.Fatalf("fill error = %v, want ErrDenied", fillErr)
+			}
+			probe, probeErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+				"code": `async (page) => page.evaluate(() => {
+					const element = document.querySelector("#race-name");
+					return "MINTCLAW_ACCESSIBILITY_DENIAL_V1|" + element.type + "|" + element.value + "|" +
+						String(element.getAttribute("role") || "") + "|" +
+						String(element.getAttribute("aria-disabled") || "false") + "|" +
+						String(element.getAttribute("aria-readonly") || "false") + "|" +
+						String(element.getAttribute("aria-labelledby") || "") + "|" + element.value;
+				})`,
+			})
+			if probeErr != nil || probe == nil || probe.IsError {
+				t.Fatalf("probe = %#v, %v", probe, probeErr)
+			}
+			probeText, boundedErr := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+			if boundedErr != nil || !strings.Contains(
+				probeText, "MINTCLAW_ACCESSIBILITY_DENIAL_V1|"+testCase.want,
+			) {
+				t.Fatalf("denial result = %q, %v", probeText, boundedErr)
+			}
+		})
+	}
 	disabledSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => page.evaluate(() => {
 			const element = document.querySelector("#race-name");
@@ -1968,8 +2066,15 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	if err != nil || disabledSetup == nil || disabledSetup.IsError {
 		t.Fatalf("disabled fieldset setup = %#v, %v", disabledSetup, err)
 	}
+	disabledObservation, err := worker.Observe(ctx)
+	if err != nil {
+		t.Fatalf("Observe() after disabled fieldset setup = %v", err)
+	}
+	disabledRef := mustSnapshotRef(
+		t, disabledObservation.Snapshot, `textbox "Race name" \[disabled\] \[ref=(e[0-9]+)\]`,
+	)
 	if err = executeAtCurrentNavigation(DriverAction{
-		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "disabled-fill-canary",
+		Kind: DriverFill, Target: disabledRef, Element: "Race name", Value: "disabled-fill-canary",
 	}); !errors.Is(err, ErrDenied) {
 		t.Fatalf("disabled fieldset fill error = %v, want ErrDenied", err)
 	}
