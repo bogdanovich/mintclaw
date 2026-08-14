@@ -1115,6 +1115,77 @@ func TestPlaywrightWorkerRejectsSelectorsOversizedInputAndUnknownActions(t *test
 	}
 }
 
+func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	tests := []struct {
+		name       string
+		action     DriverAction
+		wantTool   string
+		wantFields map[string]any
+		codeTerms  []string
+	}{
+		{
+			name: "hover", action: DriverAction{Kind: DriverHover, Target: "e1", Element: "Menu"},
+			wantTool: "browser_hover", wantFields: map[string]any{"target": "e1", "element": "Menu"},
+		},
+		{
+			name: "drag", action: DriverAction{
+				Kind: DriverDrag, Target: "e2", Element: "Card",
+				DestinationTarget: "e3", DestinationElement: "Done",
+			},
+			wantTool: "browser_drag", wantFields: map[string]any{
+				"startRef": "e2", "startElement": "Card", "endRef": "e3", "endElement": "Done",
+			},
+		},
+		{
+			name: "check", action: DriverAction{Kind: DriverCheck, Target: "f2e4", Element: "Notify"},
+			wantTool:  "browser_run_code_unsafe",
+			codeTerms: []string{`page.locator("aria-ref=" + "f2e4")`, ".check()", "isChecked()", `return "no_change"`},
+		},
+		{
+			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
+			wantTool: "browser_run_code_unsafe",
+			codeTerms: []string{`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
+				`return "denied"`},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tool, arguments, err := mapPlaywrightAction(test.action, limits)
+			if err != nil || tool != test.wantTool {
+				t.Fatalf("mapPlaywrightAction() = %q, %+v, %v", tool, arguments, err)
+			}
+			for key, want := range test.wantFields {
+				if got := arguments[key]; got != want {
+					t.Fatalf("argument %q = %#v, want %#v", key, got, want)
+				}
+			}
+			code, _ := arguments["code"].(string)
+			for _, term := range test.codeTerms {
+				if !strings.Contains(code, term) {
+					t.Fatalf("generated code does not contain %q: %s", term, code)
+				}
+			}
+			if strings.Contains(code, "mouse.") || strings.Contains(code, "position:") ||
+				strings.Contains(code, "force:") {
+				t.Fatalf("semantic primitive contains coordinate or force fallback: %s", code)
+			}
+		})
+	}
+
+	invalid := []DriverAction{
+		{Kind: DriverHover, Target: "#menu"},
+		{Kind: DriverDrag, Target: "e1", DestinationTarget: "e1"},
+		{Kind: DriverDrag, Target: "e1", DestinationTarget: ".drop"},
+		{Kind: DriverCheck, Target: "e1", DestinationTarget: "e2"},
+	}
+	for _, action := range invalid {
+		if _, _, err := mapPlaywrightAction(action, limits); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("mapPlaywrightAction(%+v) error = %v, want ErrInvalid", action, err)
+		}
+	}
+}
+
 func TestPlaywrightWorkerTracksAndHandlesPendingDialog(t *testing.T) {
 	client := &fakePlaywrightClient{
 		catalog: playwrightCatalogFixture(),

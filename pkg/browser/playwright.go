@@ -134,23 +134,29 @@ const (
 	DriverPress          DriverActionKind = "press"
 	DriverScroll         DriverActionKind = "scroll"
 	DriverDialog         DriverActionKind = "dialog"
+	DriverCheck          DriverActionKind = "check"
+	DriverUncheck        DriverActionKind = "uncheck"
+	DriverHover          DriverActionKind = "hover"
+	DriverDrag           DriverActionKind = "drag"
 	DriverUpload         DriverActionKind = "upload"
 	DriverDownloadAction DriverActionKind = "download"
 )
 
 type DriverAction struct {
-	Kind           DriverActionKind
-	URL            string
-	Target         string
-	Element        string
-	Value          string
-	Key            string
-	Direction      string
-	Amount         int
-	Accept         bool
-	PromptProvided bool
-	ArtifactSHA256 string
-	ArtifactBytes  int64
+	Kind               DriverActionKind
+	URL                string
+	Target             string
+	Element            string
+	DestinationTarget  string
+	DestinationElement string
+	Value              string
+	Key                string
+	Direction          string
+	Amount             int
+	Accept             bool
+	PromptProvided     bool
+	ArtifactSHA256     string
+	ArtifactBytes      int64
 }
 
 type DriverObservation struct {
@@ -1398,6 +1404,9 @@ func mapPlaywrightAction(
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
 ) (string, map[string]any, error) {
+	if action.Kind != DriverDrag && (action.DestinationTarget != "" || action.DestinationElement != "") {
+		return "", nil, fmt.Errorf("%w: malformed destination action", ErrInvalid)
+	}
 	switch action.Kind {
 	case DriverNavigate:
 		normalized, err := normalizeDriverNavigationURL(action.URL)
@@ -1495,9 +1504,60 @@ func mapPlaywrightAction(
 			arguments["promptText"] = action.Value
 		}
 		return "browser_handle_dialog", arguments, nil
+	case DriverHover:
+		if !validPlaywrightElementAction(action, false) {
+			return "", nil, fmt.Errorf("%w: malformed hover action", ErrInvalid)
+		}
+		arguments := map[string]any{"target": action.Target}
+		if action.Element != "" {
+			arguments["element"] = action.Element
+		}
+		return "browser_hover", arguments, nil
+	case DriverDrag:
+		if !validPlaywrightElementAction(action, true) ||
+			!playwrightTargetPattern.MatchString(action.DestinationTarget) ||
+			action.DestinationTarget == action.Target || len(action.DestinationElement) > MaxElementNameBytes {
+			return "", nil, fmt.Errorf("%w: malformed drag action", ErrInvalid)
+		}
+		arguments := map[string]any{
+			"startRef": action.Target, "endRef": action.DestinationTarget,
+			"startElement": action.Element, "endElement": action.DestinationElement,
+		}
+		return "browser_drag", arguments, nil
+	case DriverCheck, DriverUncheck:
+		if !validPlaywrightElementAction(action, false) {
+			return "", nil, fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
+		}
+		return "browser_run_code_unsafe", map[string]any{
+			"code": playwrightCheckActionCode(action.Target, action.Kind == DriverCheck),
+		}, nil
 	default:
 		return "", nil, fmt.Errorf("%w: unsupported driver action", ErrInvalid)
 	}
+}
+
+func validPlaywrightElementAction(action DriverAction, allowDestination bool) bool {
+	return playwrightTargetPattern.MatchString(action.Target) && action.URL == "" && action.Value == "" &&
+		action.Key == "" && action.Direction == "" && action.Amount == 0 && !action.Accept &&
+		!action.PromptProvided && len(action.Element) <= MaxElementNameBytes &&
+		(allowDestination || (action.DestinationTarget == "" && action.DestinationElement == ""))
+}
+
+func playwrightCheckActionCode(target string, checked bool) string {
+	encoded, _ := json.Marshal(target)
+	operation := "uncheck"
+	if checked {
+		operation = "check"
+	}
+	return `async (page) => {
+  const control = page.locator("aria-ref=" + ` + string(encoded) + `);
+  if (await control.count() !== 1 || !await control.isVisible()) return "stale";
+  if (!` + strconv.FormatBool(checked) + ` && await control.getAttribute("type") === "radio") return "denied";
+  if (await control.isChecked() === ` + strconv.FormatBool(checked) + `) return "no_change";
+  await control.` + operation + `();
+  if (await control.isChecked() !== ` + strconv.FormatBool(checked) + `) throw new Error("final_state_mismatch");
+  return "completed";
+}`
 }
 
 func normalizeDriverNavigationURL(raw string) (string, error) {
