@@ -3201,6 +3201,59 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				t.Fatal("immediate media was not queued")
 			}
 		})
+
+		t.Run("canonical immediate overrides stale handled/"+scopeCase.name, func(t *testing.T) {
+			result := (&toolshared.ToolResult{}).
+				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "still working"}).
+				WithResponseHandled().
+				WithImmediateDelivery()
+			if _, outcome, err := al.deliverToolResultToUserWithScopes(
+				t.Context(), ts, result, "message", scopeCase.scopes,
+			); err != nil || outcome != toolResultDeliveryQueued {
+				t.Fatalf("delivery = (%v, %v)", outcome, err)
+			}
+			select {
+			case outbound := <-msgBus.OutboundChan():
+				metadata := bus.OutboundMetadataFromMessage(outbound)
+				if !metadata.IsInterim() || metadata.IsFinal() {
+					t.Fatalf("outbound metadata = %#v, want interim", metadata)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("immediate text was not queued")
+			}
+		})
+	}
+}
+
+func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	defer al.Close()
+	channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "rid-mintclaw"}}
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t, cfg, msgBus, media.NewFileMediaStore(), "mintclaw", channel,
+	))
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-handled",
+		channel: "mintclaw", chatID: "mintclaw:live", sessionKey: "session-handled",
+		opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
+		}}},
+	}
+	result := toolshared.UserResult("handled response").WithResponseHandled()
+	if _, outcome, err := al.deliverToolResultToUser(
+		t.Context(), ts, result, "delegate",
+	); err != nil || outcome != toolResultDeliveryQueued {
+		t.Fatalf("handled delivery = (%v, %v)", outcome, err)
+	}
+	waitForSentMessages(t, channel, 1)
+	sent := channel.messagesSnapshot()[0]
+	metadata := bus.OutboundMetadataFromMessage(sent)
+	if !metadata.IsFinal() || metadata.IsInterim() {
+		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)
 	}
 }
 
