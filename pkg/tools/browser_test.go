@@ -84,6 +84,34 @@ func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing
 	}
 }
 
+func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
+	observe := &BrowserObserveTool{}
+	contexts := &BrowserContextsTool{}
+	action := &BrowserActTool{}
+	args := map[string]any{"browser_session_id": "session_1"}
+
+	for name, protected := range map[string]bool{
+		"observe":  observe.ProtectedDurableArguments(args),
+		"contexts": contexts.ProtectedDurableArguments(args),
+		"navigate": action.ProtectedDurableArguments(map[string]any{
+			"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
+		}),
+	} {
+		if !protected {
+			t.Fatalf("%s result was not protected", name)
+		}
+	}
+
+	projected, err := observe.DurableArguments(args)
+	if err != nil || !reflect.DeepEqual(projected, args) {
+		t.Fatalf("observe durable arguments = %#v, %v", projected, err)
+	}
+	projected["browser_session_id"] = "changed"
+	if args["browser_session_id"] != "session_1" {
+		t.Fatal("observe durable projection mutated live arguments")
+	}
+}
+
 func TestToolRegistryDurableArgumentsPreserveUnknownToolCalls(t *testing.T) {
 	registry := NewToolRegistry()
 	arguments := map[string]any{"value": "handled by a later layer"}

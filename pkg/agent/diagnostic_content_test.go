@@ -406,6 +406,34 @@ func TestProtectedBrowserFillResultIsRedactedFromLogsAndTraces(t *testing.T) {
 	}
 }
 
+func TestBrowserObservationResultIsRedactedFromLogsAndTraces(t *testing.T) {
+	const canary = "browser-observation-result-canary-a72fd516"
+	messages := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "observe-call", Name: "browser_observe",
+				Function: &providers.FunctionCall{
+					Name:      "browser_observe",
+					Arguments: `{"browser_session_id":"session"}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "observe-call", Content: `{"snapshot":"textbox: [` + canary + `]"}`},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(messages),
+		diagnosticMessagesPreview(cfg, messages),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("browser observation result was not redacted: %s", preview)
+		}
+	}
+}
+
 func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
 	const canary = "pending-reused-fill-result-canary-54eb7e0c"
 	messages := []providers.Message{

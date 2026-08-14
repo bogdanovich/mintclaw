@@ -614,6 +614,13 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
+	if plan.Command == nodes.BrowserCommandObserve {
+		// Observations are live page data. In particular, an accessibility
+		// snapshot can echo a value supplied by an earlier protected fill. A
+		// fixed terminal receipt proves completion without making the page data
+		// recoverable or replayable from the companion ledger.
+		return json.RawMessage(`{"protected_result":true}`), nil
+	}
 	if plan.Command == nodes.BrowserCommandContexts {
 		var input nodes.BrowserContextInput
 		if err := json.Unmarshal(plan.Input, &input); err != nil {
@@ -640,17 +647,14 @@ func durableInvocationSuccess(
 	if err := json.Unmarshal(plan.Input, &input); err != nil {
 		return nil, fmt.Errorf("decode browser action for durable result: %w", err)
 	}
-	if input.Action.Kind != "select" {
-		return result, nil
-	}
 	var actionResult nodes.BrowserActResult
 	if err := json.Unmarshal(result, &actionResult); err != nil {
-		return nil, fmt.Errorf("decode select result for durable receipt: %w", err)
+		return nil, fmt.Errorf("decode browser action result for durable receipt: %w", err)
 	}
 	actionResult.Observation = nil
 	durable, err := json.Marshal(actionResult)
 	if err != nil {
-		return nil, fmt.Errorf("encode select durable receipt: %w", err)
+		return nil, fmt.Errorf("encode browser action durable receipt: %w", err)
 	}
 	return durable, nil
 }
