@@ -20,9 +20,11 @@ func (durableProjectionTestTool) Parameters() map[string]any {
 		"required": []string{"value"}, "additionalProperties": false,
 	}
 }
+
 func (durableProjectionTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	return &toolshared.ToolResult{ForLLM: "ok"}
 }
+
 func (durableProjectionTestTool) DurableArguments(map[string]any) (map[string]any, error) {
 	return map[string]any{"value": "*"}, nil
 }
