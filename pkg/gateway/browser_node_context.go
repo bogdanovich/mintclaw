@@ -14,12 +14,18 @@ func (worker *nodeBrowserWorker) ContextCatalog(ctx context.Context) (browser.Co
 	if err != nil {
 		return browser.ContextCatalog{}, err
 	}
+	if err = worker.acceptContextCatalog(result.Catalog, true); err != nil {
+		return browser.ContextCatalog{}, err
+	}
 	return gatewayBrowserContextCatalog(result.Catalog)
 }
 
 func (worker *nodeBrowserWorker) OpenTab(ctx context.Context) (browser.ContextCatalog, error) {
 	result, err := worker.invokeContext(ctx, "open", nil)
 	if err != nil {
+		return browser.ContextCatalog{}, err
+	}
+	if err = worker.acceptContextCatalog(result.Catalog, true); err != nil {
 		return browser.ContextCatalog{}, err
 	}
 	worker.clearContextObservation()
@@ -60,6 +66,9 @@ func (worker *nodeBrowserWorker) SelectContext(
 			return browser.DriverObservation{}, browser.ContextCatalog{}, observeErr
 		}
 		catalog, catalogErr := gatewayBrowserContextCatalog(result.Catalog)
+		if catalogErr == nil {
+			catalogErr = worker.acceptContextCatalog(result.Catalog, false)
+		}
 		return observation, catalog, catalogErr
 	}
 	if result.Observation == nil {
@@ -73,6 +82,9 @@ func (worker *nodeBrowserWorker) SelectContext(
 		return browser.DriverObservation{}, browser.ContextCatalog{}, err
 	}
 	catalog, err := gatewayBrowserContextCatalog(result.Catalog)
+	if err == nil {
+		err = worker.acceptContextCatalog(result.Catalog, false)
+	}
 	return observation, catalog, err
 }
 
@@ -88,8 +100,31 @@ func (worker *nodeBrowserWorker) CloseTab(
 	if err != nil {
 		return browser.ContextCatalog{}, err
 	}
+	if err = worker.acceptContextCatalog(result.Catalog, true); err != nil {
+		return browser.ContextCatalog{}, err
+	}
 	worker.clearContextObservation()
 	return gatewayBrowserContextCatalog(result.Catalog)
+}
+
+func (worker *nodeBrowserWorker) acceptContextCatalog(
+	catalog nodes.BrowserContextCatalog,
+	invalidateChangedObservation bool,
+) error {
+	digest, err := nodes.BrowserContextAuthorityDigest(catalog)
+	if err != nil {
+		return browser.ErrDriverIncompatible
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	changed := worker.contextCatalogDigest != digest
+	worker.contextCatalogDigest = digest
+	if changed && invalidateChangedObservation {
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
+	}
+	return nil
 }
 
 func (worker *nodeBrowserWorker) invokeContext(

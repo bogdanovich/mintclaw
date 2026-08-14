@@ -192,7 +192,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "click" || action == "navigate" || action == "press" || action == "scroll" ||
+			if action == "click" || action == "fill" || action == "navigate" || action == "press" ||
+				action == "scroll" ||
 				action == "select" {
 				current[action] = struct{}{}
 			}
@@ -210,7 +211,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	actions := make([]browser.ActionKind, 0, len(intersection))
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionClick, browser.ActionPress, browser.ActionScroll, browser.ActionSelect,
+			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionPress,
+			browser.ActionScroll, browser.ActionSelect,
 		} {
 			if _, available := intersection[string(action)]; available {
 				actions = append(actions, action)
@@ -321,6 +323,7 @@ type nodeBrowserWorker struct {
 	statusSequence          uint64
 	observeRecoverySequence uint64
 	contextSequence         uint64
+	contextCatalogDigest    string
 	closed                  bool
 }
 
