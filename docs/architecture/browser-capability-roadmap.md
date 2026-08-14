@@ -668,6 +668,9 @@ Tabs, frames, and popup context parity is admitted in
 Protected fill parity is admitted in
 [Browser Capability BF1 Protected Fill Parity Admission](browser-capability-bf1-protected-fill-admission.md).
 
+The remaining ordinary interaction slice is admitted in
+[Browser Capability BF1 Remaining Ordinary Interactions Admission](browser-capability-bf1-ordinary-interactions-admission.md).
+
 #### Operator outcome
 
 The browser specialist can perform the ordinary interactions needed by real
