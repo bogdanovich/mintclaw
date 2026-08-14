@@ -294,6 +294,47 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 7 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
 	}
+	deniedFillMarker := `textbox "Display name" [ref=`
+	deniedFillStart := strings.Index(afterScroll.Snapshot, deniedFillMarker)
+	if deniedFillStart < 0 {
+		t.Fatalf("denied fill fixture has no bounded ref: %q", afterScroll.Snapshot)
+	}
+	deniedFillStart += len(deniedFillMarker)
+	deniedFillEnd := strings.Index(afterScroll.Snapshot[deniedFillStart:], "]")
+	if deniedFillEnd < 1 {
+		t.Fatalf("denied fill fixture has malformed ref: %q", afterScroll.Snapshot)
+	}
+	const deniedFillCanary = "wss-denied-fill-must-not-persist"
+	deniedFill, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-denied-fill", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: afterScroll.SnapshotID, SnapshotGeneration: afterScroll.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionFill,
+			Ref:  afterScroll.Snapshot[deniedFillStart : deniedFillStart+deniedFillEnd], Value: deniedFillCanary,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.denyNextFill()
+	invocation, err = broker.ExecuteAction(t.Context(), owner, deniedFill.Action.ID, nil)
+	if !errors.Is(err, browser.ErrDenied) || invocation.State != browser.InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" {
+		t.Fatalf("denied remote fill invocation = %#v, %v", invocation, err)
+	}
+	deniedStatus, err := broker.Status(t.Context(), owner, first.ID)
+	if err != nil || deniedStatus.State != browser.SessionReady {
+		t.Fatalf("session after denied remote fill = %#v, %v", deniedStatus, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(deniedFillCanary)) {
+			t.Fatalf("denied remote fill persisted protected input in %s", retainedPath)
+		}
+	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("first close = %#v, %v", closed, err)
@@ -480,7 +521,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll", "close",
+		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
+		"fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
@@ -807,6 +849,7 @@ type wssBrowserHost struct {
 	navigateEntered chan struct{}
 	navigateRelease chan struct{}
 	navigateFailure bool
+	fillDenied      bool
 	contextStale    bool
 }
 
@@ -1061,6 +1104,10 @@ func (host *wssBrowserHost) Fill(
 	if !found {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
 	}
+	if host.fillDenied {
+		host.fillDenied = false
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
 	if request.Action.Ref != "host_ref_3" || request.Action.Value == "" ||
 		request.ExpectedRole != "textbox" || request.ExpectedName != "Display name" ||
 		request.Effect != "local_edit" || request.ApprovalDigest != "" {
@@ -1070,6 +1117,12 @@ func (host *wssBrowserHost) Fill(
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
 	}, url), nil
+}
+
+func (host *wssBrowserHost) denyNextFill() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.fillDenied = true
 }
 
 func (host *wssBrowserHost) Press(

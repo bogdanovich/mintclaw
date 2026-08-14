@@ -213,3 +213,59 @@ func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *test
 			len(exec.messages), baselineMessages, agent.Sessions.GetHistory(ts.sessionKey))
 	}
 }
+
+func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersistence(t *testing.T) {
+	secret := "conflicting-browser-fill-canary"
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: secret,
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-conflicting-browser", Name: "browser_act",
+			Arguments: map[string]any{
+				"action": map[string]any{"kind": "select", "ref": "ref_1", "value": "CA"},
+			},
+			Function: &providers.FunctionCall{
+				Name:      "browser_act",
+				Arguments: `{"action":{"kind":"fill","ref":"ref_1","value":"` + secret + `"}}`,
+			},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	pipeline := NewPipeline(al)
+	contextCapture := &trackingContextManager{}
+	pipeline.Context.Runtime = contextCapture
+	ts := newTurnState(agent, makeTestProcessOpts("conflicting-browser-session"), turnEventScope{
+		turnID: "conflicting-browser-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineMessages := len(exec.messages)
+	baselineHistory, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("prepare = %+v, %v", stage, prepareErr)
+	}
+	if stage, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
+	}
+	if _, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err == nil {
+		t.Fatal("conflicting browser argument representations were accepted")
+	}
+	history, marshalErr := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
+	contextCapture.mu.Lock()
+	ingested := contextCapture.lastIngest
+	contextCapture.mu.Unlock()
+	if marshalErr != nil || len(exec.messages) != baselineMessages || !bytes.Equal(history, baselineHistory) ||
+		bytes.Contains(history, []byte(secret)) || ingested != nil {
+		t.Fatalf("conflicting browser call persisted: messages=%d baseline=%d history=%s ingest=%#v error=%v",
+			len(exec.messages), baselineMessages, history, ingested, marshalErr)
+	}
+}

@@ -820,3 +820,18 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 		t.Fatal("mismatched action modes intersected")
 	}
 }
+
+func TestBrowserInvocationDispatchDeniedPreservesTypedClassification(t *testing.T) {
+	if !browserInvocationDispatchDenied(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchCommandDenied,
+		errors.New("private remote detail"),
+	)) {
+		t.Fatal("typed command denial was not preserved")
+	}
+	if browserInvocationDispatchDenied(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchExecutionFailed,
+		errors.New("private remote detail"),
+	)) || browserInvocationDispatchDenied(errors.New("untyped transport failure")) {
+		t.Fatal("non-policy dispatch failure was classified as a denial")
+	}
+}

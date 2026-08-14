@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -657,6 +658,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	// Tool-call path: normalize and prepare for tool execution
 	llm.normalizedToolCalls = make([]providers.ToolCall, 0, len(llm.response.ToolCalls))
 	for _, tc := range llm.response.ToolCalls {
+		if err := validateProtectedBrowserCallRepresentations(tc); err != nil {
+			return LLMCallOutcome{}, fmt.Errorf("validate protected browser tool call: %w", err)
+		}
 		llm.normalizedToolCalls = append(llm.normalizedToolCalls, providers.NormalizeToolCall(tc))
 	}
 	if p.Config.DurableToolLifecycle {
@@ -777,6 +781,31 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	}
 
 	return LLMCallOutcome{Control: ControlToolLoop}, nil
+}
+
+func validateProtectedBrowserCallRepresentations(call providers.ToolCall) error {
+	functionName, serialized := "", ""
+	if call.Function != nil {
+		functionName = call.Function.Name
+		serialized = call.Function.Arguments
+	}
+	if call.Name != "browser_act" && functionName != "browser_act" {
+		return nil
+	}
+	if call.Name != "" && functionName != "" && call.Name != functionName {
+		return errors.New("conflicting browser tool names")
+	}
+	if serialized == "" {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(serialized), &decoded); err != nil || decoded == nil {
+		return errors.New("malformed serialized browser arguments")
+	}
+	if len(call.Arguments) > 0 && !reflect.DeepEqual(call.Arguments, decoded) {
+		return errors.New("conflicting browser argument representations")
+	}
+	return nil
 }
 
 func cloneDurableToolExtraContent(extra *providers.ExtraContent) *providers.ExtraContent {
