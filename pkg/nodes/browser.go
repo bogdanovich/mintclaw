@@ -814,6 +814,9 @@ func (profile BrowserProfileDescriptor) Validate() error {
 		len(profile.Actions) > MaxBrowserActions || !sort.StringsAreSorted(profile.Actions) {
 		return fmt.Errorf("%w: malformed browser profile descriptor", ErrInvalidCapability)
 	}
+	if profile.DryRun && slices.Contains(profile.Actions, "drag") {
+		return fmt.Errorf("%w: dry-run browser profile advertises approval-only drag", ErrInvalidCapability)
+	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
 		if action != "check" && action != "click" && action != "dialog" && action != "download" && action != "drag" &&

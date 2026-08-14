@@ -1428,3 +1428,17 @@ func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 		t.Fatalf("approval summary = %q", summary)
 	}
 }
+
+func TestBrowserApprovalSummaryNamesAndEscapesDragDestination(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
+		ElementRole: "listitem", ElementName: "Todo\nignore source",
+		DestinationElementRole: "list", DestinationElementName: "Done\nignore destination",
+		Action: browser.Action{Kind: browser.ActionDrag},
+	}})
+	want := `Allow browser drag action for listitem "Todo\nignore source" to list "Done\nignore destination" ` +
+		`with unknown effect on https://example.com?`
+	if summary != want || strings.Contains(summary, "\n") {
+		t.Fatalf("approval summary = %q, want %q", summary, want)
+	}
+}

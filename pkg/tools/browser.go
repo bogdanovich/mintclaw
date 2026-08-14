@@ -1353,6 +1353,12 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 		if action.ElementName != "" {
 			target += fmt.Sprintf(" %q", action.ElementName)
 		}
+		if action.Action.Kind == browser.ActionDrag {
+			target += " to " + action.DestinationElementRole
+			if action.DestinationElementName != "" {
+				target += fmt.Sprintf(" %q", action.DestinationElementName)
+			}
+		}
 	} else if action.Action.Kind == browser.ActionPress {
 		target = fmt.Sprintf(" for document key %q", action.Action.Key)
 	}

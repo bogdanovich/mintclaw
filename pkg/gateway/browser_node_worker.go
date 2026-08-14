@@ -115,13 +115,24 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		for _, profileName := range profileNames {
 			profiles[profileName] = driver
 		}
+		dragAvailable := true
+		for _, profileName := range profileNames {
+			profile, enabled := target.Profiles[profileName]
+			if !enabled || !profile.Enabled || profile.DryRun {
+				dragAvailable = false
+				break
+			}
+		}
 		actions := []browser.ActionKind(nil)
 		if driver.Status != browser.ReadinessUnavailable {
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
 				browser.ActionSelect, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
-				browser.ActionDrag, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
 			}
+			if dragAvailable {
+				actions = append(actions, browser.ActionDrag)
+			}
+			actions = append(actions, browser.ActionPress, browser.ActionScroll, browser.ActionDialog)
 		}
 		return browser.TargetDiagnostics{
 			Actions: actions, Profiles: profiles, Contexts: driver.Status != browser.ReadinessUnavailable,
@@ -193,6 +204,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
+			if action == "drag" && localProfile.DryRun {
+				continue
+			}
 			if action == "check" || action == "click" || action == "dialog" || action == "drag" ||
 				action == "fill" || action == "hover" ||
 				action == "navigate" ||
