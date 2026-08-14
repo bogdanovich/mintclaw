@@ -310,7 +310,8 @@ func (action Action) Validate(maxTextBytes int) error {
 		return fmt.Errorf("%w: malformed browser action", ErrInvalid)
 	}
 	if (action.Kind != ActionDrag && (action.SourceRef != "" || action.DestinationRef != "")) ||
-		(action.Kind != ActionDialog && action.DialogID != "") {
+		(action.Kind != ActionDialog && action.DialogID != "") ||
+		(action.Kind == ActionDialog && action.DialogID != "" && !validIdentifier(action.DialogID)) {
 		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
 	}
 	if (action.Kind != ActionUpload && action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
