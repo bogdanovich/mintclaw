@@ -609,6 +609,10 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}
+	switch prepared.Action.Kind {
+	case ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser:
+		return fmt.Errorf("%w: unsupported prepared action kind", ErrInvalid)
+	}
 	if !validContextBinding(
 		prepared.FrameID,
 		prepared.ContextCatalogID,
