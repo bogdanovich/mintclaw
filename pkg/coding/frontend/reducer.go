@@ -64,6 +64,10 @@ func (r *Reducer) Apply(delta Delta) error {
 	if delta.Metadata != nil {
 		r.state.Metadata = *delta.Metadata
 	}
+	if delta.LastTurn != nil {
+		lastTurn := *delta.LastTurn
+		r.state.LastTurn = &lastTurn
+	}
 	if delta.ContextUsage != nil {
 		r.state.ContextUsage = *delta.ContextUsage
 	}

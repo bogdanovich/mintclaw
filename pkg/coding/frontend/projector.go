@@ -373,25 +373,33 @@ func (p *Projector) CompactionFailed(status string) Delta {
 }
 
 func (p *Projector) TurnCompleted(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnCompleted, turnID, status, ActivityIdle, "")
+	return p.finishTurn(DeltaTurnCompleted, TurnOutcomeCompleted, turnID, status, ActivityIdle, "")
 }
 
 func (p *Projector) TurnSuspended(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnSuspended, turnID, status, ActivityWaitingInput, "")
+	return p.finishTurn(
+		DeltaTurnSuspended,
+		TurnOutcomeSuspended,
+		turnID,
+		status,
+		ActivityWaitingInput,
+		"",
+	)
 }
 
 func (p *Projector) TurnFailed(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnFailed, turnID, status, ActivityFailed, ToolFailed)
+	return p.finishTurn(DeltaTurnFailed, TurnOutcomeFailed, turnID, status, ActivityFailed, ToolFailed)
 }
 
 func (p *Projector) TurnInterrupted(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
+	return p.finishTurn(DeltaTurnInterrupted, TurnOutcomeInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
 }
 
 // finishTurn is the single transition for typed terminal turn outcomes. Only
 // abnormal outcomes pass a tool status, because they can bypass ToolExecEnd.
 func (p *Projector) finishTurn(
 	kind DeltaKind,
+	outcome TurnOutcome,
 	turnID, status string,
 	activity Activity,
 	toolStatus ToolStatus,
@@ -402,6 +410,9 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		delta.TurnID = turnID
 		delta.EntityID = turnID
+		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
+		state.LastTurn = &lastTurn
+		delta.LastTurn = &lastTurn
 		if toolStatus == "" {
 			return
 		}
@@ -586,6 +597,10 @@ func contextError(ctx context.Context) error {
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = cloneTools(snapshot.Tools)
+	if snapshot.LastTurn != nil {
+		lastTurn := *snapshot.LastTurn
+		snapshot.LastTurn = &lastTurn
+	}
 	if snapshot.Workspace != nil {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
@@ -606,6 +621,10 @@ func cloneDelta(delta Delta) Delta {
 	if delta.Metadata != nil {
 		metadata := *delta.Metadata
 		delta.Metadata = &metadata
+	}
+	if delta.LastTurn != nil {
+		lastTurn := *delta.LastTurn
+		delta.LastTurn = &lastTurn
 	}
 	if delta.ContextUsage != nil {
 		usage := *delta.ContextUsage

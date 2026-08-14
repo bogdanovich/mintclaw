@@ -234,26 +234,27 @@ func TestTurnOutcomesAreTypedCorrelatedAndSnapshotRecoverable(t *testing.T) {
 		finish       func(*Projector) Delta
 		wantKind     DeltaKind
 		wantActivity Activity
+		wantOutcome  TurnOutcome
 	}{
 		{
 			name: "completed", finish: func(p *Projector) Delta {
 				return p.TurnCompleted("turn-1", "completed")
-			}, wantKind: DeltaTurnCompleted, wantActivity: ActivityIdle,
+			}, wantKind: DeltaTurnCompleted, wantActivity: ActivityIdle, wantOutcome: TurnOutcomeCompleted,
 		},
 		{
 			name: "suspended", finish: func(p *Projector) Delta {
 				return p.TurnSuspended("turn-1", "waiting for input")
-			}, wantKind: DeltaTurnSuspended, wantActivity: ActivityWaitingInput,
+			}, wantKind: DeltaTurnSuspended, wantActivity: ActivityWaitingInput, wantOutcome: TurnOutcomeSuspended,
 		},
 		{
 			name: "failed", finish: func(p *Projector) Delta {
 				return p.TurnFailed("turn-1", "turn failed")
-			}, wantKind: DeltaTurnFailed, wantActivity: ActivityFailed,
+			}, wantKind: DeltaTurnFailed, wantActivity: ActivityFailed, wantOutcome: TurnOutcomeFailed,
 		},
 		{
 			name: "interrupted", finish: func(p *Projector) Delta {
 				return p.TurnInterrupted("turn-1", "interrupted")
-			}, wantKind: DeltaTurnInterrupted, wantActivity: ActivityIdle,
+			}, wantKind: DeltaTurnInterrupted, wantActivity: ActivityIdle, wantOutcome: TurnOutcomeInterrupted,
 		},
 	}
 	for _, tt := range tests {
@@ -275,7 +276,8 @@ func TestTurnOutcomesAreTypedCorrelatedAndSnapshotRecoverable(t *testing.T) {
 			}
 			finished := tt.finish(projector)
 			if finished.Kind != tt.wantKind || finished.TurnID != "turn-1" || finished.EntityID != "turn-1" ||
-				finished.Activity != tt.wantActivity {
+				finished.Activity != tt.wantActivity || finished.LastTurn == nil ||
+				finished.LastTurn.TurnID != "turn-1" || finished.LastTurn.Outcome != tt.wantOutcome {
 				t.Fatalf("terminal delta = %+v", finished)
 			}
 			if err = reducer.Apply(finished); err != nil {
@@ -289,6 +291,33 @@ func TestTurnOutcomesAreTypedCorrelatedAndSnapshotRecoverable(t *testing.T) {
 				t.Fatalf("reduced terminal state = %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+func TestTerminalOutcomeSurvivesExpiredDeltaWindowResynchronization(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Deltas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.TurnSuspended("turn-1", "waiting for input")
+	projector.ThreadMetadataUpdated(ThreadMetadata{Title: "Still waiting"})
+
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if got.LastTurn == nil || got.LastTurn.TurnID != "turn-1" ||
+		got.LastTurn.Outcome != TurnOutcomeSuspended || got.Activity != ActivityWaitingInput {
+		t.Fatalf("resynchronized terminal outcome = %+v", got)
 	}
 }
 

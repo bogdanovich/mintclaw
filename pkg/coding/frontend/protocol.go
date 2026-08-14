@@ -32,6 +32,22 @@ const (
 	ActivityFailed       Activity = "failed"
 )
 
+type TurnOutcome string
+
+const (
+	TurnOutcomeCompleted   TurnOutcome = "completed"
+	TurnOutcomeSuspended   TurnOutcome = "suspended"
+	TurnOutcomeFailed      TurnOutcome = "failed"
+	TurnOutcomeInterrupted TurnOutcome = "interrupted"
+)
+
+// LastTurnOutcome is the bounded typed terminal state retained across delta
+// expiry and authoritative snapshot recovery.
+type LastTurnOutcome struct {
+	TurnID  string      `json:"turn_id"`
+	Outcome TurnOutcome `json:"outcome"`
+}
+
 type EntryKind string
 
 const (
@@ -108,6 +124,7 @@ type ThreadSnapshot struct {
 	Revision        Revision                  `json:"revision"`
 	Metadata        ThreadMetadata            `json:"metadata,omitempty"`
 	Activity        Activity                  `json:"activity"`
+	LastTurn        *LastTurnOutcome          `json:"last_turn,omitempty"`
 	Entries         []TranscriptEntry         `json:"entries,omitempty"`
 	Tools           []ToolState               `json:"tools,omitempty"`
 	ContextUsage    ContextUsage              `json:"context_usage,omitempty"`
@@ -153,6 +170,7 @@ type Delta struct {
 	TurnID           string                    `json:"turn_id,omitempty"`
 	EntityID         string                    `json:"entity_id,omitempty"`
 	Metadata         *ThreadMetadata           `json:"metadata,omitempty"`
+	LastTurn         *LastTurnOutcome          `json:"last_turn,omitempty"`
 	Entry            *TranscriptEntry          `json:"entry,omitempty"`
 	Tool             *ToolState                `json:"tool,omitempty"`
 	ContextUsage     *ContextUsage             `json:"context_usage,omitempty"`
