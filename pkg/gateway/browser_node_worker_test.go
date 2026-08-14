@@ -22,16 +22,17 @@ import (
 )
 
 type browserNodeTestHandler struct {
-	mu            sync.Mutex
-	registration  nodes.Registration
-	commands      []string
-	actInputs     []nodes.BrowserActInput
-	actPlanInputs []json.RawMessage
-	invocations   map[string]nodes.InvocationRecord
-	currentURL    string
-	currentOrigin string
-	elementRole   string
-	elementName   string
+	mu                       sync.Mutex
+	registration             nodes.Registration
+	commands                 []string
+	actInputs                []nodes.BrowserActInput
+	actPlanInputs            []json.RawMessage
+	invocations              map[string]nodes.InvocationRecord
+	currentURL               string
+	currentOrigin            string
+	elementRole              string
+	elementName              string
+	redactNextActObservation bool
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -122,6 +123,12 @@ func (handler *browserNodeTestHandler) Invoke(
 		}
 		result = nodes.BrowserActResult{
 			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
+		}
+		if handler.redactNextActObservation {
+			result = nodes.BrowserActResult{
+				ActionInvocationID: input.ActionInvocationID, State: "succeeded",
+			}
+			handler.redactNextActObservation = false
 		}
 	case nodes.BrowserCommandContexts:
 		var input nodes.BrowserContextInput
@@ -222,6 +229,10 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Simulate recovery from the companion's durable terminal receipt. The
+	// receipt intentionally omits page data, so the worker must re-observe
+	// without replaying the accepted navigation.
+	handler.redactNextActObservation = true
 	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil)
 	if err != nil || invocation.State != browser.InvocationSucceeded {
 		t.Fatalf("ExecuteAction() = %#v, %v", invocation, err)
@@ -257,6 +268,7 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 		nodes.BrowserCommandSessionOpen,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
+		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandSessionClose,

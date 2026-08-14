@@ -531,11 +531,29 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	if err != nil {
 		return err
 	}
-	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" ||
-		result.Observation == nil {
+	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" {
 		return browser.ErrWorkerUnavailable
 	}
-	observation, err := worker.acceptObservation(*result.Observation, generation+1)
+	var observation browser.DriverObservation
+	if result.Observation == nil {
+		// A recovered companion invocation intentionally contains only a
+		// terminal receipt: fresh page observations are never durable. Advance
+		// the proven action generation, then obtain new live authority without
+		// replaying the accepted action.
+		worker.mu.Lock()
+		if worker.closed || worker.snapshotGeneration != generation {
+			worker.mu.Unlock()
+			return browser.ErrStale
+		}
+		worker.snapshotGeneration = generation + 1
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
+		worker.mu.Unlock()
+		observation, err = worker.Observe(ctx)
+	} else {
+		observation, err = worker.acceptObservation(*result.Observation, generation+1)
+	}
 	if err != nil {
 		return err
 	}
