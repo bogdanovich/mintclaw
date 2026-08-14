@@ -1584,12 +1584,14 @@ func playwrightCheckActionCode(target string, checked bool) string {
 
 func playwrightCheckDispatch(target string, checked bool) string {
 	encoded, _ := json.Marshal(target)
+	desiredState, _ := json.Marshal(strconv.FormatBool(checked))
 	operation := "uncheck"
 	if checked {
 		operation = "check"
 	}
 	return `const checkOutcome = await (async () => {
   const checkTarget = page.locator("aria-ref=" + ` + string(encoded) + `);
+  const desiredCheckedState = ` + string(desiredState) + `;
   if (await checkTarget.count() !== 1 || !await checkTarget.isVisible()) return "stale";
   const tagName = String(await checkTarget.evaluate(element => element.tagName || "")).toLowerCase();
   const inputType = String(await checkTarget.getAttribute("type") || "").toLowerCase();
@@ -1609,10 +1611,10 @@ func playwrightCheckDispatch(target string, checked bool) string {
   if (semanticRole !== "checkbox" && semanticRole !== "switch" && semanticRole !== "radio") return "denied";
   const before = String(await checkTarget.getAttribute("aria-checked") || "").toLowerCase();
   if (before !== "true" && before !== "false") return "denied";
-  if ((before === "true") === ` + strconv.FormatBool(checked) + `) return "no_change";
+  if (before === desiredCheckedState) return "no_change";
   await checkTarget.click();
   const after = String(await checkTarget.getAttribute("aria-checked") || "").toLowerCase();
-  if ((after === "true") !== ` + strconv.FormatBool(checked) + `) return "error|final_state_mismatch";
+  if (after !== desiredCheckedState) return "error|final_state_mismatch";
   return "completed";
 })();`
 }

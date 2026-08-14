@@ -254,6 +254,7 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 			name: "check", action: DriverAction{Kind: DriverCheck, Target: "e5", Element: "Notify"},
 			required: []string{
 				`const checkTarget = page.locator("aria-ref=" + "e5")`,
+				`const desiredCheckedState = "true"`,
 				`await checkTarget.click({ trial: true })`, `await checkTarget.check()`,
 				`await checkTarget.isChecked() !== true`, `return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
 				`semanticRole !== "checkbox" && semanticRole !== "switch"`,
@@ -267,11 +268,13 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e6", Element: "Updates"},
 			required: []string{
 				`const checkTarget = page.locator("aria-ref=" + "e6")`,
+				`const desiredCheckedState = "false"`,
 				`await checkTarget.click({ trial: true })`, `await checkTarget.uncheck()`,
 				`await checkTarget.isChecked() !== false`, `inputType === "radio"`, `semanticRole === "radio"`,
-				`await checkTarget.click()`, `return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
+				`await checkTarget.click()`, `after !== desiredCheckedState`,
+				`return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
 			},
-			forbid: []string{`await checkTarget.check()`},
+			forbid: []string{`await checkTarget.check()`, `(after === "true") !== false`},
 		},
 		{
 			name: "hover", action: DriverAction{Kind: DriverHover, Target: "e7", Element: "Menu"},
