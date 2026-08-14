@@ -285,6 +285,7 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 	if actions == nil {
 		actions = []browser.ActionKind{
 			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionSelect,
+			browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
 			browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
 		}
 	}
@@ -912,6 +913,25 @@ func TestBrowserActSchemaAdvertisesAdmittedDownload(t *testing.T) {
 	}
 }
 
+func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Parameters()
+	properties := parameters["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+	actionProperties := action["properties"].(map[string]any)
+	kind := actionProperties["kind"].(map[string]any)
+	seen := make(map[string]bool)
+	for _, candidate := range kind["enum"].([]string) {
+		seen[candidate] = true
+	}
+	for _, candidate := range []string{"check", "uncheck", "hover"} {
+		if !seen[candidate] {
+			t.Fatalf("%s missing from browser_act schema: %#v", candidate, seen)
+		}
+	}
+}
+
 func TestBrowserScreenshotRequiresRecoverableOutboundOwnerBeforeCapture(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true}
 	ctx := toolshared.WithToolRecoverableOutbound(browserToolTestContext(), false)
@@ -1349,6 +1369,12 @@ func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 }
 
 func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T) {
+	for _, kind := range []string{"check", "uncheck", "hover"} {
+		action, err := browserActionFromArgs(map[string]any{"kind": kind, "ref": "element_1"})
+		if err != nil || action.Kind != browser.ActionKind(kind) || action.Ref != "element_1" {
+			t.Fatalf("%s action = %#v, error = %v", kind, action, err)
+		}
+	}
 	press, err := browserActionFromArgs(map[string]any{
 		"kind": "press", "target": "document", "key": "Tab",
 	})

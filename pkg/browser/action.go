@@ -620,7 +620,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.Action.URL = normalized
 		prepared.DestinationOrigin = destination
 		prepared.Effect = EffectNavigation
-	case ActionClick, ActionFill, ActionSelect, ActionUpload, ActionDownload:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionUpload, ActionDownload:
 		element, ok := slot.refs[request.Action.Ref]
 		if !ok {
 			return PreparedAction{}, ErrStale
@@ -636,6 +636,13 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
 		switch request.Action.Kind {
+		case ActionCheck, ActionUncheck:
+			if !checkableElementRole(request.Action.Kind, element.Role) {
+				return PreparedAction{}, ErrDenied
+			}
+			prepared.Effect = EffectLocalEdit
+		case ActionHover:
+			prepared.Effect = EffectRead
 		case ActionUpload:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
@@ -960,7 +967,7 @@ func observeWithNavigationCheck(
 
 func navigationCheckedAction(kind ActionKind) bool {
 	switch kind {
-	case ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionPress, ActionScroll:
 		return true
 	default:
 		return false
@@ -1066,7 +1073,7 @@ func (broker *Broker) driverActionForPrepared(
 	switch prepared.Action.Kind {
 	case ActionNavigate:
 		return DriverAction{Kind: DriverNavigate, URL: prepared.Action.URL}, nil
-	case ActionClick, ActionFill, ActionSelect, ActionUpload, ActionDownload:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionUpload, ActionDownload:
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
@@ -1085,6 +1092,12 @@ func (broker *Broker) driverActionForPrepared(
 			}
 		}
 		switch prepared.Action.Kind {
+		case ActionCheck:
+			kind = DriverCheck
+		case ActionUncheck:
+			kind = DriverUncheck
+		case ActionHover:
+			kind = DriverHover
 		case ActionUpload:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]

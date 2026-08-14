@@ -1469,7 +1469,7 @@ func TestFileStorePersistsPreparedApprovalBinding(t *testing.T) {
 	}
 }
 
-func TestBrokerExecutesAdmittedSelectPressAndScrollActions(t *testing.T) {
+func TestBrokerExecutesAdmittedOrdinaryActions(t *testing.T) {
 	tests := []struct {
 		name       string
 		element    DriverElement
@@ -1481,6 +1481,21 @@ func TestBrokerExecutesAdmittedSelectPressAndScrollActions(t *testing.T) {
 			name: "select", element: DriverElement{Target: "e1", Role: "combobox", Name: "State"},
 			action: Action{Kind: ActionSelect, Value: "CA"}, wantEffect: EffectLocalEdit,
 			wantDriver: DriverAction{Kind: DriverSelect, Target: "e1", Element: "State", Value: "CA"},
+		},
+		{
+			name: "check", element: DriverElement{Target: "e1", Role: "checkbox", Name: "Notify"},
+			action: Action{Kind: ActionCheck}, wantEffect: EffectLocalEdit,
+			wantDriver: DriverAction{Kind: DriverCheck, Target: "e1", Element: "Notify"},
+		},
+		{
+			name: "uncheck", element: DriverElement{Target: "e1", Role: "switch", Name: "Dark mode"},
+			action: Action{Kind: ActionUncheck}, wantEffect: EffectLocalEdit,
+			wantDriver: DriverAction{Kind: DriverUncheck, Target: "e1", Element: "Dark mode"},
+		},
+		{
+			name: "hover", element: DriverElement{Target: "e1", Role: "button", Name: "Menu"},
+			action: Action{Kind: ActionHover}, wantEffect: EffectRead,
+			wantDriver: DriverAction{Kind: DriverHover, Target: "e1", Element: "Menu"},
 		},
 		{
 			name: "scroll", action: Action{Kind: ActionScroll, Direction: "down", Amount: 3},
@@ -1529,8 +1544,28 @@ func TestBrokerExecutesAdmittedSelectPressAndScrollActions(t *testing.T) {
 	}
 }
 
+func TestBrokerRejectsUncheckForRadioControl(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	element := DriverElement{Target: "e1", Role: "radio", Name: "Primary"}
+	worker.observation = driverObservationFixture(element)
+	worker.resolveElement = element
+	owner := testOwner()
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_uncheck_radio", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionUncheck, Ref: onlyVisibleRef(t, observation.Snapshot)},
+	})
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("PrepareAction(uncheck radio) error = %v, want denied", err)
+	}
+}
+
 func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T) {
-	for _, actionKind := range []ActionKind{ActionSelect, ActionPress} {
+	for _, actionKind := range []ActionKind{ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionPress} {
 		t.Run(string(actionKind), func(t *testing.T) {
 			root := admittedBrowserConfig()
 			target := root.Tools.Browser.Targets["gateway"]
@@ -1541,7 +1576,13 @@ func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T
 			root.Tools.Browser.Targets["gateway"] = target
 			store := NewMemoryStore()
 			broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
-			element := DriverElement{Target: "e1", Role: "combobox", Name: "State"}
+			element := DriverElement{Target: "e1", Role: "checkbox", Name: "Notify"}
+			switch actionKind {
+			case ActionSelect:
+				element = DriverElement{Target: "e1", Role: "combobox", Name: "State"}
+			case ActionHover:
+				element = DriverElement{Target: "e1", Role: "button", Name: "Menu"}
+			}
 			worker.observation = driverObservationFixture(element)
 			worker.resolveElement = element
 			owner := testOwner()
@@ -1550,9 +1591,11 @@ func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T
 				t.Fatal(err)
 			}
 			action := Action{Kind: actionKind}
-			if actionKind == ActionSelect {
+			if actionKind != ActionPress {
 				action.Ref = onlyVisibleRef(t, observation.Snapshot)
-				action.Value = "CA"
+				if actionKind == ActionSelect {
+					action.Value = "CA"
+				}
 			} else {
 				action.Target = "document"
 				action.Key = "Tab"

@@ -119,7 +119,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		if driver.Status != browser.ReadinessUnavailable {
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
-				browser.ActionSelect, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+				browser.ActionSelect, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
+				browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
 			}
 		}
 		return browser.TargetDiagnostics{
@@ -192,10 +193,11 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "click" || action == "dialog" || action == "fill" || action == "navigate" ||
+			if action == "check" || action == "click" || action == "dialog" || action == "fill" || action == "hover" ||
+				action == "navigate" ||
 				action == "press" ||
 				action == "scroll" ||
-				action == "select" {
+				action == "select" || action == "uncheck" {
 				current[action] = struct{}{}
 			}
 		}
@@ -212,8 +214,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	actions := make([]browser.ActionKind, 0, len(intersection))
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionPress,
-			browser.ActionScroll, browser.ActionSelect, browser.ActionDialog,
+			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionCheck,
+			browser.ActionUncheck, browser.ActionHover, browser.ActionPress, browser.ActionScroll,
+			browser.ActionSelect, browser.ActionDialog,
 		} {
 			if _, available := intersection[string(action)]; available {
 				actions = append(actions, action)
@@ -472,6 +475,12 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "scroll")
 	case browser.ActionDialog:
 		return slices.Contains(worker.actions, "dialog")
+	case browser.ActionCheck:
+		return slices.Contains(worker.actions, "check")
+	case browser.ActionUncheck:
+		return slices.Contains(worker.actions, "uncheck")
+	case browser.ActionHover:
+		return slices.Contains(worker.actions, "hover")
 	default:
 		return false
 	}
@@ -522,6 +531,18 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			PromptProvided: request.DriverAction.PromptProvided,
 		}
 		effect = string(request.Prepared.Effect)
+	case request.Prepared.Action.Kind == browser.ActionCheck &&
+		request.DriverAction.Kind == browser.DriverCheck && slices.Contains(worker.actions, "check"):
+		action = nodes.BrowserAction{Kind: "check", Ref: request.DriverAction.Target}
+		effect = "local_edit"
+	case request.Prepared.Action.Kind == browser.ActionUncheck &&
+		request.DriverAction.Kind == browser.DriverUncheck && slices.Contains(worker.actions, "uncheck"):
+		action = nodes.BrowserAction{Kind: "uncheck", Ref: request.DriverAction.Target}
+		effect = "local_edit"
+	case request.Prepared.Action.Kind == browser.ActionHover &&
+		request.DriverAction.Kind == browser.DriverHover && slices.Contains(worker.actions, "hover"):
+		action = nodes.BrowserAction{Kind: "hover", Ref: request.DriverAction.Target}
+		effect = "read"
 	default:
 		return browser.ErrDenied
 	}
@@ -540,7 +561,8 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
 	}
-	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" {
+	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" || action.Kind == "check" ||
+		action.Kind == "uncheck" || action.Kind == "hover" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}

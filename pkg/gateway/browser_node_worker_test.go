@@ -597,6 +597,111 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 	}
 }
 
+func TestGatewayBrowserWorkerRoutesTypedCheckUncheckAndHover(t *testing.T) {
+	for _, test := range []struct {
+		kind, role, effect string
+	}{
+		{kind: "check", role: "radio", effect: "local_edit"},
+		{kind: "uncheck", role: "checkbox", effect: "local_edit"},
+		{kind: "hover", role: "button", effect: "read"},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			cfg, runtime, handler := browserNodeTestRuntime(t)
+			handler.elementRole, handler.elementName = test.role, "Control"
+			registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+				for index := range catalog.Commands {
+					catalog.Commands[index].BrowserProfiles[0].Actions = []string{
+						"check", "hover", "navigate", "uncheck",
+					}
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+				Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: registration.AllowedCommands,
+				At: registration.ApprovedAt + 1,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+			if err != nil || !found {
+				t.Fatalf("registration = %#v, %v, %v", registration, found, err)
+			}
+			handler.registration = registration
+			factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+				t.Context(), "companion", []string{"managed"},
+			)
+			if err != nil || !slices.Equal(diagnostics.Actions, []browser.ActionKind{
+				browser.ActionNavigate, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
+			}) {
+				t.Fatalf("ordinary interaction diagnostics = %#v, %v", diagnostics, err)
+			}
+			broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := browser.Owner{
+				ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+				SessionKey: "session_test", ExecutionID: "execution_test",
+			}
+			session, err := broker.Open(t.Context(), browser.OpenRequest{
+				Owner: owner, Target: "companion", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			navigate, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+				Owner: owner, RequestID: "request_ordinary_navigate", SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+				Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			refStart := strings.Index(observation.Snapshot, "[ref=")
+			refEnd := strings.Index(observation.Snapshot, "]")
+			if err != nil || refStart < 0 || refEnd <= refStart+5 {
+				t.Fatalf("%s observation = %#v, %v", test.kind, observation, err)
+			}
+			preparation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+				Owner: owner, RequestID: "request_" + test.kind, SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+				Action: browser.Action{
+					Kind: browser.ActionKind(test.kind), Ref: observation.Snapshot[refStart+5 : refEnd],
+				},
+			})
+			if err != nil || preparation.RequiresApproval {
+				t.Fatalf("%s preparation = %#v, %v", test.kind, preparation, err)
+			}
+			if _, err = broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil); err != nil {
+				t.Fatalf("%s execution error = %v", test.kind, err)
+			}
+			handler.mu.Lock()
+			inputs := append([]nodes.BrowserActInput(nil), handler.actInputs...)
+			handler.mu.Unlock()
+			input := inputs[len(inputs)-1]
+			if input.Action.Kind != test.kind || input.Action.Ref != "host_ref_1" ||
+				input.ExpectedRole != test.role || input.ExpectedName != "Control" || input.Effect != test.effect ||
+				input.ApprovalDigest != "" || input.InputDigest != "" || input.InputBytes != 0 {
+				t.Fatalf("typed %s input = %#v", test.kind, input)
+			}
+		})
+	}
+}
+
 func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	handler.elementRole, handler.elementName = "textbox", "Display name"

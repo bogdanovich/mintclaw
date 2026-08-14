@@ -294,6 +294,42 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 7 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
 	}
+	afterOrdinary := afterScroll
+	for _, test := range []struct {
+		kind   browser.ActionKind
+		marker string
+	}{
+		{kind: browser.ActionCheck, marker: `checkbox "Notify" [ref=`},
+		{kind: browser.ActionUncheck, marker: `switch "Dark mode" [ref=`},
+		{kind: browser.ActionHover, marker: `button "Menu" [ref=`},
+	} {
+		refStart := strings.Index(afterOrdinary.Snapshot, test.marker)
+		if refStart < 0 {
+			t.Fatalf("%s fixture has no bounded ref: %q", test.kind, afterOrdinary.Snapshot)
+		}
+		refStart += len(test.marker)
+		refEnd := strings.Index(afterOrdinary.Snapshot[refStart:], "]")
+		if refEnd < 1 {
+			t.Fatalf("%s fixture has malformed ref: %q", test.kind, afterOrdinary.Snapshot)
+		}
+		preparation, prepareErr := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+			Owner: owner, RequestID: "browser-wss-" + string(test.kind), SessionID: first.ID, TabID: first.TabID,
+			SnapshotID: afterOrdinary.SnapshotID, SnapshotGeneration: afterOrdinary.SnapshotGeneration,
+			Action: browser.Action{Kind: test.kind, Ref: afterOrdinary.Snapshot[refStart : refStart+refEnd]},
+		})
+		if prepareErr != nil || preparation.RequiresApproval {
+			t.Fatalf("%s preparation = %#v, %v", test.kind, preparation, prepareErr)
+		}
+		invocation, err = broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil)
+		if err != nil || invocation.State != browser.InvocationSucceeded {
+			t.Fatalf("%s invocation = %#v, %v", test.kind, invocation, err)
+		}
+		previousGeneration := afterOrdinary.SnapshotGeneration
+		afterOrdinary, err = broker.Observe(t.Context(), owner, first.ID, first.TabID)
+		if err != nil || afterOrdinary.SnapshotGeneration != previousGeneration+1 {
+			t.Fatalf("%s observation = %#v, %v", test.kind, afterOrdinary, err)
+		}
+	}
 	const dialogMessage = "Type the deployment confirmation"
 	const dialogCanary = "wss-protected-dialog-must-not-persist"
 	host.setPendingDialog(first.ID, "prompt", dialogMessage)
@@ -562,7 +598,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	if got, want := host.commandSequence(), []string{
 		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
-		"observe", "observe", "observe", "dialog", "fill", "status", "close",
+		"check", "uncheck", "hover", "observe", "observe", "observe", "dialog", "fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		// Post-acceptance recovery receives a redacted terminal receipt and
@@ -1117,6 +1153,49 @@ func (host *wssBrowserHost) Scroll(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) Check(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryInteraction(request, "check", "host_ref_4", "checkbox", "Notify", "local_edit")
+}
+
+func (host *wssBrowserHost) Uncheck(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryInteraction(request, "uncheck", "host_ref_5", "switch", "Dark mode", "local_edit")
+}
+
+func (host *wssBrowserHost) Hover(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryInteraction(request, "hover", "host_ref_6", "button", "Menu", "read")
+}
+
+func (host *wssBrowserHost) ordinaryInteraction(
+	request nodes.BrowserHostActRequest,
+	action, ref, role, name, effect string,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, action)
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	if request.Action.Kind != action || request.Action.Ref != ref || request.ExpectedRole != role ||
+		request.ExpectedName != name || request.Effect != effect || request.ApprovalDigest != "" ||
+		request.InputDigest != "" || request.InputBytes != 0 {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) Dialog(
 	_ context.Context,
 	request nodes.BrowserHostActRequest,
@@ -1338,11 +1417,16 @@ func wssBrowserObservation(
 	url string,
 ) nodes.BrowserObservationResult {
 	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]\n"+
-		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]"
+		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]\n"+
+		"- checkbox \"Notify\" [ref=host_ref_4]\n- switch \"Dark mode\" [ref=host_ref_5]\n"+
+		"- button \"Menu\" [ref=host_ref_6]"
 	elements := []nodes.BrowserElement{
 		{Ref: "host_ref_1", Role: "button", Name: "Save"},
 		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
 		{Ref: "host_ref_3", Role: "textbox", Name: "Display name"},
+		{Ref: "host_ref_4", Role: "checkbox", Name: "Notify"},
+		{Ref: "host_ref_5", Role: "switch", Name: "Dark mode"},
+		{Ref: "host_ref_6", Role: "button", Name: "Menu"},
 	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
@@ -1363,8 +1447,10 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		AllowApprovedActions: true,
-		Actions:              []string{"click", "dialog", "fill", "navigate", "press", "scroll", "select"},
-		Limits:               nodes.BrowserLimits{}.Effective(),
+		Actions: []string{
+			"check", "click", "dialog", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+		},
+		Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
 

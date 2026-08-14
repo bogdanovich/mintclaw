@@ -24,6 +24,7 @@ type fakeBrowserCommandHost struct {
 	scrolled         int
 	dialogs          int
 	dialogAction     nodes.BrowserAction
+	ordinaryActions  []nodes.BrowserAction
 	contextCalls     int
 	contextError     error
 	closed           int
@@ -109,6 +110,36 @@ func (host *fakeBrowserCommandHost) Dialog(
 ) (nodes.BrowserObservationResult, error) {
 	host.dialogs++
 	host.dialogAction = request.Action
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Check(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
+func (host *fakeBrowserCommandHost) Uncheck(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
+func (host *fakeBrowserCommandHost) Hover(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
+func (host *fakeBrowserCommandHost) ordinaryAction(
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.ordinaryActions = append(host.ordinaryActions, request.Action)
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
@@ -647,6 +678,39 @@ func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.
 			(secret != "" && (bytes.Contains(plan.Input, []byte(secret)) || bytes.Contains(record.Result, []byte(secret)))) {
 			t.Fatalf("durable dialog record exposed input: %#v", record)
 		}
+	}
+}
+
+func TestRuntimeExecutesTypedCheckUncheckAndHover(t *testing.T) {
+	for _, test := range []struct {
+		kind, role, effect string
+	}{
+		{kind: "check", role: "radio", effect: "local_edit"},
+		{kind: "uncheck", role: "checkbox", effect: "local_edit"},
+		{kind: "hover", role: "button", effect: "read"},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			host := browserRuntimeHostFixture()
+			host.profiles[0].Actions = []string{"check", "hover", "navigate", "uncheck"}
+			runtime := newBrowserRuntimeFixture(t, host)
+			input := nodes.BrowserActInput{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_" + test.kind + "_1",
+				Action:             nodes.BrowserAction{Kind: test.kind, Ref: "semantic_ref_1"},
+				Effect:             test.effect, CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: "Control",
+			}
+			raw, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+			result, err := runtime.Invoke(t.Context(), plan)
+			if err != nil || len(host.ordinaryActions) != 1 || host.ordinaryActions[0] != input.Action {
+				t.Fatalf("%s result = %s, %v; actions = %#v", test.kind, result, err, host.ordinaryActions)
+			}
+		})
 	}
 }
 

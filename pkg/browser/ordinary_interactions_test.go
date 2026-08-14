@@ -38,12 +38,9 @@ func TestOrdinaryInteractionActionContracts(t *testing.T) {
 	}
 }
 
-func TestPreparedActionRejectsDormantOrdinaryInteractionKinds(t *testing.T) {
+func TestPreparedActionRejectsDormantArtifactInteractions(t *testing.T) {
 	owner := Owner{ActorID: "actor_1", AgentID: "agent_1", SessionKey: "session_key_1", ExecutionID: "execution_1"}
 	actions := []Action{
-		{Kind: ActionCheck, Ref: "ref_check"},
-		{Kind: ActionUncheck, Ref: "ref_uncheck"},
-		{Kind: ActionHover, Ref: "ref_hover"},
 		{Kind: ActionDrag, SourceRef: "ref_source", DestinationRef: "ref_destination"},
 		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 	}

@@ -472,6 +472,13 @@ func BrowserClickEffect(role string) string {
 	return "unknown"
 }
 
+func BrowserCheckRoleAllowed(kind, role string) bool {
+	if role == "checkbox" || role == "switch" {
+		return true
+	}
+	return kind == "check" && role == "radio"
+}
+
 // BrowserFillFieldAllowed is the companion-side minimum semantic deny policy.
 // It uses only freshly resolved private accessibility metadata and fails
 // closed for roles or names that cannot safely identify ordinary text input.
@@ -796,8 +803,9 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "click" && action != "dialog" && action != "download" && action != "fill" &&
-			action != "navigate" && action != "press" && action != "scroll" && action != "select" {
+		if action != "check" && action != "click" && action != "dialog" && action != "download" &&
+			action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
+			action != "scroll" && action != "select" && action != "uncheck" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -943,8 +951,10 @@ func browserCommandInputSchema(
 				effect = "external_commit"
 			case "download":
 				effect = "download"
-			case "fill", "select":
+			case "check", "fill", "select", "uncheck":
 				effect = "local_edit"
+			case "hover":
+				effect = "read"
 			case "press":
 				effect = "unknown"
 			case "scroll":
@@ -961,7 +971,8 @@ func browserCommandInputSchema(
 				"action":           browserActionSchema([]string{action}),
 				"effect":           map[string]any{"const": effect},
 			}
-			if action == "click" || action == "fill" || action == "select" {
+			if action == "click" || action == "fill" || action == "select" || action == "check" ||
+				action == "uncheck" || action == "hover" {
 				required = append(required, "expected_role")
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
@@ -976,6 +987,12 @@ func browserCommandInputSchema(
 				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
 				properties["input_bytes"] = map[string]any{
 					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
+				}
+			}
+			if action == "check" || action == "uncheck" {
+				properties["expected_role"] = map[string]any{"enum": []string{"checkbox", "radio", "switch"}}
+				if action == "uncheck" {
+					properties["expected_role"] = map[string]any{"enum": []string{"checkbox", "switch"}}
 				}
 			}
 			if action == "dialog" {
@@ -1004,6 +1021,13 @@ func browserCommandInputSchema(
 			}
 			if action == "fill" || action == "select" {
 				branch["not"] = map[string]any{"required": []string{"approval_digest"}}
+			}
+			if action == "check" || action == "uncheck" || action == "hover" {
+				branch["not"] = map[string]any{"anyOf": []any{
+					map[string]any{"required": []string{"approval_digest"}},
+					map[string]any{"required": []string{"input_digest"}},
+					map[string]any{"required": []string{"input_bytes"}},
+				}}
 			}
 			if action == "press" {
 				branch["not"] = map[string]any{"anyOf": []any{
@@ -1132,6 +1156,12 @@ func browserCommandInputSchema(
 		if _, hasFill := allActions["fill"]; hasFill {
 			actEffects = append(actEffects, "local_edit")
 		}
+		if _, hasCheck := allActions["check"]; hasCheck && !slices.Contains(actEffects, "local_edit") {
+			actEffects = append(actEffects, "local_edit")
+		}
+		if _, hasUncheck := allActions["uncheck"]; hasUncheck && !slices.Contains(actEffects, "local_edit") {
+			actEffects = append(actEffects, "local_edit")
+		}
 		if _, hasSelect := allActions["select"]; hasSelect && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
 		}
@@ -1151,7 +1181,10 @@ func browserCommandInputSchema(
 		_, hasFill := allActions["fill"]
 		_, hasSelect := allActions["select"]
 		_, hasDialog := allActions["dialog"]
-		if hasClick || hasFill || hasSelect {
+		_, hasCheck := allActions["check"]
+		_, hasUncheck := allActions["uncheck"]
+		_, hasHover := allActions["hover"]
+		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}

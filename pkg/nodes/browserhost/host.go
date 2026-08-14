@@ -455,6 +455,58 @@ func (host *BrowserHost) Select(
 	})
 }
 
+func (host *BrowserHost) Check(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	return host.checkState(ctx, request, "check", browserworker.DriverCheck)
+}
+
+func (host *BrowserHost) Uncheck(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	return host.checkState(ctx, request, "uncheck", browserworker.DriverUncheck)
+}
+
+func (host *BrowserHost) checkState(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+	action string,
+	driverKind browserworker.DriverActionKind,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != action || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		!nodes.BrowserCheckRoleAllowed(action, request.ExpectedRole) || len(request.ExpectedName) > 4096 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, action, browserworker.DriverAction{Kind: driverKind})
+}
+
+func (host *BrowserHost) Hover(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "read" ||
+		request.Action.Kind != "hover" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "hover", browserworker.DriverAction{Kind: browserworker.DriverHover})
+}
+
 func (host *BrowserHost) Fill(
 	ctx context.Context,
 	request BrowserHostNavigateRequest,
@@ -704,7 +756,8 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
-	if action == "click" || action == "fill" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" || action == "check" ||
+		action == "uncheck" || action == "hover" {
 		var found bool
 		boundElement, found = session.elementRefs[request.Action.Ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
@@ -747,7 +800,8 @@ func (host *BrowserHost) executeAction(
 			return BrowserHostObservation{}, ErrBrowserHostStale
 		}
 	}
-	if action == "click" || action == "fill" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" || action == "check" ||
+		action == "uncheck" || action == "hover" {
 		targets, matches := 0, 0
 		for _, element := range current.Elements {
 			if element.Target != boundElement.Target {
