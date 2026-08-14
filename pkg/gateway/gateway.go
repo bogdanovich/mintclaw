@@ -1189,6 +1189,7 @@ func setupAndStartServicesWithHooks(
 }
 
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) error {
+	var cleanupErrors []error
 	if !isReload && runningServices.OutboundRecovery != nil {
 		runningServices.OutboundRecovery.stop()
 	}
@@ -1201,13 +1202,14 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		if isReload {
 			return fmt.Errorf("close browser runtime before reload: %w", err)
 		}
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("close browser runtime: %w", err))
 	}
-	var cleanupErrors []error
 
 	// Reload should not stop channels or node admission. Full shutdown drains
 	// both concurrently so either side retains the complete bounded budget.
 	if !isReload {
 		var drains sync.WaitGroup
+		drainErrors := make(chan error, 2)
 		if runningServices.NodeAdmission != nil {
 			drains.Add(1)
 			go func() {
@@ -1216,6 +1218,7 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 					logger.WarnCF("nodes", "Node sessions did not drain during gateway shutdown", map[string]any{
 						"error": err.Error(),
 					})
+					drainErrors <- fmt.Errorf("drain node admission: %w", err)
 				}
 			}()
 		}
@@ -1223,10 +1226,16 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 			drains.Add(1)
 			go func() {
 				defer drains.Done()
-				_ = runningServices.ChannelManager.StopAll(shutdownCtx)
+				if err := runningServices.ChannelManager.StopAll(shutdownCtx); err != nil {
+					drainErrors <- fmt.Errorf("stop channels: %w", err)
+				}
 			}()
 		}
 		drains.Wait()
+		close(drainErrors)
+		for err := range drainErrors {
+			cleanupErrors = append(cleanupErrors, err)
+		}
 	}
 	if err := stopVoiceAgent(shutdownCtx, runningServices); err != nil {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("drain voice runtime: %w", err))

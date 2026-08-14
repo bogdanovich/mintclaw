@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -301,8 +302,10 @@ func (al *AgentLoop) Close() {
 // CloseContext releases resources while bounding MCP operation drain and
 // process cleanup by ctx.
 func (al *AgentLoop) CloseContext(ctx context.Context) error {
+	var closeErrors []error
 	if err := al.closeOutboundOutbox(); err != nil {
 		logger.ErrorCF("agent", "Failed to close outbound outbox", map[string]any{"error": err.Error()})
+		closeErrors = append(closeErrors, fmt.Errorf("close outbound outbox: %w", err))
 	}
 	mcpManager := al.mcp.takeManager()
 
@@ -313,13 +316,14 @@ func (al *AgentLoop) CloseContext(ctx context.Context) error {
 					"error": err.Error(),
 				})
 			al.mcp.restoreManager(mcpManager)
-			return err
+			closeErrors = append(closeErrors, fmt.Errorf("close MCP manager: %w", err))
 		}
 	}
 	if err := closeContextManager(al.contextManager); err != nil {
 		logger.ErrorCF("agent", "Failed to close context manager", map[string]any{
 			"error": err.Error(),
 		})
+		closeErrors = append(closeErrors, fmt.Errorf("close context manager: %w", err))
 	}
 	al.GetRegistry().Close()
 	if al.hooks != nil {
@@ -335,9 +339,10 @@ func (al *AgentLoop) CloseContext(ctx context.Context) error {
 				map[string]any{
 					"error": err.Error(),
 				})
+			closeErrors = append(closeErrors, fmt.Errorf("close runtime event bus: %w", err))
 		}
 	}
-	return nil
+	return errors.Join(closeErrors...)
 }
 
 // MountHook registers an in-process hook on the agent loop.

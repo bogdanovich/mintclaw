@@ -114,6 +114,43 @@ func TestBrowserRuntimeRetainsOwnershipUntilWorkerShutdownSucceeds(t *testing.T)
 	reopened.Close()
 }
 
+func TestServiceShutdownReportsBrowserCleanupFailure(t *testing.T) {
+	workerErr := errors.New("browser worker still running")
+	worker := &gatewayTestBrowserWorker{closeErr: workerErr}
+	cfg := gatewayBrowserConfig(t.TempDir())
+	broker, err := browser.NewBroker(
+		cfg,
+		browser.NewMemoryStore(),
+		&gatewayTestBrowserFactory{worker: worker},
+	)
+	if err != nil {
+		t.Fatalf("NewBroker() error = %v", err)
+	}
+	if _, err = broker.Open(context.Background(), browser.OpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_1", ExecutionID: "execution_1",
+		},
+		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+	}); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	runtime := &browserRuntime{broker: broker}
+	services := &services{Browser: runtime}
+
+	err = stopAndCleanupServices(services, time.Second, false)
+	if err == nil {
+		t.Fatal("stopAndCleanupServices() error = nil, want browser cleanup failure")
+	}
+	if services.Browser != runtime {
+		t.Fatal("failed browser cleanup released runtime ownership")
+	}
+	worker.closeErr = nil
+	if err = closeBrowserRuntime(context.Background(), services); err != nil {
+		t.Fatalf("closeBrowserRuntime() retry error = %v", err)
+	}
+}
+
 func TestBrowserRuntimeCloseHonorsCallerDeadlineAndRetainsOwnership(t *testing.T) {
 	root := t.TempDir()
 	cfg := gatewayBrowserConfig(root)

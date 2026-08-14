@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
@@ -46,6 +47,29 @@ func (channel *failingStopStartupChannel) Send(
 	bus.OutboundMessage,
 ) ([]string, error) {
 	return nil, nil
+}
+
+func TestServiceShutdownReportsChannelAndNodeDrainFailures(t *testing.T) {
+	channelErr := errors.New("channel stop failed")
+	nodeErr := errors.New("node drain failed")
+	messageBus := bus.NewMessageBus()
+	t.Cleanup(messageBus.Close)
+	manager, err := channels.NewManager(config.DefaultConfig(), messageBus, media.NewFileMediaStore())
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	manager.RegisterChannel("failing", &failingStopStartupChannel{stopErr: channelErr})
+	services := &services{
+		ChannelManager: manager,
+		NodeAdmission: &nodeAdmissionRuntime{
+			handler: &closeErrorNodeAdmissionHandler{err: nodeErr},
+		},
+	}
+
+	err = stopAndCleanupServices(services, time.Second, false)
+	if !errors.Is(err, channelErr) || !errors.Is(err, nodeErr) {
+		t.Fatalf("stopAndCleanupServices() error = %v, want channel and node failures", err)
+	}
 }
 
 func TestGatewayStartupTransactionRollsBackInReverseOrderAndJoinsErrors(t *testing.T) {
