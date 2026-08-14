@@ -84,6 +84,35 @@ func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing
 	}
 }
 
+func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *testing.T) {
+	tool := &BrowserActTool{}
+	for _, value := range []string{"dialog-canary-secret", ""} {
+		original := map[string]any{
+			"action": map[string]any{
+				"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": value,
+			},
+		}
+		projected, err := tool.DurableArguments(original)
+		if err != nil {
+			t.Fatalf("DurableArguments(%q) error = %v", value, err)
+		}
+		if got := projected["action"].(map[string]any)["value"]; got != browserProtectedInputRedaction {
+			t.Fatalf("durable dialog value = %#v", got)
+		}
+		if got := original["action"].(map[string]any)["value"]; got != value {
+			t.Fatalf("live dialog value = %#v, want %q", got, value)
+		}
+		if !tool.ProtectedDurableArguments(original) {
+			t.Fatalf("dialog prompt %q was not protected", value)
+		}
+	}
+	if tool.ProtectedDurableArguments(map[string]any{
+		"action": map[string]any{"kind": "dialog", "dialog_id": "dialog_1", "decision": "dismiss"},
+	}) {
+		t.Fatal("dialog dismissal unexpectedly required protected batching")
+	}
+}
+
 func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	observe := &BrowserObserveTool{}
 	contexts := &BrowserContextsTool{}

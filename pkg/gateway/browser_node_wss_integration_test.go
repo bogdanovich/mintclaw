@@ -294,23 +294,63 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 7 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
 	}
+	const dialogMessage = "Type the deployment confirmation"
+	const dialogCanary = "wss-protected-dialog-must-not-persist"
+	host.setPendingDialog(first.ID, "prompt", dialogMessage)
+	dialogObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || dialogObservation.PendingDialog == nil ||
+		dialogObservation.PendingDialog.ID == "" ||
+		dialogObservation.PendingDialog.Type != "prompt" ||
+		dialogObservation.PendingDialog.Message != dialogMessage {
+		t.Fatalf("dialog observation = %#v, %v", dialogObservation, err)
+	}
+	dialog, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-dialog", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID:         dialogObservation.SnapshotID,
+		SnapshotGeneration: dialogObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionDialog, DialogID: dialogObservation.PendingDialog.ID,
+			Decision: "accept", Value: dialogCanary, PromptProvided: true,
+		},
+	})
+	if err != nil || !dialog.RequiresApproval || dialog.Action.Effect != browser.EffectExternalCommit {
+		t.Fatalf("dialog preparation = %#v, %v", dialog, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, dialog.Action.ID, &dialog.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("dialog invocation = %#v, %v", invocation, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(dialogCanary)) || bytes.Contains(retained, []byte(dialogMessage)) {
+			t.Fatalf("durable invocation state exposed protected dialog data in %s", retainedPath)
+		}
+	}
+	afterDialog, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterDialog.PendingDialog != nil ||
+		afterDialog.SnapshotGeneration != dialogObservation.SnapshotGeneration+1 {
+		t.Fatalf("dialog completion observation = %#v, %v", afterDialog, err)
+	}
 	deniedFillMarker := `textbox "Display name" [ref=`
-	deniedFillStart := strings.Index(afterScroll.Snapshot, deniedFillMarker)
+	deniedFillStart := strings.Index(afterDialog.Snapshot, deniedFillMarker)
 	if deniedFillStart < 0 {
-		t.Fatalf("denied fill fixture has no bounded ref: %q", afterScroll.Snapshot)
+		t.Fatalf("denied fill fixture has no bounded ref: %q", afterDialog.Snapshot)
 	}
 	deniedFillStart += len(deniedFillMarker)
-	deniedFillEnd := strings.Index(afterScroll.Snapshot[deniedFillStart:], "]")
+	deniedFillEnd := strings.Index(afterDialog.Snapshot[deniedFillStart:], "]")
 	if deniedFillEnd < 1 {
-		t.Fatalf("denied fill fixture has malformed ref: %q", afterScroll.Snapshot)
+		t.Fatalf("denied fill fixture has malformed ref: %q", afterDialog.Snapshot)
 	}
 	const deniedFillCanary = "wss-denied-fill-must-not-persist"
 	deniedFill, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-denied-fill", SessionID: first.ID, TabID: first.TabID,
-		SnapshotID: afterScroll.SnapshotID, SnapshotGeneration: afterScroll.SnapshotGeneration,
+		SnapshotID: afterDialog.SnapshotID, SnapshotGeneration: afterDialog.SnapshotGeneration,
 		Action: browser.Action{
 			Kind: browser.ActionFill,
-			Ref:  afterScroll.Snapshot[deniedFillStart : deniedFillStart+deniedFillEnd], Value: deniedFillCanary,
+			Ref:  afterDialog.Snapshot[deniedFillStart : deniedFillStart+deniedFillEnd], Value: deniedFillCanary,
 		},
 	})
 	if err != nil {
@@ -522,7 +562,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	if got, want := host.commandSequence(), []string{
 		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
-		"fill", "status", "close",
+		"observe", "observe", "observe", "dialog", "fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		// Post-acceptance recovery receives a redacted terminal receipt and
@@ -878,6 +918,7 @@ type wssBrowserHost struct {
 	urls            map[string]string
 	contexts        map[string]nodes.BrowserContextCatalog
 	snapshots       map[string]uint64
+	pendingDialogs  map[string]*nodes.BrowserDialogObservation
 	navigateEntered chan struct{}
 	navigateRelease chan struct{}
 	navigateFailure bool
@@ -900,6 +941,7 @@ func (host *wssBrowserHost) Open(
 		host.urls = make(map[string]string)
 		host.contexts = make(map[string]nodes.BrowserContextCatalog)
 		host.snapshots = make(map[string]uint64)
+		host.pendingDialogs = make(map[string]*nodes.BrowserDialogObservation)
 	}
 	host.urls[request.SessionID] = "about:blank"
 	host.contexts[request.SessionID] = wssBrowserContextCatalog(false)
@@ -931,7 +973,12 @@ func (host *wssBrowserHost) Observe(
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
 	}
 	host.snapshots[request.SessionID] = request.SnapshotGeneration
-	return wssBrowserObservation(request, url), nil
+	result := wssBrowserObservation(request, url)
+	if pending := host.pendingDialogs[request.SessionID]; pending != nil {
+		copy := *pending
+		result.PendingDialog = &copy
+	}
+	return result, nil
 }
 
 func (host *wssBrowserHost) Contexts(
@@ -1068,6 +1115,54 @@ func (host *wssBrowserHost) Scroll(
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
 	}, url), nil
+}
+
+func (host *wssBrowserHost) Dialog(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "dialog")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	pending := host.pendingDialogs[request.SessionID]
+	action := request.Action
+	action.Value = ""
+	input := nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration,
+		ActionInvocationID: request.ActionInvocationID, Action: action,
+		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash:    request.PreparedActionHash,
+		BrowserPolicyRevision: request.BrowserPolicyRevision, ProfileRevision: request.ProfileRevision,
+		DialogType: request.DialogType, DialogMessageDigest: request.DialogMessageDigest,
+		DialogMessageBytes: request.DialogMessageBytes,
+		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
+		ApprovalDigest: request.ApprovalDigest,
+	}
+	if pending == nil || request.Action.Decision != "accept" || !request.Action.PromptProvided ||
+		request.Action.Value == "" || request.DialogType != pending.Type ||
+		request.DialogMessageBytes != len(pending.Message) ||
+		!nodes.BrowserDialogMessageDigestMatches(request.DialogMessageDigest, pending.Type, pending.Message) ||
+		request.InputBytes != len(request.Action.Value) ||
+		!nodes.BrowserInputDigestMatches(request.InputDigest, request.Action.Value) ||
+		!nodes.BrowserApprovalDigestMatches(input) {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	delete(host.pendingDialogs, request.SessionID)
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
+func (host *wssBrowserHost) setPendingDialog(sessionID, dialogType, message string) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.pendingDialogs[sessionID] = &nodes.BrowserDialogObservation{Type: dialogType, Message: message}
 }
 
 func (host *wssBrowserHost) Click(
@@ -1220,6 +1315,7 @@ func (host *wssBrowserHost) Close(
 	delete(host.urls, request.SessionID)
 	delete(host.contexts, request.SessionID)
 	delete(host.snapshots, request.SessionID)
+	delete(host.pendingDialogs, request.SessionID)
 	return wssBrowserSessionResult(request.SessionID, "closed"), nil
 }
 
@@ -1266,8 +1362,9 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		AllowApprovedActions: true, Actions: []string{"click", "fill", "navigate", "press", "scroll", "select"},
-		Limits: nodes.BrowserLimits{}.Effective(),
+		AllowApprovedActions: true,
+		Actions:              []string{"click", "dialog", "fill", "navigate", "press", "scroll", "select"},
+		Limits:               nodes.BrowserLimits{}.Effective(),
 	}
 }
 

@@ -33,6 +33,7 @@ type browserNodeTestHandler struct {
 	currentOrigin            string
 	elementRole              string
 	elementName              string
+	pendingDialog            *nodes.BrowserDialogObservation
 	redactNextActObservation bool
 	redactNextObservation    bool
 	redactNextContext        bool
@@ -100,6 +101,7 @@ func (handler *browserNodeTestHandler) Invoke(
 			observation.Elements[0].Name = handler.elementName
 			observation.Snapshot = "- " + handler.elementRole + " \"" + handler.elementName + "\" [ref=host_ref_1]"
 		}
+		observation.PendingDialog = handler.pendingDialog
 		result = observation
 		if handler.redactNextObservation {
 			result = nodes.BrowserObservationResult{ProtectedResult: true}
@@ -109,7 +111,8 @@ func (handler *browserNodeTestHandler) Invoke(
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
 		handler.actPlanInputs = append(handler.actPlanInputs, append(json.RawMessage(nil), plan.Input...))
-		if input.Action.Kind == "fill" || input.Action.Kind == "select" {
+		if input.Action.Kind == "fill" || input.Action.Kind == "select" ||
+			(input.Action.Kind == "dialog" && input.Action.PromptProvided) {
 			var ephemeral struct {
 				Value string `json:"value"`
 			}
@@ -119,6 +122,9 @@ func (handler *browserNodeTestHandler) Invoke(
 		handler.actInputs = append(handler.actInputs, input)
 		if input.Action.Kind == "navigate" {
 			handler.currentURL, handler.currentOrigin = "https://example.com/", "https://example.com"
+		}
+		if input.Action.Kind == "dialog" {
+			handler.pendingDialog = nil
 		}
 		observation := browserNodeTestObservation(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
@@ -686,6 +692,109 @@ func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testi
 	}
 	if len(plans) != 2 || bytes.Contains(plans[1], []byte(secret)) {
 		t.Fatalf("durable protected fill plan = %s", plans[1])
+	}
+}
+
+func TestGatewayBrowserWorkerRoutesProtectedDialogOnlyInEphemeralEnvelope(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	handler.currentURL, handler.currentOrigin = "https://example.com/form", "https://example.com"
+	handler.pendingDialog = &nodes.BrowserDialogObservation{Type: "prompt", Message: "Type confirmation"}
+	profile := cfg.Tools.Browser.Targets["companion"].Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target := cfg.Tools.Browser.Targets["companion"]
+	target.Profiles["managed"] = profile
+	cfg.Tools.Browser.Targets["companion"] = target
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		for index := range catalog.Commands {
+			catalog.Commands[index].BrowserProfiles[0].Actions = []string{"dialog", "navigate"}
+			catalog.Commands[index].BrowserProfiles[0].DryRun = false
+			catalog.Commands[index].BrowserProfiles[0].AllowApprovedActions = true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: registration.AllowedCommands,
+		At: registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+	if err != nil || !found {
+		t.Fatalf("registration = %#v, %v, %v", registration, found, err)
+	}
+	handler.registration = registration
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	)
+	if err != nil || !slices.Equal(
+		diagnostics.Actions,
+		[]browser.ActionKind{browser.ActionNavigate, browser.ActionDialog},
+	) {
+		t.Fatalf("dialog diagnostics = %#v, %v", diagnostics, err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || observation.PendingDialog == nil || observation.PendingDialog.ID == "" {
+		t.Fatalf("dialog observation = %#v, %v", observation, err)
+	}
+	secret := "gateway-companion-dialog-canary"
+	preparation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_protected_dialog", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionDialog, DialogID: observation.PendingDialog.ID,
+			Decision: "accept", Value: secret, PromptProvided: true,
+		},
+	})
+	if err != nil || !preparation.RequiresApproval || preparation.Action.Effect != browser.EffectExternalCommit {
+		t.Fatalf("dialog preparation = %#v, %v", preparation, err)
+	}
+	if _, err = broker.ExecuteAction(
+		t.Context(), owner, preparation.Action.ID, &preparation.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	inputs := append([]nodes.BrowserActInput(nil), handler.actInputs...)
+	plans := append([]json.RawMessage(nil), handler.actPlanInputs...)
+	handler.mu.Unlock()
+	if len(inputs) != 1 || inputs[0].Action.Kind != "dialog" || inputs[0].Action.Value != secret ||
+		inputs[0].Action.DialogID != observation.PendingDialog.ID || !inputs[0].Action.PromptProvided ||
+		inputs[0].DialogType != "prompt" || inputs[0].DialogMessageBytes != len("Type confirmation") ||
+		!nodes.BrowserDialogMessageDigestMatches(
+			inputs[0].DialogMessageDigest,
+			"prompt",
+			"Type confirmation",
+		) || !nodes.BrowserInputDigestMatches(inputs[0].InputDigest, secret) ||
+		!nodes.BrowserApprovalDigestMatches(func() nodes.BrowserActInput {
+			candidate := inputs[0]
+			candidate.Action.Value = ""
+			return candidate
+		}()) {
+		t.Fatalf("protected dialog inputs = %#v", inputs)
+	}
+	if len(plans) != 1 || bytes.Contains(plans[0], []byte(secret)) {
+		t.Fatalf("durable protected dialog plan = %s", plans[0])
 	}
 }
 

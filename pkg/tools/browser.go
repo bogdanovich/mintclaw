@@ -983,11 +983,12 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		actions = append(actions, "download")
 	}
 	actionProperties := map[string]any{
-		"kind":   map[string]any{"type": "string", "enum": actions},
-		"url":    map[string]any{"type": "string"},
-		"ref":    map[string]any{"type": "string"},
-		"target": map[string]any{"type": "string", "enum": []string{"document"}},
-		"value":  map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
+		"kind":      map[string]any{"type": "string", "enum": actions},
+		"url":       map[string]any{"type": "string"},
+		"ref":       map[string]any{"type": "string"},
+		"dialog_id": map[string]any{"type": "string"},
+		"target":    map[string]any{"type": "string", "enum": []string{"document"}},
+		"value":     map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
 		"key": map[string]any{"type": "string", "enum": []string{
 			"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
 			"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
@@ -1026,7 +1027,7 @@ func (*BrowserActTool) ToolLoopSemantics() loopguard.Semantics { return loopguar
 
 const browserProtectedInputRedaction = "*"
 
-// DurableArguments removes protected fill text before assistant intent can be
+// DurableArguments removes protected fill and dialog-prompt text before assistant intent can be
 // persisted or reused. It deliberately leaves the current in-memory call
 // untouched so the broker can consume the value exactly once.
 func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
@@ -1046,23 +1047,31 @@ func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, er
 	if !ok || kind == "" {
 		return nil, errors.New("browser action kind is unavailable")
 	}
-	if kind != "fill" {
+	protectedInput := kind == "fill"
+	if kind == "dialog" {
+		_, protectedInput = action["value"]
+	}
+	if !protectedInput {
 		return projected, nil
 	}
 	if _, ok = action["value"].(string); !ok {
-		return nil, errors.New("fill value is unavailable")
+		return nil, errors.New("browser protected value is unavailable")
 	}
 	action["value"] = browserProtectedInputRedaction
 	return projected, nil
 }
 
-// Fill is the only action whose model-authored arguments contain protected
-// input. Keep singleton batching and assistant-envelope stripping scoped to
-// that intent rather than applying them to every browser action.
+// Fill and a dialog prompt are the actions whose model-authored arguments
+// contain protected input. Keep singleton batching and assistant-envelope
+// stripping scoped to those intents.
 func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
 	action, _ := args["action"].(map[string]any)
 	kind, _ := action["kind"].(string)
-	return kind == "fill"
+	if kind == "fill" {
+		return true
+	}
+	_, promptProvided := action["value"]
+	return kind == "dialog" && promptProvided
 }
 
 // Every action may return a fresh page observation containing data from a

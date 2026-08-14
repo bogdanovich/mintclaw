@@ -473,6 +473,130 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 	})
 }
 
+func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
+	message := "Type confirmation"
+	pending := browserworker.DriverObservation{
+		URL: "https://example.com/form", Origin: "https://example.com", Title: "Fixture",
+		Snapshot:      "dialog pending",
+		PendingDialog: &browserworker.DialogObservation{Type: "prompt", Message: message},
+	}
+	settled := pending
+	settled.Snapshot = "dialog accepted"
+	settled.PendingDialog = nil
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			pending, pending, settled,
+		},
+	}
+	profile := browserHostProfileFixture()
+	profile.AllowedActions = []string{"dialog", "navigate"}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	open := browserHostOpenFixture()
+	open.DryRun = false
+	if _, err = host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || initial.PendingDialog == nil {
+		t.Fatalf("initial dialog = %#v, %v", initial, err)
+	}
+	secret := "dialog-prompt-canary"
+	request := BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_dialog_1",
+		Action: nodes.BrowserAction{
+			Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept",
+			Value: secret, PromptProvided: true,
+		},
+		Effect: "external_commit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", DialogType: "prompt",
+		DialogMessageDigest: nodes.BrowserDialogMessageDigest("prompt", message),
+		DialogMessageBytes:  len(message), InputDigest: nodes.BrowserInputDigest(secret), InputBytes: len(secret),
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.Dialog(t.Context(), request)
+	if err != nil || result.SnapshotGeneration != 2 || result.PendingDialog != nil {
+		t.Fatalf("Dialog() = %#v, %v", result, err)
+	}
+	want := browserworker.DriverAction{
+		Kind: browserworker.DriverDialog, Accept: true, Value: secret, PromptProvided: true,
+	}
+	if len(worker.actions) != 1 || worker.actions[0] != want {
+		t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+	}
+}
+
+func TestBrowserHostRejectsReplacedDialogBeforeDispatch(t *testing.T) {
+	first := browserworker.DriverObservation{
+		URL: "https://example.com/form", Origin: "https://example.com", Snapshot: "first",
+		PendingDialog: &browserworker.DialogObservation{Type: "confirm", Message: "First"},
+	}
+	replaced := first
+	replaced.Snapshot = "replacement"
+	replaced.PendingDialog = &browserworker.DialogObservation{Type: "confirm", Message: "Replacement"}
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady, observations: []browserworker.DriverObservation{first, replaced},
+	}
+	profile := browserHostProfileFixture()
+	profile.AllowedActions = []string{"dialog", "navigate"}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	if _, err = host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_dialog_replaced",
+		Action: nodes.BrowserAction{
+			Kind: "dialog", DialogID: "dialog_authority_1", Decision: "dismiss",
+		},
+		Effect: "read", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", DialogType: "confirm",
+		DialogMessageDigest: nodes.BrowserDialogMessageDigest("confirm", "First"),
+		DialogMessageBytes:  len("First"),
+		RoutedSessionID:     "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	if _, err = host.Dialog(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		t.Fatalf("Dialog(replaced) error = %v, want stale", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("replaced dialog reached driver: %#v", worker.actions)
+	}
+}
+
 func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	newFixture := func(
 		t *testing.T,

@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -118,6 +119,87 @@ func TestBrowserCommandDescriptorsBindExplicitApprovedActionMode(t *testing.T) {
 	input["dry_run"] = true
 	if err = validateDescriptorInvocationInput(descriptors[0], input); err == nil {
 		t.Fatal("approved-action descriptor accepted dry-run open input")
+	}
+}
+
+func TestBrowserDialogCommandSchemaBindsProtectedPromptAndApproval(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"dialog"}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+	for _, secret := range []string{"dialog-command-canary", ""} {
+		input := BrowserActInput{
+			SessionID: "session_1", TabID: "tab_1", SnapshotGeneration: 1,
+			ActionInvocationID: "action_dialog_" + strings.Repeat("x", len(secret)%2),
+			Action: BrowserAction{
+				Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept", PromptProvided: true,
+			},
+			Effect: "external_commit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("a", 64), BrowserPolicyRevision: strings.Repeat("b", 64),
+			ProfileRevision: profile.Revision, DialogType: "prompt",
+			DialogMessageDigest: BrowserDialogMessageDigest("prompt", "Type confirmation"),
+			DialogMessageBytes:  len("Type confirmation"),
+			InputDigest:         BrowserInputDigest(secret), InputBytes: len(secret),
+		}
+		input.ApprovalDigest, err = BrowserApprovalDigest(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte(secret)) && secret != "" || bytes.Contains(raw, []byte(`"value"`)) {
+			t.Fatalf("durable dialog input exposed prompt: %s", raw)
+		}
+		var object map[string]any
+		if err = json.Unmarshal(raw, &object); err != nil {
+			t.Fatal(err)
+		}
+		if err = validateDescriptorInvocationInput(act, object); err != nil {
+			t.Fatalf("protected dialog input rejected: %v", err)
+		}
+		delete(object, "input_digest")
+		if err = validateDescriptorInvocationInput(act, object); err == nil {
+			t.Fatal("prompt dialog without protected digest was accepted")
+		}
+	}
+
+	dismiss := browserActInputFixture()
+	dismiss["action"] = map[string]any{
+		"kind": "dialog", "dialog_id": "dialog_authority_2", "decision": "dismiss",
+	}
+	dismiss["effect"] = "read"
+	dismiss["current_origin"] = "https://example.com"
+	dismiss["dialog_type"] = "confirm"
+	dismiss["dialog_message_digest"] = BrowserDialogMessageDigest("confirm", "Discard?")
+	dismiss["dialog_message_bytes"] = len("Discard?")
+	if err = validateDescriptorInvocationInput(act, dismiss); err != nil {
+		t.Fatalf("dialog dismissal rejected: %v", err)
+	}
+}
+
+func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {
+	for _, test := range []struct {
+		kind string
+		want bool
+	}{
+		{kind: "dialog", want: true},
+		{kind: "navigate", want: false},
+	} {
+		raw, err := json.Marshal(BrowserActInput{Action: BrowserAction{Kind: test.kind}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := bytes.Contains(raw, []byte(`"dialog_message_bytes":0`))
+		if got != test.want {
+			t.Fatalf("%s dialog byte count presence = %v in %s, want %v", test.kind, got, raw, test.want)
+		}
 	}
 }
 

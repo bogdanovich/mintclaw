@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -21,6 +22,8 @@ type fakeBrowserCommandHost struct {
 	selected         int
 	pressed          int
 	scrolled         int
+	dialogs          int
+	dialogAction     nodes.BrowserAction
 	contextCalls     int
 	contextError     error
 	closed           int
@@ -95,6 +98,17 @@ func (host *fakeBrowserCommandHost) Scroll(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
 	host.scrolled++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Dialog(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.dialogs++
+	host.dialogAction = request.Action
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
@@ -571,6 +585,68 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 	}
 	if host.filled != 1 {
 		t.Fatalf("denied fills reached host: %d", host.filled)
+	}
+}
+
+func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.T) {
+	for _, test := range []struct {
+		secret  string
+		message string
+	}{
+		{secret: "dialog-prompt-canary", message: "Type confirmation"},
+		{secret: "", message: "Type confirmation"},
+		{secret: "empty-dialog-message-canary", message: ""},
+	} {
+		secret := test.secret
+		host := browserRuntimeHostFixture()
+		host.profiles[0].DryRun = false
+		host.profiles[0].AllowApprovedActions = true
+		host.profiles[0].Actions = []string{"dialog", "navigate"}
+		runtime := newBrowserRuntimeFixture(t, host)
+		input := nodes.BrowserActInput{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_dialog_" + fmt.Sprintf("%d", len(secret)),
+			Action: nodes.BrowserAction{
+				Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept", PromptProvided: true,
+			},
+			Effect: "external_commit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", DialogType: "prompt",
+			DialogMessageDigest: nodes.BrowserDialogMessageDigest("prompt", test.message),
+			DialogMessageBytes:  len(test.message),
+			InputDigest:         nodes.BrowserInputDigest(secret), InputBytes: len(secret),
+		}
+		var err error
+		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if test.message == "" && !bytes.Contains(raw, []byte(`"dialog_message_bytes":0`)) {
+			t.Fatalf("empty dialog message lost required byte count: %s", raw)
+		}
+		plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+		if secret != "" && bytes.Contains(plan.Input, []byte(secret)) {
+			t.Fatalf("durable dialog plan exposed input: %s", plan.Input)
+		}
+		ephemeral, err := json.Marshal(struct {
+			Value string `json:"value"`
+		}{Value: secret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runtime.InvokeWithEphemeral(t.Context(), plan, ephemeral)
+		if err != nil || host.dialogs != 1 || host.dialogAction.Value != secret {
+			t.Fatalf("protected dialog = %s, %v; calls=%d action=%#v", result, err, host.dialogs, host.dialogAction)
+		}
+		record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+		if !found || bytes.Contains(record.Result, []byte("observation")) ||
+			(secret != "" && (bytes.Contains(plan.Input, []byte(secret)) || bytes.Contains(record.Result, []byte(secret)))) {
+			t.Fatalf("durable dialog record exposed input: %#v", record)
+		}
 	}
 }
 

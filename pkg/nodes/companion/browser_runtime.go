@@ -2,6 +2,7 @@ package companion
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ type BrowserCommandHost interface {
 	Select(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Press(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Dialog(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
 
@@ -212,9 +214,9 @@ func (handler *browserCommandHandler) executeAct(
 			"COMMAND_DENIED", "browser action input is unavailable", nodes.ErrBrowserHostDenied,
 		)
 	}
-	input.Action.Value = value
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
-		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press") ||
+		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
+		input.Action.Kind != "dialog") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
@@ -230,13 +232,15 @@ func (handler *browserCommandHandler) executeAct(
 		(input.Action.Kind == "click" &&
 			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
 				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
+		(input.Action.Kind == "dialog" && !validCompanionDialogAction(input)) ||
 		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
-			input.Action.Kind != "press" &&
+			input.Action.Kind != "press" && input.Action.Kind != "dialog" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
 		)
 	}
+	input.Action.Value = value
 	request := nodes.BrowserHostActRequest{
 		SessionID: input.SessionID, TabID: input.TabID,
 		RoutedSessionID:    invocation.Plan.SessionID,
@@ -246,6 +250,9 @@ func (handler *browserCommandHandler) executeAct(
 		PreparedActionHash:    input.PreparedActionHash,
 		BrowserPolicyRevision: input.BrowserPolicyRevision, ProfileRevision: input.ProfileRevision,
 		ExpectedRole: input.ExpectedRole, ExpectedName: input.ExpectedName,
+		DialogType: input.DialogType, DialogMessageDigest: input.DialogMessageDigest,
+		DialogMessageBytes: input.DialogMessageBytes,
+		InputDigest:        input.InputDigest, InputBytes: input.InputBytes,
 		ApprovalDigest: input.ApprovalDigest,
 		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
@@ -261,6 +268,8 @@ func (handler *browserCommandHandler) executeAct(
 		observation, err = handler.host.Select(ctx, request)
 	case "press":
 		observation, err = handler.host.Press(ctx, request)
+	case "dialog":
+		observation, err = handler.host.Dialog(ctx, request)
 	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}
@@ -281,25 +290,53 @@ func browserEphemeralActionValue(
 	input nodes.BrowserActInput,
 	ephemeralInput json.RawMessage,
 ) (string, error) {
-	if input.Action.Kind != "select" && input.Action.Kind != "fill" {
+	protectedDialog := input.Action.Kind == "dialog" && input.Action.PromptProvided
+	if input.Action.Kind != "select" && input.Action.Kind != "fill" && !protectedDialog {
 		if len(ephemeralInput) != 0 || input.InputDigest != "" || input.InputBytes != 0 {
 			return "", nodes.ErrCommandDenied
 		}
 		return "", nil
 	}
-	if input.Action.Value != "" || input.InputBytes < 1 ||
+	minimumBytes := 1
+	if protectedDialog {
+		minimumBytes = 0
+	}
+	if input.Action.Value != "" || input.InputBytes < minimumBytes ||
 		input.InputBytes > nodes.MaxBrowserTextInputBytes || len(ephemeralInput) == 0 {
 		return "", nodes.ErrCommandDenied
 	}
 	var ephemeral struct {
 		Value string `json:"value"`
 	}
-	if err := decodeStrictJSON(ephemeralInput, &ephemeral); err != nil || ephemeral.Value == "" ||
+	if err := decodeStrictJSON(ephemeralInput, &ephemeral); err != nil ||
+		(!protectedDialog && ephemeral.Value == "") ||
 		len(ephemeral.Value) != input.InputBytes ||
 		!nodes.BrowserInputDigestMatches(input.InputDigest, ephemeral.Value) {
 		return "", nodes.ErrCommandDenied
 	}
 	return ephemeral.Value, nil
+}
+
+func validCompanionDialogAction(input nodes.BrowserActInput) bool {
+	if input.Action.DialogID == "" ||
+		(input.Action.Decision != "accept" && input.Action.Decision != "dismiss") ||
+		(input.DialogType != "alert" && input.DialogType != "beforeunload" &&
+			input.DialogType != "confirm" && input.DialogType != "prompt") ||
+		input.DialogMessageBytes < 0 || input.DialogMessageBytes > nodes.MaxBrowserDialogMessageBytes ||
+		len(input.DialogMessageDigest) != sha256.Size*2 || input.ExpectedRole != "" || input.ExpectedName != "" {
+		return false
+	}
+	if input.Action.Decision == "dismiss" {
+		return input.Effect == "read" && !input.Action.PromptProvided && input.InputDigest == "" &&
+			input.InputBytes == 0 && input.ApprovalDigest == ""
+	}
+	if input.Effect != "external_commit" || !nodes.BrowserApprovalDigestMatches(input) {
+		return false
+	}
+	if input.Action.PromptProvided {
+		return input.DialogType == "prompt" && len(input.InputDigest) == sha256.Size*2 && input.InputBytes >= 0
+	}
+	return input.InputDigest == "" && input.InputBytes == 0
 }
 
 func browserStatusRequest(
