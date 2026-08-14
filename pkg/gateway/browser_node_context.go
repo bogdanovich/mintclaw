@@ -38,6 +38,18 @@ func (worker *nodeBrowserWorker) SelectContext(
 	if err != nil {
 		return browser.DriverObservation{}, browser.ContextCatalog{}, err
 	}
+	if result.ProtectedResult {
+		// The select mutation is already proven accepted. Refresh live page
+		// authority without replaying it; invokeContext has independently
+		// refreshed the catalog through a new read-only list invocation.
+		worker.clearContextObservation()
+		observation, observeErr := worker.Observe(ctx)
+		if observeErr != nil {
+			return browser.DriverObservation{}, browser.ContextCatalog{}, observeErr
+		}
+		catalog, catalogErr := gatewayBrowserContextCatalog(result.Catalog)
+		return observation, catalog, catalogErr
+	}
 	if result.Observation == nil {
 		return browser.DriverObservation{}, browser.ContextCatalog{}, browser.ErrDriverIncompatible
 	}
@@ -69,6 +81,35 @@ func (worker *nodeBrowserWorker) CloseTab(
 }
 
 func (worker *nodeBrowserWorker) invokeContext(
+	ctx context.Context,
+	operation string,
+	binding *browser.ContextMutationBinding,
+) (nodes.BrowserContextResult, error) {
+	result, err := worker.invokeContextOnce(ctx, operation, binding)
+	if err != nil || !result.ProtectedResult {
+		return result, err
+	}
+	// The requested operation completed remotely and must not be replayed.
+	// Recover only its live catalog with fresh read-only list identities.
+	for attempts := 0; attempts < 10; attempts++ {
+		fresh, freshErr := worker.invokeContextOnce(ctx, "list", nil)
+		if freshErr != nil {
+			return nodes.BrowserContextResult{}, freshErr
+		}
+		if fresh.ProtectedResult {
+			continue
+		}
+		if operation == "list" {
+			return fresh, nil
+		}
+		return nodes.BrowserContextResult{
+			Operation: operation, Catalog: fresh.Catalog, ProtectedResult: true,
+		}, nil
+	}
+	return nodes.BrowserContextResult{}, browser.ErrWorkerUnavailable
+}
+
+func (worker *nodeBrowserWorker) invokeContextOnce(
 	ctx context.Context,
 	operation string,
 	binding *browser.ContextMutationBinding,

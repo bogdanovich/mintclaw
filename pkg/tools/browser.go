@@ -590,7 +590,7 @@ func (*BrowserContextsTool) DurableArguments(args map[string]any) (map[string]an
 	return cloneBrowserToolArguments(args)
 }
 
-func (*BrowserContextsTool) ProtectedDurableArguments(map[string]any) bool { return true }
+func (*BrowserContextsTool) ProtectedDurableResult(map[string]any) bool { return true }
 
 func (tool *BrowserContextsTool) ApprovalArguments(
 	ctx context.Context,
@@ -768,7 +768,7 @@ func (*BrowserObserveTool) DurableArguments(args map[string]any) (map[string]any
 	return cloneBrowserToolArguments(args)
 }
 
-func (*BrowserObserveTool) ProtectedDurableArguments(map[string]any) bool { return true }
+func (*BrowserObserveTool) ProtectedDurableResult(map[string]any) bool { return true }
 
 type browserObservationView struct {
 	BrowserSessionID   string                      `json:"browser_session_id"`
@@ -1056,10 +1056,19 @@ func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, er
 	return projected, nil
 }
 
+// Fill is the only action whose model-authored arguments contain protected
+// input. Keep singleton batching and assistant-envelope stripping scoped to
+// that intent rather than applying them to every browser action.
+func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
+	action, _ := args["action"].(map[string]any)
+	kind, _ := action["kind"].(string)
+	return kind == "fill"
+}
+
 // Every action may return a fresh page observation containing data from a
-// protected fill. DurableArguments still redacts the fill input itself; this
-// marker additionally keeps every live action result out of durable state.
-func (*BrowserActTool) ProtectedDurableArguments(map[string]any) bool { return true }
+// protected fill. Keep that live result out of durable state independently of
+// whether the current action arguments are sensitive.
+func (*BrowserActTool) ProtectedDurableResult(map[string]any) bool { return true }
 
 func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
 	encoded, err := json.Marshal(args)

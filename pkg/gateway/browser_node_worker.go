@@ -313,14 +313,15 @@ type nodeBrowserWorker struct {
 	actions           []string
 	tabID             string
 
-	mu                 sync.Mutex
-	snapshotGeneration uint64
-	cachedObservation  *browser.DriverObservation
-	elements           map[string]browser.DriverElement
-	currentOrigin      string
-	statusSequence     uint64
-	contextSequence    uint64
-	closed             bool
+	mu                      sync.Mutex
+	snapshotGeneration      uint64
+	cachedObservation       *browser.DriverObservation
+	elements                map[string]browser.DriverElement
+	currentOrigin           string
+	statusSequence          uint64
+	observeRecoverySequence uint64
+	contextSequence         uint64
+	closed                  bool
 }
 
 func (worker *nodeBrowserWorker) Status(ctx context.Context) (browser.WorkerStatus, error) {
@@ -397,19 +398,31 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 	if err != nil {
 		return browser.DriverObservation{}, err
 	}
-	var result nodes.BrowserObservationResult
-	err = worker.invoke(ctx, descriptor, fmt.Sprintf("observe_%d", nextGeneration), nodes.BrowserObserveInput{
+	input := nodes.BrowserObserveInput{
 		SessionID: worker.sessionID, TabID: worker.tabID,
 		SnapshotGeneration: nextGeneration, Screenshot: false,
-	}, &result)
-	if err != nil {
-		return browser.DriverObservation{}, err
 	}
-	observation, err := worker.acceptObservation(result, nextGeneration)
-	if err != nil {
-		return browser.DriverObservation{}, err
+	requestKey := fmt.Sprintf("observe_%d", nextGeneration)
+	for attempts := 0; attempts < 10; attempts++ {
+		var result nodes.BrowserObservationResult
+		err = worker.invoke(ctx, descriptor, requestKey, input, &result)
+		if err != nil {
+			return browser.DriverObservation{}, err
+		}
+		if !result.ProtectedResult {
+			return worker.acceptObservation(result, nextGeneration)
+		}
+		// The previous observe completed remotely, but its live response was
+		// lost and only a page-data-free receipt survived. A read may safely
+		// be repeated, but it needs a fresh invocation identity so the ledger
+		// cannot return the same receipt forever.
+		worker.mu.Lock()
+		worker.observeRecoverySequence++
+		recovery := worker.observeRecoverySequence
+		worker.mu.Unlock()
+		requestKey = fmt.Sprintf("observe_%d_recovery_%d", nextGeneration, recovery)
 	}
-	return observation, nil
+	return browser.DriverObservation{}, browser.ErrWorkerUnavailable
 }
 
 func (worker *nodeBrowserWorker) Resolve(

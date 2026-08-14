@@ -14,6 +14,7 @@ import (
 )
 
 type durableProjectionTestTool struct{}
+type resultOnlyDurabilityTestTool struct{}
 
 func (durableProjectionTestTool) Name() string        { return "protected_test" }
 func (durableProjectionTestTool) Description() string { return "test protected arguments" }
@@ -33,6 +34,24 @@ func (durableProjectionTestTool) DurableArguments(map[string]any) (map[string]an
 }
 
 func (durableProjectionTestTool) ProtectedDurableArguments(map[string]any) bool { return true }
+
+func (resultOnlyDurabilityTestTool) Name() string { return "result_only_test" }
+func (resultOnlyDurabilityTestTool) Description() string {
+	return "test result-only durability classification"
+}
+func (resultOnlyDurabilityTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+		"required": []string{"value"}, "additionalProperties": false,
+	}
+}
+func (resultOnlyDurabilityTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return &toolshared.ToolResult{ForLLM: "live private result"}
+}
+func (resultOnlyDurabilityTestTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return args, nil
+}
+func (resultOnlyDurabilityTestTool) ProtectedDurableResult(map[string]any) bool { return true }
 
 func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
@@ -212,6 +231,43 @@ func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *test
 	if len(exec.messages) != baselineMessages || len(agent.Sessions.GetHistory(ts.sessionKey)) != 0 {
 		t.Fatalf("protected multi-call batch persisted: messages=%d baseline=%d history=%#v",
 			len(exec.messages), baselineMessages, agent.Sessions.GetHistory(ts.sessionKey))
+	}
+}
+
+func TestLLMNormalizationAllowsResultOnlyProtectedCallsInBatch(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "safe assistant envelope",
+		ToolCalls: []providers.ToolCall{
+			{ID: "call-result-one", Name: "result_only_test", Arguments: map[string]any{"value": "first"}},
+			{ID: "call-result-two", Name: "result_only_test", Arguments: map[string]any{"value": "second"}},
+		},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(resultOnlyDurabilityTestTool{})
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("result-only-batch-session"), turnEventScope{
+		turnID: "result-only-batch-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("prepare = %+v, %v", stage, prepareErr)
+	}
+	if stage, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
+	}
+	if _, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err != nil {
+		t.Fatalf("result-only protected batch was rejected: %v", err)
+	}
+	if got := exec.messages[len(exec.messages)-1].Content; got != "safe assistant envelope" {
+		t.Fatalf("assistant envelope = %q", got)
 	}
 }
 

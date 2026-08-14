@@ -95,6 +95,7 @@ func (*protectedResultProjectionTool) DurableArguments(map[string]any) (map[stri
 	return map[string]any{"action": map[string]any{"kind": "fill", "value": "*"}}, nil
 }
 func (*protectedResultProjectionTool) ProtectedDurableArguments(map[string]any) bool { return true }
+func (*protectedResultProjectionTool) ProtectedDurableResult(map[string]any) bool    { return true }
 func (*protectedResultProjectionTool) Execute(
 	_ context.Context,
 	arguments map[string]any,

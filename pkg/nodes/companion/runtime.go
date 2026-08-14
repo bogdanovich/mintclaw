@@ -626,15 +626,12 @@ func durableInvocationSuccess(
 		if err := json.Unmarshal(plan.Input, &input); err != nil {
 			return nil, fmt.Errorf("decode browser context for durable result: %w", err)
 		}
-		if input.Operation != "select" {
-			return result, nil
-		}
-		var contextResult nodes.BrowserContextResult
-		if err := json.Unmarshal(result, &contextResult); err != nil {
-			return nil, fmt.Errorf("decode context result for durable receipt: %w", err)
-		}
-		contextResult.Observation = nil
-		durable, err := json.Marshal(contextResult)
+		durable, err := json.Marshal(struct {
+			Operation       string `json:"operation"`
+			ProtectedResult bool   `json:"protected_result"`
+		}{
+			Operation: input.Operation, ProtectedResult: true,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("encode context durable receipt: %w", err)
 		}

@@ -505,9 +505,10 @@ type BrowserContextInput struct {
 }
 
 type BrowserContextResult struct {
-	Operation   string                    `json:"operation"`
-	Catalog     BrowserContextCatalog     `json:"context_catalog"`
-	Observation *BrowserObservationResult `json:"observation,omitempty"`
+	Operation       string                    `json:"operation"`
+	Catalog         BrowserContextCatalog     `json:"context_catalog"`
+	Observation     *BrowserObservationResult `json:"observation,omitempty"`
+	ProtectedResult bool                      `json:"protected_result,omitempty"`
 }
 
 type BrowserSessionResult struct {
@@ -618,6 +619,7 @@ type BrowserObservationResult struct {
 	Snapshot           string           `json:"snapshot"`
 	Elements           []BrowserElement `json:"elements"`
 	Truncated          bool             `json:"truncated"`
+	ProtectedResult    bool             `json:"protected_result,omitempty"`
 }
 
 func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
@@ -631,6 +633,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		Snapshot           string           `json:"snapshot"`
 		Elements           []BrowserElement `json:"elements"`
 		Truncated          bool             `json:"truncated"`
+		ProtectedResult    bool             `json:"protected_result,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -643,6 +646,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
 		Elements: value.Elements, Truncated: value.Truncated,
+		ProtectedResult: value.ProtectedResult,
 	}
 	return nil
 }

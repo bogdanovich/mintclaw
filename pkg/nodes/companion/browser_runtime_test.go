@@ -625,6 +625,33 @@ func TestRuntimeStoresBrowserActionReceiptWithoutFreshObservation(t *testing.T) 
 	}
 }
 
+func TestRuntimeStoresOnlyProtectedReceiptForEveryBrowserContextOperation(t *testing.T) {
+	for _, operation := range []string{"list", "open", "select", "close"} {
+		t.Run(operation, func(t *testing.T) {
+			input, err := json.Marshal(nodes.BrowserContextInput{
+				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+				Operation: operation, RequestID: "context_" + operation,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := durableInvocationSuccess(nodes.ExecutionPlan{
+				InvocationRequest: nodes.InvocationRequest{
+					Command: nodes.BrowserCommandContexts, Input: input,
+				},
+			}, json.RawMessage(`{"operation":"`+operation+`","context_catalog":{"context_catalog_id":"private","tabs":[{"url":"https://private.example"}]}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(receipt, []byte("private")) ||
+				bytes.Contains(receipt, []byte("context_catalog")) ||
+				!bytes.Contains(receipt, []byte(`"protected_result":true`)) {
+				t.Fatalf("durable %s receipt = %s", operation, receipt)
+			}
+		})
+	}
+}
+
 func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *testing.T) {
 	for _, test := range []struct {
 		name      string

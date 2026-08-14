@@ -91,15 +91,25 @@ func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	args := map[string]any{"browser_session_id": "session_1"}
 
 	for name, protected := range map[string]bool{
-		"observe":  observe.ProtectedDurableArguments(args),
-		"contexts": contexts.ProtectedDurableArguments(args),
-		"navigate": action.ProtectedDurableArguments(map[string]any{
+		"observe":  observe.ProtectedDurableResult(args),
+		"contexts": contexts.ProtectedDurableResult(args),
+		"navigate": action.ProtectedDurableResult(map[string]any{
 			"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
 		}),
 	} {
 		if !protected {
 			t.Fatalf("%s result was not protected", name)
 		}
+	}
+	if action.ProtectedDurableArguments(map[string]any{
+		"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
+	}) {
+		t.Fatal("navigate intent unexpectedly requires singleton protected batching")
+	}
+	if !action.ProtectedDurableArguments(map[string]any{
+		"action": map[string]any{"kind": "fill", "ref": "ref_1", "value": "secret"},
+	}) {
+		t.Fatal("fill intent was not protected")
 	}
 
 	projected, err := observe.DurableArguments(args)

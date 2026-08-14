@@ -528,11 +528,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolResultStatus: toolResultContextStatus(hookResult),
 					Media:            toolResultMedia,
 				}
-				_, protectedResult, projectionErr := ts.agent.Tools.DurableArguments(toolName, toolArgs)
-				if projectionErr != nil {
-					runner.journalErr = fmt.Errorf("project protected tool result: %w", projectionErr)
-					return stopToolBatch(ToolLoopOutcome{})
-				}
+				protectedResult := ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
 				durableContent := durableToolResultContent(contentForLLM, protectedResult)
 				durableToolResultMsg := toolResultMsg
 				durableToolResultMsg.Content = durableContent
@@ -714,12 +710,7 @@ func (runner *toolLoopRunner) approveToolCall(
 		return skipToolCall()
 	}
 	call.toolRegistry = toolRegistry
-	_, protectedResult, projectionErr := toolRegistry.DurableArguments(toolName, toolArgs)
-	if projectionErr != nil {
-		runner.journalErr = fmt.Errorf("classify protected tool result before execution: %w", projectionErr)
-		return stopToolBatch(ToolLoopOutcome{})
-	}
-	call.protectedResult = protectedResult
+	call.protectedResult = toolRegistry.ProtectedDurableResult(toolName, toolArgs)
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
