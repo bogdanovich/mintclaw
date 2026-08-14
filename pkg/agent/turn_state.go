@@ -345,6 +345,7 @@ type turnState struct {
 	canonicalRestoreHistory []providers.Message
 	canonicalRestoreSummary string
 	persistedMessages       []providers.Message
+	liveTurnMessages        []providers.Message
 	acceptedSteering        []providers.Message
 
 	// SubTurn support.
@@ -896,9 +897,17 @@ func (ts *turnState) captureCanonicalRestorePoint(history []providers.Message, s
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
+	ts.recordPersistedMessagePair(msg, msg)
+}
+
+func (ts *turnState) recordPersistedMessagePair(
+	liveMsg providers.Message,
+	durableMsg providers.Message,
+) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.persistedMessages = append(ts.persistedMessages, msg)
+	ts.persistedMessages = append(ts.persistedMessages, durableMsg)
+	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMsg)
 }
 
 func (ts *turnState) recordAcceptedSteeringMessage(msg providers.Message) {
@@ -913,11 +922,20 @@ func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
 	return append([]providers.Message(nil), ts.persistedMessages...)
 }
 
+func (ts *turnState) liveTurnMessagesSnapshot() []providers.Message {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return append([]providers.Message(nil), ts.liveTurnMessages...)
+}
+
 func (ts *turnState) stripPersistedMessageMedia() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	for i := range ts.persistedMessages {
 		ts.persistedMessages[i].Media = nil
+	}
+	for i := range ts.liveTurnMessages {
+		ts.liveTurnMessages[i].Media = nil
 	}
 }
 

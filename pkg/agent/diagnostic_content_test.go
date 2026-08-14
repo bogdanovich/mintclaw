@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -373,6 +375,116 @@ func TestUnmatchedToolResultsAreRedactedFromLogsAndTraces(t *testing.T) {
 				t.Fatalf("unmatched tool result was not redacted: %s", preview)
 			}
 		}
+	}
+}
+
+func TestProtectedBrowserFillResultIsRedactedFromLogsAndTraces(t *testing.T) {
+	const canary = "protected-fill-result-canary-4a96ff1d"
+	messages := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "fill-call", Name: "browser_act",
+				Function: &providers.FunctionCall{
+					Name:      "browser_act",
+					Arguments: `{"browser_session_id":"session","tab_id":"tab","snapshot_id":"snapshot","snapshot_generation":1,"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "fill-call", Content: `{"observation":{"snapshot":"textbox: [` + canary + `]"}}`},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(messages),
+		diagnosticMessagesPreview(cfg, messages),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("protected fill result was not redacted: %s", preview)
+		}
+	}
+}
+
+func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
+	const canary = "pending-reused-fill-result-canary-54eb7e0c"
+	messages := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "reused-pending-call", Name: "browser_act",
+				Function: &providers.FunctionCall{
+					Name:      "browser_act",
+					Arguments: `{"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+				},
+			}},
+		},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "reused-pending-call", Name: "read_file",
+				Function: &providers.FunctionCall{
+					Name: "read_file", Arguments: `{"path":"public.txt"}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "reused-pending-call", Content: canary},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(messages),
+		diagnosticMessagesPreview(cfg, messages),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("pending reused protected call ID did not fail closed: %s", preview)
+		}
+	}
+}
+
+func TestDiagnosticPromptHashProjectsProtectedResultsWithoutMutatingLiveMessages(t *testing.T) {
+	protectedMessages := func(value string) []providers.Message {
+		return []providers.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []providers.ToolCall{{
+					ID: "fill-hash-call", Name: "browser_act",
+					Function: &providers.FunctionCall{
+						Name:      "browser_act",
+						Arguments: `{"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+					},
+				}},
+			},
+			{
+				Role: "tool", ToolCallID: "fill-hash-call", Content: "textbox: [" + value + "]",
+				SystemParts: []providers.ContentBlock{{Text: "structured: [" + value + "]"}},
+			},
+		}
+	}
+	first := protectedMessages("low-entropy-a")
+	second := protectedMessages("low-entropy-b")
+	settings := traceCaptureSettings{}
+	firstHash := safeJSONHash(settings, diagnosticPromptHashMessages(first))
+	secondHash := safeJSONHash(settings, diagnosticPromptHashMessages(second))
+	if firstHash == "" || firstHash != secondHash {
+		t.Fatalf("protected prompt hashes differ: %q != %q", firstHash, secondHash)
+	}
+	if !strings.Contains(first[1].Content, "low-entropy-a") {
+		t.Fatalf("live provider message was mutated: %#v", first)
+	}
+	if len(first[1].SystemParts) != 1 ||
+		!strings.Contains(first[1].SystemParts[0].Text, "low-entropy-a") {
+		t.Fatalf("live provider SystemParts were mutated: %#v", first[1].SystemParts)
+	}
+	projected := diagnosticPromptHashMessages(first)
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("low-entropy-a")) ||
+		!bytes.Contains(encoded, []byte("protected_result")) {
+		t.Fatalf("protected prompt hash projection is unsafe: %s", encoded)
 	}
 }
 

@@ -125,9 +125,12 @@ func (p *Pipeline) prepareLLMRequest(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request"),
 		LLMRequestPayload{
-			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
-			Model:              llm.llmModel,
-			PromptHash:         safeJSONHash(traceCaptureSettingsFromConfig(p.Cfg), llm.callMessages),
+			Provider: primaryCandidateProvider(exec.model.activeCandidates),
+			Model:    llm.llmModel,
+			PromptHash: safeJSONHash(
+				traceCaptureSettingsFromConfig(p.Cfg),
+				diagnosticPromptHashMessages(llm.callMessages),
+			),
 			MessagesCount:      len(llm.callMessages),
 			ToolsCount:         len(llm.providerToolDefs),
 			MaxTokens:          ts.agent.MaxTokens,

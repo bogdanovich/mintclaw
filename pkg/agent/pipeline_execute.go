@@ -25,6 +25,8 @@ import (
 
 const repeatedFatalToolErrorStreakLimit = 3
 
+const protectedToolResultDurableContent = `{"protected_result":true,"message":"Protected tool result omitted from durable state."}`
+
 func toolApprovalBypass(
 	cfg *config.Config,
 	registry *tools.ToolRegistry,
@@ -61,6 +63,16 @@ func durableToolLoopArguments(
 		}
 	}
 	return tools.ToolLogArguments(toolName, arguments)
+}
+
+func durableToolResultContent(
+	content string,
+	protected bool,
+) string {
+	if protected {
+		return protectedToolResultDurableContent
+	}
+	return content
 }
 
 type mcpServerTool interface {
@@ -311,6 +323,7 @@ type toolCallState struct {
 	loopArguments    map[string]any
 	mcpServerName    string
 	toolRegistry     *tools.ToolRegistry
+	protectedResult  bool
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -515,7 +528,15 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolResultStatus: toolResultContextStatus(hookResult),
 					Media:            toolResultMedia,
 				}
-				aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+				_, protectedResult, projectionErr := ts.agent.Tools.DurableArguments(toolName, toolArgs)
+				if projectionErr != nil {
+					runner.journalErr = fmt.Errorf("project protected tool result: %w", projectionErr)
+					return stopToolBatch(ToolLoopOutcome{})
+				}
+				durableContent := durableToolResultContent(contentForLLM, protectedResult)
+				durableToolResultMsg := toolResultMsg
+				durableToolResultMsg.Content = durableContent
+				aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 				if err != nil {
 					return stopToolBatch(ToolLoopOutcome{})
 				}
@@ -553,17 +574,21 @@ func (runner *toolLoopRunner) admitToolCall(
 						ForUserLen: len(hookResult.ForUser),
 						IsError:    hookResult.IsError,
 						Async:      hookResult.Async,
-						ResultHash: diagnosticSafeHash(p.Cfg, contentForLLM),
+						ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 						DiagnosticResult: diagnosticTextPreview(
-							p.Cfg, contentForLLM, diagnosticToolResultBytes,
+							p.Cfg, durableContent, diagnosticToolResultBytes,
 						),
 					},
 				)
 				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
+				errorSummary := toolErrorSummary(hookResult)
+				if protectedResult && hookResult.IsError {
+					errorSummary = "protected tool result omitted"
+				}
 				ts.recordToolExecution(
 					toolName,
 					!hookResult.IsError,
-					toolErrorSummary(hookResult),
+					errorSummary,
 					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 				)
 
@@ -689,6 +714,12 @@ func (runner *toolLoopRunner) approveToolCall(
 		return skipToolCall()
 	}
 	call.toolRegistry = toolRegistry
+	_, protectedResult, projectionErr := toolRegistry.DurableArguments(toolName, toolArgs)
+	if projectionErr != nil {
+		runner.journalErr = fmt.Errorf("classify protected tool result before execution: %w", projectionErr)
+		return stopToolBatch(ToolLoopOutcome{})
+	}
+	call.protectedResult = protectedResult
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
@@ -1065,7 +1096,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if ts.hardAbortRequested() {
 		resolveCanceledToolSuspension(execCtx, toolResult)
 		if toolResult != nil && toolResult.Suspension == nil {
-			_ = runner.journalHardAbortedToolResult(tc, toolResult)
+			effectiveCall := tc
+			effectiveCall.Name = toolName
+			effectiveCall.Arguments = toolArgs
+			_ = runner.journalHardAbortedToolResult(
+				effectiveCall, toolResult, call.protectedResult,
+			)
 		}
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
@@ -1211,7 +1247,11 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
 	toolResultMsg.Content = contentForLLM
-	aborted, err := runner.commitExecutedToolResult(toolResultMsg)
+	protectedResult := call.protectedResult
+	durableContent := durableToolResultContent(contentForLLM, protectedResult)
+	durableToolResultMsg := toolResultMsg
+	durableToolResultMsg.Content = durableContent
+	aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 	if err != nil {
 		return stopToolBatch(ToolLoopOutcome{})
 	}
@@ -1253,17 +1293,21 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			ForUserLen: len(toolResult.ForUser),
 			IsError:    toolResult.IsError,
 			Async:      toolResult.Async,
-			ResultHash: diagnosticSafeHash(p.Cfg, contentForLLM),
+			ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 			DiagnosticResult: diagnosticTextPreview(
-				p.Cfg, contentForLLM, diagnosticToolResultBytes,
+				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)
+	errorSummary := toolErrorSummary(toolResult)
+	if protectedResult && toolResult.IsError {
+		errorSummary = "protected tool result omitted"
+	}
 	ts.recordToolExecution(
 		toolName,
 		!toolResult.IsError,
-		toolErrorSummary(toolResult),
+		errorSummary,
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
 
@@ -1494,16 +1538,25 @@ func (r *toolLoopRunner) appendToolMessageWithContext(
 	msg providers.Message,
 	ingest toolMessageIngestMode,
 ) error {
+	return r.appendToolMessageWithDurableContext(ctx, msg, msg, ingest)
+}
+
+func (r *toolLoopRunner) appendToolMessageWithDurableContext(
+	ctx context.Context,
+	msg providers.Message,
+	durableMsg providers.Message,
+	ingest toolMessageIngestMode,
+) error {
 	r.messages = append(r.messages, msg)
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return nil
 	}
-	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
+	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, durableMsg)
 	if writeErr == nil {
-		r.ts.recordPersistedMessage(msg)
+		r.ts.recordPersistedMessagePair(msg, durableMsg)
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
-		r.p.ingestMessage(ctx, r.ts, msg, writeErr)
+		r.p.ingestMessage(ctx, r.ts, durableMsg, writeErr)
 	} else if writeErr != nil {
 		logger.WarnCF("agent", "Canonical tool message write failed", map[string]any{
 			"session_key": r.ts.sessionKey,
@@ -1519,6 +1572,7 @@ func (r *toolLoopRunner) appendToolMessageWithContext(
 func (r *toolLoopRunner) journalHardAbortedToolResult(
 	toolCall providers.ToolCall,
 	result *toolshared.ToolResult,
+	protectedResult bool,
 ) error {
 	if r == nil || result == nil {
 		return nil
@@ -1529,16 +1583,20 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
-	return r.appendToolMessageWithContext(
+	msg := buildToolResultJournalMessage(
+		r.p,
+		r.ts,
+		toolCall.ID,
+		toolCall.Name,
+		result,
+		r.p.filterToolContentForLLM(result.ContentForLLM()),
+	)
+	durableMsg := msg
+	durableMsg.Content = durableToolResultContent(msg.Content, protectedResult)
+	return r.appendToolMessageWithDurableContext(
 		ctx,
-		buildToolResultJournalMessage(
-			r.p,
-			r.ts,
-			toolCall.ID,
-			toolCall.Name,
-			result,
-			r.p.filterToolContentForLLM(result.ContentForLLM()),
-		),
+		msg,
+		durableMsg,
 		toolMessagePersistOnly,
 	)
 }
@@ -1566,21 +1624,26 @@ func buildToolResultJournalMessage(
 	return message
 }
 
-func (r *toolLoopRunner) commitExecutedToolResult(msg providers.Message) (bool, error) {
+func (r *toolLoopRunner) commitExecutedToolResult(
+	msg providers.Message,
+	durableMsg providers.Message,
+) (bool, error) {
 	ctx := r.turnCtx
 	if ctx == nil {
 		ctx = context.Background()
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
-	if err := r.appendToolMessageWithContext(ctx, msg, toolMessagePersistOnly); err != nil {
+	if err := r.appendToolMessageWithDurableContext(
+		ctx, msg, durableMsg, toolMessagePersistOnly,
+	); err != nil {
 		return false, err
 	}
 	if r.ts.hardAbortRequested() {
 		return true, nil
 	}
 	if r.ts != nil && !r.ts.opts.NoHistory && r.p != nil {
-		r.p.ingestMessage(r.turnCtx, r.ts, msg, nil)
+		r.p.ingestMessage(r.turnCtx, r.ts, durableMsg, nil)
 	}
 	return r.ts.hardAbortRequested(), nil
 }
