@@ -192,7 +192,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "click" || action == "fill" || action == "navigate" || action == "press" ||
+			if action == "click" || action == "dialog" || action == "fill" || action == "navigate" || action == "press" ||
 				action == "scroll" ||
 				action == "select" {
 				current[action] = struct{}{}
@@ -212,7 +212,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
 			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionPress,
-			browser.ActionScroll, browser.ActionSelect,
+			browser.ActionScroll, browser.ActionSelect, browser.ActionDialog,
 		} {
 			if _, available := intersection[string(action)]; available {
 				actions = append(actions, action)
@@ -469,6 +469,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "press")
 	case browser.ActionScroll:
 		return slices.Contains(worker.actions, "scroll")
+	case browser.ActionDialog:
+		return slices.Contains(worker.actions, "dialog")
 	default:
 		return false
 	}
@@ -511,6 +513,14 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			Kind: "press", Target: request.Prepared.Action.Target, Key: request.DriverAction.Key,
 		}
 		effect = "unknown"
+	case request.Prepared.Action.Kind == browser.ActionDialog &&
+		request.DriverAction.Kind == browser.DriverDialog && slices.Contains(worker.actions, "dialog"):
+		action = nodes.BrowserAction{
+			Kind: "dialog", DialogID: request.Prepared.Action.DialogID,
+			Decision:       request.Prepared.Action.Decision,
+			PromptProvided: request.DriverAction.PromptProvided,
+		}
+		effect = string(request.Prepared.Effect)
 	default:
 		return browser.ErrDenied
 	}
@@ -544,7 +554,23 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			return browser.ErrDenied
 		}
 	}
-	if action.Kind == "click" || action.Kind == "press" {
+	if action.Kind == "dialog" {
+		input.DialogType = request.Prepared.DialogType
+		input.DialogMessageDigest = request.Prepared.DialogMessageDigest
+		input.DialogMessageBytes = request.Prepared.DialogMessageBytes
+		if action.PromptProvided {
+			input.InputDigest = nodes.BrowserInputDigest(request.DriverAction.Value)
+			input.InputBytes = len(request.DriverAction.Value)
+			ephemeralInput, err = json.Marshal(struct {
+				Value string `json:"value"`
+			}{Value: request.DriverAction.Value})
+			if err != nil {
+				return browser.ErrDenied
+			}
+		}
+	}
+	if action.Kind == "click" || action.Kind == "press" ||
+		(action.Kind == "dialog" && action.Decision == "accept") {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
 			return browser.ErrDenied
@@ -610,6 +636,11 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	observation := browser.DriverObservation{
 		URL: result.URL, Origin: result.Origin, Title: result.Title,
 		Snapshot: result.Snapshot, Elements: elements, Truncated: result.Truncated,
+	}
+	if result.PendingDialog != nil {
+		observation.PendingDialog = &browser.DialogObservation{
+			Type: result.PendingDialog.Type, Message: result.PendingDialog.Message,
+		}
 	}
 	worker.mu.Lock()
 	worker.snapshotGeneration = result.SnapshotGeneration

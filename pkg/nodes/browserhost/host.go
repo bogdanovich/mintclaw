@@ -517,6 +517,44 @@ func (host *BrowserHost) Scroll(
 	})
 }
 
+func (host *BrowserHost) Dialog(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) ||
+		request.Action.Kind != "dialog" || !browserHostIdentifier(request.Action.DialogID) ||
+		(request.Action.Decision != "accept" && request.Action.Decision != "dismiss") ||
+		(request.DialogType != "alert" && request.DialogType != "beforeunload" &&
+			request.DialogType != "confirm" && request.DialogType != "prompt") ||
+		!browserHostDigest(request.DialogMessageDigest) || request.DialogMessageBytes < 0 ||
+		request.DialogMessageBytes > nodes.MaxBrowserDialogMessageBytes ||
+		request.Action.URL != "" || request.Action.Ref != "" || request.Action.Target != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "" || request.ExpectedName != "" ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		(request.Action.Decision == "dismiss" &&
+			(request.Effect != "read" || request.Action.PromptProvided || request.Action.Value != "" ||
+				request.InputDigest != "" || request.InputBytes != 0 || request.ApprovalDigest != "")) ||
+		(request.Action.Decision == "accept" &&
+			(request.Effect != "external_commit" ||
+				(request.Action.PromptProvided && request.DialogType != "prompt") ||
+				(!request.Action.PromptProvided && request.Action.Value != "") ||
+				len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
+				(request.Action.PromptProvided &&
+					(request.InputBytes != len(request.Action.Value) ||
+						!nodes.BrowserInputDigestMatches(request.InputDigest, request.Action.Value))) ||
+				(!request.Action.PromptProvided && (request.InputDigest != "" || request.InputBytes != 0)) ||
+				!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)))) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "dialog", browserworker.DriverAction{
+		Kind: browserworker.DriverDialog, Accept: request.Action.Decision == "accept",
+		Value: request.Action.Value, PromptProvided: request.Action.PromptProvided,
+	})
+}
+
 func (host *BrowserHost) Contexts(
 	ctx context.Context,
 	request nodes.BrowserHostContextRequest,
@@ -659,8 +697,10 @@ func (host *BrowserHost) executeAction(
 		)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if (action == "click" || action == "press") && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
+	if (action == "click" || action == "press" ||
+		(action == "dialog" && request.Action.Decision == "accept")) &&
+		(session.profile.DryRun || !session.profile.AllowApprovedActions ||
+			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
@@ -694,6 +734,18 @@ func (host *BrowserHost) executeAction(
 			return BrowserHostObservation{}, ErrBrowserHostLost
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
+	}
+	if action == "dialog" {
+		if current.PendingDialog == nil || current.PendingDialog.Type != request.DialogType ||
+			len(current.PendingDialog.Message) != request.DialogMessageBytes ||
+			!nodes.BrowserDialogMessageDigestMatches(
+				request.DialogMessageDigest,
+				current.PendingDialog.Type,
+				current.PendingDialog.Message,
+			) {
+			cancelAction()
+			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
 	}
 	if action == "click" || action == "fill" || action == "select" {
 		targets, matches := 0, 0
@@ -841,15 +893,20 @@ func stableBrowserHostNavigationIdentity(
 }
 
 func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
+	action := request.Action
+	action.Value = ""
 	return nodes.BrowserActInput{
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration,
-		ActionInvocationID: request.ActionInvocationID, Action: request.Action,
+		ActionInvocationID: request.ActionInvocationID, Action: action,
 		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
 		PreparedActionHash:    request.PreparedActionHash,
 		BrowserPolicyRevision: request.BrowserPolicyRevision,
 		ProfileRevision:       request.ProfileRevision,
 		ExpectedRole:          request.ExpectedRole, ExpectedName: request.ExpectedName,
+		DialogType: request.DialogType, DialogMessageDigest: request.DialogMessageDigest,
+		DialogMessageBytes: request.DialogMessageBytes,
+		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
 		ApprovalDigest: request.ApprovalDigest,
 	}
 }
@@ -1076,8 +1133,16 @@ func browserHostObservation(
 		SessionID: sessionID, TabID: session.tabID,
 		SnapshotGeneration: session.snapshotGeneration,
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
-		Snapshot: snapshot, Elements: elements, Truncated: observation.Truncated,
+		Snapshot: snapshot, Elements: elements, PendingDialog: browserHostDialogObservation(observation.PendingDialog),
+		Truncated: observation.Truncated,
 	}
+}
+
+func browserHostDialogObservation(dialog *browserworker.DialogObservation) *nodes.BrowserDialogObservation {
+	if dialog == nil {
+		return nil
+	}
+	return &nodes.BrowserDialogObservation{Type: dialog.Type, Message: dialog.Message}
 }
 
 func browserHostObservationDigest(

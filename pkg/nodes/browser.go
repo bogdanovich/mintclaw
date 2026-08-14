@@ -28,23 +28,24 @@ const (
 	BrowserNetworkPublicWeb    = "public_web"
 	BrowserNetworkAnyHTTP      = "any_http"
 
-	MaxBrowserProfiles        = 8
-	MaxBrowserActions         = 6
-	MaxBrowserScrollAmount    = 5
-	MaxBrowserSessions        = 1
-	MaxBrowserTabs            = 4
-	MaxBrowserSessionSeconds  = 60 * 60
-	MaxBrowserIdleSeconds     = 10 * 60
-	MaxBrowserPreparedSeconds = 5 * 60
-	MaxBrowserActionSeconds   = 60
-	MaxBrowserURLBytes        = 16 * 1024
-	MaxBrowserTitleBytes      = 4 * 1024
-	MaxBrowserSnapshotBytes   = 256 * 1024
-	MaxBrowserScreenshotBytes = 8 * 1024 * 1024
-	MaxBrowserUploadBytes     = 32 * 1024 * 1024
-	MaxBrowserDownloadBytes   = 32 * 1024 * 1024
-	MaxBrowserSnapshotRefs    = 500
-	MaxBrowserTextInputBytes  = 16 * 1024
+	MaxBrowserProfiles           = 8
+	MaxBrowserActions            = 16
+	MaxBrowserScrollAmount       = 5
+	MaxBrowserSessions           = 1
+	MaxBrowserTabs               = 4
+	MaxBrowserSessionSeconds     = 60 * 60
+	MaxBrowserIdleSeconds        = 10 * 60
+	MaxBrowserPreparedSeconds    = 5 * 60
+	MaxBrowserActionSeconds      = 60
+	MaxBrowserURLBytes           = 16 * 1024
+	MaxBrowserTitleBytes         = 4 * 1024
+	MaxBrowserDialogMessageBytes = 2 * 1024
+	MaxBrowserSnapshotBytes      = 256 * 1024
+	MaxBrowserScreenshotBytes    = 8 * 1024 * 1024
+	MaxBrowserUploadBytes        = 32 * 1024 * 1024
+	MaxBrowserDownloadBytes      = 32 * 1024 * 1024
+	MaxBrowserSnapshotRefs       = 500
+	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
 	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
@@ -264,26 +265,32 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 }
 
 type BrowserAction struct {
-	Kind      string `json:"kind"`
-	URL       string `json:"url,omitempty"`
-	Ref       string `json:"ref,omitempty"`
-	Target    string `json:"target,omitempty"`
-	Value     string `json:"value,omitempty"`
-	Key       string `json:"key,omitempty"`
-	Direction string `json:"direction,omitempty"`
-	Amount    int    `json:"amount,omitempty"`
+	Kind           string `json:"kind"`
+	URL            string `json:"url,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	DialogID       string `json:"dialog_id,omitempty"`
+	Target         string `json:"target,omitempty"`
+	Value          string `json:"value,omitempty"`
+	Key            string `json:"key,omitempty"`
+	Direction      string `json:"direction,omitempty"`
+	Amount         int    `json:"amount,omitempty"`
+	Decision       string `json:"decision,omitempty"`
+	PromptProvided bool   `json:"prompt_provided,omitempty"`
 }
 
 func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 	var value struct {
-		Kind      string          `json:"kind"`
-		URL       string          `json:"url,omitempty"`
-		Ref       string          `json:"ref,omitempty"`
-		Target    string          `json:"target,omitempty"`
-		Value     string          `json:"value,omitempty"`
-		Key       string          `json:"key,omitempty"`
-		Direction string          `json:"direction,omitempty"`
-		Amount    json.RawMessage `json:"amount,omitempty"`
+		Kind           string          `json:"kind"`
+		URL            string          `json:"url,omitempty"`
+		Ref            string          `json:"ref,omitempty"`
+		DialogID       string          `json:"dialog_id,omitempty"`
+		Target         string          `json:"target,omitempty"`
+		Value          string          `json:"value,omitempty"`
+		Key            string          `json:"key,omitempty"`
+		Direction      string          `json:"direction,omitempty"`
+		Amount         json.RawMessage `json:"amount,omitempty"`
+		Decision       string          `json:"decision,omitempty"`
+		PromptProvided bool            `json:"prompt_provided,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -297,8 +304,9 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		)
 	}
 	*action = BrowserAction{
-		Kind: value.Kind, URL: value.URL, Ref: value.Ref, Target: value.Target,
+		Kind: value.Kind, URL: value.URL, Ref: value.Ref, DialogID: value.DialogID, Target: value.Target,
 		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
+		Decision: value.Decision, PromptProvided: value.PromptProvided,
 	}
 	return nil
 }
@@ -316,6 +324,9 @@ type BrowserActInput struct {
 	ProfileRevision       string        `json:"profile_revision"`
 	ExpectedRole          string        `json:"expected_role,omitempty"`
 	ExpectedName          string        `json:"expected_name,omitempty"`
+	DialogType            string        `json:"dialog_type,omitempty"`
+	DialogMessageDigest   string        `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes    int           `json:"dialog_message_bytes,omitempty"`
 	InputDigest           string        `json:"input_digest,omitempty"`
 	InputBytes            int           `json:"input_bytes,omitempty"`
 	ApprovalDigest        string        `json:"approval_digest,omitempty"`
@@ -335,6 +346,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ProfileRevision       string          `json:"profile_revision"`
 		ExpectedRole          string          `json:"expected_role,omitempty"`
 		ExpectedName          string          `json:"expected_name,omitempty"`
+		DialogType            string          `json:"dialog_type,omitempty"`
+		DialogMessageDigest   string          `json:"dialog_message_digest,omitempty"`
+		DialogMessageBytes    json.RawMessage `json:"dialog_message_bytes,omitempty"`
 		InputDigest           string          `json:"input_digest,omitempty"`
 		InputBytes            json.RawMessage `json:"input_bytes,omitempty"`
 		ApprovalDigest        string          `json:"approval_digest,omitempty"`
@@ -353,6 +367,10 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	if inputBytes > MaxBrowserTextInputBytes {
 		return fmt.Errorf("%w: browser action input bytes exceed the limit", ErrInvalidCapability)
 	}
+	dialogMessageBytes, err := decodeCanonicalBrowserGeneration(value.DialogMessageBytes)
+	if err != nil || dialogMessageBytes > MaxBrowserDialogMessageBytes {
+		return fmt.Errorf("%w: browser dialog message bytes exceed the limit", ErrInvalidCapability)
+	}
 	*input = BrowserActInput{
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
@@ -361,7 +379,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		BrowserPolicyRevision: value.BrowserPolicyRevision,
 		ProfileRevision:       value.ProfileRevision,
 		ExpectedRole:          value.ExpectedRole, ExpectedName: value.ExpectedName,
-		InputDigest: value.InputDigest, InputBytes: int(inputBytes),
+		DialogType: value.DialogType, DialogMessageDigest: value.DialogMessageDigest,
+		DialogMessageBytes: int(dialogMessageBytes),
+		InputDigest:        value.InputDigest, InputBytes: int(inputBytes),
 		ApprovalDigest: value.ApprovalDigest,
 	}
 	return nil
@@ -370,6 +390,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 const (
 	browserApprovalDigestDomain = "mintclaw.browser.act.approval.v1\x00"
 	browserInputDigestDomain    = "mintclaw.browser.act.input.v1\x00"
+	browserDialogDigestDomain   = "mintclaw.browser.dialog-message.v1\x00"
 )
 
 func BrowserInputDigest(value string) string {
@@ -384,6 +405,23 @@ func BrowserInputDigestMatches(digest string, value string) bool {
 		return false
 	}
 	expected := BrowserInputDigest(value)
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(digest)) == 1
+}
+
+func BrowserDialogMessageDigest(dialogType, message string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(browserDialogDigestDomain))
+	_, _ = hash.Write([]byte(dialogType))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(message))
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func BrowserDialogMessageDigestMatches(digest, dialogType, message string) bool {
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	expected := BrowserDialogMessageDigest(dialogType, message)
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(digest)) == 1
 }
 
@@ -609,31 +647,38 @@ type BrowserElement struct {
 	Name string `json:"name"`
 }
 
+type BrowserDialogObservation struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 type BrowserObservationResult struct {
-	SessionID          string           `json:"session_id"`
-	TabID              string           `json:"tab_id"`
-	SnapshotGeneration uint64           `json:"snapshot_generation"`
-	URL                string           `json:"url"`
-	Origin             string           `json:"origin"`
-	Title              string           `json:"title,omitempty"`
-	Snapshot           string           `json:"snapshot"`
-	Elements           []BrowserElement `json:"elements"`
-	Truncated          bool             `json:"truncated"`
-	ProtectedResult    bool             `json:"protected_result,omitempty"`
+	SessionID          string                    `json:"session_id"`
+	TabID              string                    `json:"tab_id"`
+	SnapshotGeneration uint64                    `json:"snapshot_generation"`
+	URL                string                    `json:"url"`
+	Origin             string                    `json:"origin"`
+	Title              string                    `json:"title,omitempty"`
+	Snapshot           string                    `json:"snapshot"`
+	Elements           []BrowserElement          `json:"elements"`
+	PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
+	Truncated          bool                      `json:"truncated"`
+	ProtectedResult    bool                      `json:"protected_result,omitempty"`
 }
 
 func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 	var value struct {
-		SessionID          string           `json:"session_id"`
-		TabID              string           `json:"tab_id"`
-		SnapshotGeneration json.RawMessage  `json:"snapshot_generation"`
-		URL                string           `json:"url"`
-		Origin             string           `json:"origin"`
-		Title              string           `json:"title,omitempty"`
-		Snapshot           string           `json:"snapshot"`
-		Elements           []BrowserElement `json:"elements"`
-		Truncated          bool             `json:"truncated"`
-		ProtectedResult    bool             `json:"protected_result,omitempty"`
+		SessionID          string                    `json:"session_id"`
+		TabID              string                    `json:"tab_id"`
+		SnapshotGeneration json.RawMessage           `json:"snapshot_generation"`
+		URL                string                    `json:"url"`
+		Origin             string                    `json:"origin"`
+		Title              string                    `json:"title,omitempty"`
+		Snapshot           string                    `json:"snapshot"`
+		Elements           []BrowserElement          `json:"elements"`
+		PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
+		Truncated          bool                      `json:"truncated"`
+		ProtectedResult    bool                      `json:"protected_result,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -645,7 +690,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 	*result = BrowserObservationResult{
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
-		Elements: value.Elements, Truncated: value.Truncated,
+		Elements: value.Elements, PendingDialog: value.PendingDialog, Truncated: value.Truncated,
 		ProtectedResult: value.ProtectedResult,
 	}
 	return nil
@@ -703,6 +748,11 @@ type BrowserHostActRequest struct {
 	ApprovalDigest        string
 	ExpectedRole          string
 	ExpectedName          string
+	DialogType            string
+	DialogMessageDigest   string
+	DialogMessageBytes    int
+	InputDigest           string
+	InputBytes            int
 	AgentID               string
 	ActorID               string
 }
@@ -732,8 +782,8 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "click" && action != "download" && action != "fill" && action != "navigate" && action != "press" &&
-			action != "scroll" && action != "select" {
+		if action != "click" && action != "dialog" && action != "download" && action != "fill" &&
+			action != "navigate" && action != "press" && action != "scroll" && action != "select" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -875,6 +925,8 @@ func browserCommandInputSchema(
 		for _, action := range profile.Actions {
 			effect := "navigation"
 			switch action {
+			case "dialog":
+				effect = "external_commit"
 			case "download":
 				effect = "download"
 			case "fill", "select":
@@ -912,6 +964,23 @@ func browserCommandInputSchema(
 					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
 				}
 			}
+			if action == "dialog" {
+				required = append(required, "dialog_type", "dialog_message_digest", "dialog_message_bytes")
+				properties["effect"] = map[string]any{"enum": []string{"read", "external_commit"}}
+				properties["dialog_type"] = map[string]any{
+					"enum": []string{"alert", "beforeunload", "confirm", "prompt"},
+				}
+				properties["dialog_message_digest"] = map[string]any{
+					"type": "string", "pattern": "^[a-f0-9]{64}$",
+				}
+				properties["dialog_message_bytes"] = map[string]any{
+					"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
+				}
+				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
+				properties["input_bytes"] = map[string]any{
+					"type": "integer", "minimum": 0, "maximum": MaxBrowserTextInputBytes,
+				}
+			}
 			if action == "click" {
 				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
 			}
@@ -940,6 +1009,62 @@ func browserCommandInputSchema(
 						"expected_role": map[string]any{"not": map[string]any{"const": "button"}},
 						"effect":        map[string]any{"const": "unknown"},
 					}},
+				}
+			}
+			if action == "dialog" {
+				decisionConstraint := []any{
+					map[string]any{
+						"required": []string{"approval_digest"},
+						"properties": map[string]any{
+							"action": map[string]any{"properties": map[string]any{
+								"decision": map[string]any{"const": "accept"},
+							}},
+							"effect": map[string]any{"const": "external_commit"},
+						},
+					},
+					map[string]any{
+						"properties": map[string]any{
+							"action": map[string]any{"properties": map[string]any{
+								"decision":        map[string]any{"const": "dismiss"},
+								"prompt_provided": map[string]any{"const": false},
+							}},
+							"effect": map[string]any{"const": "read"},
+						},
+						"not": map[string]any{"anyOf": []any{
+							map[string]any{"required": []string{"approval_digest"}},
+							map[string]any{"required": []string{"input_digest"}},
+							map[string]any{"required": []string{"input_bytes"}},
+						}},
+					},
+				}
+				promptConstraint := []any{
+					map[string]any{
+						"required": []string{"input_digest"},
+						"properties": map[string]any{
+							"action": map[string]any{
+								"required": []string{"prompt_provided"},
+								"properties": map[string]any{
+									"prompt_provided": map[string]any{"const": true},
+								},
+							},
+							"dialog_type": map[string]any{"const": "prompt"},
+						},
+					},
+					map[string]any{
+						"properties": map[string]any{
+							"action": map[string]any{"properties": map[string]any{
+								"prompt_provided": map[string]any{"const": false},
+							}},
+						},
+						"not": map[string]any{"anyOf": []any{
+							map[string]any{"required": []string{"input_digest"}},
+							map[string]any{"required": []string{"input_bytes"}},
+						}},
+					},
+				}
+				branch["allOf"] = []any{
+					map[string]any{"oneOf": decisionConstraint},
+					map[string]any{"oneOf": promptConstraint},
 				}
 			}
 			actionBranches = append(actionBranches, branch)
@@ -987,6 +1112,9 @@ func browserCommandInputSchema(
 		if _, hasPress := allActions["press"]; hasPress && !slices.Contains(actEffects, "unknown") {
 			actEffects = append(actEffects, "unknown")
 		}
+		if _, hasDialog := allActions["dialog"]; hasDialog && !slices.Contains(actEffects, "external_commit") {
+			actEffects = append(actEffects, "external_commit")
+		}
 		if _, hasFill := allActions["fill"]; hasFill {
 			actEffects = append(actEffects, "local_edit")
 		}
@@ -1008,14 +1136,28 @@ func browserCommandInputSchema(
 		_, hasClick := allActions["click"]
 		_, hasFill := allActions["fill"]
 		_, hasSelect := allActions["select"]
+		_, hasDialog := allActions["dialog"]
 		if hasClick || hasFill || hasSelect {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
-		if hasFill || hasSelect {
+		if hasFill || hasSelect || hasDialog {
 			properties["input_digest"] = digest
+			minimumInputBytes := 1
+			if hasDialog {
+				minimumInputBytes = 0
+			}
 			properties["input_bytes"] = map[string]any{
-				"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
+				"type": "integer", "minimum": minimumInputBytes, "maximum": MaxBrowserTextInputBytes,
+			}
+		}
+		if hasDialog {
+			properties["dialog_type"] = map[string]any{
+				"enum": []string{"alert", "beforeunload", "confirm", "prompt"},
+			}
+			properties["dialog_message_digest"] = digest
+			properties["dialog_message_bytes"] = map[string]any{
+				"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
 			}
 		}
 		properties["approval_digest"] = digest
@@ -1406,10 +1548,10 @@ func browserActionSchema(actions []string) map[string]any {
 				"type": "object", "additionalProperties": false,
 				"required": []string{"kind", "dialog_id", "decision"},
 				"properties": map[string]any{
-					"kind":      map[string]any{"const": "dialog"},
-					"dialog_id": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-					"decision":  map[string]any{"enum": []string{"accept", "dismiss"}},
-					"value":     map[string]any{"type": "string", "maxLength": MaxBrowserTextInputBytes},
+					"kind":            map[string]any{"const": "dialog"},
+					"dialog_id":       map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"decision":        map[string]any{"enum": []string{"accept", "dismiss"}},
+					"prompt_provided": map[string]any{"type": "boolean"},
 				},
 			})
 		case "file_chooser":
@@ -1490,6 +1632,16 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 						"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 						"role": map[string]any{"type": "string", "maxLength": 128},
 						"name": map[string]any{"type": "string", "maxLength": 4096},
+					},
+				},
+			},
+			"pending_dialog": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"type", "message"},
+				"properties": map[string]any{
+					"type": map[string]any{"enum": []string{"alert", "beforeunload", "confirm", "prompt"}},
+					"message": map[string]any{
+						"type": "string", "maxLength": MaxBrowserDialogMessageBytes,
 					},
 				},
 			},
@@ -1620,6 +1772,18 @@ func validateBrowserObservationBytes(
 			field.maximum,
 			field.required,
 		); err != nil {
+			return err
+		}
+	}
+	if pending, present := observation["pending_dialog"]; present {
+		dialog, ok := pending.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: malformed browser pending dialog", ErrInvalidInvocation)
+		}
+		if err := validateBrowserStringBytes(dialog, "type", 16, true); err != nil {
+			return err
+		}
+		if err := validateBrowserStringBytes(dialog, "message", MaxBrowserDialogMessageBytes, true); err != nil {
 			return err
 		}
 	}

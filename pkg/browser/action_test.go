@@ -1631,17 +1631,25 @@ func TestBrokerObservesAndDismissesBoundDialog(t *testing.T) {
 	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: "Discard draft?"}
 	owner := testOwner()
 	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
-	if err != nil || observation.PendingDialog == nil ||
-		*observation.PendingDialog != (DialogObservation{Type: "confirm", Message: "Discard draft?"}) {
+	if err != nil || observation.PendingDialog == nil || observation.PendingDialog.ID == "" ||
+		observation.PendingDialog.Type != "confirm" || observation.PendingDialog.Message != "Discard draft?" {
 		t.Fatalf("Observe() dialog = %+v, %v", observation, err)
+	}
+	if _, err = broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_wrong_dialog", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDialog, DialogID: "dialog_wrong", Decision: "dismiss"},
+	}); !errors.Is(err, ErrStale) {
+		t.Fatalf("PrepareAction(wrong dialog) error = %v, want ErrStale", err)
 	}
 	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
 		Owner: owner, RequestID: "request_dismiss", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
-		Action: Action{Kind: ActionDialog, Decision: "dismiss"},
+		Action: Action{Kind: ActionDialog, DialogID: observation.PendingDialog.ID, Decision: "dismiss"},
 	})
-	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectLocalEdit ||
-		prepared.Action.DialogType != "confirm" || prepared.Action.DialogMessage != "Discard draft?" {
+	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectRead ||
+		prepared.Action.DialogType != "confirm" || !validDigest(prepared.Action.DialogMessageDigest) ||
+		prepared.Action.DialogMessageBytes != len("Discard draft?") {
 		t.Fatalf("PrepareAction(dismiss) = %+v, %v", prepared, err)
 	}
 	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
@@ -1671,7 +1679,8 @@ func TestBrokerBindsDialogPromptAndProtectsAcceptance(t *testing.T) {
 		Owner: owner, RequestID: "request_accept", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: Action{
-			Kind: ActionDialog, Decision: "accept", Value: "prompt-secret", PromptProvided: true,
+			Kind: ActionDialog, DialogID: observation.PendingDialog.ID,
+			Decision: "accept", Value: "prompt-secret", PromptProvided: true,
 		},
 	})
 	if err != nil || !prepared.RequiresApproval || prepared.Action.Effect != EffectExternalCommit ||
@@ -1682,7 +1691,7 @@ func TestBrokerBindsDialogPromptAndProtectsAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(state, []byte("prompt-secret")) {
+	if bytes.Contains(state, []byte("prompt-secret")) || bytes.Contains(state, []byte("Type confirmation")) {
 		t.Fatalf("durable browser state exposed dialog prompt: %s", state)
 	}
 	if _, err = broker.ExecuteAction(
@@ -1712,7 +1721,7 @@ func TestBrokerRejectsChangedDialogBeforeDispatch(t *testing.T) {
 	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
 		Owner: owner, RequestID: "request_changed_dialog", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
-		Action: Action{Kind: ActionDialog, Decision: "dismiss"},
+		Action: Action{Kind: ActionDialog, DialogID: observation.PendingDialog.ID, Decision: "dismiss"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1725,6 +1734,82 @@ func TestBrokerRejectsChangedDialogBeforeDispatch(t *testing.T) {
 	}
 	if len(worker.actions) != 0 {
 		t.Fatalf("changed dialog reached driver: %+v", worker.actions)
+	}
+}
+
+func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "browser.json")
+	store, err := NewFileStore(path, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, worker, session := openActionTestBroker(t, store)
+	message := "Legacy dialog message canary"
+	worker.observation = driverObservationFixture()
+	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: message}
+	owner := testOwner()
+	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil || observation.PendingDialog == nil {
+		t.Fatalf("Observe() = %#v, %v", observation, err)
+	}
+	preparation, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_legacy_dialog", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{
+			Kind: ActionDialog, DialogID: observation.PendingDialog.ID, Decision: "dismiss",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document fileStoreDocument
+	if err = json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	legacy := document.PreparedActions[preparation.Action.ID]
+	legacy.Action.DialogID = ""
+	legacy.LegacyDialogMessage = message
+	legacy.DialogMessageDigest = ""
+	legacy.DialogMessageBytes = 0
+	legacy.ActionHash = ""
+	legacy.ActionHash, err = hashPreparedAction(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.PreparedActions[legacy.ID] = legacy
+	for id, invocation := range document.Invocations {
+		if invocation.PreparedActionID == legacy.ID {
+			invocation.ActionHash = legacy.ActionHash
+			document.Invocations[id] = invocation
+		}
+	}
+	raw, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewFileStore(path, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	migrated, err := reopened.GetPreparedAction(context.Background(), legacy.ID)
+	if err != nil || migrated.Action.DialogID == "" || migrated.LegacyDialogMessage != "" ||
+		!validDigest(migrated.DialogMessageDigest) || migrated.DialogMessageBytes != len(message) ||
+		migrated.Validate(config.BrowserMaxTextInputBytes) != nil {
+		t.Fatalf("migrated dialog = %#v, %v", migrated, err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil || bytes.Contains(raw, []byte(message)) || bytes.Contains(raw, []byte(`"dialog_message"`)) {
+		t.Fatalf("migrated store retained legacy message: %s, %v", raw, err)
 	}
 }
 

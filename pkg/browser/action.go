@@ -37,6 +37,7 @@ type Observation struct {
 }
 
 type DialogObservation struct {
+	ID      string `json:"dialog_id,omitempty"`
 	Type    string `json:"type"`
 	Message string `json:"message"`
 }
@@ -247,11 +248,15 @@ func (broker *Broker) persistDriverObservationLocked(
 	if len(navigationID) > 0 {
 		slot.navigationID = navigationID[0]
 	}
+	pendingDialog := cloneDialogObservation(driverObservation.PendingDialog)
+	if pendingDialog != nil {
+		pendingDialog.ID = stableDialogRef(snapshotID, pendingDialog.Type, pendingDialog.Message)
+	}
 	observation := Observation{
 		SessionID: session.ID, TabID: session.TabID, FrameID: session.FrameID, SnapshotID: snapshotID,
 		SnapshotGeneration: session.SnapshotGeneration, URL: driverObservation.URL,
 		Origin: driverObservation.Origin, Title: driverObservation.Title, Snapshot: visibleSnapshot,
-		PendingDialog: cloneDialogObservation(driverObservation.PendingDialog),
+		PendingDialog: pendingDialog,
 		Truncated:     driverObservation.Truncated,
 	}
 	if session.ContextAuthority != nil {
@@ -272,6 +277,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil ||
 		(request.Action.Kind == ActionFill && request.Action.Value == "") ||
 		(request.Action.Kind == ActionSelect && request.Action.Value == "") ||
+		(request.Action.Kind == ActionDialog && !validIdentifier(request.Action.DialogID)) ||
 		(request.Action.Kind == ActionUpload && (request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
 		(request.Action.Kind != ActionUpload && request.Upload != nil) {
 		return Preparation{}, fmt.Errorf("%w: malformed action preparation", ErrInvalid)
@@ -684,11 +690,20 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if blankErr := validateBlankObservation(observation, session.SnapshotOrigin); blankErr != nil {
 			return PreparedAction{}, blankErr
 		}
-		if observation.Origin != session.SnapshotOrigin || observation.PendingDialog == nil {
+		if observation.Origin != session.SnapshotOrigin || observation.PendingDialog == nil ||
+			request.Action.DialogID != stableDialogRef(
+				session.SnapshotID,
+				observation.PendingDialog.Type,
+				observation.PendingDialog.Message,
+			) {
 			return PreparedAction{}, ErrStale
 		}
 		prepared.DialogType = observation.PendingDialog.Type
-		prepared.DialogMessage = observation.PendingDialog.Message
+		prepared.DialogMessageDigest = dialogMessageDigest(
+			observation.PendingDialog.Type,
+			observation.PendingDialog.Message,
+		)
+		prepared.DialogMessageBytes = len(observation.PendingDialog.Message)
 		if request.Action.PromptProvided && prepared.DialogType != "prompt" {
 			return PreparedAction{}, ErrDenied
 		}
@@ -764,8 +779,17 @@ func (broker *Broker) revalidatePreparedLocked(
 			return err
 		}
 		if observation.Origin != prepared.CurrentOrigin || observation.PendingDialog == nil ||
+			prepared.Action.DialogID != stableDialogRef(
+				prepared.SnapshotID,
+				observation.PendingDialog.Type,
+				observation.PendingDialog.Message,
+			) ||
 			observation.PendingDialog.Type != prepared.DialogType ||
-			observation.PendingDialog.Message != prepared.DialogMessage {
+			dialogMessageDigest(
+				observation.PendingDialog.Type,
+				observation.PendingDialog.Message,
+			) != prepared.DialogMessageDigest ||
+			len(observation.PendingDialog.Message) != prepared.DialogMessageBytes {
 			return ErrStale
 		}
 		return nil
@@ -993,7 +1017,7 @@ func classifyClickEffect(element DriverElement) Effect {
 
 func classifyDialogEffect(decision string) Effect {
 	if decision == "dismiss" {
-		return EffectLocalEdit
+		return EffectRead
 	}
 	return EffectExternalCommit
 }
@@ -1270,6 +1294,16 @@ func originFromURL(raw string) (string, error) {
 func stableElementRef(snapshotID, target string) string {
 	digest := sha256.Sum256([]byte(snapshotID + "\x00" + target))
 	return "ref_" + hex.EncodeToString(digest[:16])
+}
+
+func stableDialogRef(snapshotID, dialogType, message string) string {
+	digest := sha256.Sum256([]byte(snapshotID + "\x00" + dialogType + "\x00" + message))
+	return "dialog_" + hex.EncodeToString(digest[:16])
+}
+
+func dialogMessageDigest(dialogType, message string) string {
+	digest := sha256.Sum256([]byte("mintclaw.browser.dialog-message.v1\x00" + dialogType + "\x00" + message))
+	return hex.EncodeToString(digest[:])
 }
 
 func derivedIdentifier(prefix string, owner Owner, values ...string) string {

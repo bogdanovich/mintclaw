@@ -584,7 +584,9 @@ type PreparedAction struct {
 	ElementRole          string `json:"element_role,omitempty"`
 	ElementName          string `json:"element_name,omitempty"`
 	DialogType           string `json:"dialog_type,omitempty"`
-	DialogMessage        string `json:"dialog_message,omitempty"`
+	LegacyDialogMessage  string `json:"dialog_message,omitempty"`
+	DialogMessageDigest  string `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes   int    `json:"dialog_message_bytes,omitempty"`
 	Effect               Effect `json:"effect"`
 	DryRun               bool   `json:"dry_run"`
 	PolicyRevision       string `json:"policy_revision"`
@@ -603,7 +605,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.CurrentOrigin == "" || len(prepared.CurrentOrigin) > MaxURLBytes ||
 		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.ElementRole) > 64 ||
 		len(prepared.ElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
-		len(prepared.DialogMessage) > MaxDialogMessageBytes ||
+		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
 		!validDigest(prepared.ActionHash) || prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
@@ -620,7 +622,11 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 	) {
 		return fmt.Errorf("%w: malformed prepared action context", ErrInvalid)
 	}
-	if prepared.Action.Kind != ActionDialog && (prepared.DialogType != "" || prepared.DialogMessage != "") {
+	if prepared.LegacyDialogMessage != "" {
+		return fmt.Errorf("%w: legacy prepared dialog message was not migrated", ErrInvalid)
+	}
+	if prepared.Action.Kind != ActionDialog && (prepared.DialogType != "" ||
+		prepared.DialogMessageDigest != "" || prepared.DialogMessageBytes != 0) {
 		return fmt.Errorf("%w: unexpected prepared dialog binding", ErrInvalid)
 	}
 	if prepared.Action.Kind != ActionUpload && (prepared.ArtifactSHA256 != "" || prepared.ArtifactBytes != 0 ||
@@ -679,7 +685,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		}
 	case ActionDialog:
 		if prepared.DestinationOrigin != "" || prepared.ElementRole != "" || prepared.ElementName != "" ||
-			!validDialogType(prepared.DialogType) ||
+			!validIdentifier(prepared.Action.DialogID) || !validDialogType(prepared.DialogType) ||
+			!validDigest(prepared.DialogMessageDigest) ||
 			prepared.Action.Value != "" || prepared.Effect != classifyDialogEffect(prepared.Action.Decision) {
 			return fmt.Errorf("%w: malformed prepared dialog", ErrInvalid)
 		}
