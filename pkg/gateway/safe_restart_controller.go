@@ -178,6 +178,7 @@ func (c *RestartController) runRestart(
 	sentinel.Status = restartStatusRunning
 	sentinel.UpdatedAt = c.now()
 	sentinel.Preflight = latestPreflight
+	sentinel.ForcedAfterDrain = forced
 	if err := c.store.Write(sentinel); err != nil {
 		return
 	}
@@ -185,9 +186,6 @@ func (c *RestartController) runRestart(
 	dispatch := c.restarter.DispatchRestart(ctx, service)
 	switch dispatch.Outcome {
 	case RestartDispatchAccepted:
-		sentinel.UpdatedAt = c.now()
-		sentinel.ForcedAfterDrain = forced
-		_ = c.store.Write(sentinel)
 		return
 	case RestartDispatchIndeterminate:
 		logger.WarnCF(

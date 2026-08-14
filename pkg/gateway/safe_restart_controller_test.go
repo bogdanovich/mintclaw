@@ -277,7 +277,7 @@ func TestRestartControllerSafePathWritesSentinelAndRestarts(t *testing.T) {
 		nextTimestamp = nextTimestamp.Add(time.Second)
 		return current
 	}
-	finalUpdatedAt := nextTimestamp.Add(4 * time.Second)
+	runningUpdatedAt := nextTimestamp.Add(3 * time.Second)
 	restarter := &fakeServiceRestarter{
 		called:  make(chan string, 1),
 		release: releaseRestart,
@@ -295,7 +295,7 @@ func TestRestartControllerSafePathWritesSentinelAndRestarts(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		release()
-		waitForRestartSentinelUpdatedAt(t, store, finalUpdatedAt)
+		waitForRestartSentinelUpdatedAt(t, store, runningUpdatedAt)
 	})
 
 	result, err := controller.RequestRestart(context.Background(), RestartRequest{
@@ -321,7 +321,7 @@ func TestRestartControllerSafePathWritesSentinelAndRestarts(t *testing.T) {
 		t.Fatalf("sentinel origin = %#v", sentinel.Origin)
 	}
 	release()
-	waitForRestartSentinelUpdatedAt(t, store, finalUpdatedAt)
+	waitForRestartSentinelUpdatedAt(t, store, runningUpdatedAt)
 	if !restarter.calledWith("mintclaw-main.service") {
 		t.Fatalf("restarter calls = %#v, want configured service", restarter.services)
 	}
