@@ -976,12 +976,15 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
 	actions := []string{
 		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "drag", "press", "scroll", "dialog",
-		"file_chooser", "upload",
+		"upload",
 	}
 	downloadAvailable := false
 	if tool != nil && tool.runtime != nil {
 		limits = tool.runtime.config.Limits.Effective()
 		downloadAvailable = tool.runtime.source.DownloadAvailable()
+		if tool.runtime.fileChooserAvailable() {
+			actions = append(actions, string(browser.ActionFileChooser))
+		}
 	}
 	if downloadAvailable {
 		actions = append(actions, "download")
@@ -1028,6 +1031,18 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		},
 		"additionalProperties": false,
 	}
+}
+
+func (runtime *browserToolRuntime) fileChooserAvailable() bool {
+	if runtime == nil || runtime.source == nil || !runtime.source.ArtifactTransferAvailable() {
+		return false
+	}
+	for _, target := range runtime.config.Targets {
+		if target.Enabled && target.EffectivePlacement() == config.BrowserPlacementGateway {
+			return true
+		}
+	}
+	return false
 }
 func (*BrowserActTool) ToolLoopSemantics() loopguard.Semantics { return loopguard.SemanticsMutating }
 
