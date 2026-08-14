@@ -1382,6 +1382,46 @@ func browserActionSchema(actions []string) map[string]any {
 					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 				},
 			})
+		case "check", "uncheck", "hover":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "ref"},
+				"properties": map[string]any{
+					"kind": map[string]any{"const": action},
+					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
+		case "drag":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "source_ref", "destination_ref"},
+				"properties": map[string]any{
+					"kind":            map[string]any{"const": "drag"},
+					"source_ref":      map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"destination_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
+		case "dialog":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "dialog_id", "decision"},
+				"properties": map[string]any{
+					"kind":      map[string]any{"const": "dialog"},
+					"dialog_id": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"decision":  map[string]any{"enum": []string{"accept", "dismiss"}},
+					"value":     map[string]any{"type": "string", "maxLength": MaxBrowserTextInputBytes},
+				},
+			})
+		case "file_chooser":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "ref", "artifact_ref"},
+				"properties": map[string]any{
+					"kind":         map[string]any{"const": "file_chooser"},
+					"ref":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"artifact_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": 512},
+				},
+			})
 		case "select":
 			branches = append(branches, map[string]any{
 				"type": "object", "additionalProperties": false,

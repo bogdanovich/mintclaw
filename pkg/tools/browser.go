@@ -1294,6 +1294,9 @@ func browserActionFromArgs(raw any) (browser.Action, error) {
 	action.Kind = browser.ActionKind(kind)
 	action.URL, _ = args["url"].(string)
 	action.Ref, _ = args["ref"].(string)
+	action.SourceRef, _ = args["source_ref"].(string)
+	action.DestinationRef, _ = args["destination_ref"].(string)
+	action.DialogID, _ = args["dialog_id"].(string)
 	action.Target, _ = args["target"].(string)
 	action.Value, _ = args["value"].(string)
 	if action.Kind == browser.ActionDialog {

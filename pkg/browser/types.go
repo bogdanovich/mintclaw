@@ -261,21 +261,26 @@ func (effect Effect) Valid() bool {
 type ActionKind string
 
 const (
-	ActionNavigate ActionKind = "navigate"
-	ActionClick    ActionKind = "click"
-	ActionFill     ActionKind = "fill"
-	ActionSelect   ActionKind = "select"
-	ActionPress    ActionKind = "press"
-	ActionScroll   ActionKind = "scroll"
-	ActionDialog   ActionKind = "dialog"
-	ActionUpload   ActionKind = "upload"
-	ActionDownload ActionKind = "download"
+	ActionNavigate    ActionKind = "navigate"
+	ActionClick       ActionKind = "click"
+	ActionFill        ActionKind = "fill"
+	ActionSelect      ActionKind = "select"
+	ActionPress       ActionKind = "press"
+	ActionScroll      ActionKind = "scroll"
+	ActionDialog      ActionKind = "dialog"
+	ActionCheck       ActionKind = "check"
+	ActionUncheck     ActionKind = "uncheck"
+	ActionHover       ActionKind = "hover"
+	ActionDrag        ActionKind = "drag"
+	ActionFileChooser ActionKind = "file_chooser"
+	ActionUpload      ActionKind = "upload"
+	ActionDownload    ActionKind = "download"
 )
 
 func (kind ActionKind) Valid() bool {
 	switch kind {
 	case ActionNavigate, ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll, ActionDialog,
-		ActionUpload, ActionDownload:
+		ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser, ActionUpload, ActionDownload:
 		return true
 	default:
 		return false
@@ -286,6 +291,9 @@ type Action struct {
 	Kind           ActionKind `json:"kind"`
 	URL            string     `json:"url,omitempty"`
 	Ref            string     `json:"ref,omitempty"`
+	SourceRef      string     `json:"source_ref,omitempty"`
+	DestinationRef string     `json:"destination_ref,omitempty"`
+	DialogID       string     `json:"dialog_id,omitempty"`
 	Target         string     `json:"target,omitempty"`
 	Value          string     `json:"value,omitempty"`
 	Key            string     `json:"key,omitempty"`
@@ -301,7 +309,12 @@ func (action Action) Validate(maxTextBytes int) error {
 	if !action.Kind.Valid() || len(action.URL) > MaxURLBytes || len(action.Value) > maxTextBytes {
 		return fmt.Errorf("%w: malformed browser action", ErrInvalid)
 	}
-	if (action.Kind != ActionUpload && action.ArtifactRef != "") ||
+	if (action.Kind != ActionDrag && (action.SourceRef != "" || action.DestinationRef != "")) ||
+		(action.Kind != ActionDialog && action.DialogID != "") ||
+		(action.Kind == ActionDialog && action.DialogID != "" && !validIdentifier(action.DialogID)) {
+		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
+	}
+	if (action.Kind != ActionUpload && action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
 		(action.Kind != ActionDownload && action.Deliver) {
 		return fmt.Errorf("%w: malformed browser artifact action", ErrInvalid)
 	}
@@ -322,6 +335,19 @@ func (action Action) Validate(maxTextBytes int) error {
 			action.Direction != "" ||
 			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed click action", ErrInvalid)
+		}
+	case ActionCheck, ActionUncheck, ActionHover:
+		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Value != "" ||
+			action.Key != "" || action.Direction != "" || action.Decision != "" || action.PromptProvided ||
+			action.Amount != 0 || action.SourceRef != "" || action.DestinationRef != "" || action.DialogID != "" {
+			return fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
+		}
+	case ActionDrag:
+		if !validIdentifier(action.SourceRef) || !validIdentifier(action.DestinationRef) ||
+			action.SourceRef == action.DestinationRef || action.Ref != "" || action.URL != "" || action.Target != "" ||
+			action.Value != "" || action.Key != "" || action.Direction != "" || action.Decision != "" ||
+			action.PromptProvided || action.Amount != 0 || action.DialogID != "" {
+			return fmt.Errorf("%w: malformed drag action", ErrInvalid)
 		}
 	case ActionFill:
 		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
@@ -364,6 +390,14 @@ func (action Action) Validate(maxTextBytes int) error {
 			(action.Decision == "dismiss" && (action.Value != "" || action.PromptProvided)) ||
 			(!action.PromptProvided && action.Value != "") {
 			return fmt.Errorf("%w: malformed dialog action", ErrInvalid)
+		}
+	case ActionFileChooser:
+		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
+			len(action.ArtifactRef) > 512 || action.URL != "" || action.Target != "" || action.Value != "" ||
+			action.Key != "" || action.Direction != "" || action.Amount != 0 || action.Decision != "" ||
+			action.PromptProvided || action.Deliver || action.SourceRef != "" || action.DestinationRef != "" ||
+			action.DialogID != "" {
+			return fmt.Errorf("%w: malformed file chooser action", ErrInvalid)
 		}
 	case ActionUpload:
 		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
@@ -574,6 +608,10 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		!validDigest(prepared.ActionHash) || prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
+	}
+	switch prepared.Action.Kind {
+	case ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser:
+		return fmt.Errorf("%w: unsupported prepared action kind", ErrInvalid)
 	}
 	if !validContextBinding(
 		prepared.FrameID,

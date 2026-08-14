@@ -62,6 +62,8 @@ const playwrightNavigationIdentityMarker = "MINTCLAW_NAV_V1"
 
 const playwrightNavigationCheckedActionMarker = "MINTCLAW_NAV_ACT_V1"
 
+const playwrightCheckActionMarker = "MINTCLAW_CHECK_V1"
+
 const playwrightNavigationIdentityCode = `async (page) => {
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
   let state = page[trackerKey];
@@ -134,23 +136,29 @@ const (
 	DriverPress          DriverActionKind = "press"
 	DriverScroll         DriverActionKind = "scroll"
 	DriverDialog         DriverActionKind = "dialog"
+	DriverCheck          DriverActionKind = "check"
+	DriverUncheck        DriverActionKind = "uncheck"
+	DriverHover          DriverActionKind = "hover"
+	DriverDrag           DriverActionKind = "drag"
 	DriverUpload         DriverActionKind = "upload"
 	DriverDownloadAction DriverActionKind = "download"
 )
 
 type DriverAction struct {
-	Kind           DriverActionKind
-	URL            string
-	Target         string
-	Element        string
-	Value          string
-	Key            string
-	Direction      string
-	Amount         int
-	Accept         bool
-	PromptProvided bool
-	ArtifactSHA256 string
-	ArtifactBytes  int64
+	Kind               DriverActionKind
+	URL                string
+	Target             string
+	Element            string
+	DestinationTarget  string
+	DestinationElement string
+	Value              string
+	Key                string
+	Direction          string
+	Amount             int
+	Accept             bool
+	PromptProvided     bool
+	ArtifactSHA256     string
+	ArtifactBytes      int64
 }
 
 type DriverObservation struct {
@@ -1207,9 +1215,25 @@ func (worker *playwrightWorker) Execute(ctx context.Context, action DriverAction
 	if err != nil {
 		return err
 	}
-	_, err = worker.callAndConsume(
+	text, err := worker.callAndConsume(
 		ctx, tool, arguments, playwrightActionIncludesSnapshot(action.Kind),
 	)
+	if err != nil {
+		return err
+	}
+	if action.Kind != DriverCheck && action.Kind != DriverUncheck {
+		return nil
+	}
+	// Playwright MCP reports modal metadata instead of the callback result when
+	// the input opens a dialog. The modal proves dispatch crossed the one-shot
+	// boundary; retain it for the dialog state machine and never invite replay.
+	if worker.pendingDialog != nil {
+		return nil
+	}
+	if err = parsePlaywrightCheckAction(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		worker.lost = true
+	}
 	return err
 }
 
@@ -1307,7 +1331,7 @@ func (worker *playwrightWorker) pendingDialogObservationLocked() (DriverObservat
 
 func playwrightActionIncludesSnapshot(kind DriverActionKind) bool {
 	switch kind {
-	case DriverNavigate, DriverClick, DriverFill, DriverSelect:
+	case DriverNavigate, DriverClick, DriverFill, DriverSelect, DriverHover, DriverDrag:
 		return true
 	default:
 		return false
@@ -1398,6 +1422,9 @@ func mapPlaywrightAction(
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
 ) (string, map[string]any, error) {
+	if action.Kind != DriverDrag && (action.DestinationTarget != "" || action.DestinationElement != "") {
+		return "", nil, fmt.Errorf("%w: malformed destination action", ErrInvalid)
+	}
 	switch action.Kind {
 	case DriverNavigate:
 		normalized, err := normalizeDriverNavigationURL(action.URL)
@@ -1495,8 +1522,83 @@ func mapPlaywrightAction(
 			arguments["promptText"] = action.Value
 		}
 		return "browser_handle_dialog", arguments, nil
+	case DriverHover:
+		if !validPlaywrightElementAction(action, false) {
+			return "", nil, fmt.Errorf("%w: malformed hover action", ErrInvalid)
+		}
+		arguments := map[string]any{"target": action.Target}
+		if action.Element != "" {
+			arguments["element"] = action.Element
+		}
+		return "browser_hover", arguments, nil
+	case DriverDrag:
+		if !validPlaywrightElementAction(action, true) ||
+			!playwrightTargetPattern.MatchString(action.DestinationTarget) ||
+			action.DestinationTarget == action.Target || len(action.DestinationElement) > MaxElementNameBytes {
+			return "", nil, fmt.Errorf("%w: malformed drag action", ErrInvalid)
+		}
+		arguments := map[string]any{
+			"startTarget": action.Target, "endTarget": action.DestinationTarget,
+			"startElement": action.Element, "endElement": action.DestinationElement,
+		}
+		return "browser_drag", arguments, nil
+	case DriverCheck, DriverUncheck:
+		if !validPlaywrightElementAction(action, false) {
+			return "", nil, fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
+		}
+		return "browser_run_code_unsafe", map[string]any{
+			"code": playwrightCheckActionCode(action.Target, action.Kind == DriverCheck),
+		}, nil
 	default:
 		return "", nil, fmt.Errorf("%w: unsupported driver action", ErrInvalid)
+	}
+}
+
+func validPlaywrightElementAction(action DriverAction, allowDestination bool) bool {
+	return playwrightTargetPattern.MatchString(action.Target) && action.URL == "" && action.Value == "" &&
+		action.Key == "" && action.Direction == "" && action.Amount == 0 && !action.Accept &&
+		!action.PromptProvided && len(action.Element) <= MaxElementNameBytes &&
+		(allowDestination || (action.DestinationTarget == "" && action.DestinationElement == ""))
+}
+
+func playwrightCheckActionCode(target string, checked bool) string {
+	encoded, _ := json.Marshal(target)
+	operation := "uncheck"
+	if checked {
+		operation = "check"
+	}
+	return `async (page) => {
+  const control = page.locator("aria-ref=" + ` + string(encoded) + `);
+  if (await control.count() !== 1 || !await control.isVisible()) return "MINTCLAW_CHECK_V1|stale";
+  if (!` + strconv.FormatBool(checked) + ` && await control.getAttribute("type") === "radio") {
+    return "MINTCLAW_CHECK_V1|denied";
+  }
+  await control.click({ trial: true });
+  if (await control.isChecked() === ` + strconv.FormatBool(checked) + `) return "MINTCLAW_CHECK_V1|no_change";
+  await control.` + operation + `();
+  if (await control.isChecked() !== ` + strconv.FormatBool(checked) + `) throw new Error("final_state_mismatch");
+  return "MINTCLAW_CHECK_V1|completed";
+}`
+}
+
+func parsePlaywrightCheckAction(text string) error {
+	const resultHeader = "### Result"
+	if strings.Count(text, resultHeader) != 1 {
+		return ErrDriverIncompatible
+	}
+	result := strings.TrimLeft(text[strings.Index(text, resultHeader)+len(resultHeader):], "\r\n")
+	if end := strings.IndexByte(result, '\n'); end >= 0 {
+		result = result[:end]
+	}
+	switch strings.Trim(result, "\r\"' ") {
+	case playwrightCheckActionMarker + "|no_change", playwrightCheckActionMarker + "|completed":
+		return nil
+	case playwrightCheckActionMarker + "|stale":
+		return ErrStale
+	case playwrightCheckActionMarker + "|denied":
+		return ErrDenied
+	default:
+		return ErrDriverIncompatible
 	}
 }
 

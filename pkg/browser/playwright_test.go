@@ -1115,6 +1115,166 @@ func TestPlaywrightWorkerRejectsSelectorsOversizedInputAndUnknownActions(t *test
 	}
 }
 
+func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	tests := []struct {
+		name       string
+		action     DriverAction
+		wantTool   string
+		wantFields map[string]any
+		codeTerms  []string
+	}{
+		{
+			name: "hover", action: DriverAction{Kind: DriverHover, Target: "e1", Element: "Menu"},
+			wantTool: "browser_hover", wantFields: map[string]any{"target": "e1", "element": "Menu"},
+		},
+		{
+			name: "drag", action: DriverAction{
+				Kind: DriverDrag, Target: "e2", Element: "Card",
+				DestinationTarget: "e3", DestinationElement: "Done",
+			},
+			wantTool: "browser_drag", wantFields: map[string]any{
+				"startTarget": "e2", "startElement": "Card", "endTarget": "e3", "endElement": "Done",
+			},
+		},
+		{
+			name: "check", action: DriverAction{Kind: DriverCheck, Target: "f2e4", Element: "Notify"},
+			wantTool: "browser_run_code_unsafe",
+			codeTerms: []string{
+				`page.locator("aria-ref=" + "f2e4")`, `.click({ trial: true })`, ".check()", "isChecked()",
+				`return "MINTCLAW_CHECK_V1|no_change"`,
+			},
+		},
+		{
+			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
+			wantTool: "browser_run_code_unsafe",
+			codeTerms: []string{
+				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
+				`return "MINTCLAW_CHECK_V1|denied"`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tool, arguments, err := mapPlaywrightAction(test.action, limits)
+			if err != nil || tool != test.wantTool {
+				t.Fatalf("mapPlaywrightAction() = %q, %+v, %v", tool, arguments, err)
+			}
+			for key, want := range test.wantFields {
+				if got := arguments[key]; got != want {
+					t.Fatalf("argument %q = %#v, want %#v", key, got, want)
+				}
+			}
+			code, _ := arguments["code"].(string)
+			for _, term := range test.codeTerms {
+				if !strings.Contains(code, term) {
+					t.Fatalf("generated code does not contain %q: %s", term, code)
+				}
+			}
+			if strings.Contains(code, "mouse.") || strings.Contains(code, "position:") ||
+				strings.Contains(code, "force:") {
+				t.Fatalf("semantic primitive contains coordinate or force fallback: %s", code)
+			}
+		})
+	}
+
+	invalid := []DriverAction{
+		{Kind: DriverHover, Target: "#menu"},
+		{Kind: DriverDrag, Target: "e1", DestinationTarget: "e1"},
+		{Kind: DriverDrag, Target: "e1", DestinationTarget: ".drop"},
+		{Kind: DriverCheck, Target: "e1", DestinationTarget: "e2"},
+	}
+	for _, action := range invalid {
+		if _, _, err := mapPlaywrightAction(action, limits); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("mapPlaywrightAction(%+v) error = %v, want ErrInvalid", action, err)
+		}
+	}
+}
+
+func TestPlaywrightWorkerParsesCheckPrimitiveOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   string
+		wantErr  error
+		wantLost bool
+	}{
+		{name: "completed", result: "MINTCLAW_CHECK_V1|completed"},
+		{name: "no change", result: "MINTCLAW_CHECK_V1|no_change"},
+		{name: "stale", result: "MINTCLAW_CHECK_V1|stale", wantErr: ErrStale},
+		{name: "denied", result: "MINTCLAW_CHECK_V1|denied", wantErr: ErrDenied},
+		{name: "unknown", result: "MINTCLAW_CHECK_V1|surprise", wantErr: ErrDriverIncompatible, wantLost: true},
+		{name: "unscoped", result: "completed", wantErr: ErrDriverIncompatible, wantLost: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": playwrightTextResult("### Result\n\"" + test.result + "\""),
+			}}
+			worker := &playwrightWorker{
+				client: client, networkProxy: &browserNetworkProxy{},
+				limits: config.BrowserLimitsConfig{}.Effective(),
+			}
+			err := worker.Execute(t.Context(), DriverAction{Kind: DriverCheck, Target: "e1", Element: "Notify"})
+			if !errors.Is(err, test.wantErr) || worker.lost != test.wantLost {
+				t.Fatalf("Execute() error = %v, lost = %t; want %v, %t", err, worker.lost, test.wantErr, test.wantLost)
+			}
+		})
+	}
+}
+
+func TestPlaywrightWorkerTreatsCheckOpenedDialogAsSuccessfulDispatch(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Modal state\n" +
+				"- [\"confirm\" dialog with message \"Apply change?\"]: can be handled by browser_handle_dialog",
+		),
+	}}
+	worker := &playwrightWorker{
+		client: client, networkProxy: &browserNetworkProxy{},
+		limits:          config.BrowserLimitsConfig{}.Effective(),
+		lastObservation: DriverObservation{URL: "https://example.com/form", Origin: "https://example.com"},
+	}
+	if err := worker.Execute(
+		t.Context(), DriverAction{Kind: DriverCheck, Target: "e1", Element: "Notify"},
+	); err != nil || worker.lost || worker.pendingDialog == nil ||
+		worker.pendingDialog.Type != "confirm" || worker.pendingDialog.Message != "Apply change?" {
+		t.Fatalf("Execute() error = %v, lost = %t, dialog = %+v", err, worker.lost, worker.pendingDialog)
+	}
+}
+
+func TestPlaywrightWorkerAcceptsHoverAndDragDialogSnapshotTail(t *testing.T) {
+	tests := []struct {
+		name   string
+		tool   string
+		action DriverAction
+	}{
+		{name: "hover", tool: "browser_hover", action: DriverAction{Kind: DriverHover, Target: "e1"}},
+		{name: "drag", tool: "browser_drag", action: DriverAction{
+			Kind: DriverDrag, Target: "e1", DestinationTarget: "e2",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				test.tool: playwrightTextResult(
+					"### Modal state\n" +
+						"- [\"alert\" dialog with message \"Changed\"]: can be handled by browser_handle_dialog\n" +
+						"### Snapshot\n```yaml\n- button \"Continue\" [ref=e3]\n```",
+				),
+			}}
+			worker := &playwrightWorker{
+				client: client, networkProxy: &browserNetworkProxy{},
+				limits:          config.BrowserLimitsConfig{}.Effective(),
+				lastObservation: DriverObservation{URL: "https://example.com/form", Origin: "https://example.com"},
+			}
+			if err := worker.Execute(t.Context(), test.action); err != nil || worker.lost ||
+				worker.pendingDialog == nil || worker.pendingDialog.Type != "alert" {
+				t.Fatalf("Execute() error = %v, lost = %t, dialog = %+v", err, worker.lost, worker.pendingDialog)
+			}
+		})
+	}
+}
+
 func TestPlaywrightWorkerTracksAndHandlesPendingDialog(t *testing.T) {
 	client := &fakePlaywrightClient{
 		catalog: playwrightCatalogFixture(),
