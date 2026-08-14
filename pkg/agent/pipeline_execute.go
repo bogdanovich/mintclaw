@@ -50,6 +50,19 @@ func toolApprovalBypass(
 	return true, execution
 }
 
+func durableToolLoopArguments(
+	registry *tools.ToolRegistry,
+	toolName string,
+	arguments map[string]any,
+) map[string]any {
+	if registry != nil {
+		if projected, _, err := registry.DurableArguments(toolName, arguments); err == nil {
+			return projected
+		}
+	}
+	return tools.ToolLogArguments(toolName, arguments)
+}
+
 type mcpServerTool interface {
 	MCPServerName() string
 }
@@ -295,6 +308,7 @@ type toolCallState struct {
 	result           *toolshared.ToolResult
 	duration         time.Duration
 	loopSemantics    loopguard.Semantics
+	loopArguments    map[string]any
 	mcpServerName    string
 	toolRegistry     *tools.ToolRegistry
 }
@@ -488,9 +502,10 @@ func (runner *toolLoopRunner) admitToolCall(
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
 				}
 				contentForLLM := p.filterToolContentForLLM(hookResult.ContentForLLM())
-				_, semantics := p.beforeToolLoopDecision(ts, exec, toolName, toolArgs)
+				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
+				_, semantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
 				loopDecision := p.afterToolLoopDecision(
-					ts, exec, toolName, toolArgs, hookResult, contentForLLM, semantics,
+					ts, exec, toolName, loopArguments, hookResult, contentForLLM, semantics,
 				)
 				contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 				toolResultMsg := providers.Message{
@@ -607,8 +622,9 @@ func (runner *toolLoopRunner) admitToolCall(
 		return skipToolCall()
 	}
 	toolArgs = ts.codingInstructions.normalizeArguments(toolName, toolArgs)
+	loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
 
-	loopDecision, toolSemantics := p.beforeToolLoopDecision(ts, exec, toolName, toolArgs)
+	loopDecision, toolSemantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
 	if !loopDecision.AllowsExecution() {
 		p.emitToolLoopDecision(ts, loopDecision)
 		blockedResult := blockedToolLoopResult(loopDecision)
@@ -639,6 +655,7 @@ func (runner *toolLoopRunner) admitToolCall(
 	call.name = toolName
 	call.arguments = toolArgs
 	call.loopSemantics = toolSemantics
+	call.loopArguments = loopArguments
 	return toolCallStageResult{}
 }
 
@@ -1153,6 +1170,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	tc := call.request
 	toolName := call.name
 	toolArgs := call.arguments
+	loopArguments := call.loopArguments
 	toolCallID := tc.ID
 	toolResult := call.result
 	toolDuration := call.duration
@@ -1188,7 +1206,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	)
 	contentForLLM := toolResultMsg.Content
 	loopDecision := p.afterToolLoopDecision(
-		ts, exec, toolName, toolArgs, toolResult, contentForLLM, toolSemantics,
+		ts, exec, toolName, loopArguments, toolResult, contentForLLM, toolSemantics,
 	)
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 

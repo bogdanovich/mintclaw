@@ -219,13 +219,19 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		`page.locator("aria-ref=" + "e5")`, `fillMetadata.autocomplete`,
-		`fillMetadata.readOnly`, `sensitiveIdentity`, `await fillTarget.fill("fill-canary")`,
-		`MINTCLAW_NAV_ACT_V1|denied`,
+		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
+		`args.policy.sensitive.some(matchesTerm)`, `Object.getOwnPropertyDescriptor`,
+		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
+		`return "denied"`, `return "MINTCLAW_NAV_ACT_V1|" + fillOutcome`,
 	} {
 		if !strings.Contains(code, required) {
 			t.Fatalf("protected fill code omitted %q: %s", required, code)
 		}
+	}
+	if strings.Contains(code, `fillTarget.fill(`) ||
+		strings.Index(code, `args.policy.sensitive.some(matchesTerm)`) >
+			strings.Index(code, `setter.call(element, args.value)`) {
+		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
 	}
 	if err = parsePlaywrightNavigationDispatch(
 		"### Result\n\"MINTCLAW_NAV_ACT_V1|denied\"",
@@ -1701,6 +1707,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		_, _ = fmt.Fprintf(writer, `<!doctype html><title>MintClaw Fixture</title>
 <form onsubmit="event.preventDefault(); document.querySelector('output').textContent='Saved '+document.querySelector('input').value">
 <label>Name <input aria-label="Name"></label>
+<label>Race name <input id="race-name" aria-label="Race name"></label>
 <label>State <select aria-label="State"><option value="CA">California</option><option value="NY">New York</option></select></label>
 <button type="submit">Save</button><button type="button" onclick="prompt('Type DELETE'); alert('Saved')">Prompt</button>
 </form><output></output><a href="/download">Download fixture</a>
@@ -1863,6 +1870,52 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	observation, err = worker.Observe(ctx)
 	if err != nil || !strings.Contains(observation.Snapshot, "Ada") {
 		t.Fatalf("Observe() after fill = %+v, %v", observation, err)
+	}
+	raceTextbox := mustSnapshotRef(t, observation.Snapshot, `textbox "Race name" \[ref=(e[0-9]+)\]`)
+	raceSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			globalThis.__mintclawAtomicFill = { armed: false, inputType: "", mutated: false };
+			const nativeGetAttribute = element.getAttribute.bind(element);
+			element.getAttribute = function(name) {
+				const result = nativeGetAttribute(name);
+				if (!globalThis.__mintclawAtomicFill.armed) {
+					globalThis.__mintclawAtomicFill.armed = true;
+					queueMicrotask(() => {
+						element.type = "password";
+						globalThis.__mintclawAtomicFill.mutated = true;
+					});
+				}
+				return result;
+			};
+			element.addEventListener("input", () => {
+				globalThis.__mintclawAtomicFill.inputType = element.type;
+			}, { once: true });
+			return "armed";
+		})`,
+	})
+	if err != nil || raceSetup == nil || raceSetup.IsError {
+		t.Fatalf("atomic fill race setup = %#v, %v", raceSetup, err)
+	}
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "race-fill-canary",
+	}); err != nil {
+		t.Fatalf("atomic fill race = %v", err)
+	}
+	raceProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			const state = globalThis.__mintclawAtomicFill;
+			return "MINTCLAW_ATOMIC_FILL_V1|" + state.inputType + "|" +
+				String(state.mutated) + "|" + element.type + "|" + String(element.value === "race-fill-canary");
+		})`,
+	})
+	if err != nil || raceProbe == nil || raceProbe.IsError {
+		t.Fatalf("atomic fill race probe = %#v, %v", raceProbe, err)
+	}
+	raceText, err := boundedPlaywrightText(raceProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(raceText, "MINTCLAW_ATOMIC_FILL_V1|text|true|password|true") {
+		t.Fatalf("atomic fill race result = %q, %v", raceText, err)
 	}
 	state := mustSnapshotRef(t, observation.Snapshot, `combobox "State" \[ref=(e[0-9]+)\]`)
 	if err = executeAtCurrentNavigation(DriverAction{

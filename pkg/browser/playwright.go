@@ -940,60 +940,69 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
 	}
 	sensitive, sensitiveErr := browserpolicy.NormalizeSensitiveFieldTerms(sensitiveFields)
 	sensitive = append(browserpolicy.BuiltInSensitiveFieldTerms(), sensitive...)
-	sensitiveJSON, _ := json.Marshal(sensitive)
-	ordinaryJSON, _ := json.Marshal(browserpolicy.OrdinaryFieldTerms())
+	policyJSON, _ := json.Marshal(map[string]any{
+		"valid": sensitiveErr == nil, "sensitive": sensitive, "ordinary": browserpolicy.OrdinaryFieldTerms(),
+	})
 	dispatch := `const fillTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
   if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
-  const fillMetadata = await fillTarget.evaluate(element => ({
-    tag: String(element.tagName || "").toLowerCase(),
-    type: String(element.getAttribute("type") || "").toLowerCase(),
-    autocomplete: String(element.getAttribute("autocomplete") || "").toLowerCase(),
-    identity: ["name", "id", "aria-label", "placeholder", "title"].map(name =>
+	  const fillOutcome = await fillTarget.evaluate((element, args) => {
+    const tag = String(element.tagName || "").toLowerCase();
+    const type = String(element.getAttribute("type") || "").toLowerCase();
+    const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
+    const identity = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
       String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
-      String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim(),
-    disabled: Boolean(element.disabled),
-    readOnly: Boolean(element.readOnly),
-    contentEditable: Boolean(element.isContentEditable),
-  }));
-  const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
-  const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
-    "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
-    "email", "organization-title", "organization", "street-address", "address-line1",
-    "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
-    "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
-    "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
-    "tel-extension", "url", "photo"]);
-  const inputLike = (fillMetadata.tag === "input" && ordinaryTypes.has(fillMetadata.type)) ||
-    fillMetadata.tag === "textarea" || fillMetadata.contentEditable;
-  const sensitiveTerms = ` + string(sensitiveJSON) + `;
-  const ordinaryTerms = ` + string(ordinaryJSON) + `;
-	const sensitivePolicyValid = ` + strconv.FormatBool(sensitiveErr == nil) + `;
-  const matchesTerm = term => {
-    let offset = 0;
-    while (term && offset <= fillMetadata.identity.length - term.length) {
-      const index = fillMetadata.identity.indexOf(term, offset);
-      if (index < 0) return false;
-      const end = index + term.length;
-      const left = index === 0 || !/[\p{L}\p{N}]/u.test(fillMetadata.identity[index - 1]);
-      const right = end === fillMetadata.identity.length ||
-        !/[\p{L}\p{N}]/u.test(fillMetadata.identity[end]);
-      if (left && right) return true;
-      offset = index + 1;
+      String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
+    const style = element.ownerDocument.defaultView.getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
+      bounds.width > 0 && bounds.height > 0;
+    const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
+    const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
+      "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
+      "email", "organization-title", "organization", "street-address", "address-line1",
+      "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
+      "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
+      "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
+      "tel-extension", "url", "photo"]);
+    const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
+      tag === "textarea" || element.isContentEditable;
+    const matchesTerm = term => {
+      let offset = 0;
+      while (term && offset <= identity.length - term.length) {
+        const index = identity.indexOf(term, offset);
+        if (index < 0) return false;
+        const end = index + term.length;
+        const left = index === 0 || !/[\p{L}\p{N}]/u.test(identity[index - 1]);
+        const right = end === identity.length || !/[\p{L}\p{N}]/u.test(identity[end]);
+        if (left && right) return true;
+        offset = index + 1;
+      }
+      return false;
+    };
+    if (!args.policy.valid || !visible || !inputLike || element.disabled || element.readOnly ||
+        !ordinaryAutocomplete.has(autocomplete) || args.policy.sensitive.some(matchesTerm) ||
+        !args.policy.ordinary.some(matchesTerm)) {
+      return "denied";
     }
-    return false;
-  };
-  const sensitiveIdentity = sensitiveTerms.some(matchesTerm);
-  const ordinaryIdentity = ordinaryTerms.some(matchesTerm);
-	  if (!sensitivePolicyValid || !inputLike || fillMetadata.disabled || fillMetadata.readOnly ||
-      !ordinaryAutocomplete.has(fillMetadata.autocomplete) || sensitiveIdentity || !ordinaryIdentity) {
-    return "MINTCLAW_NAV_ACT_V1|denied";
-	  }`
-	if execute {
-		dispatch += `
-  await fillTarget.fill(` + jsonString(value) + `);`
-	}
+    if (!args.execute) return "ok";
+    element.focus({ preventScroll: true });
+    if (element.isContentEditable) {
+      element.textContent = args.value;
+    } else {
+      const prototype = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value").set;
+      if (typeof setter !== "function") return "error|missing_value_setter";
+      setter.call(element, args.value);
+    }
+    const inputEvent = typeof InputEvent === "function" ?
+      new InputEvent("input", { bubbles: true, inputType: "insertText", data: args.value }) :
+      new Event("input", { bubbles: true });
+    element.dispatchEvent(inputEvent);
+    return "ok";
+  }, { policy: ` + string(policyJSON) + `, execute: ` + strconv.FormatBool(execute) + `, value: ` + jsonString(value) + ` });
+  if (fillOutcome !== "ok") return "MINTCLAW_NAV_ACT_V1|" + fillOutcome;`
 	return dispatch
 }
 
