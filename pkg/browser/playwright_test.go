@@ -1145,8 +1145,10 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 		{
 			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
 			wantTool: "browser_run_code_unsafe",
-			codeTerms: []string{`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
-				`return "denied"`},
+			codeTerms: []string{
+				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
+				`return "denied"`,
+			},
 		},
 	}
 	for _, test := range tests {
