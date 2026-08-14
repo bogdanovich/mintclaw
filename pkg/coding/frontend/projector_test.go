@@ -151,6 +151,48 @@ func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
 	}
 }
 
+func TestRepeatedCallIDAcrossTurnsRemainsDistinctAndConverges(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltas := []Delta{
+		projector.ToolStarted("turn-1", "call-1", "write_file", "fields: path"),
+		projector.ToolCompleted("turn-1", "call-1", "write_file", "done", 0, false, []WriteAudit{{
+			Kind: "file", Target: "first.go", Action: "write", Success: true,
+		}}),
+		projector.ToolStarted("turn-2", "call-1", "exec", "fields: command"),
+		projector.ToolCompleted("turn-2", "call-1", "exec", "done", 0, false, nil),
+	}
+	for _, delta := range deltas {
+		if err = reducer.Apply(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {
+		t.Fatalf("reduced state = %+v, want %+v", got, snapshot)
+	}
+	if len(snapshot.Tools) != 2 || snapshot.Tools[0].TurnID != "turn-1" ||
+		snapshot.Tools[0].WriteAudit[0].Target != "first.go" || snapshot.Tools[1].TurnID != "turn-2" {
+		t.Fatalf("reused call ID tools = %+v", snapshot.Tools)
+	}
+	if deltas[0].EntityID == deltas[2].EntityID {
+		t.Fatalf("reused call ID shares entity ID %q", deltas[0].EntityID)
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,

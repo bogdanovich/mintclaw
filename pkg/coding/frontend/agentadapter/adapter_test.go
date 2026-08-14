@@ -108,6 +108,9 @@ func TestAdapterProjectsMetadataRetryFallbackAndRedactedError(t *testing.T) {
 	publish(runtimeevents.KindAgentLLMRetry, agent.LLMRetryPayload{
 		Attempt: 1, MaxRetries: 3, Reason: "rate_limit", Error: "secret-token=abc",
 	})
+	publish(runtimeevents.KindAgentLLMRetry, agent.LLMRetryPayload{
+		Attempt: 1, MaxRetries: 3, Reason: "rate_limit", Error: "different-secret=xyz",
+	})
 	publish(runtimeevents.KindAgentLLMFallbackAttempt, agent.LLMFallbackAttemptPayload{
 		Attempt: 1, Provider: "openai", Model: "gpt-5", Status: "succeeded", Reason: "rate_limit",
 		DiagnosticMessage: "secret-token=abc",
@@ -121,9 +124,12 @@ func TestAdapterProjectsMetadataRetryFallbackAndRedactedError(t *testing.T) {
 	if snapshot.Metadata.Title != "Fix tests" || snapshot.Metadata.CWD != "/repo/subdir" {
 		t.Fatalf("metadata = %+v", snapshot.Metadata)
 	}
-	if len(snapshot.Entries) != 3 || snapshot.Entries[0].TurnID != "turn-1" ||
+	if len(snapshot.Entries) != 4 || snapshot.Entries[0].TurnID != "turn-1" ||
 		!strings.Contains(snapshot.Entries[0].Text, "rate_limit") {
 		t.Fatalf("retry/fallback entries = %+v", snapshot.Entries)
+	}
+	if snapshot.Entries[0].ID == snapshot.Entries[1].ID {
+		t.Fatalf("repeated retry notices share ID %q", snapshot.Entries[0].ID)
 	}
 	encoded := fmt.Sprintf("%+v", snapshot)
 	if strings.Contains(encoded, "secret-token") {
@@ -131,6 +137,48 @@ func TestAdapterProjectsMetadataRetryFallbackAndRedactedError(t *testing.T) {
 	}
 	if snapshot.Status != "agent error during llm" {
 		t.Fatalf("status = %q", snapshot.Status)
+	}
+}
+
+func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	publish := func(kind runtimeevents.Kind, turnID string, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"},
+			Scope: runtimeevents.Scope{
+				SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", turnID),
+			},
+			Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentTurnEnd, "turn-1", agent.TurnEndPayload{Status: agent.TurnEndStatusCompleted})
+	publish(runtimeevents.KindAgentContextCompress, "", agent.ContextCompressPayload{
+		Reason: agent.ContextCompressReasonSummarize, TokensSaved: 500,
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
+		t.Fatalf("background compaction reopened completed turn: %+v", snapshot)
+	}
+	deltas, err := projector.ChangesSince(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 2 || deltas[1].Kind != frontend.DeltaCompactionComplete ||
+		deltas[1].Activity != frontend.ActivityIdle {
+		t.Fatalf("background compaction deltas = %+v", deltas)
 	}
 }
 
@@ -225,6 +273,63 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 		len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolFailed ||
 		snapshot.Tools[0].TurnID != "turn-1" {
 		t.Fatalf("interrupted snapshot = %+v", snapshot)
+	}
+}
+
+func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := frontend.NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	for _, event := range []runtimeevents.Event{
+		{
+			Kind: runtimeevents.KindAgentToolExecStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ToolExecStartPayload{ToolCallID: "call-1", Tool: "exec"},
+		},
+		{
+			Kind: runtimeevents.KindAgentTurnEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.TurnEndPayload{Status: agent.TurnEndStatusAborted},
+		},
+	} {
+		wrapped.PublishNonBlocking(event)
+	}
+	deltas, err := projector.ChangesSince(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 2 || !deltas[1].RequiresSnapshot {
+		t.Fatalf("interruption deltas = %+v", deltas)
+	}
+	if err = reducer.Apply(deltas[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err = reducer.ApplyOrResync(t.Context(), projector, deltas[1]); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted {
+		t.Fatalf("interrupted tools = %+v", snapshot.Tools)
+	}
+	if got := reducer.State(); len(got.Tools) != 1 || got.Tools[0].Status != frontend.ToolInterrupted {
+		t.Fatalf("resynchronized interrupted tools = %+v", got.Tools)
 	}
 }
 

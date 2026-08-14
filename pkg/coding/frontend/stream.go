@@ -86,5 +86,5 @@ func (s *projectedStream) FinalizeReasoning(_ context.Context, content string) e
 }
 
 func (s *projectedStream) Cancel(context.Context) {
-	s.projector.TurnInterrupted("stream canceled")
+	s.projector.TurnInterrupted(s.turnID, "stream canceled")
 }

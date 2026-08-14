@@ -152,7 +152,7 @@ func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []Tran
 func replaceTool(tools []ToolState, replacement ToolState) []ToolState {
 	tools = slices.Clone(tools)
 	for i := range tools {
-		if tools[i].CallID == replacement.CallID {
+		if tools[i].TurnID == replacement.TurnID && tools[i].CallID == replacement.CallID {
 			tools[i] = replacement
 			return tools
 		}

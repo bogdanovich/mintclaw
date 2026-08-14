@@ -240,7 +240,7 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) Delta {
 		turnID = normalizeTurnID(turnID)
 		id = strings.TrimSpace(id)
 		if id == "" {
-			id = entryID(turnID, string(kind))
+			id = fmt.Sprintf("%s:%s:%d", turnID, kind, state.Revision+1)
 		}
 		entry := p.boundedEntry(TranscriptEntry{
 			ID: id, TurnID: turnID, Kind: kind, Text: content, Complete: true,
@@ -260,15 +260,16 @@ func (p *Projector) ToolStarted(turnID, callID, name, arguments string) Delta {
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
 		delta.TurnID = tool.TurnID
-		delta.EntityID = tool.CallID
+		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
 	})
 }
 
 func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
 	return p.mutate(DeltaToolOutput, func(state *ThreadSnapshot, delta *Delta) {
-		tool := toolByID(state.Tools, callID)
+		turnID = normalizeTurnID(turnID)
+		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
-			tool = ToolState{TurnID: normalizeTurnID(turnID), CallID: callID, Status: ToolUnknown}
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
 		}
 		if tool.TurnID == "" {
 			tool.TurnID = normalizeTurnID(turnID)
@@ -279,7 +280,7 @@ func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
 		delta.TurnID = tool.TurnID
-		delta.EntityID = tool.CallID
+		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
 	})
 }
 
@@ -290,9 +291,10 @@ func (p *Projector) ToolCompleted(
 	writeAudit []WriteAudit,
 ) Delta {
 	return p.mutate(DeltaToolCompleted, func(state *ThreadSnapshot, delta *Delta) {
-		tool := toolByID(state.Tools, callID)
+		turnID = normalizeTurnID(turnID)
+		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
-			tool = ToolState{TurnID: normalizeTurnID(turnID), CallID: callID, Name: name}
+			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
 		}
 		if tool.TurnID == "" {
 			tool.TurnID = normalizeTurnID(turnID)
@@ -310,7 +312,7 @@ func (p *Projector) ToolCompleted(
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
 		delta.TurnID = tool.TurnID
-		delta.EntityID = tool.CallID
+		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
 	})
 }
 
@@ -338,6 +340,12 @@ func (p *Projector) CompactionCompleted(status string) Delta {
 	return p.activity(DeltaCompactionComplete, ActivityRunning, status)
 }
 
+// BackgroundCompactionCompleted records session-scoped maintenance without
+// reopening or relabeling a turn that has already reached a terminal state.
+func (p *Projector) BackgroundCompactionCompleted() Delta {
+	return p.mutate(DeltaCompactionComplete, func(*ThreadSnapshot, *Delta) {})
+}
+
 func (p *Projector) CompactionFailed(status string) Delta {
 	return p.activity(DeltaCompactionFailed, ActivityFailed, status)
 }
@@ -350,8 +358,20 @@ func (p *Projector) TurnFailed(status string) Delta {
 	return p.activity(DeltaTurnFailed, ActivityFailed, status)
 }
 
-func (p *Projector) TurnInterrupted(status string) Delta {
-	return p.activity(DeltaTurnInterrupted, ActivityIdle, status)
+func (p *Projector) TurnInterrupted(turnID, status string) Delta {
+	turnID = normalizeTurnID(turnID)
+	return p.mutate(DeltaTurnInterrupted, func(state *ThreadSnapshot, delta *Delta) {
+		state.Activity = ActivityIdle
+		state.Status, _ = boundText(status, p.limits.TextBytes)
+		delta.TurnID = turnID
+		delta.EntityID = turnID
+		for i := range state.Tools {
+			if state.Tools[i].TurnID == turnID && state.Tools[i].Status == ToolRunning {
+				state.Tools[i].Status = ToolInterrupted
+				delta.RequiresSnapshot = true
+			}
+		}
+	})
 }
 
 func (p *Projector) InterruptRequested() Delta {
@@ -459,7 +479,7 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry Trans
 
 func (p *Projector) upsertTool(state *ThreadSnapshot, delta *Delta, tool ToolState) {
 	for i := range state.Tools {
-		if state.Tools[i].CallID == tool.CallID {
+		if state.Tools[i].TurnID == tool.TurnID && state.Tools[i].CallID == tool.CallID {
 			state.Tools[i] = tool
 			return
 		}
@@ -482,13 +502,17 @@ func normalizeTurnID(turnID string) string {
 	return "current"
 }
 
-func toolByID(tools []ToolState, callID string) ToolState {
+func toolByID(tools []ToolState, turnID, callID string) ToolState {
 	for i := range tools {
-		if tools[i].CallID == callID {
+		if tools[i].TurnID == turnID && tools[i].CallID == callID {
 			return tools[i]
 		}
 	}
 	return ToolState{}
+}
+
+func toolEntityID(turnID, callID string) string {
+	return normalizeTurnID(turnID) + ":tool:" + strings.TrimSpace(callID)
 }
 
 func boundText(value string, maximum int) (string, bool) {

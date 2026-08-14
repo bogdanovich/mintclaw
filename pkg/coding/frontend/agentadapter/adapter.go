@@ -142,7 +142,7 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		if ok {
 			a.projector.Warning(
 				turnID,
-				fmt.Sprintf("%s:model-retry:%d", normalizeID(turnID), payload.Attempt),
+				"",
 				fmt.Sprintf(
 					"model request retry %d/%d (%s)",
 					payload.Attempt,
@@ -156,7 +156,7 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		if ok {
 			a.projector.Warning(
 				turnID,
-				fmt.Sprintf("%s:model-fallback:%d", normalizeID(turnID), payload.Attempt),
+				"",
 				fmt.Sprintf(
 					"model fallback %d: %s/%s %s (%s)",
 					payload.Attempt,
@@ -169,7 +169,9 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		}
 	case runtimeevents.KindAgentContextCompress:
 		payload, ok := event.Payload.(agent.ContextCompressPayload)
-		if ok {
+		if strings.TrimSpace(turnID) == "" || ok && payload.Reason == agent.ContextCompressReasonSummarize {
+			a.projector.BackgroundCompactionCompleted()
+		} else if ok {
 			a.projector.CompactionCompleted(fmt.Sprintf("context compacted; %d tokens saved", payload.TokensSaved))
 		} else {
 			a.projector.CompactionCompleted("context compacted")
@@ -243,7 +245,7 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	case agent.TurnEndStatusCompleted:
 		a.projector.TurnCompleted("completed")
 	case agent.TurnEndStatusAborted:
-		a.projector.TurnInterrupted("interrupted")
+		a.projector.TurnInterrupted(turnID, "interrupted")
 	case agent.TurnEndStatusError:
 		a.projector.TurnFailed("turn failed")
 	case agent.TurnEndStatusSuspended:
