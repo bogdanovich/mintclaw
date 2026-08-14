@@ -375,60 +375,76 @@ func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t
 }
 
 func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChanges(t *testing.T) {
-	cfg, runtime, handler := browserNodeTestRuntime(t)
-	handler.dynamicContextCatalog = true
-	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
-		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
-			SessionKey: "session_test", ExecutionID: "execution_test",
-		},
-		SessionID: "browser_session_test", Target: "companion",
-		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker := opened.Owner.(*nodeBrowserWorker)
-	if _, err = worker.ContextCatalog(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = worker.Observe(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
-		InvocationID: "invocation_navigate",
-		Prepared: browser.PreparedAction{
-			Action: browser.Action{Kind: browser.ActionNavigate},
-			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank", ActionHash: strings.Repeat("a", 64),
-		},
-		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = worker.ContextCatalog(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	observation, err := worker.Observe(t.Context())
-	if err != nil || observation.URL != "https://example.com/" {
-		t.Fatalf("fresh post-navigation observation = %#v, %v", observation, err)
-	}
-	handler.mu.Lock()
-	commands := append([]string(nil), handler.commands...)
-	handler.mu.Unlock()
-	want := []string{
-		nodes.BrowserCommandSessionOpen,
-		nodes.BrowserCommandContexts,
-		nodes.BrowserCommandObserve,
-		nodes.BrowserCommandAct,
-		nodes.BrowserCommandContexts,
-		nodes.BrowserCommandObserve,
-	}
-	if !slices.Equal(commands, want) {
-		t.Fatalf("commands = %#v, want fresh remote observation %#v", commands, want)
+	for _, test := range []struct {
+		name                    string
+		establishInitialCatalog bool
+	}{
+		{name: "changed catalog", establishInitialCatalog: true},
+		{name: "first catalog refresh"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, runtime, handler := browserNodeTestRuntime(t)
+			handler.dynamicContextCatalog = true
+			factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+				Owner: browser.Owner{
+					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_test", ExecutionID: "execution_test",
+				},
+				SessionID: "browser_session_test", Target: "companion",
+				Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := opened.Owner.(*nodeBrowserWorker)
+			if test.establishInitialCatalog {
+				if _, err = worker.ContextCatalog(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = worker.Observe(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
+				InvocationID: "invocation_navigate",
+				Prepared: browser.PreparedAction{
+					Action: browser.Action{Kind: browser.ActionNavigate},
+					Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
+					ActionHash: strings.Repeat("a", 64),
+				},
+				DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = worker.ContextCatalog(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			observation, err := worker.Observe(t.Context())
+			if err != nil || observation.URL != "https://example.com/" {
+				t.Fatalf("fresh post-navigation observation = %#v, %v", observation, err)
+			}
+			handler.mu.Lock()
+			commands := append([]string(nil), handler.commands...)
+			handler.mu.Unlock()
+			want := []string{nodes.BrowserCommandSessionOpen}
+			if test.establishInitialCatalog {
+				want = append(want, nodes.BrowserCommandContexts)
+			}
+			want = append(
+				want,
+				nodes.BrowserCommandObserve,
+				nodes.BrowserCommandAct,
+				nodes.BrowserCommandContexts,
+				nodes.BrowserCommandObserve,
+			)
+			if !slices.Equal(commands, want) {
+				t.Fatalf("commands = %#v, want fresh remote observation %#v", commands, want)
+			}
+		})
 	}
 }
 

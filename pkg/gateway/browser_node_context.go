@@ -117,7 +117,7 @@ func (worker *nodeBrowserWorker) acceptContextCatalog(
 	}
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	changed := worker.contextCatalogDigest != "" && worker.contextCatalogDigest != digest
+	changed := worker.contextCatalogDigest != digest
 	worker.contextCatalogDigest = digest
 	if changed && invalidateChangedObservation {
 		worker.cachedObservation = nil
