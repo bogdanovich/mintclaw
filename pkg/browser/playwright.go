@@ -948,16 +948,6 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
 	  const fillOutcome = await fillTarget.evaluate((element, args) => {
-    const tag = String(element.tagName || "").toLowerCase();
-    const type = String(element.getAttribute("type") || "").toLowerCase();
-    const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
-    const identity = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
-      String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
-      String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
-    const style = element.ownerDocument.defaultView.getComputedStyle(element);
-    const bounds = element.getBoundingClientRect();
-    const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
-      bounds.width > 0 && bounds.height > 0;
     const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
     const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
       "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
@@ -966,9 +956,7 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
       "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
       "tel-extension", "url", "photo"]);
-    const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
-      tag === "textarea" || element.isContentEditable;
-    const matchesTerm = term => {
+    const matchesTerm = (identity, term) => {
       let offset = 0;
       while (term && offset <= identity.length - term.length) {
         const index = identity.indexOf(term, offset);
@@ -981,13 +969,29 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       }
       return false;
     };
-    if (!args.policy.valid || !visible || !inputLike || element.disabled || element.readOnly ||
-        !ordinaryAutocomplete.has(autocomplete) || args.policy.sensitive.some(matchesTerm) ||
-        !args.policy.ordinary.some(matchesTerm)) {
-      return "denied";
-    }
+    const classify = () => {
+      const tag = String(element.tagName || "").toLowerCase();
+      const type = String(element.getAttribute("type") || "").toLowerCase();
+      const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
+      const identity = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
+        String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
+        String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
+      const style = element.ownerDocument.defaultView.getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
+        bounds.width > 0 && bounds.height > 0;
+      const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
+        tag === "textarea" || element.isContentEditable;
+      const effectivelyDisabled = element.disabled || element.matches(":disabled");
+      return args.policy.valid && visible && inputLike && !effectivelyDisabled && !element.readOnly &&
+        ordinaryAutocomplete.has(autocomplete) && !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
+        args.policy.ordinary.some(term => matchesTerm(identity, term));
+    };
+    if (!classify()) return "denied";
     if (!args.execute) return "ok";
     element.focus({ preventScroll: true });
+    if (!classify()) return "denied";
+    const tag = String(element.tagName || "").toLowerCase();
     if (element.isContentEditable) {
       element.textContent = args.value;
     } else {

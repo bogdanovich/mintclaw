@@ -220,7 +220,8 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 	}
 	for _, required := range []string{
 		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
-		`args.policy.sensitive.some(matchesTerm)`, `Object.getOwnPropertyDescriptor`,
+		`args.policy.sensitive.some(term => matchesTerm(identity, term))`, `element.matches(":disabled")`,
+		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
 		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
 		`return "denied"`, `return "MINTCLAW_NAV_ACT_V1|" + fillOutcome`,
 	} {
@@ -228,8 +229,8 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 			t.Fatalf("protected fill code omitted %q: %s", required, code)
 		}
 	}
-	if strings.Contains(code, `fillTarget.fill(`) ||
-		strings.Index(code, `args.policy.sensitive.some(matchesTerm)`) >
+	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!classify())`) != 2 ||
+		strings.Index(code, `args.policy.sensitive.some(term => matchesTerm(identity, term))`) >
 			strings.Index(code, `setter.call(element, args.value)`) {
 		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
 	}
@@ -1916,6 +1917,75 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	raceText, err := boundedPlaywrightText(raceProbe, playwrightNavigationIdentityResponseBytes)
 	if err != nil || !strings.Contains(raceText, "MINTCLAW_ATOMIC_FILL_V1|text|true|password|true") {
 		t.Fatalf("atomic fill race result = %q, %v", raceText, err)
+	}
+	focusSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			element.blur();
+			element.getAttribute = Element.prototype.getAttribute;
+			element.type = "text";
+			element.value = "";
+			element.onfocus = () => { element.type = "password"; };
+			return "armed";
+		})`,
+	})
+	if err != nil || focusSetup == nil || focusSetup.IsError {
+		t.Fatalf("focus mutation setup = %#v, %v", focusSetup, err)
+	}
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "focus-fill-canary",
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("focus mutation fill error = %v, want ErrDenied", err)
+	}
+	focusProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			return "MINTCLAW_FOCUS_DENIAL_V1|" + element.type + "|" + String(element.value === "");
+		})`,
+	})
+	if err != nil || focusProbe == nil || focusProbe.IsError {
+		t.Fatalf("focus mutation denial probe = %#v, %v", focusProbe, err)
+	}
+	focusText, err := boundedPlaywrightText(focusProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(focusText, "MINTCLAW_FOCUS_DENIAL_V1|password|true") {
+		t.Fatalf("focus mutation denial result = %q, %v", focusText, err)
+	}
+	disabledSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			element.blur();
+			element.onfocus = null;
+			element.type = "text";
+			element.value = "";
+			const label = element.closest("label");
+			const fieldset = document.createElement("fieldset");
+			fieldset.disabled = true;
+			label.parentNode.insertBefore(fieldset, label);
+			fieldset.append(label);
+			return String(element.disabled) + "|" + String(element.matches(":disabled"));
+		})`,
+	})
+	if err != nil || disabledSetup == nil || disabledSetup.IsError {
+		t.Fatalf("disabled fieldset setup = %#v, %v", disabledSetup, err)
+	}
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "disabled-fill-canary",
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("disabled fieldset fill error = %v, want ErrDenied", err)
+	}
+	denialProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			return "MINTCLAW_FILL_DENIAL_V1|" + String(element.disabled) + "|" +
+				String(element.matches(":disabled")) + "|" + String(element.value === "");
+		})`,
+	})
+	if err != nil || denialProbe == nil || denialProbe.IsError {
+		t.Fatalf("protected fill denial probe = %#v, %v", denialProbe, err)
+	}
+	denialText, err := boundedPlaywrightText(denialProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(denialText, "MINTCLAW_FILL_DENIAL_V1|false|true|true") {
+		t.Fatalf("protected fill denial result = %q, %v", denialText, err)
 	}
 	state := mustSnapshotRef(t, observation.Snapshot, `combobox "State" \[ref=(e[0-9]+)\]`)
 	if err = executeAtCurrentNavigation(DriverAction{
