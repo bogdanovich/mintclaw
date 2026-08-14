@@ -94,6 +94,22 @@ func diagnosticMessagesPreview(cfg *config.Config, messages []providers.Message)
 	return diagnosticJSONPreview(cfg, envelope, diagnosticModelMessagesBytes)
 }
 
+func diagnosticPromptHashMessages(messages []providers.Message) []providers.Message {
+	projected := cloneProviderMessages(messages)
+	classifications := diagnosticMessageClassifications(projected)
+	for index := range projected {
+		if !classifications[index].sensitive {
+			continue
+		}
+		projected[index].Content = protectedToolResultDurableContent
+		projected[index].ReasoningContent = ""
+		projected[index].ToolCalls = nil
+		projected[index].Media = nil
+		projected[index].Attachments = nil
+	}
+	return projected
+}
+
 func diagnosticMessagePreview(
 	message providers.Message,
 	classification diagnosticMessageClassification,
