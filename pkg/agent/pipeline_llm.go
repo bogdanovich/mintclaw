@@ -520,6 +520,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			return LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}, nil
 		}
 	}
+	for _, call := range llm.response.ToolCalls {
+		if err := validateProtectedBrowserCallRepresentations(call); err != nil {
+			return LLMCallOutcome{}, fmt.Errorf("validate protected browser tool call: %w", err)
+		}
+	}
 
 	// Save finishReason and usage on the active turn state. Use ts directly
 	// (the authoritative turn state for this call) rather than relying on a
@@ -658,9 +663,6 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	// Tool-call path: normalize and prepare for tool execution
 	llm.normalizedToolCalls = make([]providers.ToolCall, 0, len(llm.response.ToolCalls))
 	for _, tc := range llm.response.ToolCalls {
-		if err := validateProtectedBrowserCallRepresentations(tc); err != nil {
-			return LLMCallOutcome{}, fmt.Errorf("validate protected browser tool call: %w", err)
-		}
 		llm.normalizedToolCalls = append(llm.normalizedToolCalls, providers.NormalizeToolCall(tc))
 	}
 	if p.Config.DurableToolLifecycle {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -219,7 +220,7 @@ func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersisten
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content: secret,
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-conflicting-browser", Name: "browser_act",
+			ID: "call-conflicting-browser", Name: "read_file",
 			Arguments: map[string]any{
 				"action": map[string]any{"kind": "select", "ref": "ref_1", "value": "CA"},
 			},
@@ -231,6 +232,17 @@ func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersisten
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	diagnosticSub, diagnosticCh, err := al.RuntimeEvents().OfKind(
+		runtimeevents.KindAgentLLMResponse,
+	).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "protected-conflict", Buffer: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := diagnosticSub.Close(); closeErr != nil {
+			t.Errorf("close diagnostic subscription: %v", closeErr)
+		}
+	}()
 
 	pipeline := NewPipeline(al)
 	contextCapture := &trackingContextManager{}
@@ -258,6 +270,12 @@ func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersisten
 	}
 	if _, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err == nil {
 		t.Fatal("conflicting browser argument representations were accepted")
+	}
+	select {
+	case event := <-diagnosticCh:
+		encoded, _ := json.Marshal(event)
+		t.Fatalf("conflicting protected call emitted an LLM response diagnostic: %s", encoded)
+	default:
 	}
 	history, marshalErr := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
 	contextCapture.mu.Lock()
