@@ -30,6 +30,9 @@ func (worker *nodeBrowserWorker) SelectContext(
 	ctx context.Context,
 	authority browser.ContextMutationAuthority,
 ) (browser.DriverObservation, browser.ContextCatalog, error) {
+	worker.mu.Lock()
+	preSelectGeneration := worker.snapshotGeneration
+	worker.mu.Unlock()
 	binding, err := authority.Binding()
 	if err != nil {
 		return browser.DriverObservation{}, browser.ContextCatalog{}, err
@@ -42,7 +45,16 @@ func (worker *nodeBrowserWorker) SelectContext(
 		// The select mutation is already proven accepted. Refresh live page
 		// authority without replaying it; invokeContext has independently
 		// refreshed the catalog through a new read-only list invocation.
-		worker.clearContextObservation()
+		worker.mu.Lock()
+		if worker.closed || worker.snapshotGeneration != preSelectGeneration {
+			worker.mu.Unlock()
+			return browser.DriverObservation{}, browser.ContextCatalog{}, browser.ErrStale
+		}
+		worker.snapshotGeneration = preSelectGeneration + 1
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
+		worker.mu.Unlock()
 		observation, observeErr := worker.Observe(ctx)
 		if observeErr != nil {
 			return browser.DriverObservation{}, browser.ContextCatalog{}, observeErr

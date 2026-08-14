@@ -745,6 +745,34 @@ func TestBrowserOutputSchemasUseStrictestAdvertisedProfileCeilings(t *testing.T)
 	assertBrowserOutputInvalid(t, descriptors[3], action)
 }
 
+func TestBrowserOutputSchemasAcceptOnlyExactProtectedRecoveryReceipts(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBrowserOutputValid(t, descriptors[2], map[string]any{"protected_result": true})
+	assertBrowserOutputValid(t, descriptors[4], map[string]any{
+		"operation": "select", "protected_result": true,
+	})
+	for _, invalid := range []struct {
+		descriptor CommandDescriptor
+		value      map[string]any
+	}{
+		{descriptors[2], map[string]any{"protected_result": false}},
+		{descriptors[2], map[string]any{"protected_result": true, "url": "https://private.example"}},
+		{descriptors[4], map[string]any{"protected_result": true}},
+		{descriptors[4], map[string]any{"operation": "unknown", "protected_result": true}},
+		{descriptors[4], map[string]any{
+			"operation": "list", "protected_result": true,
+			"context_catalog": map[string]any{"context_catalog_id": "private"},
+		}},
+	} {
+		assertBrowserOutputInvalid(t, invalid.descriptor, invalid.value)
+	}
+}
+
 func assertBrowserOutputValid(t *testing.T, descriptor CommandDescriptor, value map[string]any) {
 	t.Helper()
 	encoded, err := json.Marshal(value)

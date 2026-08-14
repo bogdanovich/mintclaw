@@ -417,9 +417,19 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		// be repeated, but it needs a fresh invocation identity so the ledger
 		// cannot return the same receipt forever.
 		worker.mu.Lock()
+		if worker.closed || worker.snapshotGeneration+1 != nextGeneration {
+			worker.mu.Unlock()
+			return browser.DriverObservation{}, browser.ErrStale
+		}
+		worker.snapshotGeneration = nextGeneration
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
 		worker.observeRecoverySequence++
 		recovery := worker.observeRecoverySequence
 		worker.mu.Unlock()
+		nextGeneration++
+		input.SnapshotGeneration = nextGeneration
 		requestKey = fmt.Sprintf("observe_%d_recovery_%d", nextGeneration, recovery)
 	}
 	return browser.DriverObservation{}, browser.ErrWorkerUnavailable

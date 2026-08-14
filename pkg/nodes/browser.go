@@ -1126,7 +1126,10 @@ func BrowserCommandOutputSchema(
 			},
 		})
 	case BrowserCommandObserve:
-		return browserObservationSchema(limits)
+		return mustJSON(map[string]any{"oneOf": []any{
+			rawSchema(browserObservationSchema(limits)),
+			browserProtectedResultReceiptSchema(nil),
+		}})
 	case BrowserCommandAct:
 		return mustJSON(map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -1140,7 +1143,7 @@ func BrowserCommandOutputSchema(
 			},
 		})
 	case BrowserCommandContexts:
-		return mustJSON(map[string]any{
+		contextResult := map[string]any{
 			"type": "object", "additionalProperties": false,
 			"required": []string{"operation", "context_catalog"},
 			"properties": map[string]any{
@@ -1160,7 +1163,13 @@ func BrowserCommandOutputSchema(
 					"not": map[string]any{"required": []string{"observation"}},
 				},
 			}}},
-		})
+		}
+		return mustJSON(map[string]any{"oneOf": []any{
+			contextResult,
+			browserProtectedResultReceiptSchema(map[string]any{
+				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
+			}),
+		}})
 	default:
 		return json.RawMessage("false")
 	}
@@ -1437,6 +1446,21 @@ func browserArtifactSchema(maximumBytes int) map[string]any {
 	}
 }
 
+func browserProtectedResultReceiptSchema(properties map[string]any) map[string]any {
+	required := []string{"protected_result"}
+	resultProperties := map[string]any{
+		"protected_result": map[string]any{"const": true},
+	}
+	for name, schema := range properties {
+		resultProperties[name] = schema
+		required = append(required, name)
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": required, "properties": resultProperties,
+	}
+}
+
 func validateBrowserInvocationInput(command string, input map[string]any) error {
 	switch command {
 	case BrowserCommandSessionOpen:
@@ -1487,7 +1511,15 @@ func validateBrowserInvocationOutput(
 ) error {
 	switch command {
 	case BrowserCommandObserve:
+		if output["protected_result"] == true {
+			return nil
+		}
 		return validateBrowserObservationBytes(output, limits)
+	case BrowserCommandContexts:
+		if output["protected_result"] == true {
+			return nil
+		}
+		return nil
 	case BrowserCommandAct:
 		observation, present := output["observation"]
 		if !present {
