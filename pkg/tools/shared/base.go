@@ -16,6 +16,13 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) *ToolResult
 }
 
+// DurableArgumentsProvider projects model-authored arguments into the exact
+// schema-valid form that may be retained after the current tool execution.
+// The original map remains available only to the in-memory execution path.
+type DurableArgumentsProvider interface {
+	DurableArguments(map[string]any) (map[string]any, error)
+}
+
 // LoopSemanticsProvider explicitly classifies tool side-effect behavior for
 // loop detection. Tools without this optional capability remain unknown.
 type LoopSemanticsProvider interface {

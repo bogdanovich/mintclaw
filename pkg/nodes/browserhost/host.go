@@ -448,6 +448,27 @@ func (host *BrowserHost) Select(
 	})
 }
 
+func (host *BrowserHost) Fill(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != "fill" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.Value == "" || len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
+		!nodes.BrowserFillFieldAllowed(request.ExpectedRole, request.ExpectedName) ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "fill", browserworker.DriverAction{
+		Kind: browserworker.DriverFill, Value: request.Action.Value,
+	})
+}
+
 func (host *BrowserHost) Press(
 	ctx context.Context,
 	request BrowserHostNavigateRequest,
@@ -628,7 +649,7 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
-	if action == "click" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" {
 		var found bool
 		boundElement, found = session.elementRefs[request.Action.Ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
@@ -659,7 +680,7 @@ func (host *BrowserHost) executeAction(
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" {
 		targets, matches := 0, 0
 		for _, element := range current.Elements {
 			if element.Target != boundElement.Target {

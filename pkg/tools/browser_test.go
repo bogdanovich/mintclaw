@@ -60,6 +60,40 @@ type fakeBrowserToolSource struct {
 	cleanupCalls      int
 }
 
+func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
+	tool := &BrowserActTool{}
+	original := map[string]any{
+		"browser_session_id":  "session_1",
+		"tab_id":              "tab_1",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 1,
+		"action":              map[string]any{"kind": "fill", "ref": "ref_1", "value": "canary-secret"},
+	}
+	projected, err := tool.DurableArguments(original)
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
+	}
+	projectedAction := projected["action"].(map[string]any)
+	if projectedAction["value"] != browserProtectedInputRedaction {
+		t.Fatalf("durable value = %#v", projectedAction["value"])
+	}
+	originalAction := original["action"].(map[string]any)
+	if originalAction["value"] != "canary-secret" {
+		t.Fatalf("in-memory value was mutated: %#v", originalAction["value"])
+	}
+}
+
+func TestToolLogArgumentsRedactsBrowserFill(t *testing.T) {
+	secret := "browser-fill-canary"
+	got := ToolLogArguments("browser_act", map[string]any{
+		"action": map[string]any{"kind": "fill", "value": secret},
+	})
+	encoded, err := json.Marshal(got)
+	if err != nil || strings.Contains(string(encoded), secret) || got["redacted"] != true {
+		t.Fatalf("logged browser arguments = %s, %v", encoded, err)
+	}
+}
+
 func (source *fakeBrowserToolSource) CloseOwner(_ context.Context, owner browser.Owner) error {
 	source.cleanupOwner = owner
 	source.cleanupCalls++

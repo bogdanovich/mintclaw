@@ -435,6 +435,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "navigate")
 	case browser.ActionClick:
 		return slices.Contains(worker.actions, "click")
+	case browser.ActionFill:
+		return slices.Contains(worker.actions, "fill")
 	case browser.ActionSelect:
 		return slices.Contains(worker.actions, "select")
 	case browser.ActionPress:
@@ -473,6 +475,10 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			Kind: "select", Ref: request.DriverAction.Target,
 		}
 		effect = "local_edit"
+	case request.Prepared.Action.Kind == browser.ActionFill &&
+		request.DriverAction.Kind == browser.DriverFill && slices.Contains(worker.actions, "fill"):
+		action = nodes.BrowserAction{Kind: "fill", Ref: request.DriverAction.Target}
+		effect = "local_edit"
 	case request.Prepared.Action.Kind == browser.ActionPress &&
 		request.DriverAction.Kind == browser.DriverPress && slices.Contains(worker.actions, "press"):
 		action = nodes.BrowserAction{
@@ -497,12 +503,12 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
 	}
-	if action.Kind == "click" || action.Kind == "select" {
+	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}
 	var ephemeralInput json.RawMessage
-	if action.Kind == "select" {
+	if action.Kind == "fill" || action.Kind == "select" {
 		input.InputDigest = nodes.BrowserInputDigest(request.DriverAction.Value)
 		input.InputBytes = len(request.DriverAction.Value)
 		ephemeralInput, err = json.Marshal(struct {

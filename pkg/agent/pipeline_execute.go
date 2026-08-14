@@ -464,7 +464,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					},
 				)
 
-				p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, toolArgs, runner.messages)
+				p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, auditArgs, runner.messages)
 
 				toolDuration := time.Duration(0)
 
@@ -957,7 +957,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		},
 	)
 
-	p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, toolArgs, runner.messages)
+	p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, auditArgs, runner.messages)
 
 	toolCallID := tc.ID
 	asyncToolName := toolName

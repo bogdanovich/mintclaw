@@ -209,6 +209,31 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 }
 
+func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *testing.T) {
+	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+		frameID: "frame-1", loaderID: "loader-1", generation: 7,
+	}, DriverAction{
+		Kind: DriverFill, Target: "e5", Element: "Display name", Value: "fill-canary",
+	}, config.BrowserLimitsConfig{}.Effective())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`page.locator("aria-ref=" + "e5")`, `fillMetadata.autocomplete`,
+		`fillMetadata.readOnly`, `sensitiveIdentity`, `await fillTarget.fill("fill-canary")`,
+		`MINTCLAW_NAV_ACT_V1|denied`,
+	} {
+		if !strings.Contains(code, required) {
+			t.Fatalf("protected fill code omitted %q: %s", required, code)
+		}
+	}
+	if err = parsePlaywrightNavigationDispatch(
+		"### Result\n\"MINTCLAW_NAV_ACT_V1|denied\"",
+	); !errors.Is(err, ErrDenied) {
+		t.Fatalf("denied protected fill result = %v", err)
+	}
+}
+
 func TestPlaywrightWorkerDoesNotAttributeAmbientProxyDenialToSnapshot(t *testing.T) {
 	proxy := &browserNetworkProxy{}
 	client := &fakePlaywrightClient{
@@ -1805,7 +1830,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		t.Fatalf("first Observe() error = %v", err)
 	}
 	textbox := mustSnapshotRef(t, observation.Snapshot, `textbox "Name" \[ref=(e[0-9]+)\]`)
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverFill, Target: textbox, Element: "Name", Value: "Ada",
 	}); err != nil {
 		t.Fatalf("fill error = %v", err)

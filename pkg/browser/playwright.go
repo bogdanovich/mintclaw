@@ -880,6 +880,37 @@ func playwrightNavigationCheckedActionCode(
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\" });"
+	case "browser_type":
+		dispatch = `const fillTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
+  if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  const fillMetadata = await fillTarget.evaluate(element => ({
+    tag: String(element.tagName || "").toLowerCase(),
+    type: String(element.getAttribute("type") || "").toLowerCase(),
+    autocomplete: String(element.getAttribute("autocomplete") || "").toLowerCase(),
+    identity: ["name", "id", "aria-label", "placeholder"].map(name =>
+      String(element.getAttribute(name) || "").toLowerCase()).join(" "),
+    disabled: Boolean(element.disabled),
+    readOnly: Boolean(element.readOnly),
+    contentEditable: Boolean(element.isContentEditable),
+  }));
+  const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
+  const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
+    "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
+    "email", "organization-title", "organization", "street-address", "address-line1",
+    "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
+    "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
+    "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
+    "tel-extension", "url", "photo"]);
+  const inputLike = (fillMetadata.tag === "input" && ordinaryTypes.has(fillMetadata.type)) ||
+    fillMetadata.tag === "textarea" || fillMetadata.contentEditable;
+  const sensitiveIdentity = /password|passcode|one[ -]?time|\botp\b|verification code|recovery code|card number|credit card|security code|\bcvv\b|\bcvc\b|expir(?:y|ation)/.test(fillMetadata.identity);
+  if (!inputLike || fillMetadata.disabled || fillMetadata.readOnly ||
+      !ordinaryAutocomplete.has(fillMetadata.autocomplete) || sensitiveIdentity) {
+    return "MINTCLAW_NAV_ACT_V1|denied";
+  }
+  await fillTarget.fill(` + jsonString(action.Value) + `);`
 	case "browser_select_option":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").selectOption([" + jsonString(action.Value) + "]);"
@@ -937,6 +968,8 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		return nil
 	case playwrightNavigationCheckedActionMarker + "|stale":
 		return ErrStale
+	case playwrightNavigationCheckedActionMarker + "|denied":
+		return ErrDenied
 	default:
 		return ErrDriverIncompatible
 	}

@@ -163,8 +163,24 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 		if !diagnosticToolPreviewAllowed(name) {
 			return true
 		}
+		if name == "browser_act" && diagnosticBrowserFillCall(call) {
+			return true
+		}
 	}
 	return false
+}
+
+func diagnosticBrowserFillCall(call providers.ToolCall) bool {
+	arguments := call.Arguments
+	if len(arguments) == 0 && call.Function != nil && call.Function.Arguments != "" {
+		var decoded map[string]any
+		if json.Unmarshal([]byte(call.Function.Arguments), &decoded) != nil {
+			return true
+		}
+		arguments = decoded
+	}
+	action, ok := arguments["action"].(map[string]any)
+	return !ok || action["kind"] == "fill"
 }
 
 func diagnosticLLMResponseContent(

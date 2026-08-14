@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -25,9 +26,12 @@ type browserNodeTestHandler struct {
 	registration  nodes.Registration
 	commands      []string
 	actInputs     []nodes.BrowserActInput
+	actPlanInputs []json.RawMessage
 	invocations   map[string]nodes.InvocationRecord
 	currentURL    string
 	currentOrigin string
+	elementRole   string
+	elementName   string
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -85,11 +89,18 @@ func (handler *browserNodeTestHandler) Invoke(
 		if url == "" {
 			url, origin = "about:blank", "about:blank"
 		}
-		result = browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
+		observation := browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
+		if handler.elementRole != "" && len(observation.Elements) == 1 {
+			observation.Elements[0].Role = handler.elementRole
+			observation.Elements[0].Name = handler.elementName
+			observation.Snapshot = "- " + handler.elementRole + " \"" + handler.elementName + "\" [ref=host_ref_1]"
+		}
+		result = observation
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
-		if input.Action.Kind == "select" {
+		handler.actPlanInputs = append(handler.actPlanInputs, append(json.RawMessage(nil), plan.Input...))
+		if input.Action.Kind == "fill" || input.Action.Kind == "select" {
 			var ephemeral struct {
 				Value string `json:"value"`
 			}
@@ -104,6 +115,11 @@ func (handler *browserNodeTestHandler) Invoke(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
 			handler.currentURL, handler.currentOrigin,
 		)
+		if handler.elementRole != "" && len(observation.Elements) == 1 {
+			observation.Elements[0].Role = handler.elementRole
+			observation.Elements[0].Name = handler.elementName
+			observation.Snapshot = "- " + handler.elementRole + " \"" + handler.elementName + "\" [ref=host_ref_1]"
+		}
 		result = nodes.BrowserActResult{
 			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
 		}
@@ -340,6 +356,95 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 		inputs[0].ExpectedRole != "button" || inputs[0].ExpectedName != "Save" ||
 		!nodes.BrowserApprovalDigestMatches(inputs[0]) {
 		t.Fatalf("typed click inputs = %#v", inputs)
+	}
+}
+
+func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	handler.elementRole, handler.elementName = "textbox", "Display name"
+	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+		for index := range catalog.Commands {
+			catalog.Commands[index].BrowserProfiles[0].Actions = []string{"fill", "navigate"}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: registration.AllowedCommands,
+		At: registration.ApprovedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registration, found, err := runtime.registry.Registration(registration.Snapshot.ID)
+	if err != nil || !found {
+		t.Fatalf("registration = %#v, %v, %v", registration, found, err)
+	}
+	handler.registration = registration
+
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigate, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_fill_navigate", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	form, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	refStart := strings.Index(form.Snapshot, "[ref=")
+	refEnd := strings.Index(form.Snapshot, "]")
+	if err != nil || refStart < 0 || refEnd <= refStart+5 {
+		t.Fatalf("form observation = %#v, %v", form, err)
+	}
+	visibleRef := form.Snapshot[refStart+5 : refEnd]
+	secret := "gateway-companion-fill-canary"
+	fill, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_protected_fill", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: form.SnapshotID, SnapshotGeneration: form.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionFill, Ref: visibleRef, Value: secret},
+	})
+	if err != nil || fill.RequiresApproval || fill.Action.Effect != browser.EffectLocalEdit {
+		t.Fatalf("fill preparation = %#v, %v", fill, err)
+	}
+	if _, err = broker.ExecuteAction(t.Context(), owner, fill.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	inputs := append([]nodes.BrowserActInput(nil), handler.actInputs...)
+	plans := append([]json.RawMessage(nil), handler.actPlanInputs...)
+	handler.mu.Unlock()
+	if len(inputs) != 2 || inputs[1].Action.Kind != "fill" || inputs[1].Action.Value != secret ||
+		inputs[1].ExpectedRole != "textbox" || inputs[1].ExpectedName != "Display name" ||
+		!nodes.BrowserInputDigestMatches(inputs[1].InputDigest, secret) || inputs[1].InputBytes != len(secret) {
+		t.Fatalf("protected fill inputs = %#v", inputs)
+	}
+	if len(plans) != 2 || bytes.Contains(plans[1], []byte(secret)) {
+		t.Fatalf("durable protected fill plan = %s", plans[1])
 	}
 }
 

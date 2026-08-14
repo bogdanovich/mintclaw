@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"slices"
 	"sort"
+	"strings"
 )
 
 var (
@@ -418,6 +419,29 @@ func BrowserClickEffect(role string) string {
 	return "unknown"
 }
 
+// BrowserFillFieldAllowed is the companion-side minimum semantic deny policy.
+// It uses only freshly resolved private accessibility metadata and fails
+// closed for roles or names that cannot safely identify ordinary text input.
+func BrowserFillFieldAllowed(role, name string) bool {
+	if role != "textbox" && role != "searchbox" {
+		return false
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	if normalized == "" {
+		return false
+	}
+	for _, sensitive := range []string{
+		"password", "passcode", "one-time", "one time", "otp", "verification code",
+		"recovery code", "card number", "credit card", "security code", "cvv", "cvc",
+		"expiration", "expiry",
+	} {
+		if strings.Contains(normalized, sensitive) {
+			return false
+		}
+	}
+	return true
+}
+
 // BrowserPressKeyValid admits only document-scoped keys that cannot express
 // browser chrome, operating-system, or arbitrary modifier shortcuts.
 func BrowserPressKeyValid(key string) bool {
@@ -713,7 +737,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "click" && action != "download" && action != "navigate" && action != "press" &&
+		if action != "click" && action != "download" && action != "fill" && action != "navigate" && action != "press" &&
 			action != "scroll" && action != "select" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
@@ -858,7 +882,7 @@ func browserCommandInputSchema(
 			switch action {
 			case "download":
 				effect = "download"
-			case "select":
+			case "fill", "select":
 				effect = "local_edit"
 			case "press":
 				effect = "unknown"
@@ -876,14 +900,18 @@ func browserCommandInputSchema(
 				"action":           browserActionSchema([]string{action}),
 				"effect":           map[string]any{"const": effect},
 			}
-			if action == "click" || action == "select" {
+			if action == "click" || action == "fill" || action == "select" {
 				required = append(required, "expected_role")
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 			}
-			if action == "select" {
+			if action == "fill" || action == "select" {
 				required = append(required, "input_digest", "input_bytes")
-				properties["expected_role"] = map[string]any{"const": "combobox"}
+				if action == "select" {
+					properties["expected_role"] = map[string]any{"const": "combobox"}
+				} else {
+					properties["expected_role"] = map[string]any{"enum": []string{"searchbox", "textbox"}}
+				}
 				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
 				properties["input_bytes"] = map[string]any{
 					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
@@ -896,7 +924,7 @@ func browserCommandInputSchema(
 				"required":   required,
 				"properties": properties,
 			}
-			if action == "select" {
+			if action == "fill" || action == "select" {
 				branch["not"] = map[string]any{"required": []string{"approval_digest"}}
 			}
 			if action == "press" {
@@ -964,7 +992,10 @@ func browserCommandInputSchema(
 		if _, hasPress := allActions["press"]; hasPress && !slices.Contains(actEffects, "unknown") {
 			actEffects = append(actEffects, "unknown")
 		}
-		if _, hasSelect := allActions["select"]; hasSelect {
+		if _, hasFill := allActions["fill"]; hasFill {
+			actEffects = append(actEffects, "local_edit")
+		}
+		if _, hasSelect := allActions["select"]; hasSelect && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
 		}
 		add("session_id", identifier)
@@ -980,12 +1011,13 @@ func browserCommandInputSchema(
 		add("browser_policy_revision", digest)
 		add("profile_revision", identifier)
 		_, hasClick := allActions["click"]
+		_, hasFill := allActions["fill"]
 		_, hasSelect := allActions["select"]
-		if hasClick || hasSelect {
+		if hasClick || hasFill || hasSelect {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
-		if hasSelect {
+		if hasFill || hasSelect {
 			properties["input_digest"] = digest
 			properties["input_bytes"] = map[string]any{
 				"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
@@ -1327,6 +1359,15 @@ func browserActionSchema(actions []string) map[string]any {
 				"required": []string{"kind", "ref"},
 				"properties": map[string]any{
 					"kind": map[string]any{"const": "select"},
+					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+				},
+			})
+		case "fill":
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "ref"},
+				"properties": map[string]any{
+					"kind": map[string]any{"const": "fill"},
 					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 				},
 			})

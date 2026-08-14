@@ -685,7 +685,14 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		ReasoningContent: reasoningContent,
 	}
 	for _, tc := range llm.normalizedToolCalls {
-		argumentsJSON, _ := json.Marshal(tc.Arguments)
+		durableArguments, durableErr := ts.agent.Tools.DurableArguments(tc.Name, tc.Arguments)
+		if durableErr != nil {
+			return LLMCallOutcome{}, fmt.Errorf("project assistant tool-call intent: %w", durableErr)
+		}
+		argumentsJSON, marshalErr := json.Marshal(durableArguments)
+		if marshalErr != nil {
+			return LLMCallOutcome{}, fmt.Errorf("encode assistant tool-call intent: %w", marshalErr)
+		}
 		toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
 			llm.response,
 			tc,

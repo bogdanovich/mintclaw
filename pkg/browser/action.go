@@ -269,6 +269,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		request.SnapshotGeneration == 0 ||
 		!validContextBinding(request.FrameID, request.ContextCatalogID, request.ContextGeneration) ||
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil ||
+		(request.Action.Kind == ActionFill && request.Action.Value == "") ||
 		(request.Action.Kind == ActionSelect && request.Action.Value == "") ||
 		(request.Action.Kind == ActionUpload && (request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
 		(request.Action.Kind != ActionUpload && request.Upload != nil) {
@@ -636,7 +637,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
-			if !editableElementRole(element.Role) {
+			if !ordinaryFillElement(element.Role, element.Name) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
@@ -915,7 +916,7 @@ func observeWithNavigationCheck(
 
 func navigationCheckedAction(kind ActionKind) bool {
 	switch kind {
-	case ActionClick, ActionSelect, ActionPress, ActionScroll:
+	case ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll:
 		return true
 	default:
 		return false
@@ -996,6 +997,26 @@ func cloneDialogObservation(dialog *DialogObservation) *DialogObservation {
 
 func editableElementRole(role string) bool {
 	return role == "textbox" || role == "searchbox" || role == "combobox"
+}
+
+func ordinaryFillElement(role, name string) bool {
+	if role != "textbox" && role != "searchbox" {
+		return false
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	if normalized == "" {
+		return false
+	}
+	for _, sensitive := range []string{
+		"password", "passcode", "one-time", "one time", "otp", "verification code",
+		"recovery code", "card number", "credit card", "security code", "cvv", "cvc",
+		"expiration", "expiry",
+	} {
+		if strings.Contains(normalized, sensitive) {
+			return false
+		}
+	}
+	return true
 }
 
 func (broker *Broker) driverActionForPrepared(

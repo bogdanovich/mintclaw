@@ -476,7 +476,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			},
 		}
 		profile := browserHostProfileFixture()
-		profile.AllowedActions = []string{"navigate", "press", "select"}
+		profile.AllowedActions = []string{"fill", "navigate", "press", "select"}
 		profile.DryRun = false
 		profile.AllowApprovedActions = true
 		host, err := newBrowserHost(
@@ -523,6 +523,53 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Kind: browserworker.DriverSelect, Target: element.Target, Element: element.Name, Value: "CA",
 		}); len(worker.actions) != 1 || worker.actions[0] != want {
 			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	t.Run("fill ordinary text", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_1",
+			Action: nodes.BrowserAction{
+				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada",
+			},
+			Effect: "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		result, err := host.Fill(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Fill() = %#v, %v", result, err)
+		}
+		if want := (browserworker.DriverAction{
+			Kind: browserworker.DriverFill, Target: element.Target, Element: element.Name, Value: "Ada",
+		}); len(worker.actions) != 1 || worker.actions[0] != want {
+			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	t.Run("deny sensitive fill before dispatch", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Password"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_sensitive_1",
+			Action: nodes.BrowserAction{
+				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "secret",
+			},
+			Effect: "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Password",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(sensitive) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("sensitive fill dispatched %d actions", len(worker.actions))
 		}
 	})
 

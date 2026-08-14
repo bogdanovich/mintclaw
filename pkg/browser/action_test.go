@@ -1123,6 +1123,40 @@ func TestBrokerPreparesRuntimeEffectAndExecutesLocalEditOnce(t *testing.T) {
 	}
 }
 
+func TestBrokerDeniesSensitiveOrAmbiguousFillBeforePreparation(t *testing.T) {
+	for _, field := range []DriverElement{
+		{Target: "e1", Role: "textbox", Name: "Password"},
+		{Target: "e1", Role: "textbox", Name: "Card number"},
+		{Target: "e1", Role: "textbox", Name: "One-time code"},
+		{Target: "e1", Role: "textbox", Name: ""},
+		{Target: "e1", Role: "combobox", Name: "Unclassified"},
+	} {
+		t.Run(field.Role+"_"+field.Name, func(t *testing.T) {
+			broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+			owner := testOwner()
+			worker.observation.Elements = []DriverElement{field}
+			worker.observation.Snapshot = "- " + field.Role + " [ref=" + field.Target + "]"
+			observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.resolveElement = field
+			worker.resolveOrigin = "https://example.com"
+			_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_sensitive_fill", SessionID: session.ID,
+				TabID: session.TabID, SnapshotID: observation.SnapshotID,
+				SnapshotGeneration: observation.SnapshotGeneration,
+				Action: Action{
+					Kind: ActionFill, Ref: onlyVisibleRef(t, observation.Snapshot), Value: "canary",
+				},
+			})
+			if !errors.Is(err, ErrDenied) || len(worker.actions) != 0 {
+				t.Fatalf("PrepareAction(%+v) = %v; actions = %+v", field, err, worker.actions)
+			}
+		})
+	}
+}
+
 func TestBrokerQuarantinesSessionWhenPostActionSnapshotInvalidationFails(t *testing.T) {
 	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore()}
 	broker, worker, session := openActionTestBroker(t, store)

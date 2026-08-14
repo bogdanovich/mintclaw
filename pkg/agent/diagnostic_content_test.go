@@ -146,6 +146,26 @@ func TestDiagnosticToolCallsFailClosedForSerializedArguments(t *testing.T) {
 	}
 }
 
+func TestDiagnosticBrowserFillArgumentsAreAlwaysRedacted(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	secret := "browser-fill-diagnostic-canary"
+	calls := []providers.ToolCall{{
+		ID: "call-fill", Name: "browser_act",
+		Arguments: map[string]any{
+			"action": map[string]any{"kind": "fill", "ref": "ref_1", "value": secret},
+		},
+	}}
+	if !diagnosticToolCallsContainSensitiveEvidence(calls) {
+		t.Fatal("browser fill was not classified as sensitive")
+	}
+	got := diagnosticToolCallsPreviewWithSensitivity(cfg, calls, true)
+	if strings.Contains(got, secret) || !strings.Contains(got, "arguments_redacted") {
+		t.Fatalf("browser fill diagnostic preview = %q", got)
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true
