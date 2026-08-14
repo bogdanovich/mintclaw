@@ -583,6 +583,15 @@ func (*BrowserContextsTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
+// Browser context results can contain live page titles, URLs, and selected
+// frame observations. Keep them available to the current tool loop, but never
+// retain them in canonical history or diagnostics.
+func (*BrowserContextsTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return cloneBrowserToolArguments(args)
+}
+
+func (*BrowserContextsTool) ProtectedDurableResult(map[string]any) bool { return true }
+
 func (tool *BrowserContextsTool) ApprovalArguments(
 	ctx context.Context,
 	args map[string]any,
@@ -751,6 +760,15 @@ func (*BrowserObserveTool) ToolLoopSemantics() loopguard.Semantics {
 	// activity, so it is not runtime-idempotent.
 	return loopguard.SemanticsMutating
 }
+
+// Accessibility snapshots are live page data and may include values entered
+// by an earlier protected fill. They are intentionally ephemeral even when
+// the observe arguments themselves are non-sensitive.
+func (*BrowserObserveTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return cloneBrowserToolArguments(args)
+}
+
+func (*BrowserObserveTool) ProtectedDurableResult(map[string]any) bool { return true }
 
 type browserObservationView struct {
 	BrowserSessionID   string                      `json:"browser_session_id"`
@@ -1038,9 +1056,30 @@ func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, er
 	return projected, nil
 }
 
+// Fill is the only action whose model-authored arguments contain protected
+// input. Keep singleton batching and assistant-envelope stripping scoped to
+// that intent rather than applying them to every browser action.
 func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
-	action, ok := args["action"].(map[string]any)
-	return ok && action["kind"] == "fill"
+	action, _ := args["action"].(map[string]any)
+	kind, _ := action["kind"].(string)
+	return kind == "fill"
+}
+
+// Every action may return a fresh page observation containing data from a
+// protected fill. Keep that live result out of durable state independently of
+// whether the current action arguments are sensitive.
+func (*BrowserActTool) ProtectedDurableResult(map[string]any) bool { return true }
+
+func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	var projected map[string]any
+	if err = json.Unmarshal(encoded, &projected); err != nil {
+		return nil, err
+	}
+	return projected, nil
 }
 
 func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error) {

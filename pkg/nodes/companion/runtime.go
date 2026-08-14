@@ -614,20 +614,24 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
+	if plan.Command == nodes.BrowserCommandObserve {
+		// Observations are live page data. In particular, an accessibility
+		// snapshot can echo a value supplied by an earlier protected fill. A
+		// fixed terminal receipt proves completion without making the page data
+		// recoverable or replayable from the companion ledger.
+		return json.RawMessage(`{"protected_result":true}`), nil
+	}
 	if plan.Command == nodes.BrowserCommandContexts {
 		var input nodes.BrowserContextInput
 		if err := json.Unmarshal(plan.Input, &input); err != nil {
 			return nil, fmt.Errorf("decode browser context for durable result: %w", err)
 		}
-		if input.Operation != "select" {
-			return result, nil
-		}
-		var contextResult nodes.BrowserContextResult
-		if err := json.Unmarshal(result, &contextResult); err != nil {
-			return nil, fmt.Errorf("decode context result for durable receipt: %w", err)
-		}
-		contextResult.Observation = nil
-		durable, err := json.Marshal(contextResult)
+		durable, err := json.Marshal(struct {
+			Operation       string `json:"operation"`
+			ProtectedResult bool   `json:"protected_result"`
+		}{
+			Operation: input.Operation, ProtectedResult: true,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("encode context durable receipt: %w", err)
 		}
@@ -640,17 +644,14 @@ func durableInvocationSuccess(
 	if err := json.Unmarshal(plan.Input, &input); err != nil {
 		return nil, fmt.Errorf("decode browser action for durable result: %w", err)
 	}
-	if input.Action.Kind != "select" {
-		return result, nil
-	}
 	var actionResult nodes.BrowserActResult
 	if err := json.Unmarshal(result, &actionResult); err != nil {
-		return nil, fmt.Errorf("decode select result for durable receipt: %w", err)
+		return nil, fmt.Errorf("decode browser action result for durable receipt: %w", err)
 	}
 	actionResult.Observation = nil
 	durable, err := json.Marshal(actionResult)
 	if err != nil {
-		return nil, fmt.Errorf("encode select durable receipt: %w", err)
+		return nil, fmt.Errorf("encode browser action durable receipt: %w", err)
 	}
 	return durable, nil
 }

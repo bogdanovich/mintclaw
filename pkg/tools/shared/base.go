@@ -29,6 +29,15 @@ type ProtectedDurableArgumentsProvider interface {
 	ProtectedDurableArguments(map[string]any) bool
 }
 
+// ProtectedDurableResultProvider marks tool results that may be consumed by
+// the current in-memory tool loop but must be replaced in durable state. This
+// is intentionally separate from ProtectedDurableArgumentsProvider: hiding a
+// result must not impose singleton batching or strip the assistant envelope
+// when the model-authored arguments are safe to retain.
+type ProtectedDurableResultProvider interface {
+	ProtectedDurableResult(map[string]any) bool
+}
+
 // LoopSemanticsProvider explicitly classifies tool side-effect behavior for
 // loop detection. Tools without this optional capability remain unknown.
 type LoopSemanticsProvider interface {

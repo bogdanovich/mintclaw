@@ -12,22 +12,25 @@ import (
 )
 
 type fakeBrowserCommandHost struct {
-	profiles       []nodes.BrowserProfileDescriptor
-	opened         int
-	observed       int
-	navigated      int
-	clicked        int
-	filled         int
-	selected       int
-	pressed        int
-	scrolled       int
-	contextCalls   int
-	contextError   error
-	closed         int
-	navigateError  error
-	invalidAction  bool
-	selectSnapshot string
-	routedSessions []string
+	profiles         []nodes.BrowserProfileDescriptor
+	opened           int
+	observed         int
+	navigated        int
+	clicked          int
+	filled           int
+	selected         int
+	pressed          int
+	scrolled         int
+	contextCalls     int
+	contextError     error
+	closed           int
+	navigateError    error
+	invalidAction    bool
+	selectSnapshot   string
+	fillSnapshot     string
+	observeSnapshot  string
+	navigateSnapshot string
+	routedSessions   []string
 }
 
 func (host *fakeBrowserCommandHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -65,7 +68,9 @@ func (host *fakeBrowserCommandHost) Observe(
 ) (nodes.BrowserObservationResult, error) {
 	host.observed++
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration), nil
+	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration)
+	result.Snapshot = host.observeSnapshot
+	return result, nil
 }
 
 func (host *fakeBrowserCommandHost) Navigate(
@@ -78,6 +83,7 @@ func (host *fakeBrowserCommandHost) Navigate(
 		return nodes.BrowserObservationResult{}, host.navigateError
 	}
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
+	result.Snapshot = host.navigateSnapshot
 	if host.invalidAction {
 		result.SnapshotGeneration = 0
 	}
@@ -123,9 +129,11 @@ func (host *fakeBrowserCommandHost) Fill(
 ) (nodes.BrowserObservationResult, error) {
 	host.filled++
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	return browserRuntimeObservation(
+	result := browserRuntimeObservation(
 		request.SessionID, request.TabID, request.SnapshotGeneration+1,
-	), host.navigateError
+	)
+	result.Snapshot = host.fillSnapshot
+	return result, host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Press(
@@ -500,6 +508,7 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 	host.profiles[0].Actions = []string{"fill", "navigate"}
 	runtime := newBrowserRuntimeFixture(t, host)
 	secret := "fill-canary-value"
+	host.fillSnapshot = "textbox value: " + secret
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_fill_1",
@@ -524,7 +533,11 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 		t.Fatalf("protected fill = %s, %v; calls = %d", result, err, host.filled)
 	}
 	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
-	if !found || bytes.Contains(plan.Input, []byte(secret)) || bytes.Contains(record.Result, []byte(secret)) {
+	if !bytes.Contains(result, []byte(secret)) {
+		t.Fatalf("live protected fill result lost observation: %s", result)
+	}
+	if !found || bytes.Contains(plan.Input, []byte(secret)) || bytes.Contains(record.Result, []byte(secret)) ||
+		bytes.Contains(record.Result, []byte("observation")) {
 		t.Fatalf("durable fill record exposed input: %#v", record)
 	}
 
@@ -558,6 +571,84 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 	}
 	if host.filled != 1 {
 		t.Fatalf("denied fills reached host: %d", host.filled)
+	}
+}
+
+func TestRuntimeKeepsBrowserObservationLiveButStoresOnlyProtectedReceipt(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	const canary = "observed-form-value-canary-4f3b2d91"
+	host.observeSnapshot = "textbox value: " + canary
+	runtime := newBrowserRuntimeFixture(t, host)
+	input, err := json.Marshal(nodes.BrowserObserveInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandObserve, input)
+	result, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || !bytes.Contains(result, []byte(canary)) {
+		t.Fatalf("live observe result = %s, %v", result, err)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || bytes.Contains(record.Result, []byte(canary)) ||
+		string(record.Result) != `{"protected_result":true}` {
+		t.Fatalf("durable observe receipt = %#v", record)
+	}
+}
+
+func TestRuntimeStoresBrowserActionReceiptWithoutFreshObservation(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	const canary = "prior-form-value-in-action-observation-31c804e7"
+	host.navigateSnapshot = "textbox value: " + canary
+	runtime := newBrowserRuntimeFixture(t, host)
+	input, err := json.Marshal(nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_navigate_receipt_1",
+		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Effect:             "navigation", CurrentOrigin: "about:blank",
+		PreparedActionHash:    strings.Repeat("b", 64),
+		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, input)
+	result, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || !bytes.Contains(result, []byte(canary)) {
+		t.Fatalf("live action result = %s, %v", result, err)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || bytes.Contains(record.Result, []byte(canary)) ||
+		bytes.Contains(record.Result, []byte("observation")) {
+		t.Fatalf("durable browser action receipt = %#v", record)
+	}
+}
+
+func TestRuntimeStoresOnlyProtectedReceiptForEveryBrowserContextOperation(t *testing.T) {
+	for _, operation := range []string{"list", "open", "select", "close"} {
+		t.Run(operation, func(t *testing.T) {
+			input, err := json.Marshal(nodes.BrowserContextInput{
+				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+				Operation: operation, RequestID: "context_" + operation,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := durableInvocationSuccess(nodes.ExecutionPlan{
+				InvocationRequest: nodes.InvocationRequest{
+					Command: nodes.BrowserCommandContexts, Input: input,
+				},
+			}, json.RawMessage(`{"operation":"`+operation+`","context_catalog":{"context_catalog_id":"private","tabs":[{"url":"https://private.example"}]}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(receipt, []byte("private")) ||
+				bytes.Contains(receipt, []byte("context_catalog")) ||
+				!bytes.Contains(receipt, []byte(`"protected_result":true`)) {
+				t.Fatalf("durable %s receipt = %s", operation, receipt)
+			}
+		})
 	}
 }
 

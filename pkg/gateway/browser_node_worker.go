@@ -313,14 +313,15 @@ type nodeBrowserWorker struct {
 	actions           []string
 	tabID             string
 
-	mu                 sync.Mutex
-	snapshotGeneration uint64
-	cachedObservation  *browser.DriverObservation
-	elements           map[string]browser.DriverElement
-	currentOrigin      string
-	statusSequence     uint64
-	contextSequence    uint64
-	closed             bool
+	mu                      sync.Mutex
+	snapshotGeneration      uint64
+	cachedObservation       *browser.DriverObservation
+	elements                map[string]browser.DriverElement
+	currentOrigin           string
+	statusSequence          uint64
+	observeRecoverySequence uint64
+	contextSequence         uint64
+	closed                  bool
 }
 
 func (worker *nodeBrowserWorker) Status(ctx context.Context) (browser.WorkerStatus, error) {
@@ -397,19 +398,41 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 	if err != nil {
 		return browser.DriverObservation{}, err
 	}
-	var result nodes.BrowserObservationResult
-	err = worker.invoke(ctx, descriptor, fmt.Sprintf("observe_%d", nextGeneration), nodes.BrowserObserveInput{
+	input := nodes.BrowserObserveInput{
 		SessionID: worker.sessionID, TabID: worker.tabID,
 		SnapshotGeneration: nextGeneration, Screenshot: false,
-	}, &result)
-	if err != nil {
-		return browser.DriverObservation{}, err
 	}
-	observation, err := worker.acceptObservation(result, nextGeneration)
-	if err != nil {
-		return browser.DriverObservation{}, err
+	requestKey := fmt.Sprintf("observe_%d", nextGeneration)
+	for attempts := 0; attempts < 10; attempts++ {
+		var result nodes.BrowserObservationResult
+		err = worker.invoke(ctx, descriptor, requestKey, input, &result)
+		if err != nil {
+			return browser.DriverObservation{}, err
+		}
+		if !result.ProtectedResult {
+			return worker.acceptObservation(result, nextGeneration)
+		}
+		// The previous observe completed remotely, but its live response was
+		// lost and only a page-data-free receipt survived. A read may safely
+		// be repeated, but it needs a fresh invocation identity so the ledger
+		// cannot return the same receipt forever.
+		worker.mu.Lock()
+		if worker.closed || worker.snapshotGeneration+1 != nextGeneration {
+			worker.mu.Unlock()
+			return browser.DriverObservation{}, browser.ErrStale
+		}
+		worker.snapshotGeneration = nextGeneration
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
+		worker.observeRecoverySequence++
+		recovery := worker.observeRecoverySequence
+		worker.mu.Unlock()
+		nextGeneration++
+		input.SnapshotGeneration = nextGeneration
+		requestKey = fmt.Sprintf("observe_%d_recovery_%d", nextGeneration, recovery)
 	}
-	return observation, nil
+	return browser.DriverObservation{}, browser.ErrWorkerUnavailable
 }
 
 func (worker *nodeBrowserWorker) Resolve(
@@ -531,11 +554,29 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	if err != nil {
 		return err
 	}
-	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" ||
-		result.Observation == nil {
+	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" {
 		return browser.ErrWorkerUnavailable
 	}
-	observation, err := worker.acceptObservation(*result.Observation, generation+1)
+	var observation browser.DriverObservation
+	if result.Observation == nil {
+		// A recovered companion invocation intentionally contains only a
+		// terminal receipt: fresh page observations are never durable. Advance
+		// the proven action generation, then obtain new live authority without
+		// replaying the accepted action.
+		worker.mu.Lock()
+		if worker.closed || worker.snapshotGeneration != generation {
+			worker.mu.Unlock()
+			return browser.ErrStale
+		}
+		worker.snapshotGeneration = generation + 1
+		worker.cachedObservation = nil
+		worker.elements = make(map[string]browser.DriverElement)
+		worker.currentOrigin = ""
+		worker.mu.Unlock()
+		observation, err = worker.Observe(ctx)
+	} else {
+		observation, err = worker.acceptObservation(*result.Observation, generation+1)
+	}
 	if err != nil {
 		return err
 	}

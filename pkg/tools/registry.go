@@ -395,6 +395,25 @@ func (r *ToolRegistry) DurableArguments(name string, args map[string]any) (map[s
 	return projected, protected != nil && protected.ProtectedDurableArguments(args), nil
 }
 
+// ProtectedDurableResult reports whether a live tool result must be replaced
+// before persistence. Result protection is independent from sensitive intent
+// projection so ordinary result-only calls may participate in tool batches.
+func (r *ToolRegistry) ProtectedDurableResult(name string, args map[string]any) bool {
+	tool, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	protected, _ := tool.(toolshared.ProtectedDurableResultProvider)
+	if protected != nil {
+		return protected.ProtectedDurableResult(args)
+	}
+	// Preserve the original conservative contract for existing sensitive-input
+	// tools: unless they provide an explicit result classification, their live
+	// result remains protected whenever their durable arguments are protected.
+	intent, _ := tool.(toolshared.ProtectedDurableArgumentsProvider)
+	return intent != nil && intent.ProtectedDurableArguments(args)
+}
+
 // TrustedNodeApprovalBypassTarget returns the explicit target only when the
 // registered tool carries the package-private first-party node capability.
 func (r *ToolRegistry) TrustedNodeApprovalBypassTarget(

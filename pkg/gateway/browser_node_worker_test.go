@@ -22,16 +22,20 @@ import (
 )
 
 type browserNodeTestHandler struct {
-	mu            sync.Mutex
-	registration  nodes.Registration
-	commands      []string
-	actInputs     []nodes.BrowserActInput
-	actPlanInputs []json.RawMessage
-	invocations   map[string]nodes.InvocationRecord
-	currentURL    string
-	currentOrigin string
-	elementRole   string
-	elementName   string
+	mu                       sync.Mutex
+	registration             nodes.Registration
+	commands                 []string
+	contextOperations        []string
+	actInputs                []nodes.BrowserActInput
+	actPlanInputs            []json.RawMessage
+	invocations              map[string]nodes.InvocationRecord
+	currentURL               string
+	currentOrigin            string
+	elementRole              string
+	elementName              string
+	redactNextActObservation bool
+	redactNextObservation    bool
+	redactNextContext        bool
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -96,6 +100,10 @@ func (handler *browserNodeTestHandler) Invoke(
 			observation.Snapshot = "- " + handler.elementRole + " \"" + handler.elementName + "\" [ref=host_ref_1]"
 		}
 		result = observation
+		if handler.redactNextObservation {
+			result = nodes.BrowserObservationResult{ProtectedResult: true}
+			handler.redactNextObservation = false
+		}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
@@ -123,11 +131,24 @@ func (handler *browserNodeTestHandler) Invoke(
 		result = nodes.BrowserActResult{
 			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Observation: &observation,
 		}
+		if handler.redactNextActObservation {
+			result = nodes.BrowserActResult{
+				ActionInvocationID: input.ActionInvocationID, State: "succeeded",
+			}
+			handler.redactNextActObservation = false
+		}
 	case nodes.BrowserCommandContexts:
 		var input nodes.BrowserContextInput
 		_ = json.Unmarshal(plan.Input, &input)
+		handler.contextOperations = append(handler.contextOperations, input.Operation)
 		result = nodes.BrowserContextResult{
 			Operation: input.Operation, Catalog: browserNodeTestContextCatalog(),
+		}
+		if handler.redactNextContext {
+			result = nodes.BrowserContextResult{
+				Operation: input.Operation, ProtectedResult: true,
+			}
+			handler.redactNextContext = false
 		}
 	case nodes.BrowserCommandSessionClose:
 		var input nodes.BrowserSessionStatusInput
@@ -222,6 +243,10 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Simulate recovery from the companion's durable terminal receipt. The
+	// receipt intentionally omits page data, so the worker must re-observe
+	// without replaying the accepted navigation.
+	handler.redactNextActObservation = true
 	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil)
 	if err != nil || invocation.State != browser.InvocationSucceeded {
 		t.Fatalf("ExecuteAction() = %#v, %v", invocation, err)
@@ -258,11 +283,138 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandSessionClose,
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("companion commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	handler.redactNextObservation = true
+	observation, err := worker.Observe(t.Context())
+	if err != nil || observation.URL != "about:blank" {
+		t.Fatalf("recovered observation = %#v, %v", observation, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandObserve,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	handler.redactNextContext = true
+	catalog, err := worker.OpenTab(t.Context())
+	if err != nil || catalog.ID != "context_catalog_1" {
+		t.Fatalf("recovered context catalog = %#v, %v", catalog, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	operations := append([]string(nil), handler.contextOperations...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandContexts,
+		nodes.BrowserCommandContexts,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+	if wantOperations := []string{"open", "list"}; !slices.Equal(operations, wantOperations) {
+		t.Fatalf("context operations = %#v, want %#v", operations, wantOperations)
+	}
+}
+
+func TestGatewayBrowserWorkerRefreshesRecoveredSelectObservationWithoutReplay(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	catalog, err := gatewayBrowserContextCatalog(browserNodeTestContextCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := browser.ContextMutationAuthorityFromBinding(browser.ContextMutationBinding{
+		Catalog: catalog, TabID: catalog.SelectedTabID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.redactNextContext = true
+	observation, recoveredCatalog, err := worker.SelectContext(t.Context(), authority)
+	if err != nil || observation.URL != "about:blank" || recoveredCatalog.ID != catalog.ID {
+		t.Fatalf("recovered select = %#v, %#v, %v", observation, recoveredCatalog, err)
+	}
+	handler.mu.Lock()
+	operations := append([]string(nil), handler.contextOperations...)
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	if want := []string{"select", "list"}; !slices.Equal(operations, want) {
+		t.Fatalf("context operations = %#v, want %#v", operations, want)
+	}
+	if want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandContexts,
+		nodes.BrowserCommandContexts,
+		nodes.BrowserCommandObserve,
+	}; !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }
 

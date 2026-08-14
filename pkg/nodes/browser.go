@@ -505,9 +505,10 @@ type BrowserContextInput struct {
 }
 
 type BrowserContextResult struct {
-	Operation   string                    `json:"operation"`
-	Catalog     BrowserContextCatalog     `json:"context_catalog"`
-	Observation *BrowserObservationResult `json:"observation,omitempty"`
+	Operation       string                    `json:"operation"`
+	Catalog         BrowserContextCatalog     `json:"context_catalog"`
+	Observation     *BrowserObservationResult `json:"observation,omitempty"`
+	ProtectedResult bool                      `json:"protected_result,omitempty"`
 }
 
 type BrowserSessionResult struct {
@@ -618,6 +619,7 @@ type BrowserObservationResult struct {
 	Snapshot           string           `json:"snapshot"`
 	Elements           []BrowserElement `json:"elements"`
 	Truncated          bool             `json:"truncated"`
+	ProtectedResult    bool             `json:"protected_result,omitempty"`
 }
 
 func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
@@ -631,6 +633,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		Snapshot           string           `json:"snapshot"`
 		Elements           []BrowserElement `json:"elements"`
 		Truncated          bool             `json:"truncated"`
+		ProtectedResult    bool             `json:"protected_result,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -643,6 +646,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
 		Elements: value.Elements, Truncated: value.Truncated,
+		ProtectedResult: value.ProtectedResult,
 	}
 	return nil
 }
@@ -1122,7 +1126,10 @@ func BrowserCommandOutputSchema(
 			},
 		})
 	case BrowserCommandObserve:
-		return browserObservationSchema(limits)
+		return mustJSON(map[string]any{"oneOf": []any{
+			rawSchema(browserObservationSchema(limits)),
+			browserProtectedResultReceiptSchema(nil),
+		}})
 	case BrowserCommandAct:
 		return mustJSON(map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -1136,7 +1143,7 @@ func BrowserCommandOutputSchema(
 			},
 		})
 	case BrowserCommandContexts:
-		return mustJSON(map[string]any{
+		contextResult := map[string]any{
 			"type": "object", "additionalProperties": false,
 			"required": []string{"operation", "context_catalog"},
 			"properties": map[string]any{
@@ -1156,7 +1163,13 @@ func BrowserCommandOutputSchema(
 					"not": map[string]any{"required": []string{"observation"}},
 				},
 			}}},
-		})
+		}
+		return mustJSON(map[string]any{"oneOf": []any{
+			contextResult,
+			browserProtectedResultReceiptSchema(map[string]any{
+				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
+			}),
+		}})
 	default:
 		return json.RawMessage("false")
 	}
@@ -1433,6 +1446,21 @@ func browserArtifactSchema(maximumBytes int) map[string]any {
 	}
 }
 
+func browserProtectedResultReceiptSchema(properties map[string]any) map[string]any {
+	required := []string{"protected_result"}
+	resultProperties := map[string]any{
+		"protected_result": map[string]any{"const": true},
+	}
+	for name, schema := range properties {
+		resultProperties[name] = schema
+		required = append(required, name)
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": required, "properties": resultProperties,
+	}
+}
+
 func validateBrowserInvocationInput(command string, input map[string]any) error {
 	switch command {
 	case BrowserCommandSessionOpen:
@@ -1483,7 +1511,15 @@ func validateBrowserInvocationOutput(
 ) error {
 	switch command {
 	case BrowserCommandObserve:
+		if output["protected_result"] == true {
+			return nil
+		}
 		return validateBrowserObservationBytes(output, limits)
+	case BrowserCommandContexts:
+		if output["protected_result"] == true {
+			return nil
+		}
+		return nil
 	case BrowserCommandAct:
 		observation, present := output["observation"]
 		if !present {

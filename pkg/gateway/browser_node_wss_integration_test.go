@@ -525,7 +525,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
-		"open", "observe", "navigate", "close",
+		// Post-acceptance recovery receives a redacted terminal receipt and
+		// obtains fresh live authority without replaying navigate.
+		"open", "observe", "navigate", "observe", "close",
 		"open", "observe", "navigate", "close",
 		"open", "close",
 	}; !slices.Equal(got, want) {
@@ -581,6 +583,16 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	run := startWSSBrowserClient(t, client)
 	defer run.stop(t)
 	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+	observeDrop := &wssBrowserDropAfterAcceptance{
+		nodeAdmissionHandler: admission,
+		command:              nodes.BrowserCommandObserve,
+	}
+	selectDrop := &wssBrowserDropAfterAcceptance{
+		nodeAdmissionHandler: observeDrop,
+		command:              nodes.BrowserCommandContexts,
+		contextOperation:     "select",
+	}
+	runtimeState.handler = selectDrop
 
 	cfg := wssBrowserGatewayConfig(t, workspace)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtimeState)
@@ -600,6 +612,14 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	observeDrop.arm()
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || initial.SnapshotGeneration != 1 || !observeDrop.didDrop() {
+		t.Fatalf(
+			"recovered initial observe = %#v, %v; dropped=%v commands=%#v",
+			initial, err, observeDrop.didDrop(), host.commandSequence(),
+		)
 	}
 	listed, err := broker.ListContexts(t.Context(), owner, session.ID)
 	if err != nil || len(listed.Tabs) != 1 {
@@ -645,10 +665,11 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	selectDrop.arm()
 	selected, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
 	if err != nil || selected.Observation == nil ||
 		selected.Catalog.SelectedFrameID != selectedTab.Frames[0].ID ||
-		selected.Observation.URL != "https://example.com/popup" {
+		selected.Observation.URL != "https://example.com/popup" || !selectDrop.didDrop() {
 		t.Fatalf("ExecuteContext(select) = %#v, %v", selected, err)
 	}
 	retained, err := os.ReadFile(ledgerPath)
@@ -680,6 +701,17 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 		if !slices.Contains(host.commandSequence(), operation) {
 			t.Fatalf("browser host sequence lacks %q: %#v", operation, host.commandSequence())
 		}
+	}
+	selectCount := 0
+	for _, command := range host.commandSequence() {
+		if command == "contexts_select" {
+			selectCount++
+		}
+	}
+	if selectCount != 2 {
+		// One stale attempt and one accepted attempt are expected; recovery
+		// must use list+observe rather than replaying the accepted select.
+		t.Fatalf("browser host select count = %d, want 2: %#v", selectCount, host.commandSequence())
 	}
 }
 
@@ -939,6 +971,7 @@ func (host *wssBrowserHost) Contexts(
 		catalog.Generation++
 		catalog.SelectedTabID = request.TabID
 		catalog.SelectedFrameID = request.FrameID
+		host.urls[request.SessionID] = "https://example.com/popup"
 		generation := host.snapshots[request.SessionID] + 1
 		host.snapshots[request.SessionID] = generation
 		observation := wssBrowserObservation(nodes.BrowserHostObserveRequest{
@@ -1398,6 +1431,59 @@ type wssBrowserDropBeforeAcceptance struct {
 	armed   bool
 	dropped bool
 	plans   []nodes.ExecutionPlan
+}
+
+// wssBrowserDropAfterAcceptance models a lost successful response after the
+// companion has completed and durably recorded the invocation. Gateway
+// reconciliation therefore receives the protected terminal receipt.
+type wssBrowserDropAfterAcceptance struct {
+	nodeAdmissionHandler
+	command          string
+	contextOperation string
+
+	mu      sync.Mutex
+	armed   bool
+	dropped bool
+}
+
+func (handler *wssBrowserDropAfterAcceptance) Invoke(
+	ctx context.Context,
+	nodeID nodes.ID,
+	plan nodes.ExecutionPlan,
+	ephemeralInput json.RawMessage,
+	commit func() error,
+) (json.RawMessage, bool, error) {
+	match := plan.Command == handler.command
+	if match && handler.contextOperation != "" {
+		var input nodes.BrowserContextInput
+		match = json.Unmarshal(plan.Input, &input) == nil && input.Operation == handler.contextOperation
+	}
+	handler.mu.Lock()
+	drop := match && handler.armed && !handler.dropped
+	if drop {
+		handler.dropped = true
+	}
+	handler.mu.Unlock()
+	raw, dispatched, err := handler.nodeAdmissionHandler.Invoke(
+		ctx, nodeID, plan, ephemeralInput, commit,
+	)
+	if err != nil || !drop {
+		return raw, dispatched, err
+	}
+	return nil, true, errors.New("simulated post-acceptance response loss")
+}
+
+func (handler *wssBrowserDropAfterAcceptance) arm() {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	handler.armed = true
+	handler.dropped = false
+}
+
+func (handler *wssBrowserDropAfterAcceptance) didDrop() bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	return handler.dropped
 }
 
 func (handler *wssBrowserDropBeforeAcceptance) Invoke(
