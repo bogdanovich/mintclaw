@@ -626,15 +626,21 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 }
 
 func storedLegacyBrowserDescriptor(descriptor CommandDescriptor) bool {
-	if descriptor.Name != BrowserCommandSessionOpen {
+	var want json.RawMessage
+	switch descriptor.Name {
+	case BrowserCommandSessionOpen:
+		want = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
+	case BrowserCommandObserve, BrowserCommandContexts:
+		want = legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	default:
 		return false
 	}
-	want, err := canonicalJSON(legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles))
+	wantCanonical, err := canonicalJSON(want)
 	if err != nil {
 		return false
 	}
 	got, err := canonicalJSON(descriptor.OutputSchema)
-	return err == nil && bytes.Equal(got, want)
+	return err == nil && bytes.Equal(got, wantCanonical)
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {
