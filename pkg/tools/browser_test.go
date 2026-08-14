@@ -833,7 +833,7 @@ func TestBrowserArtifactTransfersAreNotAdvertisedOrPreparedWhenPlatformIsUnsuppo
 		t.Fatalf("unsupported transfer features = %#v", targets)
 	}
 	for _, action := range targets.Targets[0].Actions {
-		if action == browser.ActionUpload || action == browser.ActionDownload {
+		if action == browser.ActionFileChooser || action == browser.ActionUpload || action == browser.ActionDownload {
 			t.Fatalf("unsupported action advertised: %q", action)
 		}
 	}
@@ -857,12 +857,13 @@ func TestBrowserDownloadIsNotAdvertisedOrPreparedWithoutScopedDriver(t *testing.
 	if len(targets.Targets) != 1 || !targets.Targets[0].Features.Upload || targets.Targets[0].Features.Download {
 		t.Fatalf("scoped transfer features = %#v", targets)
 	}
-	upload, download := false, false
+	fileChooser, upload, download := false, false, false
 	for _, action := range targets.Targets[0].Actions {
+		fileChooser = fileChooser || action == browser.ActionFileChooser
 		upload = upload || action == browser.ActionUpload
 		download = download || action == browser.ActionDownload
 	}
-	if !upload || download {
+	if !fileChooser || !upload || download {
 		t.Fatalf("scoped transfer actions = %#v", targets.Targets[0].Actions)
 	}
 	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), map[string]any{

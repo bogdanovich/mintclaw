@@ -614,10 +614,6 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}
-	switch prepared.Action.Kind {
-	case ActionFileChooser:
-		return fmt.Errorf("%w: unsupported prepared action kind", ErrInvalid)
-	}
 	if prepared.Action.Kind != ActionDrag &&
 		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "") {
 		return fmt.Errorf("%w: unexpected prepared drag destination binding", ErrInvalid)
@@ -636,7 +632,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.DialogMessageDigest != "" || prepared.DialogMessageBytes != 0) {
 		return fmt.Errorf("%w: unexpected prepared dialog binding", ErrInvalid)
 	}
-	if prepared.Action.Kind != ActionUpload && (prepared.ArtifactSHA256 != "" || prepared.ArtifactBytes != 0 ||
+	if !artifactInputAction(prepared.Action.Kind) && (prepared.ArtifactSHA256 != "" || prepared.ArtifactBytes != 0 ||
 		prepared.ArtifactFilename != "" || prepared.ArtifactContentType != "") {
 		return fmt.Errorf("%w: unexpected prepared artifact binding", ErrInvalid)
 	}
@@ -721,7 +717,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			!validDigest(prepared.InputDigest) || prepared.InputBytes < 0 || prepared.InputBytes > maxTextBytes {
 			return fmt.Errorf("%w: malformed prepared dialog input", ErrInvalid)
 		}
-	case ActionUpload:
+	case ActionFileChooser, ActionUpload:
 		if prepared.DestinationOrigin != "" || prepared.ElementRole != "button" ||
 			prepared.Effect != EffectLocalEdit || !validDigest(prepared.ArtifactSHA256) ||
 			prepared.ArtifactBytes < 1 || prepared.ArtifactBytes > int64(config.BrowserMaxUploadBytes) ||

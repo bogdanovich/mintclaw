@@ -520,7 +520,7 @@ func TestBrokerHumanHandoffDriverFailuresCloseSession(t *testing.T) {
 	})
 }
 
-func TestBrokerBindsUploadArtifactAndRequiresApprovalForDownloadClick(t *testing.T) {
+func TestBrokerBindsFileChooserArtifactAndRequiresApprovalForDownloadClick(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	owner := testOwner()
 	worker.observation = driverObservationFixture(DriverElement{Target: "e2", Role: "button", Name: "Choose file"})
@@ -533,7 +533,7 @@ func TestBrokerBindsUploadArtifactAndRequiresApprovalForDownloadClick(t *testing
 		Owner: owner, RequestID: "request_upload", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: uploadObservation.SnapshotID, SnapshotGeneration: uploadObservation.SnapshotGeneration,
 		Action: Action{
-			Kind: ActionUpload, Ref: onlyVisibleRef(t, uploadObservation.Snapshot),
+			Kind: ActionFileChooser, Ref: onlyVisibleRef(t, uploadObservation.Snapshot),
 			ArtifactRef: "transfer-artifact://opaque",
 		},
 		Upload: &UploadBinding{
@@ -542,13 +542,13 @@ func TestBrokerBindsUploadArtifactAndRequiresApprovalForDownloadClick(t *testing
 		},
 	})
 	if err != nil || upload.RequiresApproval {
-		t.Fatalf("PrepareAction(upload) = %#v, %v", upload, err)
+		t.Fatalf("PrepareAction(file chooser) = %#v, %v", upload, err)
 	}
 	invocation, err := broker.ExecuteAction(context.Background(), owner, upload.Action.ID, nil)
 	if err != nil || invocation.State != InvocationSucceeded || len(worker.uploads) != 1 ||
 		worker.uploads[0].Value != "/private/retained/input.txt" ||
 		worker.uploads[0].ArtifactSHA256 != strings.Repeat("a", 64) || worker.uploads[0].ArtifactBytes != 7 {
-		t.Fatalf("ExecuteAction(upload) = %#v, %v; uploads = %#v", invocation, err, worker.uploads)
+		t.Fatalf("ExecuteAction(file chooser) = %#v, %v; uploads = %#v", invocation, err, worker.uploads)
 	}
 
 	worker.observation = driverObservationFixture(DriverElement{Target: "e3", Role: "link", Name: "Download"})

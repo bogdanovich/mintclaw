@@ -145,20 +145,22 @@ const (
 )
 
 type DriverAction struct {
-	Kind               DriverActionKind
-	URL                string
-	Target             string
-	Element            string
-	DestinationTarget  string
-	DestinationElement string
-	Value              string
-	Key                string
-	Direction          string
-	Amount             int
-	Accept             bool
-	PromptProvided     bool
-	ArtifactSHA256     string
-	ArtifactBytes      int64
+	Kind                DriverActionKind
+	URL                 string
+	Target              string
+	Element             string
+	DestinationTarget   string
+	DestinationElement  string
+	Value               string
+	Key                 string
+	Direction           string
+	Amount              int
+	Accept              bool
+	PromptProvided      bool
+	ArtifactSHA256      string
+	ArtifactBytes       int64
+	ArtifactFilename    string
+	ArtifactContentType string
 }
 
 type DriverObservation struct {
@@ -1264,25 +1266,14 @@ func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction)
 	defer worker.mu.Unlock()
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		action.Kind != DriverUpload || !playwrightTargetPattern.MatchString(action.Target) ||
-		action.Value == "" || !filepath.IsAbs(action.Value) {
+		action.Value == "" || !filepath.IsAbs(action.Value) || worker.outputDir == "" {
 		return ErrWorkerUnavailable
 	}
-	info, err := os.Lstat(action.Value)
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > int64(worker.limits.UploadBytes) ||
-		info.Size() != action.ArtifactBytes || !validDigest(action.ArtifactSHA256) {
-		return ErrDenied
-	}
-	file, err := os.Open(action.Value)
+	stagedPath, cleanup, err := worker.stageUploadArtifact(action)
 	if err != nil {
-		return ErrDenied
+		return err
 	}
-	digest := sha256.New()
-	count, copyErr := io.Copy(digest, io.LimitReader(file, action.ArtifactBytes+1))
-	closeErr := file.Close()
-	if copyErr != nil || closeErr != nil || count != action.ArtifactBytes ||
-		hex.EncodeToString(digest.Sum(nil)) != action.ArtifactSHA256 {
-		return ErrDenied
-	}
+	defer cleanup()
 	text, err := worker.callRawText(ctx, "browser_click", map[string]any{
 		"target": action.Target, "element": action.Element, "doubleClick": false, "button": "left",
 	})
@@ -1292,8 +1283,49 @@ func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction)
 	if strings.Count(text, "[File chooser]: can be handled by browser_file_upload") != 1 {
 		return ErrDriverIncompatible
 	}
-	_, err = worker.callRawText(ctx, "browser_file_upload", map[string]any{"paths": []string{action.Value}})
+	_, err = worker.callRawText(ctx, "browser_file_upload", map[string]any{"paths": []string{stagedPath}})
 	return err
+}
+
+func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string, func(), error) {
+	filename := action.ArtifactFilename
+	if filename == "" {
+		filename = filepath.Base(action.Value)
+	}
+	if filename == "" || filename == "." || filename != filepath.Base(filename) || len(filename) > 255 ||
+		strings.ContainsRune(filename, 0) || !validDigest(action.ArtifactSHA256) || action.ArtifactBytes < 1 ||
+		action.ArtifactBytes > int64(worker.limits.UploadBytes) {
+		return "", func() {}, ErrDenied
+	}
+	source, err := os.Open(action.Value)
+	if err != nil {
+		return "", func() {}, ErrDenied
+	}
+	defer func() { _ = source.Close() }()
+	info, err := source.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != action.ArtifactBytes {
+		return "", func() {}, ErrDenied
+	}
+	stagingDir, err := os.MkdirTemp(worker.outputDir, "upload-")
+	if err != nil {
+		return "", func() {}, ErrWorkerUnavailable
+	}
+	cleanup := func() { _ = os.RemoveAll(stagingDir) }
+	stagedPath := filepath.Join(stagingDir, filename)
+	staged, err := os.OpenFile(stagedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
+		return "", func() {}, ErrWorkerUnavailable
+	}
+	digest := sha256.New()
+	count, copyErr := io.Copy(io.MultiWriter(staged, digest), io.LimitReader(source, action.ArtifactBytes+1))
+	closeErr := staged.Close()
+	if copyErr != nil || closeErr != nil || count != action.ArtifactBytes ||
+		hex.EncodeToString(digest.Sum(nil)) != action.ArtifactSHA256 {
+		cleanup()
+		return "", func() {}, ErrDenied
+	}
+	return stagedPath, cleanup, nil
 }
 
 func (worker *playwrightWorker) Download(
