@@ -1494,6 +1494,29 @@ func TestNodeInvokeToolReportsDefinitiveCompanionRejection(t *testing.T) {
 	}
 }
 
+func TestNodeInvokeToolReportsMissingWorkspaceFileAsTerminalFailure(t *testing.T) {
+	source := newFakeNodeInvocationSource(t)
+	source.dispatchErr = nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchFileNotFound,
+		errors.New("secret absolute companion path"),
+	)
+	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+
+	result := tool.Execute(
+		nodeInvocationTestContext("actor-1", "call-1"),
+		nodeInvocationTestArgs(),
+	)
+	if !result.IsError || !strings.Contains(result.ForLLM, nodes.InvocationDispatchFileNotFound) ||
+		!strings.Contains(result.ForLLM, `"state":"failed"`) {
+		t.Fatalf("file-not-found invocation = %#v", result)
+	}
+	for _, forbidden := range []string{"DISPATCH_UNCERTAIN", "secret absolute", `"state":"rejected"`} {
+		if strings.Contains(result.ForLLM, forbidden) {
+			t.Fatalf("file-not-found invocation leaked or misstated %q: %s", forbidden, result.ForLLM)
+		}
+	}
+}
+
 func TestNodeInvokeToolKeepsRemoteUnknownAsPostDispatchUncertainty(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	source.dispatchErr = nodes.NewInvocationDispatchError(

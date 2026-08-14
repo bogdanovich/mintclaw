@@ -19,6 +19,15 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 		t.Fatal("dispatch error did not retain its internal cause")
 	}
 
+	notFound := NewInvocationDispatchError(InvocationDispatchFileNotFound, cause)
+	code, classified = InvocationDispatchErrorCode(notFound)
+	if !classified || code != InvocationDispatchFileNotFound {
+		t.Fatalf("file-not-found dispatch code = %q, %v", code, classified)
+	}
+	if notFound.Error() != "node invocation dispatch failed (FILE_NOT_FOUND)" {
+		t.Fatalf("file-not-found Error() = %q", notFound.Error())
+	}
+
 	unknown := NewInvocationDispatchError("PRIVATE_REMOTE_CODE", cause)
 	code, classified = InvocationDispatchErrorCode(unknown)
 	if !classified || code != InvocationDispatchRejected {

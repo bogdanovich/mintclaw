@@ -200,7 +200,7 @@ func (tool *NodeInvokeTool) execute(
 			state := "rejected"
 			message := "the node rejected the invocation"
 			switch errorCode {
-			case nodes.InvocationDispatchExecutionFailed:
+			case nodes.InvocationDispatchExecutionFailed, nodes.InvocationDispatchFileNotFound:
 				state = string(nodes.InvocationFailed)
 				message = "the node reported a terminal invocation failure"
 			case nodes.InvocationDispatchCanceled:

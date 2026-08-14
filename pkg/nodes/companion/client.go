@@ -1000,25 +1000,7 @@ func (client *Client) handleInvoke(
 	}
 	result, err := client.runtime.InvokeWithEphemeral(ctx, plan, ephemeralInput)
 	if err != nil {
-		code := "EXECUTION_FAILED"
-		message := "node command failed"
-		switch {
-		case errors.Is(err, nodes.ErrCommandDenied), errors.Is(err, nodes.ErrInvalidInvocation):
-			code = "COMMAND_DENIED"
-			message = "node command denied"
-		case errors.Is(err, ErrCommandUnavailable):
-			code = "COMMAND_UNAVAILABLE"
-			message = "node command unavailable"
-		case errors.Is(err, ErrInvocationConflict):
-			code = "IDEMPOTENCY_CONFLICT"
-			message = "invocation idempotency conflict"
-		case errors.Is(err, ErrInvocationOutcomeUnknown):
-			code = "INVOCATION_UNKNOWN"
-			message = "invocation outcome is unknown"
-		case errors.Is(err, ErrInvocationCanceled):
-			code = "INVOCATION_CANCELED"
-			message = "node command canceled"
-		}
+		code, message := invocationCommandFailure(err)
 		client.logger.Warn(
 			"node invocation rejected",
 			"invocation_id", plan.InvocationID,
@@ -1035,6 +1017,41 @@ func (client *Client) handleInvoke(
 		OK:     &ok,
 		Result: result,
 	})
+}
+
+func invocationCommandFailure(err error) (string, string) {
+	if failure, ok := boundedInvocationFailure(err); ok &&
+		failure.Code == nodes.InvocationDispatchFileNotFound {
+		return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
+	}
+	switch {
+	case errors.Is(err, ErrFileNotFound):
+		return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
+	case errors.Is(err, nodes.ErrCommandDenied), errors.Is(err, nodes.ErrInvalidInvocation):
+		return nodes.InvocationDispatchCommandDenied, "node command denied"
+	case errors.Is(err, ErrCommandUnavailable):
+		return nodes.InvocationDispatchCommandUnavailable, "node command unavailable"
+	case errors.Is(err, ErrInvocationConflict):
+		return nodes.InvocationDispatchIdempotencyConflict, "invocation idempotency conflict"
+	case errors.Is(err, ErrInvocationOutcomeUnknown):
+		return nodes.InvocationDispatchUnknown, "invocation outcome is unknown"
+	case errors.Is(err, ErrInvocationCanceled):
+		return nodes.InvocationDispatchCanceled, "node command canceled"
+	default:
+		return nodes.InvocationDispatchExecutionFailed, "node command failed"
+	}
+}
+
+func boundedInvocationFailure(err error) (nodes.InvocationFailure, bool) {
+	var commandFailure *commandFailureError
+	if errors.As(err, &commandFailure) {
+		return commandFailure.failure, true
+	}
+	var recordedFailure *recordedInvocationError
+	if errors.As(err, &recordedFailure) {
+		return recordedFailure.failure, true
+	}
+	return nodes.InvocationFailure{}, false
 }
 
 func invocationRejectionReason(err error) string {
