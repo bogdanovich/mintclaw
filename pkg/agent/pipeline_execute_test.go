@@ -39,6 +39,7 @@ func (*protectedResultProjectionTool) Name() string { return "browser_act" }
 func (*protectedResultProjectionTool) Description() string {
 	return "protected result persistence projection test"
 }
+
 func (*protectedResultProjectionTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object", "properties": map[string]any{
@@ -47,6 +48,7 @@ func (*protectedResultProjectionTool) Parameters() map[string]any {
 		"required": []string{"action"}, "additionalProperties": false,
 	}
 }
+
 func (*protectedResultProjectionTool) DurableArguments(map[string]any) (map[string]any, error) {
 	return map[string]any{"action": map[string]any{"kind": "fill", "value": "*"}}, nil
 }
@@ -1611,7 +1613,13 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 		Context: PipelineContextServices{Runtime: contextManager},
 	}
 
-	if outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm); outcome.Control != ToolControlContinue {
+	if outcome := pipeline.ExecuteTools(
+		t.Context(),
+		t.Context(),
+		ts,
+		exec,
+		llm,
+	); outcome.Control != ToolControlContinue {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, canary) {
