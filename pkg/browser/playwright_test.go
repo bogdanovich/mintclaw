@@ -283,6 +283,20 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 				`await hoverTarget.count() !== 1`, `!await hoverTarget.isVisible()`, `await hoverTarget.hover()`,
 			},
 		},
+		{
+			name: "drag", action: DriverAction{
+				Kind: DriverDrag, Target: "e8", Element: "Card",
+				DestinationTarget: "e9", DestinationElement: "Done",
+			},
+			required: []string{
+				`const dragSource = page.locator("aria-ref=" + "e8")`,
+				`const dragDestination = page.locator("aria-ref=" + "e9")`,
+				`await dragSource.count() !== 1`, `!await dragSource.isVisible()`,
+				`await dragDestination.count() !== 1`, `!await dragDestination.isVisible()`,
+				`await dragSource.dragTo(dragDestination)`,
+			},
+			forbid: []string{"dataTransfer", "dispatchEvent", "evaluate("},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1947,6 +1961,11 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 <a href="/download" onclick="event.preventDefault(); document.querySelector('iframe').src=this.href">Frame fixture</a>
 <a href="/slow-download" onclick="fetch('/script-download')">Multiple fixture</a>
 <iframe title="Download frame"></iframe>
+<div role="listitem" aria-label="Todo" draggable="true"
+ ondragstart="event.dataTransfer.setData('text/plain','todo')">Todo</div>
+<div role="list" aria-label="Done" ondragover="event.preventDefault()"
+ ondrop="event.preventDefault(); document.querySelector('#drag-result').textContent=event.dataTransfer.getData('text/plain')">
+Done</div><output id="drag-result"></output>
 %s<div style="height:2000px"></div>`, privateImage)
 	}))
 	defer fixture.Close()
@@ -2090,6 +2109,29 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	observation, err := worker.Observe(ctx)
 	if err != nil {
 		t.Fatalf("first Observe() error = %v", err)
+	}
+	dragSource := mustSnapshotRef(t, observation.Snapshot, `listitem "Todo" \[ref=(e[0-9]+)\]`)
+	dragDestination := mustSnapshotRef(t, observation.Snapshot, `list "Done" \[ref=(e[0-9]+)\]`)
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverDrag, Target: dragSource, Element: "Todo",
+		DestinationTarget: dragDestination, DestinationElement: "Done",
+	}); err != nil {
+		t.Fatalf("drag error = %v", err)
+	}
+	dragProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_DRAG_V1|" +
+			String(await page.locator("#drag-result").textContent())`,
+	})
+	if err != nil || dragProbe == nil || dragProbe.IsError {
+		t.Fatalf("drag completion probe = %#v, %v", dragProbe, err)
+	}
+	dragText, err := boundedPlaywrightText(dragProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(dragText, "MINTCLAW_DRAG_V1|todo") {
+		t.Fatalf("drag completion = %q, %v", dragText, err)
+	}
+	observation, err = worker.Observe(ctx)
+	if err != nil {
+		t.Fatalf("Observe() after drag = %v", err)
 	}
 	textbox := mustSnapshotRef(t, observation.Snapshot, `textbox "Name" \[ref=(e[0-9]+)\]`)
 	if err = executeAtCurrentNavigation(DriverAction{

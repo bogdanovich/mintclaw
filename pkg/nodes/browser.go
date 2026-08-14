@@ -268,6 +268,8 @@ type BrowserAction struct {
 	Kind           string `json:"kind"`
 	URL            string `json:"url,omitempty"`
 	Ref            string `json:"ref,omitempty"`
+	SourceRef      string `json:"source_ref,omitempty"`
+	DestinationRef string `json:"destination_ref,omitempty"`
 	DialogID       string `json:"dialog_id,omitempty"`
 	Target         string `json:"target,omitempty"`
 	Value          string `json:"value,omitempty"`
@@ -283,6 +285,8 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		Kind           string          `json:"kind"`
 		URL            string          `json:"url,omitempty"`
 		Ref            string          `json:"ref,omitempty"`
+		SourceRef      string          `json:"source_ref,omitempty"`
+		DestinationRef string          `json:"destination_ref,omitempty"`
 		DialogID       string          `json:"dialog_id,omitempty"`
 		Target         string          `json:"target,omitempty"`
 		Value          string          `json:"value,omitempty"`
@@ -304,7 +308,8 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		)
 	}
 	*action = BrowserAction{
-		Kind: value.Kind, URL: value.URL, Ref: value.Ref, DialogID: value.DialogID, Target: value.Target,
+		Kind: value.Kind, URL: value.URL, Ref: value.Ref, SourceRef: value.SourceRef,
+		DestinationRef: value.DestinationRef, DialogID: value.DialogID, Target: value.Target,
 		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
 		Decision: value.Decision, PromptProvided: value.PromptProvided,
 	}
@@ -312,24 +317,26 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 }
 
 type BrowserActInput struct {
-	SessionID             string        `json:"session_id"`
-	TabID                 string        `json:"tab_id"`
-	SnapshotGeneration    uint64        `json:"snapshot_generation"`
-	ActionInvocationID    string        `json:"action_invocation_id"`
-	Action                BrowserAction `json:"action"`
-	Effect                string        `json:"effect"`
-	CurrentOrigin         string        `json:"current_origin"`
-	PreparedActionHash    string        `json:"prepared_action_hash"`
-	BrowserPolicyRevision string        `json:"browser_policy_revision"`
-	ProfileRevision       string        `json:"profile_revision"`
-	ExpectedRole          string        `json:"expected_role,omitempty"`
-	ExpectedName          string        `json:"expected_name,omitempty"`
-	DialogType            string        `json:"dialog_type,omitempty"`
-	DialogMessageDigest   string        `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes    int           `json:"dialog_message_bytes,omitempty"`
-	InputDigest           string        `json:"input_digest,omitempty"`
-	InputBytes            int           `json:"input_bytes,omitempty"`
-	ApprovalDigest        string        `json:"approval_digest,omitempty"`
+	SessionID               string        `json:"session_id"`
+	TabID                   string        `json:"tab_id"`
+	SnapshotGeneration      uint64        `json:"snapshot_generation"`
+	ActionInvocationID      string        `json:"action_invocation_id"`
+	Action                  BrowserAction `json:"action"`
+	Effect                  string        `json:"effect"`
+	CurrentOrigin           string        `json:"current_origin"`
+	PreparedActionHash      string        `json:"prepared_action_hash"`
+	BrowserPolicyRevision   string        `json:"browser_policy_revision"`
+	ProfileRevision         string        `json:"profile_revision"`
+	ExpectedRole            string        `json:"expected_role,omitempty"`
+	ExpectedName            string        `json:"expected_name,omitempty"`
+	DestinationExpectedRole string        `json:"destination_expected_role,omitempty"`
+	DestinationExpectedName string        `json:"destination_expected_name,omitempty"`
+	DialogType              string        `json:"dialog_type,omitempty"`
+	DialogMessageDigest     string        `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes      int           `json:"dialog_message_bytes,omitempty"`
+	InputDigest             string        `json:"input_digest,omitempty"`
+	InputBytes              int           `json:"input_bytes,omitempty"`
+	ApprovalDigest          string        `json:"approval_digest,omitempty"`
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -348,24 +355,26 @@ func (input BrowserActInput) MarshalJSON() ([]byte, error) {
 
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	var value struct {
-		SessionID             string          `json:"session_id"`
-		TabID                 string          `json:"tab_id"`
-		SnapshotGeneration    json.RawMessage `json:"snapshot_generation"`
-		ActionInvocationID    string          `json:"action_invocation_id"`
-		Action                BrowserAction   `json:"action"`
-		Effect                string          `json:"effect"`
-		CurrentOrigin         string          `json:"current_origin"`
-		PreparedActionHash    string          `json:"prepared_action_hash"`
-		BrowserPolicyRevision string          `json:"browser_policy_revision"`
-		ProfileRevision       string          `json:"profile_revision"`
-		ExpectedRole          string          `json:"expected_role,omitempty"`
-		ExpectedName          string          `json:"expected_name,omitempty"`
-		DialogType            string          `json:"dialog_type,omitempty"`
-		DialogMessageDigest   string          `json:"dialog_message_digest,omitempty"`
-		DialogMessageBytes    json.RawMessage `json:"dialog_message_bytes,omitempty"`
-		InputDigest           string          `json:"input_digest,omitempty"`
-		InputBytes            json.RawMessage `json:"input_bytes,omitempty"`
-		ApprovalDigest        string          `json:"approval_digest,omitempty"`
+		SessionID               string          `json:"session_id"`
+		TabID                   string          `json:"tab_id"`
+		SnapshotGeneration      json.RawMessage `json:"snapshot_generation"`
+		ActionInvocationID      string          `json:"action_invocation_id"`
+		Action                  BrowserAction   `json:"action"`
+		Effect                  string          `json:"effect"`
+		CurrentOrigin           string          `json:"current_origin"`
+		PreparedActionHash      string          `json:"prepared_action_hash"`
+		BrowserPolicyRevision   string          `json:"browser_policy_revision"`
+		ProfileRevision         string          `json:"profile_revision"`
+		ExpectedRole            string          `json:"expected_role,omitempty"`
+		ExpectedName            string          `json:"expected_name,omitempty"`
+		DestinationExpectedRole string          `json:"destination_expected_role,omitempty"`
+		DestinationExpectedName string          `json:"destination_expected_name,omitempty"`
+		DialogType              string          `json:"dialog_type,omitempty"`
+		DialogMessageDigest     string          `json:"dialog_message_digest,omitempty"`
+		DialogMessageBytes      json.RawMessage `json:"dialog_message_bytes,omitempty"`
+		InputDigest             string          `json:"input_digest,omitempty"`
+		InputBytes              json.RawMessage `json:"input_bytes,omitempty"`
+		ApprovalDigest          string          `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -393,7 +402,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		BrowserPolicyRevision: value.BrowserPolicyRevision,
 		ProfileRevision:       value.ProfileRevision,
 		ExpectedRole:          value.ExpectedRole, ExpectedName: value.ExpectedName,
-		DialogType: value.DialogType, DialogMessageDigest: value.DialogMessageDigest,
+		DestinationExpectedRole: value.DestinationExpectedRole,
+		DestinationExpectedName: value.DestinationExpectedName,
+		DialogType:              value.DialogType, DialogMessageDigest: value.DialogMessageDigest,
 		DialogMessageBytes: int(dialogMessageBytes),
 		InputDigest:        value.InputDigest, InputBytes: int(inputBytes),
 		ApprovalDigest: value.ApprovalDigest,
@@ -755,27 +766,29 @@ type BrowserHostObserveRequest struct {
 }
 
 type BrowserHostActRequest struct {
-	SessionID             string
-	RoutedSessionID       string
-	TabID                 string
-	SnapshotGeneration    uint64
-	ActionInvocationID    string
-	Action                BrowserAction
-	Effect                string
-	CurrentOrigin         string
-	PreparedActionHash    string
-	BrowserPolicyRevision string
-	ProfileRevision       string
-	ApprovalDigest        string
-	ExpectedRole          string
-	ExpectedName          string
-	DialogType            string
-	DialogMessageDigest   string
-	DialogMessageBytes    int
-	InputDigest           string
-	InputBytes            int
-	AgentID               string
-	ActorID               string
+	SessionID               string
+	RoutedSessionID         string
+	TabID                   string
+	SnapshotGeneration      uint64
+	ActionInvocationID      string
+	Action                  BrowserAction
+	Effect                  string
+	CurrentOrigin           string
+	PreparedActionHash      string
+	BrowserPolicyRevision   string
+	ProfileRevision         string
+	ApprovalDigest          string
+	ExpectedRole            string
+	ExpectedName            string
+	DestinationExpectedRole string
+	DestinationExpectedName string
+	DialogType              string
+	DialogMessageDigest     string
+	DialogMessageBytes      int
+	InputDigest             string
+	InputBytes              int
+	AgentID                 string
+	ActorID                 string
 }
 
 type BrowserHostContextRequest struct {
@@ -801,9 +814,12 @@ func (profile BrowserProfileDescriptor) Validate() error {
 		len(profile.Actions) > MaxBrowserActions || !sort.StringsAreSorted(profile.Actions) {
 		return fmt.Errorf("%w: malformed browser profile descriptor", ErrInvalidCapability)
 	}
+	if profile.DryRun && slices.Contains(profile.Actions, "drag") {
+		return fmt.Errorf("%w: dry-run browser profile advertises approval-only drag", ErrInvalidCapability)
+	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "check" && action != "click" && action != "dialog" && action != "download" &&
+		if action != "check" && action != "click" && action != "dialog" && action != "download" && action != "drag" &&
 			action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
 			action != "scroll" && action != "select" && action != "uncheck" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
@@ -955,6 +971,8 @@ func browserCommandInputSchema(
 				effect = "local_edit"
 			case "hover":
 				effect = "read"
+			case "drag":
+				effect = "unknown"
 			case "press":
 				effect = "unknown"
 			case "scroll":
@@ -963,7 +981,7 @@ func browserCommandInputSchema(
 				effect = "unknown"
 			}
 			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" || action == "click" || action == "press" {
+			if action == "download" || action == "click" || action == "drag" || action == "press" {
 				required = append(required, "approval_digest")
 			}
 			properties := map[string]any{
@@ -972,10 +990,17 @@ func browserCommandInputSchema(
 				"effect":           map[string]any{"const": effect},
 			}
 			if action == "click" || action == "fill" || action == "select" || action == "check" ||
-				action == "uncheck" || action == "hover" {
+				action == "uncheck" || action == "hover" || action == "drag" {
 				required = append(required, "expected_role")
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+			}
+			if action == "drag" {
+				required = append(required, "destination_expected_role")
+				properties["destination_expected_role"] = map[string]any{
+					"type": "string", "minLength": 1, "maxLength": 128,
+				}
+				properties["destination_expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 			}
 			if action == "fill" || action == "select" {
 				required = append(required, "input_digest", "input_bytes")
@@ -1105,6 +1130,22 @@ func browserCommandInputSchema(
 					map[string]any{"oneOf": promptConstraint},
 				}
 			}
+			forbiddenFields := []string{"destination_expected_role", "destination_expected_name"}
+			if action == "drag" {
+				forbiddenFields = []string{
+					"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+				}
+			}
+			forbidden := make([]any, 0, len(forbiddenFields))
+			for _, field := range forbiddenFields {
+				forbidden = append(forbidden, map[string]any{"required": []string{field}})
+			}
+			constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
+			if existing, ok := branch["allOf"].([]any); ok {
+				branch["allOf"] = append(existing, constraint)
+			} else {
+				branch["allOf"] = []any{constraint}
+			}
 			actionBranches = append(actionBranches, branch)
 		}
 	}
@@ -1150,6 +1191,9 @@ func browserCommandInputSchema(
 		if _, hasPress := allActions["press"]; hasPress && !slices.Contains(actEffects, "unknown") {
 			actEffects = append(actEffects, "unknown")
 		}
+		if _, hasDrag := allActions["drag"]; hasDrag && !slices.Contains(actEffects, "unknown") {
+			actEffects = append(actEffects, "unknown")
+		}
 		if _, hasDialog := allActions["dialog"]; hasDialog && !slices.Contains(actEffects, "external_commit") {
 			actEffects = append(actEffects, "external_commit")
 		}
@@ -1184,9 +1228,16 @@ func browserCommandInputSchema(
 		_, hasCheck := allActions["check"]
 		_, hasUncheck := allActions["uncheck"]
 		_, hasHover := allActions["hover"]
-		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover {
+		_, hasDrag := allActions["drag"]
+		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		}
+		if hasDrag {
+			properties["destination_expected_role"] = map[string]any{
+				"type": "string", "minLength": 1, "maxLength": 128,
+			}
+			properties["destination_expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
 		if hasFill || hasSelect || hasDialog {
 			properties["input_digest"] = digest
@@ -1740,14 +1791,32 @@ func validateBrowserInvocationInput(command string, input map[string]any) error 
 			}
 			return validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true)
 		}
-		if action["kind"] == "click" {
+		if action["kind"] == "click" || action["kind"] == "drag" {
 			if err := validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true); err != nil {
 				return err
 			}
 			if err := validateBrowserStringBytes(input, "expected_role", 128, true); err != nil {
 				return err
 			}
-			return validateBrowserStringBytes(input, "expected_name", 4096, false)
+			if err := validateBrowserStringBytes(input, "expected_name", 4096, false); err != nil {
+				return err
+			}
+			if action["kind"] == "drag" {
+				if err := validateBrowserStringBytes(action, "source_ref", MaxIDLength, true); err != nil {
+					return err
+				}
+				if err := validateBrowserStringBytes(action, "destination_ref", MaxIDLength, true); err != nil {
+					return err
+				}
+				if action["source_ref"] == action["destination_ref"] {
+					return fmt.Errorf("%w: browser drag references must be distinct", ErrInvalidInvocation)
+				}
+				if err := validateBrowserStringBytes(input, "destination_expected_role", 128, true); err != nil {
+					return err
+				}
+				return validateBrowserStringBytes(input, "destination_expected_name", 4096, false)
+			}
+			return nil
 		}
 	}
 	return nil

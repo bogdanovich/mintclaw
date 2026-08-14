@@ -1015,6 +1015,68 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	}
 }
 
+func TestBrowserHostExecutesApprovedDragWithFreshSourceAndDestination(t *testing.T) {
+	source := browserworker.DriverElement{Target: "driver_source_1", Role: "listitem", Name: "Todo"}
+	destination := browserworker.DriverElement{Target: "driver_destination_1", Role: "list", Name: "Done"}
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/board", Origin: "https://example.com", Title: "Fixture",
+		Snapshot: "- listitem Todo\n- list Done", Elements: []browserworker.DriverElement{source, destination},
+	}
+	worker := &fakeBrowserHostWorker{
+		status:       browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{observation, observation, observation},
+	}
+	profile := browserHostProfileFixture()
+	profile.AllowedActions = []string{"drag", "navigate"}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	open := browserHostOpenFixture()
+	open.DryRun = false
+	if _, err = host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || len(initial.Elements) != 2 {
+		t.Fatalf("Observe() = %#v, %v", initial, err)
+	}
+	request := BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_drag_1",
+		Action: nodes.BrowserAction{
+			Kind: "drag", SourceRef: initial.Elements[0].Ref, DestinationRef: initial.Elements[1].Ref,
+		},
+		Effect: "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: source.Role, ExpectedName: source.Name,
+		DestinationExpectedRole: destination.Role, DestinationExpectedName: destination.Name,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.Drag(t.Context(), request)
+	want := browserworker.DriverAction{
+		Kind: browserworker.DriverDrag, Target: source.Target, Element: source.Name,
+		DestinationTarget: destination.Target, DestinationElement: destination.Name,
+	}
+	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 || worker.actions[0] != want {
+		t.Fatalf("Drag() = %#v, %v; actions = %#v, want %#v", result, err, worker.actions, want)
+	}
+}
+
 func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
 	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
 	factory := &fakeBrowserHostFactory{worker: worker}

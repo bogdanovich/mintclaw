@@ -71,6 +71,22 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 }
 
+func TestBrowserProfileDescriptorsHideDragFromDryRunProfiles(t *testing.T) {
+	profile := companionBrowserProfileFixture(t, t.TempDir())
+	profile.AllowedActions = []string{"drag", "navigate"}
+	profile.Limits = nodes.BrowserLimits{}.Effective()
+	descriptors, err := browserProfileDescriptors(map[string]BrowserProfilePolicy{"managed": profile})
+	if err != nil || len(descriptors) != 1 || strings.Join(descriptors[0].Actions, ",") != "navigate" {
+		t.Fatalf("dry-run descriptors = %#v, %v", descriptors, err)
+	}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	descriptors, err = browserProfileDescriptors(map[string]BrowserProfilePolicy{"managed": profile})
+	if err != nil || len(descriptors) != 1 || strings.Join(descriptors[0].Actions, ",") != "drag,navigate" {
+		t.Fatalf("approved descriptors = %#v, %v", descriptors, err)
+	}
+}
+
 func TestConfigAcceptsExplicitApprovedActionBrowserProfile(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()

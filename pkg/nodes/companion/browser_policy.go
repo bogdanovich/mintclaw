@@ -256,7 +256,7 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "check" && action != "click" && action != "dialog" && action != "navigate" &&
+		if action != "check" && action != "click" && action != "dialog" && action != "drag" && action != "navigate" &&
 			action != "download" && action != "fill" && action != "hover" &&
 			action != "press" &&
 			action != "scroll" &&
@@ -413,12 +413,16 @@ func pathWithin(path, directory string) bool {
 }
 
 func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.BrowserProfileDescriptor {
+	actions := append([]string(nil), profile.AllowedActions...)
+	if profile.DryRun {
+		actions = slices.DeleteFunc(actions, func(action string) bool { return action == "drag" })
+	}
 	return nodes.BrowserProfileDescriptor{
 		Alias: alias, Revision: profile.Revision, Driver: profile.Driver,
 		Mode: profile.Mode, NetworkMode: profile.NetworkMode,
 		DryRun: profile.DryRun, AllowApprovedActions: profile.AllowApprovedActions,
 		Headed:  profile.Headed,
-		Actions: append([]string(nil), profile.AllowedActions...),
+		Actions: actions,
 		Limits:  profile.Limits,
 	}
 }

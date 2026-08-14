@@ -972,7 +972,8 @@ func (*BrowserActTool) Description() string {
 func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
 	actions := []string{
-		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "press", "scroll", "dialog", "upload",
+		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "drag", "press", "scroll", "dialog",
+		"upload",
 	}
 	downloadAvailable := false
 	if tool != nil && tool.runtime != nil {
@@ -983,12 +984,14 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		actions = append(actions, "download")
 	}
 	actionProperties := map[string]any{
-		"kind":      map[string]any{"type": "string", "enum": actions},
-		"url":       map[string]any{"type": "string"},
-		"ref":       map[string]any{"type": "string"},
-		"dialog_id": map[string]any{"type": "string"},
-		"target":    map[string]any{"type": "string", "enum": []string{"document"}},
-		"value":     map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
+		"kind":            map[string]any{"type": "string", "enum": actions},
+		"url":             map[string]any{"type": "string"},
+		"ref":             map[string]any{"type": "string"},
+		"source_ref":      map[string]any{"type": "string"},
+		"destination_ref": map[string]any{"type": "string"},
+		"dialog_id":       map[string]any{"type": "string"},
+		"target":          map[string]any{"type": "string", "enum": []string{"document"}},
+		"value":           map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
 		"key": map[string]any{"type": "string", "enum": []string{
 			"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
 			"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
@@ -1349,6 +1352,12 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 		target = " for " + action.ElementRole
 		if action.ElementName != "" {
 			target += fmt.Sprintf(" %q", action.ElementName)
+		}
+		if action.Action.Kind == browser.ActionDrag {
+			target += " to " + action.DestinationElementRole
+			if action.DestinationElementName != "" {
+				target += fmt.Sprintf(" %q", action.DestinationElementName)
+			}
 		}
 	} else if action.Action.Kind == browser.ActionPress {
 		target = fmt.Sprintf(" for document key %q", action.Action.Key)

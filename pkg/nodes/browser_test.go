@@ -244,6 +244,46 @@ func TestBrowserOrdinaryInteractionCommandSchemaBindsSemanticRoleAndEffect(t *te
 	}
 }
 
+func TestBrowserDragCommandSchemaBindsBothSemanticTargetsAndApproval(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"drag"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+	input := browserActInputFixture()
+	input["profile_revision"] = profile.Revision
+	input["action"] = map[string]any{
+		"kind": "drag", "source_ref": "semantic_ref_1", "destination_ref": "semantic_ref_2",
+	}
+	input["effect"] = "unknown"
+	input["expected_role"] = "listitem"
+	input["expected_name"] = "Todo"
+	input["destination_expected_role"] = "list"
+	input["destination_expected_name"] = "Done"
+	input["approval_digest"] = strings.Repeat("d", 64)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("drag input rejected: %v", err)
+	}
+	input["action"].(map[string]any)["destination_ref"] = "semantic_ref_1"
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("drag input accepted identical source and destination references")
+	}
+}
+
+func TestBrowserCommandDescriptorsRejectDragInDryRunProfile(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = true
+	profile.AllowApprovedActions = false
+	profile.Actions = []string{"drag", "navigate"}
+	if _, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile}); err == nil {
+		t.Fatal("BrowserCommandDescriptors accepted approval-only drag in a dry-run profile")
+	}
+}
+
 func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	var result BrowserSessionResult
 	if err := json.Unmarshal([]byte(`{

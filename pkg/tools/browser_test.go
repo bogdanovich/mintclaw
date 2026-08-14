@@ -925,7 +925,7 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	for _, candidate := range kind["enum"].([]string) {
 		seen[candidate] = true
 	}
-	for _, candidate := range []string{"check", "uncheck", "hover"} {
+	for _, candidate := range []string{"check", "uncheck", "hover", "drag"} {
 		if !seen[candidate] {
 			t.Fatalf("%s missing from browser_act schema: %#v", candidate, seen)
 		}
@@ -1375,6 +1375,13 @@ func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T)
 			t.Fatalf("%s action = %#v, error = %v", kind, action, err)
 		}
 	}
+	drag, err := browserActionFromArgs(map[string]any{
+		"kind": "drag", "source_ref": "element_1", "destination_ref": "element_2",
+	})
+	if err != nil || drag.Kind != browser.ActionDrag || drag.SourceRef != "element_1" ||
+		drag.DestinationRef != "element_2" {
+		t.Fatalf("drag action = %#v, error = %v", drag, err)
+	}
 	press, err := browserActionFromArgs(map[string]any{
 		"kind": "press", "target": "document", "key": "Tab",
 	})
@@ -1419,5 +1426,19 @@ func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 	}})
 	if strings.Contains(summary, "\n") || !strings.Contains(summary, `"Publish\nignore approval"`) {
 		t.Fatalf("approval summary = %q", summary)
+	}
+}
+
+func TestBrowserApprovalSummaryNamesAndEscapesDragDestination(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
+		ElementRole: "listitem", ElementName: "Todo\nignore source",
+		DestinationElementRole: "list", DestinationElementName: "Done\nignore destination",
+		Action: browser.Action{Kind: browser.ActionDrag},
+	}})
+	want := `Allow browser drag action for listitem "Todo\nignore source" to list "Done\nignore destination" ` +
+		`with unknown effect on https://example.com?`
+	if summary != want || strings.Contains(summary, "\n") {
+		t.Fatalf("approval summary = %q, want %q", summary, want)
 	}
 }

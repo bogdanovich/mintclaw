@@ -136,6 +136,13 @@ func (host *fakeBrowserCommandHost) Hover(
 	return host.ordinaryAction(request)
 }
 
+func (host *fakeBrowserCommandHost) Drag(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
 func (host *fakeBrowserCommandHost) ordinaryAction(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
@@ -711,6 +718,39 @@ func TestRuntimeExecutesTypedCheckUncheckAndHover(t *testing.T) {
 				t.Fatalf("%s result = %s, %v; actions = %#v", test.kind, result, err, host.ordinaryActions)
 			}
 		})
+	}
+}
+
+func TestRuntimeExecutesApprovedTypedDrag(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].Actions = []string{"drag", "navigate"}
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_drag_1",
+		Action: nodes.BrowserAction{
+			Kind: "drag", SourceRef: "semantic_ref_1", DestinationRef: "semantic_ref_2",
+		},
+		Effect: "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "listitem", ExpectedName: "Todo",
+		DestinationExpectedRole: "list", DestinationExpectedName: "Done",
+	}
+	var err error
+	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+	result, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || len(host.ordinaryActions) != 1 || host.ordinaryActions[0] != input.Action {
+		t.Fatalf("drag result = %s, %v; actions = %#v", result, err, host.ordinaryActions)
 	}
 }
 

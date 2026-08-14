@@ -945,6 +945,49 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	}
 }
 
+type readyLocalBrowserFactory struct{}
+
+func (*readyLocalBrowserFactory) Open(
+	context.Context,
+	browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+}
+
+func (*readyLocalBrowserFactory) PassiveReadiness() browser.DriverReadiness {
+	return browser.DriverReadiness{
+		Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
+		Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+		Compatibility: browser.CompatibilityCompatible,
+	}
+}
+
+func TestGatewayLocalDiagnosticsHideDragFromDryRunAndMixedProfiles(t *testing.T) {
+	cfg, _, _ := browserNodeTestRuntime(t)
+	target := cfg.Tools.Browser.Targets["companion"]
+	target.Placement = config.BrowserPlacementGateway
+	target.NodeTarget = ""
+	target.Profiles["active"] = config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged,
+		NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: false, AllowApprovedActions: true,
+	}
+	cfg.Tools.Browser.Targets = map[string]config.BrowserTargetConfig{"gateway": target}
+	factory := &gatewayBrowserWorkerFactory{config: cfg, local: &readyLocalBrowserFactory{}}
+
+	dryRun, err := factory.PassiveTargetDiagnostics(t.Context(), "gateway", []string{"managed"})
+	if err != nil || slices.Contains(dryRun.Actions, browser.ActionDrag) {
+		t.Fatalf("dry-run diagnostics = %#v, %v", dryRun, err)
+	}
+	active, err := factory.PassiveTargetDiagnostics(t.Context(), "gateway", []string{"active"})
+	if err != nil || !slices.Contains(active.Actions, browser.ActionDrag) {
+		t.Fatalf("active diagnostics = %#v, %v", active, err)
+	}
+	mixed, err := factory.PassiveTargetDiagnostics(t.Context(), "gateway", []string{"active", "managed"})
+	if err != nil || slices.Contains(mixed.Actions, browser.ActionDrag) {
+		t.Fatalf("mixed diagnostics = %#v, %v", mixed, err)
+	}
+}
+
 func TestGatewayBrowserWorkerReadinessRejectsMismatchedCommandProfile(t *testing.T) {
 	cfg, runtime, _ := browserNodeTestRuntime(t)
 	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
