@@ -316,6 +316,28 @@ func (p *Projector) ToolCompleted(
 	})
 }
 
+// ToolSuspended records that durable continuation ownership moved outside the
+// running turn. The tool has not succeeded or failed and may be resumed after
+// the pending human interaction is resolved.
+func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Duration) Delta {
+	return p.mutate(DeltaToolSuspended, func(state *ThreadSnapshot, delta *Delta) {
+		turnID = normalizeTurnID(turnID)
+		tool := toolByID(state.Tools, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
+		}
+		if tool.Name == "" {
+			tool.Name = name
+		}
+		tool.Status = ToolSuspended
+		tool.Duration = duration
+		p.upsertTool(state, delta, tool)
+		delta.Tool = &tool
+		delta.TurnID = tool.TurnID
+		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+	})
+}
+
 func (p *Projector) ContextUsage(used, limit int) Delta {
 	return p.mutate(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
 		state.ContextUsage = ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}

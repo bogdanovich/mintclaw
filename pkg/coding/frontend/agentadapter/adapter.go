@@ -117,6 +117,10 @@ func (a *Adapter) project(event runtimeevents.Event) {
 	case runtimeevents.KindAgentToolExecEnd:
 		payload, ok := event.Payload.(agent.ToolExecEndPayload)
 		if ok {
+			if payload.Suspended {
+				a.projector.ToolSuspended(turnID, payload.ToolCallID, payload.Tool, payload.Duration)
+				break
+			}
 			result := fmt.Sprintf(
 				"result available (%d bytes for model, %d bytes for user)",
 				payload.ForLLMLen,

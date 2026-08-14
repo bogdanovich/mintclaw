@@ -75,6 +75,7 @@ type ToolStatus string
 
 const (
 	ToolRunning     ToolStatus = "running"
+	ToolSuspended   ToolStatus = "suspended"
 	ToolSucceeded   ToolStatus = "succeeded"
 	ToolFailed      ToolStatus = "failed"
 	ToolInterrupted ToolStatus = "interrupted"
@@ -126,6 +127,7 @@ const (
 	DeltaNotice             DeltaKind = "notice_updated"
 	DeltaToolStarted        DeltaKind = "tool_started"
 	DeltaToolOutput         DeltaKind = "tool_output"
+	DeltaToolSuspended      DeltaKind = "tool_suspended"
 	DeltaToolCompleted      DeltaKind = "tool_completed"
 	DeltaContextUsage       DeltaKind = "context_usage_updated"
 	DeltaWorkspaceUpdated   DeltaKind = "workspace_updated"

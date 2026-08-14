@@ -2,6 +2,7 @@ package agentadapter
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -330,6 +331,69 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	}
 	if got := reducer.State(); len(got.Tools) != 1 || got.Tools[0].Status != frontend.ToolInterrupted {
 		t.Fatalf("resynchronized interrupted tools = %+v", got.Tools)
+	}
+}
+
+func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := frontend.NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	for _, event := range []runtimeevents.Event{
+		{
+			Kind: runtimeevents.KindAgentToolExecStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ToolExecStartPayload{ToolCallID: "call-1", Tool: "request_human_input"},
+		},
+		{
+			Kind: runtimeevents.KindAgentToolExecEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ToolExecEndPayload{
+				ToolCallID: "call-1", Tool: "request_human_input", Duration: time.Second, Suspended: true,
+			},
+		},
+		{
+			Kind: runtimeevents.KindAgentTurnEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.TurnEndPayload{Status: agent.TurnEndStatusSuspended},
+		},
+	} {
+		wrapped.PublishNonBlocking(event)
+	}
+	deltas, err := projector.ChangesSince(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaToolSuspended {
+		t.Fatalf("suspension deltas = %+v", deltas)
+	}
+	for _, delta := range deltas {
+		if err = reducer.Apply(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolSuspended ||
+		snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "waiting for input" {
+		t.Fatalf("suspended snapshot = %+v", snapshot)
+	}
+	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {
+		t.Fatalf("reduced state = %+v, want %+v", got, snapshot)
 	}
 }
 
