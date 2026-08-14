@@ -146,6 +146,47 @@ func TestDiagnosticToolCallsFailClosedForSerializedArguments(t *testing.T) {
 	}
 }
 
+func TestDiagnosticBrowserFillArgumentsAreAlwaysRedacted(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	secret := "browser-fill-diagnostic-canary"
+	calls := []providers.ToolCall{{
+		ID: "call-fill", Name: "browser_act",
+		Arguments: map[string]any{
+			"action": map[string]any{"kind": "fill", "ref": "ref_1", "value": secret},
+		},
+	}}
+	if !diagnosticToolCallsContainSensitiveEvidence(calls) {
+		t.Fatal("browser fill was not classified as sensitive")
+	}
+	got := diagnosticToolCallsPreviewWithSensitivity(cfg, calls, true)
+	if strings.Contains(got, secret) || !strings.Contains(got, "arguments_redacted") {
+		t.Fatalf("browser fill diagnostic preview = %q", got)
+	}
+}
+
+func TestDiagnosticBrowserMalformedOrConflictingArgumentsAreRedacted(t *testing.T) {
+	tests := []providers.ToolCall{
+		{
+			ID: "call-malformed", Name: "browser_act",
+			Arguments: map[string]any{"action": map[string]any{"ref": "ref_1", "value": "canary"}},
+		},
+		{
+			ID: "call-conflict", Name: "browser_act",
+			Arguments: map[string]any{"action": map[string]any{"kind": "navigate", "url": "https://example.com"}},
+			Function: &providers.FunctionCall{
+				Name: "browser_act", Arguments: `{"action":{"kind":"fill","ref":"ref_1","value":"canary"}}`,
+			},
+		},
+	}
+	for _, call := range tests {
+		if !diagnosticBrowserFillCall(call) {
+			t.Fatalf("malformed browser call was not classified sensitive: %#v", call)
+		}
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

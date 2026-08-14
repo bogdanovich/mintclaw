@@ -209,6 +209,65 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 }
 
+func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *testing.T) {
+	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+		frameID: "frame-1", loaderID: "loader-1", generation: 7,
+	}, DriverAction{
+		Kind: DriverFill, Target: "e5", Element: "Display name", Value: "fill-canary",
+	}, config.BrowserLimitsConfig{}.Effective(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
+		`args.policy.sensitive.some(term => matchesTerm(identity, term))`, `element.matches(":disabled")`,
+		`element.getAttribute("aria-labelledby")`, `candidate.id`, `compatibleRole`, `ariaEnabled`, `ariaWritable`,
+		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
+		`probe.type = "number"`, `getter.call(probe) !== args.value`, `setter.call(element, priorValue)`,
+		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
+		`return "denied"`, `return "MINTCLAW_NAV_ACT_V1|" + fillOutcome`,
+	} {
+		if !strings.Contains(code, required) {
+			t.Fatalf("protected fill code omitted %q: %s", required, code)
+		}
+	}
+	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!classify())`) != 2 ||
+		strings.Index(code, `args.policy.sensitive.some(term => matchesTerm(identity, term))`) >
+			strings.Index(code, `setter.call(element, args.value)`) {
+		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
+	}
+	if err = parsePlaywrightNavigationDispatch(
+		"### Result\n\"MINTCLAW_NAV_ACT_V1|denied\"",
+	); !errors.Is(err, ErrDenied) {
+		t.Fatalf("denied protected fill result = %v", err)
+	}
+}
+
+func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|denied\""),
+	}}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+		navigationID: identity, navigationToken: identity.token(), sensitiveFields: []string{"display name"},
+	}
+	if err := worker.AuthorizeFill(t.Context(), identity.token(), "e5"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("AuthorizeFill() error = %v, want denied", err)
+	}
+	if worker.lost {
+		t.Fatal("definite private classifier denial retired worker")
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("AuthorizeFill() calls = %#v", client.calls)
+	}
+	code, ok := client.calls[0].arguments["code"].(string)
+	if !ok || strings.Contains(code, "fill-canary") || strings.Contains(code, ".fill(") ||
+		!strings.Contains(code, `"display name"`) {
+		t.Fatalf("private classifier code = %q", code)
+	}
+}
+
 func TestPlaywrightWorkerDoesNotAttributeAmbientProxyDenialToSnapshot(t *testing.T) {
 	proxy := &browserNetworkProxy{}
 	client := &fakePlaywrightClient{
@@ -1651,6 +1710,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		_, _ = fmt.Fprintf(writer, `<!doctype html><title>MintClaw Fixture</title>
 <form onsubmit="event.preventDefault(); document.querySelector('output').textContent='Saved '+document.querySelector('input').value">
 <label>Name <input aria-label="Name"></label>
+<label>Race name <input id="race-name" aria-label="Race name"></label>
 <label>State <select aria-label="State"><option value="CA">California</option><option value="NY">New York</option></select></label>
 <button type="submit">Save</button><button type="button" onclick="prompt('Type DELETE'); alert('Saved')">Prompt</button>
 </form><output></output><a href="/download">Download fixture</a>
@@ -1805,7 +1865,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		t.Fatalf("first Observe() error = %v", err)
 	}
 	textbox := mustSnapshotRef(t, observation.Snapshot, `textbox "Name" \[ref=(e[0-9]+)\]`)
-	if err = worker.Execute(ctx, DriverAction{
+	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverFill, Target: textbox, Element: "Name", Value: "Ada",
 	}); err != nil {
 		t.Fatalf("fill error = %v", err)
@@ -1813,6 +1873,224 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	observation, err = worker.Observe(ctx)
 	if err != nil || !strings.Contains(observation.Snapshot, "Ada") {
 		t.Fatalf("Observe() after fill = %+v, %v", observation, err)
+	}
+	raceTextbox := mustSnapshotRef(t, observation.Snapshot, `textbox "Race name" \[ref=(e[0-9]+)\]`)
+	raceSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			globalThis.__mintclawAtomicFill = { armed: false, inputType: "", mutated: false };
+			const nativeGetAttribute = element.getAttribute.bind(element);
+			element.getAttribute = function(name) {
+				const result = nativeGetAttribute(name);
+				if (!globalThis.__mintclawAtomicFill.armed) {
+					globalThis.__mintclawAtomicFill.armed = true;
+					queueMicrotask(() => {
+						element.type = "password";
+						globalThis.__mintclawAtomicFill.mutated = true;
+					});
+				}
+				return result;
+			};
+			element.addEventListener("input", () => {
+				globalThis.__mintclawAtomicFill.inputType = element.type;
+			}, { once: true });
+			return "armed";
+		})`,
+	})
+	if err != nil || raceSetup == nil || raceSetup.IsError {
+		t.Fatalf("atomic fill race setup = %#v, %v", raceSetup, err)
+	}
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "race-fill-canary",
+	}); err != nil {
+		t.Fatalf("atomic fill race = %v", err)
+	}
+	raceProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			const state = globalThis.__mintclawAtomicFill;
+			return "MINTCLAW_ATOMIC_FILL_V1|" + state.inputType + "|" +
+				String(state.mutated) + "|" + element.type + "|" + String(element.value === "race-fill-canary");
+		})`,
+	})
+	if err != nil || raceProbe == nil || raceProbe.IsError {
+		t.Fatalf("atomic fill race probe = %#v, %v", raceProbe, err)
+	}
+	raceText, err := boundedPlaywrightText(raceProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(raceText, "MINTCLAW_ATOMIC_FILL_V1|text|true|password|true") {
+		t.Fatalf("atomic fill race result = %q, %v", raceText, err)
+	}
+	focusSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			element.blur();
+			element.getAttribute = Element.prototype.getAttribute;
+			element.type = "text";
+			element.value = "";
+			element.onfocus = () => { element.type = "password"; };
+			return "armed";
+		})`,
+	})
+	if err != nil || focusSetup == nil || focusSetup.IsError {
+		t.Fatalf("focus mutation setup = %#v, %v", focusSetup, err)
+	}
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "focus-fill-canary",
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("focus mutation fill error = %v, want ErrDenied", err)
+	}
+	focusProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			return "MINTCLAW_FOCUS_DENIAL_V1|" + element.type + "|" + String(element.value === "");
+		})`,
+	})
+	if err != nil || focusProbe == nil || focusProbe.IsError {
+		t.Fatalf("focus mutation denial probe = %#v, %v", focusProbe, err)
+	}
+	focusText, err := boundedPlaywrightText(focusProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(focusText, "MINTCLAW_FOCUS_DENIAL_V1|password|true") {
+		t.Fatalf("focus mutation denial result = %q, %v", focusText, err)
+	}
+	accessibilityCases := []struct {
+		name     string
+		mutation string
+		want     string
+		value    string
+	}{
+		{
+			name: "labelledby_password",
+			mutation: `const label = document.createElement("span");
+			label.id = "focus-sensitive-label";
+			label.textContent = "Password";
+			document.body.append(label);
+			element.onfocus = () => { element.setAttribute("aria-labelledby", label.id); };`,
+			want:  "text|keep||false|false|focus-sensitive-label|keep",
+			value: "labelledby-fill-canary",
+		},
+		{
+			name:     "incompatible_role",
+			mutation: `element.onfocus = () => { element.setAttribute("role", "button"); };`,
+			want:     "text|keep|button|false|false||keep",
+			value:    "role-fill-canary",
+		},
+		{
+			name:     "aria_disabled",
+			mutation: `element.onfocus = () => { element.setAttribute("aria-disabled", "true"); };`,
+			want:     "text|keep||true|false||keep",
+			value:    "aria-disabled-fill-canary",
+		},
+		{
+			name:     "aria_readonly",
+			mutation: `element.onfocus = () => { element.setAttribute("aria-readonly", "true"); };`,
+			want:     "text|keep||false|true||keep",
+			value:    "aria-readonly-fill-canary",
+		},
+		{
+			name: "number_rejects_nonnumeric",
+			mutation: `element.value = "7";
+			element.onfocus = () => { element.type = "number"; };`,
+			want:  "number|7||false|false||7",
+			value: "not-a-number",
+		},
+	}
+	for _, testCase := range accessibilityCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupCode := `async (page) => page.evaluate(() => {
+				const element = document.querySelector("#race-name");
+				element.blur();
+				element.onfocus = null;
+				element.type = "text";
+				element.value = "keep";
+				element.removeAttribute("role");
+				element.removeAttribute("aria-disabled");
+				element.removeAttribute("aria-readonly");
+				element.removeAttribute("aria-labelledby");
+				document.querySelector("#focus-sensitive-label")?.remove();
+				` + testCase.mutation + `
+				return "armed";
+			})`
+			setup, setupErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+				"code": setupCode,
+			})
+			if setupErr != nil || setup == nil || setup.IsError {
+				t.Fatalf("setup = %#v, %v", setup, setupErr)
+			}
+			freshObservation, observeErr := worker.Observe(ctx)
+			if observeErr != nil {
+				t.Fatalf("Observe() after setup = %v", observeErr)
+			}
+			freshRef := mustSnapshotRef(t, freshObservation.Snapshot, `textbox "Race name" \[ref=(e[0-9]+)\]`)
+			fillErr := executeAtCurrentNavigation(DriverAction{
+				Kind: DriverFill, Target: freshRef, Element: "Race name", Value: testCase.value,
+			})
+			if !errors.Is(fillErr, ErrDenied) {
+				t.Fatalf("fill error = %v, want ErrDenied", fillErr)
+			}
+			probe, probeErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+				"code": `async (page) => page.evaluate(() => {
+					const element = document.querySelector("#race-name");
+					return "MINTCLAW_ACCESSIBILITY_DENIAL_V1|" + element.type + "|" + element.value + "|" +
+						String(element.getAttribute("role") || "") + "|" +
+						String(element.getAttribute("aria-disabled") || "false") + "|" +
+						String(element.getAttribute("aria-readonly") || "false") + "|" +
+						String(element.getAttribute("aria-labelledby") || "") + "|" + element.value;
+				})`,
+			})
+			if probeErr != nil || probe == nil || probe.IsError {
+				t.Fatalf("probe = %#v, %v", probe, probeErr)
+			}
+			probeText, boundedErr := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+			if boundedErr != nil || !strings.Contains(
+				probeText, "MINTCLAW_ACCESSIBILITY_DENIAL_V1|"+testCase.want,
+			) {
+				t.Fatalf("denial result = %q, %v", probeText, boundedErr)
+			}
+		})
+	}
+	disabledSetup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			element.blur();
+			element.onfocus = null;
+			element.type = "text";
+			element.value = "";
+			const label = element.closest("label");
+			const fieldset = document.createElement("fieldset");
+			fieldset.disabled = true;
+			label.parentNode.insertBefore(fieldset, label);
+			fieldset.append(label);
+			return String(element.disabled) + "|" + String(element.matches(":disabled"));
+		})`,
+	})
+	if err != nil || disabledSetup == nil || disabledSetup.IsError {
+		t.Fatalf("disabled fieldset setup = %#v, %v", disabledSetup, err)
+	}
+	disabledObservation, err := worker.Observe(ctx)
+	if err != nil {
+		t.Fatalf("Observe() after disabled fieldset setup = %v", err)
+	}
+	disabledRef := mustSnapshotRef(
+		t, disabledObservation.Snapshot, `textbox "Race name" \[disabled\] \[ref=(e[0-9]+)\]`,
+	)
+	if err = executeAtCurrentNavigation(DriverAction{
+		Kind: DriverFill, Target: disabledRef, Element: "Race name", Value: "disabled-fill-canary",
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("disabled fieldset fill error = %v, want ErrDenied", err)
+	}
+	denialProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.evaluate(() => {
+			const element = document.querySelector("#race-name");
+			return "MINTCLAW_FILL_DENIAL_V1|" + String(element.disabled) + "|" +
+				String(element.matches(":disabled")) + "|" + String(element.value === "");
+		})`,
+	})
+	if err != nil || denialProbe == nil || denialProbe.IsError {
+		t.Fatalf("protected fill denial probe = %#v, %v", denialProbe, err)
+	}
+	denialText, err := boundedPlaywrightText(denialProbe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(denialText, "MINTCLAW_FILL_DENIAL_V1|false|true|true") {
+		t.Fatalf("protected fill denial result = %q, %v", denialText, err)
 	}
 	state := mustSnapshotRef(t, observation.Snapshot, `combobox "State" \[ref=(e[0-9]+)\]`)
 	if err = executeAtCurrentNavigation(DriverAction{

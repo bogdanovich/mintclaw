@@ -435,6 +435,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "navigate")
 	case browser.ActionClick:
 		return slices.Contains(worker.actions, "click")
+	case browser.ActionFill:
+		return slices.Contains(worker.actions, "fill")
 	case browser.ActionSelect:
 		return slices.Contains(worker.actions, "select")
 	case browser.ActionPress:
@@ -473,6 +475,10 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			Kind: "select", Ref: request.DriverAction.Target,
 		}
 		effect = "local_edit"
+	case request.Prepared.Action.Kind == browser.ActionFill &&
+		request.DriverAction.Kind == browser.DriverFill && slices.Contains(worker.actions, "fill"):
+		action = nodes.BrowserAction{Kind: "fill", Ref: request.DriverAction.Target}
+		effect = "local_edit"
 	case request.Prepared.Action.Kind == browser.ActionPress &&
 		request.DriverAction.Kind == browser.DriverPress && slices.Contains(worker.actions, "press"):
 		action = nodes.BrowserAction{
@@ -497,12 +503,12 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
 	}
-	if action.Kind == "click" || action.Kind == "select" {
+	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}
 	var ephemeralInput json.RawMessage
-	if action.Kind == "select" {
+	if action.Kind == "fill" || action.Kind == "select" {
 		input.InputDigest = nodes.BrowserInputDigest(request.DriverAction.Value)
 		input.InputBytes = len(request.DriverAction.Value)
 		ephemeralInput, err = json.Marshal(struct {
@@ -704,11 +710,17 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		if err == nil {
 			return json.Unmarshal(raw, output)
 		}
+		if browserInvocationDispatchDenied(err) {
+			return browser.ErrDenied
+		}
 		if !dispatched {
 			raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
 				gatewayRecord.ExpectedPlanHash, ephemeralInput)
 			if err == nil {
 				return json.Unmarshal(raw, output)
+			}
+			if browserInvocationDispatchDenied(err) {
+				return browser.ErrDenied
 			}
 			if !dispatched {
 				return browser.ErrWorkerUnavailable
@@ -760,6 +772,9 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationSucceeded:
 				return json.Unmarshal(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				if remote.Failure != nil && remote.Failure.Code == nodes.InvocationDispatchCommandDenied {
+					return browser.ErrDenied
+				}
 				if remote.Failure != nil && remote.Failure.Code == "SESSION_LOST" {
 					return browser.ErrWorkerLost
 				}
@@ -799,6 +814,11 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 		}
 	}
 	return browser.ErrWorkerUnavailable
+}
+
+func browserInvocationDispatchDenied(err error) bool {
+	code, classified := nodes.InvocationDispatchErrorCode(err)
+	return classified && code == nodes.InvocationDispatchCommandDenied
 }
 
 func (worker *nodeBrowserWorker) validateAuthority(

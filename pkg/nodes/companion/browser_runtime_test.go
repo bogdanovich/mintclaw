@@ -17,6 +17,7 @@ type fakeBrowserCommandHost struct {
 	observed       int
 	navigated      int
 	clicked        int
+	filled         int
 	selected       int
 	pressed        int
 	scrolled       int
@@ -114,6 +115,17 @@ func (host *fakeBrowserCommandHost) Select(
 		result.Snapshot = host.selectSnapshot
 	}
 	return result, host.navigateError
+}
+
+func (host *fakeBrowserCommandHost) Fill(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.filled++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return browserRuntimeObservation(
+		request.SessionID, request.TabID, request.SnapshotGeneration+1,
+	), host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Press(
@@ -478,6 +490,74 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	}
 	if deniedHost.pressed != 0 {
 		t.Fatalf("denied press reached host: %d", deniedHost.pressed)
+	}
+}
+
+func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	host.profiles[0].Actions = []string{"fill", "navigate"}
+	runtime := newBrowserRuntimeFixture(t, host)
+	secret := "fill-canary-value"
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_fill_1",
+		Action:             nodes.BrowserAction{Kind: "fill", Ref: "host_ref_1"},
+		Effect:             "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+		InputDigest: nodes.BrowserInputDigest(secret), InputBytes: len(secret),
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+	if bytes.Contains(plan.Input, []byte(secret)) {
+		t.Fatalf("durable fill plan exposed input: %s", plan.Input)
+	}
+	result, err := runtime.InvokeWithEphemeral(
+		t.Context(), plan, json.RawMessage(`{"value":"`+secret+`"}`),
+	)
+	if err != nil || host.filled != 1 {
+		t.Fatalf("protected fill = %s, %v; calls = %d", result, err, host.filled)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || bytes.Contains(plan.Input, []byte(secret)) || bytes.Contains(record.Result, []byte(secret)) {
+		t.Fatalf("durable fill record exposed input: %#v", record)
+	}
+
+	for _, test := range []struct {
+		name      string
+		input     nodes.BrowserActInput
+		ephemeral json.RawMessage
+	}{
+		{name: "missing", input: input},
+		{name: "digest mismatch", input: input, ephemeral: json.RawMessage(`{"value":"different"}`)},
+		{name: "sensitive field", input: func() nodes.BrowserActInput {
+			candidate := input
+			candidate.ExpectedName = "Password"
+			return candidate
+		}(), ephemeral: json.RawMessage(`{"value":"` + secret + `"}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := test.input
+			candidate.ActionInvocationID = "browser_fill_denied_" + strings.ReplaceAll(test.name, " ", "_")
+			candidateRaw, marshalErr := json.Marshal(candidate)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			candidatePlan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, candidateRaw)
+			if _, invokeErr := runtime.InvokeWithEphemeral(
+				t.Context(), candidatePlan, test.ephemeral,
+			); invokeErr == nil {
+				t.Fatal("invalid protected fill was accepted")
+			}
+		})
+	}
+	if host.filled != 1 {
+		t.Fatalf("denied fills reached host: %d", host.filled)
 	}
 }
 

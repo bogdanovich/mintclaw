@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -519,6 +520,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			return LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}, nil
 		}
 	}
+	for _, call := range llm.response.ToolCalls {
+		if err := validateProtectedBrowserCallRepresentations(call); err != nil {
+			return LLMCallOutcome{}, fmt.Errorf("validate protected browser tool call: %w", err)
+		}
+	}
 
 	// Save finishReason and usage on the active turn state. Use ts directly
 	// (the authoritative turn state for this call) rather than relying on a
@@ -677,21 +683,55 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			"iteration": iteration,
 		})
 
+	type durableToolProjection struct {
+		call      providers.ToolCall
+		arguments map[string]any
+		protected bool
+	}
+	projections := make([]durableToolProjection, 0, len(llm.normalizedToolCalls))
+	protectedBatch := false
+	for _, tc := range llm.normalizedToolCalls {
+		durableArguments, protected, durableErr := ts.agent.Tools.DurableArguments(tc.Name, tc.Arguments)
+		if durableErr != nil {
+			return LLMCallOutcome{}, fmt.Errorf("project assistant tool-call intent: %w", durableErr)
+		}
+		protectedBatch = protectedBatch || protected
+		projections = append(projections, durableToolProjection{
+			call: tc, arguments: durableArguments, protected: protected,
+		})
+	}
+	if protectedBatch && len(projections) != 1 {
+		return LLMCallOutcome{}, errors.New("protected tool call must be the only call in its batch")
+	}
+
 	llm.toolResponseDisposition = toolResponseHandled
+	content, durableReasoning := llm.response.Content, reasoningContent
+	if protectedBatch {
+		content = ""
+		durableReasoning = ""
+	}
 	assistantMsg := providers.Message{
 		Role:             "assistant",
-		Content:          llm.response.Content,
+		Content:          content,
 		ModelName:        exec.model.llmModelName,
-		ReasoningContent: reasoningContent,
+		ReasoningContent: durableReasoning,
 	}
-	for _, tc := range llm.normalizedToolCalls {
-		argumentsJSON, _ := json.Marshal(tc.Arguments)
+	for _, projection := range projections {
+		tc := projection.call
+		argumentsJSON, marshalErr := json.Marshal(projection.arguments)
+		if marshalErr != nil {
+			return LLMCallOutcome{}, fmt.Errorf("encode assistant tool-call intent: %w", marshalErr)
+		}
 		toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
 			llm.response,
 			tc,
 			exec.messages,
 		)
-		extraContent := tc.ExtraContent
+		extraContent := cloneDurableToolExtraContent(tc.ExtraContent)
+		if projection.protected {
+			toolFeedbackExplanation = ""
+			extraContent = nil
+		}
 		if strings.TrimSpace(toolFeedbackExplanation) != "" {
 			if extraContent == nil {
 				extraContent = &providers.ExtraContent{}
@@ -699,7 +739,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			extraContent.ToolFeedbackExplanation = toolFeedbackExplanation
 		}
 		thoughtSignature := ""
-		if tc.Function != nil {
+		if tc.Function != nil && !projection.protected {
 			thoughtSignature = tc.Function.ThoughtSignature
 		}
 		assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
@@ -728,7 +768,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)
 	}
 	if shouldPublishMintClawToolCallInterim && (ts.opts.NoHistory || llm.assistantToolCallsPersisted) {
-		interimContent := llm.response.Content
+		interimContent := assistantMsg.Content
 		if p.shouldPublishToolFeedback(ts) {
 			interimContent = ""
 		}
@@ -736,13 +776,50 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			turnCtx,
 			ts,
 			exec.model.llmModelName,
-			reasoningContent,
+			assistantMsg.ReasoningContent,
 			interimContent,
 			assistantMsg.ToolCalls,
 		)
 	}
 
 	return LLMCallOutcome{Control: ControlToolLoop}, nil
+}
+
+func validateProtectedBrowserCallRepresentations(call providers.ToolCall) error {
+	functionName, serialized := "", ""
+	if call.Function != nil {
+		functionName = call.Function.Name
+		serialized = call.Function.Arguments
+	}
+	if call.Name != "browser_act" && functionName != "browser_act" {
+		return nil
+	}
+	if call.Name != "" && functionName != "" && call.Name != functionName {
+		return errors.New("conflicting browser tool names")
+	}
+	if serialized == "" {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(serialized), &decoded); err != nil || decoded == nil {
+		return errors.New("malformed serialized browser arguments")
+	}
+	if len(call.Arguments) > 0 && !reflect.DeepEqual(call.Arguments, decoded) {
+		return errors.New("conflicting browser argument representations")
+	}
+	return nil
+}
+
+func cloneDurableToolExtraContent(extra *providers.ExtraContent) *providers.ExtraContent {
+	if extra == nil {
+		return nil
+	}
+	cloned := *extra
+	if extra.Google != nil {
+		google := *extra.Google
+		cloned.Google = &google
+	}
+	return &cloned
 }
 
 func validateDurableToolCallIDs(calls []providers.ToolCall) error {

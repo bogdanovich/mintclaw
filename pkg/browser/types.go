@@ -619,6 +619,10 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		if prepared.Action.Kind == ActionSelect && prepared.ElementRole != "combobox" {
 			return fmt.Errorf("%w: malformed prepared selection", ErrInvalid)
 		}
+		if prepared.Action.Kind == ActionFill &&
+			!ordinaryFillElement(prepared.ElementRole, prepared.ElementName) {
+			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
+		}
 	case ActionClick:
 		if prepared.DestinationOrigin != "" || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
 			prepared.Effect != classifyClickEffect(DriverElement{Role: prepared.ElementRole}) ||

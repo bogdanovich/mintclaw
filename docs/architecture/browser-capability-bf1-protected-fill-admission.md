@@ -119,6 +119,14 @@ closed. Denial happens before action acceptance and before the private driver
 receives the value. The safe error identifies only the bounded policy class,
 not the value, selector, page markup, or protected attribute.
 
+Operators may add up to 64 private identity fragments through the selected
+profile's `sensitive_fields` array. Terms are Unicode-valid strings of at most
+128 bytes, normalized for case and whitespace, and rejected when empty or
+duplicated after normalization. They participate in the browser policy
+revision and are evaluated independently by the gateway broker and the host's
+private DOM classifier. Companion-local terms are not projected into node
+capability descriptors or model-visible tool results.
+
 No credential alias, password manager, payment vault, cookie, storage-state
 import, or origin-bound secret injection is admitted here. Such behavior
 requires a separately reviewed credential policy and must not be simulated by

@@ -18,6 +18,7 @@ type BrowserCommandHost interface {
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Navigate(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Click(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Fill(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Select(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Press(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
@@ -213,11 +214,15 @@ func (handler *browserCommandHandler) executeAct(
 	}
 	input.Action.Value = value
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
-		input.Action.Kind != "select" && input.Action.Kind != "press") ||
+		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
 			(input.Effect != "local_edit" || input.ExpectedRole != "combobox" ||
+				input.ApprovalDigest != "")) ||
+		(input.Action.Kind == "fill" &&
+			(input.Effect != "local_edit" ||
+				!nodes.BrowserFillFieldAllowed(input.ExpectedRole, input.ExpectedName) ||
 				input.ApprovalDigest != "")) ||
 		(input.Action.Kind == "press" &&
 			(input.Effect != "unknown" || input.Action.Target != "document" ||
@@ -225,7 +230,8 @@ func (handler *browserCommandHandler) executeAct(
 		(input.Action.Kind == "click" &&
 			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
 				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
-		(input.Action.Kind != "click" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
+		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
+			input.Action.Kind != "press" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -249,6 +255,8 @@ func (handler *browserCommandHandler) executeAct(
 		observation, err = handler.host.Scroll(ctx, request)
 	case "click":
 		observation, err = handler.host.Click(ctx, request)
+	case "fill":
+		observation, err = handler.host.Fill(ctx, request)
 	case "select":
 		observation, err = handler.host.Select(ctx, request)
 	case "press":
@@ -273,7 +281,7 @@ func browserEphemeralActionValue(
 	input nodes.BrowserActInput,
 	ephemeralInput json.RawMessage,
 ) (string, error) {
-	if input.Action.Kind != "select" {
+	if input.Action.Kind != "select" && input.Action.Kind != "fill" {
 		if len(ephemeralInput) != 0 || input.InputDigest != "" || input.InputBytes != 0 {
 			return "", nodes.ErrCommandDenied
 		}

@@ -80,6 +80,14 @@ type NavigationCheckedActionWorker interface {
 	ExecuteAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
+// ProtectedFillWorker performs a value-free private DOM classification before
+// the durable action-acceptance boundary. ExecuteAfterNavigationCheck retains
+// the same classification as a final atomic recheck immediately before fill.
+type ProtectedFillWorker interface {
+	NavigationCheckedActionWorker
+	AuthorizeFill(context.Context, string, string) error
+}
+
 // PreparedActionWorker receives the gateway-owned durable authority for one
 // accepted action and must revalidate live driver state before dispatch.
 // Remote workers use it to bind a typed node invocation; local driver workers
@@ -1357,6 +1365,16 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
+		if executionContextErr == nil && errors.Is(executeErr, ErrDenied) {
+			failed, failErr := broker.completeInvocationLocked(
+				completionCtx,
+				invocation,
+				InvocationFailed,
+				nil,
+				"policy_denied",
+			)
+			return failed, errors.Join(ErrDenied, failErr)
+		}
 		if executionContextErr == nil && errors.Is(executeErr, ErrContextAuthorityStale) {
 			failed, failErr := broker.completeInvocationLocked(
 				completionCtx,
@@ -1521,6 +1539,7 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 		for profileName, profile := range target.Profiles {
 			clonedProfile := profile
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+			clonedProfile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 			clonedTarget.Profiles[profileName] = clonedProfile
 		}
 		cloned.Targets[targetName] = clonedTarget

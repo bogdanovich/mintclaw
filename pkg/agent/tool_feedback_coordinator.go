@@ -74,6 +74,9 @@ func (tf *toolFeedbackPublisher) publishToolFeedbackForCall(
 		toolCall,
 		messages,
 	)
+	if toolName == "browser_act" && toolArgs["action_kind"] == "fill" && toolArgs["redacted"] == true {
+		toolFeedbackExplanation = ""
+	}
 	toolArgsPreview := toolFeedbackArgsPreview(toolArgs, toolFeedbackMaxLen)
 	toolFeedbackStyle := tf.toolFeedbackStyle()
 	feedbackMsg := utils.FormatToolFeedbackMessageWithStyle(

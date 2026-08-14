@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,35 @@ import (
 
 type pipelineLoopGuardTool struct {
 	executions int
+}
+
+type protectedLoopGuardTool struct {
+	values []string
+}
+
+func (*protectedLoopGuardTool) Name() string        { return "protected_loop_test" }
+func (*protectedLoopGuardTool) Description() string { return "protected loop projection test" }
+func (*protectedLoopGuardTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+		"required": []string{"value"}, "additionalProperties": false,
+	}
+}
+
+func (*protectedLoopGuardTool) DurableArguments(map[string]any) (map[string]any, error) {
+	return map[string]any{"value": "*"}, nil
+}
+
+func (*protectedLoopGuardTool) ProtectedDurableArguments(map[string]any) bool { return true }
+
+func (*protectedLoopGuardTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsReadOnlyIdempotent
+}
+
+func (tool *protectedLoopGuardTool) Execute(_ context.Context, arguments map[string]any) *toolshared.ToolResult {
+	value, _ := arguments["value"].(string)
+	tool.values = append(tool.values, value)
+	return toolshared.ErrorResult("stable protected failure")
 }
 
 type toolResultFailingJournal struct {
@@ -1457,6 +1488,71 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "same") || strings.Contains(string(encoded), "stable pipeline failure") {
 		t.Fatalf("decision events exposed arguments/results: %s", encoded)
+	}
+}
+
+func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	tool := &protectedLoopGuardTool{}
+	registry.Register(tool)
+	guardConfig := loopguard.DefaultConfig()
+	guardConfig.HardStopsEnabled = true
+	guardConfig.ExactFailureWarn = 1
+	guardConfig.ExactFailureBlock = 2
+	guardConfig.SameToolFailureHalt = 99
+	agent := &AgentInstance{
+		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""), ToolLoopDetection: guardConfig,
+	}
+	ts := &turnState{
+		agent: agent, agentID: "main", turnID: "turn-protected-loop",
+		sessionKey: "session-protected-loop", opts: processOptions{NoHistory: true},
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	emitter := &captureRuntimeEmitter{}
+	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+	canaries := []string{"protected-loop-alpha", "protected-loop-beta", "protected-loop-gamma"}
+
+	for index, canary := range canaries {
+		llm.iteration = index + 1
+		llm.normalizedToolCalls = []providers.ToolCall{{
+			ID: fmt.Sprintf("protected-call-%d", index), Name: tool.Name(),
+			Arguments: map[string]any{"value": canary},
+		}}
+		llm.toolResponseDisposition = toolResponseHandled
+		if outcome := pipeline.ExecuteTools(
+			t.Context(),
+			t.Context(),
+			ts,
+			exec,
+			llm,
+		); outcome.Control != ToolControlContinue {
+			t.Fatalf("iteration %d outcome = %+v", index, outcome)
+		}
+	}
+	if !slices.Equal(tool.values, canaries[:2]) {
+		t.Fatalf("execution values = %#v, want originals %#v before block", tool.values, canaries[:2])
+	}
+	decisions := make([]ToolLoopDecisionPayload, 0)
+	for _, event := range emitter.events {
+		if event.kind == runtimeevents.KindAgentToolLoopDecision {
+			decisions = append(decisions, event.payload.(ToolLoopDecisionPayload))
+		}
+	}
+	retained, err := json.Marshal(struct {
+		Messages  []providers.Message
+		Decisions []ToolLoopDecisionPayload
+	}{exec.messages, decisions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, canary := range canaries {
+		if bytes.Contains(retained, []byte(canary)) {
+			t.Fatalf("loop state retained protected argument %q: %s", canary, retained)
+		}
+	}
+	if !strings.Contains(string(retained), "repeated_exact_failure_block") {
+		t.Fatalf("projected repeated failure did not block: %s", retained)
 	}
 }
 

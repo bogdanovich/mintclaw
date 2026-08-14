@@ -24,6 +24,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -611,6 +612,7 @@ func (factory *PlaywrightWorkerFactory) Open(
 		client: client, networkProxy: networkProxy,
 		limits: request.Limits.Effective(), cancelLifetime: cancelLifetime,
 		outputDir: outputDir, contextSessionID: request.SessionID,
+		sensitiveFields: append([]string(nil), factory.profileConfig.SensitiveFields...),
 	}
 	worker.contextSecret = make([]byte, 32)
 	if _, err = rand.Read(worker.contextSecret); err != nil {
@@ -660,6 +662,7 @@ type playwrightWorker struct {
 	catalogRevision string
 	cancelLifetime  context.CancelFunc
 	outputDir       string
+	sensitiveFields []string
 
 	mu              sync.Mutex
 	lost            bool
@@ -835,7 +838,9 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if expectedToken == "" || expectedToken != worker.navigationToken {
 		return ErrStale
 	}
-	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
+	code, err := playwrightNavigationCheckedActionCode(
+		worker.navigationID, action, worker.limits, worker.sensitiveFields,
+	)
 	if err != nil {
 		return err
 	}
@@ -850,7 +855,35 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if worker.pendingDialog != nil {
 		return nil
 	}
-	if err = parsePlaywrightNavigationDispatch(text); err != nil && !errors.Is(err, ErrStale) {
+	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		worker.lost = true
+	}
+	return err
+}
+
+func (worker *playwrightWorker) AuthorizeFill(
+	ctx context.Context,
+	expectedToken string,
+	target string,
+) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+		return ErrWorkerUnavailable
+	}
+	if expectedToken == "" || expectedToken != worker.navigationToken ||
+		!playwrightTargetPattern.MatchString(target) {
+		return ErrStale
+	}
+	dispatch := playwrightFillDispatch(target, "", false, worker.sensitiveFields)
+	code := playwrightNavigationCheckedCode(worker.navigationID, dispatch)
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
+		return err
+	}
+	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
 		worker.lost = true
 	}
 	return err
@@ -860,6 +893,7 @@ func playwrightNavigationCheckedActionCode(
 	identity playwrightNavigationIdentity,
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
+	sensitiveFields []string,
 ) (string, error) {
 	tool, arguments, err := mapPlaywrightAction(action, limits)
 	if err != nil {
@@ -880,6 +914,8 @@ func playwrightNavigationCheckedActionCode(
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\" });"
+	case "browser_type":
+		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields)
 	case "browser_select_option":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").selectOption([" + jsonString(action.Value) + "]);"
@@ -893,6 +929,136 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = fmt.Sprintf("await page.mouse.wheel(0, %d);", delta)
 	default:
 		return "", fmt.Errorf("%w: navigation-checked action is unsupported", ErrInvalid)
+	}
+	return playwrightNavigationCheckedCode(identity, dispatch), nil
+}
+
+func playwrightFillDispatch(target, value string, execute bool, sensitiveFields []string) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	sensitive, sensitiveErr := browserpolicy.NormalizeSensitiveFieldTerms(sensitiveFields)
+	sensitive = append(browserpolicy.BuiltInSensitiveFieldTerms(), sensitive...)
+	policyJSON, _ := json.Marshal(map[string]any{
+		"valid": sensitiveErr == nil, "sensitive": sensitive, "ordinary": browserpolicy.OrdinaryFieldTerms(),
+	})
+	dispatch := `const fillTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
+  if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+	  const fillOutcome = await fillTarget.evaluate((element, args) => {
+    const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
+    const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
+      "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
+      "email", "organization-title", "organization", "street-address", "address-line1",
+      "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
+      "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
+      "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
+      "tel-extension", "url", "photo"]);
+    const matchesTerm = (identity, term) => {
+      let offset = 0;
+      while (term && offset <= identity.length - term.length) {
+        const index = identity.indexOf(term, offset);
+        if (index < 0) return false;
+        const end = index + term.length;
+        const left = index === 0 || !/[\p{L}\p{N}]/u.test(identity[index - 1]);
+        const right = end === identity.length || !/[\p{L}\p{N}]/u.test(identity[end]);
+        if (left && right) return true;
+        offset = index + 1;
+      }
+      return false;
+    };
+    const classify = () => {
+      const tag = String(element.tagName || "").toLowerCase();
+      const type = String(element.getAttribute("type") || "").toLowerCase();
+      const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
+      const role = String(element.getAttribute("role") || "").toLowerCase().trim();
+      const ariaDisabled = String(element.getAttribute("aria-disabled") || "").toLowerCase().trim();
+      const ariaReadOnly = String(element.getAttribute("aria-readonly") || "").toLowerCase().trim();
+      const labelledBy = String(element.getAttribute("aria-labelledby") || "").trim();
+      const identityParts = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
+        String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
+        String(label.textContent || "")));
+      let labelledByValid = labelledBy.length <= 1024;
+      if (labelledBy) {
+        const ids = labelledBy.split(/\s+/u).filter(Boolean);
+        const wanted = new Set(ids);
+        const references = new Map(ids.map(id => [id, []]));
+        if (ids.length === 0 || ids.length > 16 || wanted.size !== ids.length) labelledByValid = false;
+        if (labelledByValid) {
+          for (const candidate of element.ownerDocument.querySelectorAll("[id]")) {
+            if (wanted.has(candidate.id)) references.get(candidate.id).push(candidate);
+          }
+          for (const id of ids) {
+            const candidates = references.get(id);
+            const text = candidates && candidates.length === 1 ? String(candidates[0].textContent || "") : "";
+            if (!candidates || candidates.length !== 1 || !text.trim() || text.length > 1024) {
+              labelledByValid = false;
+              break;
+            }
+            identityParts.push(text);
+          }
+        }
+      }
+      const identityPartsValid = identityParts.length <= 32 &&
+        identityParts.every(part => part.length <= 1024);
+      const identity = identityParts.join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
+      const style = element.ownerDocument.defaultView.getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
+        bounds.width > 0 && bounds.height > 0;
+      const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
+        tag === "textarea" || element.isContentEditable;
+      const effectivelyDisabled = element.disabled || element.matches(":disabled");
+      const compatibleRole = role === "" || role === "textbox" || role === "searchbox";
+      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
+      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
+      return args.policy.valid && visible && inputLike && !effectivelyDisabled && !element.readOnly &&
+        labelledByValid && identityPartsValid && identity.length <= 4096 && compatibleRole && ariaEnabled && ariaWritable &&
+        ordinaryAutocomplete.has(autocomplete) && !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
+        args.policy.ordinary.some(term => matchesTerm(identity, term));
+    };
+    if (!classify()) return "denied";
+    if (!args.execute) return "ok";
+    element.focus({ preventScroll: true });
+    if (!classify()) return "denied";
+    const tag = String(element.tagName || "").toLowerCase();
+    if (element.isContentEditable) {
+      element.textContent = args.value;
+    } else {
+      const prototype = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+      const valueDescriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+      const setter = valueDescriptor && valueDescriptor.set;
+      const getter = valueDescriptor && valueDescriptor.get;
+      if (typeof setter !== "function" || typeof getter !== "function") return "error|missing_value_setter";
+      if (tag === "input" && String(element.getAttribute("type") || "").toLowerCase() === "number") {
+        const probe = element.ownerDocument.createElement("input");
+        probe.type = "number";
+        setter.call(probe, args.value);
+        if (getter.call(probe) !== args.value) return "denied";
+      }
+      const priorValue = getter.call(element);
+      setter.call(element, args.value);
+      if (getter.call(element) !== args.value) {
+        setter.call(element, priorValue);
+        return "denied";
+      }
+    }
+    const inputEvent = typeof InputEvent === "function" ?
+      new InputEvent("input", { bubbles: true, inputType: "insertText", data: args.value }) :
+      new Event("input", { bubbles: true });
+    element.dispatchEvent(inputEvent);
+    return "ok";
+  }, { policy: ` + string(policyJSON) + `, execute: ` + strconv.FormatBool(execute) + `, value: ` + jsonString(value) + ` });
+  if (fillOutcome !== "ok") return "MINTCLAW_NAV_ACT_V1|" + fillOutcome;`
+	return dispatch
+}
+
+func playwrightNavigationCheckedCode(identity playwrightNavigationIdentity, dispatch string) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
 	}
 	return fmt.Sprintf(`async (page) => {
   const expectedFrameID = %s;
@@ -920,7 +1086,7 @@ func playwrightNavigationCheckedActionCode(
 		jsonString(identity.loaderID),
 		identity.generation,
 		dispatch,
-	), nil
+	)
 }
 
 func parsePlaywrightNavigationDispatch(text string) error {
@@ -937,6 +1103,8 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		return nil
 	case playwrightNavigationCheckedActionMarker + "|stale":
 		return ErrStale
+	case playwrightNavigationCheckedActionMarker + "|denied":
+		return ErrDenied
 	default:
 		return ErrDriverIncompatible
 	}

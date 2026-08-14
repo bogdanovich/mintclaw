@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -269,6 +270,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		request.SnapshotGeneration == 0 ||
 		!validContextBinding(request.FrameID, request.ContextCatalogID, request.ContextGeneration) ||
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil ||
+		(request.Action.Kind == ActionFill && request.Action.Value == "") ||
 		(request.Action.Kind == ActionSelect && request.Action.Value == "") ||
 		(request.Action.Kind == ActionUpload && (request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
 		(request.Action.Kind != ActionUpload && request.Upload != nil) {
@@ -443,6 +445,13 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		return Invocation{}, err
 	}
 	if err = broker.revalidatePreparedLocked(ctx, session, slot, worker, prepared); err != nil {
+		if errors.Is(err, ErrDenied) {
+			delete(slot.inputs, prepared.ID)
+			denied, completeErr := broker.completeInvocationLocked(
+				ctx, currentInvocation, InvocationFailed, nil, "policy_denied",
+			)
+			return denied, errors.Join(ErrDenied, completeErr)
+		}
 		return Invocation{}, err
 	}
 	if dryRunDeniesAction(prepared) {
@@ -636,7 +645,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
-			if !editableElementRole(element.Role) {
+			if !ordinaryFillElement(element.Role, element.Name, broker.sensitiveFieldTerms(session)) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
@@ -772,6 +781,18 @@ func (broker *Broker) revalidatePreparedLocked(
 	if origin != prepared.CurrentOrigin || resolved != element ||
 		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
 		return ErrStale
+	}
+	if prepared.Action.Kind == ActionFill {
+		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(ActionFill) {
+			return nil
+		}
+		authorizer, ok := worker.(ProtectedFillWorker)
+		if !ok || slot.navigationID == "" {
+			return ErrDriverIncompatible
+		}
+		if err = authorizer.AuthorizeFill(ctx, slot.navigationID, resolved.Target); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -915,7 +936,7 @@ func observeWithNavigationCheck(
 
 func navigationCheckedAction(kind ActionKind) bool {
 	switch kind {
-	case ActionClick, ActionSelect, ActionPress, ActionScroll:
+	case ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll:
 		return true
 	default:
 		return false
@@ -996,6 +1017,22 @@ func cloneDialogObservation(dialog *DialogObservation) *DialogObservation {
 
 func editableElementRole(role string) bool {
 	return role == "textbox" || role == "searchbox" || role == "combobox"
+}
+
+func ordinaryFillElement(role, name string, sensitiveTerms ...[]string) bool {
+	var configured []string
+	if len(sensitiveTerms) > 0 {
+		configured = sensitiveTerms[0]
+	}
+	return browserpolicy.OrdinaryFillField(role, name, configured)
+}
+
+func (broker *Broker) sensitiveFieldTerms(session Session) []string {
+	target, ok := broker.config.Targets[session.Target]
+	if !ok {
+		return nil
+	}
+	return target.Profiles[session.Profile].SensitiveFields
 }
 
 func (broker *Broker) driverActionForPrepared(

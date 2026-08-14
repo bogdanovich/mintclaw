@@ -371,6 +371,30 @@ func (r *ToolRegistry) Get(name string) (toolshared.Tool, bool) {
 	return entry.Tool, true
 }
 
+// DurableArguments returns the trusted tool's persistence-safe argument
+// projection. Unregistered tools and tools without a projector retain their
+// original arguments so later admission and hook layers preserve their
+// existing responsibility for unknown tool calls.
+func (r *ToolRegistry) DurableArguments(name string, args map[string]any) (map[string]any, bool, error) {
+	tool, ok := r.Get(name)
+	if !ok {
+		return args, false, nil
+	}
+	projector, ok := tool.(toolshared.DurableArgumentsProvider)
+	if !ok {
+		return args, false, nil
+	}
+	projected, err := projector.DurableArguments(args)
+	if err != nil {
+		return nil, false, fmt.Errorf("project durable arguments for tool %q: %w", name, err)
+	}
+	if err = validateRegisteredToolArguments(tool, projected); err != nil {
+		return nil, false, fmt.Errorf("validate durable arguments for tool %q: %w", name, err)
+	}
+	protected, _ := tool.(toolshared.ProtectedDurableArgumentsProvider)
+	return projected, protected != nil && protected.ProtectedDurableArguments(args), nil
+}
+
 // TrustedNodeApprovalBypassTarget returns the explicit target only when the
 // registered tool carries the package-private first-party node capability.
 func (r *ToolRegistry) TrustedNodeApprovalBypassTarget(

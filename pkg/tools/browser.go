@@ -1006,6 +1006,43 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 }
 func (*BrowserActTool) ToolLoopSemantics() loopguard.Semantics { return loopguard.SemanticsMutating }
 
+const browserProtectedInputRedaction = "*"
+
+// DurableArguments removes protected fill text before assistant intent can be
+// persisted or reused. It deliberately leaves the current in-memory call
+// untouched so the broker can consume the value exactly once.
+func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	var projected map[string]any
+	if err = json.Unmarshal(encoded, &projected); err != nil {
+		return nil, err
+	}
+	action, ok := projected["action"].(map[string]any)
+	if !ok {
+		return nil, errors.New("browser action is unavailable")
+	}
+	kind, ok := action["kind"].(string)
+	if !ok || kind == "" {
+		return nil, errors.New("browser action kind is unavailable")
+	}
+	if kind != "fill" {
+		return projected, nil
+	}
+	if _, ok = action["value"].(string); !ok {
+		return nil, errors.New("fill value is unavailable")
+	}
+	action["value"] = browserProtectedInputRedaction
+	return projected, nil
+}
+
+func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
+	action, ok := args["action"].(map[string]any)
+	return ok && action["kind"] == "fill"
+}
+
 func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error) {
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
 		return nil, &browserSafeDenialError{cause: browser.ErrDenied}

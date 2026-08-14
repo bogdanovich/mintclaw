@@ -54,6 +54,7 @@ type BrowserProfilePolicy struct {
 	Mode                   string              `json:"mode,omitempty"`
 	NetworkMode            string              `json:"network_mode,omitempty"`
 	AllowedOrigins         []string            `json:"allowed_origins,omitempty"`
+	SensitiveFields        []string            `json:"sensitive_fields,omitempty"`
 	DryRun                 bool                `json:"dry_run"`
 	AllowApprovedActions   bool                `json:"allow_approved_actions,omitempty"`
 	AllowedActions         []string            `json:"allowed_actions,omitempty"`
@@ -106,7 +107,8 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		profile.DriverExecutable == "" && profile.DriverExecutableSHA256 == "" &&
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
-		len(profile.AllowedOrigins) == 0 && !profile.DryRun && !profile.AllowApprovedActions &&
+		len(profile.AllowedOrigins) == 0 && len(profile.SensitiveFields) == 0 &&
+		!profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
 		profile.Limits == (nodes.BrowserLimits{})
 }
@@ -120,6 +122,7 @@ func normalizeBrowserProfile(
 	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	if err := (nodes.Alias(alias)).Validate(); err != nil || alias != nodes.BrowserProfileManaged {
 		return BrowserProfilePolicy{}, errors.New("only the managed browser profile is admitted")
@@ -215,6 +218,10 @@ func normalizeBrowserProfile(
 		seenOrigins[profile.AllowedOrigins[index]] = struct{}{}
 	}
 	slices.Sort(profile.AllowedOrigins)
+	profile.SensitiveFields, err = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
+	if err != nil {
+		return BrowserProfilePolicy{}, err
+	}
 	if err = normalizeBrowserActions(&profile.AllowedActions); err != nil {
 		return BrowserProfilePolicy{}, err
 	}
@@ -249,8 +256,8 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "click" && action != "navigate" && action != "download" && action != "press" &&
-			action != "scroll" && action != "select" {
+		if action != "click" && action != "navigate" && action != "download" && action != "fill" &&
+			action != "press" && action != "scroll" && action != "select" {
 			return errors.New("allowed_actions contains an unsupported action")
 		}
 		if _, duplicate := seen[action]; duplicate {

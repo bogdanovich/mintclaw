@@ -609,6 +609,15 @@ func isNodeFileToolName(toolName string) bool {
 // ToolLogArguments returns bounded log fields without retaining file paths,
 // artifact references, transfer identities, or discovery authority.
 func ToolLogArguments(toolName string, arguments map[string]any) map[string]any {
+	if toolName == "browser_act" {
+		if action, ok := arguments["action"].(map[string]any); ok && action["kind"] == "fill" {
+			return map[string]any{
+				"redacted":       true,
+				"argument_count": len(arguments),
+				"action_kind":    "fill",
+			}
+		}
+	}
 	if isNodeFileToolName(toolName) ||
 		toolName == "nodes_invoke" ||
 		toolName == "nodes_status" ||

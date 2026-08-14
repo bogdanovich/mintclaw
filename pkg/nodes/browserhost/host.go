@@ -65,6 +65,7 @@ type browserHostSession struct {
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
 	navigationWorker      browserworker.NavigationCheckedActionWorker
+	fillWorker            browserworker.ProtectedFillWorker
 	contextWorker         browserworker.ContextWorker
 	contextCatalog        *browserworker.ContextCatalog
 	cleanupOwner          browserworker.Worker
@@ -110,6 +111,7 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 					AllowApprovedActions: profile.AllowApprovedActions,
 					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
+					SensitiveFields:      append([]string(nil), profile.SensitiveFields...),
 				},
 				ServerConfig: server,
 			},
@@ -197,6 +199,7 @@ func cloneBrowserProfilePolicy(
 	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	return profile
 }
@@ -274,8 +277,11 @@ func (host *BrowserHost) Open(
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)
 	navigationWorker, navigationOK := opened.Owner.(browserworker.NavigationCheckedActionWorker)
+	fillWorker, fillOK := opened.Owner.(browserworker.ProtectedFillWorker)
+	fillRequired := slices.Contains(profile.AllowedActions, "fill")
 	contextWorker, _ := opened.Owner.(browserworker.ContextWorker)
-	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil {
+	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil ||
+		(fillRequired && (!fillOK || fillWorker == nil)) {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
@@ -308,6 +314,7 @@ func (host *BrowserHost) Open(
 	}
 	session.worker = actionWorker
 	session.navigationWorker = navigationWorker
+	session.fillWorker = fillWorker
 	session.contextWorker = contextWorker
 	session.state = "ready"
 	session.mu.Unlock()
@@ -445,6 +452,27 @@ func (host *BrowserHost) Select(
 	}
 	return host.executeAction(ctx, request, "select", browserworker.DriverAction{
 		Kind: browserworker.DriverSelect, Value: request.Action.Value,
+	})
+}
+
+func (host *BrowserHost) Fill(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != "fill" || !browserHostIdentifier(request.Action.Ref) ||
+		request.Action.Value == "" || len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
+		request.Action.Direction != "" || request.Action.Amount != 0 ||
+		!nodes.BrowserFillFieldAllowed(request.ExpectedRole, request.ExpectedName) ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "fill", browserworker.DriverAction{
+		Kind: browserworker.DriverFill, Value: request.Action.Value,
 	})
 }
 
@@ -623,12 +651,20 @@ func (host *BrowserHost) executeAction(
 		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
+	if action == "fill" && (len(request.Action.Value) > session.limits.TextInputBytes ||
+		!nodes.BrowserFillFieldAllowedWithPolicy(
+			request.ExpectedRole,
+			request.ExpectedName,
+			session.profile.SensitiveFields,
+		)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
 	if (action == "click" || action == "press") && (session.profile.DryRun || !session.profile.AllowApprovedActions ||
 		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
-	if action == "click" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" {
 		var found bool
 		boundElement, found = session.elementRefs[request.Action.Ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
@@ -659,7 +695,7 @@ func (host *BrowserHost) executeAction(
 		}
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
-	if action == "click" || action == "select" {
+	if action == "click" || action == "fill" || action == "select" {
 		targets, matches := 0, 0
 		for _, element := range current.Elements {
 			if element.Target != boundElement.Target {
@@ -677,6 +713,27 @@ func (host *BrowserHost) executeAction(
 		driverAction.Target = boundElement.Target
 		driverAction.Element = boundElement.Name
 	}
+	if action == "fill" {
+		if session.fillWorker == nil {
+			cancelAction()
+			return BrowserHostObservation{}, ErrBrowserHostLost
+		}
+		if authorizeErr := session.fillWorker.AuthorizeFill(
+			actionCtx,
+			currentNavigationIdentity,
+			boundElement.Target,
+		); authorizeErr != nil {
+			cancelAction()
+			switch {
+			case errors.Is(authorizeErr, browserworker.ErrDenied):
+				return BrowserHostObservation{}, ErrBrowserHostDenied
+			case errors.Is(authorizeErr, browserworker.ErrStale):
+				return BrowserHostObservation{}, ErrBrowserHostStale
+			default:
+				return BrowserHostObservation{}, ErrBrowserHostLost
+			}
+		}
+	}
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
@@ -688,6 +745,10 @@ func (host *BrowserHost) executeAction(
 		cancelAction()
 		if errors.Is(executeErr, browserworker.ErrStale) {
 			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
+		if errors.Is(executeErr, browserworker.ErrDenied) {
+			delete(session.actionInvocations, request.ActionInvocationID)
+			return BrowserHostObservation{}, ErrBrowserHostDenied
 		}
 		host.quarantineActionLocked(session)
 		return BrowserHostObservation{}, ErrBrowserHostLost

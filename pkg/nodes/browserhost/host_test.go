@@ -59,6 +59,8 @@ type fakeBrowserHostWorker struct {
 	navigationIdentities    []string
 	navigationIdentityCalls int
 	dispatchNavigationID    string
+	authorizeFillCalls      int
+	authorizeFillErr        error
 	beforeBoundDispatch     func()
 	actions                 []browserworker.DriverAction
 	executeErr              error
@@ -70,6 +72,18 @@ type fakeBrowserHostWorker struct {
 	contextSelectCalls      int
 	contextSelectErr        error
 	contextSelectMutates    bool
+}
+
+func (worker *fakeBrowserHostWorker) AuthorizeFill(
+	_ context.Context,
+	expectedNavigationID string,
+	_ string,
+) error {
+	worker.authorizeFillCalls++
+	if worker.dispatchNavigationID != "" && worker.dispatchNavigationID != expectedNavigationID {
+		return browserworker.ErrStale
+	}
+	return worker.authorizeFillErr
 }
 
 func (worker *fakeBrowserHostWorker) Status(context.Context) (browserworker.WorkerStatus, error) {
@@ -476,7 +490,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			},
 		}
 		profile := browserHostProfileFixture()
-		profile.AllowedActions = []string{"navigate", "press", "select"}
+		profile.AllowedActions = []string{"fill", "navigate", "press", "select"}
 		profile.DryRun = false
 		profile.AllowApprovedActions = true
 		host, err := newBrowserHost(
@@ -523,6 +537,153 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Kind: browserworker.DriverSelect, Target: element.Target, Element: element.Name, Value: "CA",
 		}); len(worker.actions) != 1 || worker.actions[0] != want {
 			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	t.Run("fill ordinary text", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_1",
+			Action: nodes.BrowserAction{
+				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada",
+			},
+			Effect: "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		result, err := host.Fill(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Fill() = %#v, %v", result, err)
+		}
+		if want := (browserworker.DriverAction{
+			Kind: browserworker.DriverFill, Target: element.Target, Element: element.Name, Value: "Ada",
+		}); len(worker.actions) != 1 || worker.actions[0] != want {
+			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+		if worker.authorizeFillCalls != 1 {
+			t.Fatalf("fill authorization calls = %d, want 1", worker.authorizeFillCalls)
+		}
+	})
+
+	t.Run("deny fill above profile text limit", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		host.sessions["browser_session_1"].limits.TextInputBytes = 2
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_over_profile_limit",
+			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(over profile limit) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 || worker.authorizeFillCalls != 0 {
+			t.Fatalf(
+				"over-limit fill reached driver: actions=%#v authorizations=%d",
+				worker.actions,
+				worker.authorizeFillCalls,
+			)
+		}
+	})
+
+	t.Run("deny operator configured sensitive field", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		host.sessions["browser_session_1"].profile.SensitiveFields = []string{"display name"}
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_configured_sensitive",
+			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(configured sensitive) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 || worker.authorizeFillCalls != 0 {
+			t.Fatalf(
+				"configured-sensitive fill reached driver: actions=%#v authorizations=%d",
+				worker.actions,
+				worker.authorizeFillCalls,
+			)
+		}
+	})
+
+	t.Run("private classifier denial remains definite", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		worker.authorizeFillErr = browserworker.ErrDenied
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_private_denied",
+			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(private denial) error = %v, want denied", err)
+		}
+		session := host.sessions["browser_session_1"]
+		if len(worker.actions) != 0 || worker.authorizeFillCalls != 1 || session.state != "ready" ||
+			len(session.actionInvocations) != 0 {
+			t.Fatalf("private denial state: actions=%#v authorizations=%d state=%s invocations=%#v",
+				worker.actions, worker.authorizeFillCalls, session.state, session.actionInvocations)
+		}
+	})
+
+	t.Run("final classifier denial does not quarantine", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		worker.executeErr = browserworker.ErrDenied
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_final_denied",
+			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(final denial) error = %v, want denied", err)
+		}
+		session := host.sessions["browser_session_1"]
+		if worker.authorizeFillCalls != 1 || session.state != "ready" || len(session.actionInvocations) != 0 {
+			t.Fatalf("final denial state: authorizations=%d state=%s invocations=%#v",
+				worker.authorizeFillCalls, session.state, session.actionInvocations)
+		}
+	})
+
+	t.Run("deny sensitive fill before dispatch", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Password"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_sensitive_1",
+			Action: nodes.BrowserAction{
+				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "secret",
+			},
+			Effect: "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Password",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Fill(sensitive) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("sensitive fill dispatched %d actions", len(worker.actions))
 		}
 	})
 

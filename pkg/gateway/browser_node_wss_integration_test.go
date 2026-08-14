@@ -144,15 +144,53 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
 		t.Fatalf("final observation = %#v, %v", final, err)
 	}
-	refStart := strings.Index(final.Snapshot, "[ref=")
-	refEnd := strings.Index(final.Snapshot, "]")
+	fillMarker := `textbox "Display name" [ref=`
+	fillStart := strings.Index(final.Snapshot, fillMarker)
+	if fillStart < 0 {
+		t.Fatalf("fill fixture has no bounded ref: %q", final.Snapshot)
+	}
+	fillStart += len(fillMarker)
+	fillEnd := strings.Index(final.Snapshot[fillStart:], "]")
+	if fillEnd < 1 {
+		t.Fatalf("fill fixture has malformed ref: %q", final.Snapshot)
+	}
+	const fillCanary = "wss-protected-fill-must-not-persist"
+	fill, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-fill", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionFill, Ref: final.Snapshot[fillStart : fillStart+fillEnd], Value: fillCanary,
+		},
+	})
+	if err != nil || fill.RequiresApproval || fill.Action.Effect != browser.EffectLocalEdit {
+		t.Fatalf("fill preparation = %#v, %v", fill, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, fill.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("fill invocation = %#v, %v", invocation, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(fillCanary)) {
+			t.Fatalf("durable invocation state exposed protected fill input in %s", retainedPath)
+		}
+	}
+	afterFill, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterFill.URL != "https://example.com/" || afterFill.SnapshotGeneration != 3 {
+		t.Fatalf("fill observation = %#v, %v", afterFill, err)
+	}
+	refStart := strings.Index(afterFill.Snapshot, "[ref=")
+	refEnd := strings.Index(afterFill.Snapshot, "]")
 	if refStart < 0 || refEnd <= refStart+5 {
-		t.Fatalf("click fixture has no bounded ref: %q", final.Snapshot)
+		t.Fatalf("click fixture has no bounded ref: %q", afterFill.Snapshot)
 	}
 	click, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-click", SessionID: first.ID, TabID: first.TabID,
-		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionClick, Ref: final.Snapshot[refStart+5 : refEnd]},
+		SnapshotID: afterFill.SnapshotID, SnapshotGeneration: afterFill.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionClick, Ref: afterFill.Snapshot[refStart+5 : refEnd]},
 	})
 	if err != nil || !click.RequiresApproval || click.Action.Effect != browser.EffectExternalCommit {
 		t.Fatalf("click preparation = %#v, %v", click, err)
@@ -173,7 +211,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("click invocation = %#v, %v", invocation, err)
 	}
 	afterClick, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterClick.URL != "https://example.com/" || afterClick.SnapshotGeneration != 3 {
+	if err != nil || afterClick.URL != "https://example.com/" || afterClick.SnapshotGeneration != 4 {
 		t.Fatalf("click observation = %#v, %v", afterClick, err)
 	}
 	selectMarker := `combobox "State" [ref=`
@@ -210,7 +248,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		}
 	}
 	afterSelect, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterSelect.SnapshotGeneration != 4 {
+	if err != nil || afterSelect.SnapshotGeneration != 5 {
 		t.Fatalf("select observation = %#v, %v", afterSelect, err)
 	}
 	press, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
@@ -237,7 +275,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("press invocation = %#v, %v", invocation, err)
 	}
 	afterPress, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterPress.SnapshotGeneration != 5 {
+	if err != nil || afterPress.SnapshotGeneration != 6 {
 		t.Fatalf("press observation = %#v, %v", afterPress, err)
 	}
 	scroll, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
@@ -253,8 +291,49 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("scroll invocation = %#v, %v", invocation, err)
 	}
 	afterScroll, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 6 {
+	if err != nil || afterScroll.URL != "https://example.com/" || afterScroll.SnapshotGeneration != 7 {
 		t.Fatalf("scroll observation = %#v, %v", afterScroll, err)
+	}
+	deniedFillMarker := `textbox "Display name" [ref=`
+	deniedFillStart := strings.Index(afterScroll.Snapshot, deniedFillMarker)
+	if deniedFillStart < 0 {
+		t.Fatalf("denied fill fixture has no bounded ref: %q", afterScroll.Snapshot)
+	}
+	deniedFillStart += len(deniedFillMarker)
+	deniedFillEnd := strings.Index(afterScroll.Snapshot[deniedFillStart:], "]")
+	if deniedFillEnd < 1 {
+		t.Fatalf("denied fill fixture has malformed ref: %q", afterScroll.Snapshot)
+	}
+	const deniedFillCanary = "wss-denied-fill-must-not-persist"
+	deniedFill, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-denied-fill", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: afterScroll.SnapshotID, SnapshotGeneration: afterScroll.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionFill,
+			Ref:  afterScroll.Snapshot[deniedFillStart : deniedFillStart+deniedFillEnd], Value: deniedFillCanary,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.denyNextFill()
+	invocation, err = broker.ExecuteAction(t.Context(), owner, deniedFill.Action.ID, nil)
+	if !errors.Is(err, browser.ErrDenied) || invocation.State != browser.InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" {
+		t.Fatalf("denied remote fill invocation = %#v, %v", invocation, err)
+	}
+	deniedStatus, err := broker.Status(t.Context(), owner, first.ID)
+	if err != nil || deniedStatus.State != browser.SessionReady {
+		t.Fatalf("session after denied remote fill = %#v, %v", deniedStatus, err)
+	}
+	for _, retainedPath := range []string{nodes.GatewayInvocationStorePath(workspace), ledgerPath} {
+		retained, readErr := os.ReadFile(retainedPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(retained, []byte(deniedFillCanary)) {
+			t.Fatalf("denied remote fill persisted protected input in %s", retainedPath)
+		}
 	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
@@ -442,7 +521,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "click", "select", "observe", "press", "observe", "scroll", "close",
+		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
+		"fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		"open", "observe", "navigate", "close",
@@ -769,6 +849,7 @@ type wssBrowserHost struct {
 	navigateEntered chan struct{}
 	navigateRelease chan struct{}
 	navigateFailure bool
+	fillDenied      bool
 	contextStale    bool
 }
 
@@ -1012,6 +1093,38 @@ func (host *wssBrowserHost) Select(
 	return result, nil
 }
 
+func (host *wssBrowserHost) Fill(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "fill")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	if host.fillDenied {
+		host.fillDenied = false
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if request.Action.Ref != "host_ref_3" || request.Action.Value == "" ||
+		request.ExpectedRole != "textbox" || request.ExpectedName != "Display name" ||
+		request.Effect != "local_edit" || request.ApprovalDigest != "" {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
+func (host *wssBrowserHost) denyNextFill() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.fillDenied = true
+}
+
 func (host *wssBrowserHost) Press(
 	_ context.Context,
 	request nodes.BrowserHostActRequest,
@@ -1095,10 +1208,12 @@ func wssBrowserObservation(
 	request nodes.BrowserHostObserveRequest,
 	url string,
 ) nodes.BrowserObservationResult {
-	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]\n- combobox \"State\" [ref=host_ref_2]"
+	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]\n"+
+		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]"
 	elements := []nodes.BrowserElement{
 		{Ref: "host_ref_1", Role: "button", Name: "Save"},
 		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
+		{Ref: "host_ref_3", Role: "textbox", Name: "Display name"},
 	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
@@ -1118,7 +1233,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		AllowApprovedActions: true, Actions: []string{"click", "navigate", "press", "scroll", "select"},
+		AllowApprovedActions: true, Actions: []string{"click", "fill", "navigate", "press", "scroll", "select"},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
