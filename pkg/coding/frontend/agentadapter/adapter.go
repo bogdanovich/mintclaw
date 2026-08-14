@@ -189,10 +189,10 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			stage := safeToken(payload.Stage)
 			status := "agent error during " + stage
 			a.projector.Error(turnID, fmt.Sprintf("%s:error:%s", normalizeID(turnID), stage), status)
-			a.projector.TurnFailed(status)
+			a.projector.TurnFailed(turnID, status)
 		} else {
 			a.projector.Error(turnID, normalizeID(turnID)+":error", "agent error")
-			a.projector.TurnFailed("agent error")
+			a.projector.TurnFailed(turnID, "agent error")
 		}
 	}
 }
@@ -247,7 +247,7 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	case agent.TurnEndStatusAborted:
 		a.projector.TurnInterrupted(turnID, "interrupted")
 	case agent.TurnEndStatusError:
-		a.projector.TurnFailed("turn failed")
+		a.projector.TurnFailed(turnID, "turn failed")
 	case agent.TurnEndStatusSuspended:
 		a.projector.TurnCompleted("waiting for input")
 	default:

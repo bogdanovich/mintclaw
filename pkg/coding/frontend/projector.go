@@ -354,20 +354,29 @@ func (p *Projector) TurnCompleted(status string) Delta {
 	return p.activity(DeltaTurnCompleted, ActivityIdle, status)
 }
 
-func (p *Projector) TurnFailed(status string) Delta {
-	return p.activity(DeltaTurnFailed, ActivityFailed, status)
+func (p *Projector) TurnFailed(turnID, status string) Delta {
+	return p.terminalizeTurn(DeltaTurnFailed, turnID, status, ActivityFailed, ToolFailed)
 }
 
 func (p *Projector) TurnInterrupted(turnID, status string) Delta {
+	return p.terminalizeTurn(DeltaTurnInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
+}
+
+func (p *Projector) terminalizeTurn(
+	kind DeltaKind,
+	turnID, status string,
+	activity Activity,
+	toolStatus ToolStatus,
+) Delta {
 	turnID = normalizeTurnID(turnID)
-	return p.mutate(DeltaTurnInterrupted, func(state *ThreadSnapshot, delta *Delta) {
-		state.Activity = ActivityIdle
+	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+		state.Activity = activity
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		delta.TurnID = turnID
 		delta.EntityID = turnID
 		for i := range state.Tools {
 			if state.Tools[i].TurnID == turnID && state.Tools[i].Status == ToolRunning {
-				state.Tools[i].Status = ToolInterrupted
+				state.Tools[i].Status = toolStatus
 				delta.RequiresSnapshot = true
 			}
 		}

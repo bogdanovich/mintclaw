@@ -193,6 +193,41 @@ func TestRepeatedCallIDAcrossTurnsRemainsDistinctAndConverges(t *testing.T) {
 	}
 }
 
+func TestFailedTurnTerminalizesRunningToolAndReducerResynchronizes(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := projector.ToolStarted("turn-1", "call-1", "write_file", "fields: path")
+	if err = reducer.Apply(started); err != nil {
+		t.Fatal(err)
+	}
+	failed := projector.TurnFailed("turn-1", "turn failed")
+	if !failed.RequiresSnapshot {
+		t.Fatalf("failed-turn delta = %+v, want snapshot resynchronization", failed)
+	}
+	if err = reducer.ApplyOrResync(t.Context(), projector, failed); err != nil {
+		t.Fatal(err)
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) || len(got.Tools) != 1 || got.Tools[0].Status != ToolFailed ||
+		got.Activity != ActivityFailed {
+		t.Fatalf("failed-turn state = %+v, want %+v", got, want)
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,
