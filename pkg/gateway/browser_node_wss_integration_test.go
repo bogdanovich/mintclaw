@@ -525,7 +525,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"fill", "status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
-		"open", "observe", "navigate", "close",
+		// Post-acceptance recovery receives a redacted terminal receipt and
+		// obtains fresh live authority without replaying navigate.
+		"open", "observe", "navigate", "observe", "close",
 		"open", "observe", "navigate", "close",
 		"open", "close",
 	}; !slices.Equal(got, want) {
