@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -55,6 +56,245 @@ func TestGatewayInvocationSQLiteMigratesLegacySnapshotAndRejectsDowngrade(t *tes
 	}
 }
 
+func TestGatewayInvocationSQLiteDropsPreReceiptBrowserAuthority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "prepared")
+	dispatchedRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "dispatched")
+	dispatchedRecord.State = GatewayInvocationDispatched
+	dispatchedRecord.DispatchedAt = dispatchedRecord.CreatedAt + 1
+	dispatchedRecord.UpdatedAt = dispatchedRecord.DispatchedAt
+	currentPlan := gatewayTestPlan(t, "inv_current_after_receipts", "idem_current_after_receipts", time.Now())
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-current-after-receipts",
+		currentPlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, browserRecord)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, dispatchedRecord)
+
+	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatalf("reopen pre-receipt browser invocation store: %v", err)
+	}
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(browserRecord.Plan),
+		browserRecord.Plan.InvocationID,
+	); lookupErr != nil || found {
+		t.Fatalf("legacy browser authority = (found %v, error %v)", found, lookupErr)
+	}
+	retained, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(dispatchedRecord.Plan),
+		dispatchedRecord.Plan.InvocationID,
+	)
+	if lookupErr != nil || !found || retained.State != GatewayInvocationDispatched {
+		t.Fatalf("legacy dispatched tombstone = (%#v, %v, %v)", retained, found, lookupErr)
+	}
+	retained, requested, cancelErr := store.RequestCancellation(
+		gatewayTestPrincipal(dispatchedRecord.Plan),
+		dispatchedRecord.Plan.InvocationID,
+	)
+	if cancelErr != nil || !requested || retained.Cancellation == nil {
+		t.Fatalf("legacy dispatched cancellation = (%#v, %v, %v)", retained, requested, cancelErr)
+	}
+	currentDescriptor := cloneCommandDescriptor(dispatchedRecord.Descriptor)
+	currentDescriptor.OutputSchema = BrowserCommandOutputSchema(
+		currentDescriptor.Name,
+		currentDescriptor.BrowserProfiles,
+	)
+	retryRequest := dispatchedRecord.Plan.InvocationRequest
+	retryRequest.InvocationID = "inv_browser_receipt_migration_retry"
+	retryRequest.IdempotencyKey = "idem_browser_receipt_migration_retry"
+	retryPlan, err := PrepareExecutionPlan(
+		retryRequest,
+		currentDescriptor,
+		"browser",
+		"browser-policy-v1",
+		time.Now(),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.PrepareOwned(
+		gatewayTestPrincipal(retryPlan),
+		dispatchedRecord.Target,
+		dispatchedRecord.ToolCallID,
+		retryPlan,
+		currentDescriptor,
+	); !errors.Is(err, ErrGatewayInvocationConflict) {
+		t.Fatalf("retry over legacy dispatched tombstone error = %v", err)
+	}
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(currentPlan),
+		currentPlan.InvocationID,
+	); lookupErr != nil || !found {
+		t.Fatalf("current authority = (found %v, error %v)", found, lookupErr)
+	}
+}
+
+func TestGatewayInvocationSQLiteDropsPreReceiptBrowserAuthorityFromJSONSnapshot(t *testing.T) {
+	workspace := t.TempDir()
+	legacyPath := GatewayInvocationLegacyStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := gatewayLegacyBrowserObserveRecord(t, time.Now(), "snapshot")
+	data, err := json.Marshal(gatewayInvocationDocument{
+		Version: gatewayInvocationStoreVersion,
+		Records: map[string]GatewayInvocationRecord{record.Plan.InvocationID: record},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(legacyPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewGatewayInvocationSQLiteStore(
+		GatewayInvocationStorePath(workspace),
+		16*1024*1024,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+	if _, found, lookupErr := store.Lookup(
+		gatewayTestPrincipal(record.Plan),
+		record.Plan.InvocationID,
+	); lookupErr != nil || found {
+		t.Fatalf("legacy snapshot authority = (found %v, error %v)", found, lookupErr)
+	}
+}
+
+func TestGatewayInvocationSQLiteRejectsUnknownBrowserSchemaDuringReceiptMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	record := gatewayLegacyBrowserObserveRecord(t, time.Now(), "unknown")
+	record.Descriptor.OutputSchema = json.RawMessage(`{"type":"array"}`)
+	descriptorHash, err := (CapabilityCatalog{
+		Commands: []CommandDescriptor{record.Descriptor},
+	}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Plan.DescriptorHash = descriptorHash
+	record.Plan.PlanHash = ""
+	record.Plan.PlanHash, err = record.Plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ExpectedPlanHash = record.Plan.PlanHash
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+		t.Fatal("unknown browser output schema was migrated")
+	}
+}
+
+func TestGatewayInvocationSQLiteReceiptMigrationRollsBackOnSnapshotMismatch(t *testing.T) {
+	workspace := t.TempDir()
+	path := GatewayInvocationStorePath(workspace)
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	databasePlan := gatewayTestPlan(
+		t,
+		"inv_receipt_migration_database",
+		"idem_receipt_migration_database",
+		time.Now(),
+	)
+	if _, _, err = store.Prepare(
+		"vpn",
+		"call-receipt-migration-database",
+		databasePlan,
+		gatewayTestDescriptor(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "rollback")
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, legacyRecord)
+
+	snapshotPlan := gatewayTestPlan(
+		t,
+		"inv_receipt_migration_snapshot",
+		"idem_receipt_migration_snapshot",
+		time.Now(),
+	)
+	now := time.Now().UnixNano()
+	snapshotRecord := GatewayInvocationRecord{
+		Target: "vpn", ToolCallID: "call-receipt-migration-snapshot",
+		Plan: snapshotPlan, Descriptor: gatewayTestDescriptor(),
+		ExpectedPlanHash: snapshotPlan.PlanHash, State: GatewayInvocationPrepared,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	snapshot, err := json.Marshal(gatewayInvocationDocument{
+		Version: gatewayInvocationStoreVersion,
+		Records: map[string]GatewayInvocationRecord{
+			snapshotPlan.InvocationID: snapshotRecord,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(GatewayInvocationLegacyStorePath(workspace), snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+		t.Fatal("snapshot mismatch was accepted")
+	}
+
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	var count int
+	if err = database.QueryRow("SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("records after rolled-back migration = %d, want 2", count)
+	}
+	var retainedJSON []byte
+	if err = database.QueryRow(
+		"SELECT record_json FROM gateway_invocations WHERE invocation_id = ?",
+		legacyRecord.Plan.InvocationID,
+	).Scan(&retainedJSON); err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := json.Marshal(legacyRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(retainedJSON, wantJSON) {
+		t.Fatal("legacy prepared row changed after rolled-back migration")
+	}
+}
+
 func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	workspace := t.TempDir()
 	legacyPath := GatewayInvocationLegacyStorePath(workspace)
@@ -100,6 +340,112 @@ func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	}
 	if count != 256 {
 		t.Fatalf("migrated production-shaped records = %d, want 256", count)
+	}
+}
+
+func gatewayLegacyBrowserObserveRecord(
+	t *testing.T,
+	preparedAt time.Time,
+	suffix string,
+) GatewayInvocationRecord {
+	t.Helper()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == BrowserCommandObserve {
+			descriptor = candidate
+			break
+		}
+	}
+	if descriptor.Name == "" {
+		t.Fatal("browser observe descriptor is missing")
+	}
+	input, err := json.Marshal(BrowserObserveInput{
+		SessionID:          "browser_session_receipt_migration",
+		TabID:              "browser_tab_receipt_migration",
+		SnapshotGeneration: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := invocationRequest(input)
+	request.InvocationID = "inv_browser_receipt_migration_" + suffix
+	request.IdempotencyKey = "idem_browser_receipt_migration_" + suffix
+	request.Command = descriptor.Name
+	request.Input = input
+	plan, err := PrepareExecutionPlan(
+		request,
+		descriptor,
+		"browser",
+		"browser-policy-v1",
+		preparedAt,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	)
+	descriptorHash, err := (CapabilityCatalog{
+		Commands: []CommandDescriptor{descriptor},
+	}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.DescriptorHash = descriptorHash
+	plan.CatalogHash = descriptorHash
+	plan.PlanHash = ""
+	plan.PlanHash, err = plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := preparedAt.UnixNano()
+	return GatewayInvocationRecord{
+		Target: "companion", ToolCallID: "call-browser-receipt-migration-" + suffix,
+		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
+		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+func writeGatewayInvocationSQLiteRecordForMigrationTest(
+	t *testing.T,
+	path string,
+	record GatewayInvocationRecord,
+) {
+	t.Helper()
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := projectGatewayInvocationRecord(record)
+	if _, err = database.Exec(`INSERT INTO gateway_invocations(
+invocation_id, idempotency_key, target, tool_call_id, agent_id, session_id,
+actor_id, workspace_id, execution_id, plan_hash, state, created_at, updated_at,
+dispatched_at, plan_expires_at, record_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		projection.invocationID, projection.idempotencyKey, projection.target,
+		projection.toolCallID, projection.agentID, projection.sessionID,
+		projection.actorID, projection.workspaceID, projection.executionID,
+		projection.planHash, projection.state, projection.createdAt,
+		projection.updatedAt, projection.dispatchedAt, projection.planExpiresAt,
+		encoded,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

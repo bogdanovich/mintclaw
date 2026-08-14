@@ -188,6 +188,9 @@ func newGatewayInvocationSQLiteStoreWithStartupValidation(
 	if err != nil {
 		return nil, err
 	}
+	if err = filterLegacyBrowserInvocationDocument(&document); err != nil {
+		return nil, fmt.Errorf("migrate legacy browser invocation snapshot: %w", err)
+	}
 	if legacyKind == "marker" {
 		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 			return nil, errors.New("gateway node invocation migration marker has no durable database")
@@ -338,6 +341,9 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 	}
 	if hasSchema {
 		if err = store.verifySchema(ctx); err != nil {
+			return err
+		}
+		if err = store.migrateLegacyBrowserInvocations(ctx, legacyKind, &document); err != nil {
 			return err
 		}
 		if err = store.verifyIntegrity(ctx); err != nil {
@@ -557,6 +563,165 @@ func (store *gatewayInvocationSQLiteStore) verifyIntegrity(ctx context.Context) 
 		}
 	}
 	return rows.Err()
+}
+
+// migrateLegacyBrowserInvocations removes only invocation authority carrying
+// an exact browser descriptor from before protected receipt outputs. Rewriting
+// the descriptor would also require rewriting its signed execution-plan
+// identity, so dropping the transient authority is the fail-closed migration.
+func (store *gatewayInvocationSQLiteStore) migrateLegacyBrowserInvocations(
+	ctx context.Context,
+	legacyKind string,
+	document *gatewayInvocationDocument,
+) error {
+	if err := filterLegacyBrowserInvocationDocument(document); err != nil {
+		return fmt.Errorf("migrate legacy browser invocation snapshot: %w", err)
+	}
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin legacy browser invocation migration: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	databaseRecords, legacyPreparedIDs, err := func() (
+		map[string]GatewayInvocationRecord,
+		[]string,
+		error,
+	) {
+		rows, queryErr := transaction.QueryContext(
+			ctx,
+			gatewayInvocationSelect+" ORDER BY invocation_id",
+		)
+		if queryErr != nil {
+			return nil, nil, fmt.Errorf("scan legacy browser invocations: %w", queryErr)
+		}
+		defer func() { _ = rows.Close() }()
+		ids := make([]string, 0)
+		records := make(map[string]GatewayInvocationRecord)
+		for rows.Next() {
+			record, projection, scanErr := scanGatewayInvocationRecordUnchecked(rows)
+			if scanErr != nil {
+				return nil, nil, fmt.Errorf("decode legacy browser invocation: %w", scanErr)
+			}
+			legacy, validationErr := validateGatewayInvocationRecordForReceiptMigration(record)
+			if validationErr != nil {
+				return nil, nil, fmt.Errorf("validate legacy browser invocation: %w", validationErr)
+			}
+			if projectionErr := validateGatewayInvocationProjection(
+				record,
+				projection,
+			); projectionErr != nil {
+				return nil, nil, projectionErr
+			}
+			if legacy && record.State == GatewayInvocationPrepared {
+				ids = append(ids, record.Plan.InvocationID)
+				continue
+			}
+			records[record.Plan.InvocationID] = record
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return nil, nil, fmt.Errorf("scan legacy browser invocations: %w", rowsErr)
+		}
+		return records, ids, nil
+	}()
+	if err != nil {
+		return err
+	}
+	if legacyKind == "snapshot" && len(databaseRecords)+len(legacyPreparedIDs) > 0 {
+		if !sameGatewayInvocationRecordMaps(databaseRecords, document.Records) {
+			return errors.New("gateway node invocation migration proof mismatch")
+		}
+	}
+	for _, invocationID := range legacyPreparedIDs {
+		if _, err = transaction.ExecContext(
+			ctx,
+			"DELETE FROM gateway_invocations WHERE invocation_id = ?",
+			invocationID,
+		); err != nil {
+			return fmt.Errorf("delete legacy browser invocation %q: %w", invocationID, err)
+		}
+	}
+	if err = transaction.Commit(); err != nil {
+		return fmt.Errorf("commit legacy browser invocation migration: %w", err)
+	}
+	return nil
+}
+
+func filterLegacyBrowserInvocationDocument(document *gatewayInvocationDocument) error {
+	for invocationID, record := range document.Records {
+		if invocationID != record.Plan.InvocationID {
+			return errors.New("gateway node invocation migration key mismatch")
+		}
+		legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
+		if err != nil {
+			return err
+		}
+		if legacy && record.State == GatewayInvocationPrepared {
+			delete(document.Records, invocationID)
+		}
+	}
+	return nil
+}
+
+func sameGatewayInvocationRecordMaps(
+	left map[string]GatewayInvocationRecord,
+	right map[string]GatewayInvocationRecord,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for invocationID, leftRecord := range left {
+		rightRecord, found := right[invocationID]
+		if !found || !sameGatewayInvocationRecord(leftRecord, rightRecord) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateGatewayInvocationRecordForReceiptMigration(
+	record GatewayInvocationRecord,
+) (bool, error) {
+	if err := record.validate(); err == nil {
+		return false, nil
+	}
+	if !storedLegacyBrowserDescriptor(record.Descriptor) {
+		return false, record.validate()
+	}
+	compatible := cloneCommandDescriptor(record.Descriptor)
+	compatible.OutputSchema = BrowserCommandOutputSchema(
+		compatible.Name,
+		compatible.BrowserProfiles,
+	)
+	if err := compatible.Validate(); err != nil {
+		return false, err
+	}
+	if err := record.validateFields(true); err != nil {
+		return false, err
+	}
+	descriptorHash, err := (CapabilityCatalog{
+		Commands: []CommandDescriptor{record.Descriptor},
+	}).canonicalHash()
+	if err != nil {
+		return false, err
+	}
+	if descriptorHash != record.Plan.DescriptorHash {
+		return false, fmt.Errorf("%w: descriptor does not match plan", ErrInvalidInvocation)
+	}
+	return true, nil
+}
+
+func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) error {
+	if err := record.validate(); err == nil {
+		return nil
+	}
+	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
+	if err != nil {
+		return err
+	}
+	if !legacy || record.State != GatewayInvocationDispatched {
+		return fmt.Errorf("%w: legacy browser invocation is not a dispatched tombstone", ErrInvalidInvocation)
+	}
+	return nil
 }
 
 func readGatewayInvocationMigrationSource(
@@ -987,7 +1152,7 @@ func (store *gatewayInvocationSQLiteStore) importOrVerify(
 			if invocationID != record.Plan.InvocationID {
 				return errors.New("gateway node invocation migration key mismatch")
 			}
-			if err = insertGatewayInvocationRecord(ctx, transaction, record); err != nil {
+			if err = insertGatewayInvocationRecordForMigration(ctx, transaction, record); err != nil {
 				return fmt.Errorf("import gateway node invocation %q: %w", invocationID, err)
 			}
 		}
@@ -1024,6 +1189,22 @@ type gatewayInvocationScanner interface {
 }
 
 func scanGatewayInvocationRecord(scanner gatewayInvocationScanner) (GatewayInvocationRecord, error) {
+	record, projection, err := scanGatewayInvocationRecordUnchecked(scanner)
+	if err != nil {
+		return GatewayInvocationRecord{}, err
+	}
+	if err = validateGatewayInvocationRecordForStorage(record); err != nil {
+		return GatewayInvocationRecord{}, err
+	}
+	if err = validateGatewayInvocationProjection(record, projection); err != nil {
+		return GatewayInvocationRecord{}, err
+	}
+	return record, nil
+}
+
+func scanGatewayInvocationRecordUnchecked(
+	scanner gatewayInvocationScanner,
+) (GatewayInvocationRecord, gatewayInvocationProjection, error) {
 	var projection gatewayInvocationProjection
 	if err := scanner.Scan(
 		&projection.invocationID, &projection.idempotencyKey, &projection.target,
@@ -1033,27 +1214,35 @@ func scanGatewayInvocationRecord(scanner gatewayInvocationScanner) (GatewayInvoc
 		&projection.updatedAt, &projection.dispatchedAt, &projection.planExpiresAt,
 		&projection.recordJSON,
 	); err != nil {
-		return GatewayInvocationRecord{}, err
+		return GatewayInvocationRecord{}, gatewayInvocationProjection{}, err
 	}
 	var record GatewayInvocationRecord
 	decoder := json.NewDecoder(bytes.NewReader(projection.recordJSON))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&record); err != nil {
-		return GatewayInvocationRecord{}, fmt.Errorf("decode canonical invocation record: %w", err)
+		return GatewayInvocationRecord{}, gatewayInvocationProjection{}, fmt.Errorf(
+			"decode canonical invocation record: %w", err,
+		)
 	}
 	if err := requireGatewayInvocationJSONEOF(decoder); err != nil {
-		return GatewayInvocationRecord{}, fmt.Errorf("decode canonical invocation record: %w", err)
+		return GatewayInvocationRecord{}, gatewayInvocationProjection{}, fmt.Errorf(
+			"decode canonical invocation record: %w", err,
+		)
 	}
-	if err := record.validate(); err != nil {
-		return GatewayInvocationRecord{}, err
-	}
+	return record, projection, nil
+}
+
+func validateGatewayInvocationProjection(
+	record GatewayInvocationRecord,
+	projection gatewayInvocationProjection,
+) error {
 	want := projectGatewayInvocationRecord(record)
 	want.recordJSON = nil
 	projection.recordJSON = nil
 	if !reflect.DeepEqual(want, projection) {
-		return GatewayInvocationRecord{}, errors.New("gateway node invocation SQLite projection mismatch")
+		return errors.New("gateway node invocation SQLite projection mismatch")
 	}
-	return record, nil
+	return nil
 }
 
 func projectGatewayInvocationRecord(record GatewayInvocationRecord) gatewayInvocationProjection {
@@ -1078,6 +1267,29 @@ func insertGatewayInvocationRecord(
 	if err := record.validate(); err != nil {
 		return err
 	}
+	return insertGatewayInvocationRecordUnchecked(ctx, executor, record)
+}
+
+func insertGatewayInvocationRecordForMigration(
+	ctx context.Context,
+	executor interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	},
+	record GatewayInvocationRecord,
+) error {
+	if err := validateGatewayInvocationRecordForStorage(record); err != nil {
+		return err
+	}
+	return insertGatewayInvocationRecordUnchecked(ctx, executor, record)
+}
+
+func insertGatewayInvocationRecordUnchecked(
+	ctx context.Context,
+	executor interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	},
+	record GatewayInvocationRecord,
+) error {
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode gateway node invocation record: %w", err)
@@ -1102,7 +1314,7 @@ func updateGatewayInvocationRecord(
 	transaction *sql.Tx,
 	record GatewayInvocationRecord,
 ) error {
-	if err := record.validate(); err != nil {
+	if err := validateGatewayInvocationRecordForStorage(record); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(record)
