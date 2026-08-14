@@ -36,6 +36,7 @@ type browserNodeTestHandler struct {
 	redactNextActObservation bool
 	redactNextObservation    bool
 	redactNextContext        bool
+	dynamicContextCatalog    bool
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -141,9 +142,14 @@ func (handler *browserNodeTestHandler) Invoke(
 		var input nodes.BrowserContextInput
 		_ = json.Unmarshal(plan.Input, &input)
 		handler.contextOperations = append(handler.contextOperations, input.Operation)
-		result = nodes.BrowserContextResult{
-			Operation: input.Operation, Catalog: browserNodeTestContextCatalog(),
+		catalog := browserNodeTestContextCatalog()
+		if handler.dynamicContextCatalog && handler.currentURL != "" {
+			catalog.Generation = 2
+			catalog.Tabs[0].DocumentGeneration = 2
+			catalog.Tabs[0].URL = handler.currentURL
+			catalog.Tabs[0].Origin = handler.currentOrigin
 		}
+		result = nodes.BrowserContextResult{Operation: input.Operation, Catalog: catalog}
 		if handler.redactNextContext {
 			result = nodes.BrowserContextResult{
 				Operation: input.Operation, ProtectedResult: true,
@@ -368,6 +374,64 @@ func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t
 	}
 }
 
+func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChanges(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	handler.dynamicContextCatalog = true
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	if _, err = worker.ContextCatalog(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
+		InvocationID: "invocation_navigate",
+		Prepared: browser.PreparedAction{
+			Action: browser.Action{Kind: browser.ActionNavigate},
+			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank", ActionHash: strings.Repeat("a", 64),
+		},
+		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = worker.ContextCatalog(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := worker.Observe(t.Context())
+	if err != nil || observation.URL != "https://example.com/" {
+		t.Fatalf("fresh post-navigation observation = %#v, %v", observation, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandContexts,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandAct,
+		nodes.BrowserCommandContexts,
+		nodes.BrowserCommandObserve,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want fresh remote observation %#v", commands, want)
+	}
+}
+
 func TestGatewayBrowserWorkerRefreshesRecoveredSelectObservationWithoutReplay(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
@@ -537,6 +601,15 @@ func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testi
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
 		t.Fatal(err)
+	}
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	)
+	if err != nil || !slices.Equal(
+		diagnostics.Actions,
+		[]browser.ActionKind{browser.ActionNavigate, browser.ActionFill},
+	) {
+		t.Fatalf("fill diagnostics = %#v, %v", diagnostics, err)
 	}
 	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
 	if err != nil {
