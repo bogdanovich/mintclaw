@@ -106,6 +106,7 @@ func diagnosticPromptHashMessages(messages []providers.Message) []providers.Mess
 		projected[index].ToolCalls = nil
 		projected[index].Media = nil
 		projected[index].Attachments = nil
+		projected[index].SystemParts = nil
 	}
 	return projected
 }

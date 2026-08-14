@@ -456,7 +456,10 @@ func TestDiagnosticPromptHashProjectsProtectedResultsWithoutMutatingLiveMessages
 					},
 				}},
 			},
-			{Role: "tool", ToolCallID: "fill-hash-call", Content: "textbox: [" + value + "]"},
+			{
+				Role: "tool", ToolCallID: "fill-hash-call", Content: "textbox: [" + value + "]",
+				SystemParts: []providers.ContentBlock{{Text: "structured: [" + value + "]"}},
+			},
 		}
 	}
 	first := protectedMessages("low-entropy-a")
@@ -469,6 +472,10 @@ func TestDiagnosticPromptHashProjectsProtectedResultsWithoutMutatingLiveMessages
 	}
 	if !strings.Contains(first[1].Content, "low-entropy-a") {
 		t.Fatalf("live provider message was mutated: %#v", first)
+	}
+	if len(first[1].SystemParts) != 1 ||
+		!strings.Contains(first[1].SystemParts[0].Text, "low-entropy-a") {
+		t.Fatalf("live provider SystemParts were mutated: %#v", first[1].SystemParts)
 	}
 	projected := diagnosticPromptHashMessages(first)
 	encoded, err := json.Marshal(projected)
