@@ -1143,33 +1143,58 @@ func BrowserCommandOutputSchema(
 			},
 		})
 	case BrowserCommandContexts:
-		contextResult := map[string]any{
-			"type": "object", "additionalProperties": false,
-			"required": []string{"operation", "context_catalog"},
-			"properties": map[string]any{
-				"operation":       map[string]any{"enum": []string{"list", "open", "select", "close"}},
-				"context_catalog": browserContextCatalogSchema(),
-				"observation":     rawSchema(browserObservationSchema(limits)),
-			},
-			"allOf": []any{map[string]any{"oneOf": []any{
-				map[string]any{
-					"properties": map[string]any{"operation": map[string]any{"const": "select"}},
-					"required":   []string{"observation"},
-				},
-				map[string]any{
-					"properties": map[string]any{
-						"operation": map[string]any{"enum": []string{"list", "open", "close"}},
-					},
-					"not": map[string]any{"required": []string{"observation"}},
-				},
-			}}},
-		}
 		return mustJSON(map[string]any{"oneOf": []any{
-			contextResult,
+			browserContextCommandResultSchema(limits),
 			browserProtectedResultReceiptSchema(map[string]any{
 				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			}),
 		}})
+	default:
+		return json.RawMessage("false")
+	}
+}
+
+func browserContextCommandResultSchema(limits BrowserLimits) map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"operation", "context_catalog"},
+		"properties": map[string]any{
+			"operation":       map[string]any{"enum": []string{"list", "open", "select", "close"}},
+			"context_catalog": browserContextCatalogSchema(),
+			"observation":     rawSchema(browserObservationSchema(limits)),
+		},
+		"allOf": []any{map[string]any{"oneOf": []any{
+			map[string]any{
+				"properties": map[string]any{"operation": map[string]any{"const": "select"}},
+				"required":   []string{"observation"},
+			},
+			map[string]any{
+				"properties": map[string]any{
+					"operation": map[string]any{"enum": []string{"list", "open", "close"}},
+				},
+				"not": map[string]any{"required": []string{"observation"}},
+			},
+		}}},
+	}
+}
+
+// legacyBrowserPageResultOutputSchema is the exact observe/context result
+// contract advertised before protected recovery receipts were introduced. It
+// exists only for fail-closed registry migration; live catalogs must advertise
+// BrowserCommandOutputSchema and renew approval against its new catalog hash.
+func legacyBrowserPageResultOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	if len(profiles) == 0 {
+		return json.RawMessage("false")
+	}
+	limits := strictestBrowserLimits(profiles)
+	switch command {
+	case BrowserCommandObserve:
+		return browserObservationSchema(limits)
+	case BrowserCommandContexts:
+		return mustJSON(browserContextCommandResultSchema(limits))
 	default:
 		return json.RawMessage("false")
 	}

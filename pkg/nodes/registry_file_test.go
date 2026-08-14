@@ -173,6 +173,72 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 	}
 }
 
+func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := DeriveID(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := browserProfileDescriptorFixture()
+	currentDescriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
+	for index := range legacyDescriptors {
+		descriptor := &legacyDescriptors[index]
+		if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts {
+			descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		}
+	}
+	legacyCatalog := CapabilityCatalog{Commands: legacyDescriptors}
+	legacyHash, err := legacyCatalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(id): {
+			Snapshot: Snapshot{
+				ID: id, State: StateDisconnected, ProtocolVersion: ProtocolV1,
+				Catalog: legacyCatalog, CatalogHash: legacyHash,
+			},
+			PublicKey: publicKey, RequestedRole: "companion", RequestedAt: 1,
+			AllowedCommands: []string{
+				BrowserCommandSessionOpen, BrowserCommandObserve, BrowserCommandContexts,
+			},
+			ApprovedCatalogHash: legacyHash, ApprovedAt: 2,
+		},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+	registration, exists, err := registry.Registration(id)
+	if err != nil || !exists {
+		t.Fatalf("Registration() = exists %v, error %v", exists, err)
+	}
+	if len(registration.AllowedCommands) != 0 || registration.ApprovedCatalogHash != "" {
+		t.Fatalf("pre-receipt authority was not suspended: %#v", registration)
+	}
+	if _, err = registration.ApprovedCommand(BrowserCommandObserve); !errors.Is(err, ErrCommandDenied) {
+		t.Fatalf("legacy ApprovedCommand() error = %v", err)
+	}
+}
+
 func TestFileRegistryRejectsUnknownLegacyBrowserSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	pairing := testPendingPairing(t, 1)
