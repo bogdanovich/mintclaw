@@ -55,6 +55,13 @@ func TestInvocationCommandFailurePreservesAuthorizedFileNotFound(t *testing.T) {
 	if reason := invocationRejectionReason(err); reason != "execution_failed" {
 		t.Fatalf("file-not-found rejection reason = %q", reason)
 	}
+	recorded := &recordedInvocationError{failure: nodes.InvocationFailure{
+		Code: nodes.InvocationDispatchFileNotFound, Message: "workspace file was not found",
+	}}
+	code, message = invocationCommandFailure(recorded)
+	if code != nodes.InvocationDispatchFileNotFound || message != "workspace file was not found" {
+		t.Fatalf("durable invocationCommandFailure() = %q, %q", code, message)
+	}
 }
 
 func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {

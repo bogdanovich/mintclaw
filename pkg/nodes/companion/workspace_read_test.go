@@ -3,8 +3,10 @@
 package companion
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -126,6 +128,87 @@ func TestWorkspaceReadMissingFileIsDurableNotFoundWithoutReplay(t *testing.T) {
 		if !errors.As(err, &recorded) || recorded.failure.Code != nodes.InvocationDispatchFileNotFound {
 			t.Fatalf("duplicate missing workspace read error = %T %v", err, err)
 		}
+	}
+}
+
+func TestWorkspaceReadTransportPreservesDuplicateFileNotFound(t *testing.T) {
+	registry, admission := testGatewayAdmission(t)
+	server := httptest.NewTLSServer(admission)
+	defer server.Close()
+	identity := testIdentity(t)
+	runtime, root := newWorkspaceReadSearchTestRuntime(t)
+	runtime.nodeID = identity.ID
+	client := testRuntimeClientForServer(t, server, identity, runtime)
+	authentication, err := client.Authenticate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Approve(authentication.NodeID, nodes.PairingApproval{
+		AllowedCommands: []string{nodes.WorkspaceCommandRead},
+		At:              time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(runCtx) }()
+	waitForNodeState(t, registry, identity.ID, nodes.StateConnected)
+
+	registration, exists, err := registry.Registration(identity.ID)
+	if err != nil || !exists {
+		t.Fatalf("Registration() = exists %v, error %v", exists, err)
+	}
+	descriptor, err := registration.ApprovedCommand(nodes.WorkspaceCommandRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, available := nodes.ProjectFileDescriptorForProfile(descriptor, "project")
+	if !available {
+		t.Fatal("workspace read descriptor does not expose the project file profile")
+	}
+	input := json.RawMessage(`{
+		"profile_revision":"project-v1",
+		"workspace_revision":"workspace-v1",
+		"working_scope":"project",
+		"path":"transport-missing.txt",
+		"start_line":1,
+		"max_lines":10
+	}`)
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+		InvocationID: "inv_workspace_not_found", IdempotencyKey: "idem_workspace_not_found",
+		NodeID: identity.ID, CatalogHash: registration.Snapshot.CatalogHash,
+		Command: descriptor.Name, Input: input,
+		AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
+		TimeoutSeconds: 5, OutputLimitBytes: 4096,
+	}, descriptor, registration.Snapshot.Executor, registration.Snapshot.PolicyRevision, time.Now(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.policy.Authorize(plan, runtime.catalog, runtime.nodeID, LocalExecutor, time.Now()); err != nil {
+		t.Fatalf("transport test plan is not authorized by the companion runtime: %v", err)
+	}
+	assertNotFound := func(label string) {
+		t.Helper()
+		_, dispatched, invokeErr := admission.Invoke(t.Context(), identity.ID, plan, nil, nil)
+		code, classified := nodes.InvocationDispatchErrorCode(invokeErr)
+		if !dispatched || !classified || code != nodes.InvocationDispatchFileNotFound {
+			t.Fatalf("%s Invoke() = dispatched %v, code %q, classified %v, error %v",
+				label, dispatched, code, classified, invokeErr)
+		}
+	}
+	assertNotFound("initial")
+	if err := os.WriteFile(
+		filepath.Join(root, "transport-missing.txt"),
+		[]byte("created after durable failure"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertNotFound("duplicate")
+
+	cancelRun()
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

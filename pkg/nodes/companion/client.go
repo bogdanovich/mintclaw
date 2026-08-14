@@ -1020,6 +1020,10 @@ func (client *Client) handleInvoke(
 }
 
 func invocationCommandFailure(err error) (string, string) {
+	if failure, ok := boundedInvocationFailure(err); ok &&
+		failure.Code == nodes.InvocationDispatchFileNotFound {
+		return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
+	}
 	switch {
 	case errors.Is(err, ErrFileNotFound):
 		return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
@@ -1036,6 +1040,18 @@ func invocationCommandFailure(err error) (string, string) {
 	default:
 		return nodes.InvocationDispatchExecutionFailed, "node command failed"
 	}
+}
+
+func boundedInvocationFailure(err error) (nodes.InvocationFailure, bool) {
+	var commandFailure *commandFailureError
+	if errors.As(err, &commandFailure) {
+		return commandFailure.failure, true
+	}
+	var recordedFailure *recordedInvocationError
+	if errors.As(err, &recordedFailure) {
+		return recordedFailure.failure, true
+	}
+	return nodes.InvocationFailure{}, false
 }
 
 func invocationRejectionReason(err error) string {
