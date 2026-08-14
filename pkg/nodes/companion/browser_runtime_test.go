@@ -724,6 +724,8 @@ func TestRuntimeExecutesTypedCheckUncheckAndHover(t *testing.T) {
 func TestRuntimeExecutesApprovedTypedDrag(t *testing.T) {
 	host := browserRuntimeHostFixture()
 	host.profiles[0].Actions = []string{"drag", "navigate"}
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
 	runtime := newBrowserRuntimeFixture(t, host)
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
