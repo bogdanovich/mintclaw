@@ -931,24 +931,9 @@ func playwrightNavigationCheckedActionCode(
 		if action.Kind != DriverCheck && action.Kind != DriverUncheck {
 			return "", fmt.Errorf("%w: navigation-checked unsafe action is unsupported", ErrInvalid)
 		}
-		checked := action.Kind == DriverCheck
-		operation := "uncheck"
-		if checked {
-			operation = "check"
-		}
-		dispatch = `const checkTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
-  if (await checkTarget.count() !== 1 || !await checkTarget.isVisible()) {
-    return "MINTCLAW_NAV_ACT_V1|stale";
-  }
-  if (!` + strconv.FormatBool(checked) + ` && await checkTarget.getAttribute("type") === "radio") {
-    return "MINTCLAW_NAV_ACT_V1|denied";
-  }
-  await checkTarget.click({ trial: true });
-  if (await checkTarget.isChecked() !== ` + strconv.FormatBool(checked) + `) {
-    await checkTarget.` + operation + `();
-    if (await checkTarget.isChecked() !== ` + strconv.FormatBool(checked) + `) {
-      return "MINTCLAW_NAV_ACT_V1|error|final_state_mismatch";
-    }
+		dispatch = playwrightCheckDispatch(action.Target, action.Kind == DriverCheck) + `
+  if (checkOutcome !== "no_change" && checkOutcome !== "completed") {
+    return "MINTCLAW_NAV_ACT_V1|" + checkOutcome;
   }`
 	case "browser_hover":
 		dispatch = `const hoverTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
@@ -1591,23 +1576,45 @@ func validPlaywrightElementAction(action DriverAction, allowDestination bool) bo
 }
 
 func playwrightCheckActionCode(target string, checked bool) string {
+	return `async (page) => {
+	` + playwrightCheckDispatch(target, checked) + `
+  return "MINTCLAW_CHECK_V1|" + checkOutcome;
+}`
+}
+
+func playwrightCheckDispatch(target string, checked bool) string {
 	encoded, _ := json.Marshal(target)
 	operation := "uncheck"
 	if checked {
 		operation = "check"
 	}
-	return `async (page) => {
-  const control = page.locator("aria-ref=" + ` + string(encoded) + `);
-  if (await control.count() !== 1 || !await control.isVisible()) return "MINTCLAW_CHECK_V1|stale";
-  if (!` + strconv.FormatBool(checked) + ` && await control.getAttribute("type") === "radio") {
-    return "MINTCLAW_CHECK_V1|denied";
+	return `const checkOutcome = await (async () => {
+  const checkTarget = page.locator("aria-ref=" + ` + string(encoded) + `);
+  if (await checkTarget.count() !== 1 || !await checkTarget.isVisible()) return "stale";
+  const tagName = String(await checkTarget.evaluate(element => element.tagName || "")).toLowerCase();
+  const inputType = String(await checkTarget.getAttribute("type") || "").toLowerCase();
+  const semanticRole = String(await checkTarget.getAttribute("role") || "").toLowerCase();
+  const nativeControl = tagName === "input" && (inputType === "checkbox" || inputType === "radio");
+  if ((nativeControl && inputType === "radio" || !nativeControl && semanticRole === "radio") &&
+      !` + strconv.FormatBool(checked) + `) return "denied";
+  if (nativeControl) {
+    await checkTarget.click({ trial: true });
+    if (await checkTarget.isChecked() === ` + strconv.FormatBool(checked) + `) return "no_change";
+    await checkTarget.` + operation + `();
+    if (await checkTarget.isChecked() !== ` + strconv.FormatBool(checked) + `) {
+      return "error|final_state_mismatch";
+    }
+    return "completed";
   }
-  await control.click({ trial: true });
-  if (await control.isChecked() === ` + strconv.FormatBool(checked) + `) return "MINTCLAW_CHECK_V1|no_change";
-  await control.` + operation + `();
-  if (await control.isChecked() !== ` + strconv.FormatBool(checked) + `) throw new Error("final_state_mismatch");
-  return "MINTCLAW_CHECK_V1|completed";
-}`
+  if (semanticRole !== "checkbox" && semanticRole !== "switch" && semanticRole !== "radio") return "denied";
+  const before = String(await checkTarget.getAttribute("aria-checked") || "").toLowerCase();
+  if (before !== "true" && before !== "false") return "denied";
+  if ((before === "true") === ` + strconv.FormatBool(checked) + `) return "no_change";
+  await checkTarget.click();
+  const after = String(await checkTarget.getAttribute("aria-checked") || "").toLowerCase();
+  if ((after === "true") !== ` + strconv.FormatBool(checked) + `) return "error|final_state_mismatch";
+  return "completed";
+})();`
 }
 
 func parsePlaywrightCheckAction(text string) error {

@@ -255,7 +255,11 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 			required: []string{
 				`const checkTarget = page.locator("aria-ref=" + "e5")`,
 				`await checkTarget.click({ trial: true })`, `await checkTarget.check()`,
-				`await checkTarget.isChecked() !== true`, `MINTCLAW_NAV_ACT_V1|error|final_state_mismatch`,
+				`await checkTarget.isChecked() !== true`, `return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
+				`semanticRole !== "checkbox" && semanticRole !== "switch"`,
+				`const before = String(await checkTarget.getAttribute("aria-checked")`,
+				`await checkTarget.click()`, `const after = String(await checkTarget.getAttribute("aria-checked")`,
+				`return "error|final_state_mismatch"`,
 			},
 			forbid: []string{`await checkTarget.uncheck()`},
 		},
@@ -264,7 +268,8 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 			required: []string{
 				`const checkTarget = page.locator("aria-ref=" + "e6")`,
 				`await checkTarget.click({ trial: true })`, `await checkTarget.uncheck()`,
-				`await checkTarget.isChecked() !== false`, `getAttribute("type") === "radio"`,
+				`await checkTarget.isChecked() !== false`, `inputType === "radio"`, `semanticRole === "radio"`,
+				`await checkTarget.click()`, `return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
 			},
 			forbid: []string{`await checkTarget.check()`},
 		},
@@ -1199,15 +1204,17 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 			wantTool: "browser_run_code_unsafe",
 			codeTerms: []string{
 				`page.locator("aria-ref=" + "f2e4")`, `.click({ trial: true })`, ".check()", "isChecked()",
-				`return "MINTCLAW_CHECK_V1|no_change"`,
+				`semanticRole !== "checkbox" && semanticRole !== "switch"`, `.click()`,
+				`return "MINTCLAW_CHECK_V1|" + checkOutcome`,
 			},
 		},
 		{
 			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
 			wantTool: "browser_run_code_unsafe",
 			codeTerms: []string{
-				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
-				`return "MINTCLAW_CHECK_V1|denied"`,
+				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `inputType === "radio"`,
+				`semanticRole === "radio"`, `getAttribute("aria-checked")`,
+				`return "MINTCLAW_CHECK_V1|" + checkOutcome`,
 			},
 		},
 	}
