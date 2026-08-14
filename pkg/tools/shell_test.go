@@ -541,6 +541,9 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "truncated") {
 		t.Fatalf("expected truncation marker, got: %s", result.ForLLM)
 	}
+	if len(result.ArtifactTags) != 0 {
+		t.Fatalf("non-coding exec should not retain output artifacts: %v", result.ArtifactTags)
+	}
 }
 
 func TestShellTool_OutputTruncationPreservesUTF8(t *testing.T) {
@@ -553,6 +556,88 @@ func TestShellTool_OutputTruncationPreservesUTF8(t *testing.T) {
 	}
 	if !strings.Contains(output, "truncated") {
 		t.Fatalf("expected truncation marker, got: %s", output)
+	}
+}
+
+func TestCodingShellTool_RetainsFullTruncatedOutputArtifact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertion uses POSIX syntax")
+	}
+	workspace := t.TempDir()
+	scratch := t.TempDir()
+	tool, err := NewCodingExecToolWithRuntimeConfig(workspace, scratch, config.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tool.Close() })
+
+	result := tool.Execute(
+		toolshared.WithToolContext(context.Background(), "coding", "thread-quality"),
+		map[string]any{
+			"action":  "run",
+			"command": "python3 -c \"print('HEAD-' + 'x' * 20000 + '-TAIL')\"",
+		},
+	)
+	if result.IsError || len(result.ArtifactTags) != 1 ||
+		!strings.Contains(result.ForLLM, "Full command output retained") {
+		t.Fatalf("coding truncated result = %#v", result)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	if !strings.HasPrefix(path, filepath.Join(scratch, "command-output")) {
+		t.Fatalf("artifact path = %q, want under scratch %q", path, scratch)
+	}
+	full, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(full), "HEAD-") || !strings.Contains(string(full), "-TAIL") ||
+		len(full) <= maxCommandOutputBytes {
+		t.Fatalf("retained output length = %d", len(full))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("artifact mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestPruneCommandOutputArtifacts_BoundsAgeCountAndBytes(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	artifacts := []struct {
+		name    string
+		size    int
+		modTime time.Time
+	}{
+		{name: "expired.log", size: 1000, modTime: now.Add(-48 * time.Hour)},
+		{name: "oldest.log", size: 12000, modTime: now.Add(-3 * time.Hour)},
+		{name: "newer.log", size: 12000, modTime: now.Add(-2 * time.Hour)},
+		{name: "current.log", size: 12000, modTime: now.Add(-time.Hour)},
+	}
+	for _, artifact := range artifacts {
+		path := filepath.Join(dir, artifact.name)
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", artifact.size)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, artifact.modTime, artifact.modTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(dir, "current.log")
+	if err := pruneCommandOutputArtifacts(dir, current, now, 2, 25000, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Name() != "current.log" || entries[1].Name() != "newer.log" {
+		t.Fatalf("retained artifacts = %v, want current.log and newer.log", entries)
+	}
+	if _, err := os.Stat(current); err != nil {
+		t.Fatalf("current artifact was pruned: %v", err)
 	}
 }
 

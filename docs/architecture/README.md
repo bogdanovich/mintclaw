@@ -13,6 +13,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   redacted side-effect start markers, conservative startup repair, and no-replay crash semantics.
 - [Local Coding Agent P2.6 Native Turn](local-coding-agent-p2-native-turn.md): native CLI-to-AgentLoop execution,
   provider selection, restart continuation, inspectable failures, and deterministic command-level evidence.
+- [Local Coding Agent P2 Exit Record](local-coding-agent-p2-exit.md): packet-by-packet evidence for the completed
+  native coding runtime profile and the explicit P3/P4 boundary.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.

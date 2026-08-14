@@ -61,3 +61,7 @@ These are not unit tests. They are deterministic runtime integration tests:
 
 Prefer this harness over live Telegram/manual testing for regressions that need
 to stay fixed.
+
+For the native coding tool quality matrix, metrics, awkward repository
+fixtures, and opt-in live smoke, see
+[Coding tool quality gate](coding-tool-quality-gate.md).
