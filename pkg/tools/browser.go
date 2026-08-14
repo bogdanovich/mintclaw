@@ -972,7 +972,7 @@ func (*BrowserActTool) Description() string {
 func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
 	actions := []string{
-		"navigate", "click", "fill", "select", "press", "scroll", "dialog", "upload",
+		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "press", "scroll", "dialog", "upload",
 	}
 	downloadAvailable := false
 	if tool != nil && tool.runtime != nil {

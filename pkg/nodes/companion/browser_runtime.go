@@ -31,6 +31,12 @@ type browserContextCommandHost interface {
 	Contexts(context.Context, nodes.BrowserHostContextRequest) (nodes.BrowserContextResult, error)
 }
 
+type browserOrdinaryInteractionCommandHost interface {
+	Check(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Uncheck(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Hover(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -216,7 +222,8 @@ func (handler *browserCommandHandler) executeAct(
 	}
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
 		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
-		input.Action.Kind != "dialog") ||
+		input.Action.Kind != "dialog" && input.Action.Kind != "check" && input.Action.Kind != "uncheck" &&
+		input.Action.Kind != "hover") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
@@ -233,8 +240,14 @@ func (handler *browserCommandHandler) executeAct(
 			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
 				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
 		(input.Action.Kind == "dialog" && !validCompanionDialogAction(input)) ||
+		((input.Action.Kind == "check" || input.Action.Kind == "uncheck") &&
+			(input.Effect != "local_edit" || !nodes.BrowserCheckRoleAllowed(input.Action.Kind, input.ExpectedRole) ||
+				input.ApprovalDigest != "")) ||
+		(input.Action.Kind == "hover" &&
+			(input.Effect != "read" || input.ExpectedRole == "" || input.ApprovalDigest != "")) ||
 		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
-			input.Action.Kind != "press" && input.Action.Kind != "dialog" &&
+			input.Action.Kind != "press" && input.Action.Kind != "dialog" && input.Action.Kind != "check" &&
+			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -270,6 +283,19 @@ func (handler *browserCommandHandler) executeAct(
 		observation, err = handler.host.Press(ctx, request)
 	case "dialog":
 		observation, err = handler.host.Dialog(ctx, request)
+	case "check", "uncheck", "hover":
+		ordinary, ok := handler.host.(browserOrdinaryInteractionCommandHost)
+		if !ok {
+			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
+		}
+		switch input.Action.Kind {
+		case "check":
+			observation, err = ordinary.Check(ctx, request)
+		case "uncheck":
+			observation, err = ordinary.Uncheck(ctx, request)
+		default:
+			observation, err = ordinary.Hover(ctx, request)
+		}
 	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}

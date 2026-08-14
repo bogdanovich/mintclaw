@@ -614,7 +614,9 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			},
 		}
 		profile := browserHostProfileFixture()
-		profile.AllowedActions = []string{"fill", "navigate", "press", "select"}
+		profile.AllowedActions = []string{
+			"check", "fill", "hover", "navigate", "press", "select", "uncheck",
+		}
 		profile.DryRun = false
 		profile.AllowApprovedActions = true
 		host, err := newBrowserHost(
@@ -661,6 +663,70 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Kind: browserworker.DriverSelect, Target: element.Target, Element: element.Name, Value: "CA",
 		}); len(worker.actions) != 1 || worker.actions[0] != want {
 			t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+		}
+	})
+
+	for _, test := range []struct {
+		kind, role, effect string
+		driverKind         browserworker.DriverActionKind
+	}{
+		{kind: "check", role: "radio", effect: "local_edit", driverKind: browserworker.DriverCheck},
+		{kind: "uncheck", role: "checkbox", effect: "local_edit", driverKind: browserworker.DriverUncheck},
+		{kind: "hover", role: "button", effect: "read", driverKind: browserworker.DriverHover},
+	} {
+		t.Run(test.kind+" semantic control", func(t *testing.T) {
+			element := browserworker.DriverElement{
+				Target: "driver_" + test.kind + "_1",
+				Role:   test.role,
+				Name:   "Control",
+			}
+			host, worker, initial := newFixture(t, element)
+			request := BrowserHostNavigateRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_" + test.kind + "_1",
+				Action:             nodes.BrowserAction{Kind: test.kind, Ref: initial.Elements[0].Ref},
+				Effect:             test.effect, CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: "Control",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			var result BrowserHostObservation
+			var err error
+			switch test.kind {
+			case "check":
+				result, err = host.Check(t.Context(), request)
+			case "uncheck":
+				result, err = host.Uncheck(t.Context(), request)
+			default:
+				result, err = host.Hover(t.Context(), request)
+			}
+			if err != nil || result.SnapshotGeneration != 2 {
+				t.Fatalf("%s = %#v, %v", test.kind, result, err)
+			}
+			want := browserworker.DriverAction{Kind: test.driverKind, Target: element.Target, Element: element.Name}
+			if len(worker.actions) != 1 || worker.actions[0] != want {
+				t.Fatalf("driver actions = %#v, want %#v", worker.actions, want)
+			}
+		})
+	}
+
+	t.Run("deny radio uncheck", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_radio_1", Role: "radio", Name: "Primary"}
+		host, worker, initial := newFixture(t, element)
+		request := BrowserHostNavigateRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_uncheck_radio_1",
+			Action:             nodes.BrowserAction{Kind: "uncheck", Ref: initial.Elements[0].Ref},
+			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "radio", ExpectedName: "Primary",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		if _, err := host.Uncheck(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+			t.Fatalf("Uncheck(radio) error = %v, want denied", err)
+		}
+		if len(worker.actions) != 0 {
+			t.Fatalf("radio uncheck reached driver: %#v", worker.actions)
 		}
 	})
 

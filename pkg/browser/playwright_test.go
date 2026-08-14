@@ -243,6 +243,71 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 	}
 }
 
+func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitives(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   DriverAction
+		required []string
+		forbid   []string
+	}{
+		{
+			name: "check", action: DriverAction{Kind: DriverCheck, Target: "e5", Element: "Notify"},
+			required: []string{
+				`const checkTarget = page.locator("aria-ref=" + "e5")`,
+				`const desiredCheckedState = "true"`,
+				`await checkTarget.click({ trial: true })`, `await checkTarget.check()`,
+				`await checkTarget.isChecked() !== true`, `return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
+				`semanticRole !== "checkbox" && semanticRole !== "switch"`,
+				`const before = String(await checkTarget.getAttribute("aria-checked")`,
+				`await checkTarget.click()`, `const after = String(await checkTarget.getAttribute("aria-checked")`,
+				`return "error|final_state_mismatch"`,
+			},
+			forbid: []string{`await checkTarget.uncheck()`},
+		},
+		{
+			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e6", Element: "Updates"},
+			required: []string{
+				`const checkTarget = page.locator("aria-ref=" + "e6")`,
+				`const desiredCheckedState = "false"`,
+				`await checkTarget.click({ trial: true })`, `await checkTarget.uncheck()`,
+				`await checkTarget.isChecked() !== false`, `inputType === "radio"`, `semanticRole === "radio"`,
+				`await checkTarget.click()`, `after !== desiredCheckedState`,
+				`return "MINTCLAW_NAV_ACT_V1|" + checkOutcome`,
+			},
+			forbid: []string{`await checkTarget.check()`, `(after === "true") !== false`},
+		},
+		{
+			name: "hover", action: DriverAction{Kind: DriverHover, Target: "e7", Element: "Menu"},
+			required: []string{
+				`const hoverTarget = page.locator("aria-ref=" + "e7")`,
+				`await hoverTarget.count() !== 1`, `!await hoverTarget.isVisible()`, `await hoverTarget.hover()`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+				frameID: "frame-1", loaderID: "loader-1", generation: 7,
+			}, test.action, config.BrowserLimitsConfig{}.Effective(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range append([]string{
+				`const expectedGeneration = 7`, `state.generation !== expectedGeneration`,
+			}, test.required...) {
+				if !strings.Contains(code, required) {
+					t.Fatalf("navigation-checked %s code omitted %q: %s", test.name, required, code)
+				}
+			}
+			for _, forbidden := range test.forbid {
+				if strings.Contains(code, forbidden) {
+					t.Fatalf("navigation-checked %s code contains %q: %s", test.name, forbidden, code)
+				}
+			}
+		})
+	}
+}
+
 func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|denied\""),
@@ -1142,15 +1207,17 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 			wantTool: "browser_run_code_unsafe",
 			codeTerms: []string{
 				`page.locator("aria-ref=" + "f2e4")`, `.click({ trial: true })`, ".check()", "isChecked()",
-				`return "MINTCLAW_CHECK_V1|no_change"`,
+				`semanticRole !== "checkbox" && semanticRole !== "switch"`, `.click()`,
+				`return "MINTCLAW_CHECK_V1|" + checkOutcome`,
 			},
 		},
 		{
 			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
 			wantTool: "browser_run_code_unsafe",
 			codeTerms: []string{
-				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
-				`return "MINTCLAW_CHECK_V1|denied"`,
+				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `inputType === "radio"`,
+				`semanticRole === "radio"`, `getAttribute("aria-checked")`,
+				`return "MINTCLAW_CHECK_V1|" + checkOutcome`,
 			},
 		},
 	}

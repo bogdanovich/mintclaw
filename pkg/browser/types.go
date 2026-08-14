@@ -612,7 +612,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}
 	switch prepared.Action.Kind {
-	case ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser:
+	case ActionDrag, ActionFileChooser:
 		return fmt.Errorf("%w: unsupported prepared action kind", ErrInvalid)
 	}
 	if !validContextBinding(
@@ -673,6 +673,16 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared click", ErrInvalid)
 		}
+	case ActionCheck, ActionUncheck:
+		if prepared.DestinationOrigin != "" || !checkableElementRole(prepared.Action.Kind, prepared.ElementRole) ||
+			prepared.Effect != EffectLocalEdit || prepared.InputDigest != "" || prepared.InputBytes != 0 {
+			return fmt.Errorf("%w: malformed prepared %s", ErrInvalid, prepared.Action.Kind)
+		}
+	case ActionHover:
+		if prepared.DestinationOrigin != "" || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
+			prepared.Effect != EffectRead || prepared.InputDigest != "" || prepared.InputBytes != 0 {
+			return fmt.Errorf("%w: malformed prepared hover", ErrInvalid)
+		}
 	case ActionPress:
 		if prepared.DestinationOrigin != "" || prepared.ElementRole != "" || prepared.ElementName != "" ||
 			prepared.Effect != EffectUnknown || prepared.InputDigest != "" || prepared.InputBytes != 0 {
@@ -722,6 +732,13 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		return fmt.Errorf("%w: malformed prepared action binding", ErrInvalid)
 	}
 	return nil
+}
+
+func checkableElementRole(kind ActionKind, role string) bool {
+	if role == "checkbox" || role == "switch" {
+		return true
+	}
+	return kind == ActionCheck && role == "radio"
 }
 
 type ApprovalBinding struct {

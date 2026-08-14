@@ -203,6 +203,47 @@ func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {
 	}
 }
 
+func TestBrowserOrdinaryInteractionCommandSchemaBindsSemanticRoleAndEffect(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{"check", "hover", "uncheck"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+	for _, test := range []struct {
+		kind, role, effect string
+	}{
+		{kind: "check", role: "radio", effect: "local_edit"},
+		{kind: "uncheck", role: "checkbox", effect: "local_edit"},
+		{kind: "hover", role: "button", effect: "read"},
+	} {
+		input := browserActInputFixture()
+		input["profile_revision"] = profile.Revision
+		input["action"] = map[string]any{"kind": test.kind, "ref": "semantic_ref_1"}
+		input["effect"] = test.effect
+		input["expected_role"] = test.role
+		input["expected_name"] = "Control"
+		if err = validateDescriptorInvocationInput(act, input); err != nil {
+			t.Fatalf("%s input rejected: %v", test.kind, err)
+		}
+		input["approval_digest"] = strings.Repeat("d", 64)
+		if err = validateDescriptorInvocationInput(act, input); err == nil {
+			t.Fatalf("%s input accepted unexpected approval", test.kind)
+		}
+	}
+
+	invalid := browserActInputFixture()
+	invalid["profile_revision"] = profile.Revision
+	invalid["action"] = map[string]any{"kind": "uncheck", "ref": "semantic_ref_1"}
+	invalid["effect"] = "local_edit"
+	invalid["expected_role"] = "radio"
+	invalid["expected_name"] = "Primary"
+	if err = validateDescriptorInvocationInput(act, invalid); err == nil {
+		t.Fatal("uncheck schema accepted a radio control")
+	}
+}
+
 func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	var result BrowserSessionResult
 	if err := json.Unmarshal([]byte(`{
