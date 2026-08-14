@@ -665,6 +665,9 @@ advertise a feature and fail only after the model attempts to use it.
 Tabs, frames, and popup context parity is admitted in
 [Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
 
+Protected fill parity is admitted in
+[Browser Capability BF1 Protected Fill Parity Admission](browser-capability-bf1-protected-fill-admission.md).
+
 #### Operator outcome
 
 The browser specialist can perform the ordinary interactions needed by real

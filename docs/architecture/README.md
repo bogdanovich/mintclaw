@@ -75,6 +75,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   admitted bounded document-context discovery and selection, opaque tab and
   frame authority, correlated popup outcomes, lifecycle recovery, and
   cross-placement completion gates.
+- [Browser Capability BF1 Protected Fill Parity Admission](browser-capability-bf1-protected-fill-admission.md):
+  admitted durable tool-call redaction, transient companion value delivery,
+  sensitive-field denial, no-replay behavior, and cross-placement completion
+  gates for typed semantic fill.
 - [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md):
   selected six-phase BF1/BF2 execution program for shared interaction,
   document-context, protected form, artifact, diagnostic, and large-snapshot
