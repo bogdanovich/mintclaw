@@ -309,8 +309,9 @@ func diagnosticToolCallFromProvider(call providers.ToolCall, forceRedaction bool
 }
 
 type diagnosticResultClassification struct {
-	toolName string
-	matched  bool
+	toolName  string
+	matched   bool
+	protected bool
 }
 
 type diagnosticMessageClassification struct {
@@ -320,13 +321,21 @@ type diagnosticMessageClassification struct {
 
 func diagnosticMessageClassifications(messages []providers.Message) []diagnosticMessageClassification {
 	result := make([]diagnosticMessageClassification, len(messages))
-	latestCalls := make(map[string]string)
+	type diagnosticCallClassification struct {
+		toolName  string
+		protected bool
+	}
+	latestCalls := make(map[string]diagnosticCallClassification)
 	pendingSensitiveFollowUp := false
 	for index, message := range messages {
 		if message.ToolCallID != "" {
-			result[index].result.toolName, result[index].result.matched = latestCalls[message.ToolCallID]
+			call, matched := latestCalls[message.ToolCallID]
+			result[index].result = diagnosticResultClassification{
+				toolName: call.toolName, matched: matched, protected: call.protected,
+			}
 		}
 		result[index].sensitive = diagnosticMessageContainsSensitiveEvidence(message, result[index].result)
+		result[index].sensitive = result[index].sensitive || result[index].result.protected
 		if message.Role == "assistant" {
 			result[index].sensitive = result[index].sensitive || pendingSensitiveFollowUp
 			pendingSensitiveFollowUp = false
@@ -335,7 +344,7 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 		} else if !diagnosticSyntheticInterruptMessage(message) {
 			pendingSensitiveFollowUp = false
 		}
-		batchCalls := make(map[string]string, len(message.ToolCalls))
+		batchCalls := make(map[string]diagnosticCallClassification, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
 			name := call.Name
 			if name == "" && call.Function != nil {
@@ -345,13 +354,15 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 				continue
 			}
 			if _, duplicate := batchCalls[call.ID]; duplicate {
-				batchCalls[call.ID] = ""
+				batchCalls[call.ID] = diagnosticCallClassification{protected: true}
 				continue
 			}
-			batchCalls[call.ID] = name
+			batchCalls[call.ID] = diagnosticCallClassification{
+				toolName: name, protected: diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{call}),
+			}
 		}
-		for callID, name := range batchCalls {
-			latestCalls[callID] = name
+		for callID, call := range batchCalls {
+			latestCalls[callID] = call
 		}
 	}
 	return result

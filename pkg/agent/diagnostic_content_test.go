@@ -376,6 +376,34 @@ func TestUnmatchedToolResultsAreRedactedFromLogsAndTraces(t *testing.T) {
 	}
 }
 
+func TestProtectedBrowserFillResultIsRedactedFromLogsAndTraces(t *testing.T) {
+	const canary = "protected-fill-result-canary-4a96ff1d"
+	messages := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "fill-call", Name: "browser_act",
+				Function: &providers.FunctionCall{
+					Name:      "browser_act",
+					Arguments: `{"browser_session_id":"session","tab_id":"tab","snapshot_id":"snapshot","snapshot_generation":1,"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "fill-call", Content: `{"observation":{"snapshot":"textbox: [` + canary + `]"}}`},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(messages),
+		diagnosticMessagesPreview(cfg, messages),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("protected fill result was not redacted: %s", preview)
+		}
+	}
+}
+
 func TestUnnamedReusedToolCallsInvalidateEarlierCorrelation(t *testing.T) {
 	answer := "unnamed-private-answer"
 	messages := []providers.Message{

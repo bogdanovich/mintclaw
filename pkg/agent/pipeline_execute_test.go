@@ -33,6 +33,33 @@ type protectedLoopGuardTool struct {
 	values []string
 }
 
+type protectedResultProjectionTool struct{}
+
+func (*protectedResultProjectionTool) Name() string { return "browser_act" }
+func (*protectedResultProjectionTool) Description() string {
+	return "protected result persistence projection test"
+}
+func (*protectedResultProjectionTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "properties": map[string]any{
+			"action": map[string]any{"type": "object"},
+		},
+		"required": []string{"action"}, "additionalProperties": false,
+	}
+}
+func (*protectedResultProjectionTool) DurableArguments(map[string]any) (map[string]any, error) {
+	return map[string]any{"action": map[string]any{"kind": "fill", "value": "*"}}, nil
+}
+func (*protectedResultProjectionTool) ProtectedDurableArguments(map[string]any) bool { return true }
+func (*protectedResultProjectionTool) Execute(
+	_ context.Context,
+	arguments map[string]any,
+) *toolshared.ToolResult {
+	action, _ := arguments["action"].(map[string]any)
+	value, _ := action["value"].(string)
+	return toolshared.NewToolResult(`{"observation":{"snapshot":"textbox: [` + value + `]"}}`)
+}
+
 func (*protectedLoopGuardTool) Name() string        { return "protected_loop_test" }
 func (*protectedLoopGuardTool) Description() string { return "protected loop projection test" }
 func (*protectedLoopGuardTool) Parameters() map[string]any {
@@ -1553,6 +1580,65 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 	}
 	if !strings.Contains(string(retained), "repeated_exact_failure_block") {
 		t.Fatalf("projected repeated failure did not block: %s", retained)
+	}
+}
+
+func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t *testing.T) {
+	const canary = "protected-result-canary-8ed64bb3"
+	registry := tools.NewToolRegistry()
+	tool := &protectedResultProjectionTool{}
+	registry.Register(tool)
+	sessionStore := session.NewSessionManager("")
+	contextManager := &trackingContextManager{}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: sessionStore}
+	ts := &turnState{
+		agent: agent, agentID: "main", turnID: "turn-protected-result",
+		sessionKey: "session-protected-result",
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{
+		ID: "protected-result-call", Name: tool.Name(),
+		Arguments: map[string]any{"action": map[string]any{"kind": "fill", "value": canary}},
+	}}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	emitter := &captureRuntimeEmitter{}
+	pipeline := &Pipeline{
+		Cfg:     cfg,
+		Runtime: PipelineRuntimeServices{Events: emitter},
+		Context: PipelineContextServices{Runtime: contextManager},
+	}
+
+	if outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm); outcome.Control != ToolControlContinue {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, canary) {
+		t.Fatalf("current in-memory result lost protected observation: %#v", exec.messages)
+	}
+
+	durable := struct {
+		History   []providers.Message
+		Persisted []providers.Message
+		Ingested  *IngestRequest
+		Events    []any
+	}{
+		History: sessionStore.GetHistory(ts.sessionKey), Persisted: ts.persistedMessagesSnapshot(),
+		Ingested: contextManager.lastIngest,
+	}
+	for _, event := range emitter.events {
+		durable.Events = append(durable.Events, event.payload)
+	}
+	encoded, err := json.Marshal(durable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(canary)) {
+		t.Fatalf("durable projections retained protected result: %s", encoded)
+	}
+	if !bytes.Contains(encoded, []byte("protected_result")) {
+		t.Fatalf("durable projection marker missing: %s", encoded)
 	}
 }
 
