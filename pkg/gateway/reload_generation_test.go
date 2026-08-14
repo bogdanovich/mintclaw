@@ -68,7 +68,14 @@ func newGatewayReloadHarness(t *testing.T) *gatewayReloadHarness {
 		services: runningServices,
 	}
 	t.Cleanup(func() {
-		shutdownGateway(harness.services, harness.loop, harness.provider, harness.bus, true)
+		_ = shutdownGateway(
+			harness.services,
+			harness.loop,
+			harness.provider,
+			harness.bus,
+			gatewayAgentRuntime{},
+			true,
+		)
 		_ = listener.Close()
 	})
 	return harness

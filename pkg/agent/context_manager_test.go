@@ -543,6 +543,17 @@ type staticContextManager struct {
 	response *AssembleResponse
 }
 
+type failingCloseContextManager struct {
+	staticContextManager
+	err    error
+	closed bool
+}
+
+func (m *failingCloseContextManager) Close() error {
+	m.closed = true
+	return m.err
+}
+
 func (m *staticContextManager) Assemble(
 	_ context.Context,
 	_ *AssembleRequest,
@@ -560,6 +571,21 @@ func (m *staticContextManager) Ingest(_ context.Context, _ *IngestRequest) error
 
 func (m *staticContextManager) Clear(_ context.Context, _ *AgentInstance, _ string) error {
 	return nil
+}
+
+func TestAgentLoopCloseContextReturnsContextManagerFailure(t *testing.T) {
+	closeErr := errors.New("context store close failed")
+	manager := &failingCloseContextManager{err: closeErr}
+	loop := NewAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{})
+	loop.contextManager = manager
+
+	err := loop.CloseContext(t.Context())
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("CloseContext() error = %v, want context manager failure", err)
+	}
+	if !manager.closed {
+		t.Fatal("CloseContext() did not close the context manager")
+	}
 }
 
 // trackingContextManager tracks call counts for each method.
