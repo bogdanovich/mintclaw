@@ -214,7 +214,7 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 		frameID: "frame-1", loaderID: "loader-1", generation: 7,
 	}, DriverAction{
 		Kind: DriverFill, Target: "e5", Element: "Display name", Value: "fill-canary",
-	}, config.BrowserLimitsConfig{}.Effective())
+	}, config.BrowserLimitsConfig{}.Effective(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +231,31 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 		"### Result\n\"MINTCLAW_NAV_ACT_V1|denied\"",
 	); !errors.Is(err, ErrDenied) {
 		t.Fatalf("denied protected fill result = %v", err)
+	}
+}
+
+func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|denied\""),
+	}}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+		navigationID: identity, navigationToken: identity.token(), sensitiveFields: []string{"display name"},
+	}
+	if err := worker.AuthorizeFill(t.Context(), identity.token(), "e5"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("AuthorizeFill() error = %v, want denied", err)
+	}
+	if worker.lost {
+		t.Fatal("definite private classifier denial retired worker")
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("AuthorizeFill() calls = %#v", client.calls)
+	}
+	code, ok := client.calls[0].arguments["code"].(string)
+	if !ok || strings.Contains(code, "fill-canary") || strings.Contains(code, ".fill(") ||
+		!strings.Contains(code, `"display name"`) {
+		t.Fatalf("private classifier code = %q", code)
 	}
 }
 

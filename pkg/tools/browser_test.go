@@ -87,9 +87,9 @@ func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing
 func TestToolRegistryDurableArgumentsPreserveUnknownToolCalls(t *testing.T) {
 	registry := NewToolRegistry()
 	arguments := map[string]any{"value": "handled by a later layer"}
-	projected, err := registry.DurableArguments("hook_owned_tool", arguments)
-	if err != nil || !reflect.DeepEqual(projected, arguments) {
-		t.Fatalf("DurableArguments() = %#v, %v; want unchanged arguments", projected, err)
+	projected, protected, err := registry.DurableArguments("hook_owned_tool", arguments)
+	if err != nil || protected || !reflect.DeepEqual(projected, arguments) {
+		t.Fatalf("DurableArguments() = %#v, protected %v, %v; want unchanged arguments", projected, protected, err)
 	}
 }
 

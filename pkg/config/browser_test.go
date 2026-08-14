@@ -48,6 +48,39 @@ func TestBrowserConfigAcceptsExplicitApprovedActionMode(t *testing.T) {
 	}
 }
 
+func TestBrowserPolicyRevisionCanonicalizesSensitiveFields(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.SensitiveFields = []string{"  Display   Name  ", "Cardholder"}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+
+	first, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.SensitiveFields = []string{"cardholder", "display name"}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	second, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || first != second {
+		t.Fatalf("canonical sensitive field revisions = %q and %q, error = %v", first, second, err)
+	}
+}
+
+func TestBrowserConfigRejectsDuplicateSensitiveFields(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.SensitiveFields = []string{"Display Name", " display   name "}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "duplicate term") {
+		t.Fatalf("ValidateBrowserConfig() error = %v, want duplicate sensitive field", err)
+	}
+}
+
 func TestBrowserConfigAcceptsDisabledCompanionPlacement(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	cfg.Nodes.Enabled = false

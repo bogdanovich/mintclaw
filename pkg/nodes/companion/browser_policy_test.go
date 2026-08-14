@@ -17,8 +17,10 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()
 	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.SensitiveFields = []string{"  Display   Name  "}
 	originalAgents := append([]string(nil), profile.AllowedAgents...)
 	originalActions := append([]string(nil), profile.AllowedActions...)
+	originalSensitiveFields := append([]string(nil), profile.SensitiveFields...)
 	cfg, err := (Config{
 		GatewayURL: "wss://gateway.example",
 		BrowserProfiles: map[string]BrowserProfilePolicy{
@@ -32,11 +34,13 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	if !ready.Enabled || !filepath.IsAbs(ready.DriverExecutable) ||
 		!filepath.IsAbs(ready.ProfileDirectory) || !filepath.IsAbs(ready.LockFile) ||
 		strings.Join(ready.AllowedAgents, ",") != "browser,marketplace" ||
-		strings.Join(ready.AllowedActions, ",") != "click,download,navigate" {
+		strings.Join(ready.AllowedActions, ",") != "click,download,navigate" ||
+		strings.Join(ready.SensitiveFields, ",") != "display name" {
 		t.Fatalf("normalized browser profile = %#v", ready)
 	}
 	if strings.Join(profile.AllowedAgents, ",") != strings.Join(originalAgents, ",") ||
-		strings.Join(profile.AllowedActions, ",") != strings.Join(originalActions, ",") {
+		strings.Join(profile.AllowedActions, ",") != strings.Join(originalActions, ",") ||
+		strings.Join(profile.SensitiveFields, ",") != strings.Join(originalSensitiveFields, ",") {
 		t.Fatal("Normalize() mutated caller-owned browser profile slices")
 	}
 	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
@@ -49,7 +53,8 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 	for _, private := range []string{
 		ready.DriverExecutable, ready.ProfileDirectory, ready.LockFile,
-		ready.DriverExecutableSHA256, "driver_arguments", "allowed_agents", "allowed_actors",
+		ready.DriverExecutableSHA256, "display name", "sensitive_fields", "driver_arguments", "allowed_agents",
+		"allowed_actors",
 	} {
 		if strings.Contains(string(encoded), private) {
 			t.Fatalf("browser descriptor leaked companion-local value %q", private)

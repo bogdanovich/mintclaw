@@ -166,6 +166,27 @@ func TestDiagnosticBrowserFillArgumentsAreAlwaysRedacted(t *testing.T) {
 	}
 }
 
+func TestDiagnosticBrowserMalformedOrConflictingArgumentsAreRedacted(t *testing.T) {
+	tests := []providers.ToolCall{
+		{
+			ID: "call-malformed", Name: "browser_act",
+			Arguments: map[string]any{"action": map[string]any{"ref": "ref_1", "value": "canary"}},
+		},
+		{
+			ID: "call-conflict", Name: "browser_act",
+			Arguments: map[string]any{"action": map[string]any{"kind": "navigate", "url": "https://example.com"}},
+			Function: &providers.FunctionCall{
+				Name: "browser_act", Arguments: `{"action":{"kind":"fill","ref":"ref_1","value":"canary"}}`,
+			},
+		},
+	}
+	for _, call := range tests {
+		if !diagnosticBrowserFillCall(call) {
+			t.Fatalf("malformed browser call was not classified sensitive: %#v", call)
+		}
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

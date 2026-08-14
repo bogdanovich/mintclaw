@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -171,16 +172,40 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 }
 
 func diagnosticBrowserFillCall(call providers.ToolCall) bool {
-	arguments := call.Arguments
-	if len(arguments) == 0 && call.Function != nil && call.Function.Arguments != "" {
+	representations := make([]map[string]any, 0, 2)
+	if len(call.Arguments) > 0 {
+		representations = append(representations, call.Arguments)
+	}
+	if call.Function != nil && call.Function.Arguments != "" {
 		var decoded map[string]any
 		if json.Unmarshal([]byte(call.Function.Arguments), &decoded) != nil {
 			return true
 		}
-		arguments = decoded
+		representations = append(representations, decoded)
 	}
-	action, ok := arguments["action"].(map[string]any)
-	return !ok || action["kind"] == "fill"
+	if len(representations) == 0 ||
+		(len(representations) == 2 && !reflect.DeepEqual(representations[0], representations[1])) {
+		return true
+	}
+	action, ok := representations[0]["action"].(map[string]any)
+	if !ok {
+		return true
+	}
+	kind, ok := action["kind"].(string)
+	if !ok {
+		return true
+	}
+	if _, valueBearing := action["value"]; valueBearing {
+		return true
+	}
+	switch kind {
+	case "navigate", "click", "select", "press", "scroll", "dialog", "upload", "download":
+		return false
+	case "fill":
+		return true
+	default:
+		return true
+	}
 }
 
 func diagnosticLLMResponseContent(

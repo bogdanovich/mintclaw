@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -444,6 +445,13 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		return Invocation{}, err
 	}
 	if err = broker.revalidatePreparedLocked(ctx, session, slot, worker, prepared); err != nil {
+		if errors.Is(err, ErrDenied) {
+			delete(slot.inputs, prepared.ID)
+			denied, completeErr := broker.completeInvocationLocked(
+				ctx, currentInvocation, InvocationFailed, nil, "policy_denied",
+			)
+			return denied, errors.Join(ErrDenied, completeErr)
+		}
 		return Invocation{}, err
 	}
 	if dryRunDeniesAction(prepared) {
@@ -637,7 +645,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
-			if !ordinaryFillElement(element.Role, element.Name) {
+			if !ordinaryFillElement(element.Role, element.Name, broker.sensitiveFieldTerms(session)) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
@@ -773,6 +781,18 @@ func (broker *Broker) revalidatePreparedLocked(
 	if origin != prepared.CurrentOrigin || resolved != element ||
 		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
 		return ErrStale
+	}
+	if prepared.Action.Kind == ActionFill {
+		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(ActionFill) {
+			return nil
+		}
+		authorizer, ok := worker.(ProtectedFillWorker)
+		if !ok || slot.navigationID == "" {
+			return ErrDriverIncompatible
+		}
+		if err = authorizer.AuthorizeFill(ctx, slot.navigationID, resolved.Target); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -999,24 +1019,20 @@ func editableElementRole(role string) bool {
 	return role == "textbox" || role == "searchbox" || role == "combobox"
 }
 
-func ordinaryFillElement(role, name string) bool {
-	if role != "textbox" && role != "searchbox" {
-		return false
+func ordinaryFillElement(role, name string, sensitiveTerms ...[]string) bool {
+	var configured []string
+	if len(sensitiveTerms) > 0 {
+		configured = sensitiveTerms[0]
 	}
-	normalized := strings.ToLower(strings.Join(strings.Fields(name), " "))
-	if normalized == "" {
-		return false
+	return browserpolicy.OrdinaryFillField(role, name, configured)
+}
+
+func (broker *Broker) sensitiveFieldTerms(session Session) []string {
+	target, ok := broker.config.Targets[session.Target]
+	if !ok {
+		return nil
 	}
-	for _, sensitive := range []string{
-		"password", "passcode", "one-time", "one time", "otp", "verification code",
-		"recovery code", "card number", "credit card", "security code", "cvv", "cvc",
-		"expiration", "expiry",
-	} {
-		if strings.Contains(normalized, sensitive) {
-			return false
-		}
-	}
-	return true
+	return target.Profiles[session.Profile].SensitiveFields
 }
 
 func (broker *Broker) driverActionForPrepared(

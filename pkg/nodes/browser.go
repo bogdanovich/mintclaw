@@ -9,7 +9,8 @@ import (
 	"math/big"
 	"slices"
 	"sort"
-	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 var (
@@ -423,23 +424,13 @@ func BrowserClickEffect(role string) string {
 // It uses only freshly resolved private accessibility metadata and fails
 // closed for roles or names that cannot safely identify ordinary text input.
 func BrowserFillFieldAllowed(role, name string) bool {
-	if role != "textbox" && role != "searchbox" {
-		return false
-	}
-	normalized := strings.ToLower(strings.Join(strings.Fields(name), " "))
-	if normalized == "" {
-		return false
-	}
-	for _, sensitive := range []string{
-		"password", "passcode", "one-time", "one time", "otp", "verification code",
-		"recovery code", "card number", "credit card", "security code", "cvv", "cvc",
-		"expiration", "expiry",
-	} {
-		if strings.Contains(normalized, sensitive) {
-			return false
-		}
-	}
-	return true
+	return BrowserFillFieldAllowedWithPolicy(role, name, nil)
+}
+
+// BrowserFillFieldAllowedWithPolicy also applies companion-local private
+// operator-designated sensitive identity fragments.
+func BrowserFillFieldAllowedWithPolicy(role, name string, sensitiveTerms []string) bool {
+	return browserpolicy.OrdinaryFillField(role, name, sensitiveTerms)
 }
 
 // BrowserPressKeyValid admits only document-scoped keys that cannot express

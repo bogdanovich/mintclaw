@@ -3,7 +3,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -28,6 +30,8 @@ func (durableProjectionTestTool) Execute(context.Context, map[string]any) *tools
 func (durableProjectionTestTool) DurableArguments(map[string]any) (map[string]any, error) {
 	return map[string]any{"value": "*"}, nil
 }
+
+func (durableProjectionTestTool) ProtectedDurableArguments(map[string]any) bool { return true }
 
 func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
@@ -107,9 +111,16 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testing.T) {
 	secret := "ephemeral-browser-fill-canary"
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content:          "ephemeral-browser-fill-canary",
+		ReasoningContent: "reasoning repeats ephemeral-browser-fill-canary",
 		ToolCalls: []providers.ToolCall{{
 			ID: "call-protected", Name: "protected_test",
 			Arguments: map[string]any{"value": secret},
+			Function:  &providers.FunctionCall{ThoughtSignature: secret},
+			ExtraContent: &providers.ExtraContent{
+				Google:                  &providers.GoogleExtra{ThoughtSignature: secret},
+				ToolFeedbackExplanation: "explanation repeats " + secret,
+			},
 		}},
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -117,6 +128,8 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	agent.Tools.Register(durableProjectionTestTool{})
 
 	pipeline := NewPipeline(al)
+	contextCapture := &trackingContextManager{}
+	pipeline.Context.Runtime = contextCapture
 	ts := newTurnState(agent, makeTestProcessOpts("projection-session"), turnEventScope{
 		turnID: "projection-turn", context: newTurnContext(nil, nil, nil),
 	})
@@ -143,5 +156,60 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	call := exec.messages[len(exec.messages)-1].ToolCalls[0]
 	if call.Function == nil || call.Function.Arguments != `{"value":"*"}` {
 		t.Fatalf("durable tool call = %#v", call)
+	}
+	message := exec.messages[len(exec.messages)-1]
+	if message.Content != "" || message.ReasoningContent != "" || call.ExtraContent != nil ||
+		call.Function.ThoughtSignature != "" || call.ThoughtSignature != "" {
+		t.Fatalf("protected sibling response fields were retained: %#v", message)
+	}
+	history, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
+	if err != nil || bytes.Contains(history, []byte(secret)) {
+		t.Fatalf("canonical session retained protected value: %s, %v", history, err)
+	}
+	contextCapture.mu.Lock()
+	ingested := contextCapture.lastIngest
+	contextCapture.mu.Unlock()
+	ingestedJSON, err := json.Marshal(ingested)
+	if err != nil || bytes.Contains(ingestedJSON, []byte(secret)) {
+		t.Fatalf("context ingest retained protected value: %s, %v", ingestedJSON, err)
+	}
+}
+
+func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "must not persist",
+		ToolCalls: []providers.ToolCall{
+			{ID: "call-protected-one", Name: "protected_test", Arguments: map[string]any{"value": "first"}},
+			{ID: "call-protected-two", Name: "protected_test", Arguments: map[string]any{"value": "second"}},
+		},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(durableProjectionTestTool{})
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("protected-batch-session"), turnEventScope{
+		turnID: "protected-batch-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineMessages := len(exec.messages)
+	llm := newLLMIterationState(1)
+	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("prepare = %+v, %v", stage, prepareErr)
+	}
+	if stage, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
+	}
+	if _, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err == nil {
+		t.Fatal("protected multi-call batch was accepted")
+	}
+	if len(exec.messages) != baselineMessages || len(agent.Sessions.GetHistory(ts.sessionKey)) != 0 {
+		t.Fatalf("protected multi-call batch persisted: messages=%d baseline=%d history=%#v",
+			len(exec.messages), baselineMessages, agent.Sessions.GetHistory(ts.sessionKey))
 	}
 }

@@ -30,6 +30,8 @@ type actionTestWorker struct {
 	navigationID   string
 	catalogCalls   int
 	beforeNavCheck func()
+	authorizeErr   error
+	authorizeCalls int
 	executeErr     error
 	screenshot     DriverScreenshot
 	screenshotErr  error
@@ -40,6 +42,22 @@ type actionTestWorker struct {
 	humanControl   bool
 	beginHumanErr  error
 	endHumanErr    error
+}
+
+func (worker *actionTestWorker) AuthorizeFill(
+	ctx context.Context,
+	expected string,
+	_ string,
+) error {
+	worker.authorizeCalls++
+	current, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if expected == "" || expected != current {
+		return ErrStale
+	}
+	return worker.authorizeErr
 }
 
 func (worker *actionTestWorker) BeginHumanControl(context.Context) error {
@@ -1154,6 +1172,40 @@ func TestBrokerDeniesSensitiveOrAmbiguousFillBeforePreparation(t *testing.T) {
 				t.Fatalf("PrepareAction(%+v) = %v; actions = %+v", field, err, worker.actions)
 			}
 		})
+	}
+}
+
+func TestBrokerPrivateFillDenialFailsClosedBeforeDispatch(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.resolveElement = DriverElement{Target: "e1", Role: "textbox", Name: "Name"}
+	worker.resolveOrigin = "https://example.com"
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_private_fill_denial", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observation.Snapshot), Value: "canary"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.authorizeErr = ErrDenied
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrDenied) || invocation.State != InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" || worker.authorizeCalls != 1 || len(worker.actions) != 0 {
+		t.Fatalf("ExecuteAction() = %+v, %v; authorizations=%d actions=%#v",
+			invocation, err, worker.authorizeCalls, worker.actions)
+	}
+	if _, retained := broker.slots[session.ID].inputs[prepared.Action.ID]; retained {
+		t.Fatal("private classifier denial retained live fill input")
+	}
+	storedSession, err := store.GetSession(t.Context(), session.ID)
+	if err != nil || storedSession.State != SessionReady || worker.closed != 0 {
+		t.Fatalf("session after definite denial = %+v, %v; closes=%d", storedSession, err, worker.closed)
 	}
 }
 

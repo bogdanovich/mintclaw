@@ -23,6 +23,12 @@ type DurableArgumentsProvider interface {
 	DurableArguments(map[string]any) (map[string]any, error)
 }
 
+// ProtectedDurableArgumentsProvider marks projections whose surrounding
+// assistant-response text must also be excluded from durable state.
+type ProtectedDurableArgumentsProvider interface {
+	ProtectedDurableArguments(map[string]any) bool
+}
+
 // LoopSemanticsProvider explicitly classifies tool side-effect behavior for
 // loop detection. Tools without this optional capability remain unknown.
 type LoopSemanticsProvider interface {

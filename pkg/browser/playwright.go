@@ -24,6 +24,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -611,6 +612,7 @@ func (factory *PlaywrightWorkerFactory) Open(
 		client: client, networkProxy: networkProxy,
 		limits: request.Limits.Effective(), cancelLifetime: cancelLifetime,
 		outputDir: outputDir, contextSessionID: request.SessionID,
+		sensitiveFields: append([]string(nil), factory.profileConfig.SensitiveFields...),
 	}
 	worker.contextSecret = make([]byte, 32)
 	if _, err = rand.Read(worker.contextSecret); err != nil {
@@ -660,6 +662,7 @@ type playwrightWorker struct {
 	catalogRevision string
 	cancelLifetime  context.CancelFunc
 	outputDir       string
+	sensitiveFields []string
 
 	mu              sync.Mutex
 	lost            bool
@@ -835,7 +838,9 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if expectedToken == "" || expectedToken != worker.navigationToken {
 		return ErrStale
 	}
-	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
+	code, err := playwrightNavigationCheckedActionCode(
+		worker.navigationID, action, worker.limits, worker.sensitiveFields,
+	)
 	if err != nil {
 		return err
 	}
@@ -850,7 +855,35 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if worker.pendingDialog != nil {
 		return nil
 	}
-	if err = parsePlaywrightNavigationDispatch(text); err != nil && !errors.Is(err, ErrStale) {
+	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		worker.lost = true
+	}
+	return err
+}
+
+func (worker *playwrightWorker) AuthorizeFill(
+	ctx context.Context,
+	expectedToken string,
+	target string,
+) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+		return ErrWorkerUnavailable
+	}
+	if expectedToken == "" || expectedToken != worker.navigationToken ||
+		!playwrightTargetPattern.MatchString(target) {
+		return ErrStale
+	}
+	dispatch := playwrightFillDispatch(target, "", false, worker.sensitiveFields)
+	code := playwrightNavigationCheckedCode(worker.navigationID, dispatch)
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
+		return err
+	}
+	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
 		worker.lost = true
 	}
 	return err
@@ -860,6 +893,7 @@ func playwrightNavigationCheckedActionCode(
 	identity playwrightNavigationIdentity,
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
+	sensitiveFields []string,
 ) (string, error) {
 	tool, arguments, err := mapPlaywrightAction(action, limits)
 	if err != nil {
@@ -881,7 +915,34 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\" });"
 	case "browser_type":
-		dispatch = `const fillTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
+		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields)
+	case "browser_select_option":
+		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
+			").selectOption([" + jsonString(action.Value) + "]);"
+	case "browser_press_key":
+		dispatch = "await page.keyboard.press(" + jsonString(action.Key) + ");"
+	case "browser_mouse_wheel":
+		delta := action.Amount * 500
+		if action.Direction == "up" {
+			delta = -delta
+		}
+		dispatch = fmt.Sprintf("await page.mouse.wheel(0, %d);", delta)
+	default:
+		return "", fmt.Errorf("%w: navigation-checked action is unsupported", ErrInvalid)
+	}
+	return playwrightNavigationCheckedCode(identity, dispatch), nil
+}
+
+func playwrightFillDispatch(target, value string, execute bool, sensitiveFields []string) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	sensitive, sensitiveErr := browserpolicy.NormalizeSensitiveFieldTerms(sensitiveFields)
+	sensitive = append(browserpolicy.BuiltInSensitiveFieldTerms(), sensitive...)
+	sensitiveJSON, _ := json.Marshal(sensitive)
+	ordinaryJSON, _ := json.Marshal(browserpolicy.OrdinaryFieldTerms())
+	dispatch := `const fillTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
   if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
@@ -889,8 +950,9 @@ func playwrightNavigationCheckedActionCode(
     tag: String(element.tagName || "").toLowerCase(),
     type: String(element.getAttribute("type") || "").toLowerCase(),
     autocomplete: String(element.getAttribute("autocomplete") || "").toLowerCase(),
-    identity: ["name", "id", "aria-label", "placeholder"].map(name =>
-      String(element.getAttribute(name) || "").toLowerCase()).join(" "),
+    identity: ["name", "id", "aria-label", "placeholder", "title"].map(name =>
+      String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
+      String(label.textContent || ""))).join(" ").toLowerCase().replace(/\s+/gu, " ").trim(),
     disabled: Boolean(element.disabled),
     readOnly: Boolean(element.readOnly),
     contentEditable: Boolean(element.isContentEditable),
@@ -905,25 +967,40 @@ func playwrightNavigationCheckedActionCode(
     "tel-extension", "url", "photo"]);
   const inputLike = (fillMetadata.tag === "input" && ordinaryTypes.has(fillMetadata.type)) ||
     fillMetadata.tag === "textarea" || fillMetadata.contentEditable;
-  const sensitiveIdentity = /password|passcode|one[ -]?time|\botp\b|verification code|recovery code|card number|credit card|security code|\bcvv\b|\bcvc\b|expir(?:y|ation)/.test(fillMetadata.identity);
-  if (!inputLike || fillMetadata.disabled || fillMetadata.readOnly ||
-      !ordinaryAutocomplete.has(fillMetadata.autocomplete) || sensitiveIdentity) {
+  const sensitiveTerms = ` + string(sensitiveJSON) + `;
+  const ordinaryTerms = ` + string(ordinaryJSON) + `;
+	const sensitivePolicyValid = ` + strconv.FormatBool(sensitiveErr == nil) + `;
+  const matchesTerm = term => {
+    let offset = 0;
+    while (term && offset <= fillMetadata.identity.length - term.length) {
+      const index = fillMetadata.identity.indexOf(term, offset);
+      if (index < 0) return false;
+      const end = index + term.length;
+      const left = index === 0 || !/[\p{L}\p{N}]/u.test(fillMetadata.identity[index - 1]);
+      const right = end === fillMetadata.identity.length ||
+        !/[\p{L}\p{N}]/u.test(fillMetadata.identity[end]);
+      if (left && right) return true;
+      offset = index + 1;
+    }
+    return false;
+  };
+  const sensitiveIdentity = sensitiveTerms.some(matchesTerm);
+  const ordinaryIdentity = ordinaryTerms.some(matchesTerm);
+	  if (!sensitivePolicyValid || !inputLike || fillMetadata.disabled || fillMetadata.readOnly ||
+      !ordinaryAutocomplete.has(fillMetadata.autocomplete) || sensitiveIdentity || !ordinaryIdentity) {
     return "MINTCLAW_NAV_ACT_V1|denied";
-  }
-  await fillTarget.fill(` + jsonString(action.Value) + `);`
-	case "browser_select_option":
-		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
-			").selectOption([" + jsonString(action.Value) + "]);"
-	case "browser_press_key":
-		dispatch = "await page.keyboard.press(" + jsonString(action.Key) + ");"
-	case "browser_mouse_wheel":
-		delta := action.Amount * 500
-		if action.Direction == "up" {
-			delta = -delta
-		}
-		dispatch = fmt.Sprintf("await page.mouse.wheel(0, %d);", delta)
-	default:
-		return "", fmt.Errorf("%w: navigation-checked action is unsupported", ErrInvalid)
+	  }`
+	if execute {
+		dispatch += `
+  await fillTarget.fill(` + jsonString(value) + `);`
+	}
+	return dispatch
+}
+
+func playwrightNavigationCheckedCode(identity playwrightNavigationIdentity, dispatch string) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
 	}
 	return fmt.Sprintf(`async (page) => {
   const expectedFrameID = %s;
@@ -951,7 +1028,7 @@ func playwrightNavigationCheckedActionCode(
 		jsonString(identity.loaderID),
 		identity.generation,
 		dispatch,
-	), nil
+	)
 }
 
 func parsePlaywrightNavigationDispatch(text string) error {

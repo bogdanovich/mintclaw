@@ -1021,7 +1021,14 @@ func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, er
 		return nil, err
 	}
 	action, ok := projected["action"].(map[string]any)
-	if !ok || action["kind"] != "fill" {
+	if !ok {
+		return nil, errors.New("browser action is unavailable")
+	}
+	kind, ok := action["kind"].(string)
+	if !ok || kind == "" {
+		return nil, errors.New("browser action kind is unavailable")
+	}
+	if kind != "fill" {
 		return projected, nil
 	}
 	if _, ok = action["value"].(string); !ok {
@@ -1029,6 +1036,11 @@ func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, er
 	}
 	action["value"] = browserProtectedInputRedaction
 	return projected, nil
+}
+
+func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
+	action, ok := args["action"].(map[string]any)
+	return ok && action["kind"] == "fill"
 }
 
 func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error) {

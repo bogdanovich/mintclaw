@@ -677,19 +677,42 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			"iteration": iteration,
 		})
 
-	llm.toolResponseDisposition = toolResponseHandled
-	assistantMsg := providers.Message{
-		Role:             "assistant",
-		Content:          llm.response.Content,
-		ModelName:        exec.model.llmModelName,
-		ReasoningContent: reasoningContent,
+	type durableToolProjection struct {
+		call      providers.ToolCall
+		arguments map[string]any
+		protected bool
 	}
+	projections := make([]durableToolProjection, 0, len(llm.normalizedToolCalls))
+	protectedBatch := false
 	for _, tc := range llm.normalizedToolCalls {
-		durableArguments, durableErr := ts.agent.Tools.DurableArguments(tc.Name, tc.Arguments)
+		durableArguments, protected, durableErr := ts.agent.Tools.DurableArguments(tc.Name, tc.Arguments)
 		if durableErr != nil {
 			return LLMCallOutcome{}, fmt.Errorf("project assistant tool-call intent: %w", durableErr)
 		}
-		argumentsJSON, marshalErr := json.Marshal(durableArguments)
+		protectedBatch = protectedBatch || protected
+		projections = append(projections, durableToolProjection{
+			call: tc, arguments: durableArguments, protected: protected,
+		})
+	}
+	if protectedBatch && len(projections) != 1 {
+		return LLMCallOutcome{}, errors.New("protected tool call must be the only call in its batch")
+	}
+
+	llm.toolResponseDisposition = toolResponseHandled
+	content, durableReasoning := llm.response.Content, reasoningContent
+	if protectedBatch {
+		content = ""
+		durableReasoning = ""
+	}
+	assistantMsg := providers.Message{
+		Role:             "assistant",
+		Content:          content,
+		ModelName:        exec.model.llmModelName,
+		ReasoningContent: durableReasoning,
+	}
+	for _, projection := range projections {
+		tc := projection.call
+		argumentsJSON, marshalErr := json.Marshal(projection.arguments)
 		if marshalErr != nil {
 			return LLMCallOutcome{}, fmt.Errorf("encode assistant tool-call intent: %w", marshalErr)
 		}
@@ -698,7 +721,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			tc,
 			exec.messages,
 		)
-		extraContent := tc.ExtraContent
+		extraContent := cloneDurableToolExtraContent(tc.ExtraContent)
+		if projection.protected {
+			toolFeedbackExplanation = ""
+			extraContent = nil
+		}
 		if strings.TrimSpace(toolFeedbackExplanation) != "" {
 			if extraContent == nil {
 				extraContent = &providers.ExtraContent{}
@@ -706,7 +733,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			extraContent.ToolFeedbackExplanation = toolFeedbackExplanation
 		}
 		thoughtSignature := ""
-		if tc.Function != nil {
+		if tc.Function != nil && !projection.protected {
 			thoughtSignature = tc.Function.ThoughtSignature
 		}
 		assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
@@ -735,7 +762,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)
 	}
 	if shouldPublishMintClawToolCallInterim && (ts.opts.NoHistory || llm.assistantToolCallsPersisted) {
-		interimContent := llm.response.Content
+		interimContent := assistantMsg.Content
 		if p.shouldPublishToolFeedback(ts) {
 			interimContent = ""
 		}
@@ -743,13 +770,25 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			turnCtx,
 			ts,
 			exec.model.llmModelName,
-			reasoningContent,
+			assistantMsg.ReasoningContent,
 			interimContent,
 			assistantMsg.ToolCalls,
 		)
 	}
 
 	return LLMCallOutcome{Control: ControlToolLoop}, nil
+}
+
+func cloneDurableToolExtraContent(extra *providers.ExtraContent) *providers.ExtraContent {
+	if extra == nil {
+		return nil
+	}
+	cloned := *extra
+	if extra.Google != nil {
+		google := *extra.Google
+		cloned.Google = &google
+	}
+	return &cloned
 }
 
 func validateDurableToolCallIDs(calls []providers.ToolCall) error {

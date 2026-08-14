@@ -78,6 +78,7 @@ type BrowserProfileConfig struct {
 	DryRun               bool     `json:"dry_run"                          yaml:"-"`
 	AllowApprovedActions bool     `json:"allow_approved_actions,omitempty" yaml:"-"`
 	AllowedOrigins       []string `json:"allowed_origins,omitempty"        yaml:"-"`
+	SensitiveFields      []string `json:"sensitive_fields,omitempty"       yaml:"-"`
 }
 
 func (profile BrowserProfileConfig) EffectiveNetworkMode() string {
@@ -130,6 +131,7 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 		profiles := make(map[string]BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			profile.NetworkMode = profile.EffectiveNetworkMode()
+			profile.SensitiveFields, _ = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
 			profiles[profileName] = profile
 		}
 		target.Profiles = profiles
@@ -296,6 +298,9 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	}
 	if len(profile.AllowedOrigins) > BrowserMaxConfiguredOrigins {
 		return fmt.Errorf("browser profile %q exceeds %d allowed origins", name, BrowserMaxConfiguredOrigins)
+	}
+	if _, err := browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields); err != nil {
+		return fmt.Errorf("invalid browser profile %q sensitive_fields: %w", name, err)
 	}
 	seen := make(map[string]struct{}, len(profile.AllowedOrigins))
 	for _, rawOrigin := range profile.AllowedOrigins {
