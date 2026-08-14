@@ -192,7 +192,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "click" || action == "dialog" || action == "fill" || action == "navigate" || action == "press" ||
+			if action == "click" || action == "dialog" || action == "fill" || action == "navigate" ||
+				action == "press" ||
 				action == "scroll" ||
 				action == "select" {
 				current[action] = struct{}{}
