@@ -1224,6 +1224,12 @@ func (worker *playwrightWorker) Execute(ctx context.Context, action DriverAction
 	if action.Kind != DriverCheck && action.Kind != DriverUncheck {
 		return nil
 	}
+	// Playwright MCP reports modal metadata instead of the callback result when
+	// the input opens a dialog. The modal proves dispatch crossed the one-shot
+	// boundary; retain it for the dialog state machine and never invite replay.
+	if worker.pendingDialog != nil {
+		return nil
+	}
 	if err = parsePlaywrightCheckAction(text); err != nil &&
 		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
 		worker.lost = true

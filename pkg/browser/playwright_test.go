@@ -1222,6 +1222,26 @@ func TestPlaywrightWorkerParsesCheckPrimitiveOutcomes(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerTreatsCheckOpenedDialogAsSuccessfulDispatch(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Modal state\n" +
+				"- [\"confirm\" dialog with message \"Apply change?\"]: can be handled by browser_handle_dialog",
+		),
+	}}
+	worker := &playwrightWorker{
+		client: client, networkProxy: &browserNetworkProxy{},
+		limits:          config.BrowserLimitsConfig{}.Effective(),
+		lastObservation: DriverObservation{URL: "https://example.com/form", Origin: "https://example.com"},
+	}
+	if err := worker.Execute(
+		t.Context(), DriverAction{Kind: DriverCheck, Target: "e1", Element: "Notify"},
+	); err != nil || worker.lost || worker.pendingDialog == nil ||
+		worker.pendingDialog.Type != "confirm" || worker.pendingDialog.Message != "Apply change?" {
+		t.Fatalf("Execute() error = %v, lost = %t, dialog = %+v", err, worker.lost, worker.pendingDialog)
+	}
+}
+
 func TestPlaywrightWorkerTracksAndHandlesPendingDialog(t *testing.T) {
 	client := &fakePlaywrightClient{
 		catalog: playwrightCatalogFixture(),
