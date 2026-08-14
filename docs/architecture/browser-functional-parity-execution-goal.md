@@ -120,6 +120,8 @@ The implementation authority and stop conditions are fixed in
 
 Add typed form filling only after form values can cross the companion boundary
 without entering durable invocation records or diagnostic output.
+The implementation authority and stop conditions are fixed in
+[Browser Capability BF1 Protected Fill Parity Admission](browser-capability-bf1-protected-fill-admission.md).
 
 ### Acceptance Criteria
 
