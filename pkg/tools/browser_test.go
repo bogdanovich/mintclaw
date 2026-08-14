@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -80,6 +81,15 @@ func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing
 	originalAction := original["action"].(map[string]any)
 	if originalAction["value"] != "canary-secret" {
 		t.Fatalf("in-memory value was mutated: %#v", originalAction["value"])
+	}
+}
+
+func TestToolRegistryDurableArgumentsPreserveUnknownToolCalls(t *testing.T) {
+	registry := NewToolRegistry()
+	arguments := map[string]any{"value": "handled by a later layer"}
+	projected, err := registry.DurableArguments("hook_owned_tool", arguments)
+	if err != nil || !reflect.DeepEqual(projected, arguments) {
+		t.Fatalf("DurableArguments() = %#v, %v; want unchanged arguments", projected, err)
 	}
 }
 

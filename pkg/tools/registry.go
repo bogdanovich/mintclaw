@@ -372,11 +372,13 @@ func (r *ToolRegistry) Get(name string) (toolshared.Tool, bool) {
 }
 
 // DurableArguments returns the trusted tool's persistence-safe argument
-// projection. Tools without a projector retain their original arguments.
+// projection. Unregistered tools and tools without a projector retain their
+// original arguments so later admission and hook layers preserve their
+// existing responsibility for unknown tool calls.
 func (r *ToolRegistry) DurableArguments(name string, args map[string]any) (map[string]any, error) {
 	tool, ok := r.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("tool %q not found", name)
+		return args, nil
 	}
 	projector, ok := tool.(toolshared.DurableArgumentsProvider)
 	if !ok {
