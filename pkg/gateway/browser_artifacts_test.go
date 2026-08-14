@@ -174,7 +174,7 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	}
 }
 
-func TestGatewayNodeDownloadResolvesThroughBrowserUploadWorker(t *testing.T) {
+func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := gatewayBrowserConfig(workspace)
 	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
@@ -247,7 +247,7 @@ func TestGatewayNodeDownloadResolvesThroughBrowserUploadWorker(t *testing.T) {
 	preparation, err := source.PrepareAction(ctx, browser.PrepareActionRequest{
 		Owner: owner, RequestID: "request_upload", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionUpload, Ref: match[1], ArtifactRef: artifact.Ref},
+		Action: browser.Action{Kind: browser.ActionFileChooser, Ref: match[1], ArtifactRef: artifact.Ref},
 	})
 	if err != nil || preparation.Action.ArtifactSHA256 != hex.EncodeToString(digest[:]) {
 		t.Fatalf("PrepareAction() = %#v, %v", preparation, err)

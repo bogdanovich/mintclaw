@@ -38,7 +38,7 @@ func TestOrdinaryInteractionActionContracts(t *testing.T) {
 	}
 }
 
-func TestPreparedActionRejectsDormantArtifactInteractions(t *testing.T) {
+func TestPreparedFileChooserRequiresArtifactBinding(t *testing.T) {
 	owner := Owner{ActorID: "actor_1", AgentID: "agent_1", SessionKey: "session_key_1", ExecutionID: "execution_1"}
 	actions := []Action{
 		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},

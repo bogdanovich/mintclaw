@@ -464,16 +464,27 @@ func TestPlaywrightWorkerUploadsOnlyAfterExactFileChooser(t *testing.T) {
 		"browser_click":       playwrightTextResult("- [File chooser]: can be handled by browser_file_upload"),
 		"browser_file_upload": playwrightTextResult("uploaded"),
 	}}
-	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	outputDir := t.TempDir()
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: outputDir,
+	}
 	digest := sha256.Sum256([]byte("upload fixture"))
 	err := worker.Upload(context.Background(), DriverAction{
 		Kind: DriverUpload, Target: "e4", Element: "Choose file", Value: artifact,
 		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len("upload fixture")),
+		ArtifactFilename: "fixture.txt", ArtifactContentType: "text/plain",
 	})
-	if err != nil || len(client.calls) != 2 || client.calls[0].tool != "browser_click" ||
-		client.calls[1].tool != "browser_file_upload" ||
-		!reflect.DeepEqual(client.calls[1].arguments["paths"], []string{artifact}) {
+	if err != nil || len(client.calls) != 2 {
 		t.Fatalf("Upload() error = %v; calls = %#v", err, client.calls)
+	}
+	stagedPaths, _ := client.calls[1].arguments["paths"].([]string)
+	if client.calls[0].tool != "browser_click" || client.calls[1].tool != "browser_file_upload" ||
+		len(stagedPaths) != 1 || filepath.Base(stagedPaths[0]) != "fixture.txt" ||
+		!strings.HasPrefix(stagedPaths[0], outputDir+string(filepath.Separator)) {
+		t.Fatalf("Upload() error = %v; calls = %#v", err, client.calls)
+	}
+	if _, statErr := os.Stat(stagedPaths[0]); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("staged upload was not cleaned up: %v", statErr)
 	}
 	client.callResults["browser_click"] = playwrightTextResult("ordinary click")
 	if err = worker.Upload(context.Background(), DriverAction{
@@ -2516,6 +2527,109 @@ Done</div><output id="drag-result"></output>
 				t.Fatalf("Close() error = %v", closeErr)
 			}
 		})
+	}
+}
+
+func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" {
+		t.Skip("set MINTCLAW_BROWSER_REAL_DRIVER=1 to run the pinned Playwright MCP fixture")
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(writer, `<!doctype html><title>File Chooser Fixture</title>
+<label>Attachment <input type="file" aria-label="Attachment"
+ onchange="document.querySelector('output').textContent=this.files[0]?.name+'|'+this.files[0]?.size"></label>
+<output></output>`)
+	}))
+	defer fixture.Close()
+	fixtureURL, err := url.Parse(fixture.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureURL.Host = "browser-fixture.test:" + fixtureURL.Port()
+	fixtureOrigin := fixtureURL.String()
+
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.NetworkMode = config.BrowserNetworkPublicWeb
+	profile.AllowedOrigins = nil
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	server := root.Tools.MCP.Servers["playwright"]
+	driverTemp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(driverTemp, "output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
+	server.Args = []string{
+		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"--output-mode=stdout", "--output-dir=" + filepath.Join(driverTemp, "output"),
+	}
+	root.Tools.MCP.Servers["playwright"] = server
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory.proxyLookupIP = func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}
+	factory.proxyDial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, fixture.Listener.Addr().String())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "file_chooser_fixture", Target: "gateway", Profile: "managed", DryRun: true,
+		Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
+		t.Fatalf("navigate error = %v", err)
+	}
+	observation, err := worker.Observe(ctx)
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	fileChooser := mustSnapshotRef(t, observation.Snapshot, `button "Attachment" \[ref=(e[0-9]+)\]`)
+	artifactContent := []byte("bounded file chooser fixture")
+	artifactPath := filepath.Join(t.TempDir(), "bounded-upload.txt")
+	if err = os.WriteFile(artifactPath, artifactContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactDigest := sha256.Sum256(artifactContent)
+	if err = worker.Upload(ctx, DriverAction{
+		Kind: DriverUpload, Target: fileChooser, Element: "Attachment", Value: artifactPath,
+		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
+		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
+	}); err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_FILE_CHOOSER_V1|" +
+			String(await page.locator("output").textContent())`,
+	})
+	if err != nil || probe == nil || probe.IsError {
+		t.Fatalf("completion probe = %#v, %v", probe, err)
+	}
+	probeText, err := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || !strings.Contains(probeText, fmt.Sprintf(
+		"MINTCLAW_FILE_CHOOSER_V1|bounded-upload.txt|%d", len(artifactContent),
+	)) {
+		t.Fatalf("completion probe = %q, %v", probeText, err)
+	}
+	entries, err := os.ReadDir(worker.outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "upload-") {
+			t.Fatalf("staged upload directory was not cleaned up: %q", entry.Name())
+		}
 	}
 }
 

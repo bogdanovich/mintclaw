@@ -278,8 +278,9 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		(request.Action.Kind == ActionFill && request.Action.Value == "") ||
 		(request.Action.Kind == ActionSelect && request.Action.Value == "") ||
 		(request.Action.Kind == ActionDialog && !validIdentifier(request.Action.DialogID)) ||
-		(request.Action.Kind == ActionUpload && (request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
-		(request.Action.Kind != ActionUpload && request.Upload != nil) {
+		(artifactInputAction(request.Action.Kind) &&
+			(request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
+		(!artifactInputAction(request.Action.Kind) && request.Upload != nil) {
 		return Preparation{}, fmt.Errorf("%w: malformed action preparation", ErrInvalid)
 	}
 	broker.mu.Lock()
@@ -332,7 +333,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			existing.InputDigest != inputDigest || existing.InputBytes != inputBytes {
 			return Preparation{}, ErrConflict
 		}
-		if request.Action.Kind == ActionUpload && (request.Upload == nil ||
+		if artifactInputAction(request.Action.Kind) && (request.Upload == nil ||
 			existing.ArtifactSHA256 != request.Upload.SHA256 || existing.ArtifactBytes != request.Upload.Size ||
 			existing.ArtifactFilename != request.Upload.Filename ||
 			existing.ArtifactContentType != request.Upload.ContentType) {
@@ -476,12 +477,12 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		invocationID,
 		prepared.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
-			if prepared.Action.Kind == ActionUpload || prepared.Action.Kind == ActionDownload {
+			if artifactInputAction(prepared.Action.Kind) || prepared.Action.Kind == ActionDownload {
 				transferWorker, ok := worker.(TransferWorker)
 				if !ok {
 					return nil, ErrDriverIncompatible
 				}
-				if prepared.Action.Kind == ActionUpload {
+				if artifactInputAction(prepared.Action.Kind) {
 					if executeErr := transferWorker.Upload(executeCtx, driverAction); executeErr != nil {
 						return nil, executeErr
 					}
@@ -620,7 +621,8 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.Action.URL = normalized
 		prepared.DestinationOrigin = destination
 		prepared.Effect = EffectNavigation
-	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionUpload, ActionDownload:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[request.Action.Ref]
 		if !ok {
 			return PreparedAction{}, ErrStale
@@ -643,7 +645,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.Effect = EffectLocalEdit
 		case ActionHover:
 			prepared.Effect = EffectRead
-		case ActionUpload:
+		case ActionFileChooser, ActionUpload:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
 				!validDigest(request.Upload.SHA256) || request.Upload.Path == "" || request.Upload.Filename == "" ||
@@ -1122,7 +1124,8 @@ func (broker *Broker) driverActionForPrepared(
 	switch prepared.Action.Kind {
 	case ActionNavigate:
 		return DriverAction{Kind: DriverNavigate, URL: prepared.Action.URL}, nil
-	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionUpload, ActionDownload:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
@@ -1147,7 +1150,7 @@ func (broker *Broker) driverActionForPrepared(
 			kind = DriverUncheck
 		case ActionHover:
 			kind = DriverHover
-		case ActionUpload:
+		case ActionFileChooser, ActionUpload:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]
 			if !exists || binding.Ref != prepared.Action.ArtifactRef || binding.SHA256 != prepared.ArtifactSHA256 ||
@@ -1162,6 +1165,7 @@ func (broker *Broker) driverActionForPrepared(
 		return DriverAction{
 			Kind: kind, Target: element.Target, Element: element.Name, Value: value,
 			ArtifactSHA256: prepared.ArtifactSHA256, ArtifactBytes: prepared.ArtifactBytes,
+			ArtifactFilename: prepared.ArtifactFilename, ArtifactContentType: prepared.ArtifactContentType,
 		}, nil
 	case ActionDrag:
 		source, sourceOK := slot.refs[prepared.Action.SourceRef]
@@ -1198,13 +1202,17 @@ func (broker *Broker) driverActionForPrepared(
 }
 
 func (broker *Broker) rememberUpload(slot *workerSlot, prepared PreparedAction, binding *UploadBinding) {
-	if prepared.Action.Kind != ActionUpload || binding == nil {
+	if !artifactInputAction(prepared.Action.Kind) || binding == nil {
 		return
 	}
 	if slot.uploads == nil {
 		slot.uploads = make(map[string]UploadBinding)
 	}
 	slot.uploads[prepared.ID] = *binding
+}
+
+func artifactInputAction(kind ActionKind) bool {
+	return kind == ActionFileChooser || kind == ActionUpload
 }
 
 func (broker *Broker) bindActionInput(action Action) (Action, string, int, error) {

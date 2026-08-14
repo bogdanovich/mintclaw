@@ -502,7 +502,7 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 			return browser.Preparation{}, recoverErr
 		}
 	}
-	if request.Action.Kind == browser.ActionUpload {
+	if request.Action.Kind == browser.ActionFileChooser || request.Action.Kind == browser.ActionUpload {
 		binding, err := source.resolveBrowserUpload(ctx, request)
 		if err != nil {
 			return browser.Preparation{}, err
