@@ -66,22 +66,13 @@ func durableToolLoopArguments(
 }
 
 func durableToolResultContent(
-	registry *tools.ToolRegistry,
-	toolName string,
-	arguments map[string]any,
 	content string,
-) (string, bool, error) {
-	if registry == nil {
-		return content, false, nil
-	}
-	_, protected, err := registry.DurableArguments(toolName, arguments)
-	if err != nil {
-		return "", false, err
-	}
+	protected bool,
+) string {
 	if protected {
-		return protectedToolResultDurableContent, true, nil
+		return protectedToolResultDurableContent
 	}
-	return content, false, nil
+	return content
 }
 
 type mcpServerTool interface {
@@ -332,6 +323,7 @@ type toolCallState struct {
 	loopArguments    map[string]any
 	mcpServerName    string
 	toolRegistry     *tools.ToolRegistry
+	protectedResult  bool
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -536,13 +528,12 @@ func (runner *toolLoopRunner) admitToolCall(
 					ToolResultStatus: toolResultContextStatus(hookResult),
 					Media:            toolResultMedia,
 				}
-				durableContent, protectedResult, projectionErr := durableToolResultContent(
-					ts.agent.Tools, toolName, toolArgs, contentForLLM,
-				)
+				_, protectedResult, projectionErr := ts.agent.Tools.DurableArguments(toolName, toolArgs)
 				if projectionErr != nil {
 					runner.journalErr = fmt.Errorf("project protected tool result: %w", projectionErr)
 					return stopToolBatch(ToolLoopOutcome{})
 				}
+				durableContent := durableToolResultContent(contentForLLM, protectedResult)
 				durableToolResultMsg := toolResultMsg
 				durableToolResultMsg.Content = durableContent
 				aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
@@ -723,6 +714,12 @@ func (runner *toolLoopRunner) approveToolCall(
 		return skipToolCall()
 	}
 	call.toolRegistry = toolRegistry
+	_, protectedResult, projectionErr := toolRegistry.DurableArguments(toolName, toolArgs)
+	if projectionErr != nil {
+		runner.journalErr = fmt.Errorf("classify protected tool result before execution: %w", projectionErr)
+		return stopToolBatch(ToolLoopOutcome{})
+	}
+	call.protectedResult = protectedResult
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
@@ -1102,7 +1099,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 			effectiveCall := tc
 			effectiveCall.Name = toolName
 			effectiveCall.Arguments = toolArgs
-			_ = runner.journalHardAbortedToolResult(effectiveCall, toolResult)
+			_ = runner.journalHardAbortedToolResult(
+				effectiveCall, toolResult, call.protectedResult,
+			)
 		}
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
@@ -1248,13 +1247,8 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
 	toolResultMsg.Content = contentForLLM
-	durableContent, protectedResult, projectionErr := durableToolResultContent(
-		ts.agent.Tools, toolName, toolArgs, contentForLLM,
-	)
-	if projectionErr != nil {
-		runner.journalErr = fmt.Errorf("project protected tool result: %w", projectionErr)
-		return stopToolBatch(ToolLoopOutcome{})
-	}
+	protectedResult := call.protectedResult
+	durableContent := durableToolResultContent(contentForLLM, protectedResult)
 	durableToolResultMsg := toolResultMsg
 	durableToolResultMsg.Content = durableContent
 	aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
@@ -1559,7 +1553,7 @@ func (r *toolLoopRunner) appendToolMessageWithDurableContext(
 	}
 	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, durableMsg)
 	if writeErr == nil {
-		r.ts.recordPersistedMessage(durableMsg)
+		r.ts.recordPersistedMessagePair(msg, durableMsg)
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
 		r.p.ingestMessage(ctx, r.ts, durableMsg, writeErr)
@@ -1578,6 +1572,7 @@ func (r *toolLoopRunner) appendToolMessageWithDurableContext(
 func (r *toolLoopRunner) journalHardAbortedToolResult(
 	toolCall providers.ToolCall,
 	result *toolshared.ToolResult,
+	protectedResult bool,
 ) error {
 	if r == nil || result == nil {
 		return nil
@@ -1596,14 +1591,8 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 		result,
 		r.p.filterToolContentForLLM(result.ContentForLLM()),
 	)
-	durableContent, _, err := durableToolResultContent(
-		r.ts.agent.Tools, toolCall.Name, toolCall.Arguments, msg.Content,
-	)
-	if err != nil {
-		return fmt.Errorf("project protected hard-abort tool result: %w", err)
-	}
 	durableMsg := msg
-	durableMsg.Content = durableContent
+	durableMsg.Content = durableToolResultContent(msg.Content, protectedResult)
 	return r.appendToolMessageWithDurableContext(
 		ctx,
 		msg,

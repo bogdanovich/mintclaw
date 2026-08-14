@@ -10597,6 +10597,40 @@ type toolOverflowProvider struct {
 	retryMessages []providers.Message
 }
 
+type protectedToolOverflowProvider struct {
+	calls         int
+	retryMessages []providers.Message
+	canary        string
+}
+
+func (p *protectedToolOverflowProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+			ID:   "protected_retry_call",
+			Type: "function",
+			Name: "browser_act",
+			Arguments: map[string]any{
+				"action": map[string]any{"kind": "fill", "value": p.canary},
+			},
+		}}}, nil
+	case 2:
+		return nil, errors.New("context_window_exceeded")
+	default:
+		p.retryMessages = append([]providers.Message(nil), messages...)
+		return &providers.LLMResponse{Content: "Recovered with protected observation"}, nil
+	}
+}
+
+func (*protectedToolOverflowProvider) GetDefaultModel() string { return "test-model" }
+
 func (p *toolOverflowProvider) Chat(
 	_ context.Context,
 	messages []providers.Message,
@@ -10657,6 +10691,39 @@ func TestProcessMessage_NoneContextOverflowPreservesActiveToolTurn(t *testing.T)
 	}
 	if !hasToolCall || !hasToolResult {
 		t.Fatalf("retry messages dropped active tool exchange: %#v", provider.retryMessages)
+	}
+}
+
+func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *testing.T) {
+	al, _, _, originalProvider, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	_ = originalProvider
+
+	const canary = "protected-overflow-canary-2a7f901d"
+	provider := &protectedToolOverflowProvider{canary: canary}
+	al.registry = NewAgentRegistry(al.cfg, provider)
+	al.RegisterTool(&protectedResultProjectionTool{})
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Channel: "test",
+		ChatID:  "protected-overflow",
+		Content: "fill and verify protected input",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "Recovered with protected observation" || provider.calls != 3 {
+		t.Fatalf("response = %q, calls = %d", response, provider.calls)
+	}
+	var retryResult string
+	for _, message := range provider.retryMessages {
+		if message.Role == "tool" && message.ToolCallID == "protected_retry_call" {
+			retryResult = message.Content
+		}
+	}
+	if !strings.Contains(retryResult, canary) {
+		t.Fatalf("overflow retry lost live protected observation: %#v", provider.retryMessages)
 	}
 }
 

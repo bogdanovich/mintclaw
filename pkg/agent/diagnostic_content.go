@@ -333,6 +333,7 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 			result[index].result = diagnosticResultClassification{
 				toolName: call.toolName, matched: matched, protected: call.protected,
 			}
+			delete(latestCalls, message.ToolCallID)
 		}
 		result[index].sensitive = diagnosticMessageContainsSensitiveEvidence(message, result[index].result)
 		result[index].sensitive = result[index].sensitive || result[index].result.protected
@@ -362,6 +363,9 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 			}
 		}
 		for callID, call := range batchCalls {
+			if _, pending := latestCalls[callID]; pending {
+				call = diagnosticCallClassification{protected: true}
+			}
 			latestCalls[callID] = call
 		}
 	}

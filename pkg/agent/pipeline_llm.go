@@ -362,7 +362,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			compactCancel()
 			ts.refreshCanonicalRestorePointFromSession()
 			persistedTurn := ts.persistedMessagesSnapshot()
-			protectedTurnTail := append([]providers.Message(nil), persistedTurn...)
+			protectedTurnTail := ts.liveTurnMessagesSnapshot()
 			asmResp, asmErr := p.Context.Runtime.Assemble(ctx, &AssembleRequest{
 				Agent:         ts.agent,
 				SessionKey:    ts.sessionKey,

@@ -404,6 +404,43 @@ func TestProtectedBrowserFillResultIsRedactedFromLogsAndTraces(t *testing.T) {
 	}
 }
 
+func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
+	const canary = "pending-reused-fill-result-canary-54eb7e0c"
+	messages := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "reused-pending-call", Name: "browser_act",
+				Function: &providers.FunctionCall{
+					Name:      "browser_act",
+					Arguments: `{"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+				},
+			}},
+		},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "reused-pending-call", Name: "read_file",
+				Function: &providers.FunctionCall{
+					Name: "read_file", Arguments: `{"path":"public.txt"}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "reused-pending-call", Content: canary},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(messages),
+		diagnosticMessagesPreview(cfg, messages),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("pending reused protected call ID did not fail closed: %s", preview)
+		}
+	}
+}
+
 func TestUnnamedReusedToolCallsInvalidateEarlierCorrelation(t *testing.T) {
 	answer := "unnamed-private-answer"
 	messages := []providers.Message{

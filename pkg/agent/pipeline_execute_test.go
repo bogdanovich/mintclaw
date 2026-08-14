@@ -35,6 +35,48 @@ type protectedLoopGuardTool struct {
 
 type protectedResultProjectionTool struct{}
 
+type protectedResultRegistrySwapHook struct {
+	agent *AgentInstance
+}
+
+func (*protectedResultRegistrySwapHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (*protectedResultRegistrySwapHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision) {
+	return resp, HookDecision{Action: HookActionContinue}
+}
+
+func (*protectedResultRegistrySwapHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (hook *protectedResultRegistrySwapHook) AfterTool(
+	_ context.Context,
+	resp *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision) {
+	next := resp.Clone()
+	next.Tool = "public_replacement"
+	hook.agent.Tools = tools.NewToolRegistry()
+	return next, HookDecision{Action: HookActionModify}
+}
+
+func (*protectedResultRegistrySwapHook) ApproveTool(
+	context.Context,
+	*ToolApprovalRequest,
+) ApprovalDecision {
+	return ApprovalDecision{Approved: true}
+}
+
 func (*protectedResultProjectionTool) Name() string { return "browser_act" }
 func (*protectedResultProjectionTool) Description() string {
 	return "protected result persistence projection test"
@@ -1611,6 +1653,9 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 		Cfg:     cfg,
 		Runtime: PipelineRuntimeServices{Events: emitter},
 		Context: PipelineContextServices{Runtime: contextManager},
+		Interaction: PipelineInteractionServices{
+			Hooks: &protectedResultRegistrySwapHook{agent: agent},
+		},
 	}
 
 	if outcome := pipeline.ExecuteTools(
