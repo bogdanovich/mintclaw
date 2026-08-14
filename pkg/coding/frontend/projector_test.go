@@ -95,6 +95,62 @@ func TestReducerResynchronizesAfterDroppedDelta(t *testing.T) {
 	}
 }
 
+func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltas := []Delta{
+		projector.TurnStarted("turn-1", "fix it"),
+		projector.ToolStarted("turn-1", "call-1", "exec", "fields: command"),
+		projector.Warning("turn-1", "retry-1", "model request retry 1/2 (rate_limit)"),
+		projector.ToolCompleted("turn-1", "call-1", "exec", "done", 0, false, []WriteAudit{{
+			Kind: "file", Target: "main.go", Action: "update", Success: true,
+		}}),
+		projector.CompactionStarted(),
+		projector.CompactionCompleted("context compacted"),
+		projector.TurnCompleted("completed"),
+	}
+	for i, delta := range deltas {
+		if i == 2 { // Simulate an arbitrary lost progress observation.
+			continue
+		}
+		if err = reducer.Apply(delta); err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, ErrRevisionGap) {
+		t.Fatalf("reducer error = %v, want ErrRevisionGap", err)
+	}
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resynchronized lifecycle = %+v, want %+v", got, want)
+	}
+	if got.Tools[0].TurnID != "turn-1" || got.Tools[0].WriteAudit[0].Target != "main.go" {
+		t.Fatalf("tool correlation = %+v", got.Tools[0])
+	}
+	for _, delta := range deltas[:4] {
+		if delta.TurnID == "" || delta.EntityID == "" {
+			t.Fatalf("uncorrelated progress delta = %+v", delta)
+		}
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,

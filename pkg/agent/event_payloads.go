@@ -4,6 +4,7 @@ import (
 	"time"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 // TurnEndStatus describes the terminal state of a turn.
@@ -208,6 +209,7 @@ type ToolExecEndPayload struct {
 	Suspended        bool
 	InteractionID    string
 	DiagnosticResult string
+	WriteAudit       []toolshared.WriteAuditEntry
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

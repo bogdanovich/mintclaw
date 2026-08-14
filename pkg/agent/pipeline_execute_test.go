@@ -235,6 +235,50 @@ func TestToolResultContextStatus(t *testing.T) {
 	}
 }
 
+func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
+	result := toolshared.NewToolResult("updated").WithFileWriteAudit("main.go", "update", "write_file")
+	tool := &fixedToolResultTool{name: "write_file", result: result}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	agent := &AgentInstance{
+		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""),
+		ToolLoopDetection: loopguard.DefaultConfig(),
+	}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-write-audit", sessionKey: "session-write-audit",
+		opts: processOptions{NoHistory: true},
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{
+		ID: "call-write", Name: tool.Name(), Arguments: map[string]any{},
+	}}
+	emitter := &captureRuntimeEmitter{}
+	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+
+	if outcome := pipeline.ExecuteTools(
+		t.Context(),
+		t.Context(),
+		ts,
+		exec,
+		llm,
+	); outcome.Control != ToolControlContinue {
+		t.Fatalf("tool outcome = %+v", outcome)
+	}
+	for _, event := range emitter.events {
+		payload, ok := event.payload.(ToolExecEndPayload)
+		if event.kind != runtimeevents.KindAgentToolExecEnd || !ok {
+			continue
+		}
+		if len(payload.WriteAudit) != 1 || payload.WriteAudit[0].Target != "main.go" ||
+			!payload.WriteAudit[0].Success {
+			t.Fatalf("write audit event = %+v", payload.WriteAudit)
+		}
+		return
+	}
+	t.Fatal("missing tool execution end event")
+}
+
 func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	tool := &fixedToolResultTool{name: "stage-tool", result: toolshared.NewToolResult("stage result")}

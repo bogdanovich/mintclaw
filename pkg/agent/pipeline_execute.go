@@ -542,6 +542,7 @@ func (runner *toolLoopRunner) admitToolCall(
 						DiagnosticResult: diagnosticTextPreview(
 							p.Cfg, contentForLLM, diagnosticToolResultBytes,
 						),
+						WriteAudit: append([]toolshared.WriteAuditEntry(nil), hookResult.WriteAudit...),
 					},
 				)
 				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
@@ -1239,6 +1240,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, contentForLLM, diagnosticToolResultBytes,
 			),
+			WriteAudit: append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)

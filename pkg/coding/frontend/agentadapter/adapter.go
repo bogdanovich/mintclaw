@@ -10,12 +10,32 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type Adapter struct {
 	projector  *frontend.Projector
 	sessionKey string
+}
+
+// ProjectThreadMetadata maps the durable catalog descriptor into the
+// transport-neutral, bounded frontend projection.
+func ProjectThreadMetadata(projector *frontend.Projector, metadata thread.Metadata) error {
+	if projector == nil {
+		return fmt.Errorf("coding frontend projector is required")
+	}
+	projector.ThreadMetadataUpdated(frontend.ThreadMetadata{
+		Title:       metadata.Title,
+		Preview:     metadata.Preview,
+		ProjectRoot: metadata.Project.ProjectRoot,
+		CWD:         metadata.Project.InvocationCWD,
+		Model:       metadata.Model,
+		Provider:    metadata.Provider,
+		UpdatedAt:   metadata.UpdatedAt,
+	})
+	return nil
 }
 
 // WrapBus synchronously projects coding lifecycle observations before
@@ -92,7 +112,7 @@ func (a *Adapter) project(event runtimeevents.Event) {
 	case runtimeevents.KindAgentToolExecStart:
 		payload, ok := event.Payload.(agent.ToolExecStartPayload)
 		if ok {
-			a.projector.ToolStarted(payload.ToolCallID, payload.Tool, argumentShape(payload.Arguments))
+			a.projector.ToolStarted(turnID, payload.ToolCallID, payload.Tool, argumentShape(payload.Arguments))
 		}
 	case runtimeevents.KindAgentToolExecEnd:
 		payload, ok := event.Payload.(agent.ToolExecEndPayload)
@@ -102,12 +122,50 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				payload.ForLLMLen,
 				payload.ForUserLen,
 			)
-			a.projector.ToolCompleted(payload.ToolCallID, payload.Tool, result, payload.Duration, payload.IsError)
+			a.projector.ToolCompleted(
+				turnID,
+				payload.ToolCallID,
+				payload.Tool,
+				result,
+				payload.Duration,
+				payload.IsError,
+				projectWriteAudit(payload.WriteAudit),
+			)
 		}
 	case runtimeevents.KindAgentToolExecSkipped:
 		payload, ok := event.Payload.(agent.ToolExecSkippedPayload)
 		if ok {
-			a.projector.ToolCompleted(payload.ToolCallID, payload.Tool, payload.Reason, 0, true)
+			a.projector.ToolCompleted(turnID, payload.ToolCallID, payload.Tool, "tool skipped", 0, true, nil)
+		}
+	case runtimeevents.KindAgentLLMRetry:
+		payload, ok := event.Payload.(agent.LLMRetryPayload)
+		if ok {
+			a.projector.Warning(
+				turnID,
+				fmt.Sprintf("%s:model-retry:%d", normalizeID(turnID), payload.Attempt),
+				fmt.Sprintf(
+					"model request retry %d/%d (%s)",
+					payload.Attempt,
+					payload.MaxRetries,
+					safeToken(payload.Reason),
+				),
+			)
+		}
+	case runtimeevents.KindAgentLLMFallbackAttempt:
+		payload, ok := event.Payload.(agent.LLMFallbackAttemptPayload)
+		if ok {
+			a.projector.Warning(
+				turnID,
+				fmt.Sprintf("%s:model-fallback:%d", normalizeID(turnID), payload.Attempt),
+				fmt.Sprintf(
+					"model fallback %d: %s/%s %s (%s)",
+					payload.Attempt,
+					safeToken(payload.Provider),
+					safeToken(payload.Model),
+					safeToken(payload.Status),
+					safeToken(payload.Reason),
+				),
+			)
 		}
 	case runtimeevents.KindAgentContextCompress:
 		payload, ok := event.Payload.(agent.ContextCompressPayload)
@@ -124,8 +182,52 @@ func (a *Adapter) project(event runtimeevents.Event) {
 	case runtimeevents.KindAgentInterruptReceived:
 		a.projector.InterruptRequested()
 	case runtimeevents.KindAgentError:
-		a.projector.TurnFailed("agent error")
+		payload, ok := event.Payload.(agent.ErrorPayload)
+		if ok && strings.TrimSpace(payload.Stage) != "" {
+			stage := safeToken(payload.Stage)
+			status := "agent error during " + stage
+			a.projector.Error(turnID, fmt.Sprintf("%s:error:%s", normalizeID(turnID), stage), status)
+			a.projector.TurnFailed(status)
+		} else {
+			a.projector.Error(turnID, normalizeID(turnID)+":error", "agent error")
+			a.projector.TurnFailed("agent error")
+		}
 	}
+}
+
+func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit {
+	result := make([]frontend.WriteAudit, 0, len(audit))
+	for _, entry := range audit {
+		if !entry.Success {
+			continue
+		}
+		result = append(result, frontend.WriteAudit{
+			Kind: entry.Kind, Target: entry.Target, Action: entry.Action, Success: true,
+		})
+	}
+	return result
+}
+
+func safeToken(value string) string {
+	value = strings.TrimSpace(value)
+	for _, r := range value {
+		allowedPunctuation := r == '-' || r == '_' || r == '.' || r == '/' || r == ' '
+		allowedLetterOrDigit := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !allowedPunctuation && !allowedLetterOrDigit {
+			return "unknown"
+		}
+	}
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func normalizeID(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "current"
 }
 
 func (a *Adapter) projectTurnEnd(turnID string, value any) {

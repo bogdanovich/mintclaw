@@ -161,8 +161,24 @@ func (p *Projector) Open(resumed bool) Delta {
 	})
 }
 
+func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) Delta {
+	return p.mutate(DeltaThreadMetadata, func(state *ThreadSnapshot, delta *Delta) {
+		metadata.Title, _ = boundText(metadata.Title, p.limits.TextBytes)
+		metadata.Preview, _ = boundText(metadata.Preview, p.limits.TextBytes)
+		metadata.ProjectRoot, _ = boundText(metadata.ProjectRoot, p.limits.TextBytes)
+		metadata.CWD, _ = boundText(metadata.CWD, p.limits.TextBytes)
+		metadata.Model, _ = boundText(metadata.Model, p.limits.TextBytes)
+		metadata.Provider, _ = boundText(metadata.Provider, p.limits.TextBytes)
+		state.Metadata = metadata
+		delta.Metadata = &metadata
+		delta.EntityID = state.ThreadID
+	})
+}
+
 func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 	return p.mutate(DeltaTurnStarted, func(state *ThreadSnapshot, delta *Delta) {
+		delta.TurnID = normalizeTurnID(turnID)
+		delta.EntityID = delta.TurnID
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
@@ -177,6 +193,7 @@ func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 		})
 		p.upsertEntry(state, delta, entry)
 		delta.Entry = &entry
+		delta.EntityID = entry.ID
 	})
 }
 
@@ -205,36 +222,80 @@ func (p *Projector) upsertStreamEntry(
 		})
 		p.upsertEntry(state, delta, entry)
 		delta.Entry = &entry
+		delta.TurnID = entry.TurnID
+		delta.EntityID = entry.ID
 	})
 }
 
-func (p *Projector) ToolStarted(callID, name, arguments string) Delta {
+func (p *Projector) Warning(turnID, id, content string) Delta {
+	return p.notice(EntryWarning, turnID, id, content)
+}
+
+func (p *Projector) Error(turnID, id, content string) Delta {
+	return p.notice(EntryError, turnID, id, content)
+}
+
+func (p *Projector) notice(kind EntryKind, turnID, id, content string) Delta {
+	return p.mutate(DeltaNotice, func(state *ThreadSnapshot, delta *Delta) {
+		turnID = normalizeTurnID(turnID)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			id = entryID(turnID, string(kind))
+		}
+		entry := p.boundedEntry(TranscriptEntry{
+			ID: id, TurnID: turnID, Kind: kind, Text: content, Complete: true,
+		})
+		p.upsertEntry(state, delta, entry)
+		delta.Entry = &entry
+		delta.TurnID = turnID
+		delta.EntityID = id
+	})
+}
+
+func (p *Projector) ToolStarted(turnID, callID, name, arguments string) Delta {
 	return p.mutate(DeltaToolStarted, func(state *ThreadSnapshot, delta *Delta) {
-		tool := p.boundedTool(ToolState{CallID: callID, Name: name, Arguments: arguments, Status: ToolRunning})
+		tool := p.boundedTool(ToolState{
+			TurnID: normalizeTurnID(turnID), CallID: callID, Name: name, Arguments: arguments, Status: ToolRunning,
+		})
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
+		delta.TurnID = tool.TurnID
+		delta.EntityID = tool.CallID
 	})
 }
 
-func (p *Projector) ToolOutput(callID, output string) Delta {
+func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
 	return p.mutate(DeltaToolOutput, func(state *ThreadSnapshot, delta *Delta) {
 		tool := toolByID(state.Tools, callID)
 		if tool.CallID == "" {
-			tool = ToolState{CallID: callID, Status: ToolUnknown}
+			tool = ToolState{TurnID: normalizeTurnID(turnID), CallID: callID, Status: ToolUnknown}
+		}
+		if tool.TurnID == "" {
+			tool.TurnID = normalizeTurnID(turnID)
 		}
 		bounded, truncated := boundText(output, p.limits.TextBytes)
 		tool.Output = bounded
 		tool.OutputTruncated = truncated
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
+		delta.TurnID = tool.TurnID
+		delta.EntityID = tool.CallID
 	})
 }
 
-func (p *Projector) ToolCompleted(callID, name, output string, duration time.Duration, failed bool) Delta {
+func (p *Projector) ToolCompleted(
+	turnID, callID, name, output string,
+	duration time.Duration,
+	failed bool,
+	writeAudit []WriteAudit,
+) Delta {
 	return p.mutate(DeltaToolCompleted, func(state *ThreadSnapshot, delta *Delta) {
 		tool := toolByID(state.Tools, callID)
 		if tool.CallID == "" {
-			tool = ToolState{CallID: callID, Name: name}
+			tool = ToolState{TurnID: normalizeTurnID(turnID), CallID: callID, Name: name}
+		}
+		if tool.TurnID == "" {
+			tool.TurnID = normalizeTurnID(turnID)
 		}
 		if tool.Name == "" {
 			tool.Name = name
@@ -245,8 +306,11 @@ func (p *Projector) ToolCompleted(callID, name, output string, duration time.Dur
 		}
 		tool.Duration = duration
 		tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
+		tool.WriteAudit = p.boundedWriteAudit(writeAudit)
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
+		delta.TurnID = tool.TurnID
+		delta.EntityID = tool.CallID
 	})
 }
 
@@ -297,7 +361,7 @@ func (p *Projector) InterruptRequested() Delta {
 func (p *Projector) activity(kind DeltaKind, activity Activity, status string) Delta {
 	return p.mutate(kind, func(state *ThreadSnapshot, _ *Delta) {
 		state.Activity = activity
-		state.Status = status
+		state.Status, _ = boundText(status, p.limits.TextBytes)
 	})
 }
 
@@ -360,7 +424,24 @@ func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
 func (p *Projector) boundedTool(tool ToolState) ToolState {
 	tool.Arguments, _ = boundText(tool.Arguments, p.limits.TextBytes)
 	tool.Output, tool.OutputTruncated = boundText(tool.Output, p.limits.TextBytes)
+	tool.WriteAudit = p.boundedWriteAudit(tool.WriteAudit)
 	return tool
+}
+
+func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
+	if len(audit) == 0 {
+		return nil
+	}
+	result := slices.Clone(audit)
+	if len(result) > p.limits.Tools {
+		result = result[:p.limits.Tools]
+	}
+	for i := range result {
+		result[i].Kind, _ = boundText(result[i].Kind, p.limits.TextBytes)
+		result[i].Target, _ = boundText(result[i].Target, p.limits.TextBytes)
+		result[i].Action, _ = boundText(result[i].Action, p.limits.TextBytes)
+	}
+	return result
 }
 
 func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry TranscriptEntry) {
@@ -440,7 +521,7 @@ func contextError(ctx context.Context) error {
 
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Entries = slices.Clone(snapshot.Entries)
-	snapshot.Tools = slices.Clone(snapshot.Tools)
+	snapshot.Tools = cloneTools(snapshot.Tools)
 	if snapshot.Workspace != nil {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
@@ -455,7 +536,12 @@ func cloneDelta(delta Delta) Delta {
 	}
 	if delta.Tool != nil {
 		tool := *delta.Tool
+		tool.WriteAudit = slices.Clone(tool.WriteAudit)
 		delta.Tool = &tool
+	}
+	if delta.Metadata != nil {
+		metadata := *delta.Metadata
+		delta.Metadata = &metadata
 	}
 	if delta.ContextUsage != nil {
 		usage := *delta.ContextUsage
@@ -466,6 +552,14 @@ func cloneDelta(delta Delta) Delta {
 		delta.Workspace = &workspace
 	}
 	return delta
+}
+
+func cloneTools(tools []ToolState) []ToolState {
+	tools = slices.Clone(tools)
+	for i := range tools {
+		tools[i].WriteAudit = slices.Clone(tools[i].WriteAudit)
+	}
+	return tools
 }
 
 func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {

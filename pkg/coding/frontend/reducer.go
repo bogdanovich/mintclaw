@@ -61,6 +61,9 @@ func (r *Reducer) Apply(delta Delta) error {
 	r.state.Revision = delta.Revision
 	r.state.Activity = delta.Activity
 	r.state.Status = delta.Status
+	if delta.Metadata != nil {
+		r.state.Metadata = *delta.Metadata
+	}
 	if delta.ContextUsage != nil {
 		r.state.ContextUsage = *delta.ContextUsage
 	}
