@@ -1134,7 +1134,7 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 				DestinationTarget: "e3", DestinationElement: "Done",
 			},
 			wantTool: "browser_drag", wantFields: map[string]any{
-				"startRef": "e2", "startElement": "Card", "endRef": "e3", "endElement": "Done",
+				"startTarget": "e2", "startElement": "Card", "endTarget": "e3", "endElement": "Done",
 			},
 		},
 		{
@@ -1239,6 +1239,39 @@ func TestPlaywrightWorkerTreatsCheckOpenedDialogAsSuccessfulDispatch(t *testing.
 	); err != nil || worker.lost || worker.pendingDialog == nil ||
 		worker.pendingDialog.Type != "confirm" || worker.pendingDialog.Message != "Apply change?" {
 		t.Fatalf("Execute() error = %v, lost = %t, dialog = %+v", err, worker.lost, worker.pendingDialog)
+	}
+}
+
+func TestPlaywrightWorkerAcceptsHoverAndDragDialogSnapshotTail(t *testing.T) {
+	tests := []struct {
+		name   string
+		tool   string
+		action DriverAction
+	}{
+		{name: "hover", tool: "browser_hover", action: DriverAction{Kind: DriverHover, Target: "e1"}},
+		{name: "drag", tool: "browser_drag", action: DriverAction{
+			Kind: DriverDrag, Target: "e1", DestinationTarget: "e2",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				test.tool: playwrightTextResult(
+					"### Modal state\n" +
+						"- [\"alert\" dialog with message \"Changed\"]: can be handled by browser_handle_dialog\n" +
+						"### Snapshot\n```yaml\n- button \"Continue\" [ref=e3]\n```",
+				),
+			}}
+			worker := &playwrightWorker{
+				client: client, networkProxy: &browserNetworkProxy{},
+				limits:          config.BrowserLimitsConfig{}.Effective(),
+				lastObservation: DriverObservation{URL: "https://example.com/form", Origin: "https://example.com"},
+			}
+			if err := worker.Execute(t.Context(), test.action); err != nil || worker.lost ||
+				worker.pendingDialog == nil || worker.pendingDialog.Type != "alert" {
+				t.Fatalf("Execute() error = %v, lost = %t, dialog = %+v", err, worker.lost, worker.pendingDialog)
+			}
+		})
 	}
 }
 

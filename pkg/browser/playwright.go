@@ -1331,7 +1331,7 @@ func (worker *playwrightWorker) pendingDialogObservationLocked() (DriverObservat
 
 func playwrightActionIncludesSnapshot(kind DriverActionKind) bool {
 	switch kind {
-	case DriverNavigate, DriverClick, DriverFill, DriverSelect:
+	case DriverNavigate, DriverClick, DriverFill, DriverSelect, DriverHover, DriverDrag:
 		return true
 	default:
 		return false
@@ -1538,7 +1538,7 @@ func mapPlaywrightAction(
 			return "", nil, fmt.Errorf("%w: malformed drag action", ErrInvalid)
 		}
 		arguments := map[string]any{
-			"startRef": action.Target, "endRef": action.DestinationTarget,
+			"startTarget": action.Target, "endTarget": action.DestinationTarget,
 			"startElement": action.Element, "endElement": action.DestinationElement,
 		}
 		return "browser_drag", arguments, nil
