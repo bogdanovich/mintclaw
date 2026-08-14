@@ -330,6 +330,38 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 			t.Fatalf("%s observation = %#v, %v", test.kind, afterOrdinary, err)
 		}
 	}
+	dragRef := func(marker string) string {
+		start := strings.Index(afterOrdinary.Snapshot, marker)
+		if start < 0 {
+			t.Fatalf("drag fixture has no marker %q: %q", marker, afterOrdinary.Snapshot)
+		}
+		start += len(marker)
+		end := strings.Index(afterOrdinary.Snapshot[start:], "]")
+		if end < 1 {
+			t.Fatalf("drag fixture has malformed ref: %q", afterOrdinary.Snapshot)
+		}
+		return afterOrdinary.Snapshot[start : start+end]
+	}
+	drag, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-drag", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: afterOrdinary.SnapshotID, SnapshotGeneration: afterOrdinary.SnapshotGeneration,
+		Action: browser.Action{
+			Kind:      browser.ActionDrag,
+			SourceRef: dragRef(`listitem "Todo" [ref=`), DestinationRef: dragRef(`list "Done" [ref=`),
+		},
+	})
+	if err != nil || !drag.RequiresApproval || drag.Action.Effect != browser.EffectUnknown {
+		t.Fatalf("drag preparation = %#v, %v", drag, err)
+	}
+	invocation, err = broker.ExecuteAction(t.Context(), owner, drag.Action.ID, &drag.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("drag invocation = %#v, %v", invocation, err)
+	}
+	previousDragGeneration := afterOrdinary.SnapshotGeneration
+	afterOrdinary, err = broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil || afterOrdinary.SnapshotGeneration != previousDragGeneration+1 {
+		t.Fatalf("drag observation = %#v, %v", afterOrdinary, err)
+	}
 	const dialogMessage = "Type the deployment confirmation"
 	const dialogCanary = "wss-protected-dialog-must-not-persist"
 	host.setPendingDialog(first.ID, "prompt", dialogMessage)
@@ -598,7 +630,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	if got, want := host.commandSequence(), []string{
 		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
-		"check", "uncheck", "hover", "observe", "observe", "observe", "dialog", "fill", "status", "close",
+		"check", "uncheck", "hover", "drag", "observe", "observe", "observe", "dialog", "fill",
+		"status", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		// Post-acceptance recovery receives a redacted terminal receipt and
@@ -1174,6 +1207,47 @@ func (host *wssBrowserHost) Hover(
 	return host.ordinaryInteraction(request, "hover", "host_ref_6", "button", "Menu", "read")
 }
 
+func (host *wssBrowserHost) Drag(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "drag")
+	url, found := host.urls[request.SessionID]
+	if !found {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	input := nodes.BrowserActInput{
+		SessionID:               request.SessionID,
+		TabID:                   request.TabID,
+		SnapshotGeneration:      request.SnapshotGeneration,
+		ActionInvocationID:      request.ActionInvocationID,
+		Action:                  request.Action,
+		Effect:                  request.Effect,
+		CurrentOrigin:           request.CurrentOrigin,
+		PreparedActionHash:      request.PreparedActionHash,
+		BrowserPolicyRevision:   request.BrowserPolicyRevision,
+		ProfileRevision:         request.ProfileRevision,
+		ExpectedRole:            request.ExpectedRole,
+		ExpectedName:            request.ExpectedName,
+		DestinationExpectedRole: request.DestinationExpectedRole,
+		DestinationExpectedName: request.DestinationExpectedName,
+		ApprovalDigest:          request.ApprovalDigest,
+	}
+	if request.Action.Kind != "drag" || request.Action.SourceRef != "host_ref_7" ||
+		request.Action.DestinationRef != "host_ref_8" || request.ExpectedRole != "listitem" ||
+		request.ExpectedName != "Todo" || request.DestinationExpectedRole != "list" ||
+		request.DestinationExpectedName != "Done" || request.Effect != "unknown" ||
+		!nodes.BrowserApprovalDigestMatches(input) || request.InputDigest != "" || request.InputBytes != 0 {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) ordinaryInteraction(
 	request nodes.BrowserHostActRequest,
 	action, ref, role, name, effect string,
@@ -1419,7 +1493,8 @@ func wssBrowserObservation(
 	origin, title, snapshot := url, "Example Domain", "- button \"Save\" [ref=host_ref_1]\n"+
 		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]\n"+
 		"- checkbox \"Notify\" [ref=host_ref_4]\n- switch \"Dark mode\" [ref=host_ref_5]\n"+
-		"- button \"Menu\" [ref=host_ref_6]"
+		"- button \"Menu\" [ref=host_ref_6]\n- listitem \"Todo\" [ref=host_ref_7]\n"+
+		"- list \"Done\" [ref=host_ref_8]"
 	elements := []nodes.BrowserElement{
 		{Ref: "host_ref_1", Role: "button", Name: "Save"},
 		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
@@ -1427,6 +1502,8 @@ func wssBrowserObservation(
 		{Ref: "host_ref_4", Role: "checkbox", Name: "Notify"},
 		{Ref: "host_ref_5", Role: "switch", Name: "Dark mode"},
 		{Ref: "host_ref_6", Role: "button", Name: "Menu"},
+		{Ref: "host_ref_7", Role: "listitem", Name: "Todo"},
+		{Ref: "host_ref_8", Role: "list", Name: "Done"},
 	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
@@ -1448,7 +1525,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		AllowApprovedActions: true,
 		Actions: []string{
-			"check", "click", "dialog", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+			"check", "click", "dialog", "drag", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
 		},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}

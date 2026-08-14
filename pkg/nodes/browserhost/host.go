@@ -507,6 +507,28 @@ func (host *BrowserHost) Hover(
 	return host.executeAction(ctx, request, "hover", browserworker.DriverAction{Kind: browserworker.DriverHover})
 }
 
+func (host *BrowserHost) Drag(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) ||
+		!browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "unknown" ||
+		request.Action.Kind != "drag" || !browserHostIdentifier(request.Action.SourceRef) ||
+		!browserHostIdentifier(request.Action.DestinationRef) ||
+		request.Action.SourceRef == request.Action.DestinationRef || request.Action.URL != "" ||
+		request.Action.Ref != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
+		request.DestinationExpectedRole == "" || len(request.DestinationExpectedRole) > 128 ||
+		len(request.DestinationExpectedName) > 4096 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	return host.executeAction(ctx, request, "drag", browserworker.DriverAction{Kind: browserworker.DriverDrag})
+}
+
 func (host *BrowserHost) Fill(
 	ctx context.Context,
 	request BrowserHostNavigateRequest,
@@ -720,6 +742,11 @@ func (host *BrowserHost) executeAction(
 	action string,
 	driverAction browserworker.DriverAction,
 ) (BrowserHostObservation, error) {
+	if action != "drag" &&
+		(request.Action.SourceRef != "" || request.Action.DestinationRef != "" ||
+			request.DestinationExpectedRole != "" || request.DestinationExpectedName != "") {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
 		RoutedSessionID: request.RoutedSessionID,
@@ -749,19 +776,32 @@ func (host *BrowserHost) executeAction(
 		)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if (action == "click" || action == "press" ||
+	if (action == "click" || action == "drag" || action == "press" ||
 		(action == "dialog" && request.Action.Decision == "accept")) &&
 		(session.profile.DryRun || !session.profile.AllowApprovedActions ||
 			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
+	var destinationElement browserworker.DriverElement
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" {
+		action == "uncheck" || action == "hover" || action == "drag" {
+		ref := request.Action.Ref
+		if action == "drag" {
+			ref = request.Action.SourceRef
+		}
 		var found bool
-		boundElement, found = session.elementRefs[request.Action.Ref]
+		boundElement, found = session.elementRefs[ref]
 		if !found || boundElement.Role != request.ExpectedRole || boundElement.Name != request.ExpectedName {
 			return BrowserHostObservation{}, ErrBrowserHostStale
+		}
+		if action == "drag" {
+			destinationElement, found = session.elementRefs[request.Action.DestinationRef]
+			if !found || destinationElement.Target == boundElement.Target ||
+				destinationElement.Role != request.DestinationExpectedRole ||
+				destinationElement.Name != request.DestinationExpectedName {
+				return BrowserHostObservation{}, ErrBrowserHostStale
+			}
 		}
 	}
 	if existingHash, reserved := session.actionInvocations[request.ActionInvocationID]; reserved {
@@ -801,23 +841,33 @@ func (host *BrowserHost) executeAction(
 		}
 	}
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" {
-		targets, matches := 0, 0
+		action == "uncheck" || action == "hover" || action == "drag" {
+		targets, matches, destinationTargets, destinationMatches := 0, 0, 0, 0
 		for _, element := range current.Elements {
-			if element.Target != boundElement.Target {
-				continue
+			if element.Target == boundElement.Target {
+				targets++
+				if element.Role == request.ExpectedRole && element.Name == request.ExpectedName {
+					matches++
+				}
 			}
-			targets++
-			if element.Role == request.ExpectedRole && element.Name == request.ExpectedName {
-				matches++
+			if action == "drag" && element.Target == destinationElement.Target {
+				destinationTargets++
+				if element.Role == request.DestinationExpectedRole && element.Name == request.DestinationExpectedName {
+					destinationMatches++
+				}
 			}
 		}
-		if targets != 1 || matches != 1 {
+		if targets != 1 || matches != 1 ||
+			(action == "drag" && (destinationTargets != 1 || destinationMatches != 1)) {
 			cancelAction()
 			return BrowserHostObservation{}, ErrBrowserHostStale
 		}
 		driverAction.Target = boundElement.Target
 		driverAction.Element = boundElement.Name
+		if action == "drag" {
+			driverAction.DestinationTarget = destinationElement.Target
+			driverAction.DestinationElement = destinationElement.Name
+		}
 	}
 	if action == "fill" {
 		if session.fillWorker == nil {
@@ -958,7 +1008,9 @@ func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInp
 		BrowserPolicyRevision: request.BrowserPolicyRevision,
 		ProfileRevision:       request.ProfileRevision,
 		ExpectedRole:          request.ExpectedRole, ExpectedName: request.ExpectedName,
-		DialogType: request.DialogType, DialogMessageDigest: request.DialogMessageDigest,
+		DestinationExpectedRole: request.DestinationExpectedRole,
+		DestinationExpectedName: request.DestinationExpectedName,
+		DialogType:              request.DialogType, DialogMessageDigest: request.DialogMessageDigest,
 		DialogMessageBytes: request.DialogMessageBytes,
 		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
 		ApprovalDigest: request.ApprovalDigest,

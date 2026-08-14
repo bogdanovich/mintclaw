@@ -925,7 +925,7 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	for _, candidate := range kind["enum"].([]string) {
 		seen[candidate] = true
 	}
-	for _, candidate := range []string{"check", "uncheck", "hover"} {
+	for _, candidate := range []string{"check", "uncheck", "hover", "drag"} {
 		if !seen[candidate] {
 			t.Fatalf("%s missing from browser_act schema: %#v", candidate, seen)
 		}
@@ -1374,6 +1374,13 @@ func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T)
 		if err != nil || action.Kind != browser.ActionKind(kind) || action.Ref != "element_1" {
 			t.Fatalf("%s action = %#v, error = %v", kind, action, err)
 		}
+	}
+	drag, err := browserActionFromArgs(map[string]any{
+		"kind": "drag", "source_ref": "element_1", "destination_ref": "element_2",
+	})
+	if err != nil || drag.Kind != browser.ActionDrag || drag.SourceRef != "element_1" ||
+		drag.DestinationRef != "element_2" {
+		t.Fatalf("drag action = %#v, error = %v", drag, err)
 	}
 	press, err := browserActionFromArgs(map[string]any{
 		"kind": "press", "target": "document", "key": "Tab",

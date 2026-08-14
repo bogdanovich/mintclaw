@@ -35,6 +35,7 @@ type browserOrdinaryInteractionCommandHost interface {
 	Check(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Uncheck(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Hover(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Drag(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 }
 
 type browserCommandHandler struct {
@@ -223,7 +224,7 @@ func (handler *browserCommandHandler) executeAct(
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
 		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
 		input.Action.Kind != "dialog" && input.Action.Kind != "check" && input.Action.Kind != "uncheck" &&
-		input.Action.Kind != "hover") ||
+		input.Action.Kind != "hover" && input.Action.Kind != "drag") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
@@ -245,9 +246,17 @@ func (handler *browserCommandHandler) executeAct(
 				input.ApprovalDigest != "")) ||
 		(input.Action.Kind == "hover" &&
 			(input.Effect != "read" || input.ExpectedRole == "" || input.ApprovalDigest != "")) ||
+		(input.Action.Kind == "drag" &&
+			(input.Effect != "unknown" || input.Action.SourceRef == "" || input.Action.DestinationRef == "" ||
+				input.Action.SourceRef == input.Action.DestinationRef || input.ExpectedRole == "" ||
+				len(input.ExpectedRole) > 128 || len(input.ExpectedName) > 4096 ||
+				input.DestinationExpectedRole == "" || len(input.DestinationExpectedRole) > 128 ||
+				len(input.DestinationExpectedName) > 4096 || !nodes.BrowserApprovalDigestMatches(input))) ||
+		(input.Action.Kind != "drag" &&
+			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "")) ||
 		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
 			input.Action.Kind != "press" && input.Action.Kind != "dialog" && input.Action.Kind != "check" &&
-			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" &&
+			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" && input.Action.Kind != "drag" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -263,7 +272,9 @@ func (handler *browserCommandHandler) executeAct(
 		PreparedActionHash:    input.PreparedActionHash,
 		BrowserPolicyRevision: input.BrowserPolicyRevision, ProfileRevision: input.ProfileRevision,
 		ExpectedRole: input.ExpectedRole, ExpectedName: input.ExpectedName,
-		DialogType: input.DialogType, DialogMessageDigest: input.DialogMessageDigest,
+		DestinationExpectedRole: input.DestinationExpectedRole,
+		DestinationExpectedName: input.DestinationExpectedName,
+		DialogType:              input.DialogType, DialogMessageDigest: input.DialogMessageDigest,
 		DialogMessageBytes: input.DialogMessageBytes,
 		InputDigest:        input.InputDigest, InputBytes: input.InputBytes,
 		ApprovalDigest: input.ApprovalDigest,
@@ -283,7 +294,7 @@ func (handler *browserCommandHandler) executeAct(
 		observation, err = handler.host.Press(ctx, request)
 	case "dialog":
 		observation, err = handler.host.Dialog(ctx, request)
-	case "check", "uncheck", "hover":
+	case "check", "uncheck", "hover", "drag":
 		ordinary, ok := handler.host.(browserOrdinaryInteractionCommandHost)
 		if !ok {
 			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
@@ -293,6 +304,8 @@ func (handler *browserCommandHandler) executeAct(
 			observation, err = ordinary.Check(ctx, request)
 		case "uncheck":
 			observation, err = ordinary.Uncheck(ctx, request)
+		case "drag":
+			observation, err = ordinary.Drag(ctx, request)
 		default:
 			observation, err = ordinary.Hover(ctx, request)
 		}

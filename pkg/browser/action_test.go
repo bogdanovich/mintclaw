@@ -18,30 +18,31 @@ import (
 )
 
 type actionTestWorker struct {
-	observation    DriverObservation
-	observeErr     error
-	observeCalls   int
-	resolveElement DriverElement
-	resolveOrigin  string
-	resolveErr     error
-	resolveCalls   int
-	actions        []DriverAction
-	onExecute      func(DriverAction)
-	navigationID   string
-	catalogCalls   int
-	beforeNavCheck func()
-	authorizeErr   error
-	authorizeCalls int
-	executeErr     error
-	screenshot     DriverScreenshot
-	screenshotErr  error
-	uploads        []DriverAction
-	download       DriverDownload
-	closed         int
-	statusCalls    int
-	humanControl   bool
-	beginHumanErr  error
-	endHumanErr    error
+	observation     DriverObservation
+	observeErr      error
+	observeCalls    int
+	resolveElement  DriverElement
+	resolveElements map[string]DriverElement
+	resolveOrigin   string
+	resolveErr      error
+	resolveCalls    int
+	actions         []DriverAction
+	onExecute       func(DriverAction)
+	navigationID    string
+	catalogCalls    int
+	beforeNavCheck  func()
+	authorizeErr    error
+	authorizeCalls  int
+	executeErr      error
+	screenshot      DriverScreenshot
+	screenshotErr   error
+	uploads         []DriverAction
+	download        DriverDownload
+	closed          int
+	statusCalls     int
+	humanControl    bool
+	beginHumanErr   error
+	endHumanErr     error
 }
 
 func (worker *actionTestWorker) AuthorizeFill(
@@ -97,10 +98,13 @@ func (worker *actionTestWorker) Observe(context.Context) (DriverObservation, err
 	return worker.observation, worker.observeErr
 }
 
-func (worker *actionTestWorker) Resolve(context.Context, string) (DriverElement, string, error) {
+func (worker *actionTestWorker) Resolve(_ context.Context, target string) (DriverElement, string, error) {
 	worker.resolveCalls++
 	if worker.resolveErr != nil {
 		return DriverElement{}, "", worker.resolveErr
+	}
+	if element, ok := worker.resolveElements[target]; ok {
+		return element, worker.resolveOrigin, nil
 	}
 	return worker.resolveElement, worker.resolveOrigin, nil
 }
@@ -1544,6 +1548,96 @@ func TestBrokerExecutesAdmittedOrdinaryActions(t *testing.T) {
 	}
 }
 
+func TestBrokerExecutesApprovedDragWithTwoFreshSemanticBindings(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
+	source := DriverElement{Target: "e1", Role: "listitem", Name: "Todo"}
+	destination := DriverElement{Target: "e2", Role: "list", Name: "Done"}
+	worker.observation = driverObservationFixture(source, destination)
+	worker.resolveElements = map[string]DriverElement{source.Target: source, destination.Target: destination}
+	owner := testOwner()
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := visibleRefs(t, observation.Snapshot)
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_drag", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDrag, SourceRef: refs[0], DestinationRef: refs[1]},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.RequiresApproval || prepared.Action.Effect != EffectUnknown ||
+		prepared.Action.ElementRole != source.Role || prepared.Action.ElementName != source.Name ||
+		prepared.Action.DestinationElementRole != destination.Role ||
+		prepared.Action.DestinationElementName != destination.Name {
+		t.Fatalf("drag preparation = %+v", prepared)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, &prepared.Approval)
+	want := DriverAction{
+		Kind: DriverDrag, Target: source.Target, Element: source.Name,
+		DestinationTarget: destination.Target, DestinationElement: destination.Name,
+	}
+	if err != nil || invocation.State != InvocationSucceeded ||
+		!reflect.DeepEqual(worker.actions, []DriverAction{want}) {
+		t.Fatalf("drag execution = %+v, %v; driver actions = %+v", invocation, err, worker.actions)
+	}
+}
+
+func TestBrokerRejectsDragWhenDestinationBindingChanges(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
+	source := DriverElement{Target: "e1", Role: "listitem", Name: "Todo"}
+	destination := DriverElement{Target: "e2", Role: "list", Name: "Done"}
+	worker.observation = driverObservationFixture(source, destination)
+	worker.resolveElements = map[string]DriverElement{source.Target: source, destination.Target: destination}
+	owner := testOwner()
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := visibleRefs(t, observation.Snapshot)
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_drag_stale", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDrag, SourceRef: refs[0], DestinationRef: refs[1]},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.resolveElements[destination.Target] = DriverElement{
+		Target: destination.Target, Role: destination.Role, Name: "Archive",
+	}
+	if _, err = broker.ExecuteAction(
+		t.Context(),
+		owner,
+		prepared.Action.ID,
+		&prepared.Approval,
+	); !errors.Is(
+		err,
+		ErrStale,
+	) {
+		t.Fatalf("ExecuteAction(stale drag destination) error = %v, want ErrStale", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("stale drag reached driver: %+v", worker.actions)
+	}
+}
+
 func TestBrokerRejectsUncheckForRadioControl(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	element := DriverElement{Target: "e1", Role: "radio", Name: "Primary"}
@@ -1565,7 +1659,9 @@ func TestBrokerRejectsUncheckForRadioControl(t *testing.T) {
 }
 
 func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T) {
-	for _, actionKind := range []ActionKind{ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionPress} {
+	for _, actionKind := range []ActionKind{
+		ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionPress,
+	} {
 		t.Run(string(actionKind), func(t *testing.T) {
 			root := admittedBrowserConfig()
 			target := root.Tools.Browser.Targets["gateway"]
@@ -1583,15 +1679,28 @@ func TestBrokerLocalCheckedActionsRejectNavigationBeforeDriverInput(t *testing.T
 			case ActionHover:
 				element = DriverElement{Target: "e1", Role: "button", Name: "Menu"}
 			}
-			worker.observation = driverObservationFixture(element)
-			worker.resolveElement = element
+			elements := []DriverElement{element}
+			if actionKind == ActionDrag {
+				destination := DriverElement{Target: "e2", Role: "list", Name: "Done"}
+				element = DriverElement{Target: "e1", Role: "listitem", Name: "Todo"}
+				elements = []DriverElement{element, destination}
+				worker.resolveElements = map[string]DriverElement{
+					element.Target: element, destination.Target: destination,
+				}
+			} else {
+				worker.resolveElement = element
+			}
+			worker.observation = driverObservationFixture(elements...)
 			owner := testOwner()
 			observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			action := Action{Kind: actionKind}
-			if actionKind != ActionPress {
+			if actionKind == ActionDrag {
+				refs := visibleRefs(t, observation.Snapshot)
+				action.SourceRef, action.DestinationRef = refs[0], refs[1]
+			} else if actionKind != ActionPress {
 				action.Ref = onlyVisibleRef(t, observation.Snapshot)
 				if actionKind == ActionSelect {
 					action.Value = "CA"
@@ -2142,4 +2251,26 @@ func onlyVisibleRef(t *testing.T, snapshot string) string {
 		t.Fatalf("snapshot has malformed ref: %q", snapshot)
 	}
 	return snapshot[start : start+end]
+}
+
+func visibleRefs(t *testing.T, snapshot string) []string {
+	t.Helper()
+	refs := make([]string, 0, 2)
+	for remaining := snapshot; ; {
+		start := strings.Index(remaining, "[ref=")
+		if start < 0 {
+			break
+		}
+		start += len("[ref=")
+		end := strings.Index(remaining[start:], "]")
+		if end < 0 {
+			t.Fatalf("snapshot has malformed ref: %q", snapshot)
+		}
+		refs = append(refs, remaining[start:start+end])
+		remaining = remaining[start+end+1:]
+	}
+	if len(refs) < 2 {
+		t.Fatalf("snapshot has fewer than two refs: %q", snapshot)
+	}
+	return refs
 }

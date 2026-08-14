@@ -256,7 +256,7 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "check" && action != "click" && action != "dialog" && action != "navigate" &&
+		if action != "check" && action != "click" && action != "dialog" && action != "drag" && action != "navigate" &&
 			action != "download" && action != "fill" && action != "hover" &&
 			action != "press" &&
 			action != "scroll" &&

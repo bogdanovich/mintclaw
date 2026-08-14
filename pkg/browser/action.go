@@ -670,6 +670,30 @@ func (broker *Broker) resolvePreparedActionLocked(
 		default:
 			prepared.Effect = classifyClickEffect(element)
 		}
+	case ActionDrag:
+		source, sourceOK := slot.refs[request.Action.SourceRef]
+		destination, destinationOK := slot.refs[request.Action.DestinationRef]
+		if !sourceOK || !destinationOK || source.Target == destination.Target {
+			return PreparedAction{}, ErrStale
+		}
+		resolvedSource, sourceOrigin, sourceErr := worker.Resolve(ctx, source.Target)
+		if sourceErr != nil {
+			return PreparedAction{}, sourceErr
+		}
+		resolvedDestination, destinationOrigin, destinationErr := worker.Resolve(ctx, destination.Target)
+		if destinationErr != nil {
+			return PreparedAction{}, destinationErr
+		}
+		if resolvedSource != source || resolvedDestination != destination ||
+			sourceOrigin != session.SnapshotOrigin || destinationOrigin != session.SnapshotOrigin ||
+			resolvedSource.Target == resolvedDestination.Target {
+			return PreparedAction{}, ErrStale
+		}
+		prepared.ElementRole = resolvedSource.Role
+		prepared.ElementName = resolvedSource.Name
+		prepared.DestinationElementRole = resolvedDestination.Role
+		prepared.DestinationElementName = resolvedDestination.Name
+		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
 		observation, observeErr := worker.Observe(ctx)
 		if observeErr != nil {
@@ -797,6 +821,30 @@ func (broker *Broker) revalidatePreparedLocked(
 				observation.PendingDialog.Message,
 			) != prepared.DialogMessageDigest ||
 			len(observation.PendingDialog.Message) != prepared.DialogMessageBytes {
+			return ErrStale
+		}
+		return nil
+	}
+	if prepared.Action.Kind == ActionDrag {
+		source, sourceOK := slot.refs[prepared.Action.SourceRef]
+		destination, destinationOK := slot.refs[prepared.Action.DestinationRef]
+		if !sourceOK || !destinationOK || source.Target == destination.Target {
+			return ErrStale
+		}
+		resolvedSource, sourceOrigin, err := worker.Resolve(ctx, source.Target)
+		if err != nil {
+			return err
+		}
+		resolvedDestination, destinationOrigin, err := worker.Resolve(ctx, destination.Target)
+		if err != nil {
+			return err
+		}
+		if sourceOrigin != prepared.CurrentOrigin || destinationOrigin != prepared.CurrentOrigin ||
+			resolvedSource != source || resolvedDestination != destination ||
+			resolvedSource.Target == resolvedDestination.Target ||
+			resolvedSource.Role != prepared.ElementRole || resolvedSource.Name != prepared.ElementName ||
+			resolvedDestination.Role != prepared.DestinationElementRole ||
+			resolvedDestination.Name != prepared.DestinationElementName {
 			return ErrStale
 		}
 		return nil
@@ -967,7 +1015,8 @@ func observeWithNavigationCheck(
 
 func navigationCheckedAction(kind ActionKind) bool {
 	switch kind {
-	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionPress, ActionScroll:
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionPress,
+		ActionScroll:
 		return true
 	default:
 		return false
@@ -1113,6 +1162,16 @@ func (broker *Broker) driverActionForPrepared(
 		return DriverAction{
 			Kind: kind, Target: element.Target, Element: element.Name, Value: value,
 			ArtifactSHA256: prepared.ArtifactSHA256, ArtifactBytes: prepared.ArtifactBytes,
+		}, nil
+	case ActionDrag:
+		source, sourceOK := slot.refs[prepared.Action.SourceRef]
+		destination, destinationOK := slot.refs[prepared.Action.DestinationRef]
+		if !sourceOK || !destinationOK || source.Target == destination.Target {
+			return DriverAction{}, ErrStale
+		}
+		return DriverAction{
+			Kind: DriverDrag, Target: source.Target, Element: source.Name,
+			DestinationTarget: destination.Target, DestinationElement: destination.Name,
 		}, nil
 	case ActionPress:
 		return DriverAction{Kind: DriverPress, Key: prepared.Action.Key}, nil

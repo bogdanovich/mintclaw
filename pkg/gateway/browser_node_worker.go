@@ -120,7 +120,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
 				browser.ActionSelect, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
-				browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
+				browser.ActionDrag, browser.ActionPress, browser.ActionScroll, browser.ActionDialog,
 			}
 		}
 		return browser.TargetDiagnostics{
@@ -193,7 +193,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		current := make(map[string]struct{}, len(remoteProfile.Actions))
 		for _, action := range remoteProfile.Actions {
-			if action == "check" || action == "click" || action == "dialog" || action == "fill" || action == "hover" ||
+			if action == "check" || action == "click" || action == "dialog" || action == "drag" ||
+				action == "fill" || action == "hover" ||
 				action == "navigate" ||
 				action == "press" ||
 				action == "scroll" ||
@@ -215,7 +216,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
 			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionCheck,
-			browser.ActionUncheck, browser.ActionHover, browser.ActionPress, browser.ActionScroll,
+			browser.ActionUncheck, browser.ActionHover, browser.ActionDrag, browser.ActionPress, browser.ActionScroll,
 			browser.ActionSelect, browser.ActionDialog,
 		} {
 			if _, available := intersection[string(action)]; available {
@@ -481,6 +482,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "uncheck")
 	case browser.ActionHover:
 		return slices.Contains(worker.actions, "hover")
+	case browser.ActionDrag:
+		return slices.Contains(worker.actions, "drag")
 	default:
 		return false
 	}
@@ -543,6 +546,13 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		request.DriverAction.Kind == browser.DriverHover && slices.Contains(worker.actions, "hover"):
 		action = nodes.BrowserAction{Kind: "hover", Ref: request.DriverAction.Target}
 		effect = "read"
+	case request.Prepared.Action.Kind == browser.ActionDrag &&
+		request.DriverAction.Kind == browser.DriverDrag && slices.Contains(worker.actions, "drag"):
+		action = nodes.BrowserAction{
+			Kind: "drag", SourceRef: request.DriverAction.Target,
+			DestinationRef: request.DriverAction.DestinationTarget,
+		}
+		effect = "unknown"
 	default:
 		return browser.ErrDenied
 	}
@@ -562,9 +572,13 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		ProfileRevision:       worker.profileRevision,
 	}
 	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" || action.Kind == "check" ||
-		action.Kind == "uncheck" || action.Kind == "hover" {
+		action.Kind == "uncheck" || action.Kind == "hover" || action.Kind == "drag" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
+	}
+	if action.Kind == "drag" {
+		input.DestinationExpectedRole = request.Prepared.DestinationElementRole
+		input.DestinationExpectedName = request.Prepared.DestinationElementName
 	}
 	var ephemeralInput json.RawMessage
 	if action.Kind == "fill" || action.Kind == "select" {
@@ -592,7 +606,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			}
 		}
 	}
-	if action.Kind == "click" || action.Kind == "press" ||
+	if action.Kind == "click" || action.Kind == "drag" || action.Kind == "press" ||
 		(action.Kind == "dialog" && action.Decision == "accept") {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {

@@ -940,7 +940,15 @@ func playwrightNavigationCheckedActionCode(
   if (await hoverTarget.count() !== 1 || !await hoverTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
-  await hoverTarget.hover();`
+	  await hoverTarget.hover();`
+	case "browser_drag":
+		dispatch = `const dragSource = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
+  const dragDestination = page.locator("aria-ref=" + ` + jsonString(action.DestinationTarget) + `);
+  if (await dragSource.count() !== 1 || !await dragSource.isVisible() ||
+      await dragDestination.count() !== 1 || !await dragDestination.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  await dragSource.dragTo(dragDestination);`
 	case "browser_press_key":
 		dispatch = "await page.keyboard.press(" + jsonString(action.Key) + ");"
 	case "browser_mouse_wheel":
