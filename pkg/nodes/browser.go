@@ -332,6 +332,20 @@ type BrowserActInput struct {
 	ApprovalDigest        string        `json:"approval_digest,omitempty"`
 }
 
+func (input BrowserActInput) MarshalJSON() ([]byte, error) {
+	type browserActInputWire BrowserActInput
+	if input.Action.Kind != "dialog" {
+		return json.Marshal(browserActInputWire(input))
+	}
+	return json.Marshal(struct {
+		browserActInputWire
+		DialogMessageBytes int `json:"dialog_message_bytes"`
+	}{
+		browserActInputWire: browserActInputWire(input),
+		DialogMessageBytes:  input.DialogMessageBytes,
+	})
+}
+
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	var value struct {
 		SessionID             string          `json:"session_id"`

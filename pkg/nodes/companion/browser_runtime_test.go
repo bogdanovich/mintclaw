@@ -589,7 +589,15 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 }
 
 func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.T) {
-	for _, secret := range []string{"dialog-prompt-canary", ""} {
+	for _, test := range []struct {
+		secret  string
+		message string
+	}{
+		{secret: "dialog-prompt-canary", message: "Type confirmation"},
+		{secret: "", message: "Type confirmation"},
+		{secret: "empty-dialog-message-canary", message: ""},
+	} {
+		secret := test.secret
 		host := browserRuntimeHostFixture()
 		host.profiles[0].DryRun = false
 		host.profiles[0].AllowApprovedActions = true
@@ -604,8 +612,8 @@ func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.
 			Effect: "external_commit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", DialogType: "prompt",
-			DialogMessageDigest: nodes.BrowserDialogMessageDigest("prompt", "Type confirmation"),
-			DialogMessageBytes:  len("Type confirmation"),
+			DialogMessageDigest: nodes.BrowserDialogMessageDigest("prompt", test.message),
+			DialogMessageBytes:  len(test.message),
 			InputDigest:         nodes.BrowserInputDigest(secret), InputBytes: len(secret),
 		}
 		var err error
@@ -616,6 +624,9 @@ func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.
 		raw, err := json.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if test.message == "" && !bytes.Contains(raw, []byte(`"dialog_message_bytes":0`)) {
+			t.Fatalf("empty dialog message lost required byte count: %s", raw)
 		}
 		plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
 		if secret != "" && bytes.Contains(plan.Input, []byte(secret)) {

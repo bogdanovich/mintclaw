@@ -184,6 +184,25 @@ func TestBrowserDialogCommandSchemaBindsProtectedPromptAndApproval(t *testing.T)
 	}
 }
 
+func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {
+	for _, test := range []struct {
+		kind string
+		want bool
+	}{
+		{kind: "dialog", want: true},
+		{kind: "navigate", want: false},
+	} {
+		raw, err := json.Marshal(BrowserActInput{Action: BrowserAction{Kind: test.kind}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := bytes.Contains(raw, []byte(`"dialog_message_bytes":0`))
+		if got != test.want {
+			t.Fatalf("%s dialog byte count presence = %v in %s, want %v", test.kind, got, raw, test.want)
+		}
+	}
+}
+
 func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	var result BrowserSessionResult
 	if err := json.Unmarshal([]byte(`{
