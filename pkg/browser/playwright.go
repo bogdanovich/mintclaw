@@ -927,6 +927,35 @@ func playwrightNavigationCheckedActionCode(
 	case "browser_select_option":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").selectOption([" + jsonString(action.Value) + "]);"
+	case "browser_run_code_unsafe":
+		if action.Kind != DriverCheck && action.Kind != DriverUncheck {
+			return "", fmt.Errorf("%w: navigation-checked unsafe action is unsupported", ErrInvalid)
+		}
+		checked := action.Kind == DriverCheck
+		operation := "uncheck"
+		if checked {
+			operation = "check"
+		}
+		dispatch = `const checkTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
+  if (await checkTarget.count() !== 1 || !await checkTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  if (!` + strconv.FormatBool(checked) + ` && await checkTarget.getAttribute("type") === "radio") {
+    return "MINTCLAW_NAV_ACT_V1|denied";
+  }
+  await checkTarget.click({ trial: true });
+  if (await checkTarget.isChecked() !== ` + strconv.FormatBool(checked) + `) {
+    await checkTarget.` + operation + `();
+    if (await checkTarget.isChecked() !== ` + strconv.FormatBool(checked) + `) {
+      return "MINTCLAW_NAV_ACT_V1|error|final_state_mismatch";
+    }
+  }`
+	case "browser_hover":
+		dispatch = `const hoverTarget = page.locator("aria-ref=" + ` + jsonString(action.Target) + `);
+  if (await hoverTarget.count() !== 1 || !await hoverTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  await hoverTarget.hover();`
 	case "browser_press_key":
 		dispatch = "await page.keyboard.press(" + jsonString(action.Key) + ");"
 	case "browser_mouse_wheel":

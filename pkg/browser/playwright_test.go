@@ -243,6 +243,63 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 	}
 }
 
+func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitives(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   DriverAction
+		required []string
+		forbid   []string
+	}{
+		{
+			name: "check", action: DriverAction{Kind: DriverCheck, Target: "e5", Element: "Notify"},
+			required: []string{
+				`const checkTarget = page.locator("aria-ref=" + "e5")`,
+				`await checkTarget.click({ trial: true })`, `await checkTarget.check()`,
+				`await checkTarget.isChecked() !== true`, `MINTCLAW_NAV_ACT_V1|error|final_state_mismatch`,
+			},
+			forbid: []string{`await checkTarget.uncheck()`},
+		},
+		{
+			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e6", Element: "Updates"},
+			required: []string{
+				`const checkTarget = page.locator("aria-ref=" + "e6")`,
+				`await checkTarget.click({ trial: true })`, `await checkTarget.uncheck()`,
+				`await checkTarget.isChecked() !== false`, `getAttribute("type") === "radio"`,
+			},
+			forbid: []string{`await checkTarget.check()`},
+		},
+		{
+			name: "hover", action: DriverAction{Kind: DriverHover, Target: "e7", Element: "Menu"},
+			required: []string{
+				`const hoverTarget = page.locator("aria-ref=" + "e7")`,
+				`await hoverTarget.count() !== 1`, `!await hoverTarget.isVisible()`, `await hoverTarget.hover()`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+				frameID: "frame-1", loaderID: "loader-1", generation: 7,
+			}, test.action, config.BrowserLimitsConfig{}.Effective(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range append([]string{
+				`const expectedGeneration = 7`, `state.generation !== expectedGeneration`,
+			}, test.required...) {
+				if !strings.Contains(code, required) {
+					t.Fatalf("navigation-checked %s code omitted %q: %s", test.name, required, code)
+				}
+			}
+			for _, forbidden := range test.forbid {
+				if strings.Contains(code, forbidden) {
+					t.Fatalf("navigation-checked %s code contains %q: %s", test.name, forbidden, code)
+				}
+			}
+		})
+	}
+}
+
 func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|denied\""),
