@@ -28,6 +28,7 @@ const (
 	ActivityRunning      Activity = "running"
 	ActivityInterrupting Activity = "interrupting"
 	ActivityCompacting   Activity = "compacting"
+	ActivityWaitingInput Activity = "waiting_for_input"
 	ActivityFailed       Activity = "failed"
 )
 
@@ -135,6 +136,7 @@ const (
 	DeltaCompactionComplete DeltaKind = "compaction_completed"
 	DeltaCompactionFailed   DeltaKind = "compaction_failed"
 	DeltaTurnCompleted      DeltaKind = "turn_completed"
+	DeltaTurnSuspended      DeltaKind = "turn_suspended"
 	DeltaTurnFailed         DeltaKind = "turn_failed"
 	DeltaInterruptRequested DeltaKind = "interrupt_requested"
 	DeltaTurnInterrupted    DeltaKind = "turn_interrupted"

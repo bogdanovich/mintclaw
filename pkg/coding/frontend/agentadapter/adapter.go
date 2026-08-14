@@ -239,7 +239,7 @@ func normalizeID(value string) string {
 func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	payload, ok := value.(agent.TurnEndPayload)
 	if !ok {
-		a.projector.TurnCompleted("turn ended")
+		a.projector.TurnCompleted(turnID, "turn ended")
 		return
 	}
 	if payload.FinalContent != "" {
@@ -247,15 +247,15 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	}
 	switch payload.Status {
 	case agent.TurnEndStatusCompleted:
-		a.projector.TurnCompleted("completed")
+		a.projector.TurnCompleted(turnID, "completed")
 	case agent.TurnEndStatusAborted:
 		a.projector.TurnInterrupted(turnID, "interrupted")
 	case agent.TurnEndStatusError:
 		a.projector.TurnFailed(turnID, "turn failed")
 	case agent.TurnEndStatusSuspended:
-		a.projector.TurnCompleted("waiting for input")
+		a.projector.TurnSuspended(turnID, "waiting for input")
 	default:
-		a.projector.TurnCompleted("turn ended")
+		a.projector.TurnCompleted(turnID, "turn ended")
 	}
 }
 

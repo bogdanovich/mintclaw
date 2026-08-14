@@ -372,19 +372,25 @@ func (p *Projector) CompactionFailed(status string) Delta {
 	return p.activity(DeltaCompactionFailed, ActivityFailed, status)
 }
 
-func (p *Projector) TurnCompleted(status string) Delta {
-	return p.activity(DeltaTurnCompleted, ActivityIdle, status)
+func (p *Projector) TurnCompleted(turnID, status string) Delta {
+	return p.finishTurn(DeltaTurnCompleted, turnID, status, ActivityIdle, "")
+}
+
+func (p *Projector) TurnSuspended(turnID, status string) Delta {
+	return p.finishTurn(DeltaTurnSuspended, turnID, status, ActivityWaitingInput, "")
 }
 
 func (p *Projector) TurnFailed(turnID, status string) Delta {
-	return p.terminalizeTurn(DeltaTurnFailed, turnID, status, ActivityFailed, ToolFailed)
+	return p.finishTurn(DeltaTurnFailed, turnID, status, ActivityFailed, ToolFailed)
 }
 
 func (p *Projector) TurnInterrupted(turnID, status string) Delta {
-	return p.terminalizeTurn(DeltaTurnInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
+	return p.finishTurn(DeltaTurnInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
 }
 
-func (p *Projector) terminalizeTurn(
+// finishTurn is the single transition for typed terminal turn outcomes. Only
+// abnormal outcomes pass a tool status, because they can bypass ToolExecEnd.
+func (p *Projector) finishTurn(
 	kind DeltaKind,
 	turnID, status string,
 	activity Activity,
@@ -396,6 +402,9 @@ func (p *Projector) terminalizeTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		delta.TurnID = turnID
 		delta.EntityID = turnID
+		if toolStatus == "" {
+			return
+		}
 		for i := range state.Tools {
 			if state.Tools[i].TurnID == turnID && state.Tools[i].Status == ToolRunning {
 				state.Tools[i].Status = toolStatus

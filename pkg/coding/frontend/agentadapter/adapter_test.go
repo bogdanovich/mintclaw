@@ -376,7 +376,9 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaToolSuspended {
+	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaToolSuspended ||
+		deltas[2].Kind != frontend.DeltaTurnSuspended || deltas[2].TurnID != "turn-1" ||
+		deltas[2].EntityID != "turn-1" {
 		t.Fatalf("suspension deltas = %+v", deltas)
 	}
 	for _, delta := range deltas {
@@ -389,7 +391,7 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolSuspended ||
-		snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "waiting for input" {
+		snapshot.Activity != frontend.ActivityWaitingInput || snapshot.Status != "waiting for input" {
 		t.Fatalf("suspended snapshot = %+v", snapshot)
 	}
 	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {

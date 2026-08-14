@@ -117,7 +117,7 @@ func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
 		}}),
 		projector.CompactionStarted(),
 		projector.CompactionCompleted("context compacted"),
-		projector.TurnCompleted("completed"),
+		projector.TurnCompleted("turn-1", "completed"),
 	}
 	for i, delta := range deltas {
 		if i == 2 { // Simulate an arbitrary lost progress observation.
@@ -225,6 +225,70 @@ func TestFailedTurnTerminalizesRunningToolAndReducerResynchronizes(t *testing.T)
 	if !reflect.DeepEqual(got, want) || len(got.Tools) != 1 || got.Tools[0].Status != ToolFailed ||
 		got.Activity != ActivityFailed {
 		t.Fatalf("failed-turn state = %+v, want %+v", got, want)
+	}
+}
+
+func TestTurnOutcomesAreTypedCorrelatedAndSnapshotRecoverable(t *testing.T) {
+	tests := []struct {
+		name         string
+		finish       func(*Projector) Delta
+		wantKind     DeltaKind
+		wantActivity Activity
+	}{
+		{
+			name: "completed", finish: func(p *Projector) Delta {
+				return p.TurnCompleted("turn-1", "completed")
+			}, wantKind: DeltaTurnCompleted, wantActivity: ActivityIdle,
+		},
+		{
+			name: "suspended", finish: func(p *Projector) Delta {
+				return p.TurnSuspended("turn-1", "waiting for input")
+			}, wantKind: DeltaTurnSuspended, wantActivity: ActivityWaitingInput,
+		},
+		{
+			name: "failed", finish: func(p *Projector) Delta {
+				return p.TurnFailed("turn-1", "turn failed")
+			}, wantKind: DeltaTurnFailed, wantActivity: ActivityFailed,
+		},
+		{
+			name: "interrupted", finish: func(p *Projector) Delta {
+				return p.TurnInterrupted("turn-1", "interrupted")
+			}, wantKind: DeltaTurnInterrupted, wantActivity: ActivityIdle,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projector, err := NewProjector("thread-1", ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			reducer, err := NewReducer(initial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = reducer.Apply(projector.TurnStarted("turn-1", "fix it")); err != nil {
+				t.Fatal(err)
+			}
+			finished := tt.finish(projector)
+			if finished.Kind != tt.wantKind || finished.TurnID != "turn-1" || finished.EntityID != "turn-1" ||
+				finished.Activity != tt.wantActivity {
+				t.Fatalf("terminal delta = %+v", finished)
+			}
+			if err = reducer.Apply(finished); err != nil {
+				t.Fatal(err)
+			}
+			want, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reducer.State(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("reduced terminal state = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 
