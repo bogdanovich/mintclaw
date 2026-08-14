@@ -1139,15 +1139,18 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 		},
 		{
 			name: "check", action: DriverAction{Kind: DriverCheck, Target: "f2e4", Element: "Notify"},
-			wantTool:  "browser_run_code_unsafe",
-			codeTerms: []string{`page.locator("aria-ref=" + "f2e4")`, ".check()", "isChecked()", `return "no_change"`},
+			wantTool: "browser_run_code_unsafe",
+			codeTerms: []string{
+				`page.locator("aria-ref=" + "f2e4")`, `.click({ trial: true })`, ".check()", "isChecked()",
+				`return "MINTCLAW_CHECK_V1|no_change"`,
+			},
 		},
 		{
 			name: "uncheck", action: DriverAction{Kind: DriverUncheck, Target: "e5", Element: "Notify"},
 			wantTool: "browser_run_code_unsafe",
 			codeTerms: []string{
 				`page.locator("aria-ref=" + "e5")`, ".uncheck()", `getAttribute("type") === "radio"`,
-				`return "denied"`,
+				`return "MINTCLAW_CHECK_V1|denied"`,
 			},
 		},
 	}
@@ -1185,6 +1188,37 @@ func TestPlaywrightOrdinaryInteractionPrimitivesAreSemanticAndBounded(t *testing
 		if _, _, err := mapPlaywrightAction(action, limits); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("mapPlaywrightAction(%+v) error = %v, want ErrInvalid", action, err)
 		}
+	}
+}
+
+func TestPlaywrightWorkerParsesCheckPrimitiveOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   string
+		wantErr  error
+		wantLost bool
+	}{
+		{name: "completed", result: "MINTCLAW_CHECK_V1|completed"},
+		{name: "no change", result: "MINTCLAW_CHECK_V1|no_change"},
+		{name: "stale", result: "MINTCLAW_CHECK_V1|stale", wantErr: ErrStale},
+		{name: "denied", result: "MINTCLAW_CHECK_V1|denied", wantErr: ErrDenied},
+		{name: "unknown", result: "MINTCLAW_CHECK_V1|surprise", wantErr: ErrDriverIncompatible, wantLost: true},
+		{name: "unscoped", result: "completed", wantErr: ErrDriverIncompatible, wantLost: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": playwrightTextResult("### Result\n\"" + test.result + "\""),
+			}}
+			worker := &playwrightWorker{
+				client: client, networkProxy: &browserNetworkProxy{},
+				limits: config.BrowserLimitsConfig{}.Effective(),
+			}
+			err := worker.Execute(t.Context(), DriverAction{Kind: DriverCheck, Target: "e1", Element: "Notify"})
+			if !errors.Is(err, test.wantErr) || worker.lost != test.wantLost {
+				t.Fatalf("Execute() error = %v, lost = %t; want %v, %t", err, worker.lost, test.wantErr, test.wantLost)
+			}
+		})
 	}
 }
 

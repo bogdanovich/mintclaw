@@ -62,6 +62,8 @@ const playwrightNavigationIdentityMarker = "MINTCLAW_NAV_V1"
 
 const playwrightNavigationCheckedActionMarker = "MINTCLAW_NAV_ACT_V1"
 
+const playwrightCheckActionMarker = "MINTCLAW_CHECK_V1"
+
 const playwrightNavigationIdentityCode = `async (page) => {
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
   let state = page[trackerKey];
@@ -1213,9 +1215,19 @@ func (worker *playwrightWorker) Execute(ctx context.Context, action DriverAction
 	if err != nil {
 		return err
 	}
-	_, err = worker.callAndConsume(
+	text, err := worker.callAndConsume(
 		ctx, tool, arguments, playwrightActionIncludesSnapshot(action.Kind),
 	)
+	if err != nil {
+		return err
+	}
+	if action.Kind != DriverCheck && action.Kind != DriverUncheck {
+		return nil
+	}
+	if err = parsePlaywrightCheckAction(text); err != nil &&
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		worker.lost = true
+	}
 	return err
 }
 
@@ -1551,13 +1563,37 @@ func playwrightCheckActionCode(target string, checked bool) string {
 	}
 	return `async (page) => {
   const control = page.locator("aria-ref=" + ` + string(encoded) + `);
-  if (await control.count() !== 1 || !await control.isVisible()) return "stale";
-  if (!` + strconv.FormatBool(checked) + ` && await control.getAttribute("type") === "radio") return "denied";
-  if (await control.isChecked() === ` + strconv.FormatBool(checked) + `) return "no_change";
+  if (await control.count() !== 1 || !await control.isVisible()) return "MINTCLAW_CHECK_V1|stale";
+  if (!` + strconv.FormatBool(checked) + ` && await control.getAttribute("type") === "radio") {
+    return "MINTCLAW_CHECK_V1|denied";
+  }
+  await control.click({ trial: true });
+  if (await control.isChecked() === ` + strconv.FormatBool(checked) + `) return "MINTCLAW_CHECK_V1|no_change";
   await control.` + operation + `();
   if (await control.isChecked() !== ` + strconv.FormatBool(checked) + `) throw new Error("final_state_mismatch");
-  return "completed";
+  return "MINTCLAW_CHECK_V1|completed";
 }`
+}
+
+func parsePlaywrightCheckAction(text string) error {
+	const resultHeader = "### Result"
+	if strings.Count(text, resultHeader) != 1 {
+		return ErrDriverIncompatible
+	}
+	result := strings.TrimLeft(text[strings.Index(text, resultHeader)+len(resultHeader):], "\r\n")
+	if end := strings.IndexByte(result, '\n'); end >= 0 {
+		result = result[:end]
+	}
+	switch strings.Trim(result, "\r\"' ") {
+	case playwrightCheckActionMarker + "|no_change", playwrightCheckActionMarker + "|completed":
+		return nil
+	case playwrightCheckActionMarker + "|stale":
+		return ErrStale
+	case playwrightCheckActionMarker + "|denied":
+		return ErrDenied
+	default:
+		return ErrDriverIncompatible
+	}
 }
 
 func normalizeDriverNavigationURL(raw string) (string, error) {
