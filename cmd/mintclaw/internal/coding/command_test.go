@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -92,6 +94,66 @@ func TestCodeAndResumePersistOutsideProjectAcrossCommands(t *testing.T) {
 	history := readHistory(t, created.StateRoot, created.SessionKey)
 	if len(history) != 2 || history[0] != "fix the parser" || history[1] != "add a regression test" {
 		t.Fatalf("restarted history = %#v", history)
+	}
+}
+
+type interactiveLeaseController struct {
+	*frontend.Projector
+	lease *thread.Lease
+}
+
+func (*interactiveLeaseController) Submit(context.Context, string) error { return nil }
+func (*interactiveLeaseController) Interrupt(context.Context) error      { return nil }
+func (*interactiveLeaseController) HardCancel(context.Context) error     { return nil }
+func (*interactiveLeaseController) Compact(context.Context) error        { return nil }
+func (*interactiveLeaseController) Rename(context.Context, string) error { return nil }
+func (*interactiveLeaseController) NewThread(context.Context) error      { return nil }
+func (c *interactiveLeaseController) Close(context.Context) error        { return c.lease.Release() }
+
+func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 15, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	deps.terminal = func(io.Reader, io.Writer, bool) tui.TerminalCapabilities {
+		return tui.TerminalCapabilities{Interactive: true, Color: true}
+	}
+	var request codingTurnRequest
+	deps.newController = func(candidate codingTurnRequest, resumed bool) (frontend.Controller, error) {
+		if resumed {
+			t.Fatal("new coding thread was marked resumed")
+		}
+		request = candidate
+		projector, err := frontend.NewProjector(candidate.Metadata.ThreadID, frontend.ProjectionLimits{})
+		if err != nil {
+			return nil, err
+		}
+		projector.Open(false)
+		return &interactiveLeaseController{Projector: projector, lease: candidate.Lease}, nil
+	}
+	runs := 0
+	deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
+		runs++
+		if options.InitialPrompt != "fix the terminal" || !options.AlternateScreen || !options.ReportFocus {
+			t.Fatalf("TUI options = %+v", options)
+		}
+		return controller.Close(ctx)
+	}
+
+	executeCommand(t, newCodeCommand(deps), "fix", "the", "terminal")
+	if runs != 1 || request.Metadata.ThreadID == "" {
+		t.Fatalf("TUI runs=%d request=%+v", runs, request)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(request.Metadata.ThreadID)
+	if err != nil {
+		t.Fatalf("interactive shell did not release lease: %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 

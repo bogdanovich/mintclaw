@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -16,9 +17,14 @@ type fakeController struct {
 	interrupts  atomic.Int32
 	hardCancels atomic.Int32
 	closes      atomic.Int32
+	submits     atomic.Int32
 }
 
-func (f *fakeController) Submit(context.Context, string) error { return nil }
+func (f *fakeController) Submit(context.Context, string) error {
+	f.submits.Add(1)
+	return nil
+}
+
 func (f *fakeController) Interrupt(context.Context) error {
 	f.interrupts.Add(1)
 	return nil
@@ -141,6 +147,51 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 			len(snapshot.Entries),
 			snapshot.HasOlderEntries,
 		)
+	}
+}
+
+func TestModelUsesActualTinyTerminalDimensions(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 1, Height: 1})
+	if width, height := model.Dimensions(); width != 1 || height != 1 {
+		t.Fatalf("dimensions = %dx%d, want 1x1", width, height)
+	}
+	if view := model.View(); view == "" || strings.Contains(view, "\n") {
+		t.Fatalf("tiny view = %q", view)
+	}
+}
+
+func TestNextDeltaCommandWatchesFromCurrentRevision(t *testing.T) {
+	controller, snapshot := newController(t)
+	delta := controller.TurnStarted("turn-1", "inspect")
+	message := nextDeltaCmd(t.Context(), controller, snapshot.Revision)()
+	update, ok := message.(DeltaMsg)
+	if !ok {
+		t.Fatalf("watch message = %T", message)
+	}
+	if update.Delta.Revision != delta.Revision {
+		t.Fatalf("revision = %d, want %d", update.Delta.Revision, delta.Revision)
+	}
+}
+
+func TestModelTracksTerminalFocusWithoutChangingComposer(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")})
+	model = updateModel(t, model, tea.BlurMsg{})
+	if !strings.Contains(model.View(), "terminal unfocused") || model.ComposerValue() != "draft" {
+		t.Fatalf("blurred view=%q composer=%q", model.View(), model.ComposerValue())
+	}
+	model = updateModel(t, model, tea.FocusMsg{})
+	if strings.Contains(model.View(), "terminal unfocused") || model.ComposerValue() != "draft" {
+		t.Fatalf("focused view=%q composer=%q", model.View(), model.ComposerValue())
 	}
 }
 
