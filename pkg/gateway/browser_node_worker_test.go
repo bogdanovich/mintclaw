@@ -38,6 +38,7 @@ type browserNodeTestHandler struct {
 	redactNextObservation    bool
 	redactNextContext        bool
 	dynamicContextCatalog    bool
+	closeFailureCode         string
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -163,6 +164,12 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.redactNextContext = false
 		}
 	case nodes.BrowserCommandSessionClose:
+		if handler.closeFailureCode != "" {
+			return nil, true, nodes.NewInvocationDispatchError(
+				handler.closeFailureCode,
+				errors.New("private companion failure"),
+			)
+		}
 		var input nodes.BrowserSessionStatusInput
 		_ = json.Unmarshal(plan.Input, &input)
 		result = nodes.BrowserSessionResult{SessionID: input.SessionID, State: "closed"}
@@ -171,6 +178,51 @@ func (handler *browserNodeTestHandler) Invoke(
 	}
 	raw, err := json.Marshal(result)
 	return raw, true, err
+}
+
+func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	handler.closeFailureCode = nodes.InvocationDispatchBrowserSessionNotFound
+	handler.mu.Unlock()
+	worker := opened.Owner.(*nodeBrowserWorker)
+	if err = worker.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	status, err := worker.Status(t.Context())
+	if err != nil || status != browser.WorkerLost {
+		t.Fatalf("Status() = %q, %v", status, err)
+	}
+}
+
+func TestBrowserInvocationSessionNotFoundRequiresTypedClassification(t *testing.T) {
+	if !browserInvocationSessionNotFound(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchBrowserSessionNotFound,
+		errors.New("private remote detail"),
+	)) {
+		t.Fatal("typed missing browser session was not preserved")
+	}
+	if browserInvocationSessionNotFound(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchExecutionFailed,
+		errors.New("private remote detail"),
+	)) || browserInvocationSessionNotFound(errors.New("untyped transport failure")) {
+		t.Fatal("non-terminal companion failure was classified as a missing session")
+	}
 }
 
 func browserNodeTestContextCatalog() nodes.BrowserContextCatalog {

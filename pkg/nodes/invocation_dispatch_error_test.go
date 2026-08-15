@@ -28,6 +28,15 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 		t.Fatalf("file-not-found Error() = %q", notFound.Error())
 	}
 
+	browserSessionNotFound := NewInvocationDispatchError(
+		InvocationDispatchBrowserSessionNotFound,
+		cause,
+	)
+	code, classified = InvocationDispatchErrorCode(browserSessionNotFound)
+	if !classified || code != InvocationDispatchBrowserSessionNotFound {
+		t.Fatalf("browser-session-not-found dispatch code = %q, %v", code, classified)
+	}
+
 	unknown := NewInvocationDispatchError("PRIVATE_REMOTE_CODE", cause)
 	code, classified = InvocationDispatchErrorCode(unknown)
 	if !classified || code != InvocationDispatchRejected {

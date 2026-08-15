@@ -367,6 +367,8 @@ type nodeBrowserWorker struct {
 	closed                  bool
 }
 
+var errNodeBrowserSessionNotFound = errors.New("companion browser session not found")
+
 func (worker *nodeBrowserWorker) Status(ctx context.Context) (browser.WorkerStatus, error) {
 	worker.mu.Lock()
 	if worker.closed {
@@ -407,10 +409,10 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 	var result nodes.BrowserSessionResult
 	if err = worker.invoke(ctx, descriptor, "close", nodes.BrowserSessionStatusInput{
 		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
-	}, &result); err != nil {
+	}, &result); err != nil && !errors.Is(err, errNodeBrowserSessionNotFound) {
 		return err
 	}
-	if result.State != "closed" {
+	if err == nil && result.State != "closed" {
 		return browser.ErrWorkerUnavailable
 	}
 	worker.mu.Lock()
@@ -1005,6 +1007,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		if err == nil {
 			return json.Unmarshal(raw, output)
 		}
+		if browserInvocationSessionNotFound(err) {
+			return errNodeBrowserSessionNotFound
+		}
 		if browserInvocationDispatchDenied(err) {
 			return browser.ErrDenied
 		}
@@ -1013,6 +1018,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 				gatewayRecord.ExpectedPlanHash, ephemeralInput)
 			if err == nil {
 				return json.Unmarshal(raw, output)
+			}
+			if browserInvocationSessionNotFound(err) {
+				return errNodeBrowserSessionNotFound
 			}
 			if browserInvocationDispatchDenied(err) {
 				return browser.ErrDenied
@@ -1073,6 +1081,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				if remote.Failure != nil && remote.Failure.Code == "SESSION_LOST" {
 					return browser.ErrWorkerLost
 				}
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchBrowserSessionNotFound {
+					return errNodeBrowserSessionNotFound
+				}
 				if remote.Failure != nil && remote.Failure.Code == "STALE_BROWSER_STATE" {
 					if record.Plan.Command == nodes.BrowserCommandContexts {
 						return errors.Join(browser.ErrStale, browser.ErrContextAuthorityStale)
@@ -1114,6 +1126,11 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 func browserInvocationDispatchDenied(err error) bool {
 	code, classified := nodes.InvocationDispatchErrorCode(err)
 	return classified && code == nodes.InvocationDispatchCommandDenied
+}
+
+func browserInvocationSessionNotFound(err error) bool {
+	code, classified := nodes.InvocationDispatchErrorCode(err)
+	return classified && code == nodes.InvocationDispatchBrowserSessionNotFound
 }
 
 func (worker *nodeBrowserWorker) validateAuthority(
