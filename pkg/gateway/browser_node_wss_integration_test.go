@@ -149,6 +149,19 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
 		RouteID: "route_capture", SessionID: first.ID, ToolCallID: "capture_wss_1",
 	}
+	host.corruptNextOutputChunk()
+	if _, captureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	}); captureErr == nil || host.outputCancelCount() != 1 {
+		t.Fatalf("corrupt companion screenshot error = %v, cancels = %d", captureErr, host.outputCancelCount())
+	}
 	capture, err := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
 		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
 		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
@@ -1176,6 +1189,9 @@ type wssBrowserHost struct {
 	uploaded         []byte
 	output           []byte
 	outputDescriptor nodes.BrowserOutputDescriptor
+	outputActive     bool
+	corruptOutput    bool
+	outputCancels    int
 }
 
 type wssBrowserTransfer struct {
@@ -1222,19 +1238,24 @@ func (host *wssBrowserHost) HandleTransferFrame(
 		case protocol.TransferFramePrepare:
 			var descriptor nodes.BrowserOutputDescriptor
 			if json.Unmarshal(frame.Payload, &descriptor) != nil || descriptor != host.outputDescriptor ||
-				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size {
+				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive {
 				response.Type = protocol.TransferFrameDeny
 				return send(response)
 			}
+			host.outputActive = true
 			response.Type = protocol.TransferFrameAccept
 			if err := send(response); err != nil {
 				return err
 			}
 			response.Type, response.Sequence = protocol.TransferFrameChunk, 1
 			response.Payload = append([]byte(nil), host.output...)
+			if host.corruptOutput {
+				host.corruptOutput = false
+				response.Payload[len(response.Payload)-1] ^= 0xff
+			}
 			return send(response)
 		case protocol.TransferFrameAck:
-			if frame.Sequence != 1 {
+			if frame.Sequence != 1 || !host.outputActive {
 				response.Type = protocol.TransferFrameFailure
 				return send(response)
 			}
@@ -1242,7 +1263,13 @@ func (host *wssBrowserHost) HandleTransferFrame(
 			response.Payload, _ = json.Marshal(map[string]string{"status": "received"})
 			return send(response)
 		case protocol.TransferFrameCommit:
+			host.outputActive = false
 			response.Type = protocol.TransferFrameCommitted
+			return send(response)
+		case protocol.TransferFrameCancel:
+			host.outputActive = false
+			host.outputCancels++
+			response.Type = protocol.TransferFrameFailure
 			return send(response)
 		default:
 			response.Type = protocol.TransferFrameFailure
@@ -1279,6 +1306,18 @@ func (host *wssBrowserHost) HandleTransferFrame(
 		response.Type = protocol.TransferFrameFailure
 	}
 	return send(response)
+}
+
+func (host *wssBrowserHost) corruptNextOutputChunk() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.corruptOutput = true
+}
+
+func (host *wssBrowserHost) outputCancelCount() int {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return host.outputCancels
 }
 
 func (host *wssBrowserHost) Capture(

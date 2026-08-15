@@ -38,6 +38,8 @@ type browserArtifactTransferPrepare struct {
 	ExpiresAt             int64  `json:"expires_at"`
 }
 
+const browserOutputTransferRecoveryTimeout = 3 * time.Second
+
 type gatewayBrowserWorkerFactory struct {
 	config *config.Config
 	local  browser.WorkerFactory
@@ -1026,12 +1028,20 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 	if err != nil {
 		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
 	}
-	defer func() { _ = stream.Close() }()
 	frame := protocol.TransferFrame{
 		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
 		TransferID: descriptor.TransferID, PolicyRevision: descriptor.ProfileRevision,
 		TotalSize: descriptor.Size, SHA256: bindingDigest,
 	}
+	released := false
+	defer func() {
+		if !released {
+			released = cancelBrowserOutputTransferBestEffort(stream, frame)
+		}
+		if !released {
+			_ = stream.Close()
+		}
+	}()
 	frame.Payload, err = json.Marshal(descriptor)
 	if err != nil || stream.Send(ctx, frame) != nil {
 		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
@@ -1064,12 +1074,43 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 			if stream.Send(ctx, commit) != nil {
 				return record, nil
 			}
-			_, _ = stream.Receive(ctx)
+			response, receiveErr = stream.Receive(ctx)
+			if receiveErr == nil && response.Type == protocol.TransferFrameCommitted &&
+				stream.ReleaseCommitted() == nil {
+				released = true
+			}
 			return record, nil
 		case protocol.TransferFrameDeny, protocol.TransferFrameFailure:
 			return nodes.TransferArtifactRecord{}, browser.ErrDenied
 		default:
 			return nodes.TransferArtifactRecord{}, browser.ErrDriverIncompatible
+		}
+	}
+}
+
+func cancelBrowserOutputTransferBestEffort(
+	stream *nodews.TransferStream,
+	binding protocol.TransferFrame,
+) bool {
+	if stream == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), browserOutputTransferRecoveryTimeout)
+	defer cancel()
+	binding.Type, binding.Sequence, binding.Payload = protocol.TransferFrameCancel, 0, nil
+	if stream.Send(ctx, binding) != nil {
+		return false
+	}
+	for {
+		response, err := stream.Receive(ctx)
+		if err != nil {
+			return false
+		}
+		switch response.Type {
+		case protocol.TransferFrameFailure:
+			return stream.ReleaseCanceled() == nil
+		case protocol.TransferFrameCommitted:
+			return stream.ReleaseCommitted() == nil
 		}
 	}
 }

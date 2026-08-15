@@ -232,6 +232,49 @@ func TestTransferStreamReleasesCommittedIdentityForSameGenerationRetry(t *testin
 	}
 }
 
+func TestTransferStreamReleasesConfirmedCancellationForSameGenerationRetry(t *testing.T) {
+	t.Parallel()
+	binding := testTransferBinding()
+	hub, session, stream := openTestTransferStream(t, &transferRecordingConnection{}, binding)
+	if err := stream.ReleaseCanceled(); !errors.Is(err, protocol.ErrInvalidTransferFrame) {
+		t.Fatalf("ReleaseCanceled() before cancellation error = %v", err)
+	}
+	cancel := testTransferFrame(binding, protocol.TransferFrameCancel, 0, nil)
+	if err := stream.Send(t.Context(), cancel); err != nil {
+		t.Fatal(err)
+	}
+	failure := testTransferFrame(binding, protocol.TransferFrameFailure, 0, nil)
+	if err := session.handleTransferFrame(failure); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Receive(t.Context())
+	if err != nil || response.Type != protocol.TransferFrameFailure {
+		t.Fatalf("canceled response = %#v, %v", response, err)
+	}
+	if err = stream.ReleaseCanceled(); err != nil {
+		t.Fatal(err)
+	}
+	if err = stream.ReleaseCanceled(); err != nil {
+		t.Fatalf("idempotent ReleaseCanceled() error = %v", err)
+	}
+	retry, err := hub.OpenTransfer(t.Context(), testTransferNodeID(), binding)
+	if err != nil {
+		t.Fatalf("OpenTransfer() after canceled release error = %v", err)
+	}
+	if err = retry.Send(t.Context(), cancel); err != nil {
+		t.Fatal(err)
+	}
+	if err = retry.ReleaseCanceled(); !errors.Is(err, protocol.ErrInvalidTransferFrame) {
+		t.Fatalf("ReleaseCanceled() without receipt error = %v", err)
+	}
+	if err = retry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = hub.OpenTransfer(t.Context(), testTransferNodeID(), binding); err == nil {
+		t.Fatal("ambiguous cancellation did not retain a tombstone")
+	}
+}
+
 func TestTransferSendCancellationInterruptsWrite(t *testing.T) {
 	t.Parallel()
 	connection := newCancelBlockingTransferConnection()

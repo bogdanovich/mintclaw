@@ -63,7 +63,10 @@ type TransferStream struct {
 	sentAckSequence       uint64
 	receivedAckSequence   uint64
 	receivedCommitted     bool
+	sentCancel            bool
+	receivedCanceled      bool
 	releasedCommitted     bool
+	releasedCanceled      bool
 	closed                bool
 }
 
@@ -152,6 +155,9 @@ func (stream *TransferStream) Send(
 		if stream.closed {
 			return ErrNodeDisconnected
 		}
+		if stream.sentCancel {
+			return protocol.ErrInvalidTransferFrame
+		}
 		if frame.Type == protocol.TransferFrameChunk {
 			if frame.Sequence != stream.sentChunkSequence+1 {
 				return protocol.ErrInvalidTransferFrame
@@ -175,6 +181,9 @@ func (stream *TransferStream) Send(
 		}
 		if frame.Type == protocol.TransferFrameAck {
 			stream.sentAckSequence = frame.Sequence
+		}
+		if frame.Type == protocol.TransferFrameCancel {
+			stream.sentCancel = true
 		}
 		return nil
 	})
@@ -205,6 +214,8 @@ func (stream *TransferStream) Receive(
 			stream.receivedChunkSequence = frame.Sequence
 		case protocol.TransferFrameCommitted:
 			stream.receivedCommitted = true
+		case protocol.TransferFrameFailure:
+			stream.receivedCanceled = stream.sentCancel
 		case protocol.TransferFrameAck:
 			if frame.Sequence < stream.receivedAckSequence ||
 				frame.Sequence > stream.sentChunkSequence {
@@ -225,6 +236,39 @@ func (stream *TransferStream) Receive(
 		return protocol.TransferFrame{}, err
 	}
 	return frame, nil
+}
+
+// ReleaseCanceled closes a stream without retaining an abandoned-identity
+// tombstone only after the peer has returned a terminal failure receipt for a
+// caller-sent cancellation. Ambiguous cancellation continues to use Close and
+// remains fail-closed.
+func (stream *TransferStream) ReleaseCanceled() error {
+	if stream == nil || stream.session == nil || stream.subscription == nil {
+		return ErrNodeDisconnected
+	}
+	stream.stateMu.Lock()
+	if stream.closed {
+		released := stream.releasedCanceled
+		stream.stateMu.Unlock()
+		if released {
+			return nil
+		}
+		return ErrNodeDisconnected
+	}
+	if !stream.sentCancel || !stream.receivedCanceled {
+		stream.stateMu.Unlock()
+		return protocol.ErrInvalidTransferFrame
+	}
+	stream.closed = true
+	stream.releasedCanceled = true
+	stream.stateMu.Unlock()
+	stream.session.unsubscribeTransfer(
+		stream.binding.TransferID,
+		stream.subscription,
+		errors.New("transfer stream canceled"),
+		false,
+	)
+	return nil
 }
 
 // ReleaseCommitted closes a stream only after the peer has returned the
