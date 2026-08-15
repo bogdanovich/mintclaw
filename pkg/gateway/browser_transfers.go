@@ -39,10 +39,14 @@ func (source *gatewayBrowserToolSource) resolveBrowserUpload(
 		verifyNodeTransferDelivery(file, record) != nil {
 		return browser.UploadBinding{}, browser.ErrDenied
 	}
+	contentType := safeNodeTransferContentType(record.Spec.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
 	return browser.UploadBinding{
 		Ref: request.Action.ArtifactRef, SHA256: record.Spec.SHA256, Size: record.Spec.DeclaredSize,
 		Filename:    safeNodeTransferFilename(record.Spec.Filename, "artifact.bin"),
-		ContentType: safeNodeTransferContentType(record.Spec.ContentType), Path: file.Name(),
+		ContentType: contentType, Path: file.Name(),
 	}, nil
 }
 

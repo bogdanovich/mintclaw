@@ -206,8 +206,8 @@ func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	writer, artifact, created, err := spool.Begin(nodeOwner, nodes.TransferArtifactSpec{
 		TransferID: "node_download", Direction: nodes.TransferDirectionDownload,
 		Target: "personal-vpn", ProfileRevision: "files-v1", Filename: "fixture.txt",
-		ContentType: "text/plain", DeclaredSize: int64(len(data)),
-		SHA256: hex.EncodeToString(digest[:]), ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		DeclaredSize: int64(len(data)),
+		SHA256:       hex.EncodeToString(digest[:]), ExpiresAt: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil || !created || writer == nil {
 		t.Fatalf("Begin() = %#v, %t, %v", artifact, created, err)
@@ -249,7 +249,8 @@ func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: browser.Action{Kind: browser.ActionFileChooser, Ref: match[1], ArtifactRef: artifact.Ref},
 	})
-	if err != nil || preparation.Action.ArtifactSHA256 != hex.EncodeToString(digest[:]) {
+	if err != nil || preparation.Action.ArtifactSHA256 != hex.EncodeToString(digest[:]) ||
+		preparation.Action.ArtifactContentType != "application/octet-stream" {
 		t.Fatalf("PrepareAction() = %#v, %v", preparation, err)
 	}
 	invocation, err := source.ExecuteAction(ctx, owner, preparation.Action.ID, nil)
