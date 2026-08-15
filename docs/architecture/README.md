@@ -85,6 +85,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   selected six-phase BF1/BF2 execution program for shared interaction,
   document-context, protected form, artifact, diagnostic, and large-snapshot
   parity across gateway and companion placements.
+- [Browser Functional Parity Phase 5 Deployment Evidence](../operations/browser-functional-parity-phase5-evidence.md):
+  merged remaining-interaction slices, live cross-placement file chooser,
+  specialist-boundary restoration, cleanup, health, and rollback evidence.
 - [Node Companion P0 Capability Contracts](node-companion-p0-contracts.md): admitted scope, bounded discovery schema, effective-policy projection, freshness, redaction, and completion gates for model-visible node capabilities.
 - [Node Companion P1 Owner-Control Admission](node-companion-p1-admission.md): admitted owner shell, cancellation, Linux root broker, and interactive terminal contracts with disabled production defaults and exact completion gates.
 - [Node Companion P2 File Transfer Admission](node-companion-p2-admission.md): admitted regular-file transfer, gateway spool, path safety, Linux administrator helper, approval, replay, deployment, and mandatory completion gates.
