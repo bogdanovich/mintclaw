@@ -40,6 +40,16 @@
     "identityProof": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["key_algorithm"],
+            "properties": {"key_algorithm": {"const": "ecdsa-p256-sha256"}}
+          },
+          "then": {"properties": {"public_key": {"pattern": "^[A-Za-z0-9_-]{87}$"}}},
+          "else": {"properties": {"public_key": {"pattern": "^[A-Za-z0-9_-]{43}$"}}}
+        }
+      ],
       "dependentRequired": {
         "executor": ["policy_revision"],
         "policy_revision": ["executor"]
@@ -52,7 +62,8 @@
       "properties": {
         "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "node_id": {"$ref": "#/$defs/nodeID"},
-        "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+        "public_key": {"type": "string"},
+        "key_algorithm": {"enum": ["ed25519", "ecdsa-p256-sha256"]},
         "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
         "min_protocol": {"type": "integer", "minimum": 1},
         "max_protocol": {"type": "integer", "minimum": 1},

@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -71,6 +72,48 @@ func TestFileRegistryPersistsPendingPairingSecurely(t *testing.T) {
 	}
 	if got.RequestedAt != pairing.RequestedAt || got.Node.CatalogHash != pairing.Node.CatalogHash {
 		t.Fatalf("reloaded pairing = %#v", got)
+	}
+}
+
+func TestFileRegistryPersistsP256IdentityAlgorithm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := testP256PrivateKey(t)
+	publicKey := testP256PublicKeyBytes(t, privateKey)
+	id, err := DeriveIDForAlgorithm(KeyAlgorithmECDSAP256SHA256, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := testPendingPairing(t, 1000)
+	pairing.Node.ID = id
+	pairing.Node.Platform = "android"
+	pairing.Node.Architecture = "arm64-v8a"
+	pairing.PublicKey = publicKey
+	pairing.KeyAlgorithm = KeyAlgorithmECDSAP256SHA256
+	if err := registry.UpsertPending(pairing); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, exists, err := reloaded.Pending(id)
+	if err != nil || !exists {
+		t.Fatalf("Pending() = exists %v, error %v", exists, err)
+	}
+	if pending.KeyAlgorithm != KeyAlgorithmECDSAP256SHA256 || !bytes.Equal(pending.PublicKey, publicKey) {
+		t.Fatalf("persisted P-256 identity = %#v", pending)
+	}
+	approved, err := reloaded.Approve(id, PairingApproval{Aliases: []Alias{"android-test"}, At: 1001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.KeyAlgorithm != KeyAlgorithmECDSAP256SHA256 {
+		t.Fatalf("approved key algorithm = %q", approved.KeyAlgorithm)
 	}
 }
 

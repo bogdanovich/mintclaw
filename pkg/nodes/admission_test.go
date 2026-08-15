@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,6 +63,138 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 	}
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrChallengeUnknown) {
 		t.Fatalf("replayed Admit() error = %v", err)
+	}
+}
+
+func TestAuthenticatorAdmitsAndReconnectsP256Identity(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := testP256PrivateKey(t)
+	newProof := func() IdentityProof {
+		challenge, challengeErr := authenticator.IssueChallenge()
+		if challengeErr != nil {
+			t.Fatal(challengeErr)
+		}
+		return newTestP256IdentityProof(t, privateKey, challenge.Nonce)
+	}
+
+	proof := newProof()
+	admission, err := authenticator.Authenticate(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Result.State != StatePendingPairing {
+		t.Fatalf("initial state = %q", admission.Result.State)
+	}
+	pending, exists, err := registry.Pending(proof.NodeID)
+	if err != nil || !exists {
+		t.Fatalf("Pending() = exists %v, error %v", exists, err)
+	}
+	if pending.KeyAlgorithm != KeyAlgorithmECDSAP256SHA256 {
+		t.Fatalf("pending key algorithm = %q", pending.KeyAlgorithm)
+	}
+	if _, err := registry.Approve(
+		proof.NodeID,
+		PairingApproval{Aliases: []Alias{"android-test"}, At: time.Now().Unix()},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnect := newProof()
+	admission, err = authenticator.Authenticate(reconnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Result.State != StateConnected {
+		t.Fatalf("reconnect state = %q", admission.Result.State)
+	}
+}
+
+func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewIdentityProof(
+		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticator.Authenticate(proof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Approve(
+		proof.NodeID,
+		PairingApproval{Aliases: []Alias{"legacy"}, At: time.Now().Unix()},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document registryDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	record := document.Records[string(proof.NodeID)]
+	record.KeyAlgorithm = ""
+	document.Records[string(proof.NodeID)] = record
+	data, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyRegistry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyAuthenticator, err := NewAuthenticator(legacyRegistry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err = legacyAuthenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err = NewIdentityProof(
+		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
+		"v0.1.1", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := legacyAuthenticator.Authenticate(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Result.State != StateConnected {
+		t.Fatalf("legacy reconnect state = %q", admission.Result.State)
 	}
 }
 

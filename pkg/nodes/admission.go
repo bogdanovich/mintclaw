@@ -32,10 +32,11 @@ type Challenge struct {
 }
 
 type PendingPairing struct {
-	Node          Snapshot `json:"node"`
-	PublicKey     []byte   `json:"public_key"`
-	RequestedRole string   `json:"requested_role"`
-	RequestedAt   int64    `json:"requested_at"`
+	Node          Snapshot     `json:"node"`
+	PublicKey     []byte       `json:"public_key"`
+	KeyAlgorithm  KeyAlgorithm `json:"key_algorithm,omitempty"`
+	RequestedRole string       `json:"requested_role"`
+	RequestedAt   int64        `json:"requested_at"`
 }
 
 type PairingRegistry interface {
@@ -144,7 +145,7 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	if err := auth.consumeChallenge(proof.Nonce); err != nil {
 		return Admission{}, err
 	}
-	publicKey, err := proof.Verify()
+	publicKey, err := proof.VerifyIdentity()
 	if err != nil {
 		return Admission{}, err
 	}
@@ -167,20 +168,22 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 		return Admission{}, err
 	}
 	if !exists {
-		if err := auth.persistPending(node, publicKey, proof, now); err != nil {
-			return Admission{}, err
+		if persistErr := auth.persistPending(node, publicKey, proof, now); persistErr != nil {
+			return Admission{}, persistErr
 		}
 		return Admission{Result: AdmissionResult{NodeID: node.ID, State: StatePendingPairing}}, nil
 	}
-	if !bytes.Equal(registration.PublicKey, publicKey) {
+	registrationAlgorithm, err := registration.KeyAlgorithm.normalized()
+	if err != nil || registrationAlgorithm != publicKey.Algorithm ||
+		!bytes.Equal(registration.PublicKey, publicKey.Bytes) {
 		return Admission{}, fmt.Errorf("%w: node public key changed", ErrInvalidNode)
 	}
 	if registration.Snapshot.State == StateRevoked {
 		return Admission{}, ErrAdmissionRevoked
 	}
 	if registration.Snapshot.State == StatePendingPairing {
-		if err := auth.persistPending(node, publicKey, proof, now); err != nil {
-			return Admission{}, err
+		if persistErr := auth.persistPending(node, publicKey, proof, now); persistErr != nil {
+			return Admission{}, persistErr
 		}
 		return Admission{Result: AdmissionResult{NodeID: node.ID, State: StatePendingPairing}}, nil
 	}
@@ -287,10 +290,16 @@ func commandApproval(registration Registration, command string) (CommandApproval
 	}, nil
 }
 
-func (auth *Authenticator) persistPending(node Snapshot, publicKey []byte, proof IdentityProof, now int64) error {
+func (auth *Authenticator) persistPending(
+	node Snapshot,
+	publicKey IdentityPublicKey,
+	proof IdentityProof,
+	now int64,
+) error {
 	return auth.registry.UpsertPending(PendingPairing{
 		Node:          node,
-		PublicKey:     publicKey,
+		PublicKey:     publicKey.Bytes,
+		KeyAlgorithm:  publicKey.Algorithm,
 		RequestedRole: proof.RequestedRole,
 		RequestedAt:   now,
 	})

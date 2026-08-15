@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -488,6 +489,39 @@ func TestNodeAuthSchemaMatchesDomainPayloads(t *testing.T) {
 		if validationErr := resolved.Validate(instance); validationErr != nil {
 			t.Fatalf("schema rejected %s: %v", data, validationErr)
 		}
+	}
+}
+
+func TestNodeAuthSchemaAcceptsP256AndRejectsAlgorithmLengthMismatch(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "identity-p256.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Proof nodes.IdentityProof `json:"proof"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	proof := fixture.Proof
+	resolved := resolveSchema(t, "node-auth.v1")
+	validate := func(candidate nodes.IdentityProof) error {
+		data, marshalErr := json.Marshal(candidate)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var instance any
+		if unmarshalErr := json.Unmarshal(data, &instance); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return resolved.Validate(instance)
+	}
+	if err := validate(proof); err != nil {
+		t.Fatalf("schema rejected P-256 proof: %v", err)
+	}
+	proof.KeyAlgorithm = nodes.KeyAlgorithmEd25519
+	if err := validate(proof); err == nil {
+		t.Fatal("schema accepted P-256 public-key length as Ed25519")
 	}
 }
 
