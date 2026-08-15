@@ -129,10 +129,12 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
-		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		WorkspaceID: "workspace_1", RouteID: "route_1",
+		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_capture_1",
 		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
-		Filename: "capture.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),
+		CaptureTarget: "page",
+		Filename:      "capture.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	}, content)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +205,8 @@ func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
-		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		WorkspaceID: "workspace_1", RouteID: "route_1",
+		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_download_1",
 		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
 		Filename: "download.bin", ContentType: "application/octet-stream",
@@ -388,8 +391,10 @@ func TestBrowserOutputExpiryRemovesNeverTransferredArtifact(t *testing.T) {
 	host.outputExpiryAfter = func(time.Duration) <-chan time.Time { return expirySignal }
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
+		CaptureTarget:   "page",
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
-		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		WorkspaceID: "workspace_1", RouteID: "route_1",
+		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_expiry_1",
 		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
 		Filename: "expiring.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),

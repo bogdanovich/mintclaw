@@ -1037,6 +1037,13 @@ func observeWithNavigationCheck(
 	ctx context.Context,
 	worker ActionWorker,
 ) (DriverObservation, string, error) {
+	if bound, ok := worker.(BoundObservationWorker); ok {
+		observation, identity, err := bound.ObserveWithNavigationIdentity(ctx)
+		if err != nil {
+			return DriverObservation{}, "", err
+		}
+		return observation, identity, nil
+	}
 	checkedWorker, ok := worker.(NavigationIdentityWorker)
 	if !ok {
 		observation, err := worker.Observe(ctx)

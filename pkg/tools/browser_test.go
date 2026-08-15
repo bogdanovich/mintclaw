@@ -608,7 +608,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
 		!result.Targets[0].Profiles[0].DryRun || result.Targets[0].Profiles[0].AllowApprovedActions ||
-		!result.Targets[0].Features.Screenshot ||
+		!result.Targets[0].Features.Screenshot || !result.Targets[0].Features.PageScreenshot ||
+		!result.Targets[0].Features.ElementScreenshot ||
 		!result.Targets[0].Features.Upload || !result.Targets[0].Features.Download ||
 		result.Targets[0].Limits.ScreenshotBytes != config.BrowserMaxScreenshotBytes ||
 		result.Targets[0].Limits.UploadBytes != config.BrowserMaxUploadBytes ||
@@ -1254,6 +1255,46 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 	}
 	if err := duplicate.CommitOutbound(browserToolTestContext()); err != nil {
 		t.Fatalf("recovery commit outbound error = %v", err)
+	}
+}
+
+func TestBrowserCaptureUsesExactFreshElementAuthorityAndReturnsArtifactOnly(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		screenshot: browser.ScreenshotArtifact{
+			Ref: "transfer-artifact://element", Kind: "screenshot", ContentType: "image/png",
+			Filename: "browser-screenshot.png", Size: 512, SHA256: strings.Repeat("b", 64),
+			ExpiresAt: 200, SessionID: "browser_session_1", TabID: "tab_primary",
+			SnapshotID: "snapshot_3", SnapshotGeneration: 3, Target: browser.ScreenshotTargetElement,
+			DeliveryState: browser.ScreenshotDeliveryPending, MediaRef: "media://element",
+			Recovery: &browser.ScreenshotRecovery{
+				WorkspaceID: "workspace_1", AgentID: "browser", ActorID: "actor_1", RouteID: "route_1",
+				SessionID: "browser_session_1", ToolCallID: "request_1",
+			},
+		},
+	}
+	result := NewBrowserCaptureTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"frame_id": "frame_1", "context_catalog_id": "catalog_1", "context_generation": 2,
+			"snapshot_id": "snapshot_3", "snapshot_generation": 3,
+			"target": "element", "ref": "ref_button",
+		},
+	)
+	var view browserCaptureView
+	if result == nil || result.IsError || json.Unmarshal([]byte(result.ForLLM), &view) != nil ||
+		view.Artifact.Ref != source.screenshot.Ref || strings.Contains(result.ForLLM, `"snapshot":`) ||
+		result.Outbound == nil || len(result.Outbound.Media) != 1 || !result.ImmediateDelivery {
+		t.Fatalf("browser capture result = %#v; view = %#v", result, view)
+	}
+	request := source.screenshotRequest
+	if request.SessionID != "browser_session_1" || request.TabID != "tab_primary" ||
+		request.FrameID != "frame_1" || request.ContextCatalogID != "catalog_1" ||
+		request.ContextGeneration != 2 || request.SnapshotID != "snapshot_3" ||
+		request.SnapshotGeneration != 3 || request.Target != browser.ScreenshotTargetElement ||
+		request.Ref != "ref_button" {
+		t.Fatalf("browser capture request = %#v", request)
 	}
 }
 

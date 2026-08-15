@@ -17,6 +17,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
@@ -190,7 +191,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		profileReady := true
 		for _, command := range []string{
 			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
-			nodes.BrowserCommandObserve, nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
+			nodes.BrowserCommandObserve, nodes.BrowserCommandCapture, nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
 			nodes.BrowserCommandSessionClose,
 		} {
 			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
@@ -360,6 +361,7 @@ type nodeBrowserWorker struct {
 	cachedObservation       *browser.DriverObservation
 	elements                map[string]browser.DriverElement
 	currentOrigin           string
+	documentID              string
 	statusSequence          uint64
 	observeRecoverySequence uint64
 	contextSequence         uint64
@@ -420,6 +422,7 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 	worker.cachedObservation = nil
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
+	worker.documentID = ""
 	worker.mu.Unlock()
 	return nil
 }
@@ -470,6 +473,7 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		worker.cachedObservation = nil
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
+		worker.documentID = ""
 		worker.observeRecoverySequence++
 		recovery := worker.observeRecoverySequence
 		worker.mu.Unlock()
@@ -478,6 +482,19 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		requestKey = fmt.Sprintf("observe_%d_recovery_%d", nextGeneration, recovery)
 	}
 	return browser.DriverObservation{}, browser.ErrWorkerUnavailable
+}
+
+func (worker *nodeBrowserWorker) ObserveWithNavigationIdentity(
+	ctx context.Context,
+) (browser.DriverObservation, string, error) {
+	observation, err := worker.Observe(ctx)
+	if err != nil {
+		return browser.DriverObservation{}, "", err
+	}
+	worker.mu.Lock()
+	identity := worker.documentID
+	worker.mu.Unlock()
+	return observation, identity, nil
 }
 
 func (worker *nodeBrowserWorker) Resolve(
@@ -691,6 +708,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		worker.cachedObservation = nil
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
+		worker.documentID = ""
 		worker.mu.Unlock()
 		observation, err = worker.Observe(ctx)
 	} else {
@@ -867,9 +885,193 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	worker.mu.Lock()
 	worker.snapshotGeneration = result.SnapshotGeneration
 	worker.currentOrigin = observation.Origin
+	worker.documentID = result.DocumentID
 	worker.rememberElementsLocked(observation)
 	worker.mu.Unlock()
 	return observation, nil
+}
+
+func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
+	ctx context.Context,
+	request browser.ScreenshotRequest,
+	documentID string,
+	element browser.DriverElement,
+	maximum int,
+) (browser.DriverScreenshot, error) {
+	if worker == nil || worker.factory == nil || worker.factory.source == nil ||
+		request.Retention == nil || documentID == "" || maximum < 1 {
+		return browser.DriverScreenshot{}, browser.ErrDenied
+	}
+	retention := request.Retention
+	artifactOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: retention.WorkspaceID, AgentID: retention.AgentID,
+		ActorID: retention.ActorID, RouteID: retention.RouteID,
+		SessionID: retention.SessionID, ToolCallID: retention.ToolCallID,
+	}
+	if artifactOwner.Validate() != nil || retention.ToolCallID != request.RequestID ||
+		retention.SessionID != request.SessionID {
+		return browser.DriverScreenshot{}, browser.ErrDenied
+	}
+	worker.mu.Lock()
+	generation := worker.snapshotGeneration
+	currentDocumentID := worker.documentID
+	worker.mu.Unlock()
+	if generation != request.SnapshotGeneration || currentDocumentID != documentID {
+		return browser.DriverScreenshot{}, browser.ErrStale
+	}
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandCapture)
+	if err != nil {
+		return browser.DriverScreenshot{}, err
+	}
+	remoteRef := ""
+	if request.Target == browser.ScreenshotTargetElement {
+		remoteRef = element.Target
+		if remoteRef == "" {
+			return browser.DriverScreenshot{}, browser.ErrStale
+		}
+	}
+	input := nodes.BrowserCaptureInput{
+		SessionID: worker.sessionID, TabID: worker.tabID, FrameID: request.FrameID,
+		ContextID: request.ContextCatalogID, SnapshotID: request.SnapshotID,
+		SnapshotGeneration: generation, DocumentID: documentID, InvocationID: request.RequestID,
+		WorkspaceID: retention.WorkspaceID, RouteID: retention.RouteID,
+		BrowserTarget: worker.browserTarget,
+		Target:        string(request.Target), Ref: remoteRef,
+		ProfileRevision: worker.profileRevision, BrowserPolicyRevision: worker.factory.policyRevision,
+	}
+	var output nodes.BrowserOutputDescriptor
+	if err = worker.invoke(ctx, descriptor, "capture_"+request.RequestID, input, &output); err != nil {
+		return browser.DriverScreenshot{}, err
+	}
+	if output.Kind != nodes.BrowserOutputScreenshot || output.SessionID != worker.sessionID ||
+		output.RoutedSessionID != worker.principal().SessionID || output.AgentID != worker.principal().AgentID ||
+		output.ActorID != worker.principal().ActorID || output.WorkspaceID != retention.WorkspaceID ||
+		output.RouteID != retention.RouteID ||
+		output.Target != worker.browserTarget ||
+		output.ProfileRevision != worker.profileRevision ||
+		output.BrowserPolicyRevision != worker.factory.policyRevision ||
+		output.InvocationID != request.RequestID || output.TabID != worker.tabID ||
+		output.FrameID != request.FrameID || output.ContextID != request.ContextCatalogID ||
+		output.DocumentID != documentID || output.SnapshotID != request.SnapshotID ||
+		output.SnapshotGeneration != generation || output.CaptureTarget != string(request.Target) ||
+		output.ElementRef != remoteRef || output.Filename != browserScreenshotFilename ||
+		output.ContentType != "image/png" || output.Size < 1 || output.Size > uint64(maximum) {
+		return browser.DriverScreenshot{}, browser.ErrDriverIncompatible
+	}
+	record, err := worker.receiveBrowserOutput(ctx, artifactOwner, output, request.Target)
+	if err != nil {
+		return browser.DriverScreenshot{}, err
+	}
+	return browser.DriverScreenshot{
+		ContentType: "image/png",
+		Retained: &browser.RetainedScreenshot{
+			Ref: record.Ref, ContentType: record.Spec.ContentType, Size: record.Spec.DeclaredSize,
+			SHA256: record.Spec.SHA256, ExpiresAt: record.Spec.ExpiresAt,
+		},
+	}, nil
+}
+
+func (worker *nodeBrowserWorker) receiveBrowserOutput(
+	ctx context.Context,
+	owner nodes.TransferArtifactOwner,
+	descriptor nodes.BrowserOutputDescriptor,
+	target browser.ScreenshotTarget,
+) (nodes.TransferArtifactRecord, error) {
+	spool, err := worker.factory.source.runtime.gatewayTransferSpool(
+		nodes.GatewayTransferSpoolPath(worker.factory.config.WorkspacePath()),
+	)
+	if err != nil {
+		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+	}
+	spec := nodes.TransferArtifactSpec{
+		TransferID: owner.ToolCallID, Direction: nodes.TransferDirectionDownload,
+		Target: worker.browserTarget, ProfileRevision: descriptor.BrowserPolicyRevision,
+		SourceKind: browserScreenshotKind(target), SourceScope: descriptor.TabID,
+		SourceID: descriptor.SnapshotID, SourceRevision: descriptor.SnapshotGeneration,
+		Filename: descriptor.Filename, ContentType: descriptor.ContentType,
+		DeclaredSize: int64(descriptor.Size), SHA256: descriptor.SHA256, ExpiresAt: descriptor.ExpiresAt,
+	}
+	writer, record, created, err := spool.Begin(owner, spec)
+	if err != nil {
+		return nodes.TransferArtifactRecord{}, err
+	}
+	if !created {
+		if record.State != nodes.TransferArtifactCommitted {
+			return nodes.TransferArtifactRecord{}, nodes.ErrTransferArtifactConflict
+		}
+		return record, nil
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = writer.Abort()
+		}
+	}()
+	digest, err := hex.DecodeString(descriptor.SHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return nodes.TransferArtifactRecord{}, browser.ErrDriverIncompatible
+	}
+	var bindingDigest [sha256.Size]byte
+	copy(bindingDigest[:], digest)
+	sessions, err := worker.factory.source.runtime.transferSessionsSnapshot(
+		worker.factory.source.registryPath, worker.factory.source.generation,
+	)
+	if err != nil {
+		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+	}
+	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, nodews.TransferBinding{
+		TransferID: descriptor.TransferID, Direction: protocol.TransferDownload,
+		PolicyRevision: descriptor.ProfileRevision, TotalSize: descriptor.Size, SHA256: bindingDigest,
+	})
+	if err != nil {
+		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+	}
+	defer func() { _ = stream.Close() }()
+	frame := protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
+		TransferID: descriptor.TransferID, PolicyRevision: descriptor.ProfileRevision,
+		TotalSize: descriptor.Size, SHA256: bindingDigest,
+	}
+	frame.Payload, err = json.Marshal(descriptor)
+	if err != nil || stream.Send(ctx, frame) != nil {
+		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+	}
+	for {
+		response, receiveErr := stream.Receive(ctx)
+		if receiveErr != nil {
+			return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+		}
+		switch response.Type {
+		case protocol.TransferFrameAccept:
+			continue
+		case protocol.TransferFrameChunk:
+			if err = writer.WriteChunk(response.Sequence, response.Payload); err != nil {
+				return nodes.TransferArtifactRecord{}, err
+			}
+			ack := frame
+			ack.Type, ack.Sequence, ack.Payload = protocol.TransferFrameAck, response.Sequence, nil
+			if stream.Send(ctx, ack) != nil {
+				return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
+			}
+		case protocol.TransferFrameStatus:
+			record, err = writer.Commit()
+			if err != nil && !fileutil.IsCommittedWriteError(err) {
+				return nodes.TransferArtifactRecord{}, err
+			}
+			keep = true
+			commit := frame
+			commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
+			if stream.Send(ctx, commit) != nil {
+				return record, nil
+			}
+			_, _ = stream.Receive(ctx)
+			return record, nil
+		case protocol.TransferFrameDeny, protocol.TransferFrameFailure:
+			return nodes.TransferArtifactRecord{}, browser.ErrDenied
+		default:
+			return nodes.TransferArtifactRecord{}, browser.ErrDriverIncompatible
+		}
+	}
 }
 
 func (worker *nodeBrowserWorker) rememberElementsLocked(observation browser.DriverObservation) {

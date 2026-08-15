@@ -78,6 +78,19 @@ type browserOutputTransfer struct {
 	finished   bool
 }
 
+func (host *BrowserHost) registeredOutput(kind, sessionID, invocationID string) (nodes.BrowserOutputDescriptor, bool) {
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	host.expireBrowserArtifactsLocked()
+	for _, artifact := range host.outputArtifacts {
+		if artifact.descriptor.Kind == kind && artifact.descriptor.SessionID == sessionID &&
+			artifact.descriptor.InvocationID == invocationID {
+			return artifact.descriptor, true
+		}
+	}
+	return nodes.BrowserOutputDescriptor{}, false
+}
+
 const (
 	browserOutputCleanupPolicy = "session_or_expiry"
 	maxBrowserOutputArtifacts  = 8
@@ -210,11 +223,18 @@ func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool
 	}
 	for _, value := range []string{
 		descriptor.TabID, descriptor.FrameID, descriptor.ContextID,
-		descriptor.DocumentID, descriptor.SnapshotID,
+		descriptor.DocumentID, descriptor.SnapshotID, descriptor.ElementRef,
 	} {
 		if value != "" && !browserHostIdentifier(value) {
 			return false
 		}
+	}
+	if descriptor.Kind == nodes.BrowserOutputScreenshot &&
+		(!browserHostIdentifier(descriptor.RouteID) ||
+			(descriptor.CaptureTarget != "page" && descriptor.CaptureTarget != "element") ||
+			(descriptor.CaptureTarget == "page" && descriptor.ElementRef != "") ||
+			(descriptor.CaptureTarget == "element" && descriptor.ElementRef == "")) {
+		return false
 	}
 	return descriptor.TabID != "" || descriptor.SnapshotGeneration == 0
 }

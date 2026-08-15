@@ -984,6 +984,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionOpen,
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandCapture,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,

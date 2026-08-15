@@ -91,7 +91,7 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 	}
 	legacyDescriptors := make([]CommandDescriptor, 0, len(currentDescriptors)-1)
 	for _, descriptor := range currentDescriptors {
-		if descriptor.Name == BrowserCommandContexts {
+		if descriptor.Name == BrowserCommandContexts || descriptor.Name == BrowserCommandCapture {
 			continue
 		}
 		switch descriptor.Name {
@@ -212,7 +212,12 @@ func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
+	legacyDescriptors := make([]CommandDescriptor, 0, len(currentDescriptors)-1)
+	for _, descriptor := range currentDescriptors {
+		if descriptor.Name != BrowserCommandCapture {
+			legacyDescriptors = append(legacyDescriptors, descriptor)
+		}
+	}
 	for index := range legacyDescriptors {
 		descriptor := &legacyDescriptors[index]
 		switch descriptor.Name {
@@ -308,17 +313,27 @@ func TestFileRegistryLoadsHistoricalBrowserCatalogWithAuthoritySuspended(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
+			legacyDescriptors := make([]CommandDescriptor, 0, len(currentDescriptors)-1)
+			for _, descriptor := range currentDescriptors {
+				if descriptor.Name != BrowserCommandCapture {
+					legacyDescriptors = append(legacyDescriptors, descriptor)
+				}
+			}
 			for index := range legacyDescriptors {
 				descriptor := &legacyDescriptors[index]
 				if descriptor.Name == BrowserCommandAct {
 					descriptor.InputSchema = test.inputSchema(descriptor.Name, descriptor.BrowserProfiles)
 				}
-				if test.legacyOutputs && (descriptor.Name == BrowserCommandObserve ||
-					descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandContexts) {
-					descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+				if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandAct ||
+					descriptor.Name == BrowserCommandContexts {
+					descriptor.OutputSchema = legacyPreCaptureBrowserCommandOutputSchema(
 						descriptor.Name, descriptor.BrowserProfiles,
 					)
+					if test.legacyOutputs {
+						descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+							descriptor.Name, descriptor.BrowserProfiles,
+						)
+					}
 				}
 			}
 			legacyCatalog := CapabilityCatalog{Commands: legacyDescriptors}
@@ -373,18 +388,24 @@ func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	withoutCapture := make([]CommandDescriptor, 0, len(descriptors)-1)
 	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandCapture {
+			continue
+		}
 		switch descriptors[index].Name {
-		case BrowserCommandAct:
-			descriptors[index].InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
-				descriptors[index].Name, descriptors[index].BrowserProfiles,
-			)
 		case BrowserCommandObserve:
 			descriptors[index].OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
 				descriptors[index].Name, descriptors[index].BrowserProfiles,
 			)
+		case BrowserCommandAct, BrowserCommandContexts:
+			descriptors[index].OutputSchema = legacyPreCaptureBrowserCommandOutputSchema(
+				descriptors[index].Name, descriptors[index].BrowserProfiles,
+			)
 		}
+		withoutCapture = append(withoutCapture, descriptors[index])
 	}
+	descriptors = withoutCapture
 	catalogEpochs := browserSchemaEpochAll
 	for index := range descriptors {
 		epochs, _, ok := classifyStoredBrowserDescriptor(&descriptors[index])
@@ -417,6 +438,39 @@ func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
 	}
 	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+}
+
+func TestStoredBrowserCatalogRecognizesExactPreCaptureEpoch(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := make(map[string]struct{})
+	epochs := browserSchemaEpochAll
+	anyLegacy := false
+	for index := range descriptors {
+		descriptor := descriptors[index]
+		if descriptor.Name == BrowserCommandCapture {
+			continue
+		}
+		if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandAct ||
+			descriptor.Name == BrowserCommandContexts {
+			descriptor.OutputSchema = legacyPreCaptureBrowserCommandOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		}
+		descriptorEpochs, legacy, ok := classifyStoredBrowserDescriptor(&descriptor)
+		if !ok {
+			t.Fatalf("pre-capture descriptor %s = epochs %d, legacy %v, ok %v", descriptor.Name, descriptorEpochs, legacy, ok)
+		}
+		anyLegacy = anyLegacy || legacy
+		epochs &= descriptorEpochs
+		commands[descriptor.Name] = struct{}{}
+	}
+	matched, ok := storedBrowserCatalogShapeEpochs(commands, epochs)
+	if !anyLegacy || !ok || matched&browserSchemaEpochPreCapture == 0 || matched&browserSchemaEpochCurrent != 0 {
+		t.Fatalf("pre-capture catalog epochs = %d, matched = %d, ok = %v", epochs, matched, ok)
 	}
 }
 

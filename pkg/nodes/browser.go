@@ -1,11 +1,13 @@
 package nodes
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"slices"
 	"sort"
@@ -59,6 +61,7 @@ const (
 	BrowserCommandSessionOpen   = "browser.session.open.v1"
 	BrowserCommandSessionStatus = "browser.session.status.v1"
 	BrowserCommandObserve       = "browser.observe.v1"
+	BrowserCommandCapture       = "browser.capture.v1"
 	BrowserCommandAct           = "browser.act.v1"
 	BrowserCommandContexts      = "browser.contexts.v1"
 	BrowserCommandSessionClose  = "browser.session.close.v1"
@@ -215,8 +218,13 @@ func (input *BrowserSessionOpenInput) UnmarshalJSON(data []byte) error {
 		DryRun                bool            `json:"dry_run"`
 		Limits                json.RawMessage `json:"limits"`
 	}
-	if err := json.Unmarshal(data, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
 		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser session open input", ErrInvalidCapability)
 	}
 	limits, err := decodeCanonicalBrowserLimits(value.Limits)
 	if err != nil {
@@ -241,6 +249,47 @@ type BrowserObserveInput struct {
 	TabID              string `json:"tab_id"`
 	SnapshotGeneration uint64 `json:"snapshot_generation"`
 	Screenshot         bool   `json:"screenshot"`
+}
+
+type BrowserCaptureInput struct {
+	SessionID             string `json:"session_id"`
+	TabID                 string `json:"tab_id"`
+	FrameID               string `json:"frame_id,omitempty"`
+	ContextID             string `json:"context_id,omitempty"`
+	SnapshotID            string `json:"snapshot_id"`
+	SnapshotGeneration    uint64 `json:"snapshot_generation"`
+	DocumentID            string `json:"document_id"`
+	InvocationID          string `json:"invocation_id"`
+	WorkspaceID           string `json:"workspace_id"`
+	RouteID               string `json:"route_id"`
+	BrowserTarget         string `json:"browser_target"`
+	Target                string `json:"target"`
+	Ref                   string `json:"ref,omitempty"`
+	ProfileRevision       string `json:"profile_revision"`
+	BrowserPolicyRevision string `json:"browser_policy_revision"`
+}
+
+func (input *BrowserCaptureInput) UnmarshalJSON(data []byte) error {
+	type captureInputAlias BrowserCaptureInput
+	var value struct {
+		captureInputAlias
+		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser capture input", ErrInvalidCapability)
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return err
+	}
+	*input = BrowserCaptureInput(value.captureInputAlias)
+	input.SnapshotGeneration = generation
+	return nil
 }
 
 func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
@@ -713,6 +762,7 @@ type BrowserObservationResult struct {
 	PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
 	Truncated          bool                      `json:"truncated"`
 	ProtectedResult    bool                      `json:"protected_result,omitempty"`
+	DocumentID         string                    `json:"document_id,omitempty"`
 }
 
 func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
@@ -728,6 +778,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
 		Truncated          bool                      `json:"truncated"`
 		ProtectedResult    bool                      `json:"protected_result,omitempty"`
+		DocumentID         string                    `json:"document_id,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -741,6 +792,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
 		Elements: value.Elements, PendingDialog: value.PendingDialog, Truncated: value.Truncated,
 		ProtectedResult: value.ProtectedResult,
+		DocumentID:      value.DocumentID,
 	}
 	return nil
 }
@@ -770,6 +822,7 @@ type BrowserOutputDescriptor struct {
 	AgentID               string `json:"agent_id"`
 	ActorID               string `json:"actor_id"`
 	WorkspaceID           string `json:"workspace_id"`
+	RouteID               string `json:"route_id,omitempty"`
 	Target                string `json:"target"`
 	ProfileRevision       string `json:"profile_revision"`
 	BrowserPolicyRevision string `json:"browser_policy_revision"`
@@ -780,6 +833,8 @@ type BrowserOutputDescriptor struct {
 	DocumentID            string `json:"document_id,omitempty"`
 	SnapshotID            string `json:"snapshot_id,omitempty"`
 	SnapshotGeneration    uint64 `json:"snapshot_generation,omitempty"`
+	CaptureTarget         string `json:"capture_target,omitempty"`
+	ElementRef            string `json:"element_ref,omitempty"`
 	Filename              string `json:"filename"`
 	ContentType           string `json:"content_type"`
 	Size                  uint64 `json:"size"`
@@ -787,6 +842,75 @@ type BrowserOutputDescriptor struct {
 	CapturedAt            int64  `json:"captured_at"`
 	ExpiresAt             int64  `json:"expires_at"`
 	CleanupPolicy         string `json:"cleanup_policy"`
+}
+
+func (descriptor *BrowserOutputDescriptor) UnmarshalJSON(data []byte) error {
+	var value struct {
+		TransferID            string          `json:"transfer_id"`
+		Kind                  string          `json:"kind"`
+		SessionID             string          `json:"session_id"`
+		RoutedSessionID       string          `json:"routed_session_id"`
+		AgentID               string          `json:"agent_id"`
+		ActorID               string          `json:"actor_id"`
+		WorkspaceID           string          `json:"workspace_id"`
+		RouteID               string          `json:"route_id,omitempty"`
+		Target                string          `json:"target"`
+		ProfileRevision       string          `json:"profile_revision"`
+		BrowserPolicyRevision string          `json:"browser_policy_revision"`
+		InvocationID          string          `json:"invocation_id"`
+		TabID                 string          `json:"tab_id,omitempty"`
+		FrameID               string          `json:"frame_id,omitempty"`
+		ContextID             string          `json:"context_id,omitempty"`
+		DocumentID            string          `json:"document_id,omitempty"`
+		SnapshotID            string          `json:"snapshot_id,omitempty"`
+		SnapshotGeneration    json.RawMessage `json:"snapshot_generation,omitempty"`
+		CaptureTarget         string          `json:"capture_target,omitempty"`
+		ElementRef            string          `json:"element_ref,omitempty"`
+		Filename              string          `json:"filename"`
+		ContentType           string          `json:"content_type"`
+		Size                  json.RawMessage `json:"size"`
+		SHA256                string          `json:"sha256"`
+		CapturedAt            json.RawMessage `json:"captured_at"`
+		ExpiresAt             json.RawMessage `json:"expires_at"`
+		CleanupPolicy         string          `json:"cleanup_policy"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser output descriptor", ErrInvalidCapability)
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return err
+	}
+	size, err := decodeCanonicalBrowserGeneration(value.Size)
+	if err != nil {
+		return err
+	}
+	capturedAt, err := decodeCanonicalBrowserTimestamp(value.CapturedAt)
+	if err != nil {
+		return err
+	}
+	expiresAt, err := decodeCanonicalBrowserTimestamp(value.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	*descriptor = BrowserOutputDescriptor{
+		TransferID: value.TransferID, Kind: value.Kind, SessionID: value.SessionID,
+		RoutedSessionID: value.RoutedSessionID, AgentID: value.AgentID, ActorID: value.ActorID,
+		WorkspaceID: value.WorkspaceID, RouteID: value.RouteID,
+		Target: value.Target, ProfileRevision: value.ProfileRevision,
+		BrowserPolicyRevision: value.BrowserPolicyRevision, InvocationID: value.InvocationID,
+		TabID: value.TabID, FrameID: value.FrameID, ContextID: value.ContextID,
+		DocumentID: value.DocumentID, SnapshotID: value.SnapshotID, SnapshotGeneration: generation,
+		CaptureTarget: value.CaptureTarget, ElementRef: value.ElementRef,
+		Filename: value.Filename, ContentType: value.ContentType, Size: size, SHA256: value.SHA256,
+		CapturedAt: capturedAt, ExpiresAt: expiresAt, CleanupPolicy: value.CleanupPolicy,
+	}
+	return nil
 }
 
 type BrowserHostOpenRequest struct {
@@ -817,6 +941,13 @@ type BrowserHostObserveRequest struct {
 	Screenshot         bool
 	AgentID            string
 	ActorID            string
+}
+
+type BrowserHostCaptureRequest struct {
+	BrowserCaptureInput
+	RoutedSessionID string
+	AgentID         string
+	ActorID         string
 }
 
 type BrowserHostActRequest struct {
@@ -893,7 +1024,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 func IsBrowserCommand(name string) bool {
 	switch name {
 	case BrowserCommandSessionOpen, BrowserCommandSessionStatus, BrowserCommandObserve,
-		BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose:
+		BrowserCommandCapture, BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose:
 		return true
 	default:
 		return false
@@ -919,6 +1050,7 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 		{BrowserCommandAct, RiskWrite},
 		{BrowserCommandContexts, RiskWrite},
 		{BrowserCommandSessionClose, RiskWrite},
+		{BrowserCommandCapture, RiskRead},
 	}
 	result := make([]CommandDescriptor, 0, len(commands))
 	for _, command := range commands {
@@ -1296,6 +1428,32 @@ func browserCommandInputSchema(
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
+	case BrowserCommandCapture:
+		add("session_id", identifier)
+		add("tab_id", identifier)
+		properties["frame_id"] = identifier
+		properties["context_id"] = identifier
+		add("snapshot_id", identifier)
+		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
+		add("document_id", identifier)
+		add("invocation_id", identifier)
+		add("workspace_id", identifier)
+		add("route_id", identifier)
+		add("browser_target", identifier)
+		add("target", map[string]any{"enum": []string{"page", "element"}})
+		properties["ref"] = identifier
+		add("profile_revision", map[string]any{"enum": profileRevisions})
+		add("browser_policy_revision", digest)
+		profileConstraint = map[string]any{"oneOf": []any{
+			map[string]any{
+				"properties": map[string]any{"target": map[string]any{"const": "page"}},
+				"not":        map[string]any{"required": []string{"ref"}},
+			},
+			map[string]any{
+				"required":   []string{"ref"},
+				"properties": map[string]any{"target": map[string]any{"const": "element"}},
+			},
+		}}
 	case BrowserCommandAct:
 		if _, hasClick := allActions["click"]; hasClick {
 			actEffects = append(actEffects, "external_commit", "unknown")
@@ -1497,6 +1655,8 @@ func BrowserCommandOutputSchema(
 			rawSchema(browserObservationSchema(limits)),
 			browserProtectedResultReceiptSchema(nil),
 		}})
+	case BrowserCommandCapture:
+		return mustJSON(browserOutputDescriptorSchema(limits.ScreenshotBytes))
 	case BrowserCommandAct:
 		return mustJSON(map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -1881,14 +2041,22 @@ func browserActionSchema(actions []string) map[string]any {
 }
 
 func browserObservationSchema(limits BrowserLimits) json.RawMessage {
-	return browserObservationSchemaWithDialog(limits, true)
+	return browserObservationSchemaVersion(limits, true, true)
 }
 
 func legacyPreDialogBrowserObservationSchema(limits BrowserLimits) json.RawMessage {
-	return browserObservationSchemaWithDialog(limits, false)
+	return browserObservationSchemaVersion(limits, false, false)
 }
 
-func browserObservationSchemaWithDialog(limits BrowserLimits, includePendingDialog bool) json.RawMessage {
+func legacyPreCaptureBrowserObservationSchema(limits BrowserLimits) json.RawMessage {
+	return browserObservationSchemaVersion(limits, true, false)
+}
+
+func browserObservationSchemaVersion(
+	limits BrowserLimits,
+	includePendingDialog bool,
+	includeDocumentID bool,
+) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -1911,6 +2079,9 @@ func browserObservationSchemaWithDialog(limits BrowserLimits, includePendingDial
 			},
 		},
 		"screenshot": browserArtifactSchema(limits.ScreenshotBytes),
+	}
+	if includeDocumentID {
+		properties["document_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	}
 	if includePendingDialog {
 		properties["pending_dialog"] = map[string]any{
@@ -1939,6 +2110,82 @@ func browserObservationSchemaWithDialog(limits BrowserLimits, includePendingDial
 		},
 		"properties": properties,
 	})
+}
+
+// legacyPreCaptureBrowserCommandOutputSchema is the exact six-command output
+// contract emitted immediately before private document authority and the
+// capture command were added. Persisted catalogs are recognized only so their
+// prior approval can be suspended during the fail-closed upgrade.
+func legacyPreCaptureBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	if len(profiles) == 0 {
+		return json.RawMessage("false")
+	}
+	limits := strictestBrowserLimits(profiles)
+	observation := legacyPreCaptureBrowserObservationSchema(limits)
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	safeReason := map[string]any{"type": "string", "maxLength": 128}
+	switch command {
+	case BrowserCommandObserve:
+		return mustJSON(map[string]any{"oneOf": []any{
+			rawSchema(observation), browserProtectedResultReceiptSchema(nil),
+		}})
+	case BrowserCommandAct:
+		return mustJSON(map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"action_invocation_id", "state"},
+			"properties": map[string]any{
+				"action_invocation_id": identifier,
+				"state":                map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
+				"reason":               safeReason, "observation": rawSchema(observation),
+				"artifact": browserArtifactSchema(limits.DownloadBytes),
+			},
+		})
+	case BrowserCommandContexts:
+		return mustJSON(map[string]any{"oneOf": []any{
+			browserContextCommandResultSchemaWithObservation(limits, observation),
+			browserProtectedResultReceiptSchema(map[string]any{
+				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
+			}),
+		}})
+	default:
+		return BrowserCommandOutputSchema(command, profiles)
+	}
+}
+
+func browserOutputDescriptorSchema(maximumBytes int) map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	optionalIdentifier := map[string]any{"type": "string", "maxLength": MaxIDLength}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"transfer_id", "kind", "session_id", "routed_session_id", "agent_id", "actor_id",
+			"workspace_id", "route_id", "target", "profile_revision", "browser_policy_revision", "invocation_id",
+			"tab_id", "document_id", "snapshot_id", "snapshot_generation", "capture_target", "filename", "content_type",
+			"size", "sha256", "captured_at", "expires_at", "cleanup_policy",
+		},
+		"properties": map[string]any{
+			"transfer_id": identifier, "kind": map[string]any{"const": BrowserOutputScreenshot},
+			"session_id": identifier, "routed_session_id": identifier, "agent_id": identifier,
+			"actor_id": identifier, "workspace_id": identifier, "route_id": identifier, "target": identifier,
+			"profile_revision":        identifier,
+			"browser_policy_revision": map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"invocation_id":           identifier, "tab_id": identifier, "frame_id": optionalIdentifier,
+			"context_id": optionalIdentifier, "document_id": identifier, "snapshot_id": identifier,
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+			"capture_target":      map[string]any{"enum": []string{"page", "element"}},
+			"element_ref":         optionalIdentifier,
+			"filename":            map[string]any{"const": "browser-screenshot.png"},
+			"content_type":        map[string]any{"const": "image/png"},
+			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
+			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
+			"expires_at":          map[string]any{"type": "integer", "minimum": 1},
+			"cleanup_policy":      map[string]any{"const": "session_or_expiry"},
+		},
+	}
 }
 
 func browserArtifactSchema(maximumBytes int) map[string]any {

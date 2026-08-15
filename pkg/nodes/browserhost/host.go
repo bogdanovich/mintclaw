@@ -1,6 +1,7 @@
 package browserhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -44,6 +45,7 @@ type (
 	BrowserHostOpenRequest     = nodes.BrowserHostOpenRequest
 	BrowserHostStatusRequest   = nodes.BrowserHostStatusRequest
 	BrowserHostObserveRequest  = nodes.BrowserHostObserveRequest
+	BrowserHostCaptureRequest  = nodes.BrowserHostCaptureRequest
 	BrowserHostNavigateRequest = nodes.BrowserHostActRequest
 	BrowserHostElement         = nodes.BrowserElement
 	BrowserHostObservation     = nodes.BrowserObservationResult
@@ -416,6 +418,158 @@ func (host *BrowserHost) Observe(
 	session.snapshotGeneration = request.SnapshotGeneration
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
 	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
+}
+
+// Capture retains one immutable PNG for the exact last observation. The
+// private document authority is re-derived from a fresh observation before
+// the driver capture, so a stale semantic reference cannot cross the node
+// boundary.
+func (host *BrowserHost) Capture(
+	ctx context.Context,
+	request BrowserHostCaptureRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	input := request.BrowserCaptureInput
+	if !browserHostIdentifier(input.SessionID) || !browserHostIdentifier(input.TabID) ||
+		!browserHostIdentifier(input.SnapshotID) || input.SnapshotGeneration == 0 ||
+		!browserHostIdentifier(input.DocumentID) || !browserHostIdentifier(input.InvocationID) ||
+		!browserHostIdentifier(input.WorkspaceID) || !browserHostIdentifier(input.RouteID) ||
+		!browserHostIdentifier(input.BrowserTarget) ||
+		(input.Target != "page" && input.Target != "element") ||
+		(input.Target == "page" && input.Ref != "") ||
+		(input.Target == "element" && !browserHostIdentifier(input.Ref)) ||
+		!browserHostIdentifier(input.ProfileRevision) || !browserHostDigest(input.BrowserPolicyRevision) {
+		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostDenied
+	}
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: input.SessionID, ProfileRevision: input.ProfileRevision,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return nodes.BrowserOutputDescriptor{}, err
+	}
+	session.mu.Lock()
+	if session.state != "ready" || session.worker == nil ||
+		input.TabID != session.tabID || input.SnapshotGeneration != session.snapshotGeneration ||
+		input.BrowserPolicyRevision != session.browserPolicyRevision ||
+		len(session.observationDigest) != sha256.Size ||
+		!hmac.Equal([]byte(input.DocumentID), []byte(hex.EncodeToString(session.observationDigest))) {
+		session.mu.Unlock()
+		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
+	}
+	if session.contextCatalog == nil {
+		if input.FrameID != "" || input.ContextID != "" {
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
+		}
+	} else if input.ContextID == "" {
+		if input.FrameID != "" || session.contextCatalog.SelectedFrameID != "" {
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
+		}
+	} else if input.FrameID != session.contextCatalog.SelectedFrameID || input.ContextID != session.contextCatalog.ID {
+		session.mu.Unlock()
+		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
+	}
+	if existing, ok := host.registeredOutput(
+		nodes.BrowserOutputScreenshot, input.SessionID, input.InvocationID,
+	); ok {
+		if existing.RoutedSessionID != request.RoutedSessionID ||
+			existing.AgentID != request.AgentID || existing.ActorID != request.ActorID ||
+			existing.WorkspaceID != input.WorkspaceID || existing.RouteID != input.RouteID ||
+			existing.Target != input.BrowserTarget || existing.ProfileRevision != input.ProfileRevision ||
+			existing.BrowserPolicyRevision != input.BrowserPolicyRevision || existing.TabID != input.TabID ||
+			existing.FrameID != input.FrameID || existing.ContextID != input.ContextID ||
+			existing.DocumentID != input.DocumentID || existing.SnapshotID != input.SnapshotID ||
+			existing.SnapshotGeneration != input.SnapshotGeneration ||
+			existing.CaptureTarget != input.Target || existing.ElementRef != input.Ref {
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, ErrBrowserHostDenied
+		}
+		session.mu.Unlock()
+		return existing, nil
+	}
+	actionCtx, cancelAction, deadline := host.actionContextLocked(ctx, session)
+	observation, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
+	if observeErr != nil || actionCtx.Err() != nil || !host.now().UTC().Before(deadline) {
+		cancelAction()
+		session.mu.Unlock()
+		if observeErr != nil {
+			return nodes.BrowserOutputDescriptor{}, observeErr
+		}
+		return nodes.BrowserOutputDescriptor{}, context.DeadlineExceeded
+	}
+	currentDigest := browserHostObservationDigest(session, observation, navigationIdentity)
+	if !hmac.Equal(currentDigest, session.observationDigest) {
+		cancelAction()
+		session.mu.Unlock()
+		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
+	}
+	maximum := session.limits.Effective().ScreenshotBytes
+	var screenshot browserworker.DriverScreenshot
+	if input.Target == "element" {
+		element, found := session.elementRefs[input.Ref]
+		worker, supported := session.worker.(browserworker.ElementScreenshotWorker)
+		if !found || !supported {
+			cancelAction()
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, browserworker.ErrDriverIncompatible
+		}
+		screenshot, err = worker.CaptureElementScreenshot(
+			actionCtx, navigationIdentity, observation.Origin, element, maximum,
+		)
+	} else {
+		worker, supported := session.worker.(browserworker.BoundScreenshotWorker)
+		if !supported {
+			cancelAction()
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, browserworker.ErrDriverIncompatible
+		}
+		screenshot, err = worker.CapturePageScreenshot(actionCtx, navigationIdentity, maximum)
+	}
+	contextErr := error(nil)
+	if err == nil && session.contextCatalog != nil && session.contextWorker != nil {
+		var live browserworker.ContextCatalog
+		live, contextErr = session.contextWorker.ContextCatalog(actionCtx)
+		if contextErr == nil {
+			var canonical browserworker.ContextCatalog
+			canonical, contextErr = browserContextCatalogValue(browserContextCatalogResult(live))
+			if contextErr == nil && !reflect.DeepEqual(*session.contextCatalog, canonical) {
+				contextErr = browserworker.ErrStale
+			}
+		}
+	}
+	cancelAction()
+	if err != nil || contextErr != nil || screenshot.ContentType != "image/png" ||
+		len(screenshot.Data) == 0 || len(screenshot.Data) > maximum || screenshot.Retained != nil ||
+		!bytes.HasPrefix(screenshot.Data, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		session.mu.Unlock()
+		if err != nil {
+			return nodes.BrowserOutputDescriptor{}, err
+		}
+		if contextErr != nil {
+			return nodes.BrowserOutputDescriptor{}, contextErr
+		}
+		return nodes.BrowserOutputDescriptor{}, browserworker.ErrDriverIncompatible
+	}
+	expiresAt := host.now().UTC().Add(time.Duration(session.limits.RetentionSecs) * time.Second)
+	if expiresAt.After(session.expiresAt) {
+		expiresAt = session.expiresAt
+	}
+	descriptor := nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputScreenshot, SessionID: input.SessionID,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+		WorkspaceID: input.WorkspaceID, RouteID: input.RouteID, Target: input.BrowserTarget,
+		ProfileRevision: input.ProfileRevision, BrowserPolicyRevision: input.BrowserPolicyRevision,
+		InvocationID: input.InvocationID, TabID: input.TabID, FrameID: input.FrameID,
+		ContextID: input.ContextID, DocumentID: input.DocumentID, SnapshotID: input.SnapshotID,
+		SnapshotGeneration: input.SnapshotGeneration, CaptureTarget: input.Target, ElementRef: input.Ref,
+		Filename:    "browser-screenshot.png",
+		ContentType: "image/png", ExpiresAt: expiresAt.Unix(),
+	}
+	content := append([]byte(nil), screenshot.Data...)
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	session.mu.Unlock()
+	return host.RegisterOutput(descriptor, content)
 }
 
 func (host *BrowserHost) Navigate(
@@ -1282,6 +1436,8 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 			recovery = "operator"
 		}
 	}
+	_, pageScreenshot := session.worker.(browserworker.BoundScreenshotWorker)
+	_, elementScreenshot := session.worker.(browserworker.ElementScreenshotWorker)
 	return BrowserHostSession{
 		SessionID: session.sessionID,
 		State:     session.state, Reason: session.safeFailure, Recovery: recovery,
@@ -1290,7 +1446,7 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 			Observe:    true,
 			Navigate:   slices.Contains(session.profile.AllowedActions, "navigate"),
 			Contexts:   session.contextWorker != nil,
-			Screenshot: false, Download: false,
+			Screenshot: pageScreenshot && elementScreenshot, Download: false,
 		},
 		ExpiresAt: session.expiresAt.Unix(), IdleExpiresAt: session.idleExpiresAt.Unix(),
 	}
@@ -1319,7 +1475,8 @@ func browserHostObservation(
 		SnapshotGeneration: session.snapshotGeneration,
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: snapshot, Elements: elements, PendingDialog: browserHostDialogObservation(observation.PendingDialog),
-		Truncated: observation.Truncated,
+		Truncated:  observation.Truncated,
+		DocumentID: hex.EncodeToString(session.observationDigest),
 	}
 }
 

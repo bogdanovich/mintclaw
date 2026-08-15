@@ -14,7 +14,7 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptors) != 6 {
+	if len(descriptors) != 7 {
 		t.Fatalf("descriptor count = %d", len(descriptors))
 	}
 	for _, descriptor := range descriptors {
@@ -40,8 +40,35 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[2].Name != BrowserCommandObserve || descriptors[2].Risk != RiskRead ||
 		descriptors[3].Name != BrowserCommandAct || descriptors[3].Risk != RiskWrite ||
 		descriptors[4].Name != BrowserCommandContexts || descriptors[4].Risk != RiskWrite ||
-		descriptors[5].Name != BrowserCommandSessionClose || descriptors[5].Risk != RiskWrite {
+		descriptors[5].Name != BrowserCommandSessionClose || descriptors[5].Risk != RiskWrite ||
+		descriptors[6].Name != BrowserCommandCapture || descriptors[6].Risk != RiskRead {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
+	}
+}
+
+func TestBrowserCaptureCanonicalNumbersDecodeExactly(t *testing.T) {
+	var input BrowserCaptureInput
+	if err := json.Unmarshal([]byte(`{
+		"session_id":"session_1","tab_id":"tab_1","snapshot_id":"snapshot_1",
+		"snapshot_generation":1e0,"document_id":"document_1","invocation_id":"capture_1",
+		"workspace_id":"workspace_1","route_id":"route_1","browser_target":"companion","target":"page",
+		"profile_revision":"managed-v1","browser_policy_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	}`), &input); err != nil || input.SnapshotGeneration != 1 || input.BrowserTarget != "companion" {
+		t.Fatalf("BrowserCaptureInput = %+v, %v", input, err)
+	}
+	var descriptor BrowserOutputDescriptor
+	if err := json.Unmarshal([]byte(`{
+		"transfer_id":"output_1","kind":"screenshot","session_id":"session_1",
+		"routed_session_id":"route_1","agent_id":"agent_1","actor_id":"actor_1",
+		"workspace_id":"workspace_1","route_id":"route_1","target":"companion","profile_revision":"managed-v1",
+		"browser_policy_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"invocation_id":"capture_1","tab_id":"tab_1","document_id":"document_1",
+		"snapshot_id":"snapshot_1","snapshot_generation":1e0,"capture_target":"page",
+		"filename":"browser-screenshot.png","content_type":"image/png","size":9e0,
+		"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"captured_at":1.786816223e9,"expires_at":1.786816283e9,"cleanup_policy":"session_or_expiry"
+	}`), &descriptor); err != nil || descriptor.Size != 9 || descriptor.CapturedAt != 1786816223 {
+		t.Fatalf("BrowserOutputDescriptor = %+v, %v", descriptor, err)
 	}
 }
 
