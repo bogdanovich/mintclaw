@@ -102,6 +102,9 @@ type BrowserHost struct {
 	transferRoot       string
 	activeTransfers    map[string]*browserArtifactTransfer
 	completedTransfers map[string]browserStagedArtifact
+
+	beforeTransferAdmission func()
+	beforeTransferCleanup   func()
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {

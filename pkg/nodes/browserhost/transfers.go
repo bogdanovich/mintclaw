@@ -51,7 +51,9 @@ type browserStagedArtifact struct {
 	path      string
 }
 
-type browserArtifactLifetime struct{}
+type browserArtifactLifetime struct {
+	connectionDone <-chan struct{}
+}
 
 func (*BrowserHost) Descriptors() []nodes.CommandDescriptor { return nil }
 
@@ -76,6 +78,9 @@ func (host *BrowserHost) HandleTransferFrame(
 ) error {
 	if host == nil || send == nil || frame.Validate() != nil || frame.Direction != protocol.TransferUpload {
 		return protocol.ErrInvalidTransferFrame
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	switch frame.Type {
 	case protocol.TransferFramePrepare:
@@ -118,30 +123,58 @@ func (host *BrowserHost) prepareBrowserArtifact(
 		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "session_denied"))
 	}
 	session.mu.Lock()
+	now := host.now().UTC()
 	authorized := session.state == "ready" && session.profile.Revision == frame.PolicyRevision &&
 		session.browserPolicyRevision == request.BrowserPolicyRevision &&
 		session.routedSessionID == request.RoutedSessionID && session.agentID == request.AgentID &&
 		session.actorID == request.ActorID && slicesContains(session.profile.AllowedActions, "file_chooser") &&
-		frame.TotalSize <= uint64(session.limits.UploadBytes) && host.now().UTC().Unix() < request.ExpiresAt &&
-		request.ExpiresAt <= host.now().UTC().Add(time.Duration(session.limits.PreparedSeconds)*time.Second).Unix()
-	session.mu.Unlock()
+		frame.TotalSize <= uint64(session.limits.UploadBytes) && now.Before(session.expiresAt) &&
+		now.Before(session.idleExpiresAt) && now.Unix() < request.ExpiresAt &&
+		request.ExpiresAt <= now.Add(time.Duration(session.limits.PreparedSeconds)*time.Second).Unix()
 	if !authorized {
+		session.mu.Unlock()
 		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "authority_denied"))
 	}
+	if host.beforeTransferAdmission != nil {
+		host.beforeTransferAdmission()
+	}
 	host.transferMu.Lock()
+	session.mu.Unlock()
 	defer host.transferMu.Unlock()
 	host.expireBrowserArtifactsLocked()
 	if completed, ok := host.completedTransfers[frame.TransferID]; ok {
 		if browserTransferMatches(completed.binding, frame) && completed.request == request {
+			if completed.lifetime == nil || completed.lifetime.connectionDone != ctx.Done() {
+				lifetime := newBrowserArtifactLifetime(ctx)
+				completed.lifetime = lifetime
+				host.completedTransfers[frame.TransferID] = completed
+				go host.watchBrowserArtifactLifetime(
+					lifetime.connectionDone,
+					frame.TransferID,
+					lifetime,
+					request.ExpiresAt,
+				)
+			}
 			return send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
 		}
-		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "transfer_conflict"))
+		if browserArtifactLifetimeEnded(completed.lifetime) {
+			host.removeCompletedTransferLocked(frame.TransferID)
+		} else {
+			return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "transfer_conflict"))
+		}
 	}
 	if active, ok := host.activeTransfers[frame.TransferID]; ok {
-		if browserTransferMatches(active.binding, frame) && active.request == request {
+		if browserTransferMatches(active.binding, frame) && active.request == request && active.received == 0 &&
+			active.lifetime != nil && active.lifetime.connectionDone == ctx.Done() &&
+			!browserArtifactLifetimeEnded(active.lifetime) {
 			return send(browserTransferResponse(frame, protocol.TransferFrameAccept, "accepted"))
 		}
-		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "transfer_conflict"))
+		if browserTransferMatches(active.binding, frame) && active.request == request ||
+			browserArtifactLifetimeEnded(active.lifetime) {
+			host.removeActiveTransferLocked(frame.TransferID)
+		} else {
+			return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "transfer_conflict"))
+		}
 	}
 	if len(host.activeTransfers)+len(host.completedTransfers) >= nodes.MaxBrowserSessions {
 		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "capacity_exceeded"))
@@ -163,7 +196,7 @@ func (host *BrowserHost) prepareBrowserArtifact(
 		_ = os.RemoveAll(directory)
 		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "storage_unavailable"))
 	}
-	lifetime := &browserArtifactLifetime{}
+	lifetime := newBrowserArtifactLifetime(ctx)
 	host.activeTransfers[frame.TransferID] = &browserArtifactTransfer{
 		binding: frame, request: request, lifetime: lifetime,
 		directory: directory, path: path, file: file, hasher: sha256.New(),
@@ -172,12 +205,17 @@ func (host *BrowserHost) prepareBrowserArtifact(
 		host.removeActiveTransferLocked(frame.TransferID)
 		return err
 	}
-	go host.watchBrowserArtifactLifetime(ctx, frame.TransferID, lifetime, request.ExpiresAt)
+	go host.watchBrowserArtifactLifetime(
+		lifetime.connectionDone,
+		frame.TransferID,
+		lifetime,
+		request.ExpiresAt,
+	)
 	return nil
 }
 
 func (host *BrowserHost) watchBrowserArtifactLifetime(
-	ctx context.Context,
+	connectionDone <-chan struct{},
 	transferID string,
 	lifetime *browserArtifactLifetime,
 	expiresAt int64,
@@ -189,8 +227,11 @@ func (host *BrowserHost) watchBrowserArtifactLifetime(
 	timer := time.NewTimer(expiryDelay)
 	defer timer.Stop()
 	select {
-	case <-ctx.Done():
+	case <-connectionDone:
 	case <-timer.C:
+	}
+	if host.beforeTransferCleanup != nil {
+		host.beforeTransferCleanup()
 	}
 	host.transferMu.Lock()
 	defer host.transferMu.Unlock()
@@ -199,6 +240,26 @@ func (host *BrowserHost) watchBrowserArtifactLifetime(
 	}
 	if completed, ok := host.completedTransfers[transferID]; ok && completed.lifetime == lifetime {
 		host.removeCompletedTransferLocked(transferID)
+	}
+}
+
+func newBrowserArtifactLifetime(ctx context.Context) *browserArtifactLifetime {
+	done := ctx.Done()
+	if done == nil {
+		done = make(chan struct{})
+	}
+	return &browserArtifactLifetime{connectionDone: done}
+}
+
+func browserArtifactLifetimeEnded(lifetime *browserArtifactLifetime) bool {
+	if lifetime == nil || lifetime.connectionDone == nil {
+		return true
+	}
+	select {
+	case <-lifetime.connectionDone:
+		return true
+	default:
+		return false
 	}
 }
 

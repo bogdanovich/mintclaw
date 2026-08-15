@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,6 +218,144 @@ func TestBrowserArtifactTransferCleansCommittedStageOnConnectionLoss(t *testing.
 	path := stageCommittedBrowserArtifact(t, host, connection, prepare, content)
 	disconnect()
 	waitForBrowserArtifactRemoval(t, host, path)
+}
+
+func TestBrowserArtifactTransferReconnectAdoptsCommittedLifetime(t *testing.T) {
+	content := []byte("reconnect")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_reconnect",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_reconnect",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "reconnect.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	oldConnection, disconnectOld := context.WithCancel(t.Context())
+	path := stageCommittedBrowserArtifact(t, host, oldConnection, prepare, content)
+	cleanupEntered := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	cleanupExited := make(chan struct{})
+	var cleanupOnce sync.Once
+	host.beforeTransferCleanup = func() {
+		cleanupOnce.Do(func() {
+			close(cleanupEntered)
+			<-releaseCleanup
+			close(cleanupExited)
+		})
+	}
+	disconnectOld()
+	<-cleanupEntered
+	newConnection, disconnectNew := context.WithCancel(t.Context())
+	var responses []protocol.TransferFrame
+	if err := host.HandleTransferFrame(newConnection, prepare, func(response protocol.TransferFrame) error {
+		responses = append(responses, response)
+		return nil
+	}); err != nil || len(responses) != 1 || responses[0].Type != protocol.TransferFrameCommitted {
+		t.Fatalf("reconnected prepare responses = %#v, %v", responses, err)
+	}
+	close(releaseCleanup)
+	<-cleanupExited
+	host.transferMu.Lock()
+	artifact, found := host.completedTransfers[prepare.TransferID]
+	host.transferMu.Unlock()
+	if !found || artifact.lifetime == nil || artifact.lifetime.connectionDone != newConnection.Done() {
+		t.Fatalf("reconnected artifact did not adopt the new lifetime: %#v", artifact)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("old watcher removed adopted artifact: %v", err)
+	}
+	disconnectNew()
+	waitForBrowserArtifactRemoval(t, host, path)
+}
+
+func TestBrowserArtifactTransferAdmissionIsAtomicWithSessionClose(t *testing.T) {
+	content := []byte("close-race")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_close_race",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_close_race",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "close-race.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	admissionEntered := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	host.beforeTransferAdmission = func() {
+		close(admissionEntered)
+		<-releaseAdmission
+	}
+	type prepareResult struct {
+		responses []protocol.TransferFrame
+		err       error
+	}
+	prepared := make(chan prepareResult, 1)
+	go func() {
+		var responses []protocol.TransferFrame
+		err := host.HandleTransferFrame(t.Context(), prepare, func(response protocol.TransferFrame) error {
+			responses = append(responses, response)
+			return nil
+		})
+		prepared <- prepareResult{responses: responses, err: err}
+	}()
+	<-admissionEntered
+	type closeResult struct {
+		session BrowserHostSession
+		err     error
+	}
+	closed := make(chan closeResult, 1)
+	closeStarted := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		session, err := host.Close(t.Context(), BrowserHostCloseRequest{
+			SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		})
+		closed <- closeResult{session: session, err: err}
+	}()
+	<-closeStarted
+	select {
+	case result := <-closed:
+		t.Fatalf("Close() crossed paused transfer admission: %#v, %v", result.session, result.err)
+	default:
+	}
+	close(releaseAdmission)
+	preparedResult := <-prepared
+	if preparedResult.err != nil || len(preparedResult.responses) != 1 ||
+		preparedResult.responses[0].Type != protocol.TransferFrameAccept {
+		t.Fatalf("paused prepare responses = %#v, %v", preparedResult.responses, preparedResult.err)
+	}
+	closedResult := <-closed
+	if closedResult.err != nil || closedResult.session.State != "closed" {
+		t.Fatalf("Close() = %#v, %v", closedResult.session, closedResult.err)
+	}
+	host.transferMu.Lock()
+	active, completed, root := len(host.activeTransfers), len(host.completedTransfers), host.transferRoot
+	host.transferMu.Unlock()
+	if active != 0 || completed != 0 {
+		t.Fatalf("transfer survived concurrent close: active=%d completed=%d", active, completed)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("transfer root after concurrent close = %v, %v", entries, err)
+	}
 }
 
 func TestBrowserArtifactTransferProactivelyCleansCommittedStageAtExpiry(t *testing.T) {
