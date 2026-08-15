@@ -16,27 +16,44 @@ import (
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 )
 
 type dependencies struct {
-	home         func() string
-	cwd          func() (string, error)
-	now          func() time.Time
-	newThreadID  func() string
-	turnRunner   codingTurnRunner
-	resolveModel func(string) (string, string, error)
+	home          func() string
+	cwd           func() (string, error)
+	now           func() time.Time
+	newThreadID   func() string
+	turnRunner    codingTurnRunner
+	resolveModel  func(string) (string, string, error)
+	terminal      func(io.Reader, io.Writer, bool) tui.TerminalCapabilities
+	newController func(codingTurnRequest, bool) (frontend.Controller, error)
+	runTUI        func(context.Context, frontend.Controller, tui.Options) error
 }
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		home:         internal.GetMintClawHome,
-		cwd:          os.Getwd,
-		now:          time.Now,
-		newThreadID:  thread.NewThreadID,
-		turnRunner:   newNativeCodingTurnRunner(),
-		resolveModel: resolveNativeCodingModel,
+		home:          internal.GetMintClawHome,
+		cwd:           os.Getwd,
+		now:           time.Now,
+		newThreadID:   thread.NewThreadID,
+		turnRunner:    newNativeCodingTurnRunner(),
+		resolveModel:  resolveNativeCodingModel,
+		terminal:      detectCodingTerminal,
+		newController: newNativeCodingController,
+		runTUI:        tui.Run,
 	}
+}
+
+func detectCodingTerminal(input io.Reader, output io.Writer, noColor bool) tui.TerminalCapabilities {
+	inputFile, inputOK := input.(*os.File)
+	outputFile, outputOK := output.(*os.File)
+	if !inputOK || !outputOK {
+		return tui.TerminalCapabilities{Reason: "coding command streams are not terminal files"}
+	}
+	return tui.DetectTerminalCapabilities(inputFile, outputFile, noColor)
 }
 
 type commandResult struct {
@@ -71,22 +88,117 @@ func NewCodeCommand() *cobra.Command {
 }
 
 func newCodeCommand(deps dependencies) *cobra.Command {
+	deps = completeDependencies(deps)
 	var model string
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "code <prompt>",
-		Short: "Create a project coding thread",
-		Long: "Create a durable coding thread for the current project and run its first prompt " +
-			"through the native MintClaw coding runtime.",
+		Short: "Create an interactive project coding thread",
+		Long: "Create a durable coding thread for the current project and run its first prompt in the MintClaw " +
+			"terminal UI. Redirected and JSON output use the plain renderer.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.Join(args, " ")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
+			if !jsonOutput && capabilities.Interactive {
+				return runNewInteractive(
+					cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), deps, prompt, model, noColor,
+				)
+			}
 			return runNew(cmd.Context(), cmd.OutOrStdout(), deps, prompt, model, jsonOutput)
 		},
 	}
 	cmd.Flags().StringVar(&model, "model", "", "Persist a model override for this thread")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
 	return cmd
+}
+
+func completeDependencies(deps dependencies) dependencies {
+	if deps.terminal == nil {
+		deps.terminal = func(io.Reader, io.Writer, bool) tui.TerminalCapabilities {
+			return tui.TerminalCapabilities{Reason: "interactive terminal detection is unavailable"}
+		}
+	}
+	if deps.newController == nil {
+		deps.newController = newNativeCodingController
+	}
+	if deps.runTUI == nil {
+		deps.runTUI = tui.Run
+	}
+	return deps
+}
+
+func runNewInteractive(
+	ctx context.Context,
+	in io.Reader,
+	out io.Writer,
+	deps dependencies,
+	prompt string,
+	model string,
+	noColor bool,
+) error {
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
+	if err != nil {
+		return err
+	}
+	frontendController, err := deps.newController(codingTurnRequest{
+		Store: store, Lease: lease, Metadata: metadata,
+	}, false)
+	if err != nil {
+		return errors.Join(err, lease.Release())
+	}
+	return deps.runTUI(ctx, frontendController, tui.Options{
+		Input:           in,
+		Output:          out,
+		InitialPrompt:   prompt,
+		AlternateScreen: true,
+		ReportFocus:     true,
+		NoColor:         noColor,
+		Environment:     os.Environ(),
+	})
+}
+
+func prepareNewThread(
+	ctx context.Context,
+	deps dependencies,
+	prompt string,
+	model string,
+) (thread.ProjectIdentity, *thread.Store, thread.Metadata, *thread.Lease, error) {
+	project, store, resolveErr := resolveEnvironment(ctx, deps)
+	if resolveErr != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, resolveErr
+	}
+	if err := thread.ValidatePrompt(prompt); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	}
+	metadata, metadataErr := thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
+	if metadataErr != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, metadataErr
+	}
+	resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+	if err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	}
+	metadata.Model = resolvedModel
+	metadata.Provider = resolvedProvider
+	if err := metadata.Validate(); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	}
+	if _, err := runtimeLayoutFor(store, metadata); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	}
+	lease, leaseErr := store.AcquireLease(metadata.ThreadID)
+	if leaseErr != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, leaseErr
+	}
+	if err := store.Save(metadata); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, errors.Join(err, lease.Release())
+	}
+	return project, store, metadata, lease, nil
 }
 
 // NewResumeCommand creates the top-level coding-thread discovery and resume command.
@@ -143,38 +255,9 @@ func runNew(
 	model string,
 	jsonOutput bool,
 ) error {
-	project, store, resolveErr := resolveEnvironment(ctx, deps)
-	if resolveErr != nil {
-		return resolveErr
-	}
-	if err := thread.ValidatePrompt(prompt); err != nil {
-		return err
-	}
-	metadata, metadataErr := thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
-	if metadataErr != nil {
-		return metadataErr
-	}
-	resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
 	if err != nil {
 		return err
-	}
-	metadata.Model = resolvedModel
-	metadata.Provider = resolvedProvider
-	if err := metadata.Validate(); err != nil {
-		return err
-	}
-	if _, err := runtimeLayoutFor(store, metadata); err != nil {
-		return err
-	}
-	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
-		return err
-	}
-	lease, leaseErr := store.AcquireLease(metadata.ThreadID)
-	if leaseErr != nil {
-		return leaseErr
-	}
-	if err := store.Save(metadata); err != nil {
-		return errors.Join(err, lease.Release())
 	}
 	outcome, turnErr := deps.turnRunner.Run(ctx, codingTurnRequest{
 		Store: store, Lease: lease, Metadata: metadata, Prompt: prompt,

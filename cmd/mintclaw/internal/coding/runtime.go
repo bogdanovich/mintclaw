@@ -350,6 +350,19 @@ func newNativeCodingControllerWithDependencies(
 	return result, nil
 }
 
+func newNativeCodingController(
+	request codingTurnRequest,
+	resumed bool,
+) (frontend.Controller, error) {
+	return newNativeCodingControllerWithDependencies(
+		request,
+		resumed,
+		frontend.ProjectionLimits{},
+		newNativeCodingRuntimeDependencies(),
+		time.Now,
+	)
+}
+
 func codingRuntimeConfig(
 	cfg *config.Config,
 	metadata thread.Metadata,
