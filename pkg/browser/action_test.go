@@ -224,6 +224,33 @@ func (factory *preparedStageTestFactory) Open(
 	return WorkerOpenResult{Owner: factory.worker}, nil
 }
 
+type preparedDragTestWorker struct {
+	*actionTestWorker
+	executePreparedCalls int
+}
+
+func (*preparedDragTestWorker) SupportsPreparedAction(kind ActionKind) bool {
+	return kind == ActionDrag
+}
+
+func (worker *preparedDragTestWorker) ExecutePrepared(
+	_ context.Context,
+	request WorkerPreparedAction,
+) error {
+	worker.executePreparedCalls++
+	worker.actions = append(worker.actions, request.DriverAction)
+	return worker.executeErr
+}
+
+type preparedDragTestFactory struct{ worker *preparedDragTestWorker }
+
+func (factory *preparedDragTestFactory) Open(
+	context.Context,
+	WorkerOpenRequest,
+) (WorkerOpenResult, error) {
+	return WorkerOpenResult{Owner: factory.worker}, nil
+}
+
 type failOnceStagedAcceptanceStore struct {
 	*MemoryStore
 	failures int
@@ -1817,6 +1844,75 @@ func TestBrokerExecutesApprovedDragWithTwoFreshSemanticBindings(t *testing.T) {
 		!reflect.DeepEqual(worker.actions, []DriverAction{want}) || worker.resolveCalls != 0 ||
 		worker.observeCalls != 3 {
 		t.Fatalf("drag execution = %+v, %v; driver actions = %+v", invocation, err, worker.actions)
+	}
+}
+
+func TestBrokerPreparedDragPreservesSnapshotBoundRemoteReferences(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+
+	source := DriverElement{Target: "node_ref_source_1", Role: "listitem", Name: "Todo"}
+	destination := DriverElement{Target: "node_ref_destination_1", Role: "list", Name: "Done"}
+	actionWorker := &actionTestWorker{
+		observation: driverObservationFixture(source, destination),
+		resolveElements: map[string]DriverElement{
+			source.Target: source, destination.Target: destination,
+		},
+		resolveOrigin: "https://example.com",
+	}
+	worker := &preparedDragTestWorker{actionTestWorker: actionWorker}
+	broker, err := NewBroker(root, NewMemoryStore(), &preparedDragTestFactory{worker: worker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwner()
+	session, err := broker.Open(t.Context(), OpenRequest{Owner: owner, Target: "gateway", Profile: "managed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := visibleRefs(t, observation.Snapshot)
+
+	// Node-hosted observations intentionally rotate their private references
+	// on every snapshot. The outer broker must not request another observation
+	// while preparing a drag that the node broker will revalidate itself.
+	worker.observation = driverObservationFixture(
+		DriverElement{Target: "node_ref_source_2", Role: source.Role, Name: source.Name},
+		DriverElement{Target: "node_ref_destination_2", Role: destination.Role, Name: destination.Name},
+	)
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_remote_drag", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDrag, SourceRef: refs[0], DestinationRef: refs[1]},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, &prepared.Approval)
+	want := DriverAction{
+		Kind: DriverDrag, Target: source.Target, Element: source.Name,
+		DestinationTarget: destination.Target, DestinationElement: destination.Name,
+	}
+	if err != nil || invocation.State != InvocationSucceeded || worker.executePreparedCalls != 1 ||
+		worker.observeCalls != 1 || worker.resolveCalls != 4 ||
+		!reflect.DeepEqual(worker.actions, []DriverAction{want}) {
+		t.Fatalf(
+			"remote drag execution = %+v, %v; prepared calls = %d; observe calls = %d; resolve calls = %d; actions = %+v",
+			invocation,
+			err,
+			worker.executePreparedCalls,
+			worker.observeCalls,
+			worker.resolveCalls,
+			worker.actions,
+		)
 	}
 }
 

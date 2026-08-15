@@ -707,7 +707,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return PreparedAction{}, ErrStale
 		}
-		resolvedSource, resolvedDestination, origin, navigationID, resolveErr := resolveDragFromFreshObservation(
+		resolvedSource, resolvedDestination, origin, navigationID, validationDelegated, resolveErr := resolveDragBindings(
 			ctx,
 			worker,
 			source,
@@ -718,7 +718,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		}
 		if resolvedSource != source || resolvedDestination != destination ||
 			origin != session.SnapshotOrigin ||
-			(slot.navigationID != "" && navigationID != slot.navigationID) ||
+			(!validationDelegated && slot.navigationID != "" && navigationID != slot.navigationID) ||
 			resolvedSource.Target == resolvedDestination.Target {
 			return PreparedAction{}, ErrStale
 		}
@@ -864,7 +864,7 @@ func (broker *Broker) revalidatePreparedLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return ErrStale
 		}
-		resolvedSource, resolvedDestination, origin, navigationID, err := resolveDragFromFreshObservation(
+		resolvedSource, resolvedDestination, origin, navigationID, validationDelegated, err := resolveDragBindings(
 			ctx,
 			worker,
 			source,
@@ -874,7 +874,7 @@ func (broker *Broker) revalidatePreparedLocked(
 			return err
 		}
 		if origin != prepared.CurrentOrigin ||
-			(slot.navigationID != "" && navigationID != slot.navigationID) ||
+			(!validationDelegated && slot.navigationID != "" && navigationID != slot.navigationID) ||
 			resolvedSource != source || resolvedDestination != destination ||
 			resolvedSource.Target == resolvedDestination.Target ||
 			resolvedSource.Role != prepared.ElementRole || resolvedSource.Name != prepared.ElementName ||
@@ -1072,6 +1072,40 @@ func resolveDragFromFreshObservation(
 		return DriverElement{}, DriverElement{}, "", "", ErrStale
 	}
 	return resolvedSource, resolvedDestination, observation.Origin, navigationID, nil
+}
+
+func resolveDragBindings(
+	ctx context.Context,
+	worker ActionWorker,
+	source DriverElement,
+	destination DriverElement,
+) (DriverElement, DriverElement, string, string, bool, error) {
+	if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(ActionDrag) {
+		resolvedSource, sourceOrigin, err := worker.Resolve(ctx, source.Target)
+		if err != nil {
+			return DriverElement{}, DriverElement{}, "", "", true, err
+		}
+		resolvedDestination, destinationOrigin, err := worker.Resolve(ctx, destination.Target)
+		if err != nil {
+			return DriverElement{}, DriverElement{}, "", "", true, err
+		}
+		if sourceOrigin == "" || sourceOrigin != destinationOrigin {
+			return DriverElement{}, DriverElement{}, "", "", true, ErrStale
+		}
+		// Remote observations expose snapshot-bound node-broker references. A
+		// second outer observation would rotate those references before the
+		// prepared action reaches the node. Bind the current metadata here and
+		// leave the mandatory live revalidation to ExecutePrepared on the
+		// remote broker, which owns the original references and driver state.
+		return resolvedSource, resolvedDestination, sourceOrigin, "", true, nil
+	}
+	resolvedSource, resolvedDestination, origin, navigationID, err := resolveDragFromFreshObservation(
+		ctx,
+		worker,
+		source,
+		destination,
+	)
+	return resolvedSource, resolvedDestination, origin, navigationID, false, err
 }
 
 func navigationCheckedAction(kind ActionKind) bool {

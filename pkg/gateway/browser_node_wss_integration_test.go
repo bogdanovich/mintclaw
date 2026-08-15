@@ -716,7 +716,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	if got, want := host.commandSequence(), []string{
 		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
-		"check", "uncheck", "hover", "observe", "observe", "drag", "observe", "observe", "observe", "dialog", "fill",
+		// The outer broker binds the current node references; the companion
+		// broker performs the drag's live revalidation and action dispatch.
+		"check", "uncheck", "hover", "drag", "observe", "observe", "observe", "dialog", "fill",
 		"status", "observe", "file_chooser", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
