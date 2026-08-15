@@ -349,6 +349,29 @@ func TestCompactionLifecycleSurvivesExpiredDeltaWindowResynchronization(t *testi
 	}
 }
 
+func TestStandaloneForegroundCompactionOwnsIdleActivity(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := projector.CompactionStarted("", "manual", false)
+	if started.Activity != ActivityCompacting || started.Compaction == nil || started.Compaction.Background {
+		t.Fatalf("standalone compaction start = %+v", started)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != ActivityCompacting {
+		t.Fatalf("activity while standalone compaction is blocked = %q", snapshot.Activity)
+	}
+	completed := projector.CompactionCompleted("", "manual", 0, true, false)
+	if completed.Activity != ActivityIdle || completed.Compaction == nil ||
+		completed.Compaction.Status != CompactionNoop {
+		t.Fatalf("standalone compaction completion = %+v", completed)
+	}
+}
+
 func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})
 	if err != nil {

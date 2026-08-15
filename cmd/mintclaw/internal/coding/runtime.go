@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -264,6 +265,7 @@ type nativeControllerRuntime struct {
 	lease     *thread.Lease
 	projector *frontend.Projector
 	now       func() time.Time
+	save      func(thread.Metadata) error
 }
 
 var _ controller.Runtime = (*nativeControllerRuntime)(nil)
@@ -282,15 +284,25 @@ func (r *nativeControllerRuntime) persistTurnOutcome(
 		return turnErr
 	}
 	_, preview, displayErr := thread.DisplayFromRequest(prompt)
-	if displayErr == nil {
-		r.metadata.Preview = preview
+	if displayErr != nil {
+		return errors.Join(turnErr, displayErr)
 	}
-	r.metadata.Model = r.model
-	r.metadata.Provider = r.provider
-	r.metadata.UpdatedAt = r.now().UTC()
-	saveErr := r.store.Save(r.metadata)
-	projectionErr := agentadapter.ProjectThreadMetadata(r.projector, r.metadata)
-	return errors.Join(turnErr, displayErr, saveErr, projectionErr)
+	candidate := r.metadata
+	candidate.Preview = preview
+	candidate.Model = r.model
+	candidate.Provider = r.provider
+	candidate.UpdatedAt = r.now().UTC()
+	save := r.save
+	if save == nil {
+		save = r.store.Save
+	}
+	saveErr := save(candidate)
+	if saveErr != nil && !fileutil.IsCommittedWriteError(saveErr) {
+		return errors.Join(turnErr, saveErr)
+	}
+	r.metadata = candidate
+	projectionErr := agentadapter.ProjectThreadMetadata(r.projector, candidate)
+	return errors.Join(turnErr, saveErr, projectionErr)
 }
 
 func (r *nativeControllerRuntime) Close() error {
@@ -328,6 +340,7 @@ func newNativeCodingControllerWithDependencies(
 		lease:               request.Lease,
 		projector:           projector,
 		now:                 now,
+		save:                request.Store.Save,
 	}
 	result, err := controller.New(projector, runtime)
 	if err != nil {

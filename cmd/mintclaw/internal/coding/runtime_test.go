@@ -10,8 +10,10 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -448,5 +450,67 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 	}
 	if persisted.Preview != "first stored prompt" {
 		t.Fatalf("preview = %q, want prior stored prompt", persisted.Preview)
+	}
+}
+
+func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "stored preview", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "coding-test"
+	metadata.Provider = "openai"
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentadapter.ProjectThreadMetadata(projector, metadata); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected pre-commit save failure")
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: &nativeCodingRuntime{
+			metadata: metadata, model: metadata.Model, provider: metadata.Provider,
+		},
+		projector: projector,
+		now:       func() time.Time { return metadata.UpdatedAt.Add(time.Minute) },
+		save:      func(thread.Metadata) error { return injected },
+	}
+	outcome := codingTurnOutcome{Model: metadata.Model, Provider: metadata.Provider, PromptStored: true}
+	if err := runtime.persistTurnOutcome("unstored preview", outcome, nil); !errors.Is(err, injected) {
+		t.Fatalf("persistTurnOutcome() error = %v, want %v", err, injected)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.metadata.Preview != metadata.Preview || snapshot.Metadata.Preview != metadata.Preview {
+		t.Fatalf(
+			"failed save leaked metadata: runtime=%q snapshot=%q",
+			runtime.metadata.Preview,
+			snapshot.Metadata.Preview,
+		)
+	}
+	committedCause := errors.New("injected post-rename sync failure")
+	runtime.save = func(thread.Metadata) error {
+		return &fileutil.CommittedWriteError{Err: committedCause}
+	}
+	if err := runtime.persistTurnOutcome("committed preview", outcome, nil); !errors.Is(err, committedCause) {
+		t.Fatalf("committed persistTurnOutcome() error = %v, want %v", err, committedCause)
+	}
+	snapshot, err = projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.metadata.Preview != "committed preview" || snapshot.Metadata.Preview != "committed preview" {
+		t.Fatalf(
+			"committed metadata was not retained: runtime=%q snapshot=%q",
+			runtime.metadata.Preview,
+			snapshot.Metadata.Preview,
+		)
 	}
 }
