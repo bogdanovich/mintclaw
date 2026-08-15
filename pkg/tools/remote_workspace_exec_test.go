@@ -19,12 +19,12 @@ func TestWorkspaceExecForegroundBindsWorkspaceAuthority(t *testing.T) {
 	}
 	ctx := nodeInvocationTestContext("owner", "workspace-exec-foreground")
 	result := tool.Execute(ctx, map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"test", "./pkg/..."},
+		"remote_workspace": "project", "executable": "go", "args": []any{"test", "./pkg/..."},
 		"env": map[string]any{"PATH": "/usr/bin"}, "mode": "foreground", "timeout_seconds": float64(45),
 	})
 	payload := decodeNodeResult(t, result)
-	if payload["placement"] != "remote" || payload["workspace"] != "project" ||
-		payload["workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
+	if payload["placement"] != "remote" || payload["remote_workspace"] != "project" ||
+		payload["remote_workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
 		payload["mode"] != "foreground" || source.prepareCalls != 1 || source.dispatchCalls != 1 {
 		t.Fatalf(
 			"workspace exec result = %#v; prepare=%d dispatch=%d",
@@ -56,7 +56,7 @@ func TestWorkspaceExecBoundsOmittedTimeoutToCommandMaximum(t *testing.T) {
 	}
 	ctx := nodeInvocationTestContext("owner", "workspace-exec-short-timeout")
 	args := map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+		"remote_workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
 	}
 	approval, err := tool.ApprovalArguments(ctx, args)
 	if err != nil {
@@ -99,7 +99,7 @@ func TestWorkspaceExecResolvesGenerationBoundSourcePerCall(t *testing.T) {
 		return current, nil
 	})
 	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-fresh-source"), map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+		"remote_workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
 	})
 	if result.IsError || factoryCalls != 1 || current.dispatchCalls != 1 || stale.dispatchCalls != 0 {
 		t.Fatalf(
@@ -121,7 +121,7 @@ func TestWorkspaceExecJobUsesExistingP5aStart(t *testing.T) {
 	}
 	ctx := nodeInvocationTestContext("owner", "workspace-exec-job")
 	result := tool.Execute(ctx, map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"test", "./..."},
+		"remote_workspace": "project", "executable": "go", "args": []any{"test", "./..."},
 		"mode": "job", "timeout_seconds": float64(600),
 		"artifacts": []any{map[string]any{"name": "report", "path": "out/report.json"}},
 	})
@@ -150,7 +150,7 @@ func TestWorkspaceExecJobRequiresSeparateJobsGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-no-jobs"), map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{}, "mode": "job",
+		"remote_workspace": "project", "executable": "go", "args": []any{}, "mode": "job",
 	})
 	if !result.IsError || source.prepareCalls != 0 || source.dispatchCalls != 0 {
 		t.Fatalf(
@@ -171,13 +171,13 @@ func TestWorkspaceExecApprovalCannotResumeAfterWorkspaceRevisionChange(t *testin
 	}
 	ctx := nodeInvocationTestContext("owner", "workspace-exec-approval")
 	args := map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+		"remote_workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
 	}
 	approval, err := tool.ApprovalArguments(ctx, args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approval["workspace_revision"] != "project-workspace-v1" || source.prepareCalls != 1 {
+	if approval["remote_workspace_revision"] != "project-workspace-v1" || source.prepareCalls != 1 {
 		t.Fatalf("workspace approval = %#v; prepare=%d", approval, source.prepareCalls)
 	}
 
@@ -217,7 +217,7 @@ func TestWorkspaceExecReportsPostDispatchUncertaintyWithoutReplay(t *testing.T) 
 	}
 	ctx := nodeInvocationTestContext("owner", "workspace-exec-unknown")
 	args := map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+		"remote_workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
 	}
 	first := tool.Execute(ctx, args)
 	second := tool.Execute(ctx, args)
@@ -236,7 +236,7 @@ func TestWorkspaceExecReportsPostDispatchUncertaintyWithoutReplay(t *testing.T) 
 func TestToolLogArgumentsRedactsWorkspaceExecContent(t *testing.T) {
 	const secret = "workspace-exec-secret"
 	got := ToolLogArguments("workspace_exec", map[string]any{
-		"workspace": "private", "executable": "go", "args": []any{"--token=" + secret},
+		"remote_workspace": "private", "executable": "go", "args": []any{"--token=" + secret},
 		"env": map[string]any{"TOKEN": secret}, "mode": "job",
 	})
 	encoded, err := json.Marshal(got)
@@ -246,6 +246,32 @@ func TestToolLogArgumentsRedactsWorkspaceExecContent(t *testing.T) {
 	if got["redacted"] != true || strings.Contains(string(encoded), secret) ||
 		strings.Contains(string(encoded), "private") {
 		t.Fatalf("workspace exec log arguments = %s", encoded)
+	}
+}
+
+func TestWorkspaceExecSchemaDisambiguatesAgentProfiles(t *testing.T) {
+	cfg, source := workspaceExecTestSetup(t, false)
+	tool, err := NewWorkspaceExecTool(cfg, source, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties := tool.Parameters()["properties"].(map[string]any)
+	if properties["remote_workspace"] == nil || properties["workspace"] != nil {
+		t.Fatalf("workspace exec schema = %#v", properties)
+	}
+	if !strings.Contains(tool.Description(), "not a MintClaw agent profile") {
+		t.Fatalf("workspace exec description = %q", tool.Description())
+	}
+	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-legacy-selector"), map[string]any{
+		"workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
+	})
+	if !result.IsError || source.prepareCalls != 0 || source.dispatchCalls != 0 {
+		t.Fatalf(
+			"legacy selector result = %#v; prepare=%d dispatch=%d",
+			result,
+			source.prepareCalls,
+			source.dispatchCalls,
+		)
 	}
 }
 
@@ -259,7 +285,7 @@ func TestWorkspaceExecEventsExposePlacementWithoutArguments(t *testing.T) {
 	}
 	tool.SetEventPublisher(eventBus)
 	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-event"), map[string]any{
-		"workspace": "project", "executable": "go", "args": []any{"--token=" + secret},
+		"remote_workspace": "project", "executable": "go", "args": []any{"--token=" + secret},
 		"env": map[string]any{"PATH": secret}, "mode": "foreground",
 	})
 	if result.IsError {

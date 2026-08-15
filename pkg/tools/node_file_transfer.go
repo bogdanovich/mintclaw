@@ -637,7 +637,7 @@ func isRemoteWorkspaceFileCall(toolName string, arguments map[string]any) bool {
 		toolName != "write_file" && toolName != "apply_patch" {
 		return false
 	}
-	_, present := arguments["workspace"]
+	_, present := arguments[remoteWorkspaceArgument]
 	return present
 }
 
