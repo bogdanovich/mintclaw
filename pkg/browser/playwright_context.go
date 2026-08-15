@@ -128,6 +128,16 @@ type playwrightContextState struct {
 func (worker *playwrightWorker) ContextCatalog(ctx context.Context) (ContextCatalog, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	// Playwright cannot run the private context probe while a JavaScript modal
+	// is pending. The modal freezes the selected document, so return the last
+	// successfully probed catalog without touching MCP. The broker still limits
+	// this state to observation and the exact pending dialog action.
+	if worker.pendingDialog != nil {
+		if worker.cachedContext.Validate() != nil {
+			return ContextCatalog{}, ErrWorkerUnavailable
+		}
+		return cloneContextCatalog(worker.cachedContext), nil
+	}
 	return worker.contextCatalogLocked(ctx)
 }
 
@@ -417,6 +427,7 @@ func (worker *playwrightWorker) probeContextsLocked(
 		worker.lost = true
 		return ContextCatalog{}, playwrightRawContextCatalog{}, err
 	}
+	worker.cachedContext = cloneContextCatalog(catalog)
 	return catalog, raw, nil
 }
 

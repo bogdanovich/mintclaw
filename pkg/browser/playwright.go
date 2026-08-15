@@ -687,6 +687,7 @@ type playwrightWorker struct {
 	contextSessionID string
 	contextSecret    []byte
 	contextState     playwrightContextState
+	cachedContext    ContextCatalog
 }
 
 func (worker *playwrightWorker) BeginHumanControl(context.Context) error {
@@ -767,8 +768,21 @@ func (worker *playwrightWorker) Observe(ctx context.Context) (DriverObservation,
 func (worker *playwrightWorker) NavigationIdentity(ctx context.Context) (string, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+	if worker.closing || worker.closed || worker.lost || worker.humanControl {
 		return "", ErrWorkerUnavailable
+	}
+	// A JavaScript modal blocks Playwright MCP calls, but it also freezes the
+	// selected document at the one-shot action boundary. Preserve the last
+	// verified navigation identity so the broker can materialize the pending
+	// dialog without probing the blocked driver. Only dialog handling is
+	// admitted until the modal clears.
+	if worker.pendingDialog != nil {
+		if worker.navigationToken == "" || worker.navigationID.frameID == "" ||
+			worker.navigationID.loaderID == "" || worker.navigationID.generation == 0 ||
+			worker.navigationID.token() != worker.navigationToken {
+			return "", ErrWorkerUnavailable
+		}
+		return worker.navigationToken, nil
 	}
 	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": playwrightNavigationIdentityCode,
