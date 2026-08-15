@@ -862,6 +862,7 @@ type Revocation struct {
 type Registration struct {
 	Snapshot            Snapshot
 	PublicKey           []byte
+	KeyAlgorithm        KeyAlgorithm
 	RequestedRole       string
 	RequestedAt         int64
 	AllowedCommands     []string

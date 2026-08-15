@@ -1,13 +1,17 @@
 package nodes
 
 import (
+	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -16,14 +20,40 @@ const (
 	MaxPlatformLength      = 64
 	MaxArchitectureLength  = 64
 	MaxRoleLength          = 32
+
+	KeyAlgorithmEd25519         KeyAlgorithm = "ed25519"
+	KeyAlgorithmECDSAP256SHA256 KeyAlgorithm = "ecdsa-p256-sha256"
 )
 
 var ErrInvalidIdentityProof = errors.New("invalid node identity proof")
+
+// KeyAlgorithm is the bounded node-authentication signing algorithm. An empty
+// value is accepted only as the wire/storage representation of legacy Ed25519
+// identities.
+type KeyAlgorithm string
+
+func (algorithm KeyAlgorithm) normalized() (KeyAlgorithm, error) {
+	switch algorithm {
+	case "", KeyAlgorithmEd25519:
+		return KeyAlgorithmEd25519, nil
+	case KeyAlgorithmECDSAP256SHA256:
+		return KeyAlgorithmECDSAP256SHA256, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported key algorithm", ErrInvalidIdentityProof)
+	}
+}
+
+// IdentityPublicKey is a canonical, algorithm-bound node identity key.
+type IdentityPublicKey struct {
+	Algorithm KeyAlgorithm
+	Bytes     []byte
+}
 
 type IdentityProof struct {
 	Nonce          string            `json:"nonce"`
 	NodeID         ID                `json:"node_id"`
 	PublicKey      string            `json:"public_key"`
+	KeyAlgorithm   KeyAlgorithm      `json:"key_algorithm,omitempty"`
 	Signature      string            `json:"signature"`
 	MinProtocol    int               `json:"min_protocol"`
 	MaxProtocol    int               `json:"max_protocol"`
@@ -38,18 +68,19 @@ type IdentityProof struct {
 }
 
 type identityTranscript struct {
-	Nonce          string `json:"nonce"`
-	NodeID         ID     `json:"node_id"`
-	PublicKey      string `json:"public_key"`
-	MinProtocol    int    `json:"min_protocol"`
-	MaxProtocol    int    `json:"max_protocol"`
-	ClientVersion  string `json:"client_version"`
-	Platform       string `json:"platform"`
-	Architecture   string `json:"architecture"`
-	RequestedRole  string `json:"requested_role"`
-	CatalogHash    string `json:"catalog_hash"`
-	Executor       string `json:"executor"`
-	PolicyRevision string `json:"policy_revision"`
+	Nonce          string       `json:"nonce"`
+	NodeID         ID           `json:"node_id"`
+	PublicKey      string       `json:"public_key"`
+	KeyAlgorithm   KeyAlgorithm `json:"key_algorithm,omitempty"`
+	MinProtocol    int          `json:"min_protocol"`
+	MaxProtocol    int          `json:"max_protocol"`
+	ClientVersion  string       `json:"client_version"`
+	Platform       string       `json:"platform"`
+	Architecture   string       `json:"architecture"`
+	RequestedRole  string       `json:"requested_role"`
+	CatalogHash    string       `json:"catalog_hash"`
+	Executor       string       `json:"executor"`
+	PolicyRevision string       `json:"policy_revision"`
 }
 
 func DeriveID(publicKey ed25519.PublicKey) (ID, error) {
@@ -58,6 +89,28 @@ func DeriveID(publicKey ed25519.PublicKey) (ID, error) {
 	}
 	sum := sha256.Sum256(publicKey)
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+	return ID("node_" + strings.ToLower(encoded)), nil
+}
+
+// DeriveIDForAlgorithm derives an ID from a canonical public-key encoding.
+// Legacy Ed25519 derivation intentionally remains byte-for-byte unchanged.
+func DeriveIDForAlgorithm(algorithm KeyAlgorithm, publicKey []byte) (ID, error) {
+	normalized, err := algorithm.normalized()
+	if err != nil {
+		return "", err
+	}
+	if normalized == KeyAlgorithmEd25519 {
+		return DeriveID(ed25519.PublicKey(publicKey))
+	}
+	if _, err := parseP256PublicKey(publicKey); err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("mintclaw-node-id-v1\x00"))
+	_, _ = hash.Write([]byte(normalized))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(publicKey)
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash.Sum(nil))
 	return ID("node_" + strings.ToLower(encoded)), nil
 }
 
@@ -113,30 +166,81 @@ func NewIdentityProof(
 	return proof, nil
 }
 
+// Verify preserves the legacy Ed25519 API. Algorithm-agile admission uses
+// VerifyIdentity.
 func (proof IdentityProof) Verify() (ed25519.PublicKey, error) {
-	if err := proof.validateClaims(); err != nil {
-		return nil, err
-	}
-	publicKey, err := base64.RawURLEncoding.DecodeString(proof.PublicKey)
-	if err != nil || len(publicKey) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("%w: malformed public key", ErrInvalidIdentityProof)
-	}
-	derivedID, err := DeriveID(ed25519.PublicKey(publicKey))
-	if err != nil || derivedID != proof.NodeID {
-		return nil, fmt.Errorf("%w: node id does not match public key", ErrInvalidIdentityProof)
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(proof.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return nil, fmt.Errorf("%w: malformed signature", ErrInvalidIdentityProof)
-	}
-	transcript, err := proof.transcript()
+	identity, err := proof.VerifyIdentity()
 	if err != nil {
 		return nil, err
 	}
-	if !ed25519.Verify(publicKey, transcript, signature) {
-		return nil, fmt.Errorf("%w: signature verification failed", ErrInvalidIdentityProof)
+	if identity.Algorithm != KeyAlgorithmEd25519 {
+		return nil, fmt.Errorf("%w: identity is not Ed25519", ErrInvalidIdentityProof)
 	}
-	return ed25519.PublicKey(publicKey), nil
+	return ed25519.PublicKey(identity.Bytes), nil
+}
+
+// VerifyIdentity verifies either admitted node-authentication algorithm.
+func (proof IdentityProof) VerifyIdentity() (IdentityPublicKey, error) {
+	if err := proof.validateClaims(); err != nil {
+		return IdentityPublicKey{}, err
+	}
+	algorithm, err := proof.KeyAlgorithm.normalized()
+	if err != nil {
+		return IdentityPublicKey{}, err
+	}
+	publicKey, err := base64.RawURLEncoding.Strict().DecodeString(proof.PublicKey)
+	if err != nil {
+		return IdentityPublicKey{}, fmt.Errorf("%w: malformed public key", ErrInvalidIdentityProof)
+	}
+	derivedID, err := DeriveIDForAlgorithm(algorithm, publicKey)
+	if err != nil {
+		return IdentityPublicKey{}, err
+	}
+	if derivedID != proof.NodeID {
+		return IdentityPublicKey{}, fmt.Errorf("%w: node id does not match public key", ErrInvalidIdentityProof)
+	}
+	signature, err := base64.RawURLEncoding.Strict().DecodeString(proof.Signature)
+	if err != nil || len(signature) != 64 {
+		return IdentityPublicKey{}, fmt.Errorf("%w: malformed signature", ErrInvalidIdentityProof)
+	}
+	transcript, err := proof.transcript()
+	if err != nil {
+		return IdentityPublicKey{}, err
+	}
+	switch algorithm {
+	case KeyAlgorithmEd25519:
+		if len(publicKey) != ed25519.PublicKeySize || !ed25519.Verify(publicKey, transcript, signature) {
+			return IdentityPublicKey{}, fmt.Errorf("%w: signature verification failed", ErrInvalidIdentityProof)
+		}
+	case KeyAlgorithmECDSAP256SHA256:
+		parsed, parseErr := parseP256PublicKey(publicKey)
+		if parseErr != nil {
+			return IdentityPublicKey{}, parseErr
+		}
+		r := new(big.Int).SetBytes(signature[:32])
+		s := new(big.Int).SetBytes(signature[32:])
+		halfOrder := new(big.Int).Rsh(new(big.Int).Set(elliptic.P256().Params().N), 1)
+		if r.Sign() <= 0 || r.Cmp(elliptic.P256().Params().N) >= 0 || s.Sign() <= 0 || s.Cmp(halfOrder) > 0 {
+			return IdentityPublicKey{}, fmt.Errorf("%w: non-canonical signature", ErrInvalidIdentityProof)
+		}
+		digest := sha256.Sum256(transcript)
+		if !ecdsa.Verify(parsed, digest[:], r, s) {
+			return IdentityPublicKey{}, fmt.Errorf("%w: signature verification failed", ErrInvalidIdentityProof)
+		}
+	}
+	return IdentityPublicKey{Algorithm: algorithm, Bytes: append([]byte(nil), publicKey...)}, nil
+}
+
+func parseP256PublicKey(encoded []byte) (*ecdsa.PublicKey, error) {
+	if len(encoded) != 65 || encoded[0] != 4 {
+		return nil, fmt.Errorf("%w: malformed public key", ErrInvalidIdentityProof)
+	}
+	if _, err := ecdh.P256().NewPublicKey(encoded); err != nil {
+		return nil, fmt.Errorf("%w: malformed public key", ErrInvalidIdentityProof)
+	}
+	x := new(big.Int).SetBytes(encoded[1:33])
+	y := new(big.Int).SetBytes(encoded[33:])
+	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, nil
 }
 
 func (proof IdentityProof) validateClaims() error {
@@ -190,10 +294,21 @@ func validateCompanionCatalog(catalog CapabilityCatalog) error {
 }
 
 func (proof IdentityProof) transcript() ([]byte, error) {
+	algorithm, err := proof.KeyAlgorithm.normalized()
+	if err != nil {
+		return nil, err
+	}
+	prefix := "mintclaw-node-auth-v1\x00"
+	transcriptAlgorithm := KeyAlgorithm("")
+	if proof.KeyAlgorithm != "" {
+		prefix = "mintclaw-node-auth-v1:" + string(algorithm) + "\x00"
+		transcriptAlgorithm = algorithm
+	}
 	data, err := json.Marshal(identityTranscript{
 		Nonce:          proof.Nonce,
 		NodeID:         proof.NodeID,
 		PublicKey:      proof.PublicKey,
+		KeyAlgorithm:   transcriptAlgorithm,
 		MinProtocol:    proof.MinProtocol,
 		MaxProtocol:    proof.MaxProtocol,
 		ClientVersion:  proof.ClientVersion,
@@ -207,5 +322,5 @@ func (proof IdentityProof) transcript() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode signature transcript: %w", ErrInvalidIdentityProof, err)
 	}
-	return append([]byte("mintclaw-node-auth-v1\x00"), data...), nil
+	return append([]byte(prefix), data...), nil
 }
