@@ -156,6 +156,21 @@ func (worker *actionTestWorker) Upload(_ context.Context, action DriverAction) e
 	return nil
 }
 
+func (worker *actionTestWorker) UploadAfterNavigationCheck(
+	ctx context.Context,
+	expected string,
+	action DriverAction,
+) error {
+	current, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if expected == "" || expected != current {
+		return ErrStale
+	}
+	return worker.Upload(ctx, action)
+}
+
 func (worker *actionTestWorker) Download(_ context.Context, action DriverAction, _ int64) (DriverDownload, error) {
 	worker.actions = append(worker.actions, action)
 	return worker.download, nil
@@ -166,6 +181,43 @@ type actionTestFactory struct {
 }
 
 func (factory *actionTestFactory) Open(
+	context.Context,
+	WorkerOpenRequest,
+) (WorkerOpenResult, error) {
+	return WorkerOpenResult{Owner: factory.worker}, nil
+}
+
+type preparedStageTestWorker struct {
+	*actionTestWorker
+	stageErr     error
+	stageCalls   int
+	executeCalls int
+}
+
+func (*preparedStageTestWorker) SupportsPreparedAction(kind ActionKind) bool {
+	return kind == ActionFileChooser
+}
+
+func (worker *preparedStageTestWorker) StagePreparedAction(
+	_ context.Context,
+	_ WorkerPreparedAction,
+) error {
+	worker.stageCalls++
+	return worker.stageErr
+}
+
+func (worker *preparedStageTestWorker) ExecutePrepared(
+	_ context.Context,
+	request WorkerPreparedAction,
+) error {
+	worker.executeCalls++
+	worker.uploads = append(worker.uploads, request.DriverAction)
+	return nil
+}
+
+type preparedStageTestFactory struct{ worker *preparedStageTestWorker }
+
+func (factory *preparedStageTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
@@ -589,6 +641,86 @@ func TestBrokerBindsFileChooserArtifactAndRequiresApprovalForDownloadClick(t *te
 	if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 ||
 		worker.actions[0].Kind != DriverDownloadAction {
 		t.Fatalf("approved dry-run download = %#v, %v; actions = %#v", invocation, err, worker.actions)
+	}
+}
+
+func TestBrokerStagesPreparedArtifactBeforeDurableAcceptance(t *testing.T) {
+	store := NewMemoryStore()
+	baseWorker := &actionTestWorker{observation: driverObservationFixture(
+		DriverElement{Target: "e2", Role: "button", Name: "Choose file"},
+	)}
+	baseWorker.resolveElement = baseWorker.observation.Elements[0]
+	baseWorker.resolveOrigin = baseWorker.observation.Origin
+	worker := &preparedStageTestWorker{
+		actionTestWorker: baseWorker,
+		stageErr:         ErrWorkerUnavailable,
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, &preparedStageTestFactory{worker: worker})
+	now := time.Now().UTC()
+	broker.now = func() time.Time {
+		now = now.Add(time.Nanosecond)
+		return now
+	}
+	broker.lookupIP = func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_staging_boundary", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{
+			Kind: ActionFileChooser, Ref: onlyVisibleRef(t, observation.Snapshot),
+			ArtifactRef: "transfer-artifact://staging-boundary",
+		},
+		Upload: &UploadBinding{
+			Ref: "transfer-artifact://staging-boundary", SHA256: strings.Repeat("a", 64), Size: 7,
+			Filename: "input.txt", ContentType: "text/plain", Path: "/private/retained/input.txt",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrWorkerUnavailable) || invocation.State != InvocationPrepared ||
+		invocation.AcceptedAt != 0 || worker.stageCalls != 1 || worker.executeCalls != 0 {
+		t.Fatalf(
+			"failed pre-acceptance stage = %#v, %v; stage=%d execute=%d",
+			invocation,
+			err,
+			worker.stageCalls,
+			worker.executeCalls,
+		)
+	}
+	stored, err := store.GetInvocation(context.Background(), invocation.ID)
+	if err != nil || stored.State != InvocationPrepared || stored.AcceptedAt != 0 {
+		t.Fatalf("durable invocation after staging failure = %#v, %v", stored, err)
+	}
+	storedSession, err := store.GetSession(context.Background(), session.ID)
+	if err != nil || storedSession.State != SessionReady || storedSession.SafeFailure != "" {
+		t.Fatalf("session after staging failure = %#v, %v", storedSession, err)
+	}
+	worker.stageErr = nil
+	invocation, err = broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded || worker.stageCalls != 2 ||
+		worker.executeCalls != 1 || len(worker.uploads) != 1 {
+		t.Fatalf(
+			"retried staged invocation = %#v, %v; stage=%d execute=%d uploads=%#v",
+			invocation,
+			err,
+			worker.stageCalls,
+			worker.executeCalls,
+			worker.uploads,
+		)
 	}
 }
 

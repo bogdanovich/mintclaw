@@ -630,9 +630,6 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		input.ArtifactBytes = request.Prepared.ArtifactBytes
 		input.ArtifactFilename = request.Prepared.ArtifactFilename
 		input.ArtifactContentType = request.Prepared.ArtifactContentType
-		if err = worker.stageBrowserArtifact(ctx, request); err != nil {
-			return err
-		}
 	}
 	var ephemeralInput json.RawMessage
 	if action.Kind == "fill" || action.Kind == "select" {
@@ -704,6 +701,17 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	worker.cachedObservation = &observation
 	worker.mu.Unlock()
 	return nil
+}
+
+func (worker *nodeBrowserWorker) StagePreparedAction(
+	ctx context.Context,
+	request browser.WorkerPreparedAction,
+) error {
+	if request.Prepared.Action.Kind != browser.ActionFileChooser ||
+		request.DriverAction.Kind != browser.DriverUpload || !worker.SupportsPreparedAction(request.Prepared.Action.Kind) {
+		return browser.ErrDenied
+	}
+	return worker.stageBrowserArtifact(ctx, request)
 }
 
 func (worker *nodeBrowserWorker) stageBrowserArtifact(

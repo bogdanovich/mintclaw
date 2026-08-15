@@ -1264,6 +1264,27 @@ func (worker *playwrightWorker) Execute(ctx context.Context, action DriverAction
 func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction) error {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.uploadLocked(ctx, "", action)
+}
+
+func (worker *playwrightWorker) UploadAfterNavigationCheck(
+	ctx context.Context,
+	expectedToken string,
+	action DriverAction,
+) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if expectedToken == "" || expectedToken != worker.navigationToken {
+		return ErrStale
+	}
+	return worker.uploadLocked(ctx, expectedToken, action)
+}
+
+func (worker *playwrightWorker) uploadLocked(
+	ctx context.Context,
+	expectedToken string,
+	action DriverAction,
+) error {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		action.Kind != DriverUpload || !playwrightTargetPattern.MatchString(action.Target) ||
 		action.Value == "" || !filepath.IsAbs(action.Value) || worker.outputDir == "" {
@@ -1274,6 +1295,23 @@ func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction)
 		return err
 	}
 	defer cleanup()
+	if expectedToken != "" {
+		text, checkErr := worker.callAndConsume(
+			ctx,
+			"browser_run_code_unsafe",
+			map[string]any{"code": playwrightNavigationCheckedCode(worker.navigationID, "")},
+			true,
+		)
+		if checkErr != nil {
+			return checkErr
+		}
+		if checkErr = parsePlaywrightNavigationDispatch(text); checkErr != nil {
+			if !errors.Is(checkErr, ErrStale) && !errors.Is(checkErr, ErrDenied) {
+				worker.lost = true
+			}
+			return checkErr
+		}
+	}
 	text, err := worker.callRawText(ctx, "browser_click", map[string]any{
 		"target": action.Target, "element": action.Element, "doubleClick": false, "button": "left",
 	})

@@ -34,6 +34,7 @@ type browserArtifactTransferPrepare struct {
 type browserArtifactTransfer struct {
 	binding   protocol.TransferFrame
 	request   browserArtifactTransferPrepare
+	lifetime  *browserArtifactLifetime
 	directory string
 	path      string
 	file      *os.File
@@ -45,9 +46,12 @@ type browserArtifactTransfer struct {
 type browserStagedArtifact struct {
 	binding   protocol.TransferFrame
 	request   browserArtifactTransferPrepare
+	lifetime  *browserArtifactLifetime
 	directory string
 	path      string
 }
+
+type browserArtifactLifetime struct{}
 
 func (*BrowserHost) Descriptors() []nodes.CommandDescriptor { return nil }
 
@@ -159,27 +163,42 @@ func (host *BrowserHost) prepareBrowserArtifact(
 		_ = os.RemoveAll(directory)
 		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "storage_unavailable"))
 	}
+	lifetime := &browserArtifactLifetime{}
 	host.activeTransfers[frame.TransferID] = &browserArtifactTransfer{
-		binding: frame, request: request, directory: directory, path: path, file: file, hasher: sha256.New(),
+		binding: frame, request: request, lifetime: lifetime,
+		directory: directory, path: path, file: file, hasher: sha256.New(),
 	}
 	if err := send(browserTransferResponse(frame, protocol.TransferFrameAccept, "accepted")); err != nil {
 		host.removeActiveTransferLocked(frame.TransferID)
 		return err
 	}
-	go host.watchBrowserArtifactConnection(ctx, frame.TransferID, frame)
+	go host.watchBrowserArtifactLifetime(ctx, frame.TransferID, lifetime, request.ExpiresAt)
 	return nil
 }
 
-func (host *BrowserHost) watchBrowserArtifactConnection(
+func (host *BrowserHost) watchBrowserArtifactLifetime(
 	ctx context.Context,
 	transferID string,
-	binding protocol.TransferFrame,
+	lifetime *browserArtifactLifetime,
+	expiresAt int64,
 ) {
-	<-ctx.Done()
+	expiryDelay := time.Unix(expiresAt, 0).Sub(host.now().UTC())
+	if expiryDelay < 0 {
+		expiryDelay = 0
+	}
+	timer := time.NewTimer(expiryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 	host.transferMu.Lock()
 	defer host.transferMu.Unlock()
-	if active := host.activeTransfers[transferID]; active != nil && browserTransferMatches(active.binding, binding) {
+	if active := host.activeTransfers[transferID]; active != nil && active.lifetime == lifetime {
 		host.removeActiveTransferLocked(transferID)
+	}
+	if completed, ok := host.completedTransfers[transferID]; ok && completed.lifetime == lifetime {
+		host.removeCompletedTransferLocked(transferID)
 	}
 }
 
@@ -228,7 +247,8 @@ func (host *BrowserHost) commitBrowserArtifact(
 	}
 	transfer.file = nil
 	host.completedTransfers[frame.TransferID] = browserStagedArtifact{
-		binding: transfer.binding, request: transfer.request, directory: transfer.directory, path: transfer.path,
+		binding: transfer.binding, request: transfer.request, lifetime: transfer.lifetime,
+		directory: transfer.directory, path: transfer.path,
 	}
 	delete(host.activeTransfers, frame.TransferID)
 	return send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
@@ -245,8 +265,7 @@ func (host *BrowserHost) cancelBrowserArtifact(
 	}
 	if artifact, ok := host.completedTransfers[frame.TransferID]; ok &&
 		browserTransferMatches(artifact.binding, frame) {
-		_ = os.RemoveAll(artifact.directory)
-		delete(host.completedTransfers, frame.TransferID)
+		host.removeCompletedTransferLocked(frame.TransferID)
 	}
 	host.transferMu.Unlock()
 	return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "canceled"))
@@ -301,10 +320,18 @@ func (host *BrowserHost) expireBrowserArtifactsLocked() {
 	}
 	for transferID, artifact := range host.completedTransfers {
 		if now >= artifact.request.ExpiresAt {
-			_ = os.RemoveAll(artifact.directory)
-			delete(host.completedTransfers, transferID)
+			host.removeCompletedTransferLocked(transferID)
 		}
 	}
+}
+
+func (host *BrowserHost) removeCompletedTransferLocked(transferID string) {
+	artifact, ok := host.completedTransfers[transferID]
+	if !ok {
+		return
+	}
+	_ = os.RemoveAll(artifact.directory)
+	delete(host.completedTransfers, transferID)
 }
 
 func (host *BrowserHost) removeActiveTransferLocked(transferID string) {
@@ -325,9 +352,8 @@ func (host *BrowserHost) cleanupAllBrowserArtifacts() {
 	for transferID := range host.activeTransfers {
 		host.removeActiveTransferLocked(transferID)
 	}
-	for transferID, artifact := range host.completedTransfers {
-		_ = os.RemoveAll(artifact.directory)
-		delete(host.completedTransfers, transferID)
+	for transferID := range host.completedTransfers {
+		host.removeCompletedTransferLocked(transferID)
 	}
 	if host.transferRoot != "" {
 		_ = os.RemoveAll(host.transferRoot)
@@ -345,8 +371,7 @@ func (host *BrowserHost) cleanupBrowserArtifactsForSession(sessionID string) {
 	}
 	for transferID, artifact := range host.completedTransfers {
 		if artifact.request.SessionID == sessionID {
-			_ = os.RemoveAll(artifact.directory)
-			delete(host.completedTransfers, transferID)
+			host.removeCompletedTransferLocked(transferID)
 		}
 	}
 }

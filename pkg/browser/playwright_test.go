@@ -501,6 +501,56 @@ func TestPlaywrightWorkerUploadsOnlyAfterExactFileChooser(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing.T) {
+	artifact := filepath.Join(t.TempDir(), "fixture.txt")
+	content := []byte("upload fixture")
+	if err := os.WriteFile(artifact, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 1}
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\n\"" + playwrightNavigationCheckedActionMarker + "|ok\"",
+		),
+		"browser_click": playwrightTextResult(
+			"- [File chooser]: can be handled by browser_file_upload",
+		),
+		"browser_file_upload": playwrightTextResult("uploaded"),
+	}}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: t.TempDir(),
+		navigationID: identity, navigationToken: identity.token(),
+	}
+	digest := sha256.Sum256(content)
+	action := DriverAction{
+		Kind: DriverUpload, Target: "e4", Element: "Choose file", Value: artifact,
+		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
+		ArtifactFilename: "fixture.txt", ArtifactContentType: "text/plain",
+	}
+	if err := worker.UploadAfterNavigationCheck(context.Background(), identity.token(), action); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.calls) != 3 || client.calls[0].tool != "browser_run_code_unsafe" ||
+		client.calls[1].tool != "browser_click" || client.calls[2].tool != "browser_file_upload" {
+		t.Fatalf("navigation-checked upload calls = %#v", client.calls)
+	}
+	client.calls = nil
+	if err := worker.UploadAfterNavigationCheck(
+		context.Background(), strings.Repeat("0", sha256.Size*2), action,
+	); !errors.Is(err, ErrStale) || len(client.calls) != 0 {
+		t.Fatalf("stale upload error = %v; calls = %#v", err, client.calls)
+	}
+	client.callResults["browser_run_code_unsafe"] = playwrightTextResult(
+		"### Result\n\"" + playwrightNavigationCheckedActionMarker + "|stale\"",
+	)
+	if err := worker.UploadAfterNavigationCheck(
+		context.Background(), identity.token(), action,
+	); !errors.Is(err, ErrStale) || len(client.calls) != 1 ||
+		client.calls[0].tool != "browser_run_code_unsafe" {
+		t.Fatalf("driver-stale upload error = %v; calls = %#v", err, client.calls)
+	}
+}
+
 func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 	output := t.TempDir()
 	payload := []byte("download fixture")

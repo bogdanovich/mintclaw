@@ -55,7 +55,7 @@ type browserHostFactory interface {
 
 type browserHostUploadWorker interface {
 	browserworker.ActionWorker
-	Upload(context.Context, browserworker.DriverAction) error
+	UploadAfterNavigationCheck(context.Context, string, browserworker.DriverAction) error
 }
 
 type browserHostSession struct {
@@ -947,7 +947,11 @@ func (host *BrowserHost) executeAction(
 		if !ok {
 			executeErr = browserworker.ErrDriverIncompatible
 		} else {
-			executeErr = uploadWorker.Upload(actionCtx, driverAction)
+			executeErr = uploadWorker.UploadAfterNavigationCheck(
+				actionCtx,
+				currentNavigationIdentity,
+				driverAction,
+			)
 		}
 	} else {
 		executeErr = session.navigationWorker.ExecuteAfterNavigationCheck(

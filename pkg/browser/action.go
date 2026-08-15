@@ -471,6 +471,20 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 	if err != nil {
 		return Invocation{}, err
 	}
+	workerPreparedAction := WorkerPreparedAction{
+		InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
+	}
+	preparedWorker, preparedDispatch := worker.(PreparedActionWorker)
+	preparedDispatch = preparedDispatch && preparedWorker.SupportsPreparedAction(prepared.Action.Kind)
+	if artifactInputAction(prepared.Action.Kind) && preparedDispatch {
+		stager, ok := worker.(PreparedActionStager)
+		if !ok {
+			return currentInvocation, ErrDriverIncompatible
+		}
+		if stageErr := stager.StagePreparedAction(ctx, workerPreparedAction); stageErr != nil {
+			return currentInvocation, stageErr
+		}
+	}
 	invocation, executeErr := broker.executePreparedLocked(
 		ctx,
 		owner,
@@ -478,12 +492,11 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		prepared.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
 			if artifactInputAction(prepared.Action.Kind) || prepared.Action.Kind == ActionDownload {
-				if preparedWorker, ok := worker.(PreparedActionWorker); ok &&
-					artifactInputAction(prepared.Action.Kind) &&
-					preparedWorker.SupportsPreparedAction(prepared.Action.Kind) {
-					if executeErr := preparedWorker.ExecutePrepared(executeCtx, WorkerPreparedAction{
-						InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
-					}); executeErr != nil {
+				if artifactInputAction(prepared.Action.Kind) && preparedDispatch {
+					if executeErr := preparedWorker.ExecutePrepared(
+						executeCtx,
+						workerPreparedAction,
+					); executeErr != nil {
 						return nil, executeErr
 					}
 					return json.RawMessage(`{"status":"completed"}`), nil
@@ -493,7 +506,15 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					return nil, ErrDriverIncompatible
 				}
 				if artifactInputAction(prepared.Action.Kind) {
-					if executeErr := transferWorker.Upload(executeCtx, driverAction); executeErr != nil {
+					checkedUpload, ok := worker.(NavigationCheckedUploadWorker)
+					if !ok || slot.navigationID == "" {
+						return nil, ErrDriverIncompatible
+					}
+					if executeErr := checkedUpload.UploadAfterNavigationCheck(
+						executeCtx,
+						slot.navigationID,
+						driverAction,
+					); executeErr != nil {
 						return nil, executeErr
 					}
 					return json.RawMessage(`{"status":"completed"}`), nil
@@ -509,10 +530,8 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				}
 				return sink(executeCtx, prepared, download)
 			}
-			if preparedWorker, ok := worker.(PreparedActionWorker); ok {
-				if executeErr := preparedWorker.ExecutePrepared(executeCtx, WorkerPreparedAction{
-					InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
-				}); executeErr != nil {
+			if preparedDispatch {
+				if executeErr := preparedWorker.ExecutePrepared(executeCtx, workerPreparedAction); executeErr != nil {
 					return nil, executeErr
 				}
 				return json.RawMessage(`{"status":"completed"}`), nil
@@ -1002,7 +1021,7 @@ func observeWithNavigationCheck(
 	ctx context.Context,
 	worker ActionWorker,
 ) (DriverObservation, string, error) {
-	checkedWorker, ok := worker.(NavigationCheckedActionWorker)
+	checkedWorker, ok := worker.(NavigationIdentityWorker)
 	if !ok {
 		observation, err := worker.Observe(ctx)
 		return observation, "", err

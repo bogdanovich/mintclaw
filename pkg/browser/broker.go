@@ -98,6 +98,16 @@ type PreparedActionWorker interface {
 	ExecutePrepared(context.Context, WorkerPreparedAction) error
 }
 
+// PreparedActionStager moves private artifact input to a remote worker before
+// the browser invocation crosses its durable acceptance boundary. A prepared
+// worker that advertises an artifact-input action must also implement this
+// interface; ExecutePrepared may then assume that the exact bound artifact is
+// already staged and must never repeat the transfer.
+type PreparedActionStager interface {
+	PreparedActionWorker
+	StagePreparedAction(context.Context, WorkerPreparedAction) error
+}
+
 type WorkerPreparedAction struct {
 	InvocationID string
 	Prepared     PreparedAction
@@ -123,6 +133,13 @@ type TransferWorker interface {
 	ActionWorker
 	Upload(context.Context, DriverAction) error
 	Download(context.Context, DriverAction, int64) (DriverDownload, error)
+}
+
+// NavigationCheckedUploadWorker performs the final driver-owned navigation
+// identity check immediately before opening a file chooser.
+type NavigationCheckedUploadWorker interface {
+	NavigationIdentityWorker
+	UploadAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
 type DownloadSink func(context.Context, PreparedAction, DriverDownload) (json.RawMessage, error)
