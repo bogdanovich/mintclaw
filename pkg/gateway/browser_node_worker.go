@@ -993,7 +993,7 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 		Filename: descriptor.Filename, ContentType: descriptor.ContentType,
 		DeclaredSize: int64(descriptor.Size), SHA256: descriptor.SHA256, ExpiresAt: descriptor.ExpiresAt,
 	}
-	writer, record, created, err := spool.Begin(owner, spec)
+	writer, record, created, err := spool.BeginRecoverable(owner, spec)
 	if err != nil {
 		return nodes.TransferArtifactRecord{}, err
 	}

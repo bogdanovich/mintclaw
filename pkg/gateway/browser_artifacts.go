@@ -271,11 +271,8 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 		if capture.Retained != nil {
 			return browser.ScreenshotArtifact{}, nodes.ErrTransferArtifactNotFound
 		}
-		writer, record, created, err = spool.Begin(owner, spec)
-		if err != nil && (!created || writer == nil || !fileutil.IsCommittedWriteError(err)) {
-			if writer != nil {
-				_ = writer.Abort()
-			}
+		writer, record, created, err = spool.BeginRecoverable(owner, spec)
+		if err != nil {
 			return browser.ScreenshotArtifact{}, fmt.Errorf("retain browser screenshot: %w", err)
 		}
 	}
