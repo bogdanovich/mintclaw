@@ -707,8 +707,12 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return PreparedAction{}, ErrStale
 		}
-		resolvedSource, resolvedDestination, origin, navigationID, resolveErr :=
-			resolveDragFromFreshObservation(ctx, worker, source, destination)
+		resolvedSource, resolvedDestination, origin, navigationID, resolveErr := resolveDragFromFreshObservation(
+			ctx,
+			worker,
+			source,
+			destination,
+		)
 		if resolveErr != nil {
 			return PreparedAction{}, resolveErr
 		}
@@ -860,8 +864,12 @@ func (broker *Broker) revalidatePreparedLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return ErrStale
 		}
-		resolvedSource, resolvedDestination, origin, navigationID, err :=
-			resolveDragFromFreshObservation(ctx, worker, source, destination)
+		resolvedSource, resolvedDestination, origin, navigationID, err := resolveDragFromFreshObservation(
+			ctx,
+			worker,
+			source,
+			destination,
+		)
 		if err != nil {
 			return err
 		}
