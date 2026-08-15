@@ -5,6 +5,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -79,7 +80,11 @@ func TestTerminalLifecycleEmitsRestorationForExitSignalAndPanic(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer terminal.Close()
+			t.Cleanup(func() {
+				if err := terminal.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+					t.Errorf("close pseudo-terminal: %v", err)
+				}
+			})
 			output := &lockedBuffer{}
 			readDone := make(chan struct{})
 			go func() {

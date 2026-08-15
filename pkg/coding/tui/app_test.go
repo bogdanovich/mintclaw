@@ -68,12 +68,20 @@ func TestDetectTerminalCapabilitiesRejectsRedirectedStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer input.Close()
+	t.Cleanup(func() {
+		if err := input.Close(); err != nil {
+			t.Errorf("close input: %v", err)
+		}
+	})
 	output, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer output.Close()
+	t.Cleanup(func() {
+		if err := output.Close(); err != nil {
+			t.Errorf("close output: %v", err)
+		}
+	})
 
 	capabilities := DetectTerminalCapabilities(input, output, false)
 	if capabilities.Interactive || capabilities.Color || capabilities.Reason == "" {
