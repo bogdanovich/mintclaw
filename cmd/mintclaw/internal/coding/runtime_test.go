@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -512,5 +514,47 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 			runtime.metadata.Preview,
 			snapshot.Metadata.Preview,
 		)
+	}
+}
+
+func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing.T) {
+	sessions := session.NewSessionManager("")
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "user", Content: "inspect 界"})
+	sessions.AddFullMessage("coding:thread", providers.Message{
+		Role: "assistant", ReasoningContent: "consider e\u0301", Content: "done 👩🏽‍💻",
+	})
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "tool", Content: "DO-NOT-HYDRATE-SECRET"})
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "system", Content: "SYSTEM-SECRET"})
+	runtime := &nativeControllerRuntime{nativeCodingRuntime: &nativeCodingRuntime{
+		sessions:     sessions,
+		metadata:     thread.Metadata{SessionKey: "coding:thread"},
+		historyLimit: 4,
+	}}
+	page, err := runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Start != 0 || page.End != 4 || page.Total != 4 || page.HasOlder || page.HasNewer {
+		t.Fatalf("page metadata = %+v", page)
+	}
+	if len(page.Entries) != 3 {
+		t.Fatalf("safe entries = %+v", page.Entries)
+	}
+	if page.Entries[0].Kind != frontend.EntryUser || page.Entries[1].Kind != frontend.EntryReasoning ||
+		page.Entries[2].Kind != frontend.EntryAssistant {
+		t.Fatalf("entry kinds = %+v", page.Entries)
+	}
+	for _, entry := range page.Entries {
+		if strings.Contains(entry.Text, "SECRET") {
+			t.Fatalf("non-display history leaked through hydration: %+v", entry)
+		}
+	}
+}
+
+func TestHydratedTranscriptTextUsesBoundedValidUTF8(t *testing.T) {
+	input := strings.Repeat("界", hydratedTranscriptTextBytes)
+	text, truncated := boundHydratedTranscriptText(input)
+	if !truncated || len(text) > hydratedTranscriptTextBytes || !utf8.ValidString(text) {
+		t.Fatalf("bounded text bytes=%d truncated=%v valid=%v", len(text), truncated, utf8.ValidString(text))
 	}
 }

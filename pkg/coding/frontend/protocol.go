@@ -54,6 +54,7 @@ const (
 	EntryUser      EntryKind = "user"
 	EntryAssistant EntryKind = "assistant"
 	EntryReasoning EntryKind = "reasoning"
+	EntryTool      EntryKind = "tool"
 	EntryWarning   EntryKind = "warning"
 	EntryError     EntryKind = "error"
 )
@@ -263,4 +264,28 @@ type CommandSink interface {
 type Controller interface {
 	SnapshotSource
 	CommandSink
+}
+
+// TranscriptPageRequest selects a bounded canonical transcript window. Before
+// is an exclusive message index; a negative value selects the current end.
+type TranscriptPageRequest struct {
+	Before int
+	Limit  int
+}
+
+// TranscriptPage is optional historical state. Live ThreadSnapshot and Delta
+// values remain authoritative for activity after the controller opens.
+type TranscriptPage struct {
+	Entries  []TranscriptEntry
+	Start    int
+	End      int
+	Total    int
+	HasOlder bool
+	HasNewer bool
+}
+
+// TranscriptPager is an optional controller extension used by interactive
+// frontends for lazy history hydration.
+type TranscriptPager interface {
+	TranscriptPage(context.Context, TranscriptPageRequest) (TranscriptPage, error)
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
@@ -18,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -104,6 +106,7 @@ type nativeCodingRuntime struct {
 	model           string
 	provider        string
 	streaming       bool
+	historyLimit    int
 	closeOnce       sync.Once
 	closeErr        error
 }
@@ -167,7 +170,7 @@ func openNativeCodingRuntime(
 			return store.ReadTurnHistory(readCtx, sessionKey)
 		}
 	}
-	return &nativeCodingRuntime{
+	runtime := &nativeCodingRuntime{
 		loop:            loop,
 		messageBus:      messageBus,
 		eventBus:        baseEventBus,
@@ -177,7 +180,32 @@ func openNativeCodingRuntime(
 		model:           modelName,
 		provider:        providerName,
 		streaming:       projector != nil,
-	}, nil
+	}
+	if projector != nil {
+		runtime.historyLimit, err = codingHistoryCount(
+			context.Background(),
+			runtime.sessions,
+			request.Metadata.SessionKey,
+		)
+		if err != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("coding runtime: inspect transcript history: %w", err)
+		}
+	}
+	return runtime, nil
+}
+
+func codingHistoryCount(
+	ctx context.Context,
+	store session.SessionStore,
+	sessionKey string,
+) (int, error) {
+	if reader, ok := store.(session.TurnHistoryPageReader); ok {
+		page, err := reader.ReadTurnHistoryPage(ctx, sessionKey, memory.HistoryPageRequest{Before: -1, Limit: 1})
+		return page.Total, err
+	}
+	history, err := store.ReadTurnHistory(ctx, sessionKey)
+	return len(history), err
 }
 
 func (r *nativeCodingRuntime) runTurn(
@@ -268,7 +296,88 @@ type nativeControllerRuntime struct {
 	save      func(thread.Metadata) error
 }
 
-var _ controller.Runtime = (*nativeControllerRuntime)(nil)
+var (
+	_ controller.Runtime       = (*nativeControllerRuntime)(nil)
+	_ frontend.TranscriptPager = (*nativeControllerRuntime)(nil)
+)
+
+const hydratedTranscriptTextBytes = 32 << 10
+
+func (r *nativeControllerRuntime) TranscriptPage(
+	ctx context.Context,
+	request frontend.TranscriptPageRequest,
+) (frontend.TranscriptPage, error) {
+	reader, ok := r.sessions.(session.TurnHistoryPageReader)
+	if !ok {
+		return frontend.TranscriptPage{}, fmt.Errorf("coding transcript paging is unavailable")
+	}
+	before := request.Before
+	if before < 0 || before > r.historyLimit {
+		before = r.historyLimit
+	}
+	page, err := reader.ReadTurnHistoryPage(ctx, r.metadata.SessionKey, memory.HistoryPageRequest{
+		Before: before,
+		Limit:  request.Limit,
+	})
+	if err != nil {
+		return frontend.TranscriptPage{}, err
+	}
+	entries := make([]frontend.TranscriptEntry, 0, len(page.Messages)*2)
+	for offset, message := range page.Messages {
+		entries = append(entries, hydratedTranscriptEntries(page.Start+offset, message)...)
+	}
+	end := min(page.End, r.historyLimit)
+	return frontend.TranscriptPage{
+		Entries:  entries,
+		Start:    page.Start,
+		End:      end,
+		Total:    r.historyLimit,
+		HasOlder: page.Start > 0,
+		HasNewer: end < r.historyLimit,
+	}, nil
+}
+
+func hydratedTranscriptEntries(index int, message providers.Message) []frontend.TranscriptEntry {
+	turnID := fmt.Sprintf("history-message-%d", index)
+	entry := func(kind frontend.EntryKind, suffix string, text string) frontend.TranscriptEntry {
+		text, truncated := boundHydratedTranscriptText(text)
+		return frontend.TranscriptEntry{
+			ID:        fmt.Sprintf("history:%d:%s", index, suffix),
+			TurnID:    turnID,
+			Kind:      kind,
+			Text:      text,
+			Complete:  true,
+			Truncated: truncated,
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(message.Role)) {
+	case "user":
+		if strings.TrimSpace(message.Content) != "" {
+			return []frontend.TranscriptEntry{entry(frontend.EntryUser, "user", message.Content)}
+		}
+	case "assistant":
+		entries := make([]frontend.TranscriptEntry, 0, 2)
+		if strings.TrimSpace(message.ReasoningContent) != "" {
+			entries = append(entries, entry(frontend.EntryReasoning, "reasoning", message.ReasoningContent))
+		}
+		if strings.TrimSpace(message.Content) != "" {
+			entries = append(entries, entry(frontend.EntryAssistant, "assistant", message.Content))
+		}
+		return entries
+	}
+	return nil
+}
+
+func boundHydratedTranscriptText(value string) (string, bool) {
+	if len(value) <= hydratedTranscriptTextBytes {
+		return value, false
+	}
+	value = value[:hydratedTranscriptTextBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value, true
+}
 
 func (r *nativeControllerRuntime) RunTurn(ctx context.Context, prompt string, onReady func()) error {
 	outcome, turnErr := r.runTurn(ctx, prompt, onReady)

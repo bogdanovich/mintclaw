@@ -87,6 +87,16 @@ type HistoryRevisionProvider interface {
 	GetHistoryRevision(sessionKey string) (memory.HistoryRevision, error)
 }
 
+// TurnHistoryPageReader is the optional bounded read side used by transcript
+// frontends. SessionStore remains unchanged for runtimes that do not need it.
+type TurnHistoryPageReader interface {
+	ReadTurnHistoryPage(
+		ctx context.Context,
+		sessionKey string,
+		request memory.HistoryPageRequest,
+	) (memory.HistoryPage, error)
+}
+
 // ErrorAwareHistoryReader allows recovery paths to distinguish a failed write
 // from a write that became durable before reporting an error.
 type ErrorAwareHistoryReader interface {
