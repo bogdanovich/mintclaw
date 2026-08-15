@@ -110,6 +110,35 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 	}
 }
 
+func TestBrowserTransferRevisionRoutesOutputsWithoutGrantingUpload(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	revisions := host.TransferPolicyRevisions()
+	if len(revisions) != 1 || revisions[0] != "managed-v1" {
+		t.Fatalf("TransferPolicyRevisions() = %#v", revisions)
+	}
+	if slicesContains(host.profiles["managed"].AllowedActions, "file_chooser") {
+		t.Fatal("test profile unexpectedly grants file_chooser")
+	}
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("unauthorized browser upload")
+	frame := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_denied",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_denied",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "photo.jpg",
+		ContentType: "image/jpeg", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	responses := browserTransferResponses(t, host, frame)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameDeny {
+		t.Fatalf("upload responses without file_chooser = %#v", responses)
+	}
+}
+
 func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) {
 	content := bytes.Repeat([]byte("browser-output-"), 24000)
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{

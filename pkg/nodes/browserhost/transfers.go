@@ -294,9 +294,7 @@ func (host *BrowserHost) TransferPolicyRevisions() []string {
 	}
 	revisions := make([]string, 0, len(host.profiles))
 	for _, profile := range host.profiles {
-		if slicesContains(profile.AllowedActions, "file_chooser") {
-			revisions = append(revisions, profile.Revision)
-		}
+		revisions = append(revisions, profile.Revision)
 	}
 	sort.Strings(revisions)
 	return revisions
