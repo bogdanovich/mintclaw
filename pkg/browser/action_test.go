@@ -1787,6 +1787,7 @@ func TestBrokerExecutesApprovedDragWithTwoFreshSemanticBindings(t *testing.T) {
 	destination := DriverElement{Target: "e2", Role: "list", Name: "Done"}
 	worker.observation = driverObservationFixture(source, destination)
 	worker.resolveElements = map[string]DriverElement{source.Target: source, destination.Target: destination}
+	worker.resolveErr = ErrDriverRejected
 	owner := testOwner()
 	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
 	if err != nil {
@@ -1813,7 +1814,8 @@ func TestBrokerExecutesApprovedDragWithTwoFreshSemanticBindings(t *testing.T) {
 		DestinationTarget: destination.Target, DestinationElement: destination.Name,
 	}
 	if err != nil || invocation.State != InvocationSucceeded ||
-		!reflect.DeepEqual(worker.actions, []DriverAction{want}) {
+		!reflect.DeepEqual(worker.actions, []DriverAction{want}) || worker.resolveCalls != 0 ||
+		worker.observeCalls != 3 {
 		t.Fatalf("drag execution = %+v, %v; driver actions = %+v", invocation, err, worker.actions)
 	}
 }
@@ -1845,9 +1847,10 @@ func TestBrokerRejectsDragWhenDestinationBindingChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.resolveElements[destination.Target] = DriverElement{
+	changedDestination := DriverElement{
 		Target: destination.Target, Role: destination.Role, Name: "Archive",
 	}
+	worker.observation = driverObservationFixture(source, changedDestination)
 	if _, err = broker.ExecuteAction(
 		t.Context(),
 		owner,
