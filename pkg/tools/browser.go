@@ -976,7 +976,10 @@ func (tool *BrowserObserveTool) screenshotResult(
 
 func (*BrowserActTool) Name() string { return "browser_act" }
 func (*BrowserActTool) Description() string {
-	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval."
+	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval. " +
+		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
+		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
+		"context_generation, copy both together; missing or incomplete context authority fails closed."
 }
 
 func (tool *BrowserActTool) Parameters() map[string]any {
@@ -1020,17 +1023,40 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"browser_session_id":  map[string]any{"type": "string"},
-			"tab_id":              map[string]any{"type": "string"},
-			"frame_id":            map[string]any{"type": "string"},
-			"context_catalog_id":  map[string]any{"type": "string"},
-			"context_generation":  map[string]any{"type": "integer"},
-			"snapshot_id":         map[string]any{"type": "string"},
-			"snapshot_generation": map[string]any{"type": "integer"},
+			"browser_session_id": map[string]any{
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"tab_id": map[string]any{
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"frame_id": map[string]any{
+				"type":        "string",
+				"description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
+			},
+			"context_catalog_id": map[string]any{
+				"type":        "string",
+				"description": "Conditionally required: copy exactly when present in the fresh browser_observe result; otherwise omit.",
+			},
+			"context_generation": map[string]any{
+				"type":        "integer",
+				"description": "Conditionally required: copy exactly when context_catalog_id is present in the fresh browser_observe result; otherwise omit.",
+			},
+			"snapshot_id": map[string]any{
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"snapshot_generation": map[string]any{
+				"type":        "integer",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
 			"action": map[string]any{
-				"type":       "object",
-				"properties": actionProperties,
-				"required":   []string{"kind"}, "additionalProperties": false,
+				"type":                 "object",
+				"description":          "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
+				"properties":           actionProperties,
+				"required":             []string{"kind"},
+				"additionalProperties": false,
 			},
 		},
 		"required": []string{
@@ -1121,11 +1147,11 @@ func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
 
 func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error) {
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
-		return nil, &browserSafeDenialError{cause: browser.ErrDenied}
+		return nil, &browserActionSafeDenialError{cause: browser.ErrDenied}
 	}
 	preparation, err := tool.prepare(ctx, args)
 	if err != nil {
-		return nil, &browserSafeDenialError{cause: err}
+		return nil, &browserActionSafeDenialError{cause: err}
 	}
 	return map[string]any{
 		"prepared_action_id": preparation.Approval.PreparedActionID,
@@ -1156,7 +1182,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	preparation, err := tool.prepare(ctx, args)
 	if err != nil {
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	if preparation.RequiresApproval &&
 		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
@@ -1173,7 +1199,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	invocation, err := tool.runtime.source.ExecuteAction(
 		ctx, owner, preparation.Action.ID, approval,
@@ -1185,7 +1211,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 				errors.Is(err, browser.ErrSnapshotInvalidation),
 			)
 		}
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
@@ -1484,6 +1510,17 @@ func browserToolError(err error) *toolshared.ToolResult {
 	}
 }
 
+func browserActionToolError(err error) *toolshared.ToolResult {
+	if errors.Is(err, browser.ErrStale) {
+		return browserErrorResult(
+			"stale_snapshot",
+			"Browser action authority is stale. Observe again and copy every returned authority field into the action.",
+			"observe_again_and_copy_authority",
+		)
+	}
+	return browserToolError(err)
+}
+
 func browserContextToolError(err error) *toolshared.ToolResult {
 	switch {
 	case errors.Is(err, browser.ErrStale):
@@ -1507,4 +1544,14 @@ func (err *browserSafeDenialError) Error() string { return "browser approval pre
 func (err *browserSafeDenialError) Unwrap() error { return err.cause }
 func (err *browserSafeDenialError) SafeApprovalDenialResult() *toolshared.ToolResult {
 	return browserToolError(err.cause)
+}
+
+type browserActionSafeDenialError struct{ cause error }
+
+func (err *browserActionSafeDenialError) Error() string {
+	return "browser action approval preparation denied"
+}
+func (err *browserActionSafeDenialError) Unwrap() error { return err.cause }
+func (err *browserActionSafeDenialError) SafeApprovalDenialResult() *toolshared.ToolResult {
+	return browserActionToolError(err.cause)
 }
