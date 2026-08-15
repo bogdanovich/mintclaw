@@ -1009,6 +1009,14 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	if len(result.ArtifactTags) > 0 {
 		cloned.ArtifactTags = append([]string(nil), result.ArtifactTags...)
 	}
+	if len(result.WriteAudit) > 0 {
+		cloned.WriteAudit = make([]toolshared.WriteAuditEntry, len(result.WriteAudit))
+		for i, entry := range result.WriteAudit {
+			cloned.WriteAudit[i] = entry
+			cloned.WriteAudit[i].Metadata = cloneHookStringMap(entry.Metadata)
+		}
+	}
+	cloned.Observation = cloneToolObservation(result.Observation)
 	if result.Outbound != nil {
 		cloned.Outbound = &toolshared.OutboundDelivery{
 			Channel: result.Outbound.Channel, ChatID: result.Outbound.ChatID,
@@ -1045,6 +1053,22 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	if len(result.Messages) > 0 {
 		cloned.Messages = make([]providers.Message, len(result.Messages))
 		copy(cloned.Messages, result.Messages)
+	}
+	return &cloned
+}
+
+func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.ToolObservation {
+	if observation == nil {
+		return nil
+	}
+	cloned := *observation
+	if observation.Command != nil {
+		command := *observation.Command
+		if observation.Command.ExitCode != nil {
+			exitCode := *observation.Command.ExitCode
+			command.ExitCode = &exitCode
+		}
+		cloned.Command = &command
 	}
 	return &cloned
 }

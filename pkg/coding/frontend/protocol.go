@@ -86,6 +86,7 @@ type WriteAudit struct {
 	Target  string `json:"target"`
 	Action  string `json:"action"`
 	Success bool   `json:"success"`
+	Tool    string `json:"tool,omitempty"`
 }
 
 type ToolStatus string
@@ -109,6 +110,40 @@ type ToolState struct {
 	Duration        time.Duration `json:"duration,omitempty"`
 	OutputTruncated bool          `json:"output_truncated,omitempty"`
 	WriteAudit      []WriteAudit  `json:"write_audit,omitempty"`
+	Command         *CommandState `json:"command,omitempty"`
+}
+
+type CommandStatus string
+
+const (
+	CommandRunning   CommandStatus = "running"
+	CommandSucceeded CommandStatus = "succeeded"
+	CommandFailed    CommandStatus = "failed"
+	CommandCanceled  CommandStatus = "canceled"
+	CommandTimedOut  CommandStatus = "timed_out"
+)
+
+// CommandState is bounded tool-owned process output and lifecycle state.
+type CommandState struct {
+	Stdout     string        `json:"stdout,omitempty"`
+	Stderr     string        `json:"stderr,omitempty"`
+	Output     string        `json:"output,omitempty"`
+	Status     CommandStatus `json:"status,omitempty"`
+	SessionID  string        `json:"session_id,omitempty"`
+	ExitCode   *int          `json:"exit_code,omitempty"`
+	Truncated  bool          `json:"truncated,omitempty"`
+	Background bool          `json:"background,omitempty"`
+	Canceled   bool          `json:"canceled,omitempty"`
+	TimedOut   bool          `json:"timed_out,omitempty"`
+}
+
+// ChangedFile is derived only from a successful file-kind WriteAudit.
+type ChangedFile struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Tool   string `json:"tool,omitempty"`
+	TurnID string `json:"turn_id"`
+	CallID string `json:"call_id"`
 }
 
 type ContextUsage struct {
@@ -144,6 +179,7 @@ type ThreadSnapshot struct {
 	LastTurn        *LastTurnOutcome          `json:"last_turn,omitempty"`
 	Entries         []TranscriptEntry         `json:"entries,omitempty"`
 	Tools           []ToolState               `json:"tools,omitempty"`
+	ChangedFiles    []ChangedFile             `json:"changed_files,omitempty"`
 	ContextUsage    ContextUsage              `json:"context_usage,omitempty"`
 	LastCompaction  *CompactionState          `json:"last_compaction,omitempty"`
 	Workspace       *codingworkspace.Snapshot `json:"workspace,omitempty"`
@@ -166,6 +202,7 @@ const (
 	DeltaToolOutput         DeltaKind = "tool_output"
 	DeltaToolSuspended      DeltaKind = "tool_suspended"
 	DeltaToolCompleted      DeltaKind = "tool_completed"
+	DeltaFilesChanged       DeltaKind = "files_changed"
 	DeltaContextUsage       DeltaKind = "context_usage_updated"
 	DeltaWorkspaceUpdated   DeltaKind = "workspace_updated"
 	DeltaCompactionStarted  DeltaKind = "compaction_started"
@@ -192,6 +229,7 @@ type Delta struct {
 	LastTurn         *LastTurnOutcome          `json:"last_turn,omitempty"`
 	Entry            *TranscriptEntry          `json:"entry,omitempty"`
 	Tool             *ToolState                `json:"tool,omitempty"`
+	ChangedFiles     []ChangedFile             `json:"changed_files,omitempty"`
 	ContextUsage     *ContextUsage             `json:"context_usage,omitempty"`
 	Compaction       *CompactionState          `json:"compaction,omitempty"`
 	Workspace        *codingworkspace.Snapshot `json:"workspace,omitempty"`

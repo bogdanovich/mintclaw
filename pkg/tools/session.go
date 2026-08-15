@@ -202,16 +202,23 @@ func (s *ProcessSession) Write(data string) error {
 }
 
 func (s *ProcessSession) Read() string {
+	output, _ := s.ReadObservation()
+	return output
+}
+
+// ReadObservation drains buffered output and reports whether the bounded
+// process buffer has truncated any output in this session.
+func (s *ProcessSession) ReadObservation() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.outputBuffer.Len() == 0 {
-		return ""
+		return "", s.outputTruncated
 	}
 
 	data := s.outputBuffer.String()
 	s.outputBuffer.Reset()
-	return data
+	return data, s.outputTruncated
 }
 
 func (s *ProcessSession) ToSessionInfo() toolshared.SessionInfo {

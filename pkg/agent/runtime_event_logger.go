@@ -167,6 +167,16 @@ func runtimeEventLogSafePayload(payload any) any {
 		safe := *value
 		safe.DiagnosticMessage = ""
 		return &safe
+	case ToolExecEndPayload:
+		value.Observation = nil
+		return value
+	case *ToolExecEndPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Observation = nil
+		return &safe
 	default:
 		return payload
 	}

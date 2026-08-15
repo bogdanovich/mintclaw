@@ -368,6 +368,25 @@ func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
 	})
 }
 
+// ToolCommandOutput projects bounded process state owned by the command tool.
+// It never derives command output or lifecycle state from model-facing prose.
+func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) Delta {
+	return p.mutate(DeltaToolOutput, func(state *ThreadSnapshot, delta *Delta) {
+		turnID = normalizeTurnID(turnID)
+		tool := toolByID(state.Tools, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		command = p.boundedCommand(command)
+		tool.Command = &command
+		tool.Output, tool.OutputTruncated = commandDisplayOutput(command, p.limits.TextBytes)
+		p.upsertTool(state, delta, tool)
+		delta.Tool = &tool
+		delta.TurnID = tool.TurnID
+		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+	})
+}
+
 func (p *Projector) ToolCompleted(
 	turnID, callID, name, output string,
 	duration time.Duration,
@@ -390,13 +409,54 @@ func (p *Projector) ToolCompleted(
 		if failed {
 			tool.Status = ToolFailed
 		}
+		if tool.Command != nil {
+			switch tool.Command.Status {
+			case CommandCanceled:
+				tool.Status = ToolInterrupted
+			case CommandFailed, CommandTimedOut:
+				tool.Status = ToolFailed
+			}
+		}
 		tool.Duration = duration
-		tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
+		if output != "" || tool.Command == nil {
+			tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
+		}
 		tool.WriteAudit = p.boundedWriteAudit(writeAudit)
 		p.upsertTool(state, delta, tool)
 		delta.Tool = &tool
 		delta.TurnID = tool.TurnID
 		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+	})
+}
+
+// FilesChanged promotes only successful, verified file write audits into the
+// bounded changed-file projection.
+func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) Delta {
+	return p.mutate(DeltaFilesChanged, func(state *ThreadSnapshot, delta *Delta) {
+		turnID = normalizeTurnID(turnID)
+		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
+		for _, entry := range audit {
+			if !entry.Success || entry.Kind != "file" || strings.TrimSpace(entry.Target) == "" {
+				continue
+			}
+			changed = replaceChangedFile(changed, p.boundedChangedFile(ChangedFile{
+				Path: entry.Target, Action: entry.Action, Tool: entry.Tool, TurnID: turnID, CallID: callID,
+			}))
+			if overflow := len(changed) - p.limits.Tools; overflow > 0 {
+				changed = slices.Clone(changed[overflow:])
+				delta.RequiresSnapshot = true
+			}
+		}
+		for _, file := range changed {
+			state.ChangedFiles = replaceChangedFile(state.ChangedFiles, file)
+		}
+		if overflow := len(state.ChangedFiles) - p.limits.Tools; overflow > 0 {
+			state.ChangedFiles = slices.Clone(state.ChangedFiles[overflow:])
+			delta.RequiresSnapshot = true
+		}
+		delta.ChangedFiles = changed
+		delta.TurnID = turnID
+		delta.EntityID = toolEntityID(turnID, callID)
 	})
 }
 
@@ -679,7 +739,36 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 	tool.Arguments, _ = boundText(tool.Arguments, p.limits.TextBytes)
 	tool.Output, tool.OutputTruncated = boundText(tool.Output, p.limits.TextBytes)
 	tool.WriteAudit = p.boundedWriteAudit(tool.WriteAudit)
+	if tool.Command != nil {
+		command := p.boundedCommand(*tool.Command)
+		tool.Command = &command
+	}
 	return tool
+}
+
+func (p *Projector) boundedCommand(command CommandState) CommandState {
+	if command.ExitCode != nil {
+		exitCode := *command.ExitCode
+		command.ExitCode = &exitCode
+	}
+	stdout, stdoutTruncated := boundText(command.Stdout, p.limits.TextBytes)
+	stderr, stderrTruncated := boundText(command.Stderr, p.limits.TextBytes)
+	output, outputTruncated := boundText(command.Output, p.limits.TextBytes)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	command.Output = output
+	command.SessionID, _ = boundText(command.SessionID, p.limits.TextBytes)
+	command.Truncated = command.Truncated || stdoutTruncated || stderrTruncated || outputTruncated
+	return command
+}
+
+func (p *Projector) boundedChangedFile(file ChangedFile) ChangedFile {
+	file.Path, _ = boundText(file.Path, p.limits.TextBytes)
+	file.Action, _ = boundText(file.Action, p.limits.TextBytes)
+	file.Tool, _ = boundText(file.Tool, p.limits.TextBytes)
+	file.TurnID, _ = boundText(file.TurnID, p.limits.TextBytes)
+	file.CallID, _ = boundText(file.CallID, p.limits.TextBytes)
+	return file
 }
 
 func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
@@ -694,8 +783,35 @@ func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 		result[i].Kind, _ = boundText(result[i].Kind, p.limits.TextBytes)
 		result[i].Target, _ = boundText(result[i].Target, p.limits.TextBytes)
 		result[i].Action, _ = boundText(result[i].Action, p.limits.TextBytes)
+		result[i].Tool, _ = boundText(result[i].Tool, p.limits.TextBytes)
 	}
 	return result
+}
+
+func replaceChangedFile(files []ChangedFile, replacement ChangedFile) []ChangedFile {
+	result := make([]ChangedFile, 0, len(files)+1)
+	for _, file := range files {
+		if file.Path != replacement.Path {
+			result = append(result, file)
+		}
+	}
+	return append(result, replacement)
+}
+
+func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
+	if command.Output != "" {
+		output, truncated := boundText(command.Output, maximum)
+		return output, command.Truncated || truncated
+	}
+	output := command.Stdout
+	if command.Stderr != "" {
+		if output != "" {
+			output += "\nSTDERR:\n"
+		}
+		output += command.Stderr
+	}
+	output, truncated := boundText(output, maximum)
+	return output, command.Truncated || truncated
 }
 
 func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry TranscriptEntry) {
@@ -790,6 +906,7 @@ func contextError(ctx context.Context) error {
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = cloneTools(snapshot.Tools)
+	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)
 	if snapshot.LastTurn != nil {
 		lastTurn := *snapshot.LastTurn
 		snapshot.LastTurn = &lastTurn
@@ -811,10 +928,10 @@ func cloneDelta(delta Delta) Delta {
 		delta.Entry = &entry
 	}
 	if delta.Tool != nil {
-		tool := *delta.Tool
-		tool.WriteAudit = slices.Clone(tool.WriteAudit)
+		tool := cloneTool(*delta.Tool)
 		delta.Tool = &tool
 	}
+	delta.ChangedFiles = slices.Clone(delta.ChangedFiles)
 	if delta.Metadata != nil {
 		metadata := *delta.Metadata
 		delta.Metadata = &metadata
@@ -841,9 +958,22 @@ func cloneDelta(delta Delta) Delta {
 func cloneTools(tools []ToolState) []ToolState {
 	tools = slices.Clone(tools)
 	for i := range tools {
-		tools[i].WriteAudit = slices.Clone(tools[i].WriteAudit)
+		tools[i] = cloneTool(tools[i])
 	}
 	return tools
+}
+
+func cloneTool(tool ToolState) ToolState {
+	tool.WriteAudit = slices.Clone(tool.WriteAudit)
+	if tool.Command != nil {
+		command := *tool.Command
+		if command.ExitCode != nil {
+			exitCode := *command.ExitCode
+			command.ExitCode = &exitCode
+		}
+		tool.Command = &command
+	}
+	return tool
 }
 
 func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {

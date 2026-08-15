@@ -524,26 +524,45 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 	}
 	interrupted = interrupted || cmdCtx.Err() != nil
 
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
+	stdoutOutput := stdout.String()
+	stderrOutput := stderr.String()
+	observation := toolshared.CommandObservation{
+		Stdout:    truncateCommandOutput(stdoutOutput),
+		Stderr:    truncateCommandOutput(stderrOutput),
+		Truncated: len(stdoutOutput) > maxCommandOutputBytes || len(stderrOutput) > maxCommandOutputBytes,
+		Status:    "succeeded",
+	}
+	if cmd.ProcessState != nil {
+		exitCode := cmd.ProcessState.ExitCode()
+		observation.ExitCode = &exitCode
+	}
+	output := stdoutOutput
+	if stderrOutput != "" {
+		output += "\nSTDERR:\n" + stderrOutput
 	}
 	if interrupted {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			observation.Status = "timed_out"
+			observation.TimedOut = true
 			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
-			return t.commandOutputResult(msg, true, fmt.Errorf("command timeout: %w", cmdCtx.Err()))
+			return t.commandOutputResult(msg, true, fmt.Errorf("command timeout: %w", cmdCtx.Err())).
+				WithObservation(observation)
 		}
+		observation.Status = "canceled"
+		observation.Canceled = true
 		msg := "Command interrupted"
 		if output != "" {
 			msg += "\n\nPartial output before interruption:\n" + output
 		}
-		return t.commandOutputResult(msg, true, fmt.Errorf("command interrupted: %w", cmdCtx.Err()))
+		return t.commandOutputResult(msg, true, fmt.Errorf("command interrupted: %w", cmdCtx.Err())).
+			WithObservation(observation)
 	}
 
 	if err != nil {
+		observation.Status = "failed"
 		// Extract detailed exit information
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -563,7 +582,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 		output = "(no output)"
 	}
 
-	return t.commandOutputResult(output, err != nil, nil)
+	return t.commandOutputResult(output, err != nil, nil).WithObservation(observation)
 }
 
 func (t *ExecTool) commandOutputResult(output string, isError bool, resultErr error) *toolshared.ToolResult {
@@ -999,11 +1018,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s started", sessionID),
 		IsError: false,
-	}
+	}).WithObservation(toolshared.CommandObservation{
+		Background: true,
+		SessionID:  sessionID,
+		Status:     "running",
+	})
 }
 
 func (t *ExecTool) executeList() *toolshared.ToolResult {
@@ -1036,19 +1059,25 @@ func (t *ExecTool) executePoll(args map[string]any) *toolshared.ToolResult {
 		return toolshared.ErrorResult(err.Error())
 	}
 
+	status := session.GetStatus()
 	resp := toolshared.ExecResponse{
 		SessionID: sessionID,
-		Status:    session.GetStatus(),
+		Status:    status,
 		ExitCode:  session.GetExitCode(),
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		IsError: false,
-	}
+	}).WithObservation(toolshared.CommandObservation{
+		Background: true,
+		SessionID:  sessionID,
+		Status:     status,
+		ExitCode:   completedExitCode(session, status),
+	})
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *toolshared.ToolResult {
@@ -1065,21 +1094,30 @@ func (t *ExecTool) executeRead(args map[string]any) *toolshared.ToolResult {
 		return toolshared.ErrorResult(err.Error())
 	}
 
-	output := session.Read()
+	output, sessionTruncated := session.ReadObservation()
+	boundedOutput := truncateCommandOutput(output)
+	status := session.GetStatus()
 
 	resp := toolshared.ExecResponse{
 		SessionID: sessionID,
 		Output:    output,
-		Status:    session.GetStatus(),
+		Status:    status,
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		IsError: false,
-	}
+	}).WithObservation(toolshared.CommandObservation{
+		Output:     boundedOutput,
+		Truncated:  sessionTruncated || len(output) > maxCommandOutputBytes,
+		Background: true,
+		SessionID:  sessionID,
+		Status:     status,
+		ExitCode:   completedExitCode(session, status),
+	})
 }
 
 func (t *ExecTool) executeWrite(args map[string]any) *toolshared.ToolResult {
@@ -1112,18 +1150,24 @@ func (t *ExecTool) executeWrite(args map[string]any) *toolshared.ToolResult {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
 	}
 
+	status := session.GetStatus()
 	resp := toolshared.ExecResponse{
 		SessionID: sessionID,
-		Status:    session.GetStatus(),
+		Status:    status,
 	}
 	respData, err := json.Marshal(resp)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(respData),
 		IsError: false,
-	}
+	}).WithObservation(toolshared.CommandObservation{
+		Background: true,
+		SessionID:  sessionID,
+		Status:     status,
+		ExitCode:   completedExitCode(session, status),
+	})
 }
 
 func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
@@ -1161,11 +1205,24 @@ func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s killed", sessionID),
 		IsError: false,
+	}).WithObservation(toolshared.CommandObservation{
+		Background: true,
+		Canceled:   true,
+		SessionID:  sessionID,
+		Status:     "canceled",
+	})
+}
+
+func completedExitCode(session *ProcessSession, status string) *int {
+	if status == "running" {
+		return nil
 	}
+	exitCode := session.GetExitCode()
+	return &exitCode
 }
 
 // keyMap maps key names to their escape sequences.
@@ -1379,19 +1436,25 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *toolshared.ToolResult {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to send keys: %v", err))
 	}
 
+	status := session.GetStatus()
 	resp := toolshared.ExecResponse{
 		SessionID: sessionID,
-		Status:    "running",
+		Status:    status,
 		Output:    fmt.Sprintf("Sent keys: %v", keys),
 	}
 	respData, err := json.Marshal(resp)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{
+	return (&toolshared.ToolResult{
 		ForLLM:  string(respData),
 		IsError: false,
-	}
+	}).WithObservation(toolshared.CommandObservation{
+		Background: true,
+		SessionID:  sessionID,
+		Status:     status,
+		ExitCode:   completedExitCode(session, status),
+	})
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {

@@ -85,6 +85,11 @@ func (r *Reducer) Apply(delta Delta) error {
 	if delta.Tool != nil {
 		r.state.Tools = replaceTool(r.state.Tools, *delta.Tool)
 	}
+	if delta.Kind == DeltaFilesChanged {
+		for _, file := range delta.ChangedFiles {
+			r.state.ChangedFiles = replaceChangedFile(r.state.ChangedFiles, file)
+		}
+	}
 	return nil
 }
 
@@ -159,6 +164,7 @@ func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []Tran
 
 func replaceTool(tools []ToolState, replacement ToolState) []ToolState {
 	tools = slices.Clone(tools)
+	replacement = cloneTool(replacement)
 	for i := range tools {
 		if tools[i].TurnID == replacement.TurnID && tools[i].CallID == replacement.CallID {
 			tools[i] = replacement
