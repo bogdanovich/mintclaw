@@ -119,9 +119,20 @@ type ScreenshotWorker interface {
 	CaptureScreenshot(context.Context, int) (DriverScreenshot, error)
 }
 
+type BoundScreenshotWorker interface {
+	ActionWorker
+	CapturePageScreenshot(context.Context, string, int) (DriverScreenshot, error)
+}
+
 type ElementScreenshotWorker interface {
 	ActionWorker
-	CaptureElementScreenshot(context.Context, DriverElement, int) (DriverScreenshot, error)
+	CaptureElementScreenshot(
+		context.Context,
+		string,
+		string,
+		DriverElement,
+		int,
+	) (DriverScreenshot, error)
 }
 
 type UploadBinding struct {

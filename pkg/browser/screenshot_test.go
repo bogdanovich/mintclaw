@@ -88,7 +88,8 @@ func TestBrokerElementScreenshotRequiresFreshSemanticReference(t *testing.T) {
 	capture, err := broker.CaptureScreenshot(t.Context(), request)
 	if err != nil || capture.CaptureTarget != ScreenshotTargetElement ||
 		capture.SnapshotID != observation.SnapshotID ||
-		worker.screenshotElement != worker.observation.Elements[0] {
+		worker.screenshotElement != worker.observation.Elements[0] ||
+		worker.screenshotNavigationID == "" {
 		t.Fatalf("CaptureScreenshot() = %+v, %v; element = %+v", capture, err, worker.screenshotElement)
 	}
 

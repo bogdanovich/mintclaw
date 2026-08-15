@@ -59,27 +59,25 @@ func (broker *Broker) CaptureScreenshot(
 	var screenshot DriverScreenshot
 	if target == ScreenshotTargetElement {
 		element, ok := slot.refs[request.Ref]
-		if !ok {
-			return ScreenshotCapture{}, ErrStale
-		}
-		resolved, origin, resolveErr := worker.Resolve(ctx, element.Target)
-		if resolveErr != nil {
-			return ScreenshotCapture{}, resolveErr
-		}
-		if resolved != element || origin != session.SnapshotOrigin {
+		if !ok || slot.navigationID == "" {
 			return ScreenshotCapture{}, ErrStale
 		}
 		elementWorker, ok := worker.(ElementScreenshotWorker)
 		if !ok {
 			return ScreenshotCapture{}, ErrDriverIncompatible
 		}
-		screenshot, err = elementWorker.CaptureElementScreenshot(ctx, resolved, maximum)
+		screenshot, err = elementWorker.CaptureElementScreenshot(
+			ctx, slot.navigationID, session.SnapshotOrigin, element, maximum,
+		)
 	} else {
-		screenshotWorker, ok := worker.(ScreenshotWorker)
+		screenshotWorker, ok := worker.(BoundScreenshotWorker)
 		if !ok {
 			return ScreenshotCapture{}, ErrDriverIncompatible
 		}
-		screenshot, err = screenshotWorker.CaptureScreenshot(ctx, maximum)
+		if slot.navigationID == "" {
+			return ScreenshotCapture{}, ErrStale
+		}
+		screenshot, err = screenshotWorker.CapturePageScreenshot(ctx, slot.navigationID, maximum)
 	}
 	if err != nil {
 		return ScreenshotCapture{}, err

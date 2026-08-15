@@ -505,26 +505,111 @@ func TestPlaywrightWorkerCapturesBoundedPNGWithoutTextProjection(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerBindsPageScreenshotToNavigationIdentity(t *testing.T) {
+	png := append(append([]byte(nil), pngSignature...), []byte("page")...)
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	token := identity.token()
+	for _, test := range []struct {
+		name      string
+		identity  string
+		wantStale bool
+	}{
+		{name: "same_document", identity: "MINTCLAW_NAV_V1|ok|frame-1|loader-1|7"},
+		{name: "navigated", identity: "MINTCLAW_NAV_V1|ok|frame-1|loader-2|8", wantStale: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				"browser_take_screenshot": {Content: []sdkmcp.Content{
+					&sdkmcp.ImageContent{Data: png, MIMEType: "image/png"},
+				}},
+				"browser_run_code_unsafe": playwrightTextResult("### Result\n\"" + test.identity + "\""),
+			}}
+			worker := &playwrightWorker{
+				client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+				navigationID: identity, navigationToken: token,
+			}
+			screenshot, err := worker.CapturePageScreenshot(t.Context(), token, len(png))
+			if test.wantStale {
+				if !errors.Is(err, ErrStale) || len(screenshot.Data) != 0 {
+					t.Fatalf("CapturePageScreenshot() = %+v, %v", screenshot, err)
+				}
+			} else if err != nil || !bytes.Equal(screenshot.Data, png) {
+				t.Fatalf("CapturePageScreenshot() = %+v, %v", screenshot, err)
+			}
+			if len(client.calls) != 2 || client.calls[0].tool != "browser_take_screenshot" ||
+				client.calls[1].tool != "browser_run_code_unsafe" {
+				t.Fatalf("bound page screenshot calls = %+v", client.calls)
+			}
+		})
+	}
+}
+
 func TestPlaywrightWorkerCapturesSemanticElementWithoutSelector(t *testing.T) {
 	png := append(append([]byte(nil), pngSignature...), []byte("element")...)
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	token := identity.token()
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_snapshot": playwrightTextResult(
+			"### Page\n- Page URL: https://example.com/items\n" +
+				"### Snapshot\n```yaml\n- button \"Save\" [ref=e7]\n```",
+		),
 		"browser_take_screenshot": {Content: []sdkmcp.Content{
 			&sdkmcp.ImageContent{Data: png, MIMEType: "image/png"},
 		}},
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\"",
+		),
 	}}
-	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+		navigationID: identity, navigationToken: token,
+	}
 	element := DriverElement{Target: "e7", Role: "button", Name: "Save"}
-	screenshot, err := worker.CaptureElementScreenshot(t.Context(), element, len(png))
-	if err != nil || !bytes.Equal(screenshot.Data, png) || len(client.calls) != 1 {
+	screenshot, err := worker.CaptureElementScreenshot(
+		t.Context(), token, "https://example.com", element, len(png),
+	)
+	if err != nil || !bytes.Equal(screenshot.Data, png) || len(client.calls) != 3 {
 		t.Fatalf("CaptureElementScreenshot() = %+v, %v; calls = %+v", screenshot, err, client.calls)
 	}
-	arguments := client.calls[0].arguments
+	if client.calls[0].tool != "browser_snapshot" || client.calls[2].tool != "browser_run_code_unsafe" {
+		t.Fatalf("atomic element screenshot calls = %+v", client.calls)
+	}
+	arguments := client.calls[1].arguments
 	if arguments["target"] != element.Target || arguments["element"] != "semantic button" ||
 		arguments["type"] != "png" || arguments["scale"] != "css" {
 		t.Fatalf("element screenshot arguments = %#v", arguments)
 	}
 	if _, present := arguments["filename"]; present {
 		t.Fatalf("element screenshot exposed output path argument: %#v", arguments)
+	}
+}
+
+func TestPlaywrightWorkerDiscardsElementScreenshotAfterNavigationChange(t *testing.T) {
+	png := append(append([]byte(nil), pngSignature...), []byte("stale")...)
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	token := identity.token()
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_snapshot": playwrightTextResult(
+			"### Page\n- Page URL: https://example.com/items\n" +
+				"### Snapshot\n```yaml\n- button \"Save\" [ref=e7]\n```",
+		),
+		"browser_take_screenshot": {Content: []sdkmcp.Content{
+			&sdkmcp.ImageContent{Data: png, MIMEType: "image/png"},
+		}},
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-2|8\"",
+		),
+	}}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+		navigationID: identity, navigationToken: token,
+	}
+	screenshot, err := worker.CaptureElementScreenshot(
+		t.Context(), token, "https://example.com",
+		DriverElement{Target: "e7", Role: "button", Name: "Save"}, len(png),
+	)
+	if !errors.Is(err, ErrStale) || len(screenshot.Data) != 0 || len(client.calls) != 3 {
+		t.Fatalf("CaptureElementScreenshot() = %+v, %v; calls = %+v", screenshot, err, client.calls)
 	}
 }
 
