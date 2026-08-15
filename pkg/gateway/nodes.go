@@ -54,6 +54,8 @@ type nodeAdmissionRuntime struct {
 	registry            *nodes.FileRegistry
 	registryPath        string
 	handler             nodeAdmissionHandler
+	enrollmentHandler   http.Handler
+	enrollmentOffers    *nodes.EnrollmentOfferManager
 	sessions            *nodews.SessionHub
 	terminalStore       *nodes.GatewayTerminalStore
 	terminalStorePath   string
@@ -115,7 +117,8 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("open node registry: %w", err)
 	}
-	authenticator, err := nodes.NewAuthenticator(registry, nodes.AdmissionConfig{})
+	offers := nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{})
+	authenticator, err := nodes.NewAuthenticator(registry, nodes.AdmissionConfig{EnrollmentOffers: offers})
 	if err != nil {
 		return fmt.Errorf("create node authenticator: %w", err)
 	}
@@ -131,10 +134,28 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("create node admission handler: %w", err)
 	}
+	operatorToken, _, err := terminalOperatorAuthentication(cfg)
+	if err != nil {
+		return fmt.Errorf("configure Android enrollment operator authentication: %w", err)
+	}
+	enrollmentHandler := newNodeEnrollmentOperatorHandler(operatorToken, offers)
 	if runtime.mounted {
 		err = runtime.routes.ReplaceHTTPHandler(nodews.Path, handler)
+		if err == nil {
+			err = runtime.routes.ReplaceHTTPHandler(nodeEnrollmentOperatorPath, enrollmentHandler)
+			if err != nil && runtime.handler != nil {
+				rollbackErr := runtime.routes.ReplaceHTTPHandler(nodews.Path, runtime.handler)
+				err = errors.Join(err, rollbackErr)
+			}
+		}
 	} else {
 		err = runtime.routes.RegisterHTTPHandler(nodews.Path, handler)
+		if err == nil {
+			err = runtime.routes.RegisterHTTPHandler(nodeEnrollmentOperatorPath, enrollmentHandler)
+			if err != nil {
+				runtime.routes.UnregisterHTTPHandler(nodews.Path)
+			}
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("mount node admission route: %w", err)
@@ -144,6 +165,8 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	runtime.sessions = sessions
 	runtime.registryPath = registryPath
 	runtime.handler = handler
+	runtime.enrollmentHandler = enrollmentHandler
+	runtime.enrollmentOffers = offers
 	runtime.generation++
 	runtime.mounted = true
 	runtime.registryMu.Unlock()
@@ -485,6 +508,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.registryMu.Unlock()
 	if wasMounted {
 		runtime.routes.UnregisterHTTPHandler(nodews.Path)
+		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
 	}
 	runtime.registryMu.Lock()
 	terminalMounted := runtime.terminalMounted
@@ -537,6 +561,8 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.invocationStorePath = ""
 	runtime.registryPath = ""
 	runtime.handler = nil
+	runtime.enrollmentHandler = nil
+	runtime.enrollmentOffers = nil
 	runtime.registryMu.Unlock()
 	return nil
 }

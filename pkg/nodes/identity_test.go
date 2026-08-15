@@ -261,6 +261,29 @@ func TestP256IdentityProofRejectsHighSSignature(t *testing.T) {
 	}
 }
 
+func TestP256IdentityProofBindsEnrollmentOfferID(t *testing.T) {
+	privateKey := testP256PrivateKey(t)
+	proof := newTestP256IdentityProof(t, privateKey, "challenge")
+	proof.EnrollmentOfferID = strings.Repeat("a", 22)
+	proof.EnrollmentProof = base64.RawURLEncoding.EncodeToString(make([]byte, sha256.Size))
+	signTestP256IdentityProof(t, privateKey, &proof)
+	if _, err := proof.VerifyIdentity(); err != nil {
+		t.Fatalf("enrollment-bound VerifyIdentity() error = %v", err)
+	}
+	proof.EnrollmentOfferID = strings.Repeat("b", 22)
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("tampered enrollment offer VerifyIdentity() error = %v", err)
+	}
+}
+
+func TestIdentityProofRejectsIncompleteEnrollmentProof(t *testing.T) {
+	proof := newTestP256IdentityProof(t, testP256PrivateKey(t), "challenge")
+	proof.EnrollmentOfferID = strings.Repeat("a", 22)
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("incomplete enrollment VerifyIdentity() error = %v", err)
+	}
+}
+
 func TestP256IdentityProofRejectsMalformedPublicKeysAndSignatures(t *testing.T) {
 	proof := newTestP256IdentityProof(t, testP256PrivateKey(t), "challenge")
 	tests := []struct {
@@ -379,6 +402,12 @@ func newTestP256IdentityProof(t *testing.T, privateKey *ecdsa.PrivateKey, nonce 
 		ClientVersion: "android-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
 	}
+	signTestP256IdentityProof(t, privateKey, &proof)
+	return proof
+}
+
+func signTestP256IdentityProof(t *testing.T, privateKey *ecdsa.PrivateKey, proof *IdentityProof) {
+	t.Helper()
 	transcript, err := proof.transcript()
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +425,6 @@ func newTestP256IdentityProof(t *testing.T, privateKey *ecdsa.PrivateKey, nonce 
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
 	proof.Signature = base64.RawURLEncoding.EncodeToString(signature)
-	return proof
 }
 
 func testP256PublicKeyBytes(t *testing.T, privateKey *ecdsa.PrivateKey) []byte {

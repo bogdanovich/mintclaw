@@ -2,12 +2,15 @@ package nodes
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,11 +74,12 @@ func TestAuthenticatorAdmitsAndReconnectsP256Identity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	offers := NewEnrollmentOfferManager(EnrollmentOfferConfig{})
+	privateKey := testP256PrivateKey(t)
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{EnrollmentOffers: offers})
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := testP256PrivateKey(t)
 	newProof := func() IdentityProof {
 		challenge, challengeErr := authenticator.IssueChallenge()
 		if challengeErr != nil {
@@ -85,6 +89,7 @@ func TestAuthenticatorAdmitsAndReconnectsP256Identity(t *testing.T) {
 	}
 
 	proof := newProof()
+	attachTestEnrollmentOffer(t, offers, privateKey, &proof)
 	admission, err := authenticator.Authenticate(proof)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +119,100 @@ func TestAuthenticatorAdmitsAndReconnectsP256Identity(t *testing.T) {
 	if admission.Result.State != StateConnected {
 		t.Fatalf("reconnect state = %q", admission.Result.State)
 	}
+}
+
+func TestAuthenticatorRequiresOfferBeforeUnknownAndroidPairing(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newTestP256IdentityProof(t, testP256PrivateKey(t), challenge.Nonce)
+	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentRequired) {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if _, exists, err := registry.Pending(proof.NodeID); err != nil || exists {
+		t.Fatalf("unauthorized Pending() = exists %v, error %v", exists, err)
+	}
+}
+
+func TestAuthenticatorRejectsEnrollmentAuthorityFromNonAndroidIdentity(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewIdentityProof(
+		privateKey,
+		challenge.Nonce,
+		ProtocolV1,
+		ProtocolV1,
+		"v0.1.0",
+		"linux",
+		"amd64",
+		CapabilityCatalog{},
+		ExecutionProfile{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.EnrollmentOfferID = strings.Repeat("a", 22)
+	proof.EnrollmentProof = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	transcript, err := proof.transcript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, transcript))
+	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentOfferInvalid) {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if _, exists, err := registry.Pending(proof.NodeID); err != nil || exists {
+		t.Fatalf("unauthorized Pending() = exists %v, error %v", exists, err)
+	}
+}
+
+func attachTestEnrollmentOffer(
+	t *testing.T,
+	offers *EnrollmentOfferManager,
+	privateKey *ecdsa.PrivateKey,
+	proof *IdentityProof,
+) {
+	t.Helper()
+	offer, err := offers.Issue("wss://gateway.example/nodes/v1/ws", "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.EnrollmentOfferID = offer.OfferID
+	signTestP256IdentityProof(t, privateKey, proof)
+	secret, err := base64.RawURLEncoding.Strict().DecodeString(offer.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := proof.transcript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.EnrollmentProof = base64.RawURLEncoding.EncodeToString(
+		enrollmentOfferProof(secret, offer.OfferID, transcript),
+	)
 }
 
 func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) {

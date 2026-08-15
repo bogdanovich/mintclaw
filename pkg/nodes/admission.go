@@ -72,18 +72,20 @@ type Admission struct {
 }
 
 type AdmissionConfig struct {
-	ChallengeTTL  time.Duration
-	MaxChallenges int
-	Random        io.Reader
-	Now           func() time.Time
+	ChallengeTTL     time.Duration
+	MaxChallenges    int
+	Random           io.Reader
+	Now              func() time.Time
+	EnrollmentOffers *EnrollmentOfferManager
 }
 
 type Authenticator struct {
-	registry      PairingRegistry
-	ttl           time.Duration
-	maxChallenges int
-	random        io.Reader
-	now           func() time.Time
+	registry         PairingRegistry
+	ttl              time.Duration
+	maxChallenges    int
+	random           io.Reader
+	now              func() time.Time
+	enrollmentOffers *EnrollmentOfferManager
 
 	mu         sync.Mutex
 	challenges map[string]time.Time
@@ -106,12 +108,13 @@ func NewAuthenticator(registry PairingRegistry, cfg AdmissionConfig) (*Authentic
 		cfg.Now = time.Now
 	}
 	return &Authenticator{
-		registry:      registry,
-		ttl:           cfg.ChallengeTTL,
-		maxChallenges: cfg.MaxChallenges,
-		random:        cfg.Random,
-		now:           cfg.Now,
-		challenges:    make(map[string]time.Time),
+		registry:         registry,
+		ttl:              cfg.ChallengeTTL,
+		maxChallenges:    cfg.MaxChallenges,
+		random:           cfg.Random,
+		now:              cfg.Now,
+		enrollmentOffers: cfg.EnrollmentOffers,
+		challenges:       make(map[string]time.Time),
 	}, nil
 }
 
@@ -168,10 +171,27 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 		return Admission{}, err
 	}
 	if !exists {
-		if persistErr := auth.persistPending(node, publicKey, proof, now); persistErr != nil {
-			return Admission{}, persistErr
+		if proof.Platform == "android" {
+			if auth.enrollmentOffers == nil {
+				return Admission{}, ErrEnrollmentRequired
+			}
+			if consumeErr := auth.enrollmentOffers.Consume(proof, func() error {
+				return auth.persistPending(node, publicKey, proof, now)
+			}); consumeErr != nil {
+				return Admission{}, consumeErr
+			}
+		} else {
+			if proof.EnrollmentOfferID != "" || proof.EnrollmentProof != "" {
+				return Admission{}, ErrEnrollmentOfferInvalid
+			}
+			if persistErr := auth.persistPending(node, publicKey, proof, now); persistErr != nil {
+				return Admission{}, persistErr
+			}
 		}
 		return Admission{Result: AdmissionResult{NodeID: node.ID, State: StatePendingPairing}}, nil
+	}
+	if proof.EnrollmentOfferID != "" || proof.EnrollmentProof != "" {
+		return Admission{}, ErrEnrollmentOfferInvalid
 	}
 	registrationAlgorithm, err := registration.KeyAlgorithm.normalized()
 	if err != nil || registrationAlgorithm != publicKey.Algorithm ||
