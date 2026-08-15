@@ -389,6 +389,51 @@ func TestLateCompactionStartDoesNotClaimNewerTurnActivity(t *testing.T) {
 	}
 }
 
+func TestBackgroundCompactionDoesNotStrandForegroundActivity(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(*Projector)
+		want CompactionStatus
+	}{
+		{
+			name: "background start",
+			end: func(projector *Projector) {
+				projector.CompactionStarted("", "summarize", true)
+				projector.CompactionCompleted("turn-1", "llm_retry", 12, false, false)
+			},
+			want: CompactionCompleted,
+		},
+		{
+			name: "background completion",
+			end: func(projector *Projector) {
+				projector.CompactionCompleted("", "summarize", 4, false, true)
+				projector.CompactionFailed("turn-1", "llm_retry", false)
+			},
+			want: CompactionFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := NewProjector("thread-1", ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "fix it")
+			projector.CompactionStarted("turn-1", "llm_retry", false)
+			test.end(projector)
+
+			snapshot, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Activity != ActivityRunning || snapshot.LastCompaction == nil ||
+				snapshot.LastCompaction.Status != test.want {
+				t.Fatalf("interleaved compaction snapshot = %+v", snapshot)
+			}
+		})
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,
