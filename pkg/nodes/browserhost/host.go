@@ -104,6 +104,7 @@ type BrowserHost struct {
 	completedTransfers map[string]browserStagedArtifact
 	outputArtifacts    map[string]browserOutputArtifact
 	outputTransfers    map[string]*browserOutputTransfer
+	outputExpiryAfter  func(time.Duration) <-chan time.Time
 
 	beforeTransferAdmission func()
 	beforeTransferCleanup   func()
@@ -169,6 +170,7 @@ func newBrowserHost(
 		completedTransfers: make(map[string]browserStagedArtifact),
 		outputArtifacts:    make(map[string]browserOutputArtifact),
 		outputTransfers:    make(map[string]*browserOutputTransfer),
+		outputExpiryAfter:  time.After,
 	}, nil
 }
 

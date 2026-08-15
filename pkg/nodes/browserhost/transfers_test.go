@@ -185,7 +185,7 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	}
 }
 
-func TestBrowserOutputTransferDisconnectRemovesOnlyActiveStream(t *testing.T) {
+func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
 	content := bytes.Repeat([]byte("bounded-output"), 30000)
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
@@ -214,6 +214,7 @@ func TestBrowserOutputTransferDisconnectRemovesOnlyActiveStream(t *testing.T) {
 	}
 	prepare := browserOutputPrepareFrame(t, descriptor)
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	chunkSeen := make(chan struct{}, 1)
 	if err = host.HandleTransferFrame(ctx, prepare, func(response protocol.TransferFrame) error {
 		if response.Type == protocol.TransferFrameChunk {
@@ -228,7 +229,22 @@ func TestBrowserOutputTransferDisconnectRemovesOnlyActiveStream(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first output chunk was not sent")
 	}
-	cancel()
+	host.transferMu.Lock()
+	transfer := host.outputTransfers[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if transfer == nil {
+		t.Fatal("output transfer was not active")
+	}
+	cancelFrame := prepare
+	cancelFrame.Type, cancelFrame.Payload = protocol.TransferFrameCancel, nil
+	if err = host.HandleTransferFrame(ctx, cancelFrame, func(protocol.TransferFrame) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-transfer.streamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled output stream remained blocked waiting for an ACK")
+	}
 	for deadline := time.Now().Add(5 * time.Second); ; {
 		host.transferMu.Lock()
 		_, active := host.outputTransfers[descriptor.TransferID]
@@ -236,17 +252,67 @@ func TestBrowserOutputTransferDisconnectRemovesOnlyActiveStream(t *testing.T) {
 		host.transferMu.Unlock()
 		if !active {
 			if !retained {
-				t.Fatal("disconnect removed immutable output")
+				t.Fatal("cancel removed immutable output")
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("disconnect did not clean active output transfer")
+			t.Fatal("cancel did not clean active output transfer")
 		}
 		time.Sleep(time.Millisecond)
 	}
 	if received := downloadBrowserOutput(t, host, descriptor, nil); !bytes.Equal(received, content) {
 		t.Fatalf("retry returned %d bytes", len(received))
+	}
+}
+
+func TestBrowserOutputExpiryRemovesNeverTransferredArtifact(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expirySignal := make(chan time.Time, 1)
+	host.outputExpiryAfter = func(time.Duration) <-chan time.Time { return expirySignal }
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_expiry_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "expiring.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, []byte("expiring output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.transferMu.Lock()
+	artifact := host.outputArtifacts[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if artifact.path == "" {
+		t.Fatal("output was not registered")
+	}
+	expirySignal <- host.now()
+	select {
+	case <-artifact.expiryDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("registered output did not expire")
+	}
+	host.transferMu.Lock()
+	_, retained := host.outputArtifacts[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if retained {
+		t.Fatal("expired output remained registered")
+	}
+	if _, statErr := os.Stat(artifact.path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expired output remained on disk: %v", statErr)
 	}
 }
 

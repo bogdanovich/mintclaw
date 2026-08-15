@@ -61,16 +61,20 @@ type browserOutputArtifact struct {
 	binding    protocol.TransferFrame
 	directory  string
 	path       string
+	expiryDone <-chan struct{}
+	expiryStop context.CancelFunc
 }
 
 type browserOutputTransfer struct {
 	artifact   browserOutputArtifact
 	lifetime   *browserArtifactLifetime
+	cancel     context.CancelFunc
 	file       *os.File
 	sequence   uint64
 	pendingAck uint64
 	lastAck    uint64
 	acked      chan uint64
+	streamDone chan struct{}
 	finished   bool
 }
 
@@ -155,10 +159,39 @@ func (host *BrowserHost) RegisterOutput(
 		_ = os.RemoveAll(directory)
 		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostBusy
 	}
-	host.outputArtifacts[descriptor.TransferID] = browserOutputArtifact{
+	expiryContext, stopExpiry := context.WithCancel(context.Background())
+	expiryDone := make(chan struct{})
+	artifact := browserOutputArtifact{
 		descriptor: descriptor, binding: binding, directory: directory, path: path,
+		expiryDone: expiryDone, expiryStop: stopExpiry,
 	}
+	host.outputArtifacts[descriptor.TransferID] = artifact
+	go host.watchBrowserOutputExpiry(expiryContext, descriptor.TransferID, artifact, expiryDone)
 	return descriptor, nil
+}
+
+func (host *BrowserHost) watchBrowserOutputExpiry(
+	ctx context.Context,
+	transferID string,
+	artifact browserOutputArtifact,
+	done chan<- struct{},
+) {
+	defer close(done)
+	delay := time.Unix(artifact.descriptor.ExpiresAt, 0).Sub(host.now().UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-host.outputExpiryAfter(delay):
+	}
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	current, ok := host.outputArtifacts[transferID]
+	if ok && current.descriptor == artifact.descriptor && current.directory == artifact.directory {
+		host.removeBrowserOutputLocked(transferID)
+	}
 }
 
 func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool {
@@ -329,9 +362,11 @@ func (host *BrowserHost) prepareBrowserOutput(
 		host.transferMu.Unlock()
 		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "storage_unavailable"))
 	}
-	lifetime := newBrowserArtifactLifetime(ctx)
+	transferContext, cancel := context.WithCancel(ctx)
+	lifetime := newBrowserArtifactLifetime(transferContext)
 	transfer := &browserOutputTransfer{
-		artifact: artifact, lifetime: lifetime, file: file, acked: make(chan uint64, 1),
+		artifact: artifact, lifetime: lifetime, cancel: cancel, file: file,
+		acked: make(chan uint64, 1), streamDone: make(chan struct{}),
 	}
 	host.outputTransfers[frame.TransferID] = transfer
 	host.transferMu.Unlock()
@@ -368,6 +403,7 @@ func (host *BrowserHost) streamBrowserOutput(
 	binding protocol.TransferFrame,
 	send func(protocol.TransferFrame) error,
 ) {
+	defer close(transfer.streamDone)
 	buffer := make([]byte, protocol.MaxTransferChunkBytes)
 	hasher := sha256.New()
 	var observed uint64
@@ -523,6 +559,7 @@ func (host *BrowserHost) removeBrowserOutputTransferLocked(transferID string, tr
 	if host.outputTransfers[transferID] != transfer {
 		return
 	}
+	transfer.cancel()
 	if transfer.file != nil {
 		_ = transfer.file.Close()
 	}
@@ -830,6 +867,7 @@ func (host *BrowserHost) removeBrowserOutputLocked(transferID string) {
 	if !ok {
 		return
 	}
+	artifact.expiryStop()
 	_ = os.RemoveAll(artifact.directory)
 	delete(host.outputArtifacts, transferID)
 }
