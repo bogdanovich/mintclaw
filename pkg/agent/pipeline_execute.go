@@ -159,7 +159,10 @@ func inferSkillNamesFromToolCall(ts *turnState, toolName string, toolArgs map[st
 	if ts == nil || toolName != "read_file" {
 		return nil
 	}
-	if workspace, _ := toolArgs["workspace"].(string); strings.TrimSpace(workspace) != "" {
+	if _, remoteSelector := toolArgs["remote_workspace"]; remoteSelector {
+		return nil
+	}
+	if _, removedSelector := toolArgs["workspace"]; removedSelector {
 		return nil
 	}
 

@@ -130,13 +130,13 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(
 		return toolshared.ErrorResult("remote workspace result is malformed")
 	}
 	toolResult := nodeJSONResult(map[string]any{
-		"placement":          "remote",
-		"workspace":          workspaceAlias,
-		"workspace_revision": binding.config.Revision,
-		"target":             binding.config.Target,
-		"invocation_id":      view.InvocationID,
-		"state":              view.State,
-		"result":             payload,
+		"placement":                 "remote",
+		remoteWorkspaceArgument:     workspaceAlias,
+		"remote_workspace_revision": binding.config.Revision,
+		"target":                    binding.config.Target,
+		"invocation_id":             view.InvocationID,
+		"state":                     view.State,
+		"result":                    payload,
 	})
 	if toolResult.IsError {
 		return toolResult
@@ -211,8 +211,8 @@ func (router *RemoteWorkspaceNodeRouter) ApprovalArgumentsRemoteWorkspace(
 	if err != nil {
 		return nil, err
 	}
-	approval["workspace"] = workspaceAlias
-	approval["workspace_revision"] = binding.config.Revision
+	approval[remoteWorkspaceArgument] = workspaceAlias
+	approval["remote_workspace_revision"] = binding.config.Revision
 	approval["operation"] = toolName
 	if path, _ := toolArgs["path"].(string); path != "" {
 		approval["path"] = path

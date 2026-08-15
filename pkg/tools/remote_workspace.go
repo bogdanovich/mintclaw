@@ -10,6 +10,8 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+const remoteWorkspaceArgument = "remote_workspace"
+
 // RemoteWorkspaceSource executes one compatible tool against an explicit
 // operator-configured remote workspace. It is deliberately narrower than a
 // generic tool proxy.
@@ -52,7 +54,7 @@ func (tool *RemoteWorkspaceTool) ApprovalArguments(
 }
 
 // RemoteWorkspaceTool preserves one agent-specific local tool and routes
-// only calls that explicitly carry a configured workspace alias.
+// only calls that explicitly carry a configured remote workspace alias.
 type RemoteWorkspaceTool struct {
 	local    toolshared.Tool
 	remote   RemoteWorkspaceSource
@@ -86,11 +88,12 @@ func (tool *RemoteWorkspaceTool) Name() string { return tool.local.Name() }
 
 func (tool *RemoteWorkspaceTool) Description() string {
 	description := tool.local.Description() +
-		" Omit workspace for the current gateway-local workspace, or pass one configured remote workspace alias. " +
+		" Omit remote_workspace for the current agent's gateway-local filesystem, or pass one configured remote " +
+		"execution workspace alias. A remote workspace is not a MintClaw agent profile, gateway service, or deployment. " +
 		"Call this tool directly for remote workspace operations; do not use nodes discovery for workspace.* commands. " +
 		"A failed remote call never falls back to the local host."
 	if tool.Name() == "apply_patch" {
-		description += " To delete a remote file, pass its workspace alias and a *** Delete File: path patch."
+		description += " To delete a remote file, pass its remote_workspace alias and a *** Delete File: path patch."
 	}
 	return description
 }
@@ -102,11 +105,12 @@ func (tool *RemoteWorkspaceTool) Parameters() map[string]any {
 		properties = make(map[string]any)
 		parameters["properties"] = properties
 	}
-	properties["workspace"] = map[string]any{
+	properties[remoteWorkspaceArgument] = map[string]any{
 		"type": "string",
 		"enum": append([]string(nil), tool.aliases...),
-		"description": "Optional operator-configured remote workspace alias. Pass an enum value to run this tool " +
-			"remotely; omit it for gateway-local execution. Do not inspect or invoke internal workspace.* commands.",
+		"description": "Optional operator-configured remote execution workspace alias. It does not select a " +
+			"MintClaw agent profile, gateway service, or deployment. Pass an enum value to run this tool remotely; " +
+			"omit it for the current agent's gateway-local filesystem. Do not inspect or invoke internal workspace.* commands.",
 	}
 	if tool.Name() == "write_file" {
 		properties["expected_sha256"] = map[string]any{
@@ -140,7 +144,10 @@ func (tool *RemoteWorkspaceTool) Execute(
 func (tool *RemoteWorkspaceTool) routeArguments(
 	args map[string]any,
 ) (string, map[string]any, bool, error) {
-	raw, exists := args["workspace"]
+	if _, legacySelector := args["workspace"]; legacySelector {
+		return "", nil, false, ErrRemoteWorkspaceUnavailable
+	}
+	raw, exists := args[remoteWorkspaceArgument]
 	if !exists {
 		if _, remoteOnly := args["expected_sha256"]; remoteOnly {
 			return "", nil, false, ErrRemoteWorkspaceUnavailable
@@ -150,7 +157,7 @@ func (tool *RemoteWorkspaceTool) routeArguments(
 	workspace, ok := raw.(string)
 	workspace = strings.TrimSpace(workspace)
 	routed := cloneToolArguments(args)
-	delete(routed, "workspace")
+	delete(routed, remoteWorkspaceArgument)
 	if !ok || workspace == "" {
 		if _, remoteOnly := routed["expected_sha256"]; remoteOnly {
 			return "", nil, false, ErrRemoteWorkspaceUnavailable

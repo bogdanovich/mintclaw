@@ -28,7 +28,7 @@ remote coding workers, browser/MCP routing, synchronization, or shell jobs.
 | Requirement | Implementation | Authoritative test evidence | Deployment state |
 | --- | --- | --- | --- |
 | One configured alias binds one target and working scope | #635 | config validation, target-policy isolation, fresh catalog, profile and revision tests | `vpn-workspace` and `ab-workspace` each bind one target, one scope, and one exact file/job profile |
-| Local omission and explicit remote selection | #635 | decorator, unknown-alias/no-fallback, reload, and `TestRemoteWorkspaceVerticalSliceRealProcess` local-vs-remote read | Omitted workspace read remained gateway-local; explicit Linux and macOS aliases produced remote effects |
+| Local omission and explicit remote selection | #635 | decorator, unknown-alias/no-fallback, reload, and `TestRemoteWorkspaceVerticalSliceRealProcess` local-vs-remote read | Omitted `remote_workspace` remained gateway-local; explicit Linux and macOS aliases produced remote effects |
 | Bounded native read and search | #635 | traversal/symlink/special-file, pagination, ignored-file, ordering, timeout, result-bound, Linux/macOS, race, and real-process WSS tests | Live exact-file reads and searches succeeded on both deployed profiles |
 | Whole-file write and structured patch | #663, #679 | exact approval, create/replace/delete, identity/hash conflict, prepared publication, committed-prefix truth, multi-profile projection, and real-process WSS tests | Linux and macOS create/read/patch/read canaries produced verified bytes and SHA-256 values |
 | Foreground direct argv in the same scope | #674 | alias-only arguments, timeout/output bounds, config reload, failure/unknown, one-launch, and real-process WSS tests | `echo p8a-foreground-ok` succeeded on both platforms through `workspace_exec` |
@@ -46,8 +46,10 @@ pairs it over the production WSS admission/session stack, registers the
 ordinary agent tool surface, and performs native filesystem and process
 effects beneath a temporary companion-owned root.
 
-The canary proves that omitting `workspace` reads the gateway-local file while
-the explicit alias reads the distinct remote file. It then creates remote
+The canary proves that omitting `remote_workspace` reads the current agent's
+gateway-local file while an explicit alias reads the distinct remote file. The
+selector names a remote execution workspace, never a MintClaw agent profile,
+gateway service, or deployment. The canary then creates remote
 content, finds it with native bounded search, patches it, runs an allowlisted
 foreground direct-argv fixture, and starts the same fixture through the
 existing durable job manager. Finally it disconnects the real companion after
@@ -85,7 +87,7 @@ Rollback removes the remote workspace entry and its agent target grant first,
 then removes workspace commands/profile bindings from the affected companion
 and pairing approval. It does not restore an older invocation ledger over
 newer durable state. Local file tools need no migration or rollback because
-their omitted-workspace path is unchanged.
+their omitted-`remote_workspace` path is unchanged.
 
 ## Deployment evidence
 

@@ -124,7 +124,7 @@ func TestRemoteWorkspaceVerticalSliceRealProcess(t *testing.T) {
 		t.Fatal("workspace_exec is unavailable")
 	}
 	uncertainArgs := map[string]any{
-		"workspace": remoteWorkspaceAlias, "executable": "fixture",
+		"remote_workspace": remoteWorkspaceAlias, "executable": "fixture",
 		"args": []any{"uncertain"}, "mode": "foreground", "timeout_seconds": float64(10),
 	}
 	resultChannel := make(chan *toolshared.ToolResult, 1)
@@ -332,15 +332,15 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("local default result = %q", content)
 		}
 		return remoteWorkspaceToolCall("remote-read", "read_file", map[string]any{
-			"workspace": remoteWorkspaceAlias, "path": "same.txt", "offset": 0, "length": 1024,
+			"remote_workspace": remoteWorkspaceAlias, "path": "same.txt", "offset": 0, "length": 1024,
 		}), nil
 	}
 	payload, err := nodeP0LastToolPayload(call)
 	if err != nil {
 		return nil, err
 	}
-	if payload["placement"] != "remote" || payload["workspace"] != remoteWorkspaceAlias ||
-		payload["target"] != "remote" || payload["workspace_revision"] != "project-workspace-v1" {
+	if payload["placement"] != "remote" || payload["remote_workspace"] != remoteWorkspaceAlias ||
+		payload["target"] != "remote" || payload["remote_workspace_revision"] != "project-workspace-v1" {
 		return nil, fmt.Errorf("remote workspace envelope = %#v", payload)
 	}
 	switch step {
@@ -350,12 +350,12 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("remote read = %#v", payload)
 		}
 		return remoteWorkspaceToolCall("remote-write", "write_file", map[string]any{
-			"workspace": remoteWorkspaceAlias, "path": "created.txt",
+			"remote_workspace": remoteWorkspaceAlias, "path": "created.txt",
 			"content": "needle before\n", "overwrite": false,
 		}), nil
 	case 3:
 		return remoteWorkspaceToolCall("remote-search", "search_files", map[string]any{
-			"workspace": remoteWorkspaceAlias, "pattern": "needle",
+			"remote_workspace": remoteWorkspaceAlias, "pattern": "needle",
 		}), nil
 	case 4:
 		result, _ := payload["result"].(map[string]any)
@@ -363,7 +363,7 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("remote search = %#v", payload)
 		}
 		return remoteWorkspaceToolCall("remote-patch", "apply_patch", map[string]any{
-			"workspace": remoteWorkspaceAlias,
+			"remote_workspace": remoteWorkspaceAlias,
 			"input": "*** Begin Patch\n*** Update File: created.txt\n@@\n-needle before\n" +
 				"+needle after\n*** End Patch",
 		}), nil
@@ -373,7 +373,7 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("remote patch = %#v", payload)
 		}
 		return remoteWorkspaceToolCall("remote-patched-read", "read_file", map[string]any{
-			"workspace": remoteWorkspaceAlias, "path": "created.txt", "offset": 0, "length": 1024,
+			"remote_workspace": remoteWorkspaceAlias, "path": "created.txt", "offset": 0, "length": 1024,
 		}), nil
 	case 6:
 		result, _ := payload["result"].(map[string]any)
@@ -382,7 +382,7 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("remote patched read = %#v", payload)
 		}
 		return remoteWorkspaceToolCall("remote-foreground", "workspace_exec", map[string]any{
-			"workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"foreground"},
+			"remote_workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"foreground"},
 			"mode": "foreground", "timeout_seconds": 5,
 		}), nil
 	case 7:
@@ -391,7 +391,7 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			return nil, fmt.Errorf("remote foreground = %#v", payload)
 		}
 		return remoteWorkspaceToolCall("remote-job", "workspace_exec", map[string]any{
-			"workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"job"},
+			"remote_workspace": remoteWorkspaceAlias, "executable": "fixture", "args": []any{"job"},
 			"mode": "job", "timeout_seconds": 10,
 		}), nil
 	case 8:

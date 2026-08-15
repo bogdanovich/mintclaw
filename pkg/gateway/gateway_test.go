@@ -289,7 +289,7 @@ func TestRemoteWorkspaceDecoratorsDoNotStackAcrossNodeToolReloads(t *testing.T) 
 			}
 			if count := strings.Count(
 				tool.Description(),
-				"Omit workspace for the current gateway-local workspace",
+				"Omit remote_workspace for the current agent's gateway-local filesystem",
 			); count != 1 {
 				t.Fatalf("%s remote workspace decorator layers = %d, want 1", name, count)
 			}
@@ -361,7 +361,7 @@ func TestWorkspaceExecRegistersOnlyForAgentWithTargetGrant(t *testing.T) {
 	if !allowed {
 		t.Fatal("workspace_exec is unavailable to the granted agent")
 	}
-	aliases := tool.Parameters()["properties"].(map[string]any)["workspace"].(map[string]any)["enum"].([]string)
+	aliases := tool.Parameters()["properties"].(map[string]any)["remote_workspace"].(map[string]any)["enum"].([]string)
 	if len(aliases) != 1 || aliases[0] != "project" {
 		t.Fatalf("workspace_exec aliases = %#v", aliases)
 	}

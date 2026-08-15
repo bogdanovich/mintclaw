@@ -86,6 +86,7 @@ func (*WorkspaceExecTool) Name() string { return "workspace_exec" }
 
 func (*WorkspaceExecTool) Description() string {
 	return "Run one direct-argv command in an explicit operator-configured remote workspace. " +
+		"A remote workspace is an execution target, not a MintClaw agent profile, gateway service, or deployment. " +
 		"Foreground mode uses system.exec.v1. Job mode starts the existing durable P5a job and returns a stable job ID; " +
 		"use nodes describe plus nodes_invoke for job status, logs, artifacts, or cancellation. " +
 		"This tool accepts no shell text, target, profile, executable path, or cwd, and an uncertain result must be " +
@@ -97,9 +98,10 @@ func (tool *WorkspaceExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"workspace": map[string]any{
-				"type": "string", "enum": aliases,
-				"description": "Operator-configured remote workspace alias.",
+			remoteWorkspaceArgument: map[string]any{
+				"type":        "string",
+				"enum":        aliases,
+				"description": "Operator-configured remote execution workspace alias; never an agent profile or service.",
 			},
 			"executable": map[string]any{
 				"type": "string", "minLength": 1, "maxLength": 64,
@@ -135,7 +137,7 @@ func (tool *WorkspaceExecTool) Parameters() map[string]any {
 				},
 			},
 		},
-		"required":             []string{"workspace", "executable", "args", "mode"},
+		"required":             []string{remoteWorkspaceArgument, "executable", "args", "mode"},
 		"additionalProperties": false,
 	}
 }
@@ -157,8 +159,8 @@ func (tool *WorkspaceExecTool) ApprovalArguments(
 	if err != nil {
 		return nil, err
 	}
-	approval["workspace"] = binding.alias
-	approval["workspace_revision"] = binding.config.Revision
+	approval[remoteWorkspaceArgument] = binding.alias
+	approval["remote_workspace_revision"] = binding.config.Revision
 	approval["operation"] = "workspace_exec"
 	approval["mode"] = mode
 	approval["executable"] = executable
@@ -197,12 +199,12 @@ func (router *RemoteWorkspaceNodeRouter) prepareWorkspaceExec(
 ) (map[string]any, remoteWorkspaceNodeBinding, string, string, any, error) {
 	for name := range toolArgs {
 		switch name {
-		case "workspace", "executable", "args", "env", "mode", "timeout_seconds", "artifacts":
+		case remoteWorkspaceArgument, "executable", "args", "env", "mode", "timeout_seconds", "artifacts":
 		default:
 			return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 		}
 	}
-	workspace, ok := toolArgs["workspace"].(string)
+	workspace, ok := toolArgs[remoteWorkspaceArgument].(string)
 	if !ok || workspace == "" || strings.TrimSpace(workspace) != workspace {
 		return nil, remoteWorkspaceNodeBinding{}, "", "", nil, ErrRemoteWorkspaceUnavailable
 	}
@@ -359,8 +361,8 @@ func projectWorkspaceExecResult(
 	mode string,
 ) *toolshared.ToolResult {
 	base := map[string]any{
-		"placement": "remote", "workspace": binding.alias,
-		"workspace_revision": binding.config.Revision, "target": binding.config.Target,
+		"placement": "remote", remoteWorkspaceArgument: binding.alias,
+		"remote_workspace_revision": binding.config.Revision, "target": binding.config.Target,
 		"mode": mode,
 	}
 	if result == nil {

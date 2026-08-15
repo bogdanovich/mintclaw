@@ -35,8 +35,8 @@ func TestRemoteWorkspaceNodeRouterBindsConfiguredRead(t *testing.T) {
 		map[string]any{"path": "README.md", "start_line": float64(1), "max_lines": float64(20)},
 	)
 	payload := decodeNodeResult(t, result)
-	if payload["placement"] != "remote" || payload["workspace"] != "project" ||
-		payload["workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
+	if payload["placement"] != "remote" || payload["remote_workspace"] != "project" ||
+		payload["remote_workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
 		source.dispatchCalls != 1 {
 		t.Fatalf("remote workspace result = %#v; dispatch calls = %d", payload, source.dispatchCalls)
 	}
@@ -154,7 +154,7 @@ func TestRemoteWorkspaceNodeRouterBindsWriteApprovalAndExactPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approval["workspace"] != "project" || approval["path"] != "README.md" ||
+	if approval["remote_workspace"] != "project" || approval["path"] != "README.md" ||
 		approval["publication"] != "replace" || approval["content_bytes"] != 4 ||
 		approval["content"] != nil || approval["input"] != nil {
 		t.Fatalf("safe workspace approval = %#v", approval)
@@ -416,14 +416,14 @@ func TestRemoteWorkspaceReadToolRoutesOnlyExplicitAlias(t *testing.T) {
 		t.Fatalf("local result = %#v, local calls = %d, remote calls = %d", localResult, local.calls, remote.calls)
 	}
 	remoteResult := tool.Execute(context.Background(), map[string]any{
-		"path": "README.md", "workspace": "vpn",
+		"path": "README.md", "remote_workspace": "vpn",
 	})
 	if remoteResult.ContentForLLM() != "remote" || remote.calls != 1 || remote.tool != "read_file" ||
 		remote.workspace != "vpn" || remote.args["path"] != "README.md" {
 		t.Fatalf("remote result = %#v, source = %#v", remoteResult, remote)
 	}
-	if _, leaked := remote.args["workspace"]; leaked {
-		t.Fatal("remote adapter received workspace as an ordinary tool argument")
+	if _, leaked := remote.args["remote_workspace"]; leaked {
+		t.Fatal("remote adapter received remote_workspace as an ordinary tool argument")
 	}
 }
 
@@ -436,7 +436,7 @@ func TestRemoteWorkspacePatchDescriptionExplainsRemoteDeletion(t *testing.T) {
 	}
 	for _, guidance := range []string{
 		"there is no separate delete-file tool",
-		"pass its workspace alias",
+		"pass its remote_workspace alias",
 		"*** Delete File: path",
 		"never falls back to the local host",
 	} {
@@ -454,7 +454,7 @@ func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := tool.Execute(context.Background(), map[string]any{
-		"path": "README.md", "workspace": "vpn",
+		"path": "README.md", "remote_workspace": "vpn",
 	})
 	if result.IsError || remote.calls != 1 || remote.args["start_line"] != float64(1) {
 		t.Fatalf("remote line read result = %#v; source = %#v", result, remote)
@@ -473,13 +473,13 @@ func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	}
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"path": "README.md", "workspace": "missing",
+		"path": "README.md", "remote_workspace": "missing",
 	})
 	if !result.IsError || local.calls != 0 || remote.calls != 0 {
 		t.Fatalf("result = %#v, local calls = %d, remote calls = %d", result, local.calls, remote.calls)
 	}
 	properties := tool.Parameters()["properties"].(map[string]any)
-	workspace := properties["workspace"].(map[string]any)
+	workspace := properties["remote_workspace"].(map[string]any)
 	aliases := workspace["enum"].([]string)
 	if len(aliases) != 2 || aliases[0] != "mac" || aliases[1] != "vpn" {
 		t.Fatalf("workspace aliases = %#v", aliases)
@@ -487,12 +487,30 @@ func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	description, _ := workspace["description"].(string)
 	if !strings.Contains(tool.Description(), "Call this tool directly") ||
 		!strings.Contains(tool.Description(), "do not use nodes discovery") ||
+		!strings.Contains(tool.Description(), "not a MintClaw agent profile") ||
 		!strings.Contains(description, "Pass an enum value") ||
+		!strings.Contains(description, "does not select a MintClaw agent profile") ||
 		!strings.Contains(description, "internal workspace.* commands") {
 		t.Fatalf("remote workspace guidance is incomplete: tool=%q parameter=%q", tool.Description(), description)
 	}
-	if _, changed := local.Parameters()["properties"].(map[string]any)["workspace"]; changed {
+	if _, changed := local.Parameters()["properties"].(map[string]any)["remote_workspace"]; changed {
 		t.Fatal("decorator mutated local tool parameters")
+	}
+}
+
+func TestRemoteWorkspaceReadToolRejectsLegacyWorkspaceSelector(t *testing.T) {
+	local := &remoteWorkspaceLocalTool{}
+	remote := &remoteWorkspaceReadSource{}
+	tool, err := NewRemoteWorkspaceTool(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path": "README.md", "workspace": "vpn",
+	})
+	if !result.IsError || local.calls != 0 || remote.calls != 0 {
+		t.Fatalf("legacy selector result = %#v, local calls = %d, remote calls = %d", result, local.calls, remote.calls)
 	}
 }
 
@@ -504,7 +522,7 @@ func TestRemoteWorkspaceMutationToolIsExplicitAndNeverLeaksRemotePreconditionLoc
 		t.Fatal(err)
 	}
 	properties := tool.Parameters()["properties"].(map[string]any)
-	if properties["workspace"] == nil || properties["expected_sha256"] == nil ||
+	if properties["remote_workspace"] == nil || properties["expected_sha256"] == nil ||
 		tool.ToolLoopSemantics() != loopguard.SemanticsMutating {
 		t.Fatalf("remote write schema = %#v", properties)
 	}
@@ -515,7 +533,7 @@ func TestRemoteWorkspaceMutationToolIsExplicitAndNeverLeaksRemotePreconditionLoc
 		t.Fatalf("local precondition result = %#v, local=%d remote=%d", localResult, local.calls, remote.calls)
 	}
 	remoteResult := tool.Execute(context.Background(), map[string]any{
-		"path": "a.txt", "content": "new", "workspace": "vpn",
+		"path": "a.txt", "content": "new", "remote_workspace": "vpn",
 	})
 	if remoteResult.IsError || remote.calls != 1 || remote.args["overwrite"] != false {
 		t.Fatalf("remote write = %#v, source = %#v", remoteResult, remote)
@@ -524,7 +542,7 @@ func TestRemoteWorkspaceMutationToolIsExplicitAndNeverLeaksRemotePreconditionLoc
 
 func TestToolLogArgumentsRedactsRemoteWorkspaceFileContent(t *testing.T) {
 	arguments := map[string]any{
-		"workspace": "private-node", "path": "secret.txt", "pattern": "password", "content": "secret",
+		"remote_workspace": "private-node", "path": "secret.txt", "pattern": "password", "content": "secret",
 		"input": "secret patch",
 	}
 	for _, name := range []string{"search_files", "write_file", "apply_patch"} {
@@ -536,12 +554,18 @@ func TestToolLogArgumentsRedactsRemoteWorkspaceFileContent(t *testing.T) {
 	for _, workspace := range []any{nil, float64(7), false, ""} {
 		for _, name := range []string{"write_file", "apply_patch"} {
 			got := ToolLogArguments(name, map[string]any{
-				"workspace": workspace, "content": "secret", "input": "secret patch",
+				"remote_workspace": workspace, "content": "secret", "input": "secret patch",
 			})
 			if got["redacted"] != true || got["argument_count"] != 3 || len(got) != 2 {
 				t.Fatalf("%s malformed workspace %T arguments = %#v", name, workspace, got)
 			}
 		}
+	}
+	legacy := ToolLogArguments("write_file", map[string]any{
+		"workspace": "removed-node", "path": "secret.txt", "content": "secret",
+	})
+	if legacy["redacted"] != true || legacy["argument_count"] != 3 || len(legacy) != 2 {
+		t.Fatalf("legacy remote workspace arguments = %#v", legacy)
 	}
 	if local := ToolLogArguments("search_files", map[string]any{"pattern": "public"}); local["pattern"] != "public" {
 		t.Fatalf("local search arguments unexpectedly redacted: %#v", local)
