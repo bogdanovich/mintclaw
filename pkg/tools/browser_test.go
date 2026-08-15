@@ -935,7 +935,10 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 
 func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	tool := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
-	if description := tool.Description(); !strings.Contains(description, "missing or incomplete context authority fails closed") {
+	if description := tool.Description(); !strings.Contains(
+		description,
+		"missing or incomplete context authority fails closed",
+	) {
 		t.Fatalf("browser_act description = %q", description)
 	}
 	properties := tool.Parameters()["properties"].(map[string]any)
