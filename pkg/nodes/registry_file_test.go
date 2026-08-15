@@ -94,8 +94,20 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 		if descriptor.Name == BrowserCommandContexts {
 			continue
 		}
-		if descriptor.Name == BrowserCommandSessionOpen {
+		switch descriptor.Name {
+		case BrowserCommandSessionOpen:
 			descriptor.OutputSchema = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
+		case BrowserCommandObserve:
+			descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		case BrowserCommandAct:
+			descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+			descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
 		}
 		legacyDescriptors = append(legacyDescriptors, descriptor)
 	}
@@ -191,8 +203,16 @@ func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *test
 	legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
 	for index := range legacyDescriptors {
 		descriptor := &legacyDescriptors[index]
-		if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts {
+		switch descriptor.Name {
+		case BrowserCommandObserve, BrowserCommandContexts:
 			descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		case BrowserCommandAct:
+			descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+			descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
 				descriptor.Name, descriptor.BrowserProfiles,
 			)
 		}
@@ -342,15 +362,27 @@ func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := range descriptors {
-		if descriptors[index].Name != BrowserCommandAct {
-			continue
+		switch descriptors[index].Name {
+		case BrowserCommandAct:
+			descriptors[index].InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
+				descriptors[index].Name, descriptors[index].BrowserProfiles,
+			)
+		case BrowserCommandObserve:
+			descriptors[index].OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+				descriptors[index].Name, descriptors[index].BrowserProfiles,
+			)
 		}
-		descriptors[index].InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
-			descriptors[index].Name, descriptors[index].BrowserProfiles,
-		)
-		descriptors[index].OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
-			descriptors[index].Name, descriptors[index].BrowserProfiles,
-		)
+	}
+	catalogEpochs := browserSchemaEpochAll
+	for index := range descriptors {
+		epochs, _, ok := classifyStoredBrowserDescriptor(&descriptors[index])
+		if !ok {
+			t.Fatalf("descriptor %s is not individually historical", descriptors[index].Name)
+		}
+		catalogEpochs &= epochs
+	}
+	if catalogEpochs != 0 {
+		t.Fatalf("cross-epoch catalog unexpectedly overlaps at epochs %d", catalogEpochs)
 	}
 	catalog := CapabilityCatalog{Commands: descriptors}
 	catalogHash, err := catalog.canonicalHash()
@@ -417,6 +449,11 @@ func TestFileRegistryRejectsHistoricallyImpossibleLegacyBrowserInputs(t *testing
 		profile BrowserProfileDescriptor
 		schema  func(string, []BrowserProfileDescriptor) json.RawMessage
 	}{
+		{
+			name: "validator_accepted_pre_scroll_input_with_current_output", command: BrowserCommandAct,
+			profile: browserProfileDescriptorFixture(),
+			schema:  legacyBrowserCommandInputSchema,
+		},
 		{
 			name: "approved_session_with_dry_run_only_schema", command: BrowserCommandSessionOpen,
 			profile: BrowserProfileDescriptor{

@@ -270,6 +270,69 @@ func TestGatewayInvocationReceiptMigrationRejectsHistoricallyImpossibleBrowserIn
 	}
 }
 
+func TestGatewayInvocationReceiptMigrationRejectsValidatorAcceptedLegacyCurrentHybrid(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == BrowserCommandAct {
+			descriptor = candidate
+			break
+		}
+	}
+	if descriptor.Name == "" {
+		t.Fatal("browser act descriptor is missing")
+	}
+	inputValue := browserActInputFixture()
+	inputValue["action"] = map[string]any{"kind": "navigate", "url": "https://example.com/"}
+	input, err := json.Marshal(inputValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := invocationRequest(input)
+	request.InvocationID = "inv_browser_validator_legacy_current"
+	request.IdempotencyKey = "idem_browser_validator_legacy_current"
+	request.Command = descriptor.Name
+	request.Input = input
+	preparedAt := time.Now()
+	plan, err := PrepareExecutionPlan(
+		request, descriptor, "browser", "browser-policy-v1", preparedAt, time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.InputSchema = legacyBrowserCommandInputSchema(
+		descriptor.Name, descriptor.BrowserProfiles,
+	)
+	descriptorHash, err := (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.DescriptorHash = descriptorHash
+	plan.CatalogHash = descriptorHash
+	plan.PlanHash = ""
+	plan.PlanHash, err = plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := preparedAt.UnixNano()
+	record := GatewayInvocationRecord{
+		Target: "companion", ToolCallID: "call-browser-validator-legacy-current",
+		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
+		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
+	}
+	if err = record.validate(); err != nil {
+		t.Fatalf("validator-accepted hybrid did not reach the migration classifier: %v", err)
+	}
+	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
+	if legacy || !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("migration result = (legacy %v, error %v)", legacy, err)
+	}
+}
+
 func TestGatewayInvocationReceiptMigrationRejectsCrossEpochBrowserSchemas(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.DryRun = false

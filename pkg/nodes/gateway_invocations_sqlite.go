@@ -681,12 +681,26 @@ func sameGatewayInvocationRecordMaps(
 func validateGatewayInvocationRecordForReceiptMigration(
 	record GatewayInvocationRecord,
 ) (bool, error) {
-	if err := record.validate(); err == nil {
-		return false, nil
+	if !IsBrowserCommand(record.Descriptor.Name) {
+		return false, record.validate()
 	}
 	compatible := cloneCommandDescriptor(record.Descriptor)
-	if !normalizeStoredLegacyBrowserDescriptor(&compatible) {
+	_, legacy, ok := classifyStoredBrowserDescriptor(&compatible)
+	if !ok {
+		if err := record.validate(); err != nil {
+			return false, err
+		}
+		return false, fmt.Errorf(
+			"%w: browser descriptor combines incompatible schema epochs",
+			ErrInvalidCapability,
+		)
+	}
+	if !legacy {
 		return false, record.validate()
+	}
+	normalizeStoredBrowserDescriptor(&compatible)
+	if err := compatible.Validate(); err != nil {
+		return false, err
 	}
 	if err := record.validateFields(true); err != nil {
 		return false, err
@@ -704,14 +718,14 @@ func validateGatewayInvocationRecordForReceiptMigration(
 }
 
 func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) error {
-	if err := record.validate(); err == nil {
-		return nil
-	}
 	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
 	if err != nil {
 		return err
 	}
-	if !legacy || record.State != GatewayInvocationDispatched {
+	if !legacy {
+		return nil
+	}
+	if record.State != GatewayInvocationDispatched {
 		return fmt.Errorf("%w: legacy browser invocation is not a dispatched tombstone", ErrInvalidInvocation)
 	}
 	return nil

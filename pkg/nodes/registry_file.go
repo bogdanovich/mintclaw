@@ -614,21 +614,41 @@ func compactStoredSchema(label string, schema json.RawMessage) (json.RawMessage,
 }
 
 func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
-	if err := snapshot.Validate(); err == nil {
-		return false, nil
-	}
-
 	compatible := cloneSnapshot(snapshot)
 	legacyCatalog := false
+	catalogEpochs := browserSchemaEpochAll
 	for index := range compatible.Catalog.Commands {
 		descriptor := &compatible.Catalog.Commands[index]
-		if err := descriptor.Validate(); err == nil {
+		if !IsBrowserCommand(descriptor.Name) {
+			if err := descriptor.Validate(); err != nil {
+				return false, snapshot.Validate()
+			}
 			continue
 		}
-		if !normalizeStoredLegacyBrowserDescriptor(descriptor) {
-			return false, snapshot.Validate()
+		epochs, legacy, ok := classifyStoredBrowserDescriptor(descriptor)
+		if !ok {
+			if err := snapshot.Validate(); err != nil {
+				return false, err
+			}
+			return false, fmt.Errorf(
+				"%w: browser descriptor combines incompatible schema epochs",
+				ErrInvalidCapability,
+			)
 		}
-		legacyCatalog = true
+		catalogEpochs &= epochs
+		if catalogEpochs == 0 {
+			return false, fmt.Errorf(
+				"%w: browser catalog combines incompatible schema epochs",
+				ErrInvalidCapability,
+			)
+		}
+		if legacy {
+			normalizeStoredBrowserDescriptor(descriptor)
+			legacyCatalog = true
+		}
+		if err := descriptor.Validate(); err != nil {
+			return false, err
+		}
 	}
 	if !legacyCatalog {
 		return false, snapshot.Validate()
@@ -654,22 +674,25 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 	return true, nil
 }
 
-func normalizeStoredLegacyBrowserDescriptor(descriptor *CommandDescriptor) bool {
+func classifyStoredBrowserDescriptor(
+	descriptor *CommandDescriptor,
+) (browserSchemaEpochs, bool, bool) {
 	if descriptor == nil || !IsBrowserCommand(descriptor.Name) {
-		return false
+		return 0, false, false
 	}
 	currentInput := BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
 	currentOutput := BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
 	inputEpochs := storedBrowserInputSchemaEpochs(descriptor, currentInput)
 	outputEpochs := storedBrowserOutputSchemaEpochs(descriptor, currentOutput)
-	if inputEpochs&outputEpochs == 0 {
-		return false
-	}
-	migrated := !storedSchemaMatches(descriptor.InputSchema, currentInput) ||
+	epochs := inputEpochs & outputEpochs
+	legacy := !storedSchemaMatches(descriptor.InputSchema, currentInput) ||
 		!storedSchemaMatches(descriptor.OutputSchema, currentOutput)
-	descriptor.InputSchema = currentInput
-	descriptor.OutputSchema = currentOutput
-	return migrated && descriptor.Validate() == nil
+	return epochs, legacy, epochs != 0
+}
+
+func normalizeStoredBrowserDescriptor(descriptor *CommandDescriptor) {
+	descriptor.InputSchema = BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
 }
 
 type browserSchemaEpochs uint16
