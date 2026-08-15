@@ -1147,11 +1147,11 @@ func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
 
 func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[string]any) (map[string]any, error) {
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
-		return nil, &browserSafeDenialError{cause: browser.ErrDenied}
+		return nil, &browserActionSafeDenialError{cause: browser.ErrDenied}
 	}
 	preparation, err := tool.prepare(ctx, args)
 	if err != nil {
-		return nil, &browserSafeDenialError{cause: err}
+		return nil, &browserActionSafeDenialError{cause: err}
 	}
 	return map[string]any{
 		"prepared_action_id": preparation.Approval.PreparedActionID,
@@ -1182,7 +1182,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	preparation, err := tool.prepare(ctx, args)
 	if err != nil {
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	if preparation.RequiresApproval &&
 		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
@@ -1199,7 +1199,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	invocation, err := tool.runtime.source.ExecuteAction(
 		ctx, owner, preparation.Action.ID, approval,
@@ -1211,7 +1211,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 				errors.Is(err, browser.ErrSnapshotInvalidation),
 			)
 		}
-		return browserToolError(err)
+		return browserActionToolError(err)
 	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
@@ -1492,11 +1492,7 @@ func browserToolError(err error) *toolshared.ToolResult {
 	case errors.Is(err, browser.ErrNotFound):
 		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
 	case errors.Is(err, browser.ErrStale):
-		return browserErrorResult(
-			"stale_snapshot",
-			"Browser authority is stale. Observe again and copy every returned authority field into the action.",
-			"observe_again_and_copy_authority",
-		)
+		return browserErrorResult("stale_snapshot", "Browser authority is stale.", "observe_again")
 	case errors.Is(err, browser.ErrDenied):
 		return browserErrorResult("policy_denied", "Browser policy denied the operation.", "choose_allowed_action")
 	case errors.Is(err, browser.ErrApprovalRequired):
@@ -1512,6 +1508,17 @@ func browserToolError(err error) *toolshared.ToolResult {
 	default:
 		return browserErrorResult("runtime_unavailable", "Browser automation is unavailable.", "retry")
 	}
+}
+
+func browserActionToolError(err error) *toolshared.ToolResult {
+	if errors.Is(err, browser.ErrStale) {
+		return browserErrorResult(
+			"stale_snapshot",
+			"Browser action authority is stale. Observe again and copy every returned authority field into the action.",
+			"observe_again_and_copy_authority",
+		)
+	}
+	return browserToolError(err)
 }
 
 func browserContextToolError(err error) *toolshared.ToolResult {
@@ -1537,4 +1544,14 @@ func (err *browserSafeDenialError) Error() string { return "browser approval pre
 func (err *browserSafeDenialError) Unwrap() error { return err.cause }
 func (err *browserSafeDenialError) SafeApprovalDenialResult() *toolshared.ToolResult {
 	return browserToolError(err.cause)
+}
+
+type browserActionSafeDenialError struct{ cause error }
+
+func (err *browserActionSafeDenialError) Error() string {
+	return "browser action approval preparation denied"
+}
+func (err *browserActionSafeDenialError) Unwrap() error { return err.cause }
+func (err *browserActionSafeDenialError) SafeApprovalDenialResult() *toolshared.ToolResult {
+	return browserActionToolError(err.cause)
 }

@@ -955,12 +955,21 @@ func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	}
 }
 
-func TestBrowserToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
-	result := browserToolError(browser.ErrStale)
+func TestBrowserActionToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
+	result := browserActionToolError(browser.ErrStale)
 	if result == nil || !result.IsError ||
 		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_authority"`) ||
 		!strings.Contains(result.ContentForLLM(), "copy every returned authority field") {
 		t.Fatalf("stale browser result = %#v", result)
+	}
+}
+
+func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
+	result := browserToolError(browser.ErrStale)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again"`) ||
+		strings.Contains(result.ContentForLLM(), "into the action") {
+		t.Fatalf("neutral stale browser result = %#v", result)
 	}
 }
 
@@ -1383,6 +1392,21 @@ func TestBrowserActApprovalPreparationFailsWithSafeDenial(t *testing.T) {
 	result, safe := SafeApprovalDenialResult(err)
 	if !safe || result == nil || !result.IsError || strings.Contains(result.ContentForLLM(), "PRIVATE") {
 		t.Fatalf("safe denial = %#v, safe = %t, error = %v", result, safe, err)
+	}
+}
+
+func TestBrowserActApprovalStaleDenialUsesActionRecovery(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, err: browser.ErrStale}
+	tool := NewBrowserActTool(browserToolTestConfig(), source)
+	_, err := tool.ApprovalArguments(browserToolTestContext(), map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"action": map[string]any{"kind": "scroll", "direction": "down", "amount": 1},
+	})
+	result, safe := SafeApprovalDenialResult(err)
+	if !safe || result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_authority"`) {
+		t.Fatalf("stale action denial = %#v, safe = %t, error = %v", result, safe, err)
 	}
 }
 
