@@ -160,6 +160,7 @@ const (
 	DeltaTurnStarted        DeltaKind = "turn_started"
 	DeltaAssistant          DeltaKind = "assistant_delta"
 	DeltaReasoning          DeltaKind = "reasoning_delta"
+	DeltaStreamDiscarded    DeltaKind = "stream_discarded"
 	DeltaNotice             DeltaKind = "notice_updated"
 	DeltaToolStarted        DeltaKind = "tool_started"
 	DeltaToolOutput         DeltaKind = "tool_output"

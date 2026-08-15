@@ -37,12 +37,17 @@ func (d *StreamDelegate) GetStreamer(
 	if turnID == "" {
 		return nil, false
 	}
-	return &projectedStream{projector: d.projector, turnID: turnID}, true
+	return &projectedStream{
+		projector: d.projector,
+		turnID:    turnID,
+		baseline:  d.projector.captureStreamBaseline(turnID),
+	}, true
 }
 
 type projectedStream struct {
 	projector *Projector
 	turnID    string
+	baseline  streamBaseline
 }
 
 var (
@@ -109,7 +114,12 @@ func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string)
 	return nil
 }
 
-// Cancel discards only the provider delivery stream. Turn lifecycle remains
-// authoritative in the runtime event adapter, which can distinguish a
-// pre-visible fallback from an actual interrupted turn.
-func (*projectedStream) Cancel(context.Context) {}
+// Cancel discards provisional content from this provider attempt. Turn
+// lifecycle remains authoritative in the runtime event adapter, which can
+// distinguish a pre-visible fallback from an actual interrupted turn.
+func (s *projectedStream) Cancel(context.Context) {
+	if s == nil || s.projector == nil {
+		return
+	}
+	s.projector.discardProvisionalStream(s.turnID, s.baseline)
+}

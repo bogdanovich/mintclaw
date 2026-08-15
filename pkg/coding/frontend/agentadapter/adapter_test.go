@@ -628,6 +628,10 @@ func TestStreamingFallbackAndVisibleFailureRemainUnambiguous(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
+				reasoning := streamer.(bus.ReasoningStreamer)
+				if err = reasoning.UpdateReasoning(t.Context(), "failed provider reasoning"); err != nil {
+					t.Fatal(err)
+				}
 				streamer.Cancel(t.Context())
 			}
 			wrapped.PublishNonBlocking(runtimeevents.Event{

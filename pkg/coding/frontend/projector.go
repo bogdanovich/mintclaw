@@ -208,6 +208,53 @@ func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) 
 	return p.upsertStreamEntry(DeltaReasoning, turnID, EntryReasoning, content, complete)
 }
 
+type streamBaseline map[string]TranscriptEntry
+
+func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
+	turnID = normalizeTurnID(turnID)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	baseline := make(streamBaseline)
+	for _, entry := range p.state.Entries {
+		if entry.TurnID == turnID && (entry.Kind == EntryAssistant || entry.Kind == EntryReasoning) {
+			baseline[entry.ID] = entry
+		}
+	}
+	return baseline
+}
+
+// discardProvisionalStream removes only incomplete answer/reasoning entries
+// from a canceled provider attempt, restoring entries that predated this
+// streamer. Canonical turn lifecycle and completed entries remain untouched.
+func (p *Projector) discardProvisionalStream(turnID string, baseline streamBaseline) Delta {
+	turnID = normalizeTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	filtered := make([]TranscriptEntry, 0, len(p.state.Entries))
+	removed := false
+	for _, entry := range p.state.Entries {
+		provisional := entry.TurnID == turnID && !entry.Complete &&
+			(entry.Kind == EntryAssistant || entry.Kind == EntryReasoning)
+		if provisional {
+			removed = true
+			if previous, ok := baseline[entry.ID]; ok {
+				filtered = append(filtered, previous)
+			}
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if !removed {
+		return Delta{}
+	}
+	return p.mutateLocked(DeltaStreamDiscarded, func(state *ThreadSnapshot, delta *Delta) {
+		state.Entries = filtered
+		delta.TurnID = turnID
+		delta.EntityID = turnID
+		delta.RequiresSnapshot = true
+	})
+}
+
 func (p *Projector) upsertStreamEntry(
 	kind DeltaKind,
 	turnID string,

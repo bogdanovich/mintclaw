@@ -765,6 +765,39 @@ func TestConfiguredStreamingProjectsProviderAccumulatedEvents(t *testing.T) {
 	}
 }
 
+func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t *testing.T) {
+	const sessionKey = "agent:main:mintclaw:session-1"
+	projector, err := frontend.NewProjector(sessionKey, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatalf("NewProjector() error = %v", err)
+	}
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
+	provider := &configuredStreamingProvider{
+		eventPlan: []configuredStreamingEventCall{{
+			chunks: []providers.StreamChunk{{ReasoningContent: "failed provider reasoning"}},
+			err:    errors.New("stream failed after reasoning"),
+		}},
+		chatResponse: &providers.LLMResponse{Content: "fallback answer"},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	if got := runConfiguredStreamingTurn(t, al, "mintclaw"); got != "fallback answer" {
+		t.Fatalf("response = %q, want fallback answer", got)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Entries) != 0 {
+		t.Fatalf(
+			"failed provider stream entries = %#v, want none before fallback turn-end projection",
+			snapshot.Entries,
+		)
+	}
+}
+
 func TestConfiguredStreamingSuppressesMintClawReasoningWhenThinkingOff(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
 	cfg.ModelList[0].ThinkingLevel = "off"
