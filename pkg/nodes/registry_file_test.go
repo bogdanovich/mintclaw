@@ -408,6 +408,83 @@ func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
 	}
 }
 
+func TestFileRegistryRejectsIncompleteOrMixedBrowserCatalogShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func([]CommandDescriptor) []CommandDescriptor
+	}{
+		{
+			name: "missing_required_command",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				result := make([]CommandDescriptor, 0, len(descriptors)-1)
+				for _, descriptor := range descriptors {
+					if descriptor.Name != BrowserCommandObserve {
+						result = append(result, descriptor)
+					}
+				}
+				return result
+			},
+		},
+		{
+			name: "mixed_profile_revisions",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				for index := range descriptors {
+					if descriptors[index].Name != BrowserCommandObserve {
+						continue
+					}
+					descriptors[index].BrowserProfiles = CloneBrowserProfileDescriptors(
+						descriptors[index].BrowserProfiles,
+					)
+					descriptors[index].BrowserProfiles[0].Revision = "managed-mixed-revision"
+					descriptors[index].InputSchema = BrowserCommandInputSchema(
+						descriptors[index].Name, descriptors[index].BrowserProfiles,
+					)
+					descriptors[index].OutputSchema = BrowserCommandOutputSchema(
+						descriptors[index].Name, descriptors[index].BrowserProfiles,
+					)
+				}
+				return descriptors
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptors, err := BrowserCommandDescriptors(
+				[]BrowserProfileDescriptor{browserProfileDescriptorFixture()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptors = test.mutate(descriptors)
+			catalog := CapabilityCatalog{Commands: descriptors}
+			catalogHash, err := catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing := testPendingPairing(t, 1)
+			pairing.Node.Catalog = catalog
+			pairing.Node.CatalogHash = catalogHash
+			if err = pairing.Node.Validate(); err != nil {
+				t.Fatalf("ordinary snapshot validation rejected the shape fixture: %v", err)
+			}
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {Snapshot: pairing.Node},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "registry.json")
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("NewFileRegistry() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestFileRegistryRejectsUnknownLegacyBrowserSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	pairing := testPendingPairing(t, 1)

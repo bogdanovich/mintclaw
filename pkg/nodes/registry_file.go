@@ -617,6 +617,8 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 	compatible := cloneSnapshot(snapshot)
 	legacyCatalog := false
 	catalogEpochs := browserSchemaEpochAll
+	browserCommands := make(map[string]struct{}, 6)
+	var browserProfiles []BrowserProfileDescriptor
 	for index := range compatible.Catalog.Commands {
 		descriptor := &compatible.Catalog.Commands[index]
 		if !IsBrowserCommand(descriptor.Name) {
@@ -635,6 +637,15 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 				ErrInvalidCapability,
 			)
 		}
+		if _, duplicate := browserCommands[descriptor.Name]; duplicate {
+			return false, fmt.Errorf("%w: duplicate browser command %q", ErrInvalidCapability, descriptor.Name)
+		}
+		browserCommands[descriptor.Name] = struct{}{}
+		if browserProfiles == nil {
+			browserProfiles = CloneBrowserProfileDescriptors(descriptor.BrowserProfiles)
+		} else if !sameBrowserProfileDescriptors(browserProfiles, descriptor.BrowserProfiles) {
+			return false, fmt.Errorf("%w: browser catalog mixes profile sets", ErrInvalidCapability)
+		}
 		catalogEpochs &= epochs
 		if catalogEpochs == 0 {
 			return false, fmt.Errorf(
@@ -648,6 +659,11 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 		}
 		if err := descriptor.Validate(); err != nil {
 			return false, err
+		}
+	}
+	if len(browserCommands) > 0 {
+		if _, ok := storedBrowserCatalogShapeEpochs(browserCommands, catalogEpochs); !ok {
+			return false, fmt.Errorf("%w: browser catalog shape does not match an emitted epoch", ErrInvalidCapability)
 		}
 	}
 	if !legacyCatalog {
@@ -693,6 +709,68 @@ func classifyStoredBrowserDescriptor(
 func normalizeStoredBrowserDescriptor(descriptor *CommandDescriptor) {
 	descriptor.InputSchema = BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
 	descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+}
+
+func storedBrowserCatalogShapeEpochs(
+	commands map[string]struct{},
+	epochs browserSchemaEpochs,
+) (browserSchemaEpochs, bool) {
+	preContexts := browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+		browserSchemaEpochPreContexts
+	if storedBrowserCommandSetMatches(commands,
+		BrowserCommandSessionOpen,
+		BrowserCommandSessionStatus,
+		BrowserCommandObserve,
+		BrowserCommandAct,
+		BrowserCommandSessionClose,
+	) {
+		epochs &= preContexts
+		return epochs, epochs != 0
+	}
+	postContexts := browserSchemaEpochAll &^ preContexts
+	if storedBrowserCommandSetMatches(commands,
+		BrowserCommandSessionOpen,
+		BrowserCommandSessionStatus,
+		BrowserCommandObserve,
+		BrowserCommandAct,
+		BrowserCommandContexts,
+		BrowserCommandSessionClose,
+	) {
+		epochs &= postContexts
+		return epochs, epochs != 0
+	}
+	return 0, false
+}
+
+func storedBrowserCommandSetMatches(commands map[string]struct{}, expected ...string) bool {
+	if len(commands) != len(expected) {
+		return false
+	}
+	for _, command := range expected {
+		if _, exists := commands[command]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func sameBrowserProfileDescriptors(left, right []BrowserProfileDescriptor) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftProfile := left[index]
+		rightProfile := right[index]
+		if leftProfile.Alias != rightProfile.Alias || leftProfile.Revision != rightProfile.Revision ||
+			leftProfile.Driver != rightProfile.Driver || leftProfile.Mode != rightProfile.Mode ||
+			leftProfile.NetworkMode != rightProfile.NetworkMode || leftProfile.DryRun != rightProfile.DryRun ||
+			leftProfile.AllowApprovedActions != rightProfile.AllowApprovedActions ||
+			leftProfile.Headed != rightProfile.Headed || leftProfile.Limits != rightProfile.Limits ||
+			!slices.Equal(leftProfile.Actions, rightProfile.Actions) {
+			return false
+		}
+	}
+	return true
 }
 
 type browserSchemaEpochs uint16
