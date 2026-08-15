@@ -49,6 +49,7 @@ type Projector struct {
 	limits                     ProjectionLimits
 	state                      ThreadSnapshot
 	deltas                     []Delta
+	entryRevisions             map[string]Revision
 	activeTurnID               string
 	foregroundCompactionTurnID string
 	nextWatcher                uint64
@@ -67,7 +68,8 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 			ThreadID:        threadID,
 			Activity:        ActivityIdle,
 		},
-		watchers: make(map[uint64]chan Delta),
+		entryRevisions: make(map[string]Revision),
+		watchers:       make(map[uint64]chan Delta),
 	}, nil
 }
 
@@ -210,6 +212,13 @@ func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) 
 
 type streamBaseline map[string]TranscriptEntry
 
+type streamOwnedEntry struct {
+	entry    TranscriptEntry
+	revision Revision
+}
+
+type streamOwnedEntries map[string]streamOwnedEntry
+
 func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
 	turnID = normalizeTurnID(turnID)
 	p.mu.RLock()
@@ -223,32 +232,48 @@ func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
 	return baseline
 }
 
-// discardProvisionalStream removes only incomplete answer/reasoning entries
-// from a canceled provider attempt, restoring entries that predated this
-// streamer. Canonical turn lifecycle and completed entries remain untouched.
-func (p *Projector) discardProvisionalStream(turnID string, baseline streamBaseline) Delta {
+// discardOwnedStream restores answer/reasoning entries changed by a canceled
+// provider attempt when that attempt is still their latest writer. Canonical
+// turn lifecycle and entries from later writers remain untouched.
+func (p *Projector) discardOwnedStream(
+	turnID string,
+	baseline streamBaseline,
+	owned streamOwnedEntries,
+) Delta {
 	turnID = normalizeTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	filtered := make([]TranscriptEntry, 0, len(p.state.Entries))
-	removed := false
+	changed := false
+	restored := make([]string, 0, len(owned))
+	removed := make([]string, 0, len(owned))
 	for _, entry := range p.state.Entries {
-		provisional := entry.TurnID == turnID && !entry.Complete &&
-			(entry.Kind == EntryAssistant || entry.Kind == EntryReasoning)
-		if provisional {
-			removed = true
+		streamEntry, streamOwned := owned[entry.ID]
+		ownsCurrent := streamOwned && entry.TurnID == turnID && entry == streamEntry.entry &&
+			p.entryRevisions[entry.ID] == streamEntry.revision
+		if ownsCurrent {
+			changed = true
 			if previous, ok := baseline[entry.ID]; ok {
 				filtered = append(filtered, previous)
+				restored = append(restored, entry.ID)
+			} else {
+				removed = append(removed, entry.ID)
 			}
 			continue
 		}
 		filtered = append(filtered, entry)
 	}
-	if !removed {
+	if !changed {
 		return Delta{}
 	}
 	return p.mutateLocked(DeltaStreamDiscarded, func(state *ThreadSnapshot, delta *Delta) {
 		state.Entries = filtered
+		for _, id := range restored {
+			p.entryRevisions[id] = delta.Revision
+		}
+		for _, id := range removed {
+			delete(p.entryRevisions, id)
+		}
 		delta.TurnID = turnID
 		delta.EntityID = turnID
 		delta.RequiresSnapshot = true
@@ -657,11 +682,15 @@ func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry TranscriptEntry) {
 	previousLength := len(state.Entries)
 	state.Entries = replaceEntry(state.Entries, entry)
+	p.entryRevisions[entry.ID] = delta.Revision
 	if len(state.Entries) == previousLength {
 		return
 	}
 	if overflow := len(state.Entries) - p.limits.Entries; overflow > 0 {
 		state.HasOlderEntries = true
+		for _, removed := range state.Entries[:overflow] {
+			delete(p.entryRevisions, removed.ID)
+		}
 		state.Entries = slices.Clone(state.Entries[overflow:])
 		delta.RequiresSnapshot = true
 	}

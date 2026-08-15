@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -48,6 +49,8 @@ type projectedStream struct {
 	projector *Projector
 	turnID    string
 	baseline  streamBaseline
+	mu        sync.Mutex
+	owned     streamOwnedEntries
 }
 
 var (
@@ -63,7 +66,8 @@ func (s *projectedStream) Update(ctx context.Context, content string) error {
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	s.projector.AssistantAccumulated(s.turnID, content, false)
+	delta := s.projector.AssistantAccumulated(s.turnID, content, false)
+	s.recordOwned(delta)
 	return nil
 }
 
@@ -74,7 +78,8 @@ func (s *projectedStream) Finalize(ctx context.Context, content string) error {
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	s.projector.AssistantAccumulated(s.turnID, content, true)
+	delta := s.projector.AssistantAccumulated(s.turnID, content, true)
+	s.recordOwned(delta)
 	return nil
 }
 
@@ -99,7 +104,8 @@ func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) e
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	s.projector.ReasoningAccumulated(s.turnID, content, false)
+	delta := s.projector.ReasoningAccumulated(s.turnID, content, false)
+	s.recordOwned(delta)
 	return nil
 }
 
@@ -110,7 +116,8 @@ func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string)
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	s.projector.ReasoningAccumulated(s.turnID, content, true)
+	delta := s.projector.ReasoningAccumulated(s.turnID, content, true)
+	s.recordOwned(delta)
 	return nil
 }
 
@@ -121,5 +128,23 @@ func (s *projectedStream) Cancel(context.Context) {
 	if s == nil || s.projector == nil {
 		return
 	}
-	s.projector.discardProvisionalStream(s.turnID, s.baseline)
+	s.mu.Lock()
+	owned := make(streamOwnedEntries, len(s.owned))
+	for id, entry := range s.owned {
+		owned[id] = entry
+	}
+	s.mu.Unlock()
+	s.projector.discardOwnedStream(s.turnID, s.baseline, owned)
+}
+
+func (s *projectedStream) recordOwned(delta Delta) {
+	if delta.Entry == nil || delta.Revision == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owned == nil {
+		s.owned = make(streamOwnedEntries)
+	}
+	s.owned[delta.Entry.ID] = streamOwnedEntry{entry: *delta.Entry, revision: delta.Revision}
 }

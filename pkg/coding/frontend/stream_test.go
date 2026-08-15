@@ -119,12 +119,15 @@ func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 	if err = reasoning.UpdateReasoning(t.Context(), "failed provider reasoning"); err != nil {
 		t.Fatal(err)
 	}
+	if err = reasoning.FinalizeReasoning(t.Context(), "failed provider reasoning"); err != nil {
+		t.Fatal(err)
+	}
 	streamer.Cancel(t.Context())
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 4 || snapshot.Activity != ActivityRunning || snapshot.LastTurn != nil ||
+	if snapshot.Revision != 5 || snapshot.Activity != ActivityRunning || snapshot.LastTurn != nil ||
 		len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryUser ||
 		snapshot.Entries[1].Text != "reasoning from an earlier tool round" || !snapshot.Entries[1].Complete {
 		t.Fatalf("stream cancel changed turn lifecycle = %+v", snapshot)
@@ -133,13 +136,16 @@ func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deltas) != 2 || deltas[1].Kind != DeltaStreamDiscarded || !deltas[1].RequiresSnapshot {
+	if len(deltas) != 3 || deltas[2].Kind != DeltaStreamDiscarded || !deltas[2].RequiresSnapshot {
 		t.Fatalf("stream cancel deltas = %+v", deltas)
 	}
 	if err = reducer.Apply(deltas[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err = reducer.ApplyOrResync(t.Context(), projector, deltas[1]); err != nil {
+	if err = reducer.Apply(deltas[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err = reducer.ApplyOrResync(t.Context(), projector, deltas[2]); err != nil {
 		t.Fatal(err)
 	}
 	if got := reducer.State(); len(got.Entries) != 2 || got.Entries[1].Text != "reasoning from an earlier tool round" {
@@ -150,5 +156,38 @@ func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 	cancel()
 	if err = streamer.Update(canceled, "ignored"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled update error = %v, want context.Canceled", err)
+	}
+}
+
+func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(), "coding", "thread-1", "thread-1", "", runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("matching stream was rejected")
+	}
+	reasoning := streamer.(bus.ReasoningStreamer)
+	if err = reasoning.FinalizeReasoning(t.Context(), "discarded reasoning"); err != nil {
+		t.Fatal(err)
+	}
+	projector.ReasoningAccumulated("turn-1", "newer writer reasoning", true)
+	beforeCancel, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer.Cancel(t.Context())
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != beforeCancel.Revision || len(snapshot.Entries) != 2 ||
+		snapshot.Entries[1].Text != "newer writer reasoning" {
+		t.Fatalf("later writer after stream cancel = %+v", snapshot)
 	}
 }

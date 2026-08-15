@@ -26,6 +26,7 @@ type configuredStreamingProvider struct {
 	chatResponse *providers.LLMResponse
 	streamPlan   []configuredStreamingCall
 	eventPlan    []configuredStreamingEventCall
+	afterEvents  func()
 }
 
 type configuredStreamingCall struct {
@@ -105,6 +106,9 @@ func (p *configuredStreamingProvider) ChatStreamEvents(
 	}
 	for _, chunk := range plan.chunks {
 		onChunk(chunk)
+	}
+	if p.afterEvents != nil {
+		p.afterEvents()
 	}
 	if plan.err != nil {
 		return nil, plan.err
@@ -795,6 +799,56 @@ func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t 
 			"failed provider stream entries = %#v, want none before fallback turn-end projection",
 			snapshot.Entries,
 		)
+	}
+}
+
+func TestConfiguredStreamingLateSteeringDiscardsFinalizedReasoningAttempt(t *testing.T) {
+	const sessionKey = "agent:main:mintclaw:session-1"
+	projector, err := frontend.NewProjector(sessionKey, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatalf("NewProjector() error = %v", err)
+	}
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
+	provider := &configuredStreamingProvider{
+		eventPlan: []configuredStreamingEventCall{
+			{
+				chunks: []providers.StreamChunk{{ReasoningContent: "discarded reasoning"}},
+				response: &providers.LLMResponse{
+					Content: "discarded answer", ReasoningContent: "discarded reasoning",
+				},
+			},
+			{
+				chunks:   []providers.StreamChunk{{Content: "final answer"}},
+				response: &providers.LLMResponse{Content: "final answer"},
+			},
+		},
+	}
+	var al *AgentLoop
+	provider.afterEvents = func() {
+		if provider.eventCalls != 1 {
+			return
+		}
+		agent := al.GetRegistry().GetDefaultAgent()
+		if steerErr := al.Steer(agent.Workspace, sessionKey, agent.ID, providers.Message{
+			Role: "user", Content: "new direction",
+		}); steerErr != nil {
+			t.Errorf("Steer() error = %v", steerErr)
+		}
+	}
+	al = NewAgentLoop(cfg, msgBus, provider)
+
+	if got := runConfiguredStreamingTurn(t, al, "mintclaw"); got != "final answer" {
+		t.Fatalf("response = %q, want steered final answer", got)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != frontend.EntryAssistant ||
+		snapshot.Entries[0].Text != "final answer" || !snapshot.Entries[0].Complete {
+		t.Fatalf("steered stream entries = %#v, want only final answer", snapshot.Entries)
 	}
 }
 
