@@ -339,8 +339,8 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 	if err != nil {
 		return nil, err
 	}
-	if payload["placement"] != "remote" || payload["workspace"] != remoteWorkspaceAlias ||
-		payload["target"] != "remote" || payload["workspace_revision"] != "project-workspace-v1" {
+	if payload["placement"] != "remote" || payload["remote_workspace"] != remoteWorkspaceAlias ||
+		payload["target"] != "remote" || payload["remote_workspace_revision"] != "project-workspace-v1" {
 		return nil, fmt.Errorf("remote workspace envelope = %#v", payload)
 	}
 	switch step {

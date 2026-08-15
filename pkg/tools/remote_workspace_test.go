@@ -35,8 +35,8 @@ func TestRemoteWorkspaceNodeRouterBindsConfiguredRead(t *testing.T) {
 		map[string]any{"path": "README.md", "start_line": float64(1), "max_lines": float64(20)},
 	)
 	payload := decodeNodeResult(t, result)
-	if payload["placement"] != "remote" || payload["workspace"] != "project" ||
-		payload["workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
+	if payload["placement"] != "remote" || payload["remote_workspace"] != "project" ||
+		payload["remote_workspace_revision"] != "project-workspace-v1" || payload["target"] != "build" ||
 		source.dispatchCalls != 1 {
 		t.Fatalf("remote workspace result = %#v; dispatch calls = %d", payload, source.dispatchCalls)
 	}
@@ -154,7 +154,7 @@ func TestRemoteWorkspaceNodeRouterBindsWriteApprovalAndExactPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approval["workspace"] != "project" || approval["path"] != "README.md" ||
+	if approval["remote_workspace"] != "project" || approval["path"] != "README.md" ||
 		approval["publication"] != "replace" || approval["content_bytes"] != 4 ||
 		approval["content"] != nil || approval["input"] != nil {
 		t.Fatalf("safe workspace approval = %#v", approval)
