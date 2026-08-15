@@ -176,8 +176,10 @@ func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool
 		descriptor.ContentType == "" || len(descriptor.ContentType) > 255 {
 		return false
 	}
-	for _, value := range []string{descriptor.TabID, descriptor.FrameID, descriptor.ContextID,
-		descriptor.DocumentID, descriptor.SnapshotID} {
+	for _, value := range []string{
+		descriptor.TabID, descriptor.FrameID, descriptor.ContextID,
+		descriptor.DocumentID, descriptor.SnapshotID,
+	} {
 		if value != "" && !browserHostIdentifier(value) {
 			return false
 		}

@@ -143,12 +143,17 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		received := downloadBrowserOutput(t, host, descriptor, func(value nodes.BrowserOutputDescriptor) nodes.BrowserOutputDescriptor {
-			if attempt == 0 {
-				value.ActorID = "telegram:attacker"
-			}
-			return value
-		})
+		received := downloadBrowserOutput(
+			t,
+			host,
+			descriptor,
+			func(value nodes.BrowserOutputDescriptor) nodes.BrowserOutputDescriptor {
+				if attempt == 0 {
+					value.ActorID = "telegram:attacker"
+				}
+				return value
+			},
+		)
 		if attempt == 0 {
 			if received != nil {
 				t.Fatalf("forged transfer returned %d bytes", len(received))
