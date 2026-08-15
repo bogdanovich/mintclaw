@@ -34,7 +34,7 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	if !ready.Enabled || !filepath.IsAbs(ready.DriverExecutable) ||
 		!filepath.IsAbs(ready.ProfileDirectory) || !filepath.IsAbs(ready.LockFile) ||
 		strings.Join(ready.AllowedAgents, ",") != "browser,marketplace" ||
-		strings.Join(ready.AllowedActions, ",") != "check,click,download,hover,navigate,uncheck" ||
+		strings.Join(ready.AllowedActions, ",") != "check,click,download,file_chooser,hover,navigate,uncheck" ||
 		strings.Join(ready.SensitiveFields, ",") != "display name" {
 		t.Fatalf("normalized browser profile = %#v", ready)
 	}
@@ -319,7 +319,7 @@ func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfile
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		DryRun: true,
 		AllowedActions: []string{
-			"navigate", "click", "download", "check", "uncheck", "hover",
+			"navigate", "click", "download", "file_chooser", "check", "uncheck", "hover",
 		},
 		Headed: true,
 	}

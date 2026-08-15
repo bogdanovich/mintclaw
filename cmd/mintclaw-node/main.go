@@ -81,8 +81,10 @@ func run(args []string) error {
 	}
 	defer ledger.Close()
 	runtimeOptions := make([]companion.RuntimeOption, 0, 5)
+	var browserHost *browserhost.BrowserHost
 	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
-		browserHost, browserHostErr := browserhost.NewBrowserHost(cfg.BrowserProfiles)
+		var browserHostErr error
+		browserHost, browserHostErr = browserhost.NewBrowserHost(cfg.BrowserProfiles)
 		if browserHostErr != nil {
 			return fmt.Errorf("configure companion browser host: %w", browserHostErr)
 		}
@@ -117,6 +119,9 @@ func run(args []string) error {
 		}()
 	}
 	fileCapabilities := make([]companion.FileTransferCapability, 0, 2)
+	if browserHost != nil && len(browserHost.TransferPolicyRevisions()) > 0 {
+		fileCapabilities = append(fileCapabilities, browserHost)
+	}
 	if companion.HasEnabledFilePolicy(cfg.FilePolicies) || jobRuntime != nil {
 		transferLedger, transferLedgerErr := companion.NewFileTransferLedger(
 			companion.FileTransferLedgerPath(cfg.StateDir),

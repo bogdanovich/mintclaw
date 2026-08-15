@@ -103,6 +103,54 @@ func TestBrowserSelectDispatchAcceptsWorstCaseJSONEscaping(t *testing.T) {
 	}
 }
 
+func TestBrowserFileChooserCommandSchemaBindsArtifactMetadata(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{
+		"check", "click", "dialog", "drag", "file_chooser", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+	}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawCatalog, err := json.Marshal(CapabilityCatalog{Commands: descriptors})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTripped CapabilityCatalog
+	if err = json.Unmarshal(rawCatalog, &roundTripped); err != nil {
+		t.Fatal(err)
+	}
+	if err = roundTripped.Validate(); err != nil {
+		t.Fatalf("round-tripped file chooser catalog is invalid: %v", err)
+	}
+	input := browserActInputFixture()
+	input["action"] = map[string]any{
+		"kind": "file_chooser", "ref": "host_ref_1",
+		"artifact_ref": TransferArtifactRefPrefix + "artifact_1",
+	}
+	input["effect"] = "local_edit"
+	input["expected_role"] = "button"
+	input["expected_name"] = "Choose file"
+	input["artifact_sha256"] = strings.Repeat("a", 64)
+	input["artifact_bytes"] = 7
+	input["artifact_filename"] = "photo.jpg"
+	input["artifact_content_type"] = "image/jpeg"
+	if err = validateDescriptorInvocationInput(descriptors[3], input); err != nil {
+		t.Fatalf("file chooser input rejected: %v", err)
+	}
+	delete(input, "artifact_sha256")
+	if err = validateDescriptorInvocationInput(descriptors[3], input); err == nil {
+		t.Fatal("file chooser schema accepted missing artifact digest")
+	}
+	input["artifact_sha256"] = strings.Repeat("a", 64)
+	input["approval_digest"] = strings.Repeat("b", 64)
+	if err = validateDescriptorInvocationInput(descriptors[3], input); err == nil {
+		t.Fatal("file chooser schema accepted approval metadata")
+	}
+}
+
 func TestBrowserCommandDescriptorsBindExplicitApprovedActionMode(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.DryRun = false

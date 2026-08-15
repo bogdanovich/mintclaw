@@ -25,7 +25,9 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
@@ -63,7 +65,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientConfig := wssBrowserCompanionConfig(t, server, policy)
-	client := wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	client := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
 	result, err := client.Authenticate(t.Context())
 	if err != nil || result.State != nodes.StatePendingPairing {
 		t.Fatalf("bootstrap admission = %#v, %v", result, err)
@@ -92,6 +94,18 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
 	if err != nil {
 		t.Fatal(err)
+	}
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	servicesOwner := &services{
+		NodeAdmission: runtimeState,
+		Browser:       &browserRuntime{broker: broker, policyRevision: policyRevision},
+	}
+	browserSource := &gatewayBrowserToolSource{
+		services: servicesOwner, config: cfg, policyRevision: policyRevision,
+		workspace: workspace, limits: cfg.Tools.Browser.Limits.Effective(),
 	}
 	owner := browser.Owner{
 		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
@@ -443,6 +457,65 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 			t.Fatalf("denied remote fill persisted protected input in %s", retainedPath)
 		}
 	}
+	uploadObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadMarker := `button "Choose file" [ref=`
+	uploadStart := strings.Index(uploadObservation.Snapshot, uploadMarker)
+	if uploadStart < 0 {
+		t.Fatalf("file chooser fixture has no bounded ref: %q", uploadObservation.Snapshot)
+	}
+	uploadStart += len(uploadMarker)
+	uploadEnd := strings.Index(uploadObservation.Snapshot[uploadStart:], "]")
+	if uploadEnd < 1 {
+		t.Fatalf("file chooser fixture has malformed ref: %q", uploadObservation.Snapshot)
+	}
+	uploadContext := toolshared.WithToolRouteSessionKey(
+		gatewayBrowserArtifactContext(workspace), owner.SessionKey,
+	)
+	uploadContext = toolshared.WithToolExecutionIdentity(uploadContext, workspace, owner.ExecutionID)
+	artifactOwner, err := tools.RoutedNodeFileArtifactOwner(uploadContext, "browser_wss_upload_call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool, err := runtimeState.gatewayTransferSpool(nodes.GatewayTransferSpoolPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadData := []byte("browser companion WSS upload")
+	uploadDigest := sha256.Sum256(uploadData)
+	writer, uploadArtifact, created, err := spool.Begin(artifactOwner, nodes.TransferArtifactSpec{
+		TransferID: "browser_wss_upload", Direction: nodes.TransferDirectionDownload,
+		Target: "companion", ProfileRevision: "files-v1", Filename: "fixture.txt",
+		ContentType: "text/plain", DeclaredSize: int64(len(uploadData)),
+		SHA256: hex.EncodeToString(uploadDigest[:]), ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil || !created || writer == nil {
+		t.Fatalf("browser upload artifact Begin() = %#v, %t, %v", uploadArtifact, created, err)
+	}
+	if err = writer.WriteChunk(1, uploadData); err != nil {
+		t.Fatal(err)
+	}
+	uploadArtifact, err = writer.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-file-chooser", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: uploadObservation.SnapshotID, SnapshotGeneration: uploadObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionFileChooser,
+			Ref:  uploadObservation.Snapshot[uploadStart : uploadStart+uploadEnd], ArtifactRef: uploadArtifact.Ref,
+		},
+	})
+	if err != nil || upload.RequiresApproval || upload.Action.Effect != browser.EffectLocalEdit {
+		t.Fatalf("file chooser preparation = %#v, %v", upload, err)
+	}
+	invocation, err = browserSource.ExecuteAction(uploadContext, owner, upload.Action.ID, nil)
+	if err != nil || invocation.State != browser.InvocationSucceeded || !bytes.Equal(host.uploadedArtifact(), uploadData) {
+		t.Fatalf("file chooser invocation = %#v, %v; uploaded = %q", invocation, err, host.uploadedArtifact())
+	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("first close = %#v, %v", closed, err)
@@ -458,7 +531,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("disconnected node placement opened local workers %d times", local.opens)
 	}
 
-	client = wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	client = wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
 	reconnectedRun := startWSSBrowserClient(t, client)
 	defer reconnectedRun.stop(t)
 	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
@@ -516,7 +589,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	reconnectedRun.cancel()
 	waitForVerticalSliceNodeState(t, registry, nodes.StateDisconnected)
-	replacement := wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	replacement := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
 	replacementRun := startWSSBrowserClient(t, replacement)
 	defer replacementRun.stop(t)
 	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
@@ -592,7 +665,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recoveredClient := wssBrowserClient(t, clientConfig, identity, recoveredRuntime)
+	recoveredClient := wssBrowserClient(t, clientConfig, identity, recoveredRuntime, host)
 	recoveredRun := startWSSBrowserClient(t, recoveredClient)
 	defer recoveredRun.stop(t)
 	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
@@ -631,7 +704,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if got, want := host.commandSequence(), []string{
 		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
 		"check", "uncheck", "hover", "drag", "observe", "observe", "observe", "dialog", "fill",
-		"status", "close",
+		"status", "observe", "file_chooser", "close",
 		"open", "status", "close",
 		"open", "observe", "navigate", "close",
 		// Post-acceptance recovery receives a redacted terminal receipt and
@@ -993,6 +1066,69 @@ type wssBrowserHost struct {
 	navigateFailure bool
 	fillDenied      bool
 	contextStale    bool
+	transfer        *wssBrowserTransfer
+	uploaded        []byte
+}
+
+type wssBrowserTransfer struct {
+	binding protocol.TransferFrame
+	prepare browserArtifactTransferPrepare
+	data    []byte
+	seq     uint64
+}
+
+func (*wssBrowserHost) Descriptors() []nodes.CommandDescriptor { return nil }
+
+func (host *wssBrowserHost) TransferPolicyRevisions() []string {
+	return []string{host.profile.Revision}
+}
+
+func (host *wssBrowserHost) HandleTransferFrame(
+	_ context.Context,
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	response := frame
+	response.Sequence = 0
+	response.Payload = nil
+	switch frame.Type {
+	case protocol.TransferFramePrepare:
+		var prepare browserArtifactTransferPrepare
+		if json.Unmarshal(frame.Payload, &prepare) != nil || host.urls[prepare.SessionID] == "" ||
+			prepare.RoutedSessionID == "" || prepare.ActionInvocationID == "" || prepare.ArtifactRef == "" {
+			response.Type = protocol.TransferFrameDeny
+			return send(response)
+		}
+		host.transfer = &wssBrowserTransfer{binding: frame, prepare: prepare}
+		response.Type = protocol.TransferFrameAccept
+	case protocol.TransferFrameChunk:
+		if host.transfer == nil || !host.transfer.binding.SameBinding(frame) ||
+			frame.Sequence != host.transfer.seq+1 {
+			response.Type = protocol.TransferFrameFailure
+			return send(response)
+		}
+		host.transfer.data = append(host.transfer.data, frame.Payload...)
+		host.transfer.seq = frame.Sequence
+		response.Type, response.Sequence = protocol.TransferFrameAck, frame.Sequence
+	case protocol.TransferFrameCommit:
+		if host.transfer == nil || !host.transfer.binding.SameBinding(frame) ||
+			uint64(len(host.transfer.data)) != frame.TotalSize || sha256.Sum256(host.transfer.data) != frame.SHA256 {
+			response.Type = protocol.TransferFrameFailure
+			return send(response)
+		}
+		response.Type = protocol.TransferFrameCommitted
+	default:
+		response.Type = protocol.TransferFrameFailure
+	}
+	return send(response)
+}
+
+func (host *wssBrowserHost) uploadedArtifact() []byte {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return append([]byte(nil), host.uploaded...)
 }
 
 func (host *wssBrowserHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -1248,6 +1384,36 @@ func (host *wssBrowserHost) Drag(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) FileChooser(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "file_chooser")
+	url, found := host.urls[request.SessionID]
+	if !found || host.transfer == nil || request.Action.Kind != "file_chooser" ||
+		request.Action.Ref != "host_ref_9" || request.ExpectedRole != "button" ||
+		request.ExpectedName != "Choose file" || request.Effect != "local_edit" ||
+		request.Action.ArtifactRef != host.transfer.prepare.ArtifactRef ||
+		request.ActionInvocationID != host.transfer.prepare.ActionInvocationID ||
+		request.PreparedActionHash != host.transfer.prepare.PreparedActionHash ||
+		request.BrowserPolicyRevision != host.transfer.prepare.BrowserPolicyRevision ||
+		request.RoutedSessionID != host.transfer.prepare.RoutedSessionID ||
+		request.ArtifactBytes != int64(len(host.transfer.data)) ||
+		request.ArtifactSHA256 != hex.EncodeToString(host.transfer.binding.SHA256[:]) ||
+		request.ArtifactFilename != host.transfer.prepare.Filename ||
+		request.ArtifactContentType != host.transfer.prepare.ContentType {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	host.uploaded = append([]byte(nil), host.transfer.data...)
+	host.transfer = nil
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
 func (host *wssBrowserHost) ordinaryInteraction(
 	request nodes.BrowserHostActRequest,
 	action, ref, role, name, effect string,
@@ -1494,7 +1660,7 @@ func wssBrowserObservation(
 		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]\n"+
 		"- checkbox \"Notify\" [ref=host_ref_4]\n- switch \"Dark mode\" [ref=host_ref_5]\n"+
 		"- button \"Menu\" [ref=host_ref_6]\n- listitem \"Todo\" [ref=host_ref_7]\n"+
-		"- list \"Done\" [ref=host_ref_8]"
+		"- list \"Done\" [ref=host_ref_8]\n- button \"Choose file\" [ref=host_ref_9]"
 	elements := []nodes.BrowserElement{
 		{Ref: "host_ref_1", Role: "button", Name: "Save"},
 		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
@@ -1504,6 +1670,7 @@ func wssBrowserObservation(
 		{Ref: "host_ref_6", Role: "button", Name: "Menu"},
 		{Ref: "host_ref_7", Role: "listitem", Name: "Todo"},
 		{Ref: "host_ref_8", Role: "list", Name: "Done"},
+		{Ref: "host_ref_9", Role: "button", Name: "Choose file"},
 	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
@@ -1525,7 +1692,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		AllowApprovedActions: true,
 		Actions: []string{
-			"check", "click", "dialog", "drag", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+			"check", "click", "dialog", "drag", "file_chooser", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
 		},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}
@@ -1569,11 +1736,24 @@ func wssBrowserClient(
 	cfg companion.Config,
 	identity companion.Identity,
 	runtime *companion.Runtime,
+	transfers ...companion.FileTransferCapability,
 ) *companion.Client {
 	t.Helper()
-	client, err := companion.NewClientWithRuntime(
-		cfg, identity, "browser-wss-test", runtime, slog.New(slog.DiscardHandler),
-	)
+	var client *companion.Client
+	var err error
+	if len(transfers) > 0 {
+		router, routerErr := companion.NewFileTransferRouter(transfers...)
+		if routerErr != nil {
+			t.Fatal(routerErr)
+		}
+		client, err = companion.NewClientWithRuntimeAndTransferHandler(
+			cfg, identity, "browser-wss-test", runtime, router, slog.New(slog.DiscardHandler),
+		)
+	} else {
+		client, err = companion.NewClientWithRuntime(
+			cfg, identity, "browser-wss-test", runtime, slog.New(slog.DiscardHandler),
+		)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

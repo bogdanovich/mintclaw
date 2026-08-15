@@ -36,6 +36,7 @@ type browserOrdinaryInteractionCommandHost interface {
 	Uncheck(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Hover(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Drag(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	FileChooser(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 }
 
 type browserCommandHandler struct {
@@ -224,7 +225,7 @@ func (handler *browserCommandHandler) executeAct(
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
 		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
 		input.Action.Kind != "dialog" && input.Action.Kind != "check" && input.Action.Kind != "uncheck" &&
-		input.Action.Kind != "hover" && input.Action.Kind != "drag") ||
+		input.Action.Kind != "hover" && input.Action.Kind != "drag" && input.Action.Kind != "file_chooser") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
@@ -252,11 +253,22 @@ func (handler *browserCommandHandler) executeAct(
 				len(input.ExpectedRole) > 128 || len(input.ExpectedName) > 4096 ||
 				input.DestinationExpectedRole == "" || len(input.DestinationExpectedRole) > 128 ||
 				len(input.DestinationExpectedName) > 4096 || !nodes.BrowserApprovalDigestMatches(input))) ||
+		(input.Action.Kind == "file_chooser" &&
+			(input.Effect != "local_edit" || input.Action.Ref == "" || input.Action.ArtifactRef == "" ||
+				input.ExpectedRole != "button" || len(input.ExpectedName) > 4096 || input.ApprovalDigest != "" ||
+				len(input.ArtifactSHA256) != sha256.Size*2 || input.ArtifactBytes < 1 ||
+				input.ArtifactBytes > nodes.MaxBrowserUploadBytes || input.ArtifactFilename == "" ||
+				len(input.ArtifactFilename) > 255 || input.ArtifactContentType == "" ||
+				len(input.ArtifactContentType) > 255)) ||
 		(input.Action.Kind != "drag" &&
 			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "")) ||
+		(input.Action.Kind != "file_chooser" &&
+			(input.Action.ArtifactRef != "" || input.ArtifactSHA256 != "" || input.ArtifactBytes != 0 ||
+				input.ArtifactFilename != "" || input.ArtifactContentType != "")) ||
 		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
 			input.Action.Kind != "press" && input.Action.Kind != "dialog" && input.Action.Kind != "check" &&
 			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" && input.Action.Kind != "drag" &&
+			input.Action.Kind != "file_chooser" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -277,6 +289,8 @@ func (handler *browserCommandHandler) executeAct(
 		DialogType:              input.DialogType, DialogMessageDigest: input.DialogMessageDigest,
 		DialogMessageBytes: input.DialogMessageBytes,
 		InputDigest:        input.InputDigest, InputBytes: input.InputBytes,
+		ArtifactSHA256: input.ArtifactSHA256, ArtifactBytes: input.ArtifactBytes,
+		ArtifactFilename: input.ArtifactFilename, ArtifactContentType: input.ArtifactContentType,
 		ApprovalDigest: input.ApprovalDigest,
 		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
@@ -294,7 +308,7 @@ func (handler *browserCommandHandler) executeAct(
 		observation, err = handler.host.Press(ctx, request)
 	case "dialog":
 		observation, err = handler.host.Dialog(ctx, request)
-	case "check", "uncheck", "hover", "drag":
+	case "check", "uncheck", "hover", "drag", "file_chooser":
 		ordinary, ok := handler.host.(browserOrdinaryInteractionCommandHost)
 		if !ok {
 			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
@@ -306,6 +320,8 @@ func (handler *browserCommandHandler) executeAct(
 			observation, err = ordinary.Uncheck(ctx, request)
 		case "drag":
 			observation, err = ordinary.Drag(ctx, request)
+		case "file_chooser":
+			observation, err = ordinary.FileChooser(ctx, request)
 		default:
 			observation, err = ordinary.Hover(ctx, request)
 		}

@@ -278,6 +278,7 @@ type BrowserAction struct {
 	Amount         int    `json:"amount,omitempty"`
 	Decision       string `json:"decision,omitempty"`
 	PromptProvided bool   `json:"prompt_provided,omitempty"`
+	ArtifactRef    string `json:"artifact_ref,omitempty"`
 }
 
 func (action *BrowserAction) UnmarshalJSON(data []byte) error {
@@ -295,6 +296,7 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		Amount         json.RawMessage `json:"amount,omitempty"`
 		Decision       string          `json:"decision,omitempty"`
 		PromptProvided bool            `json:"prompt_provided,omitempty"`
+		ArtifactRef    string          `json:"artifact_ref,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -312,6 +314,7 @@ func (action *BrowserAction) UnmarshalJSON(data []byte) error {
 		DestinationRef: value.DestinationRef, DialogID: value.DialogID, Target: value.Target,
 		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
 		Decision: value.Decision, PromptProvided: value.PromptProvided,
+		ArtifactRef: value.ArtifactRef,
 	}
 	return nil
 }
@@ -336,6 +339,10 @@ type BrowserActInput struct {
 	DialogMessageBytes      int           `json:"dialog_message_bytes,omitempty"`
 	InputDigest             string        `json:"input_digest,omitempty"`
 	InputBytes              int           `json:"input_bytes,omitempty"`
+	ArtifactSHA256          string        `json:"artifact_sha256,omitempty"`
+	ArtifactBytes           int64         `json:"artifact_bytes,omitempty"`
+	ArtifactFilename        string        `json:"artifact_filename,omitempty"`
+	ArtifactContentType     string        `json:"artifact_content_type,omitempty"`
 	ApprovalDigest          string        `json:"approval_digest,omitempty"`
 }
 
@@ -374,6 +381,10 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		DialogMessageBytes      json.RawMessage `json:"dialog_message_bytes,omitempty"`
 		InputDigest             string          `json:"input_digest,omitempty"`
 		InputBytes              json.RawMessage `json:"input_bytes,omitempty"`
+		ArtifactSHA256          string          `json:"artifact_sha256,omitempty"`
+		ArtifactBytes           json.RawMessage `json:"artifact_bytes,omitempty"`
+		ArtifactFilename        string          `json:"artifact_filename,omitempty"`
+		ArtifactContentType     string          `json:"artifact_content_type,omitempty"`
 		ApprovalDigest          string          `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -394,6 +405,10 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	if err != nil || dialogMessageBytes > MaxBrowserDialogMessageBytes {
 		return fmt.Errorf("%w: browser dialog message bytes exceed the limit", ErrInvalidCapability)
 	}
+	artifactBytes, err := decodeCanonicalBrowserGeneration(value.ArtifactBytes)
+	if err != nil || artifactBytes > MaxBrowserUploadBytes {
+		return fmt.Errorf("%w: browser artifact bytes exceed the limit", ErrInvalidCapability)
+	}
 	*input = BrowserActInput{
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
@@ -407,6 +422,8 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		DialogType:              value.DialogType, DialogMessageDigest: value.DialogMessageDigest,
 		DialogMessageBytes: int(dialogMessageBytes),
 		InputDigest:        value.InputDigest, InputBytes: int(inputBytes),
+		ArtifactSHA256: value.ArtifactSHA256, ArtifactBytes: int64(artifactBytes),
+		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
 		ApprovalDigest: value.ApprovalDigest,
 	}
 	return nil
@@ -787,6 +804,10 @@ type BrowserHostActRequest struct {
 	DialogMessageBytes      int
 	InputDigest             string
 	InputBytes              int
+	ArtifactSHA256          string
+	ArtifactBytes           int64
+	ArtifactFilename        string
+	ArtifactContentType     string
 	AgentID                 string
 	ActorID                 string
 }
@@ -820,7 +841,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
 		if action != "check" && action != "click" && action != "dialog" && action != "download" && action != "drag" &&
-			action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
+			action != "file_chooser" && action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
 			action != "scroll" && action != "select" && action != "uncheck" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
@@ -967,7 +988,7 @@ func browserCommandInputSchema(
 				effect = "external_commit"
 			case "download":
 				effect = "download"
-			case "check", "fill", "select", "uncheck":
+			case "check", "file_chooser", "fill", "select", "uncheck":
 				effect = "local_edit"
 			case "hover":
 				effect = "read"
@@ -990,7 +1011,7 @@ func browserCommandInputSchema(
 				"effect":           map[string]any{"const": effect},
 			}
 			if action == "click" || action == "fill" || action == "select" || action == "check" ||
-				action == "uncheck" || action == "hover" || action == "drag" {
+				action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
 				required = append(required, "expected_role")
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
@@ -1012,6 +1033,20 @@ func browserCommandInputSchema(
 				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
 				properties["input_bytes"] = map[string]any{
 					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
+				}
+			}
+			if action == "file_chooser" {
+				required = append(required,
+					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+				)
+				properties["expected_role"] = map[string]any{"const": "button"}
+				properties["artifact_sha256"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
+				properties["artifact_bytes"] = map[string]any{
+					"type": "integer", "minimum": 1, "maximum": profile.Limits.UploadBytes,
+				}
+				properties["artifact_filename"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 255}
+				properties["artifact_content_type"] = map[string]any{
+					"type": "string", "minLength": 1, "maxLength": 255,
 				}
 			}
 			if action == "check" || action == "uncheck" {
@@ -1047,7 +1082,7 @@ func browserCommandInputSchema(
 			if action == "fill" || action == "select" {
 				branch["not"] = map[string]any{"required": []string{"approval_digest"}}
 			}
-			if action == "check" || action == "uncheck" || action == "hover" {
+			if action == "check" || action == "uncheck" || action == "hover" || action == "file_chooser" {
 				branch["not"] = map[string]any{"anyOf": []any{
 					map[string]any{"required": []string{"approval_digest"}},
 					map[string]any{"required": []string{"input_digest"}},
@@ -1130,10 +1165,20 @@ func browserCommandInputSchema(
 					map[string]any{"oneOf": promptConstraint},
 				}
 			}
-			forbiddenFields := []string{"destination_expected_role", "destination_expected_name"}
-			if action == "drag" {
+			forbiddenFields := []string{
+				"destination_expected_role", "destination_expected_name", "artifact_sha256", "artifact_bytes",
+				"artifact_filename", "artifact_content_type",
+			}
+			switch action {
+			case "drag":
 				forbiddenFields = []string{
 					"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+				}
+			case "file_chooser":
+				forbiddenFields = []string{
+					"destination_expected_role", "destination_expected_name", "dialog_type",
+					"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
 				}
 			}
 			forbidden := make([]any, 0, len(forbiddenFields))
@@ -1203,6 +1248,10 @@ func browserCommandInputSchema(
 		if _, hasCheck := allActions["check"]; hasCheck && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
 		}
+		if _, hasFileChooser := allActions["file_chooser"]; hasFileChooser &&
+			!slices.Contains(actEffects, "local_edit") {
+			actEffects = append(actEffects, "local_edit")
+		}
 		if _, hasUncheck := allActions["uncheck"]; hasUncheck && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
 		}
@@ -1229,7 +1278,8 @@ func browserCommandInputSchema(
 		_, hasUncheck := allActions["uncheck"]
 		_, hasHover := allActions["hover"]
 		_, hasDrag := allActions["drag"]
-		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag {
+		_, hasFileChooser := allActions["file_chooser"]
+		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag || hasFileChooser {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
@@ -1256,6 +1306,16 @@ func browserCommandInputSchema(
 			properties["dialog_message_digest"] = digest
 			properties["dialog_message_bytes"] = map[string]any{
 				"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
+			}
+		}
+		if hasFileChooser {
+			properties["artifact_sha256"] = digest
+			properties["artifact_bytes"] = map[string]any{
+				"type": "integer", "minimum": 1, "maximum": MaxBrowserUploadBytes,
+			}
+			properties["artifact_filename"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 255}
+			properties["artifact_content_type"] = map[string]any{
+				"type": "string", "minLength": 1, "maxLength": 255,
 			}
 		}
 		properties["approval_digest"] = digest

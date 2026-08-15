@@ -405,6 +405,46 @@ func TestFileRegistryApprovesOnlyAdvertisedCommands(t *testing.T) {
 	}
 }
 
+func TestFileRegistryCompactsPrettyPrintedBrowserSchemasBeforeValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{
+		"check", "click", "dialog", "drag", "file_chooser", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+	}
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := testPendingPairing(t, 1)
+	pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
+	pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.UpsertPending(pairing); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := registry.Approve(pairing.Node.ID, PairingApproval{
+		AllowedCommands: []string{BrowserCommandAct}, At: 2,
+	})
+	if err != nil || len(approved.AllowedCommands) != 1 || approved.AllowedCommands[0] != BrowserCommandAct {
+		t.Fatalf("Approve() = %#v, %v", approved, err)
+	}
+	reloaded, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := reloaded.Registration(pairing.Node.ID); err != nil || !found {
+		t.Fatalf("reloaded Registration() = %t, %v", found, err)
+	}
+}
+
 func TestFileRegistryDenyAndRevokeFailClosed(t *testing.T) {
 	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
 	if err != nil {

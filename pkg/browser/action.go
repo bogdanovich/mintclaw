@@ -478,6 +478,16 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		prepared.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
 			if artifactInputAction(prepared.Action.Kind) || prepared.Action.Kind == ActionDownload {
+				if preparedWorker, ok := worker.(PreparedActionWorker); ok &&
+					artifactInputAction(prepared.Action.Kind) &&
+					preparedWorker.SupportsPreparedAction(prepared.Action.Kind) {
+					if executeErr := preparedWorker.ExecutePrepared(executeCtx, WorkerPreparedAction{
+						InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
+					}); executeErr != nil {
+						return nil, executeErr
+					}
+					return json.RawMessage(`{"status":"completed"}`), nil
+				}
 				transferWorker, ok := worker.(TransferWorker)
 				if !ok {
 					return nil, ErrDriverIncompatible

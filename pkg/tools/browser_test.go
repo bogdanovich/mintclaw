@@ -934,38 +934,34 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 }
 
 func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testing.T) {
-	for name, test := range map[string]struct {
-		config *config.Config
-		source *fakeBrowserToolSource
-	}{
-		"transfer unavailable": {
-			config: browserToolTestConfig(),
-			source: &fakeBrowserToolSource{available: true, transferUnavailable: true},
-		},
-		"node only": {
-			config: func() *config.Config {
-				cfg := browserToolTestConfig()
-				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
-				target.Placement = config.BrowserPlacementNode
-				target.NodeTarget = "personal-node"
-				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
-				return cfg
-			}(),
-			source: &fakeBrowserToolSource{available: true},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			parameters := NewBrowserActTool(test.config, test.source).Parameters()
-			properties := parameters["properties"].(map[string]any)
-			action := properties["action"].(map[string]any)
-			actionProperties := action["properties"].(map[string]any)
-			kind := actionProperties["kind"].(map[string]any)
-			for _, candidate := range kind["enum"].([]string) {
-				if candidate == string(browser.ActionFileChooser) {
-					t.Fatalf("unsupported file chooser advertised in schema: %#v", kind["enum"])
-				}
-			}
-		})
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(),
+		&fakeBrowserToolSource{available: true, transferUnavailable: true},
+	).Parameters()
+	properties := parameters["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+	actionProperties := action["properties"].(map[string]any)
+	kind := actionProperties["kind"].(map[string]any)
+	for _, candidate := range kind["enum"].([]string) {
+		if candidate == string(browser.ActionFileChooser) {
+			t.Fatalf("unsupported file chooser advertised in schema: %#v", kind["enum"])
+		}
+	}
+}
+
+func TestBrowserActSchemaIncludesFileChooserForNodeTarget(t *testing.T) {
+	cfg := browserToolTestConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Placement = config.BrowserPlacementNode
+	target.NodeTarget = "personal-node"
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	parameters := NewBrowserActTool(cfg, &fakeBrowserToolSource{available: true}).Parameters()
+	properties := parameters["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+	actionProperties := action["properties"].(map[string]any)
+	kind := actionProperties["kind"].(map[string]any)
+	if !slices.Contains(kind["enum"].([]string), string(browser.ActionFileChooser)) {
+		t.Fatalf("node file chooser missing from schema: %#v", kind["enum"])
 	}
 }
 
@@ -1020,6 +1016,24 @@ func TestBrowserTargetsAdvertisesOnlyRuntimeActions(t *testing.T) {
 	}
 	if !slices.Equal(result.Targets[0].Actions, sourceActions) {
 		t.Fatalf("target actions = %#v", result.Targets[0].Actions)
+	}
+}
+
+func TestBrowserTargetsOmitsArtifactActionsWhenTransferIsUnavailable(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, transferUnavailable: true,
+		actions: []browser.ActionKind{
+			browser.ActionNavigate, browser.ActionFileChooser, browser.ActionUpload, browser.ActionDownload,
+		},
+	}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t, NewBrowserTargetsTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), nil), &result,
+	)
+	if len(result.Targets) != 1 || !slices.Equal(result.Targets[0].Actions, []browser.ActionKind{
+		browser.ActionNavigate,
+	}) {
+		t.Fatalf("target actions = %#v", result.Targets)
 	}
 }
 

@@ -131,6 +131,13 @@ func (worker *fakeBrowserHostWorker) Execute(
 	return worker.executeErr
 }
 
+func (worker *fakeBrowserHostWorker) Upload(
+	ctx context.Context,
+	action browserworker.DriverAction,
+) error {
+	return worker.Execute(ctx, action)
+}
+
 func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
 	ctx context.Context,
 	expectedNavigationID string,
