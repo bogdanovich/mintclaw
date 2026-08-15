@@ -856,10 +856,27 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 ) error {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil {
+	if worker.closing || worker.closed || worker.lost || worker.humanControl {
 		return ErrWorkerUnavailable
 	}
 	if expectedToken == "" || expectedToken != worker.navigationToken {
+		return ErrStale
+	}
+	if worker.pendingDialog != nil {
+		if action.Kind != DriverDialog {
+			return ErrDriverRejected
+		}
+		tool, arguments, err := mapPlaywrightAction(action, worker.limits)
+		if err != nil {
+			return err
+		}
+		if tool != "browser_handle_dialog" {
+			return ErrDriverIncompatible
+		}
+		_, err = worker.callAndConsume(ctx, tool, arguments, false)
+		return err
+	}
+	if action.Kind == DriverDialog {
 		return ErrStale
 	}
 	code, err := playwrightNavigationCheckedActionCode(

@@ -209,6 +209,103 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 }
 
+func TestPlaywrightWorkerHandlesPendingDialogAfterNavigationCheck(t *testing.T) {
+	const token = "verified-navigation-token"
+	client := &fakePlaywrightClient{}
+	worker := &playwrightWorker{
+		client:          client,
+		networkProxy:    &browserNetworkProxy{},
+		limits:          config.BrowserLimitsConfig{}.Effective(),
+		navigationToken: token,
+		lastObservation: DriverObservation{Origin: "https://example.com"},
+		pendingDialog:   &DialogObservation{Type: "prompt", Message: "Type DELETE"},
+	}
+
+	err := worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverDialog, Accept: true, Value: "DELETE", PromptProvided: true,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteAfterNavigationCheck(dialog) error = %v", err)
+	}
+	if worker.pendingDialog != nil {
+		t.Fatalf("pending dialog = %+v, want nil", worker.pendingDialog)
+	}
+	if len(client.calls) != 1 || client.calls[0].tool != "browser_handle_dialog" ||
+		client.calls[0].arguments["accept"] != true || client.calls[0].arguments["promptText"] != "DELETE" {
+		t.Fatalf("dialog calls = %#v", client.calls)
+	}
+}
+
+func TestPlaywrightWorkerGuardsNavigationCheckedDialogDispatch(t *testing.T) {
+	const token = "verified-navigation-token"
+	tests := []struct {
+		name          string
+		expectedToken string
+		pending       *DialogObservation
+		action        DriverAction
+		wantErr       error
+	}{
+		{
+			name: "non-dialog action while pending", expectedToken: token,
+			pending: &DialogObservation{Type: "confirm", Message: "Continue?"},
+			action:  DriverAction{Kind: DriverPress, Key: "Tab"}, wantErr: ErrDriverRejected,
+		},
+		{
+			name: "dialog action without pending dialog", expectedToken: token,
+			action: DriverAction{Kind: DriverDialog}, wantErr: ErrStale,
+		},
+		{
+			name: "wrong navigation identity", expectedToken: "stale-navigation-token",
+			pending: &DialogObservation{Type: "confirm", Message: "Continue?"},
+			action:  DriverAction{Kind: DriverDialog}, wantErr: ErrStale,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{}
+			worker := &playwrightWorker{
+				client: client, networkProxy: &browserNetworkProxy{},
+				limits: config.BrowserLimitsConfig{}.Effective(), navigationToken: token,
+				lastObservation: DriverObservation{Origin: "https://example.com"},
+				pendingDialog:   cloneDialogObservation(test.pending),
+			}
+			err := worker.ExecuteAfterNavigationCheck(t.Context(), test.expectedToken, test.action)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want %v", err, test.wantErr)
+			}
+			if len(client.calls) != 0 {
+				t.Fatalf("rejected dispatch called MCP: %#v", client.calls)
+			}
+		})
+	}
+}
+
+func TestPlaywrightWorkerFailsClosedAfterNavigationCheckedDialogRejection(t *testing.T) {
+	const token = "verified-navigation-token"
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_handle_dialog": {
+			IsError: true,
+			Content: []sdkmcp.Content{
+				&sdkmcp.TextContent{Text: "### Error\n- dialog handling failed"},
+			},
+		},
+	}}
+	worker := &playwrightWorker{
+		client: client, networkProxy: &browserNetworkProxy{},
+		limits: config.BrowserLimitsConfig{}.Effective(), navigationToken: token,
+		lastObservation: DriverObservation{Origin: "https://example.com"},
+		pendingDialog:   &DialogObservation{Type: "confirm", Message: "Continue?"},
+	}
+
+	err := worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{Kind: DriverDialog})
+	if !errors.Is(err, ErrDriverRejected) || !errors.Is(err, ErrWorkerUnavailable) || !worker.lost {
+		t.Fatalf("ExecuteAfterNavigationCheck(ambiguous dialog rejection) = %v; lost = %t", err, worker.lost)
+	}
+	if len(client.calls) != 1 || client.calls[0].tool != "browser_handle_dialog" {
+		t.Fatalf("dialog calls = %#v", client.calls)
+	}
+}
+
 func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *testing.T) {
 	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
 		frameID: "frame-1", loaderID: "loader-1", generation: 7,
