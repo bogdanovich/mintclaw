@@ -41,6 +41,9 @@ type DirectTurnOptions struct {
 	// EnableStreaming publishes accumulated answer and reasoning updates through
 	// the direct caller's message-bus stream delegate.
 	EnableStreaming bool
+	// OnTurnReady runs after this direct turn has installed cancellation and
+	// registered its exact active session owner.
+	OnTurnReady func()
 }
 
 // ProcessDirectWithOptions processes a direct turn with explicit persistence semantics.
@@ -130,6 +133,7 @@ func (al *AgentLoop) processCodingDirect(
 			SendResponse:                 false,
 			AllowInterimMintClawPublish:  directOpts.EnableStreaming,
 			DirectStreaming:              directOpts.EnableStreaming,
+			OnTurnReady:                  directOpts.OnTurnReady,
 			ExpectFinalDelivery:          true,
 			NoHistory:                    directOpts.Stateless,
 		},

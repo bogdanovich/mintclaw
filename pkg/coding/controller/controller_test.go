@@ -32,8 +32,9 @@ func newBlockingRuntime() *blockingRuntime {
 	}
 }
 
-func (r *blockingRuntime) RunTurn(ctx context.Context, prompt string) error {
+func (r *blockingRuntime) RunTurn(ctx context.Context, prompt string, ready func()) error {
 	r.runStarted <- prompt
+	ready()
 	select {
 	case <-r.runRelease:
 		return nil
@@ -94,6 +95,15 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 	if err := controller.Submit(ctx, "first"); err != nil {
 		t.Fatal(err)
 	}
+	if err := controller.Interrupt(ctx); err != nil {
+		t.Fatalf("immediate Interrupt() error = %v", err)
+	}
+	if err := controller.Submit(ctx, "second"); !errors.Is(err, ErrTurnActive) {
+		t.Fatalf("second Submit() error = %v, want %v", err, ErrTurnActive)
+	}
+	if err := controller.HardCancel(ctx); err != nil {
+		t.Fatalf("immediate HardCancel() error = %v", err)
+	}
 	select {
 	case prompt := <-runtime.runStarted:
 		if prompt != "first" {
@@ -101,15 +111,6 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("turn did not start")
-	}
-	if err := controller.Submit(ctx, "second"); !errors.Is(err, ErrTurnActive) {
-		t.Fatalf("second Submit() error = %v, want %v", err, ErrTurnActive)
-	}
-	if err := controller.Interrupt(ctx); err != nil {
-		t.Fatalf("Interrupt() error = %v", err)
-	}
-	if err := controller.HardCancel(ctx); err != nil {
-		t.Fatalf("HardCancel() error = %v", err)
 	}
 	if err := controller.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -168,10 +169,10 @@ func TestCloseCancelsActiveTurnAndIsIdempotent(t *testing.T) {
 	if err := controller.Submit(context.Background(), "work"); err != nil {
 		t.Fatal(err)
 	}
-	<-runtime.runStarted
 	if err := controller.Close(context.Background()); err != nil {
-		t.Fatal(err)
+		t.Fatalf("immediate Close() error = %v", err)
 	}
+	<-runtime.runStarted
 	if err := controller.Close(context.Background()); err != nil {
 		t.Fatalf("second Close() error = %v, want nil", err)
 	}

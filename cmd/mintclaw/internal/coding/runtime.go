@@ -89,8 +89,8 @@ func (r nativeCodingTurnRunner) Run(
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
-	turnErr := runtime.RunTurn(ctx, request.Prompt)
-	return runtime.outcome(), errors.Join(turnErr, runtime.Close())
+	outcome, turnErr := runtime.runTurn(ctx, request.Prompt, nil)
+	return outcome, errors.Join(turnErr, runtime.Close())
 }
 
 type nativeCodingRuntime struct {
@@ -103,8 +103,6 @@ type nativeCodingRuntime struct {
 	model           string
 	provider        string
 	streaming       bool
-	mu              sync.Mutex
-	lastOutcome     codingTurnOutcome
 	closeOnce       sync.Once
 	closeErr        error
 }
@@ -181,10 +179,15 @@ func openNativeCodingRuntime(
 	}, nil
 }
 
-func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error {
+func (r *nativeCodingRuntime) runTurn(
+	ctx context.Context,
+	prompt string,
+	onReady func(),
+) (codingTurnOutcome, error) {
+	baseOutcome := codingTurnOutcome{Model: r.model, Provider: r.provider}
 	beforeHistory, err := r.readTurnHistory(ctx, r.sessions, r.metadata.SessionKey)
 	if err != nil {
-		return fmt.Errorf("coding runtime: read history before turn: %w", err)
+		return baseOutcome, fmt.Errorf("coding runtime: read history before turn: %w", err)
 	}
 	response, turnErr := r.loop.ProcessDirectWithOptions(
 		ctx,
@@ -195,6 +198,7 @@ func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error 
 		agent.DirectTurnOptions{
 			SuppressBackgroundCompaction: true,
 			EnableStreaming:              r.streaming,
+			OnTurnReady:                  onReady,
 		},
 	)
 	after, historyErr := r.readTurnHistory(
@@ -209,12 +213,9 @@ func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error 
 		Response:     response,
 		PromptStored: promptStored,
 	}
-	r.mu.Lock()
-	r.lastOutcome = outcome
-	r.mu.Unlock()
 	hardCanceled := errors.Is(context.Cause(ctx), controller.ErrHardCanceled)
 	if historyErr != nil {
-		return &thread.IndeterminatePromptError{
+		return outcome, &thread.IndeterminatePromptError{
 			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
 				turnErr,
@@ -223,10 +224,10 @@ func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error 
 		}
 	}
 	if hardCanceled && !promptStored {
-		return turnErr
+		return outcome, turnErr
 	}
 	if !promptStored {
-		return &thread.IndeterminatePromptError{
+		return outcome, &thread.IndeterminatePromptError{
 			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
 				turnErr,
@@ -234,7 +235,7 @@ func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error 
 			),
 		}
 	}
-	return turnErr
+	return outcome, turnErr
 }
 
 func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {
@@ -257,12 +258,6 @@ func (r *nativeCodingRuntime) Close() error {
 	return r.closeErr
 }
 
-func (r *nativeCodingRuntime) outcome() codingTurnOutcome {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.lastOutcome
-}
-
 type nativeControllerRuntime struct {
 	*nativeCodingRuntime
 	store     *thread.Store
@@ -273,9 +268,16 @@ type nativeControllerRuntime struct {
 
 var _ controller.Runtime = (*nativeControllerRuntime)(nil)
 
-func (r *nativeControllerRuntime) RunTurn(ctx context.Context, prompt string) error {
-	turnErr := r.nativeCodingRuntime.RunTurn(ctx, prompt)
-	outcome := r.outcome()
+func (r *nativeControllerRuntime) RunTurn(ctx context.Context, prompt string, onReady func()) error {
+	outcome, turnErr := r.runTurn(ctx, prompt, onReady)
+	return r.persistTurnOutcome(prompt, outcome, turnErr)
+}
+
+func (r *nativeControllerRuntime) persistTurnOutcome(
+	prompt string,
+	outcome codingTurnOutcome,
+	turnErr error,
+) error {
 	if !outcome.PromptStored {
 		return turnErr
 	}

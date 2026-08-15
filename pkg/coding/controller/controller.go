@@ -25,7 +25,7 @@ var (
 // Compact may block; the controller always invokes them outside its mutation
 // coordinator. The control methods must target only this runtime's thread.
 type Runtime interface {
-	RunTurn(context.Context, string) error
+	RunTurn(context.Context, string, func()) error
 	Interrupt(context.Context) error
 	HardCancel(context.Context) error
 	Compact(context.Context) error
@@ -216,13 +216,7 @@ func (c *Controller) coordinate() {
 				compacting = false
 			}
 			operationCancel = nil
-			if result.err != nil && !errors.Is(result.err, context.Canceled) {
-				if result.kind == operationTurn {
-					c.projector.Error("", "controller:turn-error", "coding turn failed")
-				} else {
-					c.projector.Error("", "controller:compaction-error", "coding compaction failed")
-				}
-			}
+			c.projectOperationError(result)
 			if finishClose() {
 				return
 			}
@@ -242,8 +236,23 @@ func (c *Controller) coordinate() {
 					active = true
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
 					operationCancel = cancel
-					go c.run(operationCtx, operationTurn, request.content)
-					request.reply <- nil
+					ready := make(chan struct{})
+					var readyOnce sync.Once
+					go c.run(operationCtx, operationTurn, request.content, func() {
+						readyOnce.Do(func() { close(ready) })
+					})
+					select {
+					case <-ready:
+						request.reply <- nil
+					case result := <-c.results:
+						active = false
+						operationCancel = nil
+						c.projectOperationError(result)
+						request.reply <- result.err
+					case <-request.ctx.Done():
+						operationCancel(context.Cause(request.ctx))
+						request.reply <- request.ctx.Err()
+					}
 				}
 			case commandInterrupt:
 				if !active {
@@ -274,7 +283,7 @@ func (c *Controller) coordinate() {
 					compacting = true
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
 					operationCancel = cancel
-					go c.run(operationCtx, operationCompaction, "")
+					go c.run(operationCtx, operationCompaction, "", nil)
 					request.reply <- nil
 				}
 			case commandRename, commandNewThread:
@@ -303,12 +312,23 @@ func (c *Controller) coordinate() {
 	}
 }
 
-func (c *Controller) run(ctx context.Context, kind operationKind, prompt string) {
+func (c *Controller) run(ctx context.Context, kind operationKind, prompt string, ready func()) {
 	var err error
 	if kind == operationTurn {
-		err = c.runtime.RunTurn(ctx, prompt)
+		err = c.runtime.RunTurn(ctx, prompt, ready)
 	} else {
 		err = c.runtime.Compact(ctx)
 	}
 	c.results <- operationResult{kind: kind, err: err}
+}
+
+func (c *Controller) projectOperationError(result operationResult) {
+	if result.err == nil || errors.Is(result.err, context.Canceled) {
+		return
+	}
+	if result.kind == operationTurn {
+		c.projector.Error("", "controller:turn-error", "coding turn failed")
+	} else {
+		c.projector.Error("", "controller:compaction-error", "coding compaction failed")
+	}
 }

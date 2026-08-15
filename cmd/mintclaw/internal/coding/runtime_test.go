@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 type blockingCodingProvider struct {
@@ -302,6 +303,9 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	if err := frontendController.Submit(t.Context(), "inspect the project"); err != nil {
 		t.Fatal(err)
 	}
+	if err := frontendController.Interrupt(t.Context()); err != nil {
+		t.Fatalf("immediate native Interrupt() error = %v", err)
+	}
 	select {
 	case <-provider.started:
 	case <-time.After(5 * time.Second):
@@ -311,8 +315,8 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Activity != frontend.ActivityRunning {
-		t.Fatalf("activity = %q, want running", snapshot.Activity)
+	if snapshot.Activity != frontend.ActivityInterrupting {
+		t.Fatalf("activity = %q, want interrupting", snapshot.Activity)
 	}
 	if len(snapshot.Entries) < 2 || snapshot.Entries[len(snapshot.Entries)-1].Text != "working" {
 		t.Fatalf("streamed entries = %#v", snapshot.Entries)
@@ -391,5 +395,58 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	}
 	if persisted.Preview != metadata.Preview {
 		t.Fatalf("canceled prompt changed preview to %q", persisted.Preview)
+	}
+}
+
+func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "initial", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "coding-test"
+	metadata.Provider = "openai"
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected pre-turn history failure")
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: &nativeCodingRuntime{
+			metadata: metadata,
+			model:    metadata.Model,
+			provider: metadata.Provider,
+			readTurnHistory: func(context.Context, session.SessionStore, string) ([]providers.Message, error) {
+				return nil, injected
+			},
+		},
+		store:     store,
+		projector: projector,
+		now:       time.Now,
+	}
+	if err := runtime.persistTurnOutcome("first stored prompt", codingTurnOutcome{
+		Model: metadata.Model, Provider: metadata.Provider, PromptStored: true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RunTurn(t.Context(), "second unstored prompt", func() {}); !errors.Is(err, injected) {
+		t.Fatalf("second RunTurn() error = %v, want %v", err, injected)
+	}
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Preview != "first stored prompt" {
+		t.Fatalf("preview = %q, want prior stored prompt", persisted.Preview)
 	}
 }
