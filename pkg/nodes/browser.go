@@ -931,7 +931,7 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false)
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, false, false)
 }
 
 // legacyBrowserCommandInputSchema returns the exact browser input contract
@@ -939,7 +939,7 @@ func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescript
 // persisted companion catalog during a rolling upgrade; fresh discovery is
 // always generated through BrowserCommandInputSchema.
 func legacyBrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"}, true)
+	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"}, true, false, false)
 }
 
 // legacyDryRunBrowserCommandInputSchema returns the exact session-open input
@@ -950,7 +950,27 @@ func legacyDryRunBrowserCommandInputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, true)
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, true, false, false)
+}
+
+// legacyPreFileChooserBrowserCommandInputSchema returns the exact browser
+// input contract emitted before file chooser authority was introduced. It is
+// used only to recognize durable catalogs during a fail-closed upgrade.
+func legacyPreFileChooserBrowserCommandInputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, true, false)
+}
+
+// legacyPreDragBrowserCommandInputSchema returns the exact browser input
+// contract emitted before drag-specific field exclusions were introduced. It
+// is used only to recognize durable catalogs during a fail-closed upgrade.
+func legacyPreDragBrowserCommandInputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, true, true)
 }
 
 func browserCommandInputSchema(
@@ -958,6 +978,8 @@ func browserCommandInputSchema(
 	profiles []BrowserProfileDescriptor,
 	actEffects []string,
 	legacyDryRunOpen bool,
+	legacyPreFileChooser bool,
+	legacyPreDrag bool,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	actionBranches := make([]any, 0, len(profiles))
@@ -1165,31 +1187,39 @@ func browserCommandInputSchema(
 					map[string]any{"oneOf": promptConstraint},
 				}
 			}
-			forbiddenFields := []string{
-				"destination_expected_role", "destination_expected_name", "artifact_sha256", "artifact_bytes",
-				"artifact_filename", "artifact_content_type",
-			}
-			switch action {
-			case "drag":
-				forbiddenFields = []string{
-					"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
-					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+			if !legacyPreDrag {
+				forbiddenFields := []string{"destination_expected_role", "destination_expected_name"}
+				if !legacyPreFileChooser {
+					forbiddenFields = append(forbiddenFields,
+						"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+					)
 				}
-			case "file_chooser":
-				forbiddenFields = []string{
-					"destination_expected_role", "destination_expected_name", "dialog_type",
-					"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+				switch action {
+				case "drag":
+					forbiddenFields = []string{
+						"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+					}
+					if !legacyPreFileChooser {
+						forbiddenFields = append(forbiddenFields,
+							"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+						)
+					}
+				case "file_chooser":
+					forbiddenFields = []string{
+						"destination_expected_role", "destination_expected_name", "dialog_type",
+						"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+					}
 				}
-			}
-			forbidden := make([]any, 0, len(forbiddenFields))
-			for _, field := range forbiddenFields {
-				forbidden = append(forbidden, map[string]any{"required": []string{field}})
-			}
-			constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
-			if existing, ok := branch["allOf"].([]any); ok {
-				branch["allOf"] = append(existing, constraint)
-			} else {
-				branch["allOf"] = []any{constraint}
+				forbidden := make([]any, 0, len(forbiddenFields))
+				for _, field := range forbiddenFields {
+					forbidden = append(forbidden, map[string]any{"required": []string{field}})
+				}
+				constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
+				if existing, ok := branch["allOf"].([]any); ok {
+					branch["allOf"] = append(existing, constraint)
+				} else {
+					branch["allOf"] = []any{constraint}
+				}
 			}
 			actionBranches = append(actionBranches, branch)
 		}
@@ -1455,13 +1485,20 @@ func BrowserCommandOutputSchema(
 }
 
 func browserContextCommandResultSchema(limits BrowserLimits) map[string]any {
+	return browserContextCommandResultSchemaWithObservation(limits, browserObservationSchema(limits))
+}
+
+func browserContextCommandResultSchemaWithObservation(
+	limits BrowserLimits,
+	observation json.RawMessage,
+) map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"required": []string{"operation", "context_catalog"},
 		"properties": map[string]any{
 			"operation":       map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			"context_catalog": browserContextCatalogSchema(),
-			"observation":     rawSchema(browserObservationSchema(limits)),
+			"observation":     rawSchema(observation),
 		},
 		"allOf": []any{map[string]any{"oneOf": []any{
 			map[string]any{
@@ -1475,6 +1512,52 @@ func browserContextCommandResultSchema(limits BrowserLimits) map[string]any {
 				"not": map[string]any{"required": []string{"observation"}},
 			},
 		}}},
+	}
+}
+
+// legacyPreDialogBrowserCommandOutputSchema returns the exact output contract
+// emitted before pending dialog observation was introduced. It is retained
+// only to recognize durable catalogs during a fail-closed upgrade.
+func legacyPreDialogBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	if len(profiles) == 0 {
+		return json.RawMessage("false")
+	}
+	limits := strictestBrowserLimits(profiles)
+	observation := legacyPreDialogBrowserObservationSchema(limits)
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	safeReason := map[string]any{"type": "string", "maxLength": 128}
+	switch command {
+	case BrowserCommandObserve:
+		return mustJSON(map[string]any{"oneOf": []any{
+			rawSchema(observation),
+			browserProtectedResultReceiptSchema(nil),
+		}})
+	case BrowserCommandAct:
+		return mustJSON(map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"action_invocation_id", "state"},
+			"properties": map[string]any{
+				"action_invocation_id": identifier,
+				"state": map[string]any{
+					"enum": []string{"accepted", "succeeded", "failed", "unknown"},
+				},
+				"reason":      safeReason,
+				"observation": rawSchema(observation),
+				"artifact":    browserArtifactSchema(limits.DownloadBytes),
+			},
+		})
+	case BrowserCommandContexts:
+		return mustJSON(map[string]any{"oneOf": []any{
+			browserContextCommandResultSchemaWithObservation(limits, observation),
+			browserProtectedResultReceiptSchema(map[string]any{
+				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
+			}),
+		}})
+	default:
+		return json.RawMessage("false")
 	}
 }
 
@@ -1759,6 +1842,49 @@ func browserActionSchema(actions []string) map[string]any {
 }
 
 func browserObservationSchema(limits BrowserLimits) json.RawMessage {
+	return browserObservationSchemaWithDialog(limits, true)
+}
+
+func legacyPreDialogBrowserObservationSchema(limits BrowserLimits) json.RawMessage {
+	return browserObservationSchemaWithDialog(limits, false)
+}
+
+func browserObservationSchemaWithDialog(limits BrowserLimits, includePendingDialog bool) json.RawMessage {
+	properties := map[string]any{
+		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+		"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+		"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
+		"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
+		"title":               map[string]any{"type": "string", "maxLength": MaxBrowserTitleBytes},
+		"snapshot":            map[string]any{"type": "string", "maxLength": limits.SnapshotBytes},
+		"truncated":           map[string]any{"type": "boolean"},
+		"elements": map[string]any{
+			"type": "array", "maxItems": limits.SnapshotRefs,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"ref", "role", "name"},
+				"properties": map[string]any{
+					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+					"role": map[string]any{"type": "string", "maxLength": 128},
+					"name": map[string]any{"type": "string", "maxLength": 4096},
+				},
+			},
+		},
+		"screenshot": browserArtifactSchema(limits.ScreenshotBytes),
+	}
+	if includePendingDialog {
+		properties["pending_dialog"] = map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"type", "message"},
+			"properties": map[string]any{
+				"type": map[string]any{"enum": []string{"alert", "beforeunload", "confirm", "prompt"}},
+				"message": map[string]any{
+					"type": "string", "maxLength": MaxBrowserDialogMessageBytes,
+				},
+			},
+		}
+	}
 	return mustJSON(map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -1772,39 +1898,7 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 			"elements",
 			"truncated",
 		},
-		"properties": map[string]any{
-			"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-			"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
-			"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
-			"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
-			"title":               map[string]any{"type": "string", "maxLength": MaxBrowserTitleBytes},
-			"snapshot":            map[string]any{"type": "string", "maxLength": limits.SnapshotBytes},
-			"truncated":           map[string]any{"type": "boolean"},
-			"elements": map[string]any{
-				"type": "array", "maxItems": limits.SnapshotRefs,
-				"items": map[string]any{
-					"type": "object", "additionalProperties": false,
-					"required": []string{"ref", "role", "name"},
-					"properties": map[string]any{
-						"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-						"role": map[string]any{"type": "string", "maxLength": 128},
-						"name": map[string]any{"type": "string", "maxLength": 4096},
-					},
-				},
-			},
-			"pending_dialog": map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"type", "message"},
-				"properties": map[string]any{
-					"type": map[string]any{"enum": []string{"alert", "beforeunload", "confirm", "prompt"}},
-					"message": map[string]any{
-						"type": "string", "maxLength": MaxBrowserDialogMessageBytes,
-					},
-				},
-			},
-			"screenshot": browserArtifactSchema(limits.ScreenshotBytes),
-		},
+		"properties": properties,
 	})
 }
 

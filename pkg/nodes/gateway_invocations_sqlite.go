@@ -684,16 +684,9 @@ func validateGatewayInvocationRecordForReceiptMigration(
 	if err := record.validate(); err == nil {
 		return false, nil
 	}
-	if !storedLegacyBrowserDescriptor(record.Descriptor) {
-		return false, record.validate()
-	}
 	compatible := cloneCommandDescriptor(record.Descriptor)
-	compatible.OutputSchema = BrowserCommandOutputSchema(
-		compatible.Name,
-		compatible.BrowserProfiles,
-	)
-	if err := compatible.Validate(); err != nil {
-		return false, err
+	if !normalizeStoredLegacyBrowserDescriptor(&compatible) {
+		return false, record.validate()
 	}
 	if err := record.validateFields(true); err != nil {
 		return false, err

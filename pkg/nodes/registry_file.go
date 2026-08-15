@@ -625,10 +625,9 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 		if err := descriptor.Validate(); err == nil {
 			continue
 		}
-		if !storedLegacyBrowserDescriptor(*descriptor) {
+		if !normalizeStoredLegacyBrowserDescriptor(descriptor) {
 			return false, snapshot.Validate()
 		}
-		descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
 		legacyCatalog = true
 	}
 	if !legacyCatalog {
@@ -655,22 +654,95 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 	return true, nil
 }
 
-func storedLegacyBrowserDescriptor(descriptor CommandDescriptor) bool {
-	var want json.RawMessage
-	switch descriptor.Name {
-	case BrowserCommandSessionOpen:
-		want = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
-	case BrowserCommandObserve, BrowserCommandContexts:
-		want = legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
-	default:
+func normalizeStoredLegacyBrowserDescriptor(descriptor *CommandDescriptor) bool {
+	if descriptor == nil || !IsBrowserCommand(descriptor.Name) {
 		return false
 	}
+	migrated := false
+	currentInput := BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	if !storedSchemaMatches(descriptor.InputSchema, currentInput) {
+		legacyInputs := []json.RawMessage{
+			legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		}
+		if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") {
+			legacyInputs = append(legacyInputs,
+				legacyPreFileChooserBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			)
+		}
+		if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") {
+			legacyInputs = append(legacyInputs,
+				legacyPreDragBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			)
+		}
+		if !storedSchemaMatchesAny(descriptor.InputSchema, legacyInputs) {
+			return false
+		}
+		descriptor.InputSchema = currentInput
+		migrated = true
+	}
+
+	currentOutput := BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	if !storedSchemaMatches(descriptor.OutputSchema, currentOutput) {
+		var legacyOutputs []json.RawMessage
+		switch descriptor.Name {
+		case BrowserCommandSessionOpen:
+			legacyOutputs = append(legacyOutputs,
+				legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
+			)
+		case BrowserCommandObserve, BrowserCommandContexts:
+			legacyOutputs = append(legacyOutputs,
+				legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			)
+			if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "dialog") {
+				legacyOutputs = append(legacyOutputs,
+					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+				)
+			}
+		case BrowserCommandAct:
+			if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "dialog") {
+				legacyOutputs = append(legacyOutputs,
+					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+				)
+			}
+		}
+		if !storedSchemaMatchesAny(descriptor.OutputSchema, legacyOutputs) {
+			return false
+		}
+		descriptor.OutputSchema = currentOutput
+		migrated = true
+	}
+
+	return migrated && descriptor.Validate() == nil
+}
+
+func browserProfilesUseAnyAction(profiles []BrowserProfileDescriptor, actions ...string) bool {
+	for _, profile := range profiles {
+		for _, profileAction := range profile.Actions {
+			if slices.Contains(actions, profileAction) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func storedSchemaMatchesAny(got json.RawMessage, candidates []json.RawMessage) bool {
+	for _, candidate := range candidates {
+		if storedSchemaMatches(got, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func storedSchemaMatches(got json.RawMessage, want json.RawMessage) bool {
 	wantCanonical, err := canonicalJSON(want)
 	if err != nil {
 		return false
 	}
-	got, err := canonicalJSON(descriptor.OutputSchema)
-	return err == nil && bytes.Equal(got, wantCanonical)
+	gotCanonical, err := canonicalJSON(got)
+	return err == nil && bytes.Equal(gotCanonical, wantCanonical)
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {
