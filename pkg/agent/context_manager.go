@@ -87,7 +87,7 @@ type CompactRequest struct {
 	SessionKey string                   // session identifier
 	Workspace  string                   // canonical workspace owner
 	TraceScope runtimeevents.TraceScope // exact owner for synchronous turn work; zero for background work
-	Reason     ContextCompressReason    // proactive_budget | llm_retry | summarize
+	Reason     ContextCompressReason    // proactive_budget | llm_retry | summarize | manual
 	Budget     int                      // effective history budget for compact/overflow repair
 }
 

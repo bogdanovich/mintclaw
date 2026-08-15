@@ -53,6 +53,7 @@ type Projector struct {
 	nextEntryGeneration        uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
+	foregroundCompactionActive bool
 	nextWatcher                uint64
 	watchers                   map[uint64]chan Delta
 }
@@ -491,40 +492,56 @@ func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta
 		}
 		switch compaction.Status {
 		case CompactionRunning:
-			if state.Activity != ActivityRunning || p.activeTurnID != compaction.TurnID {
+			standalone := compaction.TurnID == "" && p.activeTurnID == "" && state.Activity == ActivityIdle
+			inTurn := state.Activity == ActivityRunning && p.activeTurnID == compaction.TurnID
+			if !standalone && !inTurn {
 				return
 			}
 			p.foregroundCompactionTurnID = compaction.TurnID
+			p.foregroundCompactionActive = true
 			state.Activity = ActivityCompacting
 			state.Status = "compacting context"
 		case CompactionNoop:
-			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+			activity, ok := p.releaseCompactionActivity(state.Activity, compaction.TurnID)
+			if !ok {
 				return
 			}
-			state.Activity = ActivityRunning
+			state.Activity = activity
 			state.Status = "context already compact"
 		case CompactionCompleted:
-			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+			activity, ok := p.releaseCompactionActivity(state.Activity, compaction.TurnID)
+			if !ok {
 				return
 			}
-			state.Activity = ActivityRunning
+			state.Activity = activity
 			state.Status = fmt.Sprintf("context compacted; %d tokens saved", compaction.TokensSaved)
 		case CompactionFailed:
-			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+			activity, ok := p.releaseCompactionActivity(state.Activity, compaction.TurnID)
+			if !ok {
 				return
 			}
-			state.Activity = ActivityRunning
+			state.Activity = activity
 			state.Status = "context compaction failed"
 		}
 	})
 }
 
-func (p *Projector) releaseCompactionActivity(activity Activity, turnID string) bool {
-	if p.foregroundCompactionTurnID != turnID {
-		return false
+func (p *Projector) releaseCompactionActivity(activity Activity, turnID string) (Activity, bool) {
+	if !p.foregroundCompactionActive || p.foregroundCompactionTurnID != turnID ||
+		activity != ActivityCompacting {
+		return activity, false
 	}
+	var next Activity
+	if turnID == "" && p.activeTurnID == "" {
+		next = ActivityIdle
+	} else if p.activeTurnID == turnID {
+		next = ActivityRunning
+	} else {
+		return activity, false
+	}
+	p.foregroundCompactionActive = false
 	p.foregroundCompactionTurnID = ""
-	return activity == ActivityCompacting && p.activeTurnID == turnID
+	return next, true
 }
 
 func (p *Projector) TurnCompleted(turnID, status string) Delta {
@@ -564,8 +581,9 @@ func (p *Projector) finishTurn(
 		if p.activeTurnID == turnID {
 			p.activeTurnID = ""
 		}
-		if p.foregroundCompactionTurnID == turnID {
+		if p.foregroundCompactionActive && p.foregroundCompactionTurnID == turnID {
 			p.foregroundCompactionTurnID = ""
+			p.foregroundCompactionActive = false
 		}
 		state.Activity = activity
 		state.Status, _ = boundText(status, p.limits.TextBytes)

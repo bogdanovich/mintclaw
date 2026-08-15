@@ -110,6 +110,9 @@ func TestRuntimeSessionClaimsAreWorkspaceScoped(t *testing.T) {
 	if _, ambiguous := al.uniqueActiveTurnForSession("shared-session"); !ambiguous {
 		t.Fatal("session-only lookup did not fail closed across workspaces")
 	}
+	if err := al.InterruptGracefulSession("shared-session", "stop"); err == nil {
+		t.Fatal("InterruptGracefulSession() admitted an ambiguous session")
+	}
 }
 
 func TestRuntimeRouteClaimsAreWorkspaceScoped(t *testing.T) {

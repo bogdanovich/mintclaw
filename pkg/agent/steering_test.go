@@ -2600,8 +2600,8 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 		t.Fatalf("unexpected active turn target: %#v", active)
 	}
 
-	if err := al.InterruptGraceful("wrap it up"); err != nil {
-		t.Fatalf("InterruptGraceful failed: %v", err)
+	if err := al.InterruptGracefulSession(sessionKey, "wrap it up"); err != nil {
+		t.Fatalf("InterruptGracefulSession failed: %v", err)
 	}
 
 	select {

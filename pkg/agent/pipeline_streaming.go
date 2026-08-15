@@ -335,6 +335,9 @@ func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecutio
 		})
 		return false
 	}
+	if ts.opts.DirectStreaming {
+		return true
+	}
 	channelStreaming, ok := p.channelStreamingConfig(ts.channel)
 	if !ok || !channelStreaming.Enabled {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{

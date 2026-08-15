@@ -297,12 +297,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return err
 	}
 
-	// For model overflow retry, use aggressive CompactUntilUnder to guarantee
-	// the next LLM request has a smaller assembled history. Proactive pressure
-	// must stay latency-bounded for interactive turns; SetupTurn performs a
-	// cheap history trim after this normal compact pass if the prompt is still
-	// over budget.
-	if (req.Reason == ContextCompressReasonRetry ||
+	// Overflow retry uses aggressive CompactUntilUnder to guarantee the next LLM
+	// request has a smaller assembled history. Manual frontend compaction uses
+	// the same synchronous path so the controller does not admit a turn while a
+	// condensed write still runs. Proactive pressure stays latency-bounded for
+	// interactive turns; SetupTurn performs a cheap history trim if needed.
+	if (req.Reason == ContextCompressReasonRetry || req.Reason == ContextCompressReasonManual ||
 		(req.Reason == ContextCompressReasonProactive && runtime.engine.AbsoluteBudgetsEnabled())) &&
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
@@ -317,7 +317,8 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	}
 
 	result, err := runtime.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-		Force:  req.Reason == ContextCompressReasonRetry,
+		Force: req.Reason == ContextCompressReasonRetry ||
+			req.Reason == ContextCompressReasonManual,
 		Budget: &req.Budget,
 	})
 	if err == nil {
