@@ -707,16 +707,18 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return PreparedAction{}, ErrStale
 		}
-		resolvedSource, sourceOrigin, sourceErr := worker.Resolve(ctx, source.Target)
-		if sourceErr != nil {
-			return PreparedAction{}, sourceErr
-		}
-		resolvedDestination, destinationOrigin, destinationErr := worker.Resolve(ctx, destination.Target)
-		if destinationErr != nil {
-			return PreparedAction{}, destinationErr
+		resolvedSource, resolvedDestination, origin, navigationID, resolveErr := resolveDragFromFreshObservation(
+			ctx,
+			worker,
+			source,
+			destination,
+		)
+		if resolveErr != nil {
+			return PreparedAction{}, resolveErr
 		}
 		if resolvedSource != source || resolvedDestination != destination ||
-			sourceOrigin != session.SnapshotOrigin || destinationOrigin != session.SnapshotOrigin ||
+			origin != session.SnapshotOrigin ||
+			(slot.navigationID != "" && navigationID != slot.navigationID) ||
 			resolvedSource.Target == resolvedDestination.Target {
 			return PreparedAction{}, ErrStale
 		}
@@ -862,15 +864,17 @@ func (broker *Broker) revalidatePreparedLocked(
 		if !sourceOK || !destinationOK || source.Target == destination.Target {
 			return ErrStale
 		}
-		resolvedSource, sourceOrigin, err := worker.Resolve(ctx, source.Target)
+		resolvedSource, resolvedDestination, origin, navigationID, err := resolveDragFromFreshObservation(
+			ctx,
+			worker,
+			source,
+			destination,
+		)
 		if err != nil {
 			return err
 		}
-		resolvedDestination, destinationOrigin, err := worker.Resolve(ctx, destination.Target)
-		if err != nil {
-			return err
-		}
-		if sourceOrigin != prepared.CurrentOrigin || destinationOrigin != prepared.CurrentOrigin ||
+		if origin != prepared.CurrentOrigin ||
+			(slot.navigationID != "" && navigationID != slot.navigationID) ||
 			resolvedSource != source || resolvedDestination != destination ||
 			resolvedSource.Target == resolvedDestination.Target ||
 			resolvedSource.Role != prepared.ElementRole || resolvedSource.Name != prepared.ElementName ||
@@ -1042,6 +1046,32 @@ func observeWithNavigationCheck(
 		return DriverObservation{}, "", ErrStale
 	}
 	return observation, after, nil
+}
+
+func resolveDragFromFreshObservation(
+	ctx context.Context,
+	worker ActionWorker,
+	source DriverElement,
+	destination DriverElement,
+) (DriverElement, DriverElement, string, string, error) {
+	observation, navigationID, err := observeWithNavigationCheck(ctx, worker)
+	if err != nil {
+		return DriverElement{}, DriverElement{}, "", "", err
+	}
+	var resolvedSource DriverElement
+	var resolvedDestination DriverElement
+	for _, element := range observation.Elements {
+		switch element.Target {
+		case source.Target:
+			resolvedSource = element
+		case destination.Target:
+			resolvedDestination = element
+		}
+	}
+	if resolvedSource.Target == "" || resolvedDestination.Target == "" {
+		return DriverElement{}, DriverElement{}, "", "", ErrStale
+	}
+	return resolvedSource, resolvedDestination, observation.Origin, navigationID, nil
 }
 
 func navigationCheckedAction(kind ActionKind) bool {
