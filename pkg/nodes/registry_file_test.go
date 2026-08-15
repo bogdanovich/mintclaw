@@ -139,6 +139,18 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 	if err != nil {
 		t.Fatalf("NewFileRegistry() error = %v", err)
 	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedDocument registryDocument
+	if err = json.Unmarshal(persisted, &persistedDocument); err != nil {
+		t.Fatal(err)
+	}
+	persistedRecord := persistedDocument.Records[string(id)]
+	if len(persistedRecord.AllowedCommands) != 0 || persistedRecord.ApprovedCatalogHash != "" {
+		t.Fatalf("persisted legacy authority was not suspended: %#v", persistedRecord)
+	}
 	registration, exists, err := registry.Registration(id)
 	if err != nil || !exists {
 		t.Fatalf("Registration() = exists %v, error %v", exists, err)

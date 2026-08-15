@@ -61,9 +61,11 @@ func NewFileRegistry(path string, maxPending int) (*FileRegistry, error) {
 		maxPending: maxPending,
 		records:    make(map[string]registryRecord),
 	}
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return nil, err
 	}
+	release()
 	return registry, nil
 }
 
@@ -75,9 +77,11 @@ func (registry *FileRegistry) List(filter Filter) ([]Snapshot, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return nil, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	states := make(map[State]struct{}, len(filter.States))
 	for _, state := range filter.States {
 		if !state.Valid() {
@@ -104,9 +108,11 @@ func (registry *FileRegistry) List(filter Filter) ([]Snapshot, error) {
 func (registry *FileRegistry) Resolve(ref string) (Snapshot, bool, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return Snapshot{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return Snapshot{}, false, nil
@@ -246,9 +252,11 @@ func (registry *FileRegistry) Pending(id ID) (PendingPairing, bool, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return PendingPairing{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	record, exists := registry.records[string(id)]
 	if !exists || record.Snapshot.State != StatePendingPairing {
 		return PendingPairing{}, false, nil
@@ -269,9 +277,11 @@ func (registry *FileRegistry) Registration(id ID) (Registration, bool, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return Registration{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	record, exists := registry.records[string(id)]
 	if !exists {
 		return Registration{}, false, nil
@@ -548,6 +558,7 @@ func (registry *FileRegistry) load() error {
 	if document.Records == nil {
 		document.Records = make(map[string]registryRecord)
 	}
+	persistAuthoritySuspension := false
 	for id, record := range document.Records {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
@@ -560,6 +571,9 @@ func (registry *FileRegistry) load() error {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
 		if legacyCatalog {
+			if len(record.AllowedCommands) > 0 || record.ApprovedCatalogHash != "" {
+				persistAuthoritySuspension = true
+			}
 			record.AllowedCommands = nil
 			record.ApprovedCatalogHash = ""
 		}
@@ -581,6 +595,11 @@ func (registry *FileRegistry) load() error {
 	}
 	if err := validateRegistryNamespace(document.Records); err != nil {
 		return fmt.Errorf("validate node registry namespace: %w", err)
+	}
+	if persistAuthoritySuspension {
+		if err := registry.save(document.Records); err != nil {
+			return fmt.Errorf("persist legacy node authority suspension: %w", err)
+		}
 	}
 	registry.records = document.Records
 	return nil
