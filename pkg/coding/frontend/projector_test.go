@@ -369,6 +369,26 @@ func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
 	}
 }
 
+func TestLateCompactionStartDoesNotClaimNewerTurnActivity(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "first")
+	projector.TurnCompleted("turn-1", "completed")
+	projector.TurnStarted("turn-2", "second")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != ActivityRunning || snapshot.Status != "running" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.TurnID != "turn-1" {
+		t.Fatalf("late prior-turn compaction snapshot = %+v", snapshot)
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,
