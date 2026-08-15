@@ -61,9 +61,11 @@ func NewFileRegistry(path string, maxPending int) (*FileRegistry, error) {
 		maxPending: maxPending,
 		records:    make(map[string]registryRecord),
 	}
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return nil, err
 	}
+	release()
 	return registry, nil
 }
 
@@ -75,9 +77,11 @@ func (registry *FileRegistry) List(filter Filter) ([]Snapshot, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return nil, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	states := make(map[State]struct{}, len(filter.States))
 	for _, state := range filter.States {
 		if !state.Valid() {
@@ -104,9 +108,11 @@ func (registry *FileRegistry) List(filter Filter) ([]Snapshot, error) {
 func (registry *FileRegistry) Resolve(ref string) (Snapshot, bool, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return Snapshot{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return Snapshot{}, false, nil
@@ -246,9 +252,11 @@ func (registry *FileRegistry) Pending(id ID) (PendingPairing, bool, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return PendingPairing{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	record, exists := registry.records[string(id)]
 	if !exists || record.Snapshot.State != StatePendingPairing {
 		return PendingPairing{}, false, nil
@@ -269,9 +277,11 @@ func (registry *FileRegistry) Registration(id ID) (Registration, bool, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.load(); err != nil {
+	release, err := registry.lockAndReloadLocked()
+	if err != nil {
 		return Registration{}, false, fmt.Errorf("refresh node registry: %w", err)
 	}
+	defer release()
 	record, exists := registry.records[string(id)]
 	if !exists {
 		return Registration{}, false, nil
@@ -548,6 +558,7 @@ func (registry *FileRegistry) load() error {
 	if document.Records == nil {
 		document.Records = make(map[string]registryRecord)
 	}
+	persistAuthoritySuspension := false
 	for id, record := range document.Records {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
@@ -560,6 +571,9 @@ func (registry *FileRegistry) load() error {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
 		if legacyCatalog {
+			if len(record.AllowedCommands) > 0 || record.ApprovedCatalogHash != "" {
+				persistAuthoritySuspension = true
+			}
 			record.AllowedCommands = nil
 			record.ApprovedCatalogHash = ""
 		}
@@ -581,6 +595,11 @@ func (registry *FileRegistry) load() error {
 	}
 	if err := validateRegistryNamespace(document.Records); err != nil {
 		return fmt.Errorf("validate node registry namespace: %w", err)
+	}
+	if persistAuthoritySuspension {
+		if err := registry.save(document.Records); err != nil {
+			return fmt.Errorf("persist legacy node authority suspension: %w", err)
+		}
 	}
 	registry.records = document.Records
 	return nil
@@ -614,22 +633,57 @@ func compactStoredSchema(label string, schema json.RawMessage) (json.RawMessage,
 }
 
 func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
-	if err := snapshot.Validate(); err == nil {
-		return false, nil
-	}
-
 	compatible := cloneSnapshot(snapshot)
 	legacyCatalog := false
+	catalogEpochs := browserSchemaEpochAll
+	browserCommands := make(map[string]struct{}, 6)
+	var browserProfiles []BrowserProfileDescriptor
 	for index := range compatible.Catalog.Commands {
 		descriptor := &compatible.Catalog.Commands[index]
-		if err := descriptor.Validate(); err == nil {
+		if !IsBrowserCommand(descriptor.Name) {
+			if err := descriptor.Validate(); err != nil {
+				return false, snapshot.Validate()
+			}
 			continue
 		}
-		if !storedLegacyBrowserDescriptor(*descriptor) {
-			return false, snapshot.Validate()
+		epochs, legacy, ok := classifyStoredBrowserDescriptor(descriptor)
+		if !ok {
+			if err := snapshot.Validate(); err != nil {
+				return false, err
+			}
+			return false, fmt.Errorf(
+				"%w: browser descriptor combines incompatible schema epochs",
+				ErrInvalidCapability,
+			)
 		}
-		descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
-		legacyCatalog = true
+		if _, duplicate := browserCommands[descriptor.Name]; duplicate {
+			return false, fmt.Errorf("%w: duplicate browser command %q", ErrInvalidCapability, descriptor.Name)
+		}
+		browserCommands[descriptor.Name] = struct{}{}
+		if browserProfiles == nil {
+			browserProfiles = CloneBrowserProfileDescriptors(descriptor.BrowserProfiles)
+		} else if !sameBrowserProfileDescriptors(browserProfiles, descriptor.BrowserProfiles) {
+			return false, fmt.Errorf("%w: browser catalog mixes profile sets", ErrInvalidCapability)
+		}
+		catalogEpochs &= epochs
+		if catalogEpochs == 0 {
+			return false, fmt.Errorf(
+				"%w: browser catalog combines incompatible schema epochs",
+				ErrInvalidCapability,
+			)
+		}
+		if legacy {
+			normalizeStoredBrowserDescriptor(descriptor)
+			legacyCatalog = true
+		}
+		if err := descriptor.Validate(); err != nil {
+			return false, err
+		}
+	}
+	if len(browserCommands) > 0 {
+		if _, ok := storedBrowserCatalogShapeEpochs(browserCommands, catalogEpochs); !ok {
+			return false, fmt.Errorf("%w: browser catalog shape does not match an emitted epoch", ErrInvalidCapability)
+		}
 	}
 	if !legacyCatalog {
 		return false, snapshot.Validate()
@@ -655,22 +709,265 @@ func validateStoredSnapshot(snapshot Snapshot) (bool, error) {
 	return true, nil
 }
 
-func storedLegacyBrowserDescriptor(descriptor CommandDescriptor) bool {
-	var want json.RawMessage
-	switch descriptor.Name {
-	case BrowserCommandSessionOpen:
-		want = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
-	case BrowserCommandObserve, BrowserCommandContexts:
-		want = legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
-	default:
+func classifyStoredBrowserDescriptor(
+	descriptor *CommandDescriptor,
+) (browserSchemaEpochs, bool, bool) {
+	if descriptor == nil || !IsBrowserCommand(descriptor.Name) {
+		return 0, false, false
+	}
+	currentInput := BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	currentOutput := BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	inputEpochs := storedBrowserInputSchemaEpochs(descriptor, currentInput)
+	outputEpochs := storedBrowserOutputSchemaEpochs(descriptor, currentOutput)
+	epochs := inputEpochs & outputEpochs
+	legacy := !storedSchemaMatches(descriptor.InputSchema, currentInput) ||
+		!storedSchemaMatches(descriptor.OutputSchema, currentOutput)
+	return epochs, legacy, epochs != 0
+}
+
+func normalizeStoredBrowserDescriptor(descriptor *CommandDescriptor) {
+	descriptor.InputSchema = BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
+	descriptor.OutputSchema = BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
+}
+
+func storedBrowserCatalogShapeEpochs(
+	commands map[string]struct{},
+	epochs browserSchemaEpochs,
+) (browserSchemaEpochs, bool) {
+	preContexts := browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+		browserSchemaEpochPreContexts
+	if storedBrowserCommandSetMatches(commands,
+		BrowserCommandSessionOpen,
+		BrowserCommandSessionStatus,
+		BrowserCommandObserve,
+		BrowserCommandAct,
+		BrowserCommandSessionClose,
+	) {
+		epochs &= preContexts
+		return epochs, epochs != 0
+	}
+	postContexts := browserSchemaEpochAll &^ preContexts
+	if storedBrowserCommandSetMatches(commands,
+		BrowserCommandSessionOpen,
+		BrowserCommandSessionStatus,
+		BrowserCommandObserve,
+		BrowserCommandAct,
+		BrowserCommandContexts,
+		BrowserCommandSessionClose,
+	) {
+		epochs &= postContexts
+		return epochs, epochs != 0
+	}
+	return 0, false
+}
+
+func storedBrowserCommandSetMatches(commands map[string]struct{}, expected ...string) bool {
+	if len(commands) != len(expected) {
 		return false
 	}
+	for _, command := range expected {
+		if _, exists := commands[command]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func sameBrowserProfileDescriptors(left, right []BrowserProfileDescriptor) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftProfile := left[index]
+		rightProfile := right[index]
+		if leftProfile.Alias != rightProfile.Alias || leftProfile.Revision != rightProfile.Revision ||
+			leftProfile.Driver != rightProfile.Driver || leftProfile.Mode != rightProfile.Mode ||
+			leftProfile.NetworkMode != rightProfile.NetworkMode || leftProfile.DryRun != rightProfile.DryRun ||
+			leftProfile.AllowApprovedActions != rightProfile.AllowApprovedActions ||
+			leftProfile.Headed != rightProfile.Headed || leftProfile.Limits != rightProfile.Limits ||
+			!slices.Equal(leftProfile.Actions, rightProfile.Actions) {
+			return false
+		}
+	}
+	return true
+}
+
+type browserSchemaEpochs uint16
+
+// Browser schemas changed independently across releases. A stored descriptor
+// is historical only when its exact input and output contracts overlap in at
+// least one epoch that MintClaw actually emitted.
+const (
+	browserSchemaEpochPreScroll browserSchemaEpochs = 1 << iota
+	browserSchemaEpochPreApprovedActions
+	browserSchemaEpochPreContexts
+	browserSchemaEpochPreReceipts
+	browserSchemaEpochPreDialogs
+	browserSchemaEpochPreDrag
+	browserSchemaEpochPreFileChooser
+	browserSchemaEpochCurrent
+)
+
+const browserSchemaEpochAll = browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+	browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+	browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+
+func storedBrowserInputSchemaEpochs(
+	descriptor *CommandDescriptor,
+	current json.RawMessage,
+) browserSchemaEpochs {
+	var epochs browserSchemaEpochs
+	if storedSchemaMatches(descriptor.InputSchema, current) {
+		switch descriptor.Name {
+		case BrowserCommandAct:
+			epochs |= browserSchemaEpochCurrent
+		case BrowserCommandSessionOpen:
+			epochs |= browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts |
+				browserSchemaEpochPreDialogs | browserSchemaEpochPreDrag |
+				browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		case BrowserCommandContexts:
+			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		default:
+			epochs |= browserSchemaEpochAll
+		}
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreScroll
+	}
+	if descriptor.Name == BrowserCommandSessionOpen &&
+		browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyPreFileChooserBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreFileChooser
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyPreDragBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreApprovedActions | browserSchemaEpochPreContexts |
+			browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs | browserSchemaEpochPreDrag
+	}
+	return epochs
+}
+
+func storedBrowserOutputSchemaEpochs(
+	descriptor *CommandDescriptor,
+	current json.RawMessage,
+) browserSchemaEpochs {
+	var epochs browserSchemaEpochs
+	if storedSchemaMatches(descriptor.OutputSchema, current) {
+		switch descriptor.Name {
+		case BrowserCommandSessionOpen:
+			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		case BrowserCommandObserve, BrowserCommandAct, BrowserCommandContexts:
+			epochs |= browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		default:
+			epochs |= browserSchemaEpochAll
+		}
+	}
+	profilesPrecedeDialogs := browserProfilesUseOnlyActions(
+		descriptor.BrowserProfiles,
+		"click", "download", "fill", "navigate", "press", "scroll", "select",
+	)
+	if !profilesPrecedeDialogs {
+		return epochs
+	}
+	switch descriptor.Name {
+	case BrowserCommandSessionOpen:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts
+		}
+	case BrowserCommandObserve:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts
+		}
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreDialogs
+		}
+	case BrowserCommandContexts:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreReceipts
+		}
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreDialogs
+		}
+	case BrowserCommandAct:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs
+		}
+	}
+	return epochs
+}
+
+func browserProfilesUseAnyAction(profiles []BrowserProfileDescriptor, actions ...string) bool {
+	for _, profile := range profiles {
+		for _, profileAction := range profile.Actions {
+			if slices.Contains(actions, profileAction) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func browserProfilesUseOnlyActions(profiles []BrowserProfileDescriptor, actions ...string) bool {
+	for _, profile := range profiles {
+		for _, profileAction := range profile.Actions {
+			if !slices.Contains(actions, profileAction) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func storedSchemaMatches(got json.RawMessage, want json.RawMessage) bool {
 	wantCanonical, err := canonicalJSON(want)
 	if err != nil {
 		return false
 	}
-	got, err := canonicalJSON(descriptor.OutputSchema)
-	return err == nil && bytes.Equal(got, wantCanonical)
+	gotCanonical, err := canonicalJSON(got)
+	return err == nil && bytes.Equal(gotCanonical, wantCanonical)
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {

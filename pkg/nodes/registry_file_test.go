@@ -94,8 +94,20 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 		if descriptor.Name == BrowserCommandContexts {
 			continue
 		}
-		if descriptor.Name == BrowserCommandSessionOpen {
+		switch descriptor.Name {
+		case BrowserCommandSessionOpen:
 			descriptor.OutputSchema = legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles)
+		case BrowserCommandObserve:
+			descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		case BrowserCommandAct:
+			descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+			descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
 		}
 		legacyDescriptors = append(legacyDescriptors, descriptor)
 	}
@@ -126,6 +138,18 @@ func TestFileRegistryLoadsLegacyBrowserCatalogWithAuthoritySuspended(t *testing.
 	registry, err := NewFileRegistry(path, 4)
 	if err != nil {
 		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedDocument registryDocument
+	if err = json.Unmarshal(persisted, &persistedDocument); err != nil {
+		t.Fatal(err)
+	}
+	persistedRecord := persistedDocument.Records[string(id)]
+	if len(persistedRecord.AllowedCommands) != 0 || persistedRecord.ApprovedCatalogHash != "" {
+		t.Fatalf("persisted legacy authority was not suspended: %#v", persistedRecord)
 	}
 	registration, exists, err := registry.Registration(id)
 	if err != nil || !exists {
@@ -191,13 +215,29 @@ func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *test
 	legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
 	for index := range legacyDescriptors {
 		descriptor := &legacyDescriptors[index]
-		if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts {
+		switch descriptor.Name {
+		case BrowserCommandObserve, BrowserCommandContexts:
 			descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+		case BrowserCommandAct:
+			descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
+				descriptor.Name, descriptor.BrowserProfiles,
+			)
+			descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
 				descriptor.Name, descriptor.BrowserProfiles,
 			)
 		}
 	}
 	legacyCatalog := CapabilityCatalog{Commands: legacyDescriptors}
+	for _, descriptor := range legacyDescriptors {
+		if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts {
+			if strings.Contains(string(descriptor.OutputSchema), "pending_dialog") ||
+				strings.Contains(string(descriptor.OutputSchema), "protected_result") {
+				t.Fatalf("pre-receipt/pre-dialog %s schema contains a later field", descriptor.Name)
+			}
+		}
+	}
 	legacyHash, err := legacyCatalog.canonicalHash()
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +279,224 @@ func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *test
 	}
 }
 
+func TestFileRegistryLoadsHistoricalBrowserCatalogWithAuthoritySuspended(t *testing.T) {
+	tests := []struct {
+		name          string
+		inputSchema   func(string, []BrowserProfileDescriptor) json.RawMessage
+		legacyOutputs bool
+	}{
+		{name: "pre_file_chooser", inputSchema: legacyPreFileChooserBrowserCommandInputSchema},
+		{name: "pre_drag_pre_dialog", inputSchema: legacyPreDragBrowserCommandInputSchema, legacyOutputs: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.json")
+			publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, err := DeriveID(publicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := browserProfileDescriptorFixture()
+			profile.Revision = "managed-v10-protected-fill"
+			profile.DryRun = false
+			profile.AllowApprovedActions = true
+			profile.Actions = []string{"click", "fill", "navigate", "press", "scroll", "select"}
+			currentDescriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacyDescriptors := append([]CommandDescriptor(nil), currentDescriptors...)
+			for index := range legacyDescriptors {
+				descriptor := &legacyDescriptors[index]
+				if descriptor.Name == BrowserCommandAct {
+					descriptor.InputSchema = test.inputSchema(descriptor.Name, descriptor.BrowserProfiles)
+				}
+				if test.legacyOutputs && (descriptor.Name == BrowserCommandObserve ||
+					descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandContexts) {
+					descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+						descriptor.Name, descriptor.BrowserProfiles,
+					)
+				}
+			}
+			legacyCatalog := CapabilityCatalog{Commands: legacyDescriptors}
+			legacyHash, err := legacyCatalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(id): {
+					Snapshot: Snapshot{
+						ID: id, State: StateDisconnected, ProtocolVersion: ProtocolV1,
+						Catalog: legacyCatalog, CatalogHash: legacyHash,
+					},
+					PublicKey: publicKey, RequestedRole: "companion", RequestedAt: 1,
+					AllowedCommands: []string{
+						BrowserCommandSessionOpen, BrowserCommandSessionStatus, BrowserCommandObserve,
+						BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose,
+					},
+					ApprovedCatalogHash: legacyHash, ApprovedAt: 2,
+				},
+			}}
+			encoded, err := json.MarshalIndent(document, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			registry, err := NewFileRegistry(path, 4)
+			if err != nil {
+				t.Fatalf("NewFileRegistry() error = %v", err)
+			}
+			registration, exists, err := registry.Registration(id)
+			if err != nil || !exists {
+				t.Fatalf("Registration() = exists %v, error %v", exists, err)
+			}
+			if len(registration.AllowedCommands) != 0 || registration.ApprovedCatalogHash != "" {
+				t.Fatalf("legacy authority was not suspended: %#v", registration)
+			}
+		})
+	}
+}
+
+func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Revision = "managed-cross-epoch"
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"click", "fill", "navigate", "press", "scroll", "select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		switch descriptors[index].Name {
+		case BrowserCommandAct:
+			descriptors[index].InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
+				descriptors[index].Name, descriptors[index].BrowserProfiles,
+			)
+		case BrowserCommandObserve:
+			descriptors[index].OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+				descriptors[index].Name, descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	catalogEpochs := browserSchemaEpochAll
+	for index := range descriptors {
+		epochs, _, ok := classifyStoredBrowserDescriptor(&descriptors[index])
+		if !ok {
+			t.Fatalf("descriptor %s is not individually historical", descriptors[index].Name)
+		}
+		catalogEpochs &= epochs
+	}
+	if catalogEpochs != 0 {
+		t.Fatalf("cross-epoch catalog unexpectedly overlaps at epochs %d", catalogEpochs)
+	}
+	catalog := CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := testPendingPairing(t, 1)
+	pairing.Node.Catalog = catalog
+	pairing.Node.CatalogHash = catalogHash
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(pairing.Node.ID): {Snapshot: pairing.Node},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+}
+
+func TestFileRegistryRejectsIncompleteOrMixedBrowserCatalogShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func([]CommandDescriptor) []CommandDescriptor
+	}{
+		{
+			name: "missing_required_command",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				result := make([]CommandDescriptor, 0, len(descriptors)-1)
+				for _, descriptor := range descriptors {
+					if descriptor.Name != BrowserCommandObserve {
+						result = append(result, descriptor)
+					}
+				}
+				return result
+			},
+		},
+		{
+			name: "mixed_profile_revisions",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				for index := range descriptors {
+					if descriptors[index].Name != BrowserCommandObserve {
+						continue
+					}
+					descriptors[index].BrowserProfiles = CloneBrowserProfileDescriptors(
+						descriptors[index].BrowserProfiles,
+					)
+					descriptors[index].BrowserProfiles[0].Revision = "managed-mixed-revision"
+					descriptors[index].InputSchema = BrowserCommandInputSchema(
+						descriptors[index].Name, descriptors[index].BrowserProfiles,
+					)
+					descriptors[index].OutputSchema = BrowserCommandOutputSchema(
+						descriptors[index].Name, descriptors[index].BrowserProfiles,
+					)
+				}
+				return descriptors
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptors, err := BrowserCommandDescriptors(
+				[]BrowserProfileDescriptor{browserProfileDescriptorFixture()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptors = test.mutate(descriptors)
+			catalog := CapabilityCatalog{Commands: descriptors}
+			catalogHash, err := catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing := testPendingPairing(t, 1)
+			pairing.Node.Catalog = catalog
+			pairing.Node.CatalogHash = catalogHash
+			if err = pairing.Node.Validate(); err != nil {
+				t.Fatalf("ordinary snapshot validation rejected the shape fixture: %v", err)
+			}
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {Snapshot: pairing.Node},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "registry.json")
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("NewFileRegistry() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestFileRegistryRejectsUnknownLegacyBrowserSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	pairing := testPendingPairing(t, 1)
@@ -270,6 +528,92 @@ func TestFileRegistryRejectsUnknownLegacyBrowserSchema(t *testing.T) {
 	}
 	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+}
+
+func TestFileRegistryRejectsHistoricallyImpossibleLegacyBrowserInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		profile BrowserProfileDescriptor
+		schema  func(string, []BrowserProfileDescriptor) json.RawMessage
+	}{
+		{
+			name: "validator_accepted_pre_scroll_input_with_current_output", command: BrowserCommandAct,
+			profile: browserProfileDescriptorFixture(),
+			schema:  legacyBrowserCommandInputSchema,
+		},
+		{
+			name: "approved_session_with_dry_run_only_schema", command: BrowserCommandSessionOpen,
+			profile: BrowserProfileDescriptor{
+				Alias: "managed", Revision: "managed-approved", Driver: BrowserDriverPlaywrightMCP,
+				Mode: BrowserProfileManaged, NetworkMode: BrowserNetworkAnyHTTP,
+				AllowApprovedActions: true,
+				Actions:              []string{"click", "download", "fill", "navigate", "press", "scroll", "select"},
+				Limits:               browserProfileDescriptorFixture().Limits,
+			},
+			schema: legacyDryRunBrowserCommandInputSchema,
+		},
+		{
+			name: "drag_profile_with_pre_drag_schema", command: BrowserCommandAct,
+			profile: BrowserProfileDescriptor{
+				Alias:                "managed",
+				Revision:             "managed-drag",
+				Driver:               BrowserDriverPlaywrightMCP,
+				Mode:                 BrowserProfileManaged,
+				NetworkMode:          BrowserNetworkAnyHTTP,
+				AllowApprovedActions: true,
+				Actions: []string{
+					"click",
+					"download",
+					"drag",
+					"fill",
+					"navigate",
+					"press",
+					"scroll",
+					"select",
+				},
+				Limits: browserProfileDescriptorFixture().Limits,
+			},
+			schema: legacyPreDragBrowserCommandInputSchema,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{test.profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index := range descriptors {
+				if descriptors[index].Name == test.command {
+					descriptors[index].InputSchema = test.schema(
+						test.command, descriptors[index].BrowserProfiles,
+					)
+				}
+			}
+			catalog := CapabilityCatalog{Commands: descriptors}
+			catalogHash, err := catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing := testPendingPairing(t, 1)
+			pairing.Node.Catalog = catalog
+			pairing.Node.CatalogHash = catalogHash
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {Snapshot: pairing.Node},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "registry.json")
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("NewFileRegistry() error = %v", err)
+			}
+		})
 	}
 }
 
