@@ -63,6 +63,7 @@ type TransferStream struct {
 	sentAckSequence       uint64
 	receivedAckSequence   uint64
 	receivedCommitted     bool
+	sentCommit            bool
 	sentCancel            bool
 	receivedCanceled      bool
 	releasedCommitted     bool
@@ -155,7 +156,7 @@ func (stream *TransferStream) Send(
 		if stream.closed {
 			return ErrNodeDisconnected
 		}
-		if stream.sentCancel {
+		if stream.sentCancel || (stream.sentCommit && frame.Type == protocol.TransferFrameCancel) {
 			return protocol.ErrInvalidTransferFrame
 		}
 		if frame.Type == protocol.TransferFrameChunk {
@@ -171,6 +172,12 @@ func (stream *TransferStream) Send(
 				frame.Sequence > stream.receivedChunkSequence {
 				return protocol.ErrInvalidTransferFrame
 			}
+		}
+		if frame.Type == protocol.TransferFrameCommit {
+			// A failed write is ambiguous: the peer may still have received the
+			// commit. From this point onward the binding must remain tombstoned
+			// unless its committed receipt is observed.
+			stream.sentCommit = true
 		}
 		if err := stream.session.writeTransferFrame(ctx, frame); err != nil {
 			return err
@@ -289,7 +296,7 @@ func (stream *TransferStream) ReleaseCommitted() error {
 		}
 		return ErrNodeDisconnected
 	}
-	if !stream.receivedCommitted {
+	if !stream.receivedCommitted || stream.sentCancel {
 		stream.stateMu.Unlock()
 		return protocol.ErrInvalidTransferFrame
 	}

@@ -243,11 +243,22 @@ func TestTransferStreamReleasesConfirmedCancellationForSameGenerationRetry(t *te
 	if err := stream.Send(t.Context(), cancel); err != nil {
 		t.Fatal(err)
 	}
+	committed := testTransferFrame(binding, protocol.TransferFrameCommitted, 0, nil)
+	if err := session.handleTransferFrame(committed); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Receive(t.Context())
+	if err != nil || response.Type != protocol.TransferFrameCommitted {
+		t.Fatalf("committed response after cancel = %#v, %v", response, err)
+	}
+	if err = stream.ReleaseCommitted(); !errors.Is(err, protocol.ErrInvalidTransferFrame) {
+		t.Fatalf("ReleaseCommitted() after cancel error = %v", err)
+	}
 	failure := testTransferFrame(binding, protocol.TransferFrameFailure, 0, nil)
 	if err := session.handleTransferFrame(failure); err != nil {
 		t.Fatal(err)
 	}
-	response, err := stream.Receive(t.Context())
+	response, err = stream.Receive(t.Context())
 	if err != nil || response.Type != protocol.TransferFrameFailure {
 		t.Fatalf("canceled response = %#v, %v", response, err)
 	}
@@ -272,6 +283,26 @@ func TestTransferStreamReleasesConfirmedCancellationForSameGenerationRetry(t *te
 	}
 	if _, err = hub.OpenTransfer(t.Context(), testTransferNodeID(), binding); err == nil {
 		t.Fatal("ambiguous cancellation did not retain a tombstone")
+	}
+}
+
+func TestTransferStreamRetainsAmbiguousCommittedIdentityWithoutCancellation(t *testing.T) {
+	t.Parallel()
+	binding := testTransferBinding()
+	hub, _, stream := openTestTransferStream(t, &transferRecordingConnection{}, binding)
+	commit := testTransferFrame(binding, protocol.TransferFrameCommit, 0, nil)
+	if err := stream.Send(t.Context(), commit); err != nil {
+		t.Fatal(err)
+	}
+	cancel := testTransferFrame(binding, protocol.TransferFrameCancel, 0, nil)
+	if err := stream.Send(t.Context(), cancel); !errors.Is(err, protocol.ErrInvalidTransferFrame) {
+		t.Fatalf("Send(cancel) after commit error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.OpenTransfer(t.Context(), testTransferNodeID(), binding); err == nil {
+		t.Fatal("ambiguous committed identity did not retain a tombstone")
 	}
 }
 
