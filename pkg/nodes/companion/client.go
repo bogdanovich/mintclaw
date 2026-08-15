@@ -1020,9 +1020,13 @@ func (client *Client) handleInvoke(
 }
 
 func invocationCommandFailure(err error) (string, string) {
-	if failure, ok := boundedInvocationFailure(err); ok &&
-		failure.Code == nodes.InvocationDispatchFileNotFound {
-		return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
+	if failure, ok := boundedInvocationFailure(err); ok {
+		switch failure.Code {
+		case nodes.InvocationDispatchFileNotFound:
+			return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
+		case nodes.InvocationDispatchBrowserSessionNotFound:
+			return nodes.InvocationDispatchBrowserSessionNotFound, "browser session was not found"
+		}
 	}
 	switch {
 	case errors.Is(err, ErrFileNotFound):

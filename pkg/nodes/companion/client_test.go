@@ -64,6 +64,19 @@ func TestInvocationCommandFailurePreservesAuthorizedFileNotFound(t *testing.T) {
 	}
 }
 
+func TestInvocationCommandFailurePreservesBrowserSessionNotFound(t *testing.T) {
+	err := newCommandFailure(
+		nodes.InvocationDispatchBrowserSessionNotFound,
+		"browser session was not found",
+		nodes.ErrBrowserHostNotFound,
+	)
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchBrowserSessionNotFound ||
+		message != "browser session was not found" {
+		t.Fatalf("invocationCommandFailure() = %q, %q", code, message)
+	}
+}
+
 func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 	registry, handler := testGatewayAdmission(t)
 	server := httptest.NewTLSServer(handler)
