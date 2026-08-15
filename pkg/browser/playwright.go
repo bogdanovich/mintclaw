@@ -1099,18 +1099,25 @@ func playwrightNavigationCheckedCode(identity playwrightNavigationIdentity, disp
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
   const state = page[trackerKey];
   if (!state) return "MINTCLAW_NAV_ACT_V1|error|missing_tracker";
-  const tree = await state.cdp.send("Page.getFrameTree");
-  const frame = tree.frameTree && tree.frameTree.frame;
-  const frameID = String(frame && frame.id || "");
-  const loaderID = String(frame && frame.loaderId || "");
-  if (!frameID || !loaderID) return "MINTCLAW_NAV_ACT_V1|error|missing_identity";
-  if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
-    state.mainFrameID = frameID;
-    state.loaderID = loaderID;
-    state.generation++;
+  const navigationStatus = async () => {
+    const tree = await state.cdp.send("Page.getFrameTree");
+    const frame = tree.frameTree && tree.frameTree.frame;
+    const frameID = String(frame && frame.id || "");
+    const loaderID = String(frame && frame.loaderId || "");
+    if (!frameID || !loaderID) return "error|missing_identity";
+    if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
+      state.mainFrameID = frameID;
+      state.loaderID = loaderID;
+      state.generation++;
+    }
+    if (frameID !== expectedFrameID || loaderID !== expectedLoaderID ||
+        state.generation !== expectedGeneration) return "stale";
+    return "ok";
+  };
+  const initialNavigationStatus = await navigationStatus();
+  if (initialNavigationStatus !== "ok") {
+    return "MINTCLAW_NAV_ACT_V1|" + initialNavigationStatus;
   }
-  if (frameID !== expectedFrameID || loaderID !== expectedLoaderID ||
-      state.generation !== expectedGeneration) return "MINTCLAW_NAV_ACT_V1|stale";
   %s
   return "MINTCLAW_NAV_ACT_V1|ok";
 }`,
@@ -1343,11 +1350,24 @@ func playwrightNavigationCheckedUploadCode(
   if (await uploadTarget.count() !== 1 || !await uploadTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
-  const [fileChooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    uploadTarget.click({ button: "left" }),
-  ]);
-  await fileChooser.setFiles([` + jsonString(stagedPath) + `]);`
+  // Playwright MCP turns this event into a cross-tool modal state. Suppress
+  // that listener only for this worker-exclusive transaction so the checked
+  // click and file assignment complete in one driver call.
+  const retainedFileChooserListeners = page.listeners("filechooser");
+  for (const listener of retainedFileChooserListeners) page.off("filechooser", listener);
+  try {
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      uploadTarget.click({ button: "left" }),
+    ]);
+    const postClickNavigationStatus = await navigationStatus();
+    if (postClickNavigationStatus !== "ok") {
+      return "MINTCLAW_NAV_ACT_V1|" + postClickNavigationStatus;
+    }
+    await fileChooser.setFiles([` + jsonString(stagedPath) + `]);
+  } finally {
+    for (const listener of retainedFileChooserListeners) page.on("filechooser", listener);
+  }`
 	return playwrightNavigationCheckedCode(identity, dispatch)
 }
 
