@@ -1,6 +1,7 @@
 package browserhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -107,6 +108,391 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 	if _, err = host.FileChooser(t.Context(), request); err == nil || len(worker.actions) != 1 {
 		t.Fatalf("reused artifact error = %v; actions = %#v", err, worker.actions)
 	}
+}
+
+func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) {
+	content := bytes.Repeat([]byte("browser-output-"), 24000)
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(),
+			browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_capture_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "capture.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.TransferID == "" || descriptor.Size != uint64(len(content)) ||
+		descriptor.SHA256 == "" || descriptor.CleanupPolicy != browserOutputCleanupPolicy {
+		t.Fatalf("RegisterOutput() = %#v", descriptor)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		received := downloadBrowserOutput(
+			t,
+			host,
+			descriptor,
+			func(value nodes.BrowserOutputDescriptor) nodes.BrowserOutputDescriptor {
+				if attempt == 0 {
+					value.ActorID = "telegram:attacker"
+				}
+				return value
+			},
+		)
+		if attempt == 0 {
+			if received != nil {
+				t.Fatalf("forged transfer returned %d bytes", len(received))
+			}
+			received = downloadBrowserOutput(t, host, descriptor, nil)
+		}
+		if !bytes.Equal(received, content) {
+			t.Fatalf("attempt %d returned %d bytes", attempt, len(received))
+		}
+	}
+
+	host.transferMu.Lock()
+	artifact := host.outputArtifacts[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if artifact.path == "" {
+		t.Fatal("committed output was not retained for retry")
+	}
+	if info, statErr := os.Stat(artifact.path); statErr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("output mode = %v, %v", info, statErr)
+	}
+	if _, err = host.Close(t.Context(), BrowserHostCloseRequest{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ProfileRevision: "managed-v1", AgentID: "browser", ActorID: "telegram:owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(artifact.path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output survived session close: %v", statErr)
+	}
+}
+
+func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
+	content := bytes.Repeat([]byte("bounded-output"), 30000)
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_download_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "download.bin", ContentType: "application/octet-stream",
+		ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserOutputPrepareFrame(t, descriptor)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	chunkSeen := make(chan struct{}, 1)
+	if err = host.HandleTransferFrame(ctx, prepare, func(response protocol.TransferFrame) error {
+		if response.Type == protocol.TransferFrameChunk {
+			chunkSeen <- struct{}{}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-chunkSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first output chunk was not sent")
+	}
+	host.transferMu.Lock()
+	transfer := host.outputTransfers[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if transfer == nil {
+		t.Fatal("output transfer was not active")
+	}
+	cancelFrame := prepare
+	cancelFrame.Type, cancelFrame.Payload = protocol.TransferFrameCancel, nil
+	if err = host.HandleTransferFrame(ctx, cancelFrame, func(protocol.TransferFrame) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-transfer.streamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled output stream remained blocked waiting for an ACK")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		host.transferMu.Lock()
+		_, active := host.outputTransfers[descriptor.TransferID]
+		_, retained := host.outputArtifacts[descriptor.TransferID]
+		host.transferMu.Unlock()
+		if !active {
+			if !retained {
+				t.Fatal("cancel removed immutable output")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancel did not clean active output transfer")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if received := downloadBrowserOutput(t, host, descriptor, nil); !bytes.Equal(received, content) {
+		t.Fatalf("retry returned %d bytes", len(received))
+	}
+}
+
+func TestBrowserOutputCancelIsTerminalForOutboundFrames(t *testing.T) {
+	content := bytes.Repeat([]byte("ordered-output"), 30000)
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_ordering_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "ordered.bin", ContentType: "application/octet-stream",
+		ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkReady := make(chan struct{})
+	releaseChunk := make(chan struct{})
+	transferReady := make(chan *browserOutputTransfer, 1)
+	var readyOnce sync.Once
+	host.beforeOutputFrameSend = func(frame protocol.TransferFrame) {
+		if frame.Type == protocol.TransferFrameChunk {
+			readyOnce.Do(func() {
+				transferReady <- host.outputTransfers[descriptor.TransferID]
+				close(chunkReady)
+			})
+			<-releaseChunk
+		}
+	}
+	prepare := browserOutputPrepareFrame(t, descriptor)
+	var responseMu sync.Mutex
+	responses := make([]protocol.TransferFrame, 0, 3)
+	send := func(response protocol.TransferFrame) error {
+		responseMu.Lock()
+		responses = append(responses, response)
+		responseMu.Unlock()
+		return nil
+	}
+	if err = host.HandleTransferFrame(t.Context(), prepare, send); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-chunkReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("output stream did not reach the send boundary")
+	}
+	transfer := <-transferReady
+	if transfer == nil {
+		t.Fatal("output transfer was not active at the send boundary")
+	}
+	cancelDone := make(chan error, 1)
+	cancelFrame := prepare
+	cancelFrame.Type, cancelFrame.Payload = protocol.TransferFrameCancel, nil
+	go func() { cancelDone <- host.HandleTransferFrame(t.Context(), cancelFrame, send) }()
+	close(releaseChunk)
+	if cancelErr := <-cancelDone; cancelErr != nil {
+		t.Fatal(cancelErr)
+	}
+	select {
+	case <-transfer.streamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled output stream did not finish")
+	}
+	responseMu.Lock()
+	defer responseMu.Unlock()
+	canceledAt := -1
+	for index, response := range responses {
+		if response.Type == protocol.TransferFrameFailure {
+			canceledAt = index
+		}
+	}
+	if canceledAt < 0 || canceledAt != len(responses)-1 {
+		t.Fatalf("cancel was not terminal: %#v", responses)
+	}
+}
+
+func TestValidBrowserOutputFilenameRejectsWindowsDevices(t *testing.T) {
+	for _, filename := range []string{
+		"NUL", "nul.txt", "CON.json", "PRN", "AUX.log", "CLOCK$", "CONIN$", "conin$.txt",
+		"CONOUT$", "conout$.log", "COM1", "com9.txt",
+		"LPT1", "lpt9.log", "COM¹.txt", "LPT³", "file.", "file ", "a:b", `a\b`, "a\x00b",
+	} {
+		if validBrowserOutputFilename(filename) {
+			t.Errorf("validBrowserOutputFilename(%q) = true", filename)
+		}
+	}
+	for _, filename := range []string{"capture.png", "COM10.txt", "LPT20", "console.json"} {
+		if !validBrowserOutputFilename(filename) {
+			t.Errorf("validBrowserOutputFilename(%q) = false", filename)
+		}
+	}
+}
+
+func TestBrowserOutputExpiryRemovesNeverTransferredArtifact(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expirySignal := make(chan time.Time, 1)
+	host.outputExpiryAfter = func(time.Duration) <-chan time.Time { return expirySignal }
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_expiry_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "expiring.png", ContentType: "image/png", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, []byte("expiring output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.transferMu.Lock()
+	artifact := host.outputArtifacts[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if artifact.path == "" {
+		t.Fatal("output was not registered")
+	}
+	expirySignal <- host.now()
+	select {
+	case <-artifact.expiryDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("registered output did not expire")
+	}
+	host.transferMu.Lock()
+	_, retained := host.outputArtifacts[descriptor.TransferID]
+	host.transferMu.Unlock()
+	if retained {
+		t.Fatal("expired output remained registered")
+	}
+	if _, statErr := os.Stat(artifact.path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expired output remained on disk: %v", statErr)
+	}
+}
+
+func downloadBrowserOutput(
+	t *testing.T,
+	host *BrowserHost,
+	descriptor nodes.BrowserOutputDescriptor,
+	mutate func(nodes.BrowserOutputDescriptor) nodes.BrowserOutputDescriptor,
+) []byte {
+	t.Helper()
+	prepare := browserOutputPrepareFrame(t, descriptor)
+	var err error
+	payload := descriptor
+	if mutate != nil {
+		payload = mutate(payload)
+	}
+	prepare.Payload, _ = json.Marshal(payload)
+	responses := make(chan protocol.TransferFrame, 8)
+	send := func(frame protocol.TransferFrame) error {
+		responses <- frame
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err = host.HandleTransferFrame(ctx, prepare, send); err != nil {
+		t.Fatal(err)
+	}
+	var received bytes.Buffer
+	for {
+		select {
+		case response := <-responses:
+			switch response.Type {
+			case protocol.TransferFrameDeny:
+				return nil
+			case protocol.TransferFrameAccept:
+			case protocol.TransferFrameChunk:
+				_, _ = received.Write(response.Payload)
+				ack := response
+				ack.Type, ack.Payload = protocol.TransferFrameAck, nil
+				if err = host.HandleTransferFrame(ctx, ack, send); err != nil {
+					t.Fatal(err)
+				}
+			case protocol.TransferFrameStatus:
+				commit := prepare
+				commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
+				if err = host.HandleTransferFrame(ctx, commit, send); err != nil {
+					t.Fatal(err)
+				}
+			case protocol.TransferFrameCommitted:
+				return received.Bytes()
+			default:
+				t.Fatalf("unexpected output response %#v", response)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for browser output")
+		}
+	}
+}
+
+func browserOutputPrepareFrame(
+	t *testing.T,
+	descriptor nodes.BrowserOutputDescriptor,
+) protocol.TransferFrame {
+	t.Helper()
+	digest, err := hex.DecodeString(descriptor.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
+		TransferID: descriptor.TransferID, PolicyRevision: descriptor.ProfileRevision,
+		TotalSize: descriptor.Size,
+	}
+	copy(frame.SHA256[:], digest)
+	frame.Payload, _ = json.Marshal(descriptor)
+	return frame
 }
 
 func TestBrowserArtifactTransferIsCleanedWhenSessionCloses(t *testing.T) {

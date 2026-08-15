@@ -752,6 +752,43 @@ type BrowserActResult struct {
 	Observation        *BrowserObservationResult `json:"observation,omitempty"`
 }
 
+const (
+	BrowserOutputScreenshot = "screenshot"
+	BrowserOutputDownload   = "download"
+	BrowserOutputSnapshot   = "snapshot"
+)
+
+// BrowserOutputDescriptor is the private, authority-bound description of an
+// immutable browser-owned output. It is returned only inside trusted node
+// command results and must match a subsequent download-direction transfer
+// prepare exactly; it never contains the companion-local staging path.
+type BrowserOutputDescriptor struct {
+	TransferID            string `json:"transfer_id"`
+	Kind                  string `json:"kind"`
+	SessionID             string `json:"session_id"`
+	RoutedSessionID       string `json:"routed_session_id"`
+	AgentID               string `json:"agent_id"`
+	ActorID               string `json:"actor_id"`
+	WorkspaceID           string `json:"workspace_id"`
+	Target                string `json:"target"`
+	ProfileRevision       string `json:"profile_revision"`
+	BrowserPolicyRevision string `json:"browser_policy_revision"`
+	InvocationID          string `json:"invocation_id"`
+	TabID                 string `json:"tab_id,omitempty"`
+	FrameID               string `json:"frame_id,omitempty"`
+	ContextID             string `json:"context_id,omitempty"`
+	DocumentID            string `json:"document_id,omitempty"`
+	SnapshotID            string `json:"snapshot_id,omitempty"`
+	SnapshotGeneration    uint64 `json:"snapshot_generation,omitempty"`
+	Filename              string `json:"filename"`
+	ContentType           string `json:"content_type"`
+	Size                  uint64 `json:"size"`
+	SHA256                string `json:"sha256"`
+	CapturedAt            int64  `json:"captured_at"`
+	ExpiresAt             int64  `json:"expires_at"`
+	CleanupPolicy         string `json:"cleanup_policy"`
+}
+
 type BrowserHostOpenRequest struct {
 	SessionID             string
 	RoutedSessionID       string

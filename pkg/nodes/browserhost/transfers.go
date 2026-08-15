@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"hash"
 	"io"
@@ -55,6 +56,216 @@ type browserArtifactLifetime struct {
 	connectionDone <-chan struct{}
 }
 
+type browserOutputArtifact struct {
+	descriptor nodes.BrowserOutputDescriptor
+	binding    protocol.TransferFrame
+	directory  string
+	path       string
+	expiryDone <-chan struct{}
+	expiryStop context.CancelFunc
+}
+
+type browserOutputTransfer struct {
+	artifact   browserOutputArtifact
+	lifetime   *browserArtifactLifetime
+	cancel     context.CancelFunc
+	file       *os.File
+	sequence   uint64
+	pendingAck uint64
+	lastAck    uint64
+	acked      chan uint64
+	streamDone chan struct{}
+	finished   bool
+}
+
+const (
+	browserOutputCleanupPolicy = "session_or_expiry"
+	maxBrowserOutputArtifacts  = 8
+)
+
+// RegisterOutput stores one immutable browser-owned result for a later
+// authenticated download-direction transfer. Trusted capture code supplies
+// the complete authority descriptor; the host fills the content binding and
+// never exposes the private staging path.
+func (host *BrowserHost) RegisterOutput(
+	descriptor nodes.BrowserOutputDescriptor,
+	content []byte,
+) (nodes.BrowserOutputDescriptor, error) {
+	if host == nil || len(content) == 0 || descriptor.TransferID != "" ||
+		descriptor.Size != 0 || descriptor.SHA256 != "" || descriptor.CapturedAt != 0 ||
+		descriptor.CleanupPolicy != "" || !validBrowserOutputDescriptor(descriptor) {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostDenied
+	}
+	host.mu.Lock()
+	session := host.sessions[descriptor.SessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostNotFound
+	}
+	session.mu.Lock()
+	now := host.now().UTC()
+	limit := browserOutputLimit(session.limits, descriptor.Kind)
+	authorized := session.state == "ready" && session.routedSessionID == descriptor.RoutedSessionID &&
+		session.agentID == descriptor.AgentID && session.actorID == descriptor.ActorID &&
+		session.profile.Revision == descriptor.ProfileRevision &&
+		session.browserPolicyRevision == descriptor.BrowserPolicyRevision &&
+		now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) &&
+		descriptor.ExpiresAt > now.Unix() && descriptor.ExpiresAt <= session.expiresAt.Unix() &&
+		len(content) <= limit
+	if descriptor.TabID != "" {
+		authorized = authorized && descriptor.TabID == session.tabID &&
+			descriptor.SnapshotGeneration == session.snapshotGeneration
+	}
+	if !authorized {
+		session.mu.Unlock()
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostDenied
+	}
+	digest := sha256.Sum256(content)
+	descriptor.Size = uint64(len(content))
+	descriptor.SHA256 = hex.EncodeToString(digest[:])
+	descriptor.CapturedAt = now.Unix()
+	descriptor.CleanupPolicy = browserOutputCleanupPolicy
+	descriptor.TransferID = browserOutputTransferID(descriptor)
+	binding := protocol.TransferFrame{
+		Direction: protocol.TransferDownload, TransferID: descriptor.TransferID,
+		PolicyRevision: descriptor.ProfileRevision, TotalSize: descriptor.Size, SHA256: digest,
+	}
+	host.transferMu.Lock()
+	session.mu.Unlock()
+	defer host.transferMu.Unlock()
+	host.expireBrowserArtifactsLocked()
+	if existing, ok := host.outputArtifacts[descriptor.TransferID]; ok {
+		if existing.descriptor == descriptor {
+			return descriptor, nil
+		}
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostDenied
+	}
+	if len(host.outputArtifacts) >= maxBrowserOutputArtifacts {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostBusy
+	}
+	if host.transferRoot == "" {
+		root, err := os.MkdirTemp("", "mintclaw-browser-artifacts-")
+		if err != nil {
+			return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostBusy
+		}
+		host.transferRoot = root
+	}
+	directory, err := os.MkdirTemp(host.transferRoot, "output-")
+	if err != nil {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostBusy
+	}
+	path := filepath.Join(directory, descriptor.Filename)
+	if err = os.WriteFile(path, content, 0o600); err != nil {
+		_ = os.RemoveAll(directory)
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostBusy
+	}
+	expiryContext, stopExpiry := context.WithCancel(context.Background())
+	expiryDone := make(chan struct{})
+	artifact := browserOutputArtifact{
+		descriptor: descriptor, binding: binding, directory: directory, path: path,
+		expiryDone: expiryDone, expiryStop: stopExpiry,
+	}
+	host.outputArtifacts[descriptor.TransferID] = artifact
+	go host.watchBrowserOutputExpiry(expiryContext, descriptor.TransferID, artifact, expiryDone)
+	return descriptor, nil
+}
+
+func (host *BrowserHost) watchBrowserOutputExpiry(
+	ctx context.Context,
+	transferID string,
+	artifact browserOutputArtifact,
+	done chan<- struct{},
+) {
+	defer close(done)
+	delay := time.Unix(artifact.descriptor.ExpiresAt, 0).Sub(host.now().UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-host.outputExpiryAfter(delay):
+	}
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	current, ok := host.outputArtifacts[transferID]
+	if ok && current.descriptor == artifact.descriptor && current.directory == artifact.directory {
+		host.removeBrowserOutputLocked(transferID)
+	}
+}
+
+func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool {
+	if descriptor.Kind != nodes.BrowserOutputScreenshot && descriptor.Kind != nodes.BrowserOutputDownload &&
+		descriptor.Kind != nodes.BrowserOutputSnapshot {
+		return false
+	}
+	if !browserHostIdentifier(descriptor.SessionID) || !browserHostIdentifier(descriptor.RoutedSessionID) ||
+		!browserHostIdentifier(descriptor.AgentID) || !browserHostIdentifier(descriptor.ActorID) ||
+		!browserHostIdentifier(descriptor.WorkspaceID) || !browserHostIdentifier(descriptor.Target) ||
+		!browserHostIdentifier(descriptor.InvocationID) || !browserHostIdentifier(descriptor.ProfileRevision) ||
+		!browserHostDigest(descriptor.BrowserPolicyRevision) || descriptor.ExpiresAt <= 0 ||
+		!validBrowserOutputFilename(descriptor.Filename) ||
+		descriptor.ContentType == "" || len(descriptor.ContentType) > 255 {
+		return false
+	}
+	for _, value := range []string{
+		descriptor.TabID, descriptor.FrameID, descriptor.ContextID,
+		descriptor.DocumentID, descriptor.SnapshotID,
+	} {
+		if value != "" && !browserHostIdentifier(value) {
+			return false
+		}
+	}
+	return descriptor.TabID != "" || descriptor.SnapshotGeneration == 0
+}
+
+func validBrowserOutputFilename(filename string) bool {
+	if filename == "" || filename == "." || filename == ".." || len(filename) > 255 ||
+		filename != filepath.Base(filename) || strings.ContainsAny(filename, `<>:"/\|?*`) ||
+		strings.HasSuffix(filename, ".") || strings.HasSuffix(filename, " ") {
+		return false
+	}
+	for _, character := range filename {
+		if character < 32 || character == 127 {
+			return false
+		}
+	}
+	device := strings.ToUpper(strings.SplitN(filename, ".", 2)[0])
+	if device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" || device == "CLOCK$" ||
+		device == "CONIN$" || device == "CONOUT$" {
+		return false
+	}
+	if strings.HasPrefix(device, "COM") || strings.HasPrefix(device, "LPT") {
+		suffix := strings.TrimPrefix(strings.TrimPrefix(device, "COM"), "LPT")
+		if (len(suffix) == 1 && suffix[0] >= '1' && suffix[0] <= '9') ||
+			suffix == "¹" || suffix == "²" || suffix == "³" {
+			return false
+		}
+	}
+	return true
+}
+
+func browserOutputLimit(limits nodes.BrowserLimits, kind string) int {
+	switch kind {
+	case nodes.BrowserOutputScreenshot:
+		return limits.ScreenshotBytes
+	case nodes.BrowserOutputDownload:
+		return limits.DownloadBytes
+	case nodes.BrowserOutputSnapshot:
+		return limits.SnapshotBytes
+	default:
+		return 0
+	}
+}
+
+func browserOutputTransferID(descriptor nodes.BrowserOutputDescriptor) string {
+	copy := descriptor
+	copy.TransferID = ""
+	encoded, _ := json.Marshal(copy)
+	digest := sha256.Sum256(append([]byte("mintclaw.browser.output.v1\x00"), encoded...))
+	return "browser_output_" + hex.EncodeToString(digest[:16])
+}
+
 func (*BrowserHost) Descriptors() []nodes.CommandDescriptor { return nil }
 
 func (host *BrowserHost) TransferPolicyRevisions() []string {
@@ -76,11 +287,17 @@ func (host *BrowserHost) HandleTransferFrame(
 	frame protocol.TransferFrame,
 	send func(protocol.TransferFrame) error,
 ) error {
-	if host == nil || send == nil || frame.Validate() != nil || frame.Direction != protocol.TransferUpload {
+	if host == nil || send == nil || frame.Validate() != nil {
 		return protocol.ErrInvalidTransferFrame
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if frame.Direction == protocol.TransferDownload {
+		return host.handleBrowserOutputFrame(ctx, frame, send)
+	}
+	if frame.Direction != protocol.TransferUpload {
+		return protocol.ErrInvalidTransferFrame
 	}
 	switch frame.Type {
 	case protocol.TransferFramePrepare:
@@ -96,6 +313,301 @@ func (host *BrowserHost) HandleTransferFrame(
 	default:
 		return protocol.ErrInvalidTransferFrame
 	}
+}
+
+func (host *BrowserHost) handleBrowserOutputFrame(
+	ctx context.Context,
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	switch frame.Type {
+	case protocol.TransferFramePrepare:
+		return host.prepareBrowserOutput(ctx, frame, send)
+	case protocol.TransferFrameAck:
+		return host.ackBrowserOutput(frame)
+	case protocol.TransferFrameCommit:
+		return host.commitBrowserOutput(frame, send)
+	case protocol.TransferFrameCancel:
+		return host.cancelBrowserOutput(frame, send)
+	case protocol.TransferFrameStatus:
+		return host.statusBrowserOutput(frame, send)
+	default:
+		return protocol.ErrInvalidTransferFrame
+	}
+}
+
+func (host *BrowserHost) prepareBrowserOutput(
+	ctx context.Context,
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	var descriptor nodes.BrowserOutputDescriptor
+	decoder := json.NewDecoder(bytes.NewReader(frame.Payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&descriptor) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		descriptor.TransferID != frame.TransferID || descriptor.ProfileRevision != frame.PolicyRevision ||
+		descriptor.Size != frame.TotalSize || !strings.EqualFold(descriptor.SHA256, bytesToHex(frame.SHA256[:])) {
+		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "invalid_prepare"))
+	}
+	host.mu.Lock()
+	session := host.sessions[descriptor.SessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "session_denied"))
+	}
+	session.mu.Lock()
+	now := host.now().UTC()
+	authorized := session.state == "ready" && session.routedSessionID == descriptor.RoutedSessionID &&
+		session.agentID == descriptor.AgentID && session.actorID == descriptor.ActorID &&
+		session.profile.Revision == descriptor.ProfileRevision &&
+		session.browserPolicyRevision == descriptor.BrowserPolicyRevision &&
+		now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) && now.Unix() < descriptor.ExpiresAt
+	if !authorized {
+		session.mu.Unlock()
+		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "authority_denied"))
+	}
+	if host.beforeTransferAdmission != nil {
+		host.beforeTransferAdmission()
+	}
+	host.transferMu.Lock()
+	session.mu.Unlock()
+	host.expireBrowserArtifactsLocked()
+	artifact, ok := host.outputArtifacts[frame.TransferID]
+	if !ok || artifact.descriptor != descriptor || !browserTransferMatches(artifact.binding, frame) {
+		host.transferMu.Unlock()
+		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "output_denied"))
+	}
+	if _, busy := host.outputTransfers[frame.TransferID]; busy {
+		host.transferMu.Unlock()
+		return send(browserTransferResponse(frame, protocol.TransferFrameDeny, "transfer_busy"))
+	}
+	file, err := os.Open(artifact.path)
+	if err != nil {
+		host.removeBrowserOutputLocked(frame.TransferID)
+		host.transferMu.Unlock()
+		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "storage_unavailable"))
+	}
+	transferContext, cancel := context.WithCancel(ctx)
+	lifetime := newBrowserArtifactLifetime(transferContext)
+	transfer := &browserOutputTransfer{
+		artifact: artifact, lifetime: lifetime, cancel: cancel, file: file,
+		acked: make(chan uint64, 1), streamDone: make(chan struct{}),
+	}
+	host.outputTransfers[frame.TransferID] = transfer
+	if err = send(browserTransferResponse(frame, protocol.TransferFrameAccept, "accepted")); err != nil {
+		host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
+		host.transferMu.Unlock()
+		return err
+	}
+	host.transferMu.Unlock()
+	go host.streamBrowserOutput(transfer, frame, send)
+	go host.watchBrowserOutputTransfer(frame.TransferID, transfer)
+	return nil
+}
+
+func (host *BrowserHost) ackBrowserOutput(frame protocol.TransferFrame) error {
+	host.transferMu.Lock()
+	transfer := host.outputTransfers[frame.TransferID]
+	if transfer == nil || !browserTransferMatches(transfer.artifact.binding, frame) || transfer.finished ||
+		frame.Sequence == 0 || frame.Sequence != transfer.pendingAck || frame.Sequence == transfer.lastAck {
+		host.transferMu.Unlock()
+		return protocol.ErrInvalidTransferFrame
+	}
+	transfer.lastAck = frame.Sequence
+	select {
+	case transfer.acked <- frame.Sequence:
+		host.transferMu.Unlock()
+		return nil
+	default:
+		host.transferMu.Unlock()
+		return protocol.ErrInvalidTransferFrame
+	}
+}
+
+func (host *BrowserHost) streamBrowserOutput(
+	transfer *browserOutputTransfer,
+	binding protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) {
+	defer close(transfer.streamDone)
+	buffer := make([]byte, protocol.MaxTransferChunkBytes)
+	hasher := sha256.New()
+	var observed uint64
+	for {
+		count, readErr := transfer.file.Read(buffer)
+		if count > 0 {
+			chunk := append([]byte(nil), buffer[:count]...)
+			_, _ = hasher.Write(chunk)
+			host.transferMu.Lock()
+			if host.outputTransfers[binding.TransferID] != transfer {
+				host.transferMu.Unlock()
+				return
+			}
+			transfer.sequence++
+			transfer.pendingAck = transfer.sequence
+			sequence := transfer.sequence
+			frame := browserTransferResponse(binding, protocol.TransferFrameChunk, "")
+			frame.Sequence, frame.Payload = sequence, chunk
+			if host.beforeOutputFrameSend != nil {
+				host.beforeOutputFrameSend(frame)
+			}
+			if send(frame) != nil {
+				host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
+				host.transferMu.Unlock()
+				return
+			}
+			host.transferMu.Unlock()
+			select {
+			case <-transfer.lifetime.connectionDone:
+				host.removeBrowserOutputTransfer(binding.TransferID, transfer)
+				return
+			case acknowledged := <-transfer.acked:
+				if acknowledged != sequence {
+					host.failBrowserOutputTransfer(binding, transfer, send, "sequence_mismatch")
+					return
+				}
+			}
+			observed += uint64(count)
+			host.transferMu.Lock()
+			transfer.pendingAck = 0
+			host.transferMu.Unlock()
+		}
+		if readErr != nil && readErr != io.EOF {
+			host.failBrowserOutputTransfer(binding, transfer, send, "source_changed")
+			return
+		}
+		if readErr == io.EOF {
+			break
+		}
+	}
+	info, err := transfer.file.Stat()
+	status := ""
+	if err != nil {
+		status = "source_stat_failed"
+	} else if uint64(info.Size()) != binding.TotalSize {
+		status = "source_size_changed"
+	} else if observed != binding.TotalSize {
+		status = "source_short_read"
+	} else if !bytes.Equal(hasher.Sum(nil), binding.SHA256[:]) {
+		status = "source_digest_changed"
+	}
+	if status != "" {
+		host.failBrowserOutputTransfer(binding, transfer, send, status)
+		return
+	}
+	host.transferMu.Lock()
+	if host.outputTransfers[binding.TransferID] != transfer {
+		host.transferMu.Unlock()
+		return
+	}
+	transfer.finished = true
+	_ = transfer.file.Close()
+	transfer.file = nil
+	statusFrame := browserTransferResponse(binding, protocol.TransferFrameStatus, "received")
+	if host.beforeOutputFrameSend != nil {
+		host.beforeOutputFrameSend(statusFrame)
+	}
+	if send(statusFrame) != nil {
+		host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
+	}
+	host.transferMu.Unlock()
+}
+
+func (host *BrowserHost) commitBrowserOutput(
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	host.transferMu.Lock()
+	transfer := host.outputTransfers[frame.TransferID]
+	if transfer == nil || !browserTransferMatches(transfer.artifact.binding, frame) || !transfer.finished {
+		host.transferMu.Unlock()
+		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "transfer_conflict"))
+	}
+	host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
+	err := send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
+	host.transferMu.Unlock()
+	return err
+}
+
+func (host *BrowserHost) cancelBrowserOutput(
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	host.transferMu.Lock()
+	if transfer := host.outputTransfers[frame.TransferID]; transfer != nil &&
+		browserTransferMatches(transfer.artifact.binding, frame) {
+		host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
+	}
+	err := send(browserTransferResponse(frame, protocol.TransferFrameFailure, "canceled"))
+	host.transferMu.Unlock()
+	return err
+}
+
+func (host *BrowserHost) statusBrowserOutput(
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	if transfer := host.outputTransfers[frame.TransferID]; transfer != nil &&
+		browserTransferMatches(transfer.artifact.binding, frame) {
+		state := "streaming"
+		if transfer.finished {
+			state = "received"
+		}
+		return send(browserTransferResponse(frame, protocol.TransferFrameStatus, state))
+	}
+	if artifact, ok := host.outputArtifacts[frame.TransferID]; ok && browserTransferMatches(artifact.binding, frame) {
+		return send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "available"))
+	}
+	return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "not_found"))
+}
+
+func (host *BrowserHost) failBrowserOutputTransfer(
+	binding protocol.TransferFrame,
+	transfer *browserOutputTransfer,
+	send func(protocol.TransferFrame) error,
+	status string,
+) {
+	host.transferMu.Lock()
+	if host.outputTransfers[binding.TransferID] != transfer {
+		host.transferMu.Unlock()
+		return
+	}
+	host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
+	_ = send(browserTransferResponse(binding, protocol.TransferFrameFailure, status))
+	host.transferMu.Unlock()
+}
+
+func (host *BrowserHost) watchBrowserOutputTransfer(transferID string, transfer *browserOutputTransfer) {
+	delay := time.Unix(transfer.artifact.descriptor.ExpiresAt, 0).Sub(host.now().UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-transfer.lifetime.connectionDone:
+	case <-timer.C:
+	}
+	host.removeBrowserOutputTransfer(transferID, transfer)
+}
+
+func (host *BrowserHost) removeBrowserOutputTransfer(transferID string, transfer *browserOutputTransfer) {
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	host.removeBrowserOutputTransferLocked(transferID, transfer)
+}
+
+func (host *BrowserHost) removeBrowserOutputTransferLocked(transferID string, transfer *browserOutputTransfer) {
+	if host.outputTransfers[transferID] != transfer {
+		return
+	}
+	transfer.cancel()
+	if transfer.file != nil {
+		_ = transfer.file.Close()
+	}
+	delete(host.outputTransfers, transferID)
 }
 
 func (host *BrowserHost) prepareBrowserArtifact(
@@ -384,6 +896,24 @@ func (host *BrowserHost) expireBrowserArtifactsLocked() {
 			host.removeCompletedTransferLocked(transferID)
 		}
 	}
+	for transferID, artifact := range host.outputArtifacts {
+		if now >= artifact.descriptor.ExpiresAt {
+			host.removeBrowserOutputLocked(transferID)
+		}
+	}
+}
+
+func (host *BrowserHost) removeBrowserOutputLocked(transferID string) {
+	if transfer := host.outputTransfers[transferID]; transfer != nil {
+		host.removeBrowserOutputTransferLocked(transferID, transfer)
+	}
+	artifact, ok := host.outputArtifacts[transferID]
+	if !ok {
+		return
+	}
+	artifact.expiryStop()
+	_ = os.RemoveAll(artifact.directory)
+	delete(host.outputArtifacts, transferID)
 }
 
 func (host *BrowserHost) removeCompletedTransferLocked(transferID string) {
@@ -416,6 +946,9 @@ func (host *BrowserHost) cleanupAllBrowserArtifacts() {
 	for transferID := range host.completedTransfers {
 		host.removeCompletedTransferLocked(transferID)
 	}
+	for transferID := range host.outputArtifacts {
+		host.removeBrowserOutputLocked(transferID)
+	}
 	if host.transferRoot != "" {
 		_ = os.RemoveAll(host.transferRoot)
 		host.transferRoot = ""
@@ -433,6 +966,11 @@ func (host *BrowserHost) cleanupBrowserArtifactsForSession(sessionID string) {
 	for transferID, artifact := range host.completedTransfers {
 		if artifact.request.SessionID == sessionID {
 			host.removeCompletedTransferLocked(transferID)
+		}
+	}
+	for transferID, artifact := range host.outputArtifacts {
+		if artifact.descriptor.SessionID == sessionID {
+			host.removeBrowserOutputLocked(transferID)
 		}
 	}
 }

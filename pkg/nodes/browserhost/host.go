@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 )
 
 const (
@@ -102,9 +103,13 @@ type BrowserHost struct {
 	transferRoot       string
 	activeTransfers    map[string]*browserArtifactTransfer
 	completedTransfers map[string]browserStagedArtifact
+	outputArtifacts    map[string]browserOutputArtifact
+	outputTransfers    map[string]*browserOutputTransfer
+	outputExpiryAfter  func(time.Duration) <-chan time.Time
 
 	beforeTransferAdmission func()
 	beforeTransferCleanup   func()
+	beforeOutputFrameSend   func(protocol.TransferFrame)
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
@@ -165,6 +170,9 @@ func newBrowserHost(
 		sessions:           make(map[string]*browserHostSession),
 		activeTransfers:    make(map[string]*browserArtifactTransfer),
 		completedTransfers: make(map[string]browserStagedArtifact),
+		outputArtifacts:    make(map[string]browserOutputArtifact),
+		outputTransfers:    make(map[string]*browserOutputTransfer),
+		outputExpiryAfter:  time.After,
 	}, nil
 }
 
