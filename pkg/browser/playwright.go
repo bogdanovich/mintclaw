@@ -1299,7 +1299,11 @@ func (worker *playwrightWorker) uploadLocked(
 		text, checkErr := worker.callAndConsume(
 			ctx,
 			"browser_run_code_unsafe",
-			map[string]any{"code": playwrightNavigationCheckedCode(worker.navigationID, "")},
+			map[string]any{"code": playwrightNavigationCheckedUploadCode(
+				worker.navigationID,
+				action.Target,
+				stagedPath,
+			)},
 			true,
 		)
 		if checkErr != nil {
@@ -1311,6 +1315,7 @@ func (worker *playwrightWorker) uploadLocked(
 			}
 			return checkErr
 		}
+		return nil
 	}
 	text, err := worker.callRawText(ctx, "browser_click", map[string]any{
 		"target": action.Target, "element": action.Element, "doubleClick": false, "button": "left",
@@ -1323,6 +1328,27 @@ func (worker *playwrightWorker) uploadLocked(
 	}
 	_, err = worker.callRawText(ctx, "browser_file_upload", map[string]any{"paths": []string{stagedPath}})
 	return err
+}
+
+func playwrightNavigationCheckedUploadCode(
+	identity playwrightNavigationIdentity,
+	target string,
+	stagedPath string,
+) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	dispatch := `const uploadTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
+  if (await uploadTarget.count() !== 1 || !await uploadTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    uploadTarget.click({ button: "left" }),
+  ]);
+  await fileChooser.setFiles([` + jsonString(stagedPath) + `]);`
+	return playwrightNavigationCheckedCode(identity, dispatch)
 }
 
 func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string, func(), error) {

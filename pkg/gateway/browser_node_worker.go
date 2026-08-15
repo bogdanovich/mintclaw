@@ -754,7 +754,12 @@ func (worker *nodeBrowserWorker) stageBrowserArtifact(
 	if err != nil {
 		return browser.ErrWorkerUnavailable
 	}
-	defer func() { _ = stream.Close() }()
+	releasedCommitted := false
+	defer func() {
+		if !releasedCommitted {
+			_ = stream.Close()
+		}
+	}()
 	frame := protocol.TransferFrame{
 		Type: protocol.TransferFramePrepare, Direction: binding.Direction,
 		TransferID: binding.TransferID, PolicyRevision: binding.PolicyRevision,
@@ -777,6 +782,10 @@ func (worker *nodeBrowserWorker) stageBrowserArtifact(
 		return browser.ErrWorkerUnavailable
 	}
 	if response.Type == protocol.TransferFrameCommitted {
+		if err = stream.ReleaseCommitted(); err != nil {
+			return browser.ErrWorkerUnavailable
+		}
+		releasedCommitted = true
 		return nil
 	}
 	if response.Type != protocol.TransferFrameAccept {
@@ -819,6 +828,10 @@ func (worker *nodeBrowserWorker) stageBrowserArtifact(
 	if err != nil || response.Type != protocol.TransferFrameCommitted {
 		return browser.ErrWorkerUnavailable
 	}
+	if err = stream.ReleaseCommitted(); err != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	releasedCommitted = true
 	return nil
 }
 

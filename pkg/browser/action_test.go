@@ -224,6 +224,23 @@ func (factory *preparedStageTestFactory) Open(
 	return WorkerOpenResult{Owner: factory.worker}, nil
 }
 
+type failOnceStagedAcceptanceStore struct {
+	*MemoryStore
+	failures int
+}
+
+func (store *failOnceStagedAcceptanceStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next Invocation,
+) error {
+	if next.State == InvocationAccepted && store.failures > 0 {
+		store.failures--
+		return ErrStale
+	}
+	return store.MemoryStore.UpdateInvocation(ctx, expected, next)
+}
+
 func TestBrokerObservationScopesOpaqueReferencesToFreshGeneration(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	owner := testOwner()
@@ -715,6 +732,83 @@ func TestBrokerStagesPreparedArtifactBeforeDurableAcceptance(t *testing.T) {
 		worker.executeCalls != 1 || len(worker.uploads) != 1 {
 		t.Fatalf(
 			"retried staged invocation = %#v, %v; stage=%d execute=%d uploads=%#v",
+			invocation,
+			err,
+			worker.stageCalls,
+			worker.executeCalls,
+			worker.uploads,
+		)
+	}
+}
+
+func TestBrokerRetriesStagingAfterDurableAcceptanceFailure(t *testing.T) {
+	store := &failOnceStagedAcceptanceStore{MemoryStore: NewMemoryStore(), failures: 1}
+	baseWorker := &actionTestWorker{observation: driverObservationFixture(
+		DriverElement{Target: "e2", Role: "button", Name: "Choose file"},
+	)}
+	baseWorker.resolveElement = baseWorker.observation.Elements[0]
+	baseWorker.resolveOrigin = baseWorker.observation.Origin
+	worker := &preparedStageTestWorker{actionTestWorker: baseWorker}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, &preparedStageTestFactory{worker: worker})
+	now := time.Now().UTC()
+	broker.now = func() time.Time {
+		now = now.Add(time.Nanosecond)
+		return now
+	}
+	broker.lookupIP = func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_staging_acceptance_retry",
+		SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{
+			Kind: ActionFileChooser, Ref: onlyVisibleRef(t, observation.Snapshot),
+			ArtifactRef: "transfer-artifact://acceptance-retry",
+		},
+		Upload: &UploadBinding{
+			Ref: "transfer-artifact://acceptance-retry", SHA256: strings.Repeat("a", 64), Size: 7,
+			Filename: "input.txt", ContentType: "text/plain", Path: "/private/retained/input.txt",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation, executeErr := broker.ExecuteAction(
+		context.Background(), owner, prepared.Action.ID, nil,
+	); !errors.Is(executeErr, ErrStale) || invocation.ID != "" || worker.stageCalls != 1 ||
+		worker.executeCalls != 0 {
+		t.Fatalf(
+			"first acceptance attempt = %#v, %v; stage=%d execute=%d",
+			invocation,
+			executeErr,
+			worker.stageCalls,
+			worker.executeCalls,
+		)
+	}
+	invocationID := derivedIdentifier(
+		"invocation", owner, session.ID, "request_staging_acceptance_retry",
+	)
+	stored, err := store.GetInvocation(context.Background(), invocationID)
+	if err != nil || stored.State != InvocationPrepared || stored.AcceptedAt != 0 {
+		t.Fatalf("invocation after failed acceptance = %#v, %v", stored, err)
+	}
+	invocation, err := broker.ExecuteAction(context.Background(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded || worker.stageCalls != 2 ||
+		worker.executeCalls != 1 || len(worker.uploads) != 1 {
+		t.Fatalf(
+			"retried acceptance = %#v, %v; stage=%d execute=%d uploads=%#v",
 			invocation,
 			err,
 			worker.stageCalls,

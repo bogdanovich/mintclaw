@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,7 +92,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	local := &wssBrowserLocalFactory{}
 	factory.(*gatewayBrowserWorkerFactory).local = local
-	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	acceptanceStore := &wssBrowserAcceptanceStore{Store: browser.NewMemoryStore()}
+	broker, err := browser.NewBroker(cfg, acceptanceStore, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,6 +513,16 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	})
 	if err != nil || upload.RequiresApproval || upload.Action.Effect != browser.EffectLocalEdit {
 		t.Fatalf("file chooser preparation = %#v, %v", upload, err)
+	}
+	acceptanceStore.failNextAccepted.Store(true)
+	invocation, err = browserSource.ExecuteAction(uploadContext, owner, upload.Action.ID, nil)
+	if !errors.Is(err, browser.ErrStale) || invocation.ID != "" || len(host.uploadedArtifact()) != 0 {
+		t.Fatalf(
+			"file chooser failed acceptance = %#v, %v; uploaded = %q",
+			invocation,
+			err,
+			host.uploadedArtifact(),
+		)
 	}
 	invocation, err = browserSource.ExecuteAction(uploadContext, owner, upload.Action.ID, nil)
 	if err != nil || invocation.State != browser.InvocationSucceeded ||
@@ -1076,6 +1088,22 @@ type wssBrowserTransfer struct {
 	prepare browserArtifactTransferPrepare
 	data    []byte
 	seq     uint64
+}
+
+type wssBrowserAcceptanceStore struct {
+	browser.Store
+	failNextAccepted atomic.Bool
+}
+
+func (store *wssBrowserAcceptanceStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next browser.Invocation,
+) error {
+	if next.State == browser.InvocationAccepted && store.failNextAccepted.CompareAndSwap(true, false) {
+		return browser.ErrStale
+	}
+	return store.Store.UpdateInvocation(ctx, expected, next)
 }
 
 func (*wssBrowserHost) Descriptors() []nodes.CommandDescriptor { return nil }

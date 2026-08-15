@@ -512,10 +512,6 @@ func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing
 		"browser_run_code_unsafe": playwrightTextResult(
 			"### Result\n\"" + playwrightNavigationCheckedActionMarker + "|ok\"",
 		),
-		"browser_click": playwrightTextResult(
-			"- [File chooser]: can be handled by browser_file_upload",
-		),
-		"browser_file_upload": playwrightTextResult("uploaded"),
 	}}
 	worker := &playwrightWorker{
 		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: t.TempDir(),
@@ -530,9 +526,15 @@ func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing
 	if err := worker.UploadAfterNavigationCheck(context.Background(), identity.token(), action); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.calls) != 3 || client.calls[0].tool != "browser_run_code_unsafe" ||
-		client.calls[1].tool != "browser_click" || client.calls[2].tool != "browser_file_upload" {
+	if len(client.calls) != 1 || client.calls[0].tool != "browser_run_code_unsafe" {
 		t.Fatalf("navigation-checked upload calls = %#v", client.calls)
+	}
+	code, _ := client.calls[0].arguments["code"].(string)
+	if !strings.Contains(code, `page.waitForEvent("filechooser")`) ||
+		!strings.Contains(code, `uploadTarget.click({ button: "left" })`) ||
+		!strings.Contains(code, `fileChooser.setFiles([`) || !strings.Contains(code, `"e4"`) ||
+		!strings.Contains(code, `fixture.txt`) {
+		t.Fatalf("navigation-checked upload code = %q", code)
 	}
 	client.calls = nil
 	if err := worker.UploadAfterNavigationCheck(
@@ -2652,12 +2654,16 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifactDigest := sha256.Sum256(artifactContent)
-	if err = worker.Upload(ctx, DriverAction{
+	navigationIdentity, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("NavigationIdentity() error = %v", err)
+	}
+	if err = worker.UploadAfterNavigationCheck(ctx, navigationIdentity, DriverAction{
 		Kind: DriverUpload, Target: fileChooser, Element: "Attachment", Value: artifactPath,
 		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
 		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
 	}); err != nil {
-		t.Fatalf("Upload() error = %v", err)
+		t.Fatalf("UploadAfterNavigationCheck() error = %v", err)
 	}
 	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => "MINTCLAW_FILE_CHOOSER_V1|" +

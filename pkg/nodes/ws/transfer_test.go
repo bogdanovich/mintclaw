@@ -199,6 +199,39 @@ func TestTransferStreamTombstonesLateFrames(t *testing.T) {
 	}
 }
 
+func TestTransferStreamReleasesCommittedIdentityForSameGenerationRetry(t *testing.T) {
+	t.Parallel()
+	binding := testTransferBinding()
+	hub, session, stream := openTestTransferStream(t, &transferRecordingConnection{}, binding)
+	if err := stream.ReleaseCommitted(); !errors.Is(err, protocol.ErrInvalidTransferFrame) {
+		t.Fatalf("ReleaseCommitted() before receipt error = %v", err)
+	}
+	committed := testTransferFrame(binding, protocol.TransferFrameCommitted, 0, nil)
+	if err := session.handleTransferFrame(committed); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Receive(t.Context())
+	if err != nil || response.Type != protocol.TransferFrameCommitted {
+		t.Fatalf("committed response = %#v, %v", response, err)
+	}
+	if err = stream.ReleaseCommitted(); err != nil {
+		t.Fatal(err)
+	}
+	if err = stream.ReleaseCommitted(); err != nil {
+		t.Fatalf("idempotent ReleaseCommitted() error = %v", err)
+	}
+	retry, err := hub.OpenTransfer(t.Context(), testTransferNodeID(), binding)
+	if err != nil {
+		t.Fatalf("OpenTransfer() after committed release error = %v", err)
+	}
+	if err = retry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = hub.OpenTransfer(t.Context(), testTransferNodeID(), binding); err == nil {
+		t.Fatal("ambiguous retry close did not retain a tombstone")
+	}
+}
+
 func TestTransferSendCancellationInterruptsWrite(t *testing.T) {
 	t.Parallel()
 	connection := newCancelBlockingTransferConnection()
