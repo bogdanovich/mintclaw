@@ -102,6 +102,8 @@ type BrowserHost struct {
 	transferRoot       string
 	activeTransfers    map[string]*browserArtifactTransfer
 	completedTransfers map[string]browserStagedArtifact
+	outputArtifacts    map[string]browserOutputArtifact
+	outputTransfers    map[string]*browserOutputTransfer
 
 	beforeTransferAdmission func()
 	beforeTransferCleanup   func()
@@ -165,6 +167,8 @@ func newBrowserHost(
 		sessions:           make(map[string]*browserHostSession),
 		activeTransfers:    make(map[string]*browserArtifactTransfer),
 		completedTransfers: make(map[string]browserStagedArtifact),
+		outputArtifacts:    make(map[string]browserOutputArtifact),
+		outputTransfers:    make(map[string]*browserOutputTransfer),
 	}, nil
 }
 
