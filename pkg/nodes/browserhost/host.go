@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 )
 
 const (
@@ -108,6 +109,7 @@ type BrowserHost struct {
 
 	beforeTransferAdmission func()
 	beforeTransferCleanup   func()
+	beforeOutputFrameSend   func(protocol.TransferFrame)
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {

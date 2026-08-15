@@ -266,6 +266,109 @@ func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
 	}
 }
 
+func TestBrowserOutputCancelIsTerminalForOutboundFrames(t *testing.T) {
+	content := bytes.Repeat([]byte("ordered-output"), 30000)
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		WorkspaceID: "workspace_1", Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_ordering_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		Filename: "ordered.bin", ContentType: "application/octet-stream",
+		ExpiresAt: host.now().Add(time.Minute).Unix(),
+	}, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkReady := make(chan struct{})
+	releaseChunk := make(chan struct{})
+	transferReady := make(chan *browserOutputTransfer, 1)
+	var readyOnce sync.Once
+	host.beforeOutputFrameSend = func(frame protocol.TransferFrame) {
+		if frame.Type == protocol.TransferFrameChunk {
+			readyOnce.Do(func() {
+				transferReady <- host.outputTransfers[descriptor.TransferID]
+				close(chunkReady)
+			})
+			<-releaseChunk
+		}
+	}
+	prepare := browserOutputPrepareFrame(t, descriptor)
+	var responseMu sync.Mutex
+	responses := make([]protocol.TransferFrame, 0, 3)
+	send := func(response protocol.TransferFrame) error {
+		responseMu.Lock()
+		responses = append(responses, response)
+		responseMu.Unlock()
+		return nil
+	}
+	if err = host.HandleTransferFrame(t.Context(), prepare, send); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-chunkReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("output stream did not reach the send boundary")
+	}
+	transfer := <-transferReady
+	if transfer == nil {
+		t.Fatal("output transfer was not active at the send boundary")
+	}
+	cancelDone := make(chan error, 1)
+	cancelFrame := prepare
+	cancelFrame.Type, cancelFrame.Payload = protocol.TransferFrameCancel, nil
+	go func() { cancelDone <- host.HandleTransferFrame(t.Context(), cancelFrame, send) }()
+	close(releaseChunk)
+	if cancelErr := <-cancelDone; cancelErr != nil {
+		t.Fatal(cancelErr)
+	}
+	select {
+	case <-transfer.streamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled output stream did not finish")
+	}
+	responseMu.Lock()
+	defer responseMu.Unlock()
+	canceledAt := -1
+	for index, response := range responses {
+		if response.Type == protocol.TransferFrameFailure {
+			canceledAt = index
+		}
+	}
+	if canceledAt < 0 || canceledAt != len(responses)-1 {
+		t.Fatalf("cancel was not terminal: %#v", responses)
+	}
+}
+
+func TestValidBrowserOutputFilenameRejectsWindowsDevices(t *testing.T) {
+	for _, filename := range []string{
+		"NUL", "nul.txt", "CON.json", "PRN", "AUX.log", "CLOCK$", "COM1", "com9.txt",
+		"LPT1", "lpt9.log", "COM¹.txt", "LPT³", "file.", "file ", "a:b", `a\b`, "a\x00b",
+	} {
+		if validBrowserOutputFilename(filename) {
+			t.Errorf("validBrowserOutputFilename(%q) = true", filename)
+		}
+	}
+	for _, filename := range []string{"capture.png", "COM10.txt", "LPT20", "console.json"} {
+		if !validBrowserOutputFilename(filename) {
+			t.Errorf("validBrowserOutputFilename(%q) = false", filename)
+		}
+	}
+}
+
 func TestBrowserOutputExpiryRemovesNeverTransferredArtifact(t *testing.T) {
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,

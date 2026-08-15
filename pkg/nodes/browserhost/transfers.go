@@ -204,8 +204,7 @@ func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool
 		!browserHostIdentifier(descriptor.WorkspaceID) || !browserHostIdentifier(descriptor.Target) ||
 		!browserHostIdentifier(descriptor.InvocationID) || !browserHostIdentifier(descriptor.ProfileRevision) ||
 		!browserHostDigest(descriptor.BrowserPolicyRevision) || descriptor.ExpiresAt <= 0 ||
-		descriptor.Filename == "" || descriptor.Filename != filepath.Base(descriptor.Filename) ||
-		len(descriptor.Filename) > 255 || strings.ContainsRune(descriptor.Filename, 0) ||
+		!validBrowserOutputFilename(descriptor.Filename) ||
 		descriptor.ContentType == "" || len(descriptor.ContentType) > 255 {
 		return false
 	}
@@ -218,6 +217,31 @@ func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool
 		}
 	}
 	return descriptor.TabID != "" || descriptor.SnapshotGeneration == 0
+}
+
+func validBrowserOutputFilename(filename string) bool {
+	if filename == "" || filename == "." || filename == ".." || len(filename) > 255 ||
+		filename != filepath.Base(filename) || strings.ContainsAny(filename, `<>:"/\|?*`) ||
+		strings.HasSuffix(filename, ".") || strings.HasSuffix(filename, " ") {
+		return false
+	}
+	for _, character := range filename {
+		if character < 32 || character == 127 {
+			return false
+		}
+	}
+	device := strings.ToUpper(strings.SplitN(filename, ".", 2)[0])
+	if device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" || device == "CLOCK$" {
+		return false
+	}
+	if strings.HasPrefix(device, "COM") || strings.HasPrefix(device, "LPT") {
+		suffix := strings.TrimPrefix(strings.TrimPrefix(device, "COM"), "LPT")
+		if (len(suffix) == 1 && suffix[0] >= '1' && suffix[0] <= '9') ||
+			suffix == "¹" || suffix == "²" || suffix == "³" {
+			return false
+		}
+	}
+	return true
 }
 
 func browserOutputLimit(limits nodes.BrowserLimits, kind string) int {
@@ -369,11 +393,12 @@ func (host *BrowserHost) prepareBrowserOutput(
 		acked: make(chan uint64, 1), streamDone: make(chan struct{}),
 	}
 	host.outputTransfers[frame.TransferID] = transfer
-	host.transferMu.Unlock()
 	if err = send(browserTransferResponse(frame, protocol.TransferFrameAccept, "accepted")); err != nil {
-		host.removeBrowserOutputTransfer(frame.TransferID, transfer)
+		host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
+		host.transferMu.Unlock()
 		return err
 	}
+	host.transferMu.Unlock()
 	go host.streamBrowserOutput(transfer, frame, send)
 	go host.watchBrowserOutputTransfer(frame.TransferID, transfer)
 	return nil
@@ -420,13 +445,17 @@ func (host *BrowserHost) streamBrowserOutput(
 			transfer.sequence++
 			transfer.pendingAck = transfer.sequence
 			sequence := transfer.sequence
-			host.transferMu.Unlock()
 			frame := browserTransferResponse(binding, protocol.TransferFrameChunk, "")
 			frame.Sequence, frame.Payload = sequence, chunk
+			if host.beforeOutputFrameSend != nil {
+				host.beforeOutputFrameSend(frame)
+			}
 			if send(frame) != nil {
-				host.removeBrowserOutputTransfer(binding.TransferID, transfer)
+				host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
+				host.transferMu.Unlock()
 				return
 			}
+			host.transferMu.Unlock()
 			select {
 			case <-transfer.lifetime.connectionDone:
 				host.removeBrowserOutputTransfer(binding.TransferID, transfer)
@@ -473,8 +502,14 @@ func (host *BrowserHost) streamBrowserOutput(
 	transfer.finished = true
 	_ = transfer.file.Close()
 	transfer.file = nil
+	statusFrame := browserTransferResponse(binding, protocol.TransferFrameStatus, "received")
+	if host.beforeOutputFrameSend != nil {
+		host.beforeOutputFrameSend(statusFrame)
+	}
+	if send(statusFrame) != nil {
+		host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
+	}
 	host.transferMu.Unlock()
-	_ = send(browserTransferResponse(binding, protocol.TransferFrameStatus, "received"))
 }
 
 func (host *BrowserHost) commitBrowserOutput(
@@ -488,8 +523,9 @@ func (host *BrowserHost) commitBrowserOutput(
 		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "transfer_conflict"))
 	}
 	host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
+	err := send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
 	host.transferMu.Unlock()
-	return send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
+	return err
 }
 
 func (host *BrowserHost) cancelBrowserOutput(
@@ -501,8 +537,9 @@ func (host *BrowserHost) cancelBrowserOutput(
 		browserTransferMatches(transfer.artifact.binding, frame) {
 		host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
 	}
+	err := send(browserTransferResponse(frame, protocol.TransferFrameFailure, "canceled"))
 	host.transferMu.Unlock()
-	return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "canceled"))
+	return err
 }
 
 func (host *BrowserHost) statusBrowserOutput(
@@ -531,8 +568,14 @@ func (host *BrowserHost) failBrowserOutputTransfer(
 	send func(protocol.TransferFrame) error,
 	status string,
 ) {
-	host.removeBrowserOutputTransfer(binding.TransferID, transfer)
+	host.transferMu.Lock()
+	if host.outputTransfers[binding.TransferID] != transfer {
+		host.transferMu.Unlock()
+		return
+	}
+	host.removeBrowserOutputTransferLocked(binding.TransferID, transfer)
 	_ = send(browserTransferResponse(binding, protocol.TransferFrameFailure, status))
+	host.transferMu.Unlock()
 }
 
 func (host *BrowserHost) watchBrowserOutputTransfer(transferID string, transfer *browserOutputTransfer) {
