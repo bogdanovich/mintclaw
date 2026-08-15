@@ -98,6 +98,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		if err := controller.Submit(ctx, options.InitialPrompt); err != nil {
 			return fmt.Errorf("coding TUI submit initial prompt: %w", err)
 		}
+		model.admitInitialTurn()
 	}
 
 	programOptions := []tea.ProgramOption{tea.WithContext(ctx)}

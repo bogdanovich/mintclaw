@@ -97,6 +97,49 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 	}
 }
 
+func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, quit := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if quit == nil {
+		t.Fatal("idle Ctrl+C produced no quit command")
+	}
+	message := quit()
+	if _, ok := message.(tea.QuitMsg); !ok {
+		t.Fatalf("idle Ctrl+C command returned %T, want tea.QuitMsg", message)
+	}
+	if controller.closes.Load() != 0 {
+		t.Fatalf("model closed controller before terminal restoration: closes=%d", controller.closes.Load())
+	}
+}
+
+func TestModelInterruptsAdmittedInitialTurnBeforeFirstDelta(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.admitInitialTurn()
+
+	_, interrupt := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if interrupt == nil {
+		t.Fatal("pending initial turn produced no interrupt command")
+	}
+	interrupt()
+	if controller.interrupts.Load() != 1 || controller.closes.Load() != 0 {
+		t.Fatalf("interrupts=%d closes=%d", controller.interrupts.Load(), controller.closes.Load())
+	}
+	delta := controller.TurnStarted("turn-1", "fix it")
+	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	if model.initialTurnPending {
+		t.Fatal("authoritative turn lifecycle did not clear pending admission")
+	}
+}
+
 func TestModelRecoversDroppedDeltaThroughControllerSnapshot(t *testing.T) {
 	controller, snapshot := newController(t)
 	model, err := NewModel(controller, snapshot)

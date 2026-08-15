@@ -32,6 +32,10 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 		InitialPrompt:   "fix it",
 		AlternateScreen: true,
 		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
+			rendered, ok := model.(*Model)
+			if !ok || !rendered.initialTurnPending {
+				t.Fatalf("initial turn was not marked pending before input: %T", model)
+			}
 			return fakeProgram{model: model}
 		},
 	})

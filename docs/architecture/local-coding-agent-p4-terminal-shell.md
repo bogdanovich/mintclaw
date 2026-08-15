@@ -24,7 +24,8 @@ the cursor, and alternate-screen entry/restoration. The MintClaw application
 owns the surrounding controller lifecycle:
 
 - a dedicated cancellable watch context stops frontend watches on every exit;
-- normal idle `Ctrl+C` closes the controller and then leaves the screen;
+- normal idle `Ctrl+C` exits the screen immediately, then the application
+  performs bounded controller cleanup after Bubble Tea restores the terminal;
 - the first and repeated `Ctrl+C` during work preserve the admitted graceful
   interrupt and hard-cancel behavior;
 - SIGINT and SIGTERM use Bubble Tea's signal path, which restores the terminal
@@ -33,6 +34,12 @@ owns the surrounding controller lifecycle:
   controller and releases the thread lease; and
 - controller close has a fresh bounded timeout even when the application
   context was canceled or a long-running session exceeded an earlier deadline.
+
+After an initial prompt is admitted, the model retains a frontend-local
+pending-active marker until the authoritative turn lifecycle delta arrives.
+This closes the short gap between controller admission and `TurnStarted`
+projection, so an immediate `Ctrl+C` remains a graceful interrupt instead of
+falling through the stale idle exit path.
 
 The shell asks for terminal focus reports and keeps the composer focus state
 frontend-local. Width and height retain their actual clamped terminal values;

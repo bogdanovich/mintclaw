@@ -38,17 +38,20 @@ type CommandErrorMsg struct {
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
-	controller       frontend.Controller
-	ctx              context.Context
-	reducer          *frontend.Reducer
-	viewport         viewport.Model
-	composer         textarea.Model
-	width            int
-	height           int
-	interruptPending bool
-	resyncing        bool
-	focused          bool
-	err              error
+	controller         frontend.Controller
+	ctx                context.Context
+	reducer            *frontend.Reducer
+	viewport           viewport.Model
+	composer           textarea.Model
+	width              int
+	height             int
+	interruptPending   bool
+	initialTurnPending bool
+	admittedRevision   frontend.Revision
+	admittedLastTurn   *frontend.LastTurnOutcome
+	resyncing          bool
+	focused            bool
+	err                error
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -102,6 +105,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = message.Err
 		if message.Err == nil {
 			m.err = m.reducer.ApplySnapshot(message.Snapshot)
+			if m.initialTurnResolvedBy(message.Snapshot) {
+				m.initialTurnPending = false
+			}
 			if m.err == nil && !activeWork(m.reducer.State().Activity) {
 				m.interruptPending = false
 			}
@@ -122,6 +128,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !activeWork(m.reducer.State().Activity) {
 			m.interruptPending = false
+		}
+		if turnLifecycleDelta(message.Delta.Kind) {
+			m.initialTurnPending = false
 		}
 		m.refreshViewport()
 		return m, nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision)
@@ -196,6 +205,41 @@ func (m *Model) Dimensions() (int, int) {
 	return m.width, m.height
 }
 
+func (m *Model) admitInitialTurn() {
+	m.initialTurnPending = true
+	state := m.reducer.State()
+	m.admittedRevision = state.Revision
+	m.admittedLastTurn = cloneLastTurn(state.LastTurn)
+}
+
+func (m *Model) initialTurnResolvedBy(snapshot frontend.ThreadSnapshot) bool {
+	if !m.initialTurnPending {
+		return false
+	}
+	if activeWork(snapshot.Activity) {
+		return true
+	}
+	if snapshot.Revision <= m.admittedRevision {
+		return false
+	}
+	return !sameLastTurn(snapshot.LastTurn, m.admittedLastTurn)
+}
+
+func cloneLastTurn(last *frontend.LastTurnOutcome) *frontend.LastTurnOutcome {
+	if last == nil {
+		return nil
+	}
+	cloned := *last
+	return &cloned
+}
+
+func sameLastTurn(left, right *frontend.LastTurnOutcome) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func (m *Model) resize(width, height int) {
 	m.width = max(1, width)
 	m.height = max(1, height)
@@ -240,19 +284,32 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	activity := m.reducer.State().Activity
-	if activeWork(activity) {
+	if activeWork(activity) || m.initialTurnPending {
 		if m.interruptPending || activity == frontend.ActivityInterrupting {
 			return m, commandCmd("hard_cancel", m.controller.HardCancel)
 		}
 		m.interruptPending = true
 		return m, commandCmd("interrupt", m.controller.Interrupt)
 	}
-	return m, tea.Sequence(commandCmd("close", m.controller.Close), tea.Quit)
+	return m, tea.Quit
 }
 
 func activeWork(activity frontend.Activity) bool {
 	return activity == frontend.ActivityRunning || activity == frontend.ActivityCompacting ||
 		activity == frontend.ActivityInterrupting
+}
+
+func turnLifecycleDelta(kind frontend.DeltaKind) bool {
+	switch kind {
+	case frontend.DeltaTurnStarted,
+		frontend.DeltaTurnCompleted,
+		frontend.DeltaTurnSuspended,
+		frontend.DeltaTurnFailed,
+		frontend.DeltaTurnInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 func snapshotCmd(controller frontend.Controller) tea.Cmd {
