@@ -169,14 +169,19 @@ func (broker *Broker) observeSelectedContextLocked(
 		driverObservation, navigationID, err = observeWithNavigationCheck(ctx, worker)
 	} else {
 		identityWorker, ok := worker.(ContextSelectionIdentityWorker)
-		if !ok {
-			return Observation{}, ErrDriverIncompatible
-		}
 		authority := newContextMutationAuthority(*session.ContextAuthority, session.TabID, session.FrameID)
-		driverObservation, live, navigationID, err = identityWorker.SelectContextWithNavigationIdentity(
-			ctx,
-			authority,
-		)
+		if ok {
+			driverObservation, live, navigationID, err = identityWorker.SelectContextWithNavigationIdentity(
+				ctx,
+				authority,
+			)
+		} else {
+			// Remote context workers retain their existing observation path
+			// until companion screenshot transport supplies an equivalent
+			// private document authority. An empty identity keeps capture
+			// fail-closed without regressing ordinary frame observation.
+			driverObservation, live, err = worker.SelectContext(ctx, authority)
+		}
 	}
 	if err != nil {
 		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
