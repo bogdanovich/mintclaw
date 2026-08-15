@@ -575,7 +575,13 @@ func TestGatewayTransferSpoolBeginRecoverableConsumesCommittedIndexWarning(t *te
 	}
 	replayWriter, replay, replayCreated, err := store.BeginRecoverable(owner, spec)
 	if err != nil || replayWriter != nil || replayCreated || replay.Ref != committed.Ref {
-		t.Fatalf("replay BeginRecoverable() = writer %v, record %#v, created %v, error %v", replayWriter, replay, replayCreated, err)
+		t.Fatalf(
+			"replay BeginRecoverable() = writer %v, record %#v, created %v, error %v",
+			replayWriter,
+			replay,
+			replayCreated,
+			err,
+		)
 	}
 }
 
