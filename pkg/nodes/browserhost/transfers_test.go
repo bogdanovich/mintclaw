@@ -140,7 +140,11 @@ func TestBrowserArtifactTransferIsCleanedWhenSessionCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(host.activeTransfers) != 0 || len(host.completedTransfers) != 0 {
-		t.Fatalf("browser transfers survived close: active=%d completed=%d", len(host.activeTransfers), len(host.completedTransfers))
+		t.Fatalf(
+			"browser transfers survived close: active=%d completed=%d",
+			len(host.activeTransfers),
+			len(host.completedTransfers),
+		)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {

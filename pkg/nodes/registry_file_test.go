@@ -413,7 +413,18 @@ func TestFileRegistryCompactsPrettyPrintedBrowserSchemasBeforeValidation(t *test
 	}
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{
-		"check", "click", "dialog", "drag", "file_chooser", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+		"check",
+		"click",
+		"dialog",
+		"drag",
+		"file_chooser",
+		"fill",
+		"hover",
+		"navigate",
+		"press",
+		"scroll",
+		"select",
+		"uncheck",
 	}
 	profile.DryRun = false
 	profile.AllowApprovedActions = true

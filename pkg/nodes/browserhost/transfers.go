@@ -258,7 +258,8 @@ func (host *BrowserHost) statusBrowserArtifact(
 ) error {
 	host.transferMu.Lock()
 	defer host.transferMu.Unlock()
-	if artifact, ok := host.completedTransfers[frame.TransferID]; ok && browserTransferMatches(artifact.binding, frame) {
+	if artifact, ok := host.completedTransfers[frame.TransferID]; ok &&
+		browserTransferMatches(artifact.binding, frame) {
 		return send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
 	}
 	if transfer, ok := host.activeTransfers[frame.TransferID]; ok && browserTransferMatches(transfer.binding, frame) {

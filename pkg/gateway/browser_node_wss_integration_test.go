@@ -513,7 +513,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("file chooser preparation = %#v, %v", upload, err)
 	}
 	invocation, err = browserSource.ExecuteAction(uploadContext, owner, upload.Action.ID, nil)
-	if err != nil || invocation.State != browser.InvocationSucceeded || !bytes.Equal(host.uploadedArtifact(), uploadData) {
+	if err != nil || invocation.State != browser.InvocationSucceeded ||
+		!bytes.Equal(host.uploadedArtifact(), uploadData) {
 		t.Fatalf("file chooser invocation = %#v, %v; uploaded = %q", invocation, err, host.uploadedArtifact())
 	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
@@ -1692,7 +1693,18 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 		AllowApprovedActions: true,
 		Actions: []string{
-			"check", "click", "dialog", "drag", "file_chooser", "fill", "hover", "navigate", "press", "scroll", "select", "uncheck",
+			"check",
+			"click",
+			"dialog",
+			"drag",
+			"file_chooser",
+			"fill",
+			"hover",
+			"navigate",
+			"press",
+			"scroll",
+			"select",
+			"uncheck",
 		},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}
