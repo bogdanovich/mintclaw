@@ -6,6 +6,12 @@ Proposed product and architecture roadmap. This document defines ordering,
 boundaries, and completion evidence. It does not admit every milestone for
 implementation.
 
+The node-role portion of A0 is admitted under
+[`android-companion-a0n-admission.md`](android-companion-a0n-admission.md).
+It authorizes only the identity, enrollment, and A4 device-node foundation
+defined there. A0-O, A1 through A3, A5 and later capabilities remain
+unadmitted.
+
 The Android companion is distinct from running the MintClaw Linux binary in
 Termux. Termux provides a phone-local gateway and agent runtime. The companion
 is a native Android application connected to a remote MintClaw gateway.

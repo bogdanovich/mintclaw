@@ -34,6 +34,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Android Companion Roadmap](android-companion-roadmap.md): native Android
   operator chat and device-node architecture, reliability, permissions,
   distribution profiles, SMS safety, and phased delivery plan.
+- [Android Companion A0-N Admission](android-companion-a0n-admission.md):
+  admitted P-256 identity, short-lived enrollment, native node foundation,
+  durable read-only invocation, validation, and mandatory A4 stop gates.
 - [Reliable Browser Capability](browser-capability.md): deployed-state
   investigation, comparative analysis, and target broker/worker architecture
   for safe local, companion, and cloud browser automation.
