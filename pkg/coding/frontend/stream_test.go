@@ -218,6 +218,8 @@ func TestStreamCancelDoesNotRollbackIdenticalLaterStreamer(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.Cancel(t.Context())
+	second.Cancel(t.Context())
+	first.Cancel(t.Context()) // Repeated cancellation must not reclaim restored ownership.
 
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {

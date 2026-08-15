@@ -51,6 +51,7 @@ type projectedStream struct {
 	baseline  streamBaseline
 	mu        sync.Mutex
 	owned     streamOwnedEntries
+	canceled  bool
 }
 
 var (
@@ -60,27 +61,17 @@ var (
 )
 
 func (s *projectedStream) Update(ctx context.Context, content string) error {
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if s == nil || s.projector == nil {
-		return nil
-	}
-	_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, false)
-	s.recordOwned(owned)
-	return nil
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, false)
+		return owned
+	})
 }
 
 func (s *projectedStream) Finalize(ctx context.Context, content string) error {
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if s == nil || s.projector == nil {
-		return nil
-	}
-	_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, true)
-	s.recordOwned(owned)
-	return nil
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, true)
+		return owned
+	})
 }
 
 func (s *projectedStream) FinalizeWithContext(
@@ -98,30 +89,40 @@ func (s *projectedStream) FinalizeWithContext(
 }
 
 func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) error {
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if s == nil || s.projector == nil {
-		return nil
-	}
-	_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, false)
-	s.recordOwned(owned)
-	return nil
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, false)
+		return owned
+	})
 }
 
 func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string) error {
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, true)
+		return owned
+	})
+}
+
+func (s *projectedStream) project(ctx context.Context, update func() streamOwnedEntry) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, true)
-	s.recordOwned(owned)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canceled {
+		return context.Canceled
+	}
+	owned := update()
+	if s.owned == nil {
+		s.owned = make(streamOwnedEntries)
+	}
+	s.owned[owned.entry.ID] = owned
 	return nil
 }
 
-// Cancel discards provisional content from this provider attempt. Turn
+// Cancel discards content owned by this provider attempt. Turn
 // lifecycle remains authoritative in the runtime event adapter, which can
 // distinguish a pre-visible fallback from an actual interrupted turn.
 func (s *projectedStream) Cancel(context.Context) {
@@ -129,19 +130,15 @@ func (s *projectedStream) Cancel(context.Context) {
 		return
 	}
 	s.mu.Lock()
+	if s.canceled {
+		s.mu.Unlock()
+		return
+	}
+	s.canceled = true
 	owned := make(streamOwnedEntries, len(s.owned))
 	for id, entry := range s.owned {
 		owned[id] = entry
 	}
 	s.mu.Unlock()
 	s.projector.discardOwnedStream(s.turnID, s.baseline, owned)
-}
-
-func (s *projectedStream) recordOwned(owned streamOwnedEntry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.owned == nil {
-		s.owned = make(streamOwnedEntries)
-	}
-	s.owned[owned.entry.ID] = owned
 }
