@@ -979,7 +979,7 @@ func (*BrowserActTool) Description() string {
 	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval. " +
 		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
 		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
-		"context_generation, both are required for the action; omitting either fails stale."
+		"context_generation, copy both together; missing or incomplete context authority fails closed."
 }
 
 func (tool *BrowserActTool) Parameters() map[string]any {
