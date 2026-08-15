@@ -168,8 +168,15 @@ func (broker *Broker) observeSelectedContextLocked(
 	if session.FrameID == "" {
 		driverObservation, navigationID, err = observeWithNavigationCheck(ctx, worker)
 	} else {
+		identityWorker, ok := worker.(ContextSelectionIdentityWorker)
+		if !ok {
+			return Observation{}, ErrDriverIncompatible
+		}
 		authority := newContextMutationAuthority(*session.ContextAuthority, session.TabID, session.FrameID)
-		driverObservation, live, err = worker.SelectContext(ctx, authority)
+		driverObservation, live, navigationID, err = identityWorker.SelectContextWithNavigationIdentity(
+			ctx,
+			authority,
+		)
 	}
 	if err != nil {
 		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)

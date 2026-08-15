@@ -179,50 +179,68 @@ func (worker *playwrightWorker) SelectContext(
 ) (DriverObservation, ContextCatalog, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	observation, catalog, _, err := worker.selectContextLocked(ctx, authority, false)
+	return observation, catalog, err
+}
+
+func (worker *playwrightWorker) SelectContextWithNavigationIdentity(
+	ctx context.Context,
+	authority ContextMutationAuthority,
+) (DriverObservation, ContextCatalog, string, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.selectContextLocked(ctx, authority, true)
+}
+
+func (worker *playwrightWorker) selectContextLocked(
+	ctx context.Context,
+	authority ContextMutationAuthority,
+	bindNavigationIdentity bool,
+) (DriverObservation, ContextCatalog, string, error) {
 	if err := worker.contextAvailableLocked(); err != nil {
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	catalog, raw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	if err = authority.validateLive(catalog); err != nil {
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	tabID, frameID := authority.tabID, authority.frameID
 	index, found := worker.contextState.tabIndexes[tabID]
 	if !found {
-		return DriverObservation{}, ContextCatalog{}, ErrNotFound
+		return DriverObservation{}, ContextCatalog{}, "", ErrNotFound
 	}
 	if frameID != "" {
 		if rawToken, ok := worker.contextState.frames[frameID]; !ok ||
 			!rawCatalogHasFrame(raw, tabID, rawToken, worker.contextState.tabs) {
-			return DriverObservation{}, ContextCatalog{}, ErrNotFound
+			return DriverObservation{}, ContextCatalog{}, "", ErrNotFound
 		}
 		if !catalogFrameReady(catalog, tabID, frameID) {
-			return DriverObservation{}, ContextCatalog{}, ErrDenied
+			return DriverObservation{}, ContextCatalog{}, "", ErrDenied
 		}
 	}
 	rawToken := worker.contextState.tabs[tabID]
 	rawDocumentGeneration := rawPageDocumentGeneration(raw, rawToken)
 	if rawDocumentGeneration == 0 {
-		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, ErrContextAuthorityStale)
+		return DriverObservation{}, ContextCatalog{}, "", errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if err = worker.armContextSelectLocked(
 		ctx, raw.Generation, rawToken, rawDocumentGeneration,
 	); err != nil {
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	var selectText string
 	selectText, err = worker.callAndConsume(ctx, "browser_tabs", map[string]any{
 		"action": "select", "index": index,
 	}, true)
 	if err != nil && errors.Is(err, ErrDriverRejected) && strings.Contains(selectText, playwrightContextSelectStale) {
-		return DriverObservation{}, ContextCatalog{}, errors.Join(ErrStale, ErrContextAuthorityStale)
+		return DriverObservation{}, ContextCatalog{}, "", errors.Join(ErrStale, ErrContextAuthorityStale)
 	}
 	if err != nil {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	if worker.contextState.selectedTabID != tabID || worker.contextState.selectedFrame != frameID {
 		worker.contextState.selectedTabID = tabID
@@ -232,11 +250,18 @@ func (worker *playwrightWorker) SelectContext(
 	_, selectedRaw, err := worker.probeContextsLocked(ctx)
 	if err != nil {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	if selectedRaw.Selected != worker.contextState.tabs[tabID] {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, ErrStale
+		return DriverObservation{}, ContextCatalog{}, "", ErrStale
+	}
+	var navigationID string
+	if bindNavigationIdentity {
+		navigationID, err = worker.navigationIdentityLocked(ctx)
+		if err != nil {
+			return DriverObservation{}, ContextCatalog{}, "", err
+		}
 	}
 	var observation DriverObservation
 	if frameID == "" {
@@ -246,19 +271,29 @@ func (worker *playwrightWorker) SelectContext(
 	}
 	if err != nil {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	catalog, selectedRaw, err = worker.probeContextsLocked(ctx)
 	if err != nil {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, err
+		return DriverObservation{}, ContextCatalog{}, "", err
 	}
 	if selectedRaw.Selected != worker.contextState.tabs[tabID] ||
 		(frameID != "" && !rawCatalogHasFrame(selectedRaw, tabID, worker.contextState.frames[frameID], worker.contextState.tabs)) {
 		worker.lost = true
-		return DriverObservation{}, ContextCatalog{}, ErrStale
+		return DriverObservation{}, ContextCatalog{}, "", ErrStale
 	}
-	return observation, catalog, nil
+	if bindNavigationIdentity {
+		var after string
+		after, err = worker.navigationIdentityLocked(ctx)
+		if err != nil {
+			return DriverObservation{}, ContextCatalog{}, "", err
+		}
+		if navigationID == "" || navigationID != after {
+			return DriverObservation{}, ContextCatalog{}, "", ErrStale
+		}
+	}
+	return observation, catalog, navigationID, nil
 }
 
 func (worker *playwrightWorker) CloseTab(

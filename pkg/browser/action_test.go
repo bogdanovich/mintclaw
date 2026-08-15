@@ -38,6 +38,7 @@ type actionTestWorker struct {
 	screenshotErr          error
 	screenshotElement      DriverElement
 	screenshotNavigationID string
+	beforeScreenshot       func()
 	uploads                []DriverAction
 	download               DriverDownload
 	closed                 int
@@ -158,6 +159,9 @@ func (worker *actionTestWorker) CapturePageScreenshot(
 	expectedNavigationID string,
 	_ int,
 ) (DriverScreenshot, error) {
+	if worker.beforeScreenshot != nil {
+		worker.beforeScreenshot()
+	}
 	if expectedNavigationID == "" ||
 		(expectedNavigationID != worker.navigationID && expectedNavigationID != "navigation_1") {
 		return DriverScreenshot{}, ErrStale

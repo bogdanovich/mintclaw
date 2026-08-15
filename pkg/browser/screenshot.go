@@ -44,8 +44,10 @@ func (broker *Broker) CaptureScreenshot(
 		) {
 		return ScreenshotCapture{}, ErrStale
 	}
+	var contextWorker ContextWorker
 	if session.ContextAuthority != nil {
-		contextWorker, ok := worker.(ContextWorker)
+		var ok bool
+		contextWorker, ok = worker.(ContextWorker)
 		if !ok && session.FrameID != "" {
 			return ScreenshotCapture{}, ErrDriverIncompatible
 		}
@@ -81,6 +83,11 @@ func (broker *Broker) CaptureScreenshot(
 	}
 	if err != nil {
 		return ScreenshotCapture{}, err
+	}
+	if contextWorker != nil {
+		if err = broker.ensureContextFreshLocked(ctx, session, contextWorker); err != nil {
+			return ScreenshotCapture{}, err
+		}
 	}
 	if screenshot.ContentType != "image/png" || len(screenshot.Data) == 0 ||
 		len(screenshot.Data) > maximum || !bytes.HasPrefix(screenshot.Data, pngSignature) {
