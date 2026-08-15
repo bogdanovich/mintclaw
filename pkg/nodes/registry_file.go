@@ -661,16 +661,27 @@ func normalizeStoredLegacyBrowserDescriptor(descriptor *CommandDescriptor) bool 
 	migrated := false
 	currentInput := BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
 	if !storedSchemaMatches(descriptor.InputSchema, currentInput) {
-		legacyInputs := []json.RawMessage{
-			legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		var legacyInputs []json.RawMessage
+		if descriptor.Name == BrowserCommandAct &&
+			browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
+			legacyInputs = append(legacyInputs,
+				legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			)
 		}
-		if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") {
+		if descriptor.Name == BrowserCommandSessionOpen &&
+			browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) {
+			legacyInputs = append(legacyInputs,
+				legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+			)
+		}
+		if descriptor.Name == BrowserCommandAct &&
+			!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") {
 			legacyInputs = append(legacyInputs,
 				legacyPreFileChooserBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
 			)
 		}
-		if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") {
+		if descriptor.Name == BrowserCommandAct &&
+			!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") {
 			legacyInputs = append(legacyInputs,
 				legacyPreDragBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
 			)
@@ -685,22 +696,26 @@ func normalizeStoredLegacyBrowserDescriptor(descriptor *CommandDescriptor) bool 
 	currentOutput := BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
 	if !storedSchemaMatches(descriptor.OutputSchema, currentOutput) {
 		var legacyOutputs []json.RawMessage
+		profilesPrecedeDialogs := browserProfilesUseOnlyActions(
+			descriptor.BrowserProfiles,
+			"click", "download", "fill", "navigate", "press", "scroll", "select",
+		)
 		switch descriptor.Name {
 		case BrowserCommandSessionOpen:
-			legacyOutputs = append(legacyOutputs,
-				legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
-			)
-		case BrowserCommandObserve, BrowserCommandContexts:
-			legacyOutputs = append(legacyOutputs,
-				legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			)
-			if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "dialog") {
+			if profilesPrecedeDialogs {
 				legacyOutputs = append(legacyOutputs,
+					legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
+				)
+			}
+		case BrowserCommandObserve, BrowserCommandContexts:
+			if profilesPrecedeDialogs {
+				legacyOutputs = append(legacyOutputs,
+					legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
 					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
 				)
 			}
 		case BrowserCommandAct:
-			if !browserProfilesUseAnyAction(descriptor.BrowserProfiles, "dialog") {
+			if profilesPrecedeDialogs {
 				legacyOutputs = append(legacyOutputs,
 					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
 				)
@@ -725,6 +740,17 @@ func browserProfilesUseAnyAction(profiles []BrowserProfileDescriptor, actions ..
 		}
 	}
 	return false
+}
+
+func browserProfilesUseOnlyActions(profiles []BrowserProfileDescriptor, actions ...string) bool {
+	for _, profile := range profiles {
+		for _, profileAction := range profile.Actions {
+			if !slices.Contains(actions, profileAction) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func storedSchemaMatchesAny(got json.RawMessage, candidates []json.RawMessage) bool {

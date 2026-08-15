@@ -207,6 +207,69 @@ func TestGatewayInvocationSQLiteRejectsUnknownBrowserSchemaDuringReceiptMigratio
 	}
 }
 
+func TestGatewayInvocationReceiptMigrationRejectsHistoricallyImpossibleBrowserInput(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"click", "download", "drag", "fill", "navigate", "press", "scroll", "select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == BrowserCommandAct {
+			descriptor = candidate
+			break
+		}
+	}
+	if descriptor.Name == "" {
+		t.Fatal("browser act descriptor is missing")
+	}
+	inputValue := browserActInputFixture()
+	inputValue["action"] = map[string]any{"kind": "navigate", "url": "https://example.com/"}
+	input, err := json.Marshal(inputValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := invocationRequest(input)
+	request.InvocationID = "inv_browser_impossible_legacy_input"
+	request.IdempotencyKey = "idem_browser_impossible_legacy_input"
+	request.Command = descriptor.Name
+	request.Input = input
+	preparedAt := time.Now()
+	plan, err := PrepareExecutionPlan(
+		request, descriptor, "browser", "browser-policy-v1", preparedAt, time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
+		descriptor.Name, descriptor.BrowserProfiles,
+	)
+	descriptorHash, err := (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.DescriptorHash = descriptorHash
+	plan.CatalogHash = descriptorHash
+	plan.PlanHash = ""
+	plan.PlanHash, err = plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := preparedAt.UnixNano()
+	record := GatewayInvocationRecord{
+		Target: "companion", ToolCallID: "call-browser-impossible-legacy-input",
+		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
+		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
+	}
+	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
+	if legacy || !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("migration result = (legacy %v, error %v)", legacy, err)
+	}
+}
+
 func TestGatewayInvocationSQLiteReceiptMigrationRollsBackOnSnapshotMismatch(t *testing.T) {
 	workspace := t.TempDir()
 	path := GatewayInvocationStorePath(workspace)
@@ -393,6 +456,10 @@ func gatewayLegacyBrowserObserveRecord(
 		descriptor.Name,
 		descriptor.BrowserProfiles,
 	)
+	if strings.Contains(string(descriptor.OutputSchema), "pending_dialog") ||
+		strings.Contains(string(descriptor.OutputSchema), "protected_result") {
+		t.Fatal("pre-receipt/pre-dialog invocation schema contains a later field")
+	}
 	descriptorHash, err := (CapabilityCatalog{
 		Commands: []CommandDescriptor{descriptor},
 	}).canonicalHash()

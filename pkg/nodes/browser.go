@@ -1562,9 +1562,10 @@ func legacyPreDialogBrowserCommandOutputSchema(
 }
 
 // legacyBrowserPageResultOutputSchema is the exact observe/context result
-// contract advertised before protected recovery receipts were introduced. It
-// exists only for fail-closed registry migration; live catalogs must advertise
-// BrowserCommandOutputSchema and renew approval against its new catalog hash.
+// contract advertised before protected recovery receipts and pending dialog
+// observations were introduced. It exists only for fail-closed registry
+// migration; live catalogs must advertise BrowserCommandOutputSchema and renew
+// approval against its new catalog hash.
 func legacyBrowserPageResultOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
@@ -1573,11 +1574,12 @@ func legacyBrowserPageResultOutputSchema(
 		return json.RawMessage("false")
 	}
 	limits := strictestBrowserLimits(profiles)
+	observation := legacyPreDialogBrowserObservationSchema(limits)
 	switch command {
 	case BrowserCommandObserve:
-		return browserObservationSchema(limits)
+		return observation
 	case BrowserCommandContexts:
-		return mustJSON(browserContextCommandResultSchema(limits))
+		return mustJSON(browserContextCommandResultSchemaWithObservation(limits, observation))
 	default:
 		return json.RawMessage("false")
 	}
