@@ -1191,6 +1191,9 @@ compaction experience are incomplete.
 
 Goal: expose the engine to a TUI without coupling UI state to runtime internals.
 
+Status: complete. See the [P3 exit record](local-coding-agent-p3-exit.md)
+for the merged packets, validation evidence, and explicit P4 boundary.
+
 #### P3.1 — Coding event projector
 
 Dependencies: P0.5, P2.7
@@ -1278,6 +1281,9 @@ Done when:
 
 A headless test frontend can drive turns, receive bounded ordered events, and
 interrupt work without importing TUI packages.
+
+Completed by the [P3 exit record](local-coding-agent-p3-exit.md). The required
+interactive terminal application remains P4 work.
 
 ### P4 — Required terminal UI
 
