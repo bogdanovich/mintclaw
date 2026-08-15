@@ -252,6 +252,47 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 	}
 }
 
+func TestAdapterLateCompactionStartPreservesAcceptedInterrupt(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	for _, event := range []runtimeevents.Event{
+		{
+			Kind: runtimeevents.KindAgentTurnStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.TurnStartPayload{UserMessage: "continue"},
+		},
+		{
+			Kind: runtimeevents.KindAgentInterruptReceived, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.InterruptReceivedPayload{},
+		},
+		{
+			Kind:   runtimeevents.KindAgentContextCompressStart,
+			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ContextCompressLifecyclePayload{
+				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
+			},
+		},
+	} {
+		wrapped.PublishNonBlocking(event)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != frontend.ActivityInterrupting || snapshot.Status != "interrupt requested" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.Status != frontend.CompactionRunning {
+		t.Fatalf("late compaction snapshot = %+v", snapshot)
+	}
+}
+
 func TestAdapterProjectsWorkspaceSnapshot(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

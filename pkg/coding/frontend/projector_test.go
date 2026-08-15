@@ -349,6 +349,26 @@ func TestCompactionLifecycleSurvivesExpiredDeltaWindowResynchronization(t *testi
 	}
 }
 
+func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.InterruptRequested()
+	projector.CompactionFailed("turn-1", "llm_retry", false)
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != ActivityInterrupting || snapshot.Status != "interrupt requested" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.Status != CompactionFailed {
+		t.Fatalf("interrupted compaction snapshot = %+v", snapshot)
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,

@@ -406,6 +406,7 @@ func (p *Projector) CompactionFailed(turnID, reason string, background bool) Del
 func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta {
 	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
+		previous := state.LastCompaction
 		state.LastCompaction = &compaction
 		delta.Compaction = &compaction
 		delta.TurnID = compaction.TurnID
@@ -415,19 +416,36 @@ func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta
 		}
 		switch compaction.Status {
 		case CompactionRunning:
+			if state.Activity != ActivityRunning {
+				return
+			}
 			state.Activity = ActivityCompacting
 			state.Status = "compacting context"
 		case CompactionNoop:
+			if !ownsCompactionActivity(state.Activity, previous, compaction.TurnID) {
+				return
+			}
 			state.Activity = ActivityRunning
 			state.Status = "context already compact"
 		case CompactionCompleted:
+			if !ownsCompactionActivity(state.Activity, previous, compaction.TurnID) {
+				return
+			}
 			state.Activity = ActivityRunning
 			state.Status = fmt.Sprintf("context compacted; %d tokens saved", compaction.TokensSaved)
 		case CompactionFailed:
+			if !ownsCompactionActivity(state.Activity, previous, compaction.TurnID) {
+				return
+			}
 			state.Activity = ActivityRunning
 			state.Status = "context compaction failed"
 		}
 	})
+}
+
+func ownsCompactionActivity(activity Activity, previous *CompactionState, turnID string) bool {
+	return activity == ActivityCompacting && previous != nil && previous.Status == CompactionRunning &&
+		previous.TurnID == turnID && !previous.Background
 }
 
 func (p *Projector) TurnCompleted(turnID, status string) Delta {
