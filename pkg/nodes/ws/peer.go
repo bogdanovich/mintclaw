@@ -695,10 +695,10 @@ func (session *peer) writeControl(messageType int, data []byte, deadline time.Ti
 func (session *peer) writeTransferFrame(
 	ctx context.Context,
 	frame protocol.TransferFrame,
-) error {
+) (bool, error) {
 	data, err := protocol.EncodeTransferFrame(frame)
 	if err != nil {
-		return err
+		return false, err
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
 	defer cancel()
@@ -706,21 +706,21 @@ func (session *peer) writeTransferFrame(
 	case session.writeSlot <- struct{}{}:
 		defer func() { <-session.writeSlot }()
 	case <-writeCtx.Done():
-		return writeCtx.Err()
+		return false, writeCtx.Err()
 	case <-session.closed:
-		return ErrNodeDisconnected
+		return false, ErrNodeDisconnected
 	}
 	select {
 	case <-writeCtx.Done():
-		return writeCtx.Err()
+		return false, writeCtx.Err()
 	case <-session.closed:
-		return ErrNodeDisconnected
+		return false, ErrNodeDisconnected
 	default:
 	}
 	deadline, _ := writeCtx.Deadline()
 	if err := session.connection.SetWriteDeadline(deadline); err != nil {
 		_ = session.Close()
-		return err
+		return false, err
 	}
 	cancelDone := make(chan struct{})
 	stopCancel := context.AfterFunc(writeCtx, func() {
@@ -734,9 +734,9 @@ func (session *peer) writeTransferFrame(
 	if writeErr != nil {
 		_ = session.Close()
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return true, ctx.Err()
 		}
-		return writeErr
+		return true, writeErr
 	}
-	return nil
+	return true, nil
 }

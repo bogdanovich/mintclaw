@@ -306,6 +306,42 @@ func TestTransferStreamRetainsAmbiguousCommittedIdentityWithoutCancellation(t *t
 	}
 }
 
+func TestTransferStreamCancelsQueuedCommitThatWasNeverDispatched(t *testing.T) {
+	t.Parallel()
+	binding := testTransferBinding()
+	hub, session, stream := openTestTransferStream(t, &transferRecordingConnection{}, binding)
+	session.writeSlot <- struct{}{}
+	ctx, cancelContext := context.WithCancel(t.Context())
+	cancelContext()
+	commit := testTransferFrame(binding, protocol.TransferFrameCommit, 0, nil)
+	if err := stream.Send(ctx, commit); !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued commit error = %v", err)
+	}
+	<-session.writeSlot
+	cancel := testTransferFrame(binding, protocol.TransferFrameCancel, 0, nil)
+	if err := stream.Send(t.Context(), cancel); err != nil {
+		t.Fatalf("cancel after undispatched commit error = %v", err)
+	}
+	failure := testTransferFrame(binding, protocol.TransferFrameFailure, 0, nil)
+	if err := session.handleTransferFrame(failure); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Receive(t.Context())
+	if err != nil || response.Type != protocol.TransferFrameFailure {
+		t.Fatalf("cancellation receipt = %#v, %v", response, err)
+	}
+	if err = stream.ReleaseCanceled(); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := hub.OpenTransfer(t.Context(), testTransferNodeID(), binding)
+	if err != nil {
+		t.Fatalf("OpenTransfer() after queued commit cancellation error = %v", err)
+	}
+	if err = retry.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransferSendCancellationInterruptsWrite(t *testing.T) {
 	t.Parallel()
 	connection := newCancelBlockingTransferConnection()

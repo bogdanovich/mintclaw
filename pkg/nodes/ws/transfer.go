@@ -173,13 +173,14 @@ func (stream *TransferStream) Send(
 				return protocol.ErrInvalidTransferFrame
 			}
 		}
-		if frame.Type == protocol.TransferFrameCommit {
-			// A failed write is ambiguous: the peer may still have received the
-			// commit. From this point onward the binding must remain tombstoned
-			// unless its committed receipt is observed.
+		dispatched, err := stream.session.writeTransferFrame(ctx, frame)
+		if frame.Type == protocol.TransferFrameCommit && dispatched {
+			// Once transport dispatch begins, a failed write is ambiguous. The
+			// peer closes on transport failure; otherwise this binding remains
+			// tombstoned unless its committed receipt is observed.
 			stream.sentCommit = true
 		}
-		if err := stream.session.writeTransferFrame(ctx, frame); err != nil {
+		if err != nil {
 			return err
 		}
 		if frame.Type == protocol.TransferFrameChunk {
