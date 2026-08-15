@@ -61,6 +61,13 @@ func (r *Reducer) Apply(delta Delta) error {
 	r.state.Revision = delta.Revision
 	r.state.Activity = delta.Activity
 	r.state.Status = delta.Status
+	if delta.Metadata != nil {
+		r.state.Metadata = *delta.Metadata
+	}
+	if delta.LastTurn != nil {
+		lastTurn := *delta.LastTurn
+		r.state.LastTurn = &lastTurn
+	}
 	if delta.ContextUsage != nil {
 		r.state.ContextUsage = *delta.ContextUsage
 	}
@@ -149,7 +156,7 @@ func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []Tran
 func replaceTool(tools []ToolState, replacement ToolState) []ToolState {
 	tools = slices.Clone(tools)
 	for i := range tools {
-		if tools[i].CallID == replacement.CallID {
+		if tools[i].TurnID == replacement.TurnID && tools[i].CallID == replacement.CallID {
 			tools[i] = replacement
 			return tools
 		}

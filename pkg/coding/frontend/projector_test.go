@@ -95,6 +95,232 @@ func TestReducerResynchronizesAfterDroppedDelta(t *testing.T) {
 	}
 }
 
+func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltas := []Delta{
+		projector.TurnStarted("turn-1", "fix it"),
+		projector.ToolStarted("turn-1", "call-1", "exec", "fields: command"),
+		projector.Warning("turn-1", "retry-1", "model request retry 1/2 (rate_limit)"),
+		projector.ToolCompleted("turn-1", "call-1", "exec", "done", 0, false, []WriteAudit{{
+			Kind: "file", Target: "main.go", Action: "update", Success: true,
+		}}),
+		projector.CompactionStarted(),
+		projector.CompactionCompleted("context compacted"),
+		projector.TurnCompleted("turn-1", "completed"),
+	}
+	for i, delta := range deltas {
+		if i == 2 { // Simulate an arbitrary lost progress observation.
+			continue
+		}
+		if err = reducer.Apply(delta); err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, ErrRevisionGap) {
+		t.Fatalf("reducer error = %v, want ErrRevisionGap", err)
+	}
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resynchronized lifecycle = %+v, want %+v", got, want)
+	}
+	if got.Tools[0].TurnID != "turn-1" || got.Tools[0].WriteAudit[0].Target != "main.go" {
+		t.Fatalf("tool correlation = %+v", got.Tools[0])
+	}
+	for _, delta := range deltas[:4] {
+		if delta.TurnID == "" || delta.EntityID == "" {
+			t.Fatalf("uncorrelated progress delta = %+v", delta)
+		}
+	}
+}
+
+func TestRepeatedCallIDAcrossTurnsRemainsDistinctAndConverges(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltas := []Delta{
+		projector.ToolStarted("turn-1", "call-1", "write_file", "fields: path"),
+		projector.ToolCompleted("turn-1", "call-1", "write_file", "done", 0, false, []WriteAudit{{
+			Kind: "file", Target: "first.go", Action: "write", Success: true,
+		}}),
+		projector.ToolStarted("turn-2", "call-1", "exec", "fields: command"),
+		projector.ToolCompleted("turn-2", "call-1", "exec", "done", 0, false, nil),
+	}
+	for _, delta := range deltas {
+		if err = reducer.Apply(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {
+		t.Fatalf("reduced state = %+v, want %+v", got, snapshot)
+	}
+	if len(snapshot.Tools) != 2 || snapshot.Tools[0].TurnID != "turn-1" ||
+		snapshot.Tools[0].WriteAudit[0].Target != "first.go" || snapshot.Tools[1].TurnID != "turn-2" {
+		t.Fatalf("reused call ID tools = %+v", snapshot.Tools)
+	}
+	if deltas[0].EntityID == deltas[2].EntityID {
+		t.Fatalf("reused call ID shares entity ID %q", deltas[0].EntityID)
+	}
+}
+
+func TestFailedTurnTerminalizesRunningToolAndReducerResynchronizes(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := projector.ToolStarted("turn-1", "call-1", "write_file", "fields: path")
+	if err = reducer.Apply(started); err != nil {
+		t.Fatal(err)
+	}
+	failed := projector.TurnFailed("turn-1", "turn failed")
+	if !failed.RequiresSnapshot {
+		t.Fatalf("failed-turn delta = %+v, want snapshot resynchronization", failed)
+	}
+	if err = reducer.ApplyOrResync(t.Context(), projector, failed); err != nil {
+		t.Fatal(err)
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) || len(got.Tools) != 1 || got.Tools[0].Status != ToolFailed ||
+		got.Activity != ActivityFailed {
+		t.Fatalf("failed-turn state = %+v, want %+v", got, want)
+	}
+}
+
+func TestTurnOutcomesAreTypedCorrelatedAndSnapshotRecoverable(t *testing.T) {
+	tests := []struct {
+		name         string
+		finish       func(*Projector) Delta
+		wantKind     DeltaKind
+		wantActivity Activity
+		wantOutcome  TurnOutcome
+	}{
+		{
+			name: "completed", finish: func(p *Projector) Delta {
+				return p.TurnCompleted("turn-1", "completed")
+			}, wantKind: DeltaTurnCompleted, wantActivity: ActivityIdle, wantOutcome: TurnOutcomeCompleted,
+		},
+		{
+			name: "suspended", finish: func(p *Projector) Delta {
+				return p.TurnSuspended("turn-1", "waiting for input")
+			}, wantKind: DeltaTurnSuspended, wantActivity: ActivityWaitingInput, wantOutcome: TurnOutcomeSuspended,
+		},
+		{
+			name: "failed", finish: func(p *Projector) Delta {
+				return p.TurnFailed("turn-1", "turn failed")
+			}, wantKind: DeltaTurnFailed, wantActivity: ActivityFailed, wantOutcome: TurnOutcomeFailed,
+		},
+		{
+			name: "interrupted", finish: func(p *Projector) Delta {
+				return p.TurnInterrupted("turn-1", "interrupted")
+			}, wantKind: DeltaTurnInterrupted, wantActivity: ActivityIdle, wantOutcome: TurnOutcomeInterrupted,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projector, err := NewProjector("thread-1", ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			reducer, err := NewReducer(initial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = reducer.Apply(projector.TurnStarted("turn-1", "fix it")); err != nil {
+				t.Fatal(err)
+			}
+			finished := tt.finish(projector)
+			if finished.Kind != tt.wantKind || finished.TurnID != "turn-1" || finished.EntityID != "turn-1" ||
+				finished.Activity != tt.wantActivity || finished.LastTurn == nil ||
+				finished.LastTurn.TurnID != "turn-1" || finished.LastTurn.Outcome != tt.wantOutcome {
+				t.Fatalf("terminal delta = %+v", finished)
+			}
+			if err = reducer.Apply(finished); err != nil {
+				t.Fatal(err)
+			}
+			want, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reducer.State(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("reduced terminal state = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestTerminalOutcomeSurvivesExpiredDeltaWindowResynchronization(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Deltas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.TurnSuspended("turn-1", "waiting for input")
+	projector.ThreadMetadataUpdated(ThreadMetadata{Title: "Still waiting"})
+
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if got.LastTurn == nil || got.LastTurn.TurnID != "turn-1" ||
+		got.LastTurn.Outcome != TurnOutcomeSuspended || got.Activity != ActivityWaitingInput {
+		t.Fatalf("resynchronized terminal outcome = %+v", got)
+	}
+}
+
 func TestReducerRejectsSnapshotIdentityAndRevisionRollback(t *testing.T) {
 	reducer, err := NewReducer(ThreadSnapshot{
 		ProtocolVersion: ProtocolVersion,
