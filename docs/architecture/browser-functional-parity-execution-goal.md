@@ -190,6 +190,8 @@ Add typed `dialog`, `check`, `uncheck`, `hover`, `drag-and-drop`, and
 
 Complete the selected BF2 parity slice for screenshots, browser upload and
 download flows, bounded diagnostics, and large semantic snapshots.
+The implementation authority and stop conditions are fixed in
+[Browser Capability BF2 Media, Transfer, Diagnostics, And Snapshot Admission](browser-capability-bf2-media-transfer-diagnostics-admission.md).
 
 ### Acceptance Criteria
 
