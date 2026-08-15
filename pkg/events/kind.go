@@ -19,6 +19,10 @@ const (
 
 	// KindAgentContextCompress is emitted when agent context is compressed.
 	KindAgentContextCompress Kind = "agent.context.compress"
+	// KindAgentContextCompressStart begins one context compaction attempt.
+	KindAgentContextCompressStart Kind = "agent.context.compress_start"
+	// KindAgentContextCompressEnd completes one context compaction attempt.
+	KindAgentContextCompressEnd Kind = "agent.context.compress_end"
 	// KindAgentContextSnapshot captures a bounded final context identity.
 	KindAgentContextSnapshot Kind = "agent.context.snapshot"
 	// KindAgentWorkspaceSnapshot captures fresh deterministic coding workspace state.
@@ -146,6 +150,8 @@ var knownKinds = []Kind{
 	KindAgentLLMRetry,
 	KindAgentLLMFallbackAttempt,
 	KindAgentContextCompress,
+	KindAgentContextCompressStart,
+	KindAgentContextCompressEnd,
 	KindAgentContextSnapshot,
 	KindAgentWorkspaceSnapshot,
 	KindAgentSessionSummarize,

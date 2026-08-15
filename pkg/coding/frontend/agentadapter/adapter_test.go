@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -53,17 +54,24 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 			Kind: "file", Target: "main.go", Action: "update", Success: true,
 		}},
 	})
-	publish(runtimeevents.KindAgentContextCompress, agent.ContextCompressPayload{TokensSaved: 400})
+	publish(runtimeevents.KindAgentContextCompressStart, agent.ContextCompressLifecyclePayload{
+		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
+	})
+	publish(runtimeevents.KindAgentContextCompressEnd, agent.ContextCompressLifecyclePayload{
+		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 400,
+	})
 	publish(runtimeevents.KindAgentTurnEnd, agent.TurnEndPayload{
-		Status:       agent.TurnEndStatusCompleted,
-		FinalContent: "done",
+		Status:             agent.TurnEndStatusCompleted,
+		FinalContent:       "done",
+		ContextUsedTokens:  120,
+		ContextLimitTokens: 1000,
 	})
 
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 6 || snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
+	if snapshot.Revision != 8 || snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
 		t.Fatalf("terminal state = %+v", snapshot)
 	}
 	if len(snapshot.Entries) != 2 || snapshot.Entries[1].Text != "done" {
@@ -79,6 +87,9 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
 		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
+	}
+	if snapshot.ContextUsage.UsedTokens != 120 || snapshot.ContextUsage.LimitTokens != 1000 {
+		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
 	}
 }
 
@@ -162,8 +173,12 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 		})
 	}
 	publish(runtimeevents.KindAgentTurnEnd, "turn-1", agent.TurnEndPayload{Status: agent.TurnEndStatusCompleted})
-	publish(runtimeevents.KindAgentContextCompress, "", agent.ContextCompressPayload{
-		Reason: agent.ContextCompressReasonSummarize, TokensSaved: 500,
+	publish(runtimeevents.KindAgentContextCompressStart, "", agent.ContextCompressLifecyclePayload{
+		Reason: agent.ContextCompressReasonSummarize, Status: agent.ContextCompressLifecycleStarted,
+	})
+	publish(runtimeevents.KindAgentContextCompressEnd, "", agent.ContextCompressLifecyclePayload{
+		Reason: agent.ContextCompressReasonSummarize,
+		Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 500,
 	})
 
 	snapshot, err := projector.Snapshot(t.Context())
@@ -177,9 +192,104 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deltas) != 2 || deltas[1].Kind != frontend.DeltaCompactionComplete ||
-		deltas[1].Activity != frontend.ActivityIdle {
+	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaCompactionStarted ||
+		deltas[2].Kind != frontend.DeltaCompactionComplete || deltas[1].Activity != frontend.ActivityIdle ||
+		deltas[2].Activity != frontend.ActivityIdle || snapshot.LastCompaction == nil ||
+		snapshot.LastCompaction.Status != frontend.CompactionCompleted || !snapshot.LastCompaction.Background {
 		t.Fatalf("background compaction deltas = %+v", deltas)
+	}
+}
+
+func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	for _, event := range []runtimeevents.Event{
+		{
+			Kind: runtimeevents.KindAgentTurnStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.TurnStartPayload{UserMessage: "continue"},
+		},
+		{
+			Kind:   runtimeevents.KindAgentContextCompressStart,
+			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ContextCompressLifecyclePayload{
+				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
+			},
+		},
+		{
+			Kind:   runtimeevents.KindAgentContextCompressEnd,
+			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ContextCompressLifecyclePayload{
+				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleFailed,
+			},
+		},
+	} {
+		wrapped.PublishNonBlocking(event)
+	}
+	deltas, err := projector.ChangesSince(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 3 || deltas[1].TurnID != "turn-1" || deltas[2].TurnID != "turn-1" ||
+		deltas[1].Kind != frontend.DeltaCompactionStarted || deltas[2].Kind != frontend.DeltaCompactionFailed {
+		t.Fatalf("compaction deltas = %+v", deltas)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != frontend.ActivityRunning || snapshot.LastCompaction == nil ||
+		snapshot.LastCompaction.Status != frontend.CompactionFailed || snapshot.Status != "context compaction failed" {
+		t.Fatalf("failed compaction snapshot = %+v", snapshot)
+	}
+}
+
+func TestAdapterLateCompactionStartPreservesAcceptedInterrupt(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	for _, event := range []runtimeevents.Event{
+		{
+			Kind: runtimeevents.KindAgentTurnStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.TurnStartPayload{UserMessage: "continue"},
+		},
+		{
+			Kind: runtimeevents.KindAgentInterruptReceived, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.InterruptReceivedPayload{},
+		},
+		{
+			Kind:   runtimeevents.KindAgentContextCompressStart,
+			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ContextCompressLifecyclePayload{
+				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
+			},
+		},
+	} {
+		wrapped.PublishNonBlocking(event)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != frontend.ActivityInterrupting || snapshot.Status != "interrupt requested" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.Status != frontend.CompactionRunning {
+		t.Fatalf("late compaction snapshot = %+v", snapshot)
 	}
 }
 
@@ -396,6 +506,148 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 	}
 	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {
 		t.Fatalf("reduced state = %+v, want %+v", got, snapshot)
+	}
+}
+
+func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *testing.T) {
+	project := func(t *testing.T, streaming bool) (frontend.ThreadSnapshot, []frontend.Delta) {
+		t.Helper()
+		projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventBus := runtimeevents.NewBus()
+		wrapped, err := WrapBus(eventBus, projector, "thread-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = wrapped.Close() })
+		scope := runtimeevents.Scope{
+			SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+		}
+		publish := func(kind runtimeevents.Kind, payload any) {
+			wrapped.PublishNonBlocking(runtimeevents.Event{
+				Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+			})
+		}
+		publish(runtimeevents.KindAgentTurnStart, agent.TurnStartPayload{UserMessage: "hello"})
+		if streaming {
+			streamer, ok := frontend.NewStreamDelegate(projector, "thread-1").GetStreamer(
+				t.Context(), "coding", "thread-1", "thread-1", "", scope.TraceScope,
+			)
+			if !ok {
+				t.Fatal("matching stream was rejected")
+			}
+			if err = streamer.Update(t.Context(), "hel"); err != nil {
+				t.Fatal(err)
+			}
+			withUsage := streamer.(bus.ContextUsageStreamer)
+			if err = withUsage.FinalizeWithContext(t.Context(), "hello", &bus.ContextUsage{
+				UsedTokens: 12, TotalTokens: 100,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		publish(runtimeevents.KindAgentTurnEnd, agent.TurnEndPayload{
+			Status: agent.TurnEndStatusCompleted, FinalContent: "hello",
+			ContextUsedTokens: 12, ContextLimitTokens: 100,
+		})
+		snapshot, err := projector.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		deltas, err := projector.ChangesSince(t.Context(), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot, deltas
+	}
+
+	streamed, streamedDeltas := project(t, true)
+	nonStreamed, _ := project(t, false)
+	streamed.Revision = 0
+	nonStreamed.Revision = 0
+	if !reflect.DeepEqual(streamed, nonStreamed) {
+		t.Fatalf("streamed state = %+v, want non-streamed %+v", streamed, nonStreamed)
+	}
+	assistantDeltas := 0
+	for _, delta := range streamedDeltas {
+		if delta.Kind == frontend.DeltaAssistant {
+			assistantDeltas++
+		}
+	}
+	if assistantDeltas != 2 || len(streamed.Entries) != 2 || streamed.Entries[1].Text != "hello" ||
+		!streamed.Entries[1].Complete {
+		t.Fatalf("stream finalization deltas = %+v, snapshot = %+v", streamedDeltas, streamed)
+	}
+}
+
+func TestStreamingFallbackAndVisibleFailureRemainUnambiguous(t *testing.T) {
+	tests := []struct {
+		name         string
+		visible      bool
+		turnStatus   agent.TurnEndStatus
+		finalContent string
+		wantText     string
+		wantComplete bool
+		wantOutcome  frontend.TurnOutcome
+	}{
+		{
+			name: "fallback before visible output", turnStatus: agent.TurnEndStatusCompleted,
+			finalContent: "fallback answer", wantText: "fallback answer", wantComplete: true,
+			wantOutcome: frontend.TurnOutcomeCompleted,
+		},
+		{
+			name: "failure after visible output", visible: true, turnStatus: agent.TurnEndStatusError,
+			wantText: "partial answer", wantOutcome: frontend.TurnOutcomeFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			eventBus := runtimeevents.NewBus()
+			wrapped, err := WrapBus(eventBus, projector, "thread-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = wrapped.Close() })
+			scope := runtimeevents.Scope{
+				SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+			}
+			streamer, ok := frontend.NewStreamDelegate(projector, "thread-1").GetStreamer(
+				t.Context(), "coding", "thread-1", "thread-1", "", scope.TraceScope,
+			)
+			if !ok {
+				t.Fatal("matching stream was rejected")
+			}
+			if tt.visible {
+				if err = streamer.Update(t.Context(), "partial answer"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				reasoning := streamer.(bus.ReasoningStreamer)
+				if err = reasoning.UpdateReasoning(t.Context(), "failed provider reasoning"); err != nil {
+					t.Fatal(err)
+				}
+				streamer.Cancel(t.Context())
+			}
+			wrapped.PublishNonBlocking(runtimeevents.Event{
+				Kind: runtimeevents.KindAgentTurnEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+				Payload: agent.TurnEndPayload{Status: tt.turnStatus, FinalContent: tt.finalContent},
+			})
+			snapshot, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != tt.wantText ||
+				snapshot.Entries[0].Complete != tt.wantComplete || snapshot.LastTurn == nil ||
+				snapshot.LastTurn.Outcome != tt.wantOutcome {
+				t.Fatalf("stream terminal state = %+v", snapshot)
+			}
+		})
 	}
 }
 

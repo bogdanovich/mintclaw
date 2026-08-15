@@ -75,6 +75,8 @@ type TurnEndPayload struct {
 	PromptTokens          int
 	CompletionTokens      int
 	TotalTokens           int
+	ContextUsedTokens     int
+	ContextLimitTokens    int
 	FinalContentLen       int
 	UserMessage           string
 	FinalContent          string
@@ -167,6 +169,23 @@ type ContextCompressPayload struct {
 	SummariesCreated         int
 	LeafSummaries            int
 	CondensedSummaries       int
+}
+
+type ContextCompressLifecycleStatus string
+
+const (
+	ContextCompressLifecycleStarted   ContextCompressLifecycleStatus = "started"
+	ContextCompressLifecycleCompleted ContextCompressLifecycleStatus = "completed"
+	ContextCompressLifecycleNoop      ContextCompressLifecycleStatus = "no_op"
+	ContextCompressLifecycleFailed    ContextCompressLifecycleStatus = "failed"
+)
+
+// ContextCompressLifecyclePayload pairs every attempted compaction without
+// carrying raw errors or summarized content into frontend observations.
+type ContextCompressLifecyclePayload struct {
+	Reason      ContextCompressReason
+	Status      ContextCompressLifecycleStatus
+	TokensSaved int
 }
 
 type ContextSnapshotPayload struct {

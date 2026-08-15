@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -37,12 +38,20 @@ func (d *StreamDelegate) GetStreamer(
 	if turnID == "" {
 		return nil, false
 	}
-	return &projectedStream{projector: d.projector, turnID: turnID}, true
+	return &projectedStream{
+		projector: d.projector,
+		turnID:    turnID,
+		baseline:  d.projector.captureStreamBaseline(turnID),
+	}, true
 }
 
 type projectedStream struct {
 	projector *Projector
 	turnID    string
+	baseline  streamBaseline
+	mu        sync.Mutex
+	owned     streamOwnedEntries
+	canceled  bool
 }
 
 var (
@@ -51,14 +60,18 @@ var (
 	_ bus.ContextUsageStreamer = (*projectedStream)(nil)
 )
 
-func (s *projectedStream) Update(_ context.Context, content string) error {
-	s.projector.AssistantAccumulated(s.turnID, content, false)
-	return nil
+func (s *projectedStream) Update(ctx context.Context, content string) error {
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, false)
+		return owned
+	})
 }
 
-func (s *projectedStream) Finalize(_ context.Context, content string) error {
-	s.projector.AssistantAccumulated(s.turnID, content, true)
-	return nil
+func (s *projectedStream) Finalize(ctx context.Context, content string) error {
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, true)
+		return owned
+	})
 }
 
 func (s *projectedStream) FinalizeWithContext(
@@ -75,16 +88,57 @@ func (s *projectedStream) FinalizeWithContext(
 	return nil
 }
 
-func (s *projectedStream) UpdateReasoning(_ context.Context, content string) error {
-	s.projector.ReasoningAccumulated(s.turnID, content, false)
+func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) error {
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, false)
+		return owned
+	})
+}
+
+func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string) error {
+	return s.project(ctx, func() streamOwnedEntry {
+		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, true)
+		return owned
+	})
+}
+
+func (s *projectedStream) project(ctx context.Context, update func() streamOwnedEntry) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canceled {
+		return context.Canceled
+	}
+	owned := update()
+	if s.owned == nil {
+		s.owned = make(streamOwnedEntries)
+	}
+	s.owned[owned.entry.ID] = owned
 	return nil
 }
 
-func (s *projectedStream) FinalizeReasoning(_ context.Context, content string) error {
-	s.projector.ReasoningAccumulated(s.turnID, content, true)
-	return nil
-}
-
+// Cancel discards content owned by this provider attempt. Turn
+// lifecycle remains authoritative in the runtime event adapter, which can
+// distinguish a pre-visible fallback from an actual interrupted turn.
 func (s *projectedStream) Cancel(context.Context) {
-	s.projector.TurnInterrupted(s.turnID, "stream canceled")
+	if s == nil || s.projector == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.canceled {
+		s.mu.Unlock()
+		return
+	}
+	s.canceled = true
+	owned := make(streamOwnedEntries, len(s.owned))
+	for id, entry := range s.owned {
+		owned[id] = entry
+	}
+	s.mu.Unlock()
+	s.projector.discardOwnedStream(s.turnID, s.baseline, owned)
 }

@@ -115,8 +115,8 @@ func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
 		projector.ToolCompleted("turn-1", "call-1", "exec", "done", 0, false, []WriteAudit{{
 			Kind: "file", Target: "main.go", Action: "update", Success: true,
 		}}),
-		projector.CompactionStarted(),
-		projector.CompactionCompleted("context compacted"),
+		projector.CompactionStarted("turn-1", "llm_retry", false),
+		projector.CompactionCompleted("turn-1", "llm_retry", 10, false, false),
 		projector.TurnCompleted("turn-1", "completed"),
 	}
 	for i, delta := range deltas {
@@ -318,6 +318,119 @@ func TestTerminalOutcomeSurvivesExpiredDeltaWindowResynchronization(t *testing.T
 	if got.LastTurn == nil || got.LastTurn.TurnID != "turn-1" ||
 		got.LastTurn.Outcome != TurnOutcomeSuspended || got.Activity != ActivityWaitingInput {
 		t.Fatalf("resynchronized terminal outcome = %+v", got)
+	}
+}
+
+func TestCompactionLifecycleSurvivesExpiredDeltaWindowResynchronization(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Deltas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionFailed("turn-1", "llm_retry", false)
+	projector.ThreadMetadataUpdated(ThreadMetadata{Title: "After compaction"})
+
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if got.LastCompaction == nil || got.LastCompaction.TurnID != "turn-1" ||
+		got.LastCompaction.Status != CompactionFailed || got.Activity != ActivityRunning {
+		t.Fatalf("resynchronized compaction = %+v", got)
+	}
+}
+
+func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.InterruptRequested()
+	projector.CompactionFailed("turn-1", "llm_retry", false)
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != ActivityInterrupting || snapshot.Status != "interrupt requested" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.Status != CompactionFailed {
+		t.Fatalf("interrupted compaction snapshot = %+v", snapshot)
+	}
+}
+
+func TestLateCompactionStartDoesNotClaimNewerTurnActivity(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "first")
+	projector.TurnCompleted("turn-1", "completed")
+	projector.TurnStarted("turn-2", "second")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != ActivityRunning || snapshot.Status != "running" ||
+		snapshot.LastCompaction == nil || snapshot.LastCompaction.TurnID != "turn-1" {
+		t.Fatalf("late prior-turn compaction snapshot = %+v", snapshot)
+	}
+}
+
+func TestBackgroundCompactionDoesNotStrandForegroundActivity(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(*Projector)
+		want CompactionStatus
+	}{
+		{
+			name: "background start",
+			end: func(projector *Projector) {
+				projector.CompactionStarted("", "summarize", true)
+				projector.CompactionCompleted("turn-1", "llm_retry", 12, false, false)
+			},
+			want: CompactionCompleted,
+		},
+		{
+			name: "background completion",
+			end: func(projector *Projector) {
+				projector.CompactionCompleted("", "summarize", 4, false, true)
+				projector.CompactionFailed("turn-1", "llm_retry", false)
+			},
+			want: CompactionFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := NewProjector("thread-1", ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "fix it")
+			projector.CompactionStarted("turn-1", "llm_retry", false)
+			test.end(projector)
+
+			snapshot, err := projector.Snapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Activity != ActivityRunning || snapshot.LastCompaction == nil ||
+				snapshot.LastCompaction.Status != test.want {
+				t.Fatalf("interleaved compaction snapshot = %+v", snapshot)
+			}
+		})
 	}
 }
 

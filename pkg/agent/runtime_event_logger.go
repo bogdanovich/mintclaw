@@ -280,6 +280,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["prompt_tokens"] = payload.PromptTokens
 		fields["completion_tokens"] = payload.CompletionTokens
 		fields["total_tokens"] = payload.TotalTokens
+		fields["context_used_tokens"] = payload.ContextUsedTokens
+		fields["context_limit_tokens"] = payload.ContextLimitTokens
 		fields["final_len"] = payload.FinalContentLen
 	case LLMRequestPayload:
 		fields["model"] = payload.Model
@@ -334,6 +336,10 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["summaries_created"] = payload.SummariesCreated
 		fields["leaf_summaries"] = payload.LeafSummaries
 		fields["condensed_summaries"] = payload.CondensedSummaries
+	case ContextCompressLifecyclePayload:
+		fields["reason"] = payload.Reason
+		fields["status"] = payload.Status
+		fields["tokens_saved"] = payload.TokensSaved
 	case ContextSnapshotPayload:
 		fields["message_count"] = payload.MessageCount
 		fields["snapshot_hash"] = payload.SnapshotHash

@@ -171,14 +171,25 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				),
 			)
 		}
-	case runtimeevents.KindAgentContextCompress:
-		payload, ok := event.Payload.(agent.ContextCompressPayload)
-		if strings.TrimSpace(turnID) == "" || ok && payload.Reason == agent.ContextCompressReasonSummarize {
-			a.projector.BackgroundCompactionCompleted()
-		} else if ok {
-			a.projector.CompactionCompleted(fmt.Sprintf("context compacted; %d tokens saved", payload.TokensSaved))
-		} else {
-			a.projector.CompactionCompleted("context compacted")
+	case runtimeevents.KindAgentContextCompressStart:
+		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+		if ok {
+			background := backgroundCompaction(turnID, payload.Reason)
+			a.projector.CompactionStarted(turnID, safeToken(string(payload.Reason)), background)
+		}
+	case runtimeevents.KindAgentContextCompressEnd:
+		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+		if ok {
+			background := backgroundCompaction(turnID, payload.Reason)
+			reason := safeToken(string(payload.Reason))
+			switch payload.Status {
+			case agent.ContextCompressLifecycleCompleted:
+				a.projector.CompactionCompleted(turnID, reason, payload.TokensSaved, false, background)
+			case agent.ContextCompressLifecycleNoop:
+				a.projector.CompactionCompleted(turnID, reason, 0, true, background)
+			case agent.ContextCompressLifecycleFailed:
+				a.projector.CompactionFailed(turnID, reason, background)
+			}
 		}
 	case runtimeevents.KindAgentWorkspaceSnapshot:
 		payload, ok := event.Payload.(agent.WorkspaceSnapshotPayload)
@@ -236,6 +247,10 @@ func normalizeID(value string) string {
 	return "current"
 }
 
+func backgroundCompaction(turnID string, reason agent.ContextCompressReason) bool {
+	return strings.TrimSpace(turnID) == "" || reason == agent.ContextCompressReasonSummarize
+}
+
 func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	payload, ok := value.(agent.TurnEndPayload)
 	if !ok {
@@ -244,6 +259,9 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 	}
 	if payload.FinalContent != "" {
 		a.projector.AssistantAccumulated(turnID, payload.FinalContent, true)
+	}
+	if payload.ContextUsedTokens > 0 || payload.ContextLimitTokens > 0 {
+		a.projector.ContextUsage(payload.ContextUsedTokens, payload.ContextLimitTokens)
 	}
 	switch payload.Status {
 	case agent.TurnEndStatusCompleted:

@@ -45,12 +45,16 @@ func (l ProjectionLimits) normalized() ProjectionLimits {
 // Projector owns a bounded UI projection. Canonical transcript and tool audit
 // persistence remain outside this type.
 type Projector struct {
-	mu          sync.RWMutex
-	limits      ProjectionLimits
-	state       ThreadSnapshot
-	deltas      []Delta
-	nextWatcher uint64
-	watchers    map[uint64]chan Delta
+	mu                         sync.RWMutex
+	limits                     ProjectionLimits
+	state                      ThreadSnapshot
+	deltas                     []Delta
+	entryGenerations           map[string]uint64
+	nextEntryGeneration        uint64
+	activeTurnID               string
+	foregroundCompactionTurnID string
+	nextWatcher                uint64
+	watchers                   map[uint64]chan Delta
 }
 
 func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) {
@@ -65,7 +69,8 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 			ThreadID:        threadID,
 			Activity:        ActivityIdle,
 		},
-		watchers: make(map[uint64]chan Delta),
+		entryGenerations: make(map[string]uint64),
+		watchers:         make(map[uint64]chan Delta),
 	}, nil
 }
 
@@ -178,6 +183,7 @@ func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) Delta {
 func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 	return p.mutate(DeltaTurnStarted, func(state *ThreadSnapshot, delta *Delta) {
 		delta.TurnID = normalizeTurnID(turnID)
+		p.activeTurnID = delta.TurnID
 		delta.EntityID = delta.TurnID
 		state.Activity = ActivityRunning
 		state.Status = "running"
@@ -198,11 +204,77 @@ func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 }
 
 func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) Delta {
-	return p.upsertStreamEntry(DeltaAssistant, turnID, EntryAssistant, content, complete)
+	delta, _ := p.upsertStreamEntry(DeltaAssistant, turnID, EntryAssistant, content, complete)
+	return delta
 }
 
 func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) Delta {
-	return p.upsertStreamEntry(DeltaReasoning, turnID, EntryReasoning, content, complete)
+	delta, _ := p.upsertStreamEntry(DeltaReasoning, turnID, EntryReasoning, content, complete)
+	return delta
+}
+
+type streamOwnedEntry struct {
+	entry      TranscriptEntry
+	generation uint64
+}
+
+type (
+	streamBaseline     map[string]streamOwnedEntry
+	streamOwnedEntries map[string]streamOwnedEntry
+)
+
+func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
+	turnID = normalizeTurnID(turnID)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	baseline := make(streamBaseline)
+	for _, entry := range p.state.Entries {
+		if entry.TurnID == turnID && (entry.Kind == EntryAssistant || entry.Kind == EntryReasoning) {
+			baseline[entry.ID] = streamOwnedEntry{entry: entry, generation: p.entryGenerations[entry.ID]}
+		}
+	}
+	return baseline
+}
+
+// discardOwnedStream restores answer/reasoning entries changed by a canceled
+// provider attempt when that attempt is still their latest writer. Canonical
+// turn lifecycle and entries from later writers remain untouched.
+func (p *Projector) discardOwnedStream(
+	turnID string,
+	baseline streamBaseline,
+	owned streamOwnedEntries,
+) Delta {
+	turnID = normalizeTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	filtered := make([]TranscriptEntry, 0, len(p.state.Entries))
+	visibleChange := false
+	for _, entry := range p.state.Entries {
+		streamEntry, streamOwned := owned[entry.ID]
+		ownsCurrent := streamOwned && entry.TurnID == turnID && entry == streamEntry.entry &&
+			p.entryGenerations[entry.ID] == streamEntry.generation
+		if ownsCurrent {
+			if previous, ok := baseline[entry.ID]; ok {
+				filtered = append(filtered, previous.entry)
+				p.entryGenerations[entry.ID] = previous.generation
+				visibleChange = visibleChange || previous.entry != entry
+			} else {
+				delete(p.entryGenerations, entry.ID)
+				visibleChange = true
+			}
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if !visibleChange {
+		return Delta{}
+	}
+	return p.mutateLocked(DeltaStreamDiscarded, func(state *ThreadSnapshot, delta *Delta) {
+		state.Entries = filtered
+		delta.TurnID = turnID
+		delta.EntityID = turnID
+		delta.RequiresSnapshot = true
+	})
 }
 
 func (p *Projector) upsertStreamEntry(
@@ -211,20 +283,31 @@ func (p *Projector) upsertStreamEntry(
 	entryKind EntryKind,
 	content string,
 	complete bool,
-) Delta {
-	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
-		entry := p.boundedEntry(TranscriptEntry{
-			ID:       entryID(turnID, string(entryKind)),
-			TurnID:   normalizeTurnID(turnID),
-			Kind:     entryKind,
-			Text:     content,
-			Complete: complete,
-		})
+) (Delta, streamOwnedEntry) {
+	entry := p.boundedEntry(TranscriptEntry{
+		ID:       entryID(turnID, string(entryKind)),
+		TurnID:   normalizeTurnID(turnID),
+		Kind:     entryKind,
+		Text:     content,
+		Complete: complete,
+	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nextEntryGeneration++
+	owned := streamOwnedEntry{entry: entry, generation: p.nextEntryGeneration}
+	p.entryGenerations[entry.ID] = owned.generation
+	for i := range p.state.Entries {
+		if p.state.Entries[i].ID == entry.ID && p.state.Entries[i] == entry {
+			return Delta{}, owned
+		}
+	}
+	delta := p.mutateLocked(kind, func(state *ThreadSnapshot, delta *Delta) {
 		p.upsertEntry(state, delta, entry)
 		delta.Entry = &entry
 		delta.TurnID = entry.TurnID
 		delta.EntityID = entry.ID
 	})
+	return delta, owned
 }
 
 func (p *Projector) Warning(turnID, id, content string) Delta {
@@ -339,8 +422,14 @@ func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Dur
 }
 
 func (p *Projector) ContextUsage(used, limit int) Delta {
-	return p.mutate(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
-		state.ContextUsage = ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}
+	usage := ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state.ContextUsage == usage {
+		return Delta{}
+	}
+	return p.mutateLocked(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
+		state.ContextUsage = usage
 		usage := state.ContextUsage
 		delta.ContextUsage = &usage
 	})
@@ -354,22 +443,88 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) Delta {
 	})
 }
 
-func (p *Projector) CompactionStarted() Delta {
-	return p.activity(DeltaCompactionStarted, ActivityCompacting, "compacting context")
+func (p *Projector) CompactionStarted(turnID, reason string, background bool) Delta {
+	return p.compaction(
+		DeltaCompactionStarted,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionRunning, Background: background,
+		},
+	)
 }
 
-func (p *Projector) CompactionCompleted(status string) Delta {
-	return p.activity(DeltaCompactionComplete, ActivityRunning, status)
+func (p *Projector) CompactionCompleted(
+	turnID, reason string,
+	tokensSaved int,
+	noProgress, background bool,
+) Delta {
+	status := CompactionCompleted
+	if noProgress {
+		status = CompactionNoop
+	}
+	return p.compaction(
+		DeltaCompactionComplete,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: status,
+			TokensSaved: max(0, tokensSaved), Background: background,
+		},
+	)
 }
 
-// BackgroundCompactionCompleted records session-scoped maintenance without
-// reopening or relabeling a turn that has already reached a terminal state.
-func (p *Projector) BackgroundCompactionCompleted() Delta {
-	return p.mutate(DeltaCompactionComplete, func(*ThreadSnapshot, *Delta) {})
+func (p *Projector) CompactionFailed(turnID, reason string, background bool) Delta {
+	return p.compaction(
+		DeltaCompactionFailed,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionFailed, Background: background,
+		},
+	)
 }
 
-func (p *Projector) CompactionFailed(status string) Delta {
-	return p.activity(DeltaCompactionFailed, ActivityFailed, status)
+func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta {
+	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
+		state.LastCompaction = &compaction
+		delta.Compaction = &compaction
+		delta.TurnID = compaction.TurnID
+		delta.EntityID = compaction.TurnID
+		if compaction.Background {
+			return
+		}
+		switch compaction.Status {
+		case CompactionRunning:
+			if state.Activity != ActivityRunning || p.activeTurnID != compaction.TurnID {
+				return
+			}
+			p.foregroundCompactionTurnID = compaction.TurnID
+			state.Activity = ActivityCompacting
+			state.Status = "compacting context"
+		case CompactionNoop:
+			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+				return
+			}
+			state.Activity = ActivityRunning
+			state.Status = "context already compact"
+		case CompactionCompleted:
+			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+				return
+			}
+			state.Activity = ActivityRunning
+			state.Status = fmt.Sprintf("context compacted; %d tokens saved", compaction.TokensSaved)
+		case CompactionFailed:
+			if !p.releaseCompactionActivity(state.Activity, compaction.TurnID) {
+				return
+			}
+			state.Activity = ActivityRunning
+			state.Status = "context compaction failed"
+		}
+	})
+}
+
+func (p *Projector) releaseCompactionActivity(activity Activity, turnID string) bool {
+	if p.foregroundCompactionTurnID != turnID {
+		return false
+	}
+	p.foregroundCompactionTurnID = ""
+	return activity == ActivityCompacting && p.activeTurnID == turnID
 }
 
 func (p *Projector) TurnCompleted(turnID, status string) Delta {
@@ -406,6 +561,12 @@ func (p *Projector) finishTurn(
 ) Delta {
 	turnID = normalizeTurnID(turnID)
 	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+		if p.activeTurnID == turnID {
+			p.activeTurnID = ""
+		}
+		if p.foregroundCompactionTurnID == turnID {
+			p.foregroundCompactionTurnID = ""
+		}
 		state.Activity = activity
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		delta.TurnID = turnID
@@ -439,6 +600,10 @@ func (p *Projector) activity(kind DeltaKind, activity Activity, status string) D
 func (p *Projector) mutate(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.mutateLocked(kind, apply)
+}
+
+func (p *Projector) mutateLocked(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
 	previous := p.state.Revision
 	delta := Delta{
 		ProtocolVersion:  ProtocolVersion,
@@ -523,6 +688,9 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry Trans
 	}
 	if overflow := len(state.Entries) - p.limits.Entries; overflow > 0 {
 		state.HasOlderEntries = true
+		for _, removed := range state.Entries[:overflow] {
+			delete(p.entryGenerations, removed.ID)
+		}
 		state.Entries = slices.Clone(state.Entries[overflow:])
 		delta.RequiresSnapshot = true
 	}
@@ -553,6 +721,10 @@ func normalizeTurnID(turnID string) string {
 	return "current"
 }
 
+func normalizeOptionalTurnID(turnID string) string {
+	return strings.TrimSpace(turnID)
+}
+
 func toolByID(tools []ToolState, turnID, callID string) ToolState {
 	for i := range tools {
 		if tools[i].TurnID == turnID && tools[i].CallID == callID {
@@ -567,6 +739,9 @@ func toolEntityID(turnID, callID string) string {
 }
 
 func boundText(value string, maximum int) (string, bool) {
+	if !utf8.ValidString(value) {
+		value = strings.ToValidUTF8(value, "�")
+	}
 	if maximum <= 0 || len(value) <= maximum {
 		return value, false
 	}
@@ -601,6 +776,10 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		lastTurn := *snapshot.LastTurn
 		snapshot.LastTurn = &lastTurn
 	}
+	if snapshot.LastCompaction != nil {
+		compaction := *snapshot.LastCompaction
+		snapshot.LastCompaction = &compaction
+	}
 	if snapshot.Workspace != nil {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
@@ -625,6 +804,10 @@ func cloneDelta(delta Delta) Delta {
 	if delta.LastTurn != nil {
 		lastTurn := *delta.LastTurn
 		delta.LastTurn = &lastTurn
+	}
+	if delta.Compaction != nil {
+		compaction := *delta.Compaction
+		delta.Compaction = &compaction
 	}
 	if delta.ContextUsage != nil {
 		usage := *delta.ContextUsage
