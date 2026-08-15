@@ -976,7 +976,10 @@ func (tool *BrowserObserveTool) screenshotResult(
 
 func (*BrowserActTool) Name() string { return "browser_act" }
 func (*BrowserActTool) Description() string {
-	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval."
+	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval. " +
+		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
+		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
+		"context_generation, both are required for the action; omitting either fails stale."
 }
 
 func (tool *BrowserActTool) Parameters() map[string]any {
@@ -1020,17 +1023,32 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"browser_session_id":  map[string]any{"type": "string"},
-			"tab_id":              map[string]any{"type": "string"},
-			"frame_id":            map[string]any{"type": "string"},
-			"context_catalog_id":  map[string]any{"type": "string"},
-			"context_generation":  map[string]any{"type": "integer"},
-			"snapshot_id":         map[string]any{"type": "string"},
-			"snapshot_generation": map[string]any{"type": "integer"},
+			"browser_session_id": map[string]any{
+				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"tab_id": map[string]any{
+				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"frame_id": map[string]any{
+				"type": "string", "description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
+			},
+			"context_catalog_id": map[string]any{
+				"type": "string", "description": "Conditionally required: copy exactly when present in the fresh browser_observe result; otherwise omit.",
+			},
+			"context_generation": map[string]any{
+				"type": "integer", "description": "Conditionally required: copy exactly when context_catalog_id is present in the fresh browser_observe result; otherwise omit.",
+			},
+			"snapshot_id": map[string]any{
+				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
+			"snapshot_generation": map[string]any{
+				"type": "integer", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+			},
 			"action": map[string]any{
-				"type":       "object",
-				"properties": actionProperties,
-				"required":   []string{"kind"}, "additionalProperties": false,
+				"type":        "object",
+				"description": "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
+				"properties":  actionProperties,
+				"required":    []string{"kind"}, "additionalProperties": false,
 			},
 		},
 		"required": []string{
@@ -1466,7 +1484,11 @@ func browserToolError(err error) *toolshared.ToolResult {
 	case errors.Is(err, browser.ErrNotFound):
 		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
 	case errors.Is(err, browser.ErrStale):
-		return browserErrorResult("stale_snapshot", "Browser authority is stale.", "observe_again")
+		return browserErrorResult(
+			"stale_snapshot",
+			"Browser authority is stale. Observe again and copy every returned authority field into the action.",
+			"observe_again_and_copy_authority",
+		)
 	case errors.Is(err, browser.ErrDenied):
 		return browserErrorResult("policy_denied", "Browser policy denied the operation.", "choose_allowed_action")
 	case errors.Is(err, browser.ErrApprovalRequired):

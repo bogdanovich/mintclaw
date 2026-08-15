@@ -933,6 +933,34 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	}
 }
 
+func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
+	tool := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
+	if description := tool.Description(); !strings.Contains(description, "both are required") {
+		t.Fatalf("browser_act description = %q", description)
+	}
+	properties := tool.Parameters()["properties"].(map[string]any)
+	for _, name := range []string{"context_catalog_id", "context_generation"} {
+		property := properties[name].(map[string]any)
+		description, _ := property["description"].(string)
+		if !strings.Contains(description, "Conditionally required") {
+			t.Fatalf("%s description = %q", name, description)
+		}
+	}
+	action := properties["action"].(map[string]any)
+	if description, _ := action["description"].(string); !strings.Contains(description, "do not add unrelated") {
+		t.Fatalf("action description = %q", description)
+	}
+}
+
+func TestBrowserToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
+	result := browserToolError(browser.ErrStale)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_authority"`) ||
+		!strings.Contains(result.ContentForLLM(), "copy every returned authority field") {
+		t.Fatalf("stale browser result = %#v", result)
+	}
+}
+
 func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testing.T) {
 	parameters := NewBrowserActTool(
 		browserToolTestConfig(),
