@@ -1099,18 +1099,25 @@ func playwrightNavigationCheckedCode(identity playwrightNavigationIdentity, disp
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
   const state = page[trackerKey];
   if (!state) return "MINTCLAW_NAV_ACT_V1|error|missing_tracker";
-  const tree = await state.cdp.send("Page.getFrameTree");
-  const frame = tree.frameTree && tree.frameTree.frame;
-  const frameID = String(frame && frame.id || "");
-  const loaderID = String(frame && frame.loaderId || "");
-  if (!frameID || !loaderID) return "MINTCLAW_NAV_ACT_V1|error|missing_identity";
-  if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
-    state.mainFrameID = frameID;
-    state.loaderID = loaderID;
-    state.generation++;
+  const navigationStatus = async () => {
+    const tree = await state.cdp.send("Page.getFrameTree");
+    const frame = tree.frameTree && tree.frameTree.frame;
+    const frameID = String(frame && frame.id || "");
+    const loaderID = String(frame && frame.loaderId || "");
+    if (!frameID || !loaderID) return "error|missing_identity";
+    if (frameID !== state.mainFrameID || loaderID !== state.loaderID) {
+      state.mainFrameID = frameID;
+      state.loaderID = loaderID;
+      state.generation++;
+    }
+    if (frameID !== expectedFrameID || loaderID !== expectedLoaderID ||
+        state.generation !== expectedGeneration) return "stale";
+    return "ok";
+  };
+  const initialNavigationStatus = await navigationStatus();
+  if (initialNavigationStatus !== "ok") {
+    return "MINTCLAW_NAV_ACT_V1|" + initialNavigationStatus;
   }
-  if (frameID !== expectedFrameID || loaderID !== expectedLoaderID ||
-      state.generation !== expectedGeneration) return "MINTCLAW_NAV_ACT_V1|stale";
   %s
   return "MINTCLAW_NAV_ACT_V1|ok";
 }`,
@@ -1264,6 +1271,27 @@ func (worker *playwrightWorker) Execute(ctx context.Context, action DriverAction
 func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction) error {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.uploadLocked(ctx, "", action)
+}
+
+func (worker *playwrightWorker) UploadAfterNavigationCheck(
+	ctx context.Context,
+	expectedToken string,
+	action DriverAction,
+) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if expectedToken == "" || expectedToken != worker.navigationToken {
+		return ErrStale
+	}
+	return worker.uploadLocked(ctx, expectedToken, action)
+}
+
+func (worker *playwrightWorker) uploadLocked(
+	ctx context.Context,
+	expectedToken string,
+	action DriverAction,
+) error {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		action.Kind != DriverUpload || !playwrightTargetPattern.MatchString(action.Target) ||
 		action.Value == "" || !filepath.IsAbs(action.Value) || worker.outputDir == "" {
@@ -1274,6 +1302,28 @@ func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction)
 		return err
 	}
 	defer cleanup()
+	if expectedToken != "" {
+		text, checkErr := worker.callAndConsume(
+			ctx,
+			"browser_run_code_unsafe",
+			map[string]any{"code": playwrightNavigationCheckedUploadCode(
+				worker.navigationID,
+				action.Target,
+				stagedPath,
+			)},
+			true,
+		)
+		if checkErr != nil {
+			return checkErr
+		}
+		if checkErr = parsePlaywrightNavigationDispatch(text); checkErr != nil {
+			if !errors.Is(checkErr, ErrStale) && !errors.Is(checkErr, ErrDenied) {
+				worker.lost = true
+			}
+			return checkErr
+		}
+		return nil
+	}
 	text, err := worker.callRawText(ctx, "browser_click", map[string]any{
 		"target": action.Target, "element": action.Element, "doubleClick": false, "button": "left",
 	})
@@ -1285,6 +1335,40 @@ func (worker *playwrightWorker) Upload(ctx context.Context, action DriverAction)
 	}
 	_, err = worker.callRawText(ctx, "browser_file_upload", map[string]any{"paths": []string{stagedPath}})
 	return err
+}
+
+func playwrightNavigationCheckedUploadCode(
+	identity playwrightNavigationIdentity,
+	target string,
+	stagedPath string,
+) string {
+	jsonString := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	dispatch := `const uploadTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
+  if (await uploadTarget.count() !== 1 || !await uploadTarget.isVisible()) {
+    return "MINTCLAW_NAV_ACT_V1|stale";
+  }
+  // Playwright MCP turns this event into a cross-tool modal state. Suppress
+  // that listener only for this worker-exclusive transaction so the checked
+  // click and file assignment complete in one driver call.
+  const retainedFileChooserListeners = page.listeners("filechooser");
+  for (const listener of retainedFileChooserListeners) page.off("filechooser", listener);
+  try {
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      uploadTarget.click({ button: "left" }),
+    ]);
+    const postClickNavigationStatus = await navigationStatus();
+    if (postClickNavigationStatus !== "ok") {
+      return "MINTCLAW_NAV_ACT_V1|" + postClickNavigationStatus;
+    }
+    await fileChooser.setFiles([` + jsonString(stagedPath) + `]);
+  } finally {
+    for (const listener of retainedFileChooserListeners) page.on("filechooser", listener);
+  }`
+	return playwrightNavigationCheckedCode(identity, dispatch)
 }
 
 func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string, func(), error) {

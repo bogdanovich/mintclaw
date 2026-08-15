@@ -501,6 +501,66 @@ func TestPlaywrightWorkerUploadsOnlyAfterExactFileChooser(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing.T) {
+	artifact := filepath.Join(t.TempDir(), "fixture.txt")
+	content := []byte("upload fixture")
+	if err := os.WriteFile(artifact, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 1}
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\n\"" + playwrightNavigationCheckedActionMarker + "|ok\"",
+		),
+	}}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: t.TempDir(),
+		navigationID: identity, navigationToken: identity.token(),
+	}
+	digest := sha256.Sum256(content)
+	action := DriverAction{
+		Kind: DriverUpload, Target: "e4", Element: "Choose file", Value: artifact,
+		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
+		ArtifactFilename: "fixture.txt", ArtifactContentType: "text/plain",
+	}
+	if err := worker.UploadAfterNavigationCheck(context.Background(), identity.token(), action); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.calls) != 1 || client.calls[0].tool != "browser_run_code_unsafe" {
+		t.Fatalf("navigation-checked upload calls = %#v", client.calls)
+	}
+	code, _ := client.calls[0].arguments["code"].(string)
+	if !strings.Contains(code, `page.waitForEvent("filechooser")`) ||
+		!strings.Contains(code, `uploadTarget.click({ button: "left" })`) ||
+		strings.Count(code, `await navigationStatus()`) != 2 ||
+		!strings.Contains(code, `page.off("filechooser", listener)`) ||
+		!strings.Contains(code, `page.on("filechooser", listener)`) ||
+		!strings.Contains(code, `fileChooser.setFiles([`) || !strings.Contains(code, `"e4"`) ||
+		!strings.Contains(code, `fixture.txt`) {
+		t.Fatalf("navigation-checked upload code = %q", code)
+	}
+	postCheck := strings.Index(code, `const postClickNavigationStatus = await navigationStatus()`)
+	setFiles := strings.Index(code, `fileChooser.setFiles([`)
+	if postCheck < 0 || setFiles < 0 || postCheck >= setFiles {
+		t.Fatalf("post-click navigation check is not before file assignment: %q", code)
+	}
+	client.calls = nil
+	if err := worker.UploadAfterNavigationCheck(
+		context.Background(), strings.Repeat("0", sha256.Size*2), action,
+	); !errors.Is(err, ErrStale) || len(client.calls) != 0 {
+		t.Fatalf("stale upload error = %v; calls = %#v", err, client.calls)
+	}
+	client.callResults["browser_run_code_unsafe"] = playwrightTextResult(
+		"### Result\n\"" + playwrightNavigationCheckedActionMarker + "|stale\"",
+	)
+	if err := worker.UploadAfterNavigationCheck(
+		context.Background(), identity.token(), action,
+	); !errors.Is(err, ErrStale) || len(client.calls) != 1 ||
+		client.calls[0].tool != "browser_run_code_unsafe" {
+		t.Fatalf("driver-stale upload error = %v; calls = %#v", err, client.calls)
+	}
+}
+
 func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 	output := t.TempDir()
 	payload := []byte("download fixture")
@@ -2538,8 +2598,12 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = fmt.Fprint(writer, `<!doctype html><title>File Chooser Fixture</title>
 <label>Attachment <input type="file" aria-label="Attachment"
- onchange="document.querySelector('output').textContent=this.files[0]?.name+'|'+this.files[0]?.size"></label>
-<output></output>`)
+ onchange="document.querySelector('#upload-output').textContent=this.files[0]?.name+'|'+this.files[0]?.size"></label>
+<output id="upload-output"></output>
+<label>History attachment <input type="file" aria-label="History attachment"
+ onclick="history.pushState({},'', '/changed-before-file-assignment')"
+ onchange="document.querySelector('#history-output').textContent=this.files[0]?.name"></label>
+<output id="history-output"></output>`)
 	}))
 	defer fixture.Close()
 	fixtureURL, err := url.Parse(fixture.URL)
@@ -2602,25 +2666,29 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifactDigest := sha256.Sum256(artifactContent)
-	if err = worker.Upload(ctx, DriverAction{
+	navigationIdentity, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("NavigationIdentity() error = %v", err)
+	}
+	if err = worker.UploadAfterNavigationCheck(ctx, navigationIdentity, DriverAction{
 		Kind: DriverUpload, Target: fileChooser, Element: "Attachment", Value: artifactPath,
 		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
 		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
 	}); err != nil {
-		t.Fatalf("Upload() error = %v", err)
+		t.Fatalf("UploadAfterNavigationCheck() error = %v", err)
 	}
 	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => "MINTCLAW_FILE_CHOOSER_V1|" +
-			String(await page.locator("output").textContent())`,
+			String(await page.locator("#upload-output").textContent())`,
 	})
+	probeText, probeTextErr := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
 	if err != nil || probe == nil || probe.IsError {
-		t.Fatalf("completion probe = %#v, %v", probe, err)
+		t.Fatalf("completion probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
 	}
-	probeText, err := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
-	if err != nil || !strings.Contains(probeText, fmt.Sprintf(
+	if probeTextErr != nil || !strings.Contains(probeText, fmt.Sprintf(
 		"MINTCLAW_FILE_CHOOSER_V1|bounded-upload.txt|%d", len(artifactContent),
 	)) {
-		t.Fatalf("completion probe = %q, %v", probeText, err)
+		t.Fatalf("completion probe = %q, %v", probeText, probeTextErr)
 	}
 	entries, err := os.ReadDir(worker.outputDir)
 	if err != nil {
@@ -2630,6 +2698,42 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 		if entry.IsDir() && strings.HasPrefix(entry.Name(), "upload-") {
 			t.Fatalf("staged upload directory was not cleaned up: %q", entry.Name())
 		}
+	}
+
+	observation, err = worker.Observe(ctx)
+	if err != nil {
+		t.Fatalf("Observe(history fixture) error = %v", err)
+	}
+	historyChooser := mustSnapshotRef(
+		t,
+		observation.Snapshot,
+		`button "History attachment" \[ref=(e[0-9]+)\]`,
+	)
+	navigationIdentity, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("NavigationIdentity(history fixture) error = %v", err)
+	}
+	if err = worker.UploadAfterNavigationCheck(ctx, navigationIdentity, DriverAction{
+		Kind: DriverUpload, Target: historyChooser, Element: "History attachment", Value: artifactPath,
+		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
+		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
+	}); !errors.Is(err, ErrStale) {
+		t.Fatalf("history-changing UploadAfterNavigationCheck() error = %v", err)
+	}
+	probe, err = worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_FILE_CHOOSER_HISTORY_V1|" +
+			String(await page.evaluate(() => location.pathname)) + "|" +
+			String(await page.locator("#history-output").textContent())`,
+	})
+	probeText, probeTextErr = boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || probe == nil || probe.IsError {
+		t.Fatalf("history completion probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
+	}
+	if probeTextErr != nil || !strings.Contains(
+		probeText,
+		"MINTCLAW_FILE_CHOOSER_HISTORY_V1|/changed-before-file-assignment|",
+	) || strings.Contains(probeText, "bounded-upload.txt") {
+		t.Fatalf("history completion probe = %q, %v", probeText, probeTextErr)
 	}
 }
 

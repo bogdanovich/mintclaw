@@ -320,7 +320,14 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		if capabilitiesAvailable {
 			actions = append(actions, diagnostics.Actions...)
 		}
-		uploadAvailable := capabilitiesAvailable && diagnostics.Upload
+		artifactTransferAvailable := tool.runtime.source.ArtifactTransferAvailable()
+		if !artifactTransferAvailable {
+			actions = slices.DeleteFunc(actions, func(action browser.ActionKind) bool {
+				return action == browser.ActionFileChooser || action == browser.ActionUpload ||
+					action == browser.ActionDownload
+			})
+		}
+		uploadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Upload
 		downloadAvailable := uploadAvailable && diagnostics.Download
 		if uploadAvailable && !slices.Contains(actions, browser.ActionUpload) {
 			actions = append(actions, browser.ActionUpload)
@@ -1038,7 +1045,7 @@ func (runtime *browserToolRuntime) fileChooserAvailable() bool {
 		return false
 	}
 	for _, target := range runtime.config.Targets {
-		if target.Enabled && target.EffectivePlacement() == config.BrowserPlacementGateway {
+		if target.Enabled {
 			return true
 		}
 	}

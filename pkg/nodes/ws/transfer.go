@@ -62,6 +62,8 @@ type TransferStream struct {
 	receivedChunkSequence uint64
 	sentAckSequence       uint64
 	receivedAckSequence   uint64
+	receivedCommitted     bool
+	releasedCommitted     bool
 	closed                bool
 }
 
@@ -201,6 +203,8 @@ func (stream *TransferStream) Receive(
 		switch frame.Type {
 		case protocol.TransferFrameChunk:
 			stream.receivedChunkSequence = frame.Sequence
+		case protocol.TransferFrameCommitted:
+			stream.receivedCommitted = true
 		case protocol.TransferFrameAck:
 			if frame.Sequence < stream.receivedAckSequence ||
 				frame.Sequence > stream.sentChunkSequence {
@@ -221,6 +225,40 @@ func (stream *TransferStream) Receive(
 		return protocol.TransferFrame{}, err
 	}
 	return frame, nil
+}
+
+// ReleaseCommitted closes a stream only after the peer has returned the
+// terminal committed receipt. Unlike Close, it does not retain an abandoned
+// identity tombstone, so an idempotent caller may reopen the same binding on
+// the same authenticated peer generation. Any ambiguous or incomplete stream
+// must continue to use Close and remain fail-closed.
+func (stream *TransferStream) ReleaseCommitted() error {
+	if stream == nil || stream.session == nil || stream.subscription == nil {
+		return ErrNodeDisconnected
+	}
+	stream.stateMu.Lock()
+	if stream.closed {
+		released := stream.releasedCommitted
+		stream.stateMu.Unlock()
+		if released {
+			return nil
+		}
+		return ErrNodeDisconnected
+	}
+	if !stream.receivedCommitted {
+		stream.stateMu.Unlock()
+		return protocol.ErrInvalidTransferFrame
+	}
+	stream.closed = true
+	stream.releasedCommitted = true
+	stream.stateMu.Unlock()
+	stream.session.unsubscribeTransfer(
+		stream.binding.TransferID,
+		stream.subscription,
+		errors.New("transfer stream committed"),
+		false,
+	)
+	return nil
 }
 
 func (stream *TransferStream) acquireReceiveSlot(ctx context.Context) error {

@@ -25,6 +25,7 @@ type fakeBrowserCommandHost struct {
 	dialogs          int
 	dialogAction     nodes.BrowserAction
 	ordinaryActions  []nodes.BrowserAction
+	ordinaryRequests []nodes.BrowserHostActRequest
 	contextCalls     int
 	contextError     error
 	closed           int
@@ -143,13 +144,55 @@ func (host *fakeBrowserCommandHost) Drag(
 	return host.ordinaryAction(request)
 }
 
+func (host *fakeBrowserCommandHost) FileChooser(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
 func (host *fakeBrowserCommandHost) ordinaryAction(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
 	host.ordinaryActions = append(host.ordinaryActions, request.Action)
+	host.ordinaryRequests = append(host.ordinaryRequests, request)
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
+}
+
+func TestRuntimeExecutesTypedFileChooser(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].Actions = []string{"file_chooser", "navigate"}
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_file_chooser_1",
+		Action: nodes.BrowserAction{
+			Kind: "file_chooser", Ref: "semantic_ref_1",
+			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1",
+		},
+		Effect: "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
+		ArtifactSHA256: strings.Repeat("d", 64), ArtifactBytes: 7,
+		ArtifactFilename: "photo.jpg", ArtifactContentType: "image/jpeg",
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+	result, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || len(host.ordinaryRequests) != 1 {
+		t.Fatalf("file chooser result = %s, %v; requests = %#v", result, err, host.ordinaryRequests)
+	}
+	request := host.ordinaryRequests[0]
+	if request.Action != input.Action || request.ArtifactSHA256 != input.ArtifactSHA256 ||
+		request.ArtifactBytes != input.ArtifactBytes || request.ArtifactFilename != input.ArtifactFilename ||
+		request.ArtifactContentType != input.ArtifactContentType {
+		t.Fatalf("file chooser request = %#v", request)
+	}
 }
 
 func (host *fakeBrowserCommandHost) Click(

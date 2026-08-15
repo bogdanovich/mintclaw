@@ -1,0 +1,530 @@
+package browserhost
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
+)
+
+func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
+	content := []byte("companion browser upload")
+	digest := sha256.Sum256(content)
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(), browserUploadObservation(),
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observed.Elements) != 1 {
+		t.Fatalf("Observe() = %#v, %v", observed, err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_1",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_1",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "photo.jpg",
+		ContentType: "image/jpeg", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	denied := prepare
+	denied.TransferID = "browser_transfer_denied"
+	var deniedRequest browserArtifactTransferPrepare
+	if err := json.Unmarshal(denied.Payload, &deniedRequest); err != nil {
+		t.Fatal(err)
+	}
+	deniedRequest.ActorID = "telegram:attacker"
+	denied.Payload, _ = json.Marshal(deniedRequest)
+	responses := browserTransferResponses(t, host, denied)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameDeny {
+		t.Fatalf("forged prepare responses = %#v", responses)
+	}
+
+	responses = browserTransferResponses(t, host, prepare)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameAccept {
+		t.Fatalf("prepare responses = %#v", responses)
+	}
+	chunk := prepare
+	chunk.Type, chunk.Sequence, chunk.Payload = protocol.TransferFrameChunk, 1, content
+	responses = browserTransferResponses(t, host, chunk)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameAck {
+		t.Fatalf("chunk responses = %#v", responses)
+	}
+	commit := prepare
+	commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
+	responses = browserTransferResponses(t, host, commit)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameCommitted {
+		t.Fatalf("commit responses = %#v", responses)
+	}
+
+	request := BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_file_chooser_1",
+		Action: nodes.BrowserAction{
+			Kind: "file_chooser", Ref: observed.Elements[0].Ref,
+			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1",
+		},
+		Effect: "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
+		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
+		ArtifactFilename: "photo.jpg", ArtifactContentType: "image/jpeg",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	result, err := host.FileChooser(t.Context(), request)
+	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
+		t.Fatalf("FileChooser() = %#v, %v; actions = %#v", result, err, worker.actions)
+	}
+	action := worker.actions[0]
+	if action.Kind != browserworker.DriverUpload || action.ArtifactSHA256 != request.ArtifactSHA256 ||
+		action.ArtifactBytes != request.ArtifactBytes || action.ArtifactFilename != "photo.jpg" {
+		t.Fatalf("driver upload = %#v", action)
+	}
+	if _, statErr := os.Stat(action.Value); !os.IsNotExist(statErr) {
+		t.Fatalf("consumed staged path remains: %v", statErr)
+	}
+	request.ActionInvocationID = "browser_file_chooser_2"
+	request.PreparedActionHash = strings.Repeat("c", 64)
+	request.SnapshotGeneration = 2
+	if _, err = host.FileChooser(t.Context(), request); err == nil || len(worker.actions) != 1 {
+		t.Fatalf("reused artifact error = %v; actions = %#v", err, worker.actions)
+	}
+}
+
+func TestBrowserArtifactTransferIsCleanedWhenSessionCloses(t *testing.T) {
+	content := []byte("cleanup")
+	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_cleanup",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_cleanup",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "cleanup.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	browserTransferResponses(t, host, prepare)
+	chunk := prepare
+	chunk.Type, chunk.Sequence, chunk.Payload = protocol.TransferFrameChunk, 1, content
+	browserTransferResponses(t, host, chunk)
+	commit := prepare
+	commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
+	browserTransferResponses(t, host, commit)
+	root := host.transferRoot
+	if _, err := host.Close(t.Context(), BrowserHostCloseRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.activeTransfers) != 0 || len(host.completedTransfers) != 0 {
+		t.Fatalf(
+			"browser transfers survived close: active=%d completed=%d",
+			len(host.activeTransfers),
+			len(host.completedTransfers),
+		)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("browser transfer root after close = %v, %v", entries, err)
+	}
+}
+
+func TestBrowserArtifactTransferCleansPartialStageOnConnectionLoss(t *testing.T) {
+	content := []byte("partial")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_partial",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_partial",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "partial.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	connection, disconnect := context.WithCancel(t.Context())
+	var responses []protocol.TransferFrame
+	if err := host.HandleTransferFrame(connection, prepare, func(response protocol.TransferFrame) error {
+		responses = append(responses, response)
+		return nil
+	}); err != nil || len(responses) != 1 || responses[0].Type != protocol.TransferFrameAccept {
+		t.Fatalf("prepare = %#v, %v", responses, err)
+	}
+	disconnect()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		host.transferMu.Lock()
+		active := len(host.activeTransfers)
+		host.transferMu.Unlock()
+		if active == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("partial browser artifact survived connection loss")
+}
+
+func TestBrowserArtifactTransferCleansCommittedStageOnConnectionLoss(t *testing.T) {
+	content := []byte("committed")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_committed_disconnect",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_committed_disconnect",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "committed.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	connection, disconnect := context.WithCancel(t.Context())
+	path := stageCommittedBrowserArtifact(t, host, connection, prepare, content)
+	disconnect()
+	waitForBrowserArtifactRemoval(t, host, path)
+}
+
+func TestBrowserArtifactTransferReconnectAdoptsCommittedLifetime(t *testing.T) {
+	content := []byte("reconnect")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_reconnect",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_reconnect",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "reconnect.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	oldConnection, disconnectOld := context.WithCancel(t.Context())
+	path := stageCommittedBrowserArtifact(t, host, oldConnection, prepare, content)
+	cleanupEntered := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	cleanupExited := make(chan struct{})
+	var cleanupOnce sync.Once
+	host.beforeTransferCleanup = func() {
+		cleanupOnce.Do(func() {
+			close(cleanupEntered)
+			<-releaseCleanup
+			close(cleanupExited)
+		})
+	}
+	disconnectOld()
+	<-cleanupEntered
+	newConnection, disconnectNew := context.WithCancel(t.Context())
+	var responses []protocol.TransferFrame
+	if err := host.HandleTransferFrame(newConnection, prepare, func(response protocol.TransferFrame) error {
+		responses = append(responses, response)
+		return nil
+	}); err != nil || len(responses) != 1 || responses[0].Type != protocol.TransferFrameCommitted {
+		t.Fatalf("reconnected prepare responses = %#v, %v", responses, err)
+	}
+	close(releaseCleanup)
+	<-cleanupExited
+	host.transferMu.Lock()
+	artifact, found := host.completedTransfers[prepare.TransferID]
+	host.transferMu.Unlock()
+	if !found || artifact.lifetime == nil || artifact.lifetime.connectionDone != newConnection.Done() {
+		t.Fatalf("reconnected artifact did not adopt the new lifetime: %#v", artifact)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("old watcher removed adopted artifact: %v", err)
+	}
+	disconnectNew()
+	waitForBrowserArtifactRemoval(t, host, path)
+}
+
+func TestBrowserArtifactTransferAdmissionIsAtomicWithSessionClose(t *testing.T) {
+	content := []byte("close-race")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_close_race",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_close_race",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "close-race.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	admissionEntered := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	host.beforeTransferAdmission = func() {
+		close(admissionEntered)
+		<-releaseAdmission
+	}
+	type prepareResult struct {
+		responses []protocol.TransferFrame
+		err       error
+	}
+	prepared := make(chan prepareResult, 1)
+	go func() {
+		var responses []protocol.TransferFrame
+		err := host.HandleTransferFrame(t.Context(), prepare, func(response protocol.TransferFrame) error {
+			responses = append(responses, response)
+			return nil
+		})
+		prepared <- prepareResult{responses: responses, err: err}
+	}()
+	<-admissionEntered
+	type closeResult struct {
+		session BrowserHostSession
+		err     error
+	}
+	closed := make(chan closeResult, 1)
+	closeStarted := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		session, err := host.Close(t.Context(), BrowserHostCloseRequest{
+			SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		})
+		closed <- closeResult{session: session, err: err}
+	}()
+	<-closeStarted
+	select {
+	case result := <-closed:
+		t.Fatalf("Close() crossed paused transfer admission: %#v, %v", result.session, result.err)
+	default:
+	}
+	close(releaseAdmission)
+	preparedResult := <-prepared
+	if preparedResult.err != nil || len(preparedResult.responses) != 1 ||
+		preparedResult.responses[0].Type != protocol.TransferFrameAccept {
+		t.Fatalf("paused prepare responses = %#v, %v", preparedResult.responses, preparedResult.err)
+	}
+	closedResult := <-closed
+	if closedResult.err != nil || closedResult.session.State != "closed" {
+		t.Fatalf("Close() = %#v, %v", closedResult.session, closedResult.err)
+	}
+	host.transferMu.Lock()
+	active, completed, root := len(host.activeTransfers), len(host.completedTransfers), host.transferRoot
+	host.transferMu.Unlock()
+	if active != 0 || completed != 0 {
+		t.Fatalf("transfer survived concurrent close: active=%d completed=%d", active, completed)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("transfer root after concurrent close = %v, %v", entries, err)
+	}
+}
+
+func TestBrowserArtifactTransferProactivelyCleansCommittedStageAtExpiry(t *testing.T) {
+	content := []byte("expiring")
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+	}})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_expiry",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_expiry",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "expiring.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Second).Unix(),
+	})
+	path := stageCommittedBrowserArtifact(t, host, t.Context(), prepare, content)
+	waitForBrowserArtifactRemoval(t, host, path)
+}
+
+func TestBrowserArtifactFileChooserRejectsNavigationBeforeUpload(t *testing.T) {
+	content := []byte("navigation-bound")
+	digest := sha256.Sum256(content)
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			browserUploadObservation(), browserUploadObservation(),
+		},
+		dispatchNavigationID: "navigation_1",
+	}
+	worker.beforeBoundDispatch = func() { worker.dispatchNavigationID = "navigation_2" }
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = append(profile.AllowedActions, "file_chooser")
+	host.profiles["managed"] = profile
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := browserArtifactFrame(t, content, browserArtifactTransferPrepare{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		ActionInvocationID: "browser_file_chooser_navigation",
+		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_navigation",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		AgentID: "browser", ActorID: "telegram:owner", Filename: "navigation.txt",
+		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
+	})
+	path := stageCommittedBrowserArtifact(t, host, t.Context(), prepare, content)
+	request := BrowserHostNavigateRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_file_chooser_navigation",
+		Action: nodes.BrowserAction{
+			Kind: "file_chooser", Ref: observed.Elements[0].Ref,
+			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_navigation",
+		},
+		Effect: "local_edit", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
+		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
+		ArtifactFilename: "navigation.txt", ArtifactContentType: "text/plain",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	if _, err = host.FileChooser(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) ||
+		len(worker.actions) != 0 {
+		t.Fatalf("FileChooser(navigation race) error = %v; actions = %#v", err, worker.actions)
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("navigation-rejected staged path remains: %v", err)
+	}
+}
+
+func stageCommittedBrowserArtifact(
+	t *testing.T,
+	host *BrowserHost,
+	ctx context.Context,
+	prepare protocol.TransferFrame,
+	content []byte,
+) string {
+	t.Helper()
+	var responses []protocol.TransferFrame
+	if err := host.HandleTransferFrame(ctx, prepare, func(response protocol.TransferFrame) error {
+		responses = append(responses, response)
+		return nil
+	}); err != nil || len(responses) != 1 || responses[0].Type != protocol.TransferFrameAccept {
+		t.Fatalf("prepare responses = %#v, %v", responses, err)
+	}
+	chunk := prepare
+	chunk.Type, chunk.Sequence, chunk.Payload = protocol.TransferFrameChunk, 1, content
+	responses = browserTransferResponses(t, host, chunk)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameAck {
+		t.Fatalf("chunk responses = %#v", responses)
+	}
+	commit := prepare
+	commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
+	responses = browserTransferResponses(t, host, commit)
+	if len(responses) != 1 || responses[0].Type != protocol.TransferFrameCommitted {
+		t.Fatalf("commit responses = %#v", responses)
+	}
+	host.transferMu.Lock()
+	artifact := host.completedTransfers[prepare.TransferID]
+	host.transferMu.Unlock()
+	if artifact.path == "" {
+		t.Fatal("committed browser artifact is unavailable")
+	}
+	return artifact.path
+}
+
+func waitForBrowserArtifactRemoval(t *testing.T, host *BrowserHost, path string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		host.transferMu.Lock()
+		active, completed := len(host.activeTransfers), len(host.completedTransfers)
+		host.transferMu.Unlock()
+		_, statErr := os.Stat(path)
+		if active == 0 && completed == 0 && os.IsNotExist(statErr) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("browser artifact remained after lifecycle boundary: %s", path)
+}
+
+func browserUploadObservation() browserworker.DriverObservation {
+	return browserworker.DriverObservation{
+		URL: "https://example.com/upload", Origin: "https://example.com", Title: "Upload",
+		Snapshot: "- button \"Choose file\" [ref=chooser]",
+		Elements: []browserworker.DriverElement{{Target: "chooser", Role: "button", Name: "Choose file"}},
+	}
+}
+
+func browserArtifactFrame(
+	t *testing.T,
+	content []byte,
+	request browserArtifactTransferPrepare,
+) protocol.TransferFrame {
+	t.Helper()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: protocol.TransferUpload,
+		TransferID: "browser_transfer_1", PolicyRevision: "managed-v1",
+		TotalSize: uint64(len(content)), SHA256: sha256.Sum256(content), Payload: payload,
+	}
+}
+
+func browserTransferResponses(
+	t *testing.T,
+	host *BrowserHost,
+	frame protocol.TransferFrame,
+) []protocol.TransferFrame {
+	t.Helper()
+	responses := make([]protocol.TransferFrame, 0, 1)
+	err := host.HandleTransferFrame(context.Background(), frame, func(response protocol.TransferFrame) error {
+		responses = append(responses, response)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return responses
+}

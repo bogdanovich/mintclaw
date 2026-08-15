@@ -552,6 +552,9 @@ func (registry *FileRegistry) load() error {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
+		if err := compactStoredCommandSchemas(&record.Snapshot); err != nil {
+			return fmt.Errorf("validate node registry record %q: %w", id, err)
+		}
 		legacyCatalog, err := validateStoredSnapshot(record.Snapshot)
 		if err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
@@ -559,8 +562,8 @@ func (registry *FileRegistry) load() error {
 		if legacyCatalog {
 			record.AllowedCommands = nil
 			record.ApprovedCatalogHash = ""
-			document.Records[id] = record
 		}
+		document.Records[id] = record
 		if record.Snapshot.State == StatePendingPairing &&
 			(len(record.PublicKey) != ed25519.PublicKeySize ||
 				record.RequestedRole != "companion" || record.RequestedAt <= 0) {
@@ -581,6 +584,33 @@ func (registry *FileRegistry) load() error {
 	}
 	registry.records = document.Records
 	return nil
+}
+
+func compactStoredCommandSchemas(snapshot *Snapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("%w: node snapshot is unavailable", ErrInvalidNode)
+	}
+	for index := range snapshot.Catalog.Commands {
+		descriptor := &snapshot.Catalog.Commands[index]
+		input, err := compactStoredSchema("input", descriptor.InputSchema)
+		if err != nil {
+			return err
+		}
+		output, err := compactStoredSchema("output", descriptor.OutputSchema)
+		if err != nil {
+			return err
+		}
+		descriptor.InputSchema, descriptor.OutputSchema = input, output
+	}
+	return nil
+}
+
+func compactStoredSchema(label string, schema json.RawMessage) (json.RawMessage, error) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, schema); err != nil {
+		return nil, fmt.Errorf("%w: invalid %s schema", ErrInvalidCapability, label)
+	}
+	return append(json.RawMessage(nil), compact.Bytes()...), nil
 }
 
 func validateStoredSnapshot(snapshot Snapshot) (bool, error) {

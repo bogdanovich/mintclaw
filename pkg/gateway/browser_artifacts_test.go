@@ -301,7 +301,12 @@ func (*gatewayUploadWorker) Resolve(
 }
 func (*gatewayUploadWorker) Execute(context.Context, browser.DriverAction) error { return nil }
 func (*gatewayUploadWorker) CatalogRevision() string                             { return strings.Repeat("c", 64) }
+func (*gatewayUploadWorker) NavigationIdentity(context.Context) (string, error) {
+	return "navigation_1", nil
+}
+
 func (worker *gatewayUploadWorker) Upload(_ context.Context, action browser.DriverAction) error {
+	worker.path = action.Value
 	if !filepath.IsAbs(action.Value) {
 		return browser.ErrDriverIncompatible
 	}
@@ -309,8 +314,19 @@ func (worker *gatewayUploadWorker) Upload(_ context.Context, action browser.Driv
 	if err != nil || !bytes.Equal(data, worker.want) {
 		return browser.ErrDenied
 	}
-	worker.path, worker.got = action.Value, data
+	worker.got = data
 	return nil
+}
+
+func (worker *gatewayUploadWorker) UploadAfterNavigationCheck(
+	ctx context.Context,
+	expected string,
+	action browser.DriverAction,
+) error {
+	if expected != "navigation_1" {
+		return browser.ErrStale
+	}
+	return worker.Upload(ctx, action)
 }
 
 func (*gatewayUploadWorker) Download(

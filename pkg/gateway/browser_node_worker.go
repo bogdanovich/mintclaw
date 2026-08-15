@@ -1,12 +1,16 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -14,8 +18,24 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
+	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+type browserArtifactTransferPrepare struct {
+	SessionID             string `json:"session_id"`
+	RoutedSessionID       string `json:"routed_session_id"`
+	ActionInvocationID    string `json:"action_invocation_id"`
+	ArtifactRef           string `json:"artifact_ref"`
+	PreparedActionHash    string `json:"prepared_action_hash"`
+	BrowserPolicyRevision string `json:"browser_policy_revision"`
+	AgentID               string `json:"agent_id"`
+	ActorID               string `json:"actor_id"`
+	Filename              string `json:"filename"`
+	ContentType           string `json:"content_type"`
+	ExpiresAt             int64  `json:"expires_at"`
+}
 
 type gatewayBrowserWorkerFactory struct {
 	config *config.Config
@@ -208,7 +228,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 				continue
 			}
 			if action == "check" || action == "click" || action == "dialog" || action == "drag" ||
-				action == "fill" || action == "hover" ||
+				action == "file_chooser" || action == "fill" || action == "hover" ||
 				action == "navigate" ||
 				action == "press" ||
 				action == "scroll" ||
@@ -230,7 +250,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	if allProfilesReady {
 		for _, action := range []browser.ActionKind{
 			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionCheck,
-			browser.ActionUncheck, browser.ActionHover, browser.ActionDrag, browser.ActionPress, browser.ActionScroll,
+			browser.ActionUncheck, browser.ActionHover, browser.ActionDrag, browser.ActionFileChooser,
+			browser.ActionPress, browser.ActionScroll,
 			browser.ActionSelect, browser.ActionDialog,
 		} {
 			if _, available := intersection[string(action)]; available {
@@ -498,6 +519,8 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 		return slices.Contains(worker.actions, "hover")
 	case browser.ActionDrag:
 		return slices.Contains(worker.actions, "drag")
+	case browser.ActionFileChooser:
+		return slices.Contains(worker.actions, "file_chooser")
 	default:
 		return false
 	}
@@ -567,6 +590,13 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			DestinationRef: request.DriverAction.DestinationTarget,
 		}
 		effect = "unknown"
+	case request.Prepared.Action.Kind == browser.ActionFileChooser &&
+		request.DriverAction.Kind == browser.DriverUpload && slices.Contains(worker.actions, "file_chooser"):
+		action = nodes.BrowserAction{
+			Kind: "file_chooser", Ref: request.DriverAction.Target,
+			ArtifactRef: request.Prepared.Action.ArtifactRef,
+		}
+		effect = "local_edit"
 	default:
 		return browser.ErrDenied
 	}
@@ -586,13 +616,20 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		ProfileRevision:       worker.profileRevision,
 	}
 	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" || action.Kind == "check" ||
-		action.Kind == "uncheck" || action.Kind == "hover" || action.Kind == "drag" {
+		action.Kind == "uncheck" || action.Kind == "hover" || action.Kind == "drag" ||
+		action.Kind == "file_chooser" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}
 	if action.Kind == "drag" {
 		input.DestinationExpectedRole = request.Prepared.DestinationElementRole
 		input.DestinationExpectedName = request.Prepared.DestinationElementName
+	}
+	if action.Kind == "file_chooser" {
+		input.ArtifactSHA256 = request.Prepared.ArtifactSHA256
+		input.ArtifactBytes = request.Prepared.ArtifactBytes
+		input.ArtifactFilename = request.Prepared.ArtifactFilename
+		input.ArtifactContentType = request.Prepared.ArtifactContentType
 	}
 	var ephemeralInput json.RawMessage
 	if action.Kind == "fill" || action.Kind == "select" {
@@ -663,6 +700,138 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	worker.mu.Lock()
 	worker.cachedObservation = &observation
 	worker.mu.Unlock()
+	return nil
+}
+
+func (worker *nodeBrowserWorker) StagePreparedAction(
+	ctx context.Context,
+	request browser.WorkerPreparedAction,
+) error {
+	if request.Prepared.Action.Kind != browser.ActionFileChooser ||
+		request.DriverAction.Kind != browser.DriverUpload || !worker.SupportsPreparedAction(request.Prepared.Action.Kind) {
+		return browser.ErrDenied
+	}
+	return worker.stageBrowserArtifact(ctx, request)
+}
+
+func (worker *nodeBrowserWorker) stageBrowserArtifact(
+	ctx context.Context,
+	request browser.WorkerPreparedAction,
+) error {
+	if worker == nil || worker.factory == nil || worker.factory.source == nil ||
+		request.DriverAction.Value == "" || !filepath.IsAbs(request.DriverAction.Value) ||
+		request.Prepared.ArtifactBytes < 1 || request.Prepared.ArtifactBytes > int64(worker.limits.UploadBytes) {
+		return browser.ErrDenied
+	}
+	digestBytes, err := hex.DecodeString(request.Prepared.ArtifactSHA256)
+	if err != nil || len(digestBytes) != sha256.Size {
+		return browser.ErrDenied
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], digestBytes)
+	file, err := os.Open(request.DriverAction.Value)
+	if err != nil {
+		return browser.ErrDenied
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != request.Prepared.ArtifactBytes {
+		return browser.ErrDenied
+	}
+	sessions, err := worker.factory.source.runtime.transferSessionsSnapshot(
+		worker.factory.source.registryPath,
+		worker.factory.source.generation,
+	)
+	if err != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	transferID := browserNodeStableID("browser_artifact", worker.sessionID, request.InvocationID)
+	binding := nodews.TransferBinding{
+		TransferID: transferID, Direction: protocol.TransferUpload,
+		PolicyRevision: worker.profileRevision, TotalSize: uint64(request.Prepared.ArtifactBytes), SHA256: digest,
+	}
+	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, binding)
+	if err != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	releasedCommitted := false
+	defer func() {
+		if !releasedCommitted {
+			_ = stream.Close()
+		}
+	}()
+	frame := protocol.TransferFrame{
+		Type: protocol.TransferFramePrepare, Direction: binding.Direction,
+		TransferID: binding.TransferID, PolicyRevision: binding.PolicyRevision,
+		TotalSize: binding.TotalSize, SHA256: binding.SHA256,
+	}
+	principal := worker.principal()
+	frame.Payload, err = json.Marshal(browserArtifactTransferPrepare{
+		SessionID: worker.sessionID, RoutedSessionID: principal.SessionID,
+		ActionInvocationID: request.InvocationID, ArtifactRef: request.Prepared.Action.ArtifactRef,
+		PreparedActionHash: request.Prepared.ActionHash, BrowserPolicyRevision: request.Prepared.PolicyRevision,
+		AgentID: principal.AgentID, ActorID: principal.ActorID,
+		Filename: request.Prepared.ArtifactFilename, ContentType: request.Prepared.ArtifactContentType,
+		ExpiresAt: time.Unix(0, request.Prepared.ExpiresAt).Unix(),
+	})
+	if err != nil || stream.Send(ctx, frame) != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	response, err := stream.Receive(ctx)
+	if err != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	if response.Type == protocol.TransferFrameCommitted {
+		if err = stream.ReleaseCommitted(); err != nil {
+			return browser.ErrWorkerUnavailable
+		}
+		releasedCommitted = true
+		return nil
+	}
+	if response.Type != protocol.TransferFrameAccept {
+		return browser.ErrDenied
+	}
+	hasher := sha256.New()
+	buffer := make([]byte, protocol.MaxTransferChunkBytes)
+	var sequence uint64
+	for {
+		count, readErr := file.Read(buffer)
+		if count > 0 {
+			sequence++
+			_, _ = hasher.Write(buffer[:count])
+			chunk := frame
+			chunk.Type, chunk.Sequence = protocol.TransferFrameChunk, sequence
+			chunk.Payload = append([]byte(nil), buffer[:count]...)
+			if stream.Send(ctx, chunk) != nil {
+				return browser.ErrWorkerUnavailable
+			}
+			ack, receiveErr := stream.Receive(ctx)
+			if receiveErr != nil || ack.Type != protocol.TransferFrameAck || ack.Sequence != sequence {
+				return browser.ErrWorkerUnavailable
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return browser.ErrDenied
+			}
+			break
+		}
+	}
+	if !bytes.Equal(hasher.Sum(nil), digest[:]) {
+		return browser.ErrDenied
+	}
+	frame.Type, frame.Sequence, frame.Payload = protocol.TransferFrameCommit, 0, nil
+	if stream.Send(ctx, frame) != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	response, err = stream.Receive(ctx)
+	if err != nil || response.Type != protocol.TransferFrameCommitted {
+		return browser.ErrWorkerUnavailable
+	}
+	if err = stream.ReleaseCommitted(); err != nil {
+		return browser.ErrWorkerUnavailable
+	}
+	releasedCommitted = true
 	return nil
 }
 

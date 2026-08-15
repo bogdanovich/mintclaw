@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -52,6 +53,11 @@ type browserHostFactory interface {
 	Open(context.Context, browserworker.WorkerOpenRequest) (browserworker.WorkerOpenResult, error)
 }
 
+type browserHostUploadWorker interface {
+	browserworker.ActionWorker
+	UploadAfterNavigationCheck(context.Context, string, browserworker.DriverAction) error
+}
+
 type browserHostSession struct {
 	mu                    sync.Mutex
 	sessionID             string
@@ -91,6 +97,14 @@ type BrowserHost struct {
 
 	mu       sync.Mutex
 	sessions map[string]*browserHostSession
+
+	transferMu         sync.Mutex
+	transferRoot       string
+	activeTransfers    map[string]*browserArtifactTransfer
+	completedTransfers map[string]browserStagedArtifact
+
+	beforeTransferAdmission func()
+	beforeTransferCleanup   func()
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
@@ -147,8 +161,10 @@ func newBrowserHost(
 	}
 	return &BrowserHost{
 		profiles: clonedProfiles, factories: factories, now: time.Now,
-		verifyProfile: companion.VerifyBrowserProfileRuntimeIdentity,
-		sessions:      make(map[string]*browserHostSession),
+		verifyProfile:      companion.VerifyBrowserProfileRuntimeIdentity,
+		sessions:           make(map[string]*browserHostSession),
+		activeTransfers:    make(map[string]*browserArtifactTransfer),
+		completedTransfers: make(map[string]browserStagedArtifact),
 	}, nil
 }
 
@@ -529,6 +545,37 @@ func (host *BrowserHost) Drag(
 	return host.executeAction(ctx, request, "drag", browserworker.DriverAction{Kind: browserworker.DriverDrag})
 }
 
+func (host *BrowserHost) FileChooser(
+	ctx context.Context,
+	request BrowserHostNavigateRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) || !browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
+		request.Action.Kind != "file_chooser" || !browserHostIdentifier(request.Action.Ref) ||
+		!strings.HasPrefix(request.Action.ArtifactRef, nodes.TransferArtifactRefPrefix) ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "button" || len(request.ExpectedName) > 4096 ||
+		!browserHostDigest(request.ArtifactSHA256) || request.ArtifactBytes < 1 ||
+		request.ArtifactBytes > nodes.MaxBrowserUploadBytes || request.ArtifactFilename == "" ||
+		request.ArtifactFilename != filepath.Base(request.ArtifactFilename) || len(request.ArtifactFilename) > 255 ||
+		request.ArtifactContentType == "" || len(request.ArtifactContentType) > 255 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	artifact, ok := host.takeBrowserArtifact(request)
+	if !ok {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	defer func() { _ = os.RemoveAll(artifact.directory) }()
+	return host.executeAction(ctx, request, "file_chooser", browserworker.DriverAction{
+		Kind: browserworker.DriverUpload, Value: artifact.path,
+		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
+		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
+	})
+}
+
 func (host *BrowserHost) Fill(
 	ctx context.Context,
 	request BrowserHostNavigateRequest,
@@ -747,6 +794,10 @@ func (host *BrowserHost) executeAction(
 			request.DestinationExpectedRole != "" || request.DestinationExpectedName != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
+	if action != "file_chooser" && (request.Action.ArtifactRef != "" || request.ArtifactSHA256 != "" ||
+		request.ArtifactBytes != 0 || request.ArtifactFilename != "" || request.ArtifactContentType != "") {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
 		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
 		RoutedSessionID: request.RoutedSessionID,
@@ -785,7 +836,7 @@ func (host *BrowserHost) executeAction(
 	var boundElement browserworker.DriverElement
 	var destinationElement browserworker.DriverElement
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" || action == "drag" {
+		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
 		ref := request.Action.Ref
 		if action == "drag" {
 			ref = request.Action.SourceRef
@@ -841,7 +892,7 @@ func (host *BrowserHost) executeAction(
 		}
 	}
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" || action == "drag" {
+		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
 		targets, matches, destinationTargets, destinationMatches := 0, 0, 0, 0
 		for _, element := range current.Elements {
 			if element.Target == boundElement.Target {
@@ -893,11 +944,26 @@ func (host *BrowserHost) executeAction(
 	// Bind the gateway invocation immediately before driver dispatch. Once
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
-	if executeErr := session.navigationWorker.ExecuteAfterNavigationCheck(
-		actionCtx,
-		currentNavigationIdentity,
-		driverAction,
-	); executeErr != nil {
+	var executeErr error
+	if action == "file_chooser" {
+		uploadWorker, ok := session.worker.(browserHostUploadWorker)
+		if !ok {
+			executeErr = browserworker.ErrDriverIncompatible
+		} else {
+			executeErr = uploadWorker.UploadAfterNavigationCheck(
+				actionCtx,
+				currentNavigationIdentity,
+				driverAction,
+			)
+		}
+	} else {
+		executeErr = session.navigationWorker.ExecuteAfterNavigationCheck(
+			actionCtx,
+			currentNavigationIdentity,
+			driverAction,
+		)
+	}
+	if executeErr != nil {
 		cancelAction()
 		if errors.Is(executeErr, browserworker.ErrStale) {
 			return BrowserHostObservation{}, ErrBrowserHostStale
@@ -1013,6 +1079,8 @@ func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInp
 		DialogType:              request.DialogType, DialogMessageDigest: request.DialogMessageDigest,
 		DialogMessageBytes: request.DialogMessageBytes,
 		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
+		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
+		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
 		ApprovalDigest: request.ApprovalDigest,
 	}
 }
@@ -1048,6 +1116,7 @@ func (host *BrowserHost) Close(
 	if err != nil {
 		return BrowserHostSession{}, err
 	}
+	defer host.cleanupBrowserArtifactsForSession(request.SessionID)
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.state == "closed" {
@@ -1119,6 +1188,7 @@ func (host *BrowserHost) Shutdown(ctx context.Context) error {
 			shutdownErr = errors.Join(shutdownErr, err)
 		}
 	}
+	host.cleanupAllBrowserArtifacts()
 	return shutdownErr
 }
 
@@ -1147,6 +1217,7 @@ func (host *BrowserHost) expireSessionLocked(
 	session.state = "closed"
 	session.safeFailure = "session_expired"
 	session.elementRefs = make(map[string]browserworker.DriverElement)
+	host.cleanupBrowserArtifactsForSession(session.sessionID)
 	return true
 }
 
