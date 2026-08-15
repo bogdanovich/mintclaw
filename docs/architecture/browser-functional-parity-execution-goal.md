@@ -17,6 +17,20 @@ Playwright MCP tools, CSS selectors, CDP endpoints, arbitrary page code, and
 placement-specific model-visible APIs remain outside the ordinary browser
 tool surface.
 
+## Execution Progress
+
+| Phase | Status | Evidence or authority |
+| --- | --- | --- |
+| 1. Shared click parity | Complete | Shared click admission, implementation, deployment, and gateway/companion canaries completed before Phase 2 |
+| 2. Shared press and select parity | Complete | Shared press/select admission, implementation, deployment, and gateway/companion canaries completed before Phase 3 |
+| 3. Tabs, frames, and popups | Complete | [BF1 contexts admission](browser-capability-bf1-contexts-admission.md) and merged cross-placement implementation |
+| 4. Protected fill parity | Complete | [BF1 protected fill admission](browser-capability-bf1-protected-fill-admission.md) and merged protected-value implementation |
+| 5. Remaining ordinary interactions | Complete | [Phase 5 deployment evidence](../operations/browser-functional-parity-phase5-evidence.md) |
+| 6. BF2 media, transfer, diagnostics, and snapshot delivery | Active | Current-state audit and focused admission are next |
+
+The overall goal remains active until Phase 6 and the global completion
+criteria are satisfied.
+
 ## Execution Rules
 
 1. Deliver the phases in order unless a separately merged foundation is
