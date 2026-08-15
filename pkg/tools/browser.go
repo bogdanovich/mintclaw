@@ -1024,31 +1024,39 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"browser_session_id": map[string]any{
-				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"tab_id": map[string]any{
-				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"frame_id": map[string]any{
-				"type": "string", "description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
+				"type":        "string",
+				"description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
 			},
 			"context_catalog_id": map[string]any{
-				"type": "string", "description": "Conditionally required: copy exactly when present in the fresh browser_observe result; otherwise omit.",
+				"type":        "string",
+				"description": "Conditionally required: copy exactly when present in the fresh browser_observe result; otherwise omit.",
 			},
 			"context_generation": map[string]any{
-				"type": "integer", "description": "Conditionally required: copy exactly when context_catalog_id is present in the fresh browser_observe result; otherwise omit.",
+				"type":        "integer",
+				"description": "Conditionally required: copy exactly when context_catalog_id is present in the fresh browser_observe result; otherwise omit.",
 			},
 			"snapshot_id": map[string]any{
-				"type": "string", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+				"type":        "string",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"snapshot_generation": map[string]any{
-				"type": "integer", "description": "Copy exactly from the same fresh browser_observe result used for this action.",
+				"type":        "integer",
+				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"action": map[string]any{
-				"type":        "object",
-				"description": "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
-				"properties":  actionProperties,
-				"required":    []string{"kind"}, "additionalProperties": false,
+				"type":                 "object",
+				"description":          "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
+				"properties":           actionProperties,
+				"required":             []string{"kind"},
+				"additionalProperties": false,
 			},
 		},
 		"required": []string{
