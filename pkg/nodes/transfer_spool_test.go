@@ -541,6 +541,50 @@ func TestGatewayTransferSpoolRetainsCommittedIndexMutations(t *testing.T) {
 	}
 }
 
+func TestGatewayTransferSpoolBeginRecoverableConsumesCommittedIndexWarning(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_800_000_000, 0)
+	store, err := newGatewayTransferSpool(
+		filepath.Join(t.TempDir(), "spool"), 0, 0, time.Minute, func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	owner := testTransferOwner("actor-recoverable")
+	content := []byte("recoverable payload")
+	spec := testTransferSpec(content, now)
+	restore := injectCommittedTransferIndexWarning(store, errors.New("directory sync warning"))
+	writer, staged, created, beginErr := store.BeginRecoverable(owner, spec)
+	restore()
+	if beginErr != nil || !created || writer == nil {
+		t.Fatalf("BeginRecoverable() = writer %v, created %v, error %v", writer, created, beginErr)
+	}
+	if len(store.active) != 1 || store.active[staged.ArtifactID] != writer {
+		t.Fatalf("active writers after recoverable begin = %#v", store.active)
+	}
+	if err = writer.WriteChunk(1, content); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := writer.Commit()
+	if err != nil || committed.State != TransferArtifactCommitted {
+		t.Fatalf("Commit() = %#v, %v", committed, err)
+	}
+	if len(store.active) != 0 {
+		t.Fatalf("active writers after commit = %#v", store.active)
+	}
+	replayWriter, replay, replayCreated, err := store.BeginRecoverable(owner, spec)
+	if err != nil || replayWriter != nil || replayCreated || replay.Ref != committed.Ref {
+		t.Fatalf(
+			"replay BeginRecoverable() = writer %v, record %#v, created %v, error %v",
+			replayWriter,
+			replay,
+			replayCreated,
+			err,
+		)
+	}
+}
+
 func TestGatewayTransferSpoolReconcilesAbandonedStaging(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)

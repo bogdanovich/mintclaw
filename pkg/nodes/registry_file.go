@@ -761,7 +761,19 @@ func storedBrowserCatalogShapeEpochs(
 		BrowserCommandContexts,
 		BrowserCommandSessionClose,
 	) {
-		epochs &= postContexts
+		epochs &= postContexts &^ browserSchemaEpochCurrent
+		return epochs, epochs != 0
+	}
+	if storedBrowserCommandSetMatches(commands,
+		BrowserCommandSessionOpen,
+		BrowserCommandSessionStatus,
+		BrowserCommandObserve,
+		BrowserCommandAct,
+		BrowserCommandContexts,
+		BrowserCommandSessionClose,
+		BrowserCommandCapture,
+	) {
+		epochs &= browserSchemaEpochCurrent
 		return epochs, epochs != 0
 	}
 	return 0, false
@@ -811,12 +823,14 @@ const (
 	browserSchemaEpochPreDialogs
 	browserSchemaEpochPreDrag
 	browserSchemaEpochPreFileChooser
+	browserSchemaEpochPreCapture
 	browserSchemaEpochCurrent
 )
 
 const browserSchemaEpochAll = browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
 	browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
-	browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+	browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochPreCapture |
+	browserSchemaEpochCurrent
 
 func storedBrowserInputSchemaEpochs(
 	descriptor *CommandDescriptor,
@@ -826,14 +840,15 @@ func storedBrowserInputSchemaEpochs(
 	if storedSchemaMatches(descriptor.InputSchema, current) {
 		switch descriptor.Name {
 		case BrowserCommandAct:
-			epochs |= browserSchemaEpochCurrent
+			epochs |= browserSchemaEpochPreCapture | browserSchemaEpochCurrent
 		case BrowserCommandSessionOpen:
 			epochs |= browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts |
 				browserSchemaEpochPreDialogs | browserSchemaEpochPreDrag |
-				browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+				browserSchemaEpochPreFileChooser | browserSchemaEpochPreCapture | browserSchemaEpochCurrent
 		case BrowserCommandContexts:
 			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
-				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser |
+				browserSchemaEpochPreCapture | browserSchemaEpochCurrent
 		default:
 			epochs |= browserSchemaEpochAll
 		}
@@ -883,12 +898,21 @@ func storedBrowserOutputSchemaEpochs(
 		switch descriptor.Name {
 		case BrowserCommandSessionOpen:
 			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
-				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser |
+				browserSchemaEpochPreCapture | browserSchemaEpochCurrent
 		case BrowserCommandObserve, BrowserCommandAct, BrowserCommandContexts:
-			epochs |= browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+			epochs |= browserSchemaEpochCurrent
 		default:
 			epochs |= browserSchemaEpochAll
 		}
+	}
+	if (descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandAct ||
+		descriptor.Name == BrowserCommandContexts) && storedSchemaMatches(
+		descriptor.OutputSchema,
+		legacyPreCaptureBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+	) {
+		epochs |= browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser |
+			browserSchemaEpochPreCapture
 	}
 	profilesPrecedeDialogs := browserProfilesUseOnlyActions(
 		descriptor.BrowserProfiles,

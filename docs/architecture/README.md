@@ -17,6 +17,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   native coding runtime profile and the explicit P3/P4 boundary.
 - [Local Coding Agent P3 Exit Record](local-coding-agent-p3-exit.md): merged evidence for the bounded terminal
   event/control plane and the explicit interactive P4 boundary.
+- [Local Coding Agent P4.1 Terminal Shell](local-coding-agent-p4-terminal-shell.md): interactive TTY admission,
+  alternate-screen lifecycle, bounded final scrollback, revision watches, and restoration evidence.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.

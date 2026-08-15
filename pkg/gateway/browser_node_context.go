@@ -60,6 +60,7 @@ func (worker *nodeBrowserWorker) SelectContext(
 		worker.cachedObservation = nil
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
+		worker.documentID = ""
 		worker.mu.Unlock()
 		observation, observeErr := worker.Observe(ctx)
 		if observeErr != nil {
@@ -86,6 +87,20 @@ func (worker *nodeBrowserWorker) SelectContext(
 		err = worker.acceptContextCatalog(result.Catalog, false)
 	}
 	return observation, catalog, err
+}
+
+func (worker *nodeBrowserWorker) SelectContextWithNavigationIdentity(
+	ctx context.Context,
+	authority browser.ContextMutationAuthority,
+) (browser.DriverObservation, browser.ContextCatalog, string, error) {
+	observation, catalog, err := worker.SelectContext(ctx, authority)
+	if err != nil {
+		return browser.DriverObservation{}, browser.ContextCatalog{}, "", err
+	}
+	worker.mu.Lock()
+	identity := worker.documentID
+	worker.mu.Unlock()
+	return observation, catalog, identity, nil
 }
 
 func (worker *nodeBrowserWorker) CloseTab(
@@ -123,6 +138,7 @@ func (worker *nodeBrowserWorker) acceptContextCatalog(
 		worker.cachedObservation = nil
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
+		worker.documentID = ""
 	}
 	return nil
 }
@@ -214,6 +230,7 @@ func (worker *nodeBrowserWorker) clearContextObservation() {
 	worker.cachedObservation = nil
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
+	worker.documentID = ""
 	worker.mu.Unlock()
 }
 

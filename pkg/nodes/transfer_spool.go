@@ -352,6 +352,27 @@ func (store *GatewayTransferSpool) Begin(
 	return writer, cloneTransferArtifactRecord(record), true, persistErr
 }
 
+// BeginRecoverable returns a usable writer when Begin committed its staging
+// index mutation but could not prove directory-sync durability. Any writer
+// returned alongside a non-committed failure is aborted here so callers cannot
+// leak the active-transfer reservation before installing their own cleanup.
+func (store *GatewayTransferSpool) BeginRecoverable(
+	owner TransferArtifactOwner,
+	spec TransferArtifactSpec,
+) (*TransferArtifactWriter, TransferArtifactRecord, bool, error) {
+	writer, record, created, err := store.Begin(owner, spec)
+	if err == nil {
+		return writer, record, created, nil
+	}
+	if created && writer != nil && fileutil.IsCommittedWriteError(err) {
+		return writer, record, true, nil
+	}
+	if writer != nil {
+		err = errors.Join(err, writer.Abort())
+	}
+	return nil, record, created, err
+}
+
 func (writer *TransferArtifactWriter) WriteChunk(sequence uint64, data []byte) error {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()

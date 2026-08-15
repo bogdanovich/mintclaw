@@ -113,6 +113,30 @@ func (worker *fakeBrowserHostWorker) NavigationIdentity(context.Context) (string
 	return identity, nil
 }
 
+func (*fakeBrowserHostWorker) CapturePageScreenshot(
+	context.Context,
+	string,
+	int,
+) (browserworker.DriverScreenshot, error) {
+	return browserworker.DriverScreenshot{
+		ContentType: "image/png",
+		Data:        []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1},
+	}, nil
+}
+
+func (*fakeBrowserHostWorker) CaptureElementScreenshot(
+	context.Context,
+	string,
+	string,
+	browserworker.DriverElement,
+	int,
+) (browserworker.DriverScreenshot, error) {
+	return browserworker.DriverScreenshot{
+		ContentType: "image/png",
+		Data:        []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 2},
+	}, nil
+}
+
 func (*fakeBrowserHostWorker) Resolve(
 	context.Context,
 	string,
@@ -328,6 +352,55 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 1 {
 		t.Fatalf("repeated Close() = %#v, %v, calls = %d", closed, err, worker.closeCalls)
+	}
+}
+
+func TestBrowserHostCapturesAndRetainsExactObservationIdempotently(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			{URL: "https://example.com/", Origin: "https://example.com", Snapshot: "page"},
+			{URL: "https://example.com/", Origin: "https://example.com", Snapshot: "page"},
+		},
+		navigationIdentities: []string{"navigation_1", "navigation_1", "navigation_1", "navigation_1"},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(context.Background(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := host.Observe(context.Background(), browserHostObserveFixture())
+	if err != nil || observation.DocumentID == "" {
+		t.Fatalf("Observe() = %+v, %v", observation, err)
+	}
+	request := BrowserHostCaptureRequest{
+		BrowserCaptureInput: nodes.BrowserCaptureInput{
+			SessionID: observation.SessionID, TabID: observation.TabID,
+			SnapshotID: "snapshot_gateway_1", SnapshotGeneration: observation.SnapshotGeneration,
+			DocumentID: observation.DocumentID, InvocationID: "capture_request_1",
+			WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+			Target: "page", ProfileRevision: "managed-v1",
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+		},
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	first, err := host.Capture(context.Background(), request)
+	if err != nil || first.TransferID == "" || first.Size == 0 || first.SHA256 == "" {
+		t.Fatalf("Capture() = %+v, %v", first, err)
+	}
+	second, err := host.Capture(context.Background(), request)
+	if err != nil || second != first {
+		t.Fatalf("idempotent Capture() = %+v, %v; want %+v", second, err, first)
+	}
+	rebound := request
+	rebound.RouteID = "route_2"
+	if _, err = host.Capture(context.Background(), rebound); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("route-rebound Capture() error = %v", err)
+	}
+	host.transferMu.Lock()
+	count := len(host.outputArtifacts)
+	host.transferMu.Unlock()
+	if count != 1 {
+		t.Fatalf("retained output count = %d, want 1", count)
 	}
 }
 

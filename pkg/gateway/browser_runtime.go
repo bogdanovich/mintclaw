@@ -267,7 +267,7 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			if source.config != nil {
 				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
 					configured.EffectivePlacement() == config.BrowserPlacementNode {
-					screenshotAvailable = false
+					screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
 					uploadAvailable = false
 					downloadAvailable = false
 					handoffAvailable = false
@@ -645,6 +645,13 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			}
 			return tools.NewBrowserObserveTool(reloadCfg, source), nil
 		},
+		"browser_capture": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserCaptureTool(reloadCfg, source), nil
+		},
 		"browser_contexts": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
@@ -661,7 +668,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		},
 	}
 	for _, name := range []string{
-		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_act",
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_act",
 	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
 			return err

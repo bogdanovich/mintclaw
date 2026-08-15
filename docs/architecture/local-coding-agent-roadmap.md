@@ -1293,6 +1293,9 @@ Goal: replace the direct coding renderer with a stable interactive TUI.
 
 Dependencies: P3.2, P3.3
 
+Implementation evidence:
+[`local-coding-agent-p4-terminal-shell.md`](local-coding-agent-p4-terminal-shell.md)
+
 Scope:
 
 - Add the TUI model/update/view shell.

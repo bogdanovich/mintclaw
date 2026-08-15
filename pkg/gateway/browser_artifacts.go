@@ -176,6 +176,17 @@ func (source *gatewayBrowserToolSource) CaptureScreenshot(
 	ctx context.Context,
 	request browser.ScreenshotRequest,
 ) (browser.ScreenshotArtifact, error) {
+	if source == nil || source.workspace == "" {
+		return browser.ScreenshotArtifact{}, browser.ErrWorkerUnavailable
+	}
+	owner, _, err := browserScreenshotOwners(ctx, source.workspace, request.SessionID, request.RequestID)
+	if err != nil {
+		return browser.ScreenshotArtifact{}, browser.ErrDenied
+	}
+	request.Retention = &browser.ScreenshotRetentionAuthority{
+		WorkspaceID: owner.WorkspaceID, AgentID: owner.AgentID, ActorID: owner.ActorID,
+		RouteID: owner.RouteID, SessionID: owner.SessionID, ToolCallID: owner.ToolCallID,
+	}
 	return withGatewayBrowserBroker(
 		ctx,
 		source,
@@ -203,7 +214,8 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 		captureTarget = browser.ScreenshotTargetPage
 	}
 	if source == nil || source.services == nil || source.services.NodeAdmission == nil ||
-		source.services.MediaStore == nil || source.workspace == "" || len(capture.Data) == 0 {
+		source.services.MediaStore == nil || source.workspace == "" ||
+		(len(capture.Data) == 0 && capture.Retained == nil) {
 		return browser.ScreenshotArtifact{}, browser.ErrWorkerUnavailable
 	}
 	if captureTarget != requestTarget || capture.FrameID != request.FrameID ||
@@ -217,15 +229,24 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	if err != nil {
 		return browser.ScreenshotArtifact{}, browser.ErrDenied
 	}
-	digest := sha256.Sum256(capture.Data)
 	expiresAt := time.Now().Add(source.screenshotRetention).Unix()
+	var digestValue string
+	declaredSize := int64(len(capture.Data))
+	if capture.Retained != nil {
+		digestValue = capture.Retained.SHA256
+		declaredSize = capture.Retained.Size
+		expiresAt = capture.Retained.ExpiresAt
+	} else {
+		digest := sha256.Sum256(capture.Data)
+		digestValue = hex.EncodeToString(digest[:])
+	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: request.RequestID, Direction: nodes.TransferDirectionDownload,
 		Target: capture.Target, ProfileRevision: capture.PolicyRevision,
 		SourceKind: browserScreenshotKind(captureTarget), SourceScope: capture.TabID,
 		SourceID: capture.SnapshotID, SourceRevision: capture.SnapshotGeneration,
 		Filename: browserScreenshotFilename, ContentType: capture.ContentType,
-		DeclaredSize: int64(len(capture.Data)), SHA256: hex.EncodeToString(digest[:]),
+		DeclaredSize: declaredSize, SHA256: digestValue,
 		ExpiresAt: expiresAt,
 	}
 	spool, err := source.services.NodeAdmission.gatewayTransferSpool(
@@ -242,15 +263,16 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	created := false
 	if found {
 		if !sameBrowserScreenshotSpec(record.Spec, spec) ||
-			record.State != nodes.TransferArtifactCommitted {
+			record.State != nodes.TransferArtifactCommitted ||
+			(capture.Retained != nil && record.Ref != capture.Retained.Ref) {
 			return browser.ScreenshotArtifact{}, nodes.ErrTransferArtifactConflict
 		}
 	} else {
-		writer, record, created, err = spool.Begin(owner, spec)
-		if err != nil && (!created || writer == nil || !fileutil.IsCommittedWriteError(err)) {
-			if writer != nil {
-				_ = writer.Abort()
-			}
+		if capture.Retained != nil {
+			return browser.ScreenshotArtifact{}, nodes.ErrTransferArtifactNotFound
+		}
+		writer, record, created, err = spool.BeginRecoverable(owner, spec)
+		if err != nil {
 			return browser.ScreenshotArtifact{}, fmt.Errorf("retain browser screenshot: %w", err)
 		}
 	}

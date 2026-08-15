@@ -51,6 +51,30 @@ var (
 type DriverScreenshot struct {
 	Data        []byte
 	ContentType string
+	Retained    *RetainedScreenshot
+}
+
+// RetainedScreenshot describes screenshot bytes that a remote worker has
+// already streamed into the gateway artifact spool. Exactly one of Data or
+// Retained is populated by a screenshot worker.
+type RetainedScreenshot struct {
+	Ref         string
+	ContentType string
+	Size        int64
+	SHA256      string
+	ExpiresAt   int64
+}
+
+// ScreenshotRetentionAuthority is trusted gateway-only routing authority for
+// retaining remote screenshot bytes. Its values are already opaque and are
+// never accepted from model arguments.
+type ScreenshotRetentionAuthority struct {
+	WorkspaceID string
+	AgentID     string
+	ActorID     string
+	RouteID     string
+	SessionID   string
+	ToolCallID  string
 }
 
 type ScreenshotTarget string
@@ -72,6 +96,7 @@ type ScreenshotRequest struct {
 	SnapshotGeneration uint64
 	Target             ScreenshotTarget
 	Ref                string
+	Retention          *ScreenshotRetentionAuthority
 }
 
 type ScreenshotDeliveryRequest struct {
@@ -154,6 +179,7 @@ type ScreenshotCapture struct {
 	CaptureTarget      ScreenshotTarget
 	Data               []byte
 	ContentType        string
+	Retained           *RetainedScreenshot
 }
 
 type SessionState string
