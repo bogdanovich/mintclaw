@@ -146,6 +146,7 @@ type processOptions struct {
 	ExpectFinalDelivery          bool                      // Whether an outer coordinator will publish the final response
 	FinalDeliveryObservation     *finalDeliveryObservation // Collects state settled by an outer final response
 	AllowInterimMintClawPublish  bool                      // Whether mintclaw tool-call interim text can be published when SendResponse is false
+	DirectStreaming              bool                      // Whether a direct frontend supplies its own stream delegate
 	SuppressToolUserDelivery     bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
 	SuppressToolFeedback         bool                      // Whether to suppress inline tool feedback messages
 	NoHistory                    bool                      // If true, don't load session history (for heartbeat)

@@ -248,6 +248,9 @@ func normalizeID(value string) string {
 }
 
 func backgroundCompaction(turnID string, reason agent.ContextCompressReason) bool {
+	if reason == agent.ContextCompressReasonManual {
+		return false
+	}
 	return strings.TrimSpace(turnID) == "" || reason == agent.ContextCompressReasonSummarize
 }
 

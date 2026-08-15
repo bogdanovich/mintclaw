@@ -103,6 +103,15 @@ func (l *Lease) Release() error {
 	return l.err
 }
 
+// ValidateLease confirms that lease is still active and owns threadID in this
+// store without mutating thread state.
+func (s *Store) ValidateLease(lease *Lease, threadID string) error {
+	if s == nil {
+		return fmt.Errorf("coding thread store is nil")
+	}
+	return lease.withActive(s.root, threadID, func() error { return nil })
+}
+
 func (l *Lease) withActive(storeRoot string, threadID string, operation func() error) error {
 	if l == nil {
 		return fmt.Errorf("coding thread lease is required")

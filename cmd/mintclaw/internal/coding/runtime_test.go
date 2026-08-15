@@ -1,12 +1,50 @@
 package coding
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+type blockingCodingProvider struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingCodingProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: "non-streaming fallback"}, nil
+}
+
+func (p *blockingCodingProvider) ChatStreamEvents(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+	onChunk func(providers.StreamChunk),
+) (*providers.LLMResponse, error) {
+	onChunk(providers.StreamChunk{Content: "working"})
+	p.once.Do(func() { close(p.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test" }
 
 func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -203,5 +241,155 @@ func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("disabled persisted provider selection unexpectedly succeeded")
+	}
+}
+
+func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "initial", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "coding-test"
+	metadata.Provider = "openai"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingCodingProvider{started: make(chan struct{})}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = metadata.Model
+	cfg.Agents.Defaults.Provider = metadata.Provider
+	cfg.Agents.Defaults.MaxTokens = 256
+	cfg.Agents.Defaults.ContextWindow = 32_000
+	cfg.ModelList = config.SecureModelList{&config.ModelConfig{
+		ModelName: metadata.Model,
+		Provider:  metadata.Provider,
+		Model:     "test-model-id",
+		Enabled:   true,
+		Streaming: config.ModelStreamingConfig{Enabled: true},
+	}}
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return cfg, nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, metadata.Model, nil
+		},
+	}
+	frontendController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := frontendController.Submit(t.Context(), "inspect the project"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not receive the headless turn")
+	}
+	snapshot, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Activity != frontend.ActivityRunning {
+		t.Fatalf("activity = %q, want running", snapshot.Activity)
+	}
+	if len(snapshot.Entries) < 2 || snapshot.Entries[len(snapshot.Entries)-1].Text != "working" {
+		t.Fatalf("streamed entries = %#v", snapshot.Entries)
+	}
+	if err := frontendController.Submit(
+		t.Context(),
+		"must remain in composer",
+	); !errors.Is(
+		err,
+		controller.ErrTurnActive,
+	) {
+		t.Fatalf("second Submit() error = %v, want %v", err, controller.ErrTurnActive)
+	}
+	if err := frontendController.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err = frontendController.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Activity != frontend.ActivityRunning && snapshot.Activity != frontend.ActivityInterrupting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("turn did not stop: %#v", snapshot)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for {
+		err = frontendController.Compact(t.Context())
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, controller.ErrTurnActive) || time.Now().After(deadline) {
+			t.Fatalf("Compact() after interruption error = %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for {
+		snapshot, err = frontendController.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.LastCompaction != nil && snapshot.LastCompaction.Reason == "manual" &&
+			snapshot.LastCompaction.Status != frontend.CompactionRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("manual compaction did not finish: %#v", snapshot.LastCompaction)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if snapshot.LastCompaction.Background {
+		t.Fatal("manual compaction was projected as background work")
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.ID == "controller:turn-error" {
+			t.Fatalf("intentional interruption was projected as a controller failure: %#v", entry)
+		}
+	}
+	if err := frontendController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reacquired, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatalf("controller did not release thread lease: %v", err)
+	}
+	if err := reacquired.Release(); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Preview != metadata.Preview {
+		t.Fatalf("canceled prompt changed preview to %q", persisted.Preview)
 	}
 }

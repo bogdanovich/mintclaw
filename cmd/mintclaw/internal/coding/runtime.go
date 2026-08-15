@@ -5,12 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -49,6 +55,10 @@ type nativeCodingTurnRunner struct {
 }
 
 func newNativeCodingTurnRunner() codingTurnRunner {
+	return newNativeCodingRuntimeDependencies()
+}
+
+func newNativeCodingRuntimeDependencies() nativeCodingTurnRunner {
 	return nativeCodingTurnRunner{
 		loadConfig:     internal.LoadConfig,
 		createProvider: providers.CreateProvider,
@@ -75,36 +85,79 @@ func (r nativeCodingTurnRunner) Run(
 	ctx context.Context,
 	request codingTurnRequest,
 ) (codingTurnOutcome, error) {
-	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
+	runtime, err := openNativeCodingRuntime(r, request, nil)
 	if err != nil {
 		return codingTurnOutcome{}, err
+	}
+	turnErr := runtime.RunTurn(ctx, request.Prompt)
+	return runtime.outcome(), errors.Join(turnErr, runtime.Close())
+}
+
+type nativeCodingRuntime struct {
+	loop            *agent.AgentLoop
+	messageBus      *bus.MessageBus
+	eventBus        runtimeevents.Bus
+	sessions        session.SessionStore
+	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
+	metadata        thread.Metadata
+	model           string
+	provider        string
+	streaming       bool
+	mu              sync.Mutex
+	lastOutcome     codingTurnOutcome
+	closeOnce       sync.Once
+	closeErr        error
+}
+
+func openNativeCodingRuntime(
+	r nativeCodingTurnRunner,
+	request codingTurnRequest,
+	projector *frontend.Projector,
+) (*nativeCodingRuntime, error) {
+	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
+	if err != nil {
+		return nil, err
 	}
 	cfg, err := r.loadConfig()
 	if err != nil {
-		return codingTurnOutcome{}, fmt.Errorf("coding runtime: load config: %w", err)
+		return nil, fmt.Errorf("coding runtime: load config: %w", err)
 	}
 	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, request.Metadata)
 	if err != nil {
-		return codingTurnOutcome{}, err
+		return nil, err
 	}
 	provider, _, err := r.createProvider(runtimeCfg)
 	if err != nil {
-		return codingTurnOutcome{Model: modelName, Provider: providerName},
-			fmt.Errorf("coding runtime: create provider: %w", err)
+		return nil, fmt.Errorf("coding runtime: create provider: %w", err)
 	}
 	profile, err := agent.NewRuntimeProfile(agent.RuntimeProfileBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		return codingTurnOutcome{Model: modelName, Provider: providerName}, err
+		return nil, err
 	}
 	messageBus := bus.NewMessageBus()
-	defer messageBus.Close()
-	loop, err := agent.NewAgentLoopWithRuntimeProfile(runtimeCfg, messageBus, provider, profile)
-	if err != nil {
-		return codingTurnOutcome{Model: modelName, Provider: providerName},
-			fmt.Errorf("coding runtime: initialize agent: %w", err)
+	baseEventBus := runtimeevents.NewBus()
+	var eventBus runtimeevents.Bus = baseEventBus
+	if projector != nil {
+		eventBus, err = agentadapter.WrapBus(baseEventBus, projector, request.Metadata.SessionKey)
+		if err != nil {
+			messageBus.Close()
+			_ = baseEventBus.Close()
+			return nil, err
+		}
+		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	defer loop.Close()
-	sessions := loop.GetRegistry().GetDefaultAgent().Sessions
+	loop, err := agent.NewAgentLoopWithRuntimeProfile(
+		runtimeCfg,
+		messageBus,
+		provider,
+		profile,
+		agent.WithRuntimeEvents(eventBus),
+	)
+	if err != nil {
+		messageBus.Close()
+		_ = baseEventBus.Close()
+		return nil, fmt.Errorf("coding runtime: initialize agent: %w", err)
+	}
 	readTurnHistory := r.readTurnHistory
 	if readTurnHistory == nil {
 		readTurnHistory = func(
@@ -115,50 +168,171 @@ func (r nativeCodingTurnRunner) Run(
 			return store.ReadTurnHistory(readCtx, sessionKey)
 		}
 	}
-	beforeHistory, err := readTurnHistory(ctx, sessions, request.Metadata.SessionKey)
+	return &nativeCodingRuntime{
+		loop:            loop,
+		messageBus:      messageBus,
+		eventBus:        baseEventBus,
+		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
+		readTurnHistory: readTurnHistory,
+		metadata:        request.Metadata,
+		model:           modelName,
+		provider:        providerName,
+		streaming:       projector != nil,
+	}, nil
+}
+
+func (r *nativeCodingRuntime) RunTurn(ctx context.Context, prompt string) error {
+	beforeHistory, err := r.readTurnHistory(ctx, r.sessions, r.metadata.SessionKey)
 	if err != nil {
-		return codingTurnOutcome{Model: modelName, Provider: providerName},
-			fmt.Errorf("coding runtime: read history before turn: %w", err)
+		return fmt.Errorf("coding runtime: read history before turn: %w", err)
 	}
-	response, turnErr := loop.ProcessDirectWithOptions(
+	response, turnErr := r.loop.ProcessDirectWithOptions(
 		ctx,
-		request.Prompt,
-		request.Metadata.SessionKey,
+		prompt,
+		r.metadata.SessionKey,
 		"coding",
-		request.Metadata.ThreadID,
-		agent.DirectTurnOptions{SuppressBackgroundCompaction: true},
+		r.metadata.ThreadID,
+		agent.DirectTurnOptions{
+			SuppressBackgroundCompaction: true,
+			EnableStreaming:              r.streaming,
+		},
 	)
-	after, historyErr := readTurnHistory(
+	after, historyErr := r.readTurnHistory(
 		context.WithoutCancel(ctx),
-		sessions,
-		request.Metadata.SessionKey,
+		r.sessions,
+		r.metadata.SessionKey,
 	)
-	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), request.Prompt)
+	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), prompt)
 	outcome := codingTurnOutcome{
-		Model:        modelName,
-		Provider:     providerName,
+		Model:        r.model,
+		Provider:     r.provider,
 		Response:     response,
 		PromptStored: promptStored,
 	}
+	r.mu.Lock()
+	r.lastOutcome = outcome
+	r.mu.Unlock()
+	hardCanceled := errors.Is(context.Cause(ctx), controller.ErrHardCanceled)
 	if historyErr != nil {
-		return outcome, &thread.IndeterminatePromptError{
-			ThreadID: request.Metadata.ThreadID,
+		return &thread.IndeterminatePromptError{
+			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
 				turnErr,
 				fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr),
 			),
 		}
 	}
+	if hardCanceled && !promptStored {
+		return turnErr
+	}
 	if !promptStored {
-		return outcome, &thread.IndeterminatePromptError{
-			ThreadID: request.Metadata.ThreadID,
+		return &thread.IndeterminatePromptError{
+			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
 				turnErr,
 				fmt.Errorf("coding runtime: confirmed history does not contain the admitted prompt"),
 			),
 		}
 	}
-	return outcome, turnErr
+	return turnErr
+}
+
+func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {
+	return r.loop.InterruptGracefulSession(r.metadata.SessionKey, "finish the current work and summarize")
+}
+
+func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
+	return r.loop.HardAbort(r.metadata.SessionKey)
+}
+
+func (r *nativeCodingRuntime) Compact(ctx context.Context) error {
+	return r.loop.CompactCodingSession(ctx, r.metadata.SessionKey)
+}
+
+func (r *nativeCodingRuntime) Close() error {
+	r.closeOnce.Do(func() {
+		r.closeErr = errors.Join(r.loop.CloseContext(context.Background()), r.eventBus.Close())
+		r.messageBus.Close()
+	})
+	return r.closeErr
+}
+
+func (r *nativeCodingRuntime) outcome() codingTurnOutcome {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastOutcome
+}
+
+type nativeControllerRuntime struct {
+	*nativeCodingRuntime
+	store     *thread.Store
+	lease     *thread.Lease
+	projector *frontend.Projector
+	now       func() time.Time
+}
+
+var _ controller.Runtime = (*nativeControllerRuntime)(nil)
+
+func (r *nativeControllerRuntime) RunTurn(ctx context.Context, prompt string) error {
+	turnErr := r.nativeCodingRuntime.RunTurn(ctx, prompt)
+	outcome := r.outcome()
+	if !outcome.PromptStored {
+		return turnErr
+	}
+	_, preview, displayErr := thread.DisplayFromRequest(prompt)
+	if displayErr == nil {
+		r.metadata.Preview = preview
+	}
+	r.metadata.Model = r.model
+	r.metadata.Provider = r.provider
+	r.metadata.UpdatedAt = r.now().UTC()
+	saveErr := r.store.Save(r.metadata)
+	projectionErr := agentadapter.ProjectThreadMetadata(r.projector, r.metadata)
+	return errors.Join(turnErr, displayErr, saveErr, projectionErr)
+}
+
+func (r *nativeControllerRuntime) Close() error {
+	return errors.Join(r.nativeCodingRuntime.Close(), r.lease.Release())
+}
+
+func newNativeCodingControllerWithDependencies(
+	request codingTurnRequest,
+	resumed bool,
+	limits frontend.ProjectionLimits,
+	dependencies nativeCodingTurnRunner,
+	now func() time.Time,
+) (frontend.Controller, error) {
+	if request.Store == nil || request.Lease == nil {
+		return nil, fmt.Errorf("coding controller requires a store and thread lease")
+	}
+	if err := request.Store.ValidateLease(request.Lease, request.Metadata.ThreadID); err != nil {
+		return nil, fmt.Errorf("coding controller requires an active thread lease: %w", err)
+	}
+	projector, err := frontend.NewProjector(request.Metadata.ThreadID, limits)
+	if err != nil {
+		return nil, err
+	}
+	projector.Open(resumed)
+	if projectionErr := agentadapter.ProjectThreadMetadata(projector, request.Metadata); projectionErr != nil {
+		return nil, projectionErr
+	}
+	native, err := openNativeCodingRuntime(dependencies, request, projector)
+	if err != nil {
+		return nil, err
+	}
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: native,
+		store:               request.Store,
+		lease:               request.Lease,
+		projector:           projector,
+		now:                 now,
+	}
+	result, err := controller.New(projector, runtime)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	return result, nil
 }
 
 func codingRuntimeConfig(

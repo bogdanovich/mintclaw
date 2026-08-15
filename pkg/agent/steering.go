@@ -684,6 +684,24 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 	if ts == nil {
 		return fmt.Errorf("no active turn")
 	}
+	return al.interruptGracefulTurn(ts, hint)
+}
+
+// InterruptGracefulSession requests a terminal summary from the one active
+// turn owned by sessionKey. It fails closed when identical session keys are
+// active in multiple workspaces.
+func (al *AgentLoop) InterruptGracefulSession(sessionKey, hint string) error {
+	ts, ambiguous := al.uniqueActiveTurnForSession(sessionKey)
+	if ambiguous {
+		return fmt.Errorf("session %s is active in multiple workspaces", sessionKey)
+	}
+	if ts == nil {
+		return fmt.Errorf("no active turn state found for session %s", sessionKey)
+	}
+	return al.interruptGracefulTurn(ts, hint)
+}
+
+func (al *AgentLoop) interruptGracefulTurn(ts *turnState, hint string) error {
 	if !ts.requestGracefulInterrupt(hint) {
 		return fmt.Errorf("turn %s cannot accept graceful interrupt", ts.turnID)
 	}

@@ -38,6 +38,9 @@ type DirectTurnOptions struct {
 	// SuppressBackgroundCompaction keeps durable history and foreground
 	// compaction enabled while preventing work from outliving a short-lived caller.
 	SuppressBackgroundCompaction bool
+	// EnableStreaming publishes accumulated answer and reasoning updates through
+	// the direct caller's message-bus stream delegate.
+	EnableStreaming bool
 }
 
 // ProcessDirectWithOptions processes a direct turn with explicit persistence semantics.
@@ -125,6 +128,8 @@ func (al *AgentLoop) processCodingDirect(
 			SuppressBackgroundCompaction: directOpts.SuppressBackgroundCompaction,
 			TreatInputAsPrompt:           true,
 			SendResponse:                 false,
+			AllowInterimMintClawPublish:  directOpts.EnableStreaming,
+			DirectStreaming:              directOpts.EnableStreaming,
 			ExpectFinalDelivery:          true,
 			NoHistory:                    directOpts.Stateless,
 		},

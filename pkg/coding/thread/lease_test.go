@@ -210,6 +210,26 @@ func TestThreadLeaseRejectsMissingThreadAndInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestStoreValidateLeaseRequiresActiveExactOwner(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ValidateLease(lease, metadata.ThreadID); err != nil {
+		t.Fatalf("ValidateLease(active) error = %v", err)
+	}
+	if err := store.ValidateLease(lease, uuid.NewString()); err == nil {
+		t.Fatal("ValidateLease(wrong thread) succeeded")
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ValidateLease(lease, metadata.ThreadID); err == nil {
+		t.Fatal("ValidateLease(released) succeeded")
+	}
+}
+
 func newLeaseTestThread(t *testing.T) (*Store, Metadata) {
 	t.Helper()
 	project, err := ResolveProject(t.Context(), t.TempDir())
