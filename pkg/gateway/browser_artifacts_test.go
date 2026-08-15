@@ -174,6 +174,28 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	}
 }
 
+func TestBrowserScreenshotTargetSourceKindRoundTrip(t *testing.T) {
+	for _, target := range []browser.ScreenshotTarget{
+		browser.ScreenshotTargetPage,
+		browser.ScreenshotTargetElement,
+	} {
+		kind := browserScreenshotKind(target)
+		if got := browserScreenshotTarget(kind); got != target {
+			t.Fatalf("browserScreenshotTarget(browserScreenshotKind(%q)) = %q", target, got)
+		}
+		record := nodes.TransferArtifactRecord{
+			State: nodes.TransferArtifactCommitted,
+			Spec: nodes.TransferArtifactSpec{
+				Direction: nodes.TransferDirectionDownload, SourceKind: kind,
+				Filename: browserScreenshotFilename, ContentType: "image/png",
+			},
+		}
+		if !validBrowserScreenshotRecord(record) {
+			t.Fatalf("validBrowserScreenshotRecord(%q) = false", target)
+		}
+	}
+}
+
 func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := gatewayBrowserConfig(workspace)

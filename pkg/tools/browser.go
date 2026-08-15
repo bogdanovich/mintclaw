@@ -920,8 +920,11 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	}
 	artifact, err := tool.runtime.source.CaptureScreenshot(ctx, browser.ScreenshotRequest{
 		Owner: owner, RequestID: requestID, SessionID: observation.SessionID,
-		TabID: observation.TabID, SnapshotID: observation.SnapshotID,
-		SnapshotGeneration: observation.SnapshotGeneration,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID:  observation.ContextCatalogID,
+		ContextGeneration: observation.ContextGeneration,
+		SnapshotID:        observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
 	})
 	if err != nil {
 		return browserToolError(err)

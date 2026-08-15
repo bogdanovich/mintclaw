@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	browserScreenshotFilename   = "browser-screenshot.png"
-	browserScreenshotSourceKind = "browser_screenshot"
+	browserScreenshotFilename          = "browser-screenshot.png"
+	browserScreenshotSourceKind        = "browser_screenshot"
+	browserElementScreenshotSourceKind = "browser_screenshot_element"
 )
 
 type browserScreenshotCopyFunc func(
@@ -164,7 +165,9 @@ func recoverBrowserScreenshotDelivery(
 
 func validBrowserScreenshotRecord(record nodes.TransferArtifactRecord) bool {
 	return record.State == nodes.TransferArtifactCommitted &&
-		record.Spec.SourceKind == browserScreenshotSourceKind &&
+		record.Spec.Direction == nodes.TransferDirectionDownload &&
+		(record.Spec.SourceKind == browserScreenshotSourceKind ||
+			record.Spec.SourceKind == browserElementScreenshotSourceKind) &&
 		record.Spec.Filename == browserScreenshotFilename &&
 		record.Spec.ContentType == "image/png"
 }
@@ -191,9 +194,22 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	request browser.ScreenshotRequest,
 	capture browser.ScreenshotCapture,
 ) (browser.ScreenshotArtifact, error) {
+	requestTarget := request.Target
+	if requestTarget == "" {
+		requestTarget = browser.ScreenshotTargetPage
+	}
+	captureTarget := capture.CaptureTarget
+	if captureTarget == "" {
+		captureTarget = browser.ScreenshotTargetPage
+	}
 	if source == nil || source.services == nil || source.services.NodeAdmission == nil ||
 		source.services.MediaStore == nil || source.workspace == "" || len(capture.Data) == 0 {
 		return browser.ScreenshotArtifact{}, browser.ErrWorkerUnavailable
+	}
+	if captureTarget != requestTarget || capture.FrameID != request.FrameID ||
+		capture.ContextCatalogID != request.ContextCatalogID ||
+		capture.ContextGeneration != request.ContextGeneration {
+		return browser.ScreenshotArtifact{}, browser.ErrDenied
 	}
 	owner, mediaOwner, err := browserScreenshotOwners(
 		ctx, source.workspace, capture.SessionID, request.RequestID,
@@ -206,7 +222,7 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	spec := nodes.TransferArtifactSpec{
 		TransferID: request.RequestID, Direction: nodes.TransferDirectionDownload,
 		Target: capture.Target, ProfileRevision: capture.PolicyRevision,
-		SourceKind: browserScreenshotSourceKind, SourceScope: capture.TabID,
+		SourceKind: browserScreenshotKind(captureTarget), SourceScope: capture.TabID,
 		SourceID: capture.SnapshotID, SourceRevision: capture.SnapshotGeneration,
 		Filename: browserScreenshotFilename, ContentType: capture.ContentType,
 		DeclaredSize: int64(len(capture.Data)), SHA256: hex.EncodeToString(digest[:]),
@@ -349,6 +365,7 @@ func browserScreenshotArtifact(
 		SessionID: record.Owner.SessionID, TabID: record.Spec.SourceScope,
 		SnapshotID:         record.Spec.SourceID,
 		SnapshotGeneration: record.Spec.SourceRevision,
+		Target:             browserScreenshotTarget(record.Spec.SourceKind),
 		DeliveryState:      deliveryState,
 		MediaRef:           mediaRef,
 		Recovery: &browser.ScreenshotRecovery{
@@ -357,6 +374,20 @@ func browserScreenshotArtifact(
 			SessionID: record.Owner.SessionID, ToolCallID: record.Owner.ToolCallID,
 		},
 	}
+}
+
+func browserScreenshotKind(target browser.ScreenshotTarget) string {
+	if target == browser.ScreenshotTargetElement {
+		return browserElementScreenshotSourceKind
+	}
+	return browserScreenshotSourceKind
+}
+
+func browserScreenshotTarget(sourceKind string) browser.ScreenshotTarget {
+	if sourceKind == browserElementScreenshotSourceKind {
+		return browser.ScreenshotTargetElement
+	}
+	return browser.ScreenshotTargetPage
 }
 
 func browserScreenshotOwners(

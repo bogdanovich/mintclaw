@@ -53,13 +53,25 @@ type DriverScreenshot struct {
 	ContentType string
 }
 
+type ScreenshotTarget string
+
+const (
+	ScreenshotTargetPage    ScreenshotTarget = "page"
+	ScreenshotTargetElement ScreenshotTarget = "element"
+)
+
 type ScreenshotRequest struct {
 	Owner              Owner
 	RequestID          string
 	SessionID          string
 	TabID              string
+	FrameID            string
+	ContextCatalogID   string
+	ContextGeneration  uint64
 	SnapshotID         string
 	SnapshotGeneration uint64
+	Target             ScreenshotTarget
+	Ref                string
 }
 
 type ScreenshotDeliveryRequest struct {
@@ -88,6 +100,7 @@ type ScreenshotArtifact struct {
 	TabID              string              `json:"tab_id"`
 	SnapshotID         string              `json:"snapshot_id"`
 	SnapshotGeneration uint64              `json:"snapshot_generation"`
+	Target             ScreenshotTarget    `json:"target"`
 	Truncated          bool                `json:"truncated"`
 	DeliveryState      string              `json:"-"`
 	MediaRef           string              `json:"-"`
@@ -133,8 +146,12 @@ type ScreenshotCapture struct {
 	Profile            string
 	PolicyRevision     string
 	TabID              string
+	FrameID            string
+	ContextCatalogID   string
+	ContextGeneration  uint64
 	SnapshotID         string
 	SnapshotGeneration uint64
+	CaptureTarget      ScreenshotTarget
 	Data               []byte
 	ContentType        string
 }

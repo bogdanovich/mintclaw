@@ -1186,12 +1186,36 @@ func (worker *playwrightWorker) CaptureScreenshot(
 ) (DriverScreenshot, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.captureScreenshotLocked(ctx, map[string]any{
+		"type": "png", "fullPage": false, "scale": "css",
+	}, maximumBytes)
+}
+
+func (worker *playwrightWorker) CaptureElementScreenshot(
+	ctx context.Context,
+	element DriverElement,
+	maximumBytes int,
+) (DriverScreenshot, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if !playwrightTargetPattern.MatchString(element.Target) || element.Role == "" {
+		return DriverScreenshot{}, ErrStale
+	}
+	return worker.captureScreenshotLocked(ctx, map[string]any{
+		"type": "png", "scale": "css", "target": element.Target,
+		"element": "semantic " + element.Role,
+	}, maximumBytes)
+}
+
+func (worker *playwrightWorker) captureScreenshotLocked(
+	ctx context.Context,
+	arguments map[string]any,
+	maximumBytes int,
+) (DriverScreenshot, error) {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || maximumBytes <= 0 {
 		return DriverScreenshot{}, ErrWorkerUnavailable
 	}
-	result, err := worker.client.CallTool(ctx, "browser_take_screenshot", map[string]any{
-		"type": "png", "fullPage": false, "scale": "css",
-	})
+	result, err := worker.client.CallTool(ctx, "browser_take_screenshot", arguments)
 	if err != nil || result == nil {
 		worker.lost = true
 		return DriverScreenshot{}, ErrWorkerUnavailable

@@ -505,6 +505,29 @@ func TestPlaywrightWorkerCapturesBoundedPNGWithoutTextProjection(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerCapturesSemanticElementWithoutSelector(t *testing.T) {
+	png := append(append([]byte(nil), pngSignature...), []byte("element")...)
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_take_screenshot": {Content: []sdkmcp.Content{
+			&sdkmcp.ImageContent{Data: png, MIMEType: "image/png"},
+		}},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	element := DriverElement{Target: "e7", Role: "button", Name: "Save"}
+	screenshot, err := worker.CaptureElementScreenshot(t.Context(), element, len(png))
+	if err != nil || !bytes.Equal(screenshot.Data, png) || len(client.calls) != 1 {
+		t.Fatalf("CaptureElementScreenshot() = %+v, %v; calls = %+v", screenshot, err, client.calls)
+	}
+	arguments := client.calls[0].arguments
+	if arguments["target"] != element.Target || arguments["element"] != "semantic button" ||
+		arguments["type"] != "png" || arguments["scale"] != "css" {
+		t.Fatalf("element screenshot arguments = %#v", arguments)
+	}
+	if _, present := arguments["filename"]; present {
+		t.Fatalf("element screenshot exposed output path argument: %#v", arguments)
+	}
+}
+
 func TestPlaywrightWorkerRejectsInvalidScreenshotContent(t *testing.T) {
 	tests := []struct {
 		name    string

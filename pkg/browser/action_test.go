@@ -18,31 +18,32 @@ import (
 )
 
 type actionTestWorker struct {
-	observation     DriverObservation
-	observeErr      error
-	observeCalls    int
-	resolveElement  DriverElement
-	resolveElements map[string]DriverElement
-	resolveOrigin   string
-	resolveErr      error
-	resolveCalls    int
-	actions         []DriverAction
-	onExecute       func(DriverAction)
-	navigationID    string
-	catalogCalls    int
-	beforeNavCheck  func()
-	authorizeErr    error
-	authorizeCalls  int
-	executeErr      error
-	screenshot      DriverScreenshot
-	screenshotErr   error
-	uploads         []DriverAction
-	download        DriverDownload
-	closed          int
-	statusCalls     int
-	humanControl    bool
-	beginHumanErr   error
-	endHumanErr     error
+	observation       DriverObservation
+	observeErr        error
+	observeCalls      int
+	resolveElement    DriverElement
+	resolveElements   map[string]DriverElement
+	resolveOrigin     string
+	resolveErr        error
+	resolveCalls      int
+	actions           []DriverAction
+	onExecute         func(DriverAction)
+	navigationID      string
+	catalogCalls      int
+	beforeNavCheck    func()
+	authorizeErr      error
+	authorizeCalls    int
+	executeErr        error
+	screenshot        DriverScreenshot
+	screenshotErr     error
+	screenshotElement DriverElement
+	uploads           []DriverAction
+	download          DriverDownload
+	closed            int
+	statusCalls       int
+	humanControl      bool
+	beginHumanErr     error
+	endHumanErr       error
 }
 
 func (worker *actionTestWorker) AuthorizeFill(
@@ -148,6 +149,15 @@ func (worker *actionTestWorker) CatalogRevision() string {
 }
 
 func (worker *actionTestWorker) CaptureScreenshot(context.Context, int) (DriverScreenshot, error) {
+	return worker.screenshot, worker.screenshotErr
+}
+
+func (worker *actionTestWorker) CaptureElementScreenshot(
+	_ context.Context,
+	element DriverElement,
+	_ int,
+) (DriverScreenshot, error) {
+	worker.screenshotElement = element
 	return worker.screenshot, worker.screenshotErr
 }
 
