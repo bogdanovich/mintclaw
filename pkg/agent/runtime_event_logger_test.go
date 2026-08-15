@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestRuntimeEventLoggerFiltering(t *testing.T) {
@@ -174,6 +175,31 @@ func TestRuntimeEventLogSafePayloadOmitsFallbackDiagnosticMessage(t *testing.T) 
 		}
 	}
 	if payload.DiagnosticMessage != secret {
+		t.Fatal("log-safe projection mutated the event payload")
+	}
+}
+
+func TestRuntimeEventLogSafePayloadOmitsToolObservation(t *testing.T) {
+	payload := ToolExecEndPayload{
+		Tool:        "exec",
+		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{Output: "secret output"}},
+	}
+	for _, input := range []any{payload, &payload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got ToolExecEndPayload
+		switch value := safe.(type) {
+		case ToolExecEndPayload:
+			got = value
+		case *ToolExecEndPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.Observation != nil || got.Tool != "exec" {
+			t.Fatalf("safe tool payload = %#v", got)
+		}
+	}
+	if payload.Observation == nil {
 		t.Fatal("log-safe projection mutated the event payload")
 	}
 }

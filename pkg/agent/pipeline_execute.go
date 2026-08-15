@@ -577,7 +577,8 @@ func (runner *toolLoopRunner) admitToolCall(
 						DiagnosticResult: diagnosticTextPreview(
 							p.Cfg, durableContent, diagnosticToolResultBytes,
 						),
-						WriteAudit: append([]toolshared.WriteAuditEntry(nil), hookResult.WriteAudit...),
+						WriteAudit:  append([]toolshared.WriteAuditEntry(nil), hookResult.WriteAudit...),
+						Observation: codingToolObservation(ts, hookResult.Observation),
 					},
 				)
 				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
@@ -1292,7 +1293,8 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
-			WriteAudit: append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
+			WriteAudit:  append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
+			Observation: codingToolObservation(ts, toolResult.Observation),
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)
@@ -1363,6 +1365,19 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	runner.captureAfterToolSteering(false)
 	return toolCallStageResult{}
+}
+
+func codingToolObservation(ts *turnState, observation *toolshared.ToolObservation) *toolshared.ToolObservation {
+	if ts == nil || strings.TrimSpace(ts.opts.CodingContext.SessionKey) == "" ||
+		observation == nil || observation.Command == nil {
+		return nil
+	}
+	command := *observation.Command
+	if observation.Command.ExitCode != nil {
+		exitCode := *observation.Command.ExitCode
+		command.ExitCode = &exitCode
+	}
+	return &toolshared.ToolObservation{Command: &command}
 }
 
 func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOutcome {

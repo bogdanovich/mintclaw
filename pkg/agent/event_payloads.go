@@ -231,6 +231,7 @@ type ToolExecEndPayload struct {
 	InteractionID    string
 	DiagnosticResult string
 	WriteAudit       []toolshared.WriteAuditEntry
+	Observation      *toolshared.ToolObservation
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

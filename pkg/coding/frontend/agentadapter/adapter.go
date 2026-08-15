@@ -121,11 +121,17 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				a.projector.ToolSuspended(turnID, payload.ToolCallID, payload.Tool, payload.Duration)
 				break
 			}
-			result := fmt.Sprintf(
-				"result available (%d bytes for model, %d bytes for user)",
-				payload.ForLLMLen,
-				payload.ForUserLen,
-			)
+			result := ""
+			if payload.Observation != nil && payload.Observation.Command != nil {
+				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*payload.Observation.Command))
+			} else {
+				result = fmt.Sprintf(
+					"result available (%d bytes for model, %d bytes for user)",
+					payload.ForLLMLen,
+					payload.ForUserLen,
+				)
+			}
+			audit := projectWriteAudit(payload.WriteAudit)
 			a.projector.ToolCompleted(
 				turnID,
 				payload.ToolCallID,
@@ -133,8 +139,11 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				result,
 				payload.Duration,
 				payload.IsError,
-				projectWriteAudit(payload.WriteAudit),
+				audit,
 			)
+			if hasChangedFiles(audit) {
+				a.projector.FilesChanged(turnID, payload.ToolCallID, audit)
+			}
 		}
 	case runtimeevents.KindAgentToolExecSkipped:
 		payload, ok := event.Payload.(agent.ToolExecSkippedPayload)
@@ -219,10 +228,46 @@ func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit
 			continue
 		}
 		result = append(result, frontend.WriteAudit{
-			Kind: entry.Kind, Target: entry.Target, Action: entry.Action, Success: true,
+			Kind: entry.Kind, Target: entry.Target, Action: entry.Action, Success: true, Tool: entry.Tool,
 		})
 	}
 	return result
+}
+
+func hasChangedFiles(audit []frontend.WriteAudit) bool {
+	for _, entry := range audit {
+		if entry.Success && entry.Kind == "file" && strings.TrimSpace(entry.Target) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func projectCommand(command toolshared.CommandObservation) frontend.CommandState {
+	var status frontend.CommandStatus
+	switch strings.TrimSpace(command.Status) {
+	case "running":
+		status = frontend.CommandRunning
+	case "succeeded":
+		status = frontend.CommandSucceeded
+	case "done", "exited":
+		status = frontend.CommandSucceeded
+		if command.ExitCode != nil && *command.ExitCode != 0 {
+			status = frontend.CommandFailed
+		}
+	case "canceled":
+		status = frontend.CommandCanceled
+	case "timed_out":
+		status = frontend.CommandTimedOut
+	default:
+		status = frontend.CommandFailed
+	}
+	return frontend.CommandState{
+		Stdout: command.Stdout, Stderr: command.Stderr, Output: command.Output,
+		Status: status, SessionID: command.SessionID, ExitCode: command.ExitCode,
+		Truncated: command.Truncated, Background: command.Background,
+		Canceled: command.Canceled, TimedOut: command.TimedOut,
+	}
 }
 
 func safeToken(value string) string {

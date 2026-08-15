@@ -71,7 +71,7 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 8 || snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
+	if snapshot.Revision != 9 || snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
 		t.Fatalf("terminal state = %+v", snapshot)
 	}
 	if len(snapshot.Entries) != 2 || snapshot.Entries[1].Text != "done" {
@@ -84,12 +84,84 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.Tools[0].WriteAudit[0].Target != "main.go" {
 		t.Fatalf("tool correlation/write audit = %+v", snapshot.Tools[0])
 	}
+	if len(snapshot.ChangedFiles) != 1 || snapshot.ChangedFiles[0].Path != "main.go" ||
+		snapshot.ChangedFiles[0].CallID != "call-1" {
+		t.Fatalf("verified changed files = %+v", snapshot.ChangedFiles)
+	}
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
 		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
 	}
 	if snapshot.ContextUsage.UsedTokens != 120 || snapshot.ContextUsage.LimitTokens != 1000 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
+	}
+}
+
+func TestAdapterProjectsBoundedToolOwnedCommandObservation(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{TextBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{ToolCallID: "call-1", Tool: "exec"})
+	exitCode := -1
+	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+		ToolCallID: "call-1", Tool: "exec", IsError: true,
+		ForLLMLen: 999999, ForUserLen: 999999,
+		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+			Stdout: strings.Repeat("o", 512), Stderr: strings.Repeat("e", 512), Status: "canceled",
+			ExitCode: &exitCode, Truncated: true, Background: true, Canceled: true, SessionID: "session-1",
+		}},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Command == nil {
+		t.Fatalf("command tool = %+v", snapshot.Tools)
+	}
+	tool := snapshot.Tools[0]
+	if tool.Status != frontend.ToolInterrupted || tool.Command.Status != frontend.CommandCanceled ||
+		!tool.Command.Truncated || !tool.Command.Background || tool.Command.ExitCode == nil ||
+		*tool.Command.ExitCode != -1 {
+		t.Fatalf("command state = %+v", tool)
+	}
+	if len(tool.Command.Stdout) > 64 || len(tool.Command.Stderr) > 64 || len(tool.Output) > 64 ||
+		strings.Contains(tool.Output, "result available") {
+		t.Fatalf("unbounded or prose-derived command output = %+v", tool)
+	}
+	deltas, err := projector.ChangesSince(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 3 || deltas[0].Kind != frontend.DeltaToolStarted ||
+		deltas[1].Kind != frontend.DeltaToolOutput || deltas[2].Kind != frontend.DeltaToolCompleted {
+		t.Fatalf("command lifecycle deltas = %+v", deltas)
+	}
+}
+
+func TestProjectCommandMapsCompletedNonzeroExitToFailure(t *testing.T) {
+	exitCode := 7
+	command := projectCommand(toolshared.CommandObservation{Status: "done", ExitCode: &exitCode})
+	if command.Status != frontend.CommandFailed || command.ExitCode == nil || *command.ExitCode != 7 {
+		t.Fatalf("completed nonzero command = %+v", command)
+	}
+	exitCode = 0
+	command = projectCommand(toolshared.CommandObservation{Status: "exited", ExitCode: &exitCode})
+	if command.Status != frontend.CommandSucceeded {
+		t.Fatalf("completed zero command = %+v", command)
 	}
 }
 

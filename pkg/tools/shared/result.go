@@ -138,6 +138,10 @@ type ToolResult struct {
 	// "updated", or "created"; prose in ForLLM/ForUser is only descriptive.
 	WriteAudit []WriteAuditEntry `json:"write_audit,omitempty"`
 
+	// Observation carries bounded tool-owned frontend state. It is neither
+	// model-visible nor persisted in canonical tool-result history.
+	Observation *ToolObservation `json:"-"`
+
 	// Suspension asks the runtime to durably pause this tool call for human
 	// input. It is control-plane state, not model-visible tool output. The
 	// runtime must enrich it with trusted route and origin data before use.
@@ -148,6 +152,27 @@ type ToolResult struct {
 	// process-local; authoritative domain state must recover safely after a
 	// restart without it.
 	SuspensionResolution func(context.Context, interactions.Outcome) error `json:"-"`
+}
+
+// ToolObservation is a bounded structured observation produced by a tool.
+// Command is currently the only admitted observation kind.
+type ToolObservation struct {
+	Command *CommandObservation
+}
+
+// CommandObservation describes command output and process lifecycle without
+// requiring a frontend to parse ForLLM or ForUser prose.
+type CommandObservation struct {
+	Stdout     string
+	Stderr     string
+	Output     string
+	Truncated  bool
+	Background bool
+	Canceled   bool
+	TimedOut   bool
+	SessionID  string
+	Status     string
+	ExitCode   *int
 }
 
 type OutboundDelivery struct {
@@ -351,6 +376,20 @@ func (tr *ToolResult) WithWriteAudit(entry WriteAuditEntry) *ToolResult {
 	}
 	entry.Success = true
 	tr.WriteAudit = append(tr.WriteAudit, entry)
+	return tr
+}
+
+// WithObservation attaches a tool-owned frontend observation.
+func (tr *ToolResult) WithObservation(command CommandObservation) *ToolResult {
+	if tr == nil {
+		return tr
+	}
+	copy := command
+	if command.ExitCode != nil {
+		exitCode := *command.ExitCode
+		copy.ExitCode = &exitCode
+	}
+	tr.Observation = &ToolObservation{Command: &copy}
 	return tr
 }
 

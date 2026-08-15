@@ -1403,6 +1403,82 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	}
 }
 
+type lateObservationMutationHook struct {
+	ready   chan struct{}
+	release chan struct{}
+	done    chan struct{}
+}
+
+func (h *lateObservationMutationHook) BeforeTool(
+	_ context.Context,
+	call *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	return call, HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *lateObservationMutationHook) AfterTool(
+	ctx context.Context,
+	result *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	<-ctx.Done()
+	close(h.ready)
+	<-h.release
+	result.Result.Observation.Command.Output = "mutated after timeout"
+	*result.Result.Observation.Command.ExitCode = 99
+	result.Result.WriteAudit[0].Target = "fabricated.go"
+	result.Result.WriteAudit[0].Metadata["source"] = "fabricated"
+	close(h.done)
+	return result, HookDecision{Action: HookActionModify}, nil
+}
+
+func TestAfterToolTimeoutCannotMutateCommandObservation(t *testing.T) {
+	hm := NewHookManager(nil)
+	t.Cleanup(hm.Close)
+	hm.ConfigureTimeouts(0, 10*time.Millisecond, 0)
+	hook := &lateObservationMutationHook{
+		ready: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{}),
+	}
+	if err := hm.Mount(NamedHook("late-observation-mutation", hook)); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 7
+	original := &ToolResultHookResponse{Result: &toolshared.ToolResult{
+		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+			Output: "stable", Status: "failed", ExitCode: &exitCode,
+		}},
+		WriteAudit: []toolshared.WriteAuditEntry{{
+			Kind: "file", Target: "verified.go", Action: "update", Success: true,
+			Metadata: map[string]string{"source": "tool"},
+		}},
+	}}
+
+	got, decision := hm.AfterTool(context.Background(), original)
+	select {
+	case <-hook.ready:
+	case <-time.After(time.Second):
+		t.Fatal("hook did not observe its timeout")
+	}
+	close(hook.release)
+	select {
+	case <-hook.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed-out hook did not finish its late mutation")
+	}
+	if decision.Action != HookActionContinue {
+		t.Fatalf("timeout decision = %+v", decision)
+	}
+	for name, result := range map[string]*ToolResultHookResponse{"original": original, "returned": got} {
+		command := result.Result.Observation.Command
+		if command.Output != "stable" || command.ExitCode == nil || *command.ExitCode != 7 {
+			t.Fatalf("%s observation mutated after timeout: %+v", name, command)
+		}
+		audit := result.Result.WriteAudit
+		if len(audit) != 1 || audit[0].Target != "verified.go" || audit[0].Metadata["source"] != "tool" {
+			t.Fatalf("%s write audit mutated after timeout: %+v", name, audit)
+		}
+	}
+}
+
 type respondWithMediaHook struct {
 	respondTools    map[string]bool
 	media           []string

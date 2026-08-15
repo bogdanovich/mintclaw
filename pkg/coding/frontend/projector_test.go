@@ -151,6 +151,116 @@ func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
 	}
 }
 
+func TestVerifiedFileChangesConvergeAndIgnoreNonFileAudits(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Tools: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := projector.FilesChanged("turn-1", "call-1", []WriteAudit{
+		{Kind: "file", Target: "main.go", Action: "update", Tool: "write_file", Success: true},
+		{Kind: "memory", Target: "note", Action: "update", Success: true},
+		{Kind: "file", Target: "failed.go", Action: "write", Success: false},
+	})
+	if err = reducer.Apply(delta); err != nil {
+		t.Fatal(err)
+	}
+	want, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if !reflect.DeepEqual(got, want) || len(got.ChangedFiles) != 1 {
+		t.Fatalf("changed-file projection = %+v, want %+v", got, want)
+	}
+	file := got.ChangedFiles[0]
+	if file.Path != "main.go" || file.Tool != "write_file" || file.TurnID != "turn-1" || file.CallID != "call-1" {
+		t.Fatalf("changed file = %+v", file)
+	}
+}
+
+func TestChangedFileDeltaIsDeduplicatedAndBounded(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Tools: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := projector.FilesChanged("turn-1", "call-1", []WriteAudit{
+		{Kind: "file", Target: "a.go", Action: "write", Success: true},
+		{Kind: "file", Target: "b.go", Action: "write", Success: true},
+		{Kind: "file", Target: "a.go", Action: "update", Success: true},
+		{Kind: "file", Target: "c.go", Action: "write", Success: true},
+	})
+	if !delta.RequiresSnapshot || len(delta.ChangedFiles) != 2 ||
+		delta.ChangedFiles[0].Path != "a.go" || delta.ChangedFiles[0].Action != "update" ||
+		delta.ChangedFiles[1].Path != "c.go" {
+		t.Fatalf("bounded changed-file delta = %+v", delta)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.ChangedFiles, delta.ChangedFiles) {
+		t.Fatalf("changed-file snapshot = %+v, delta = %+v", snapshot.ChangedFiles, delta.ChangedFiles)
+	}
+}
+
+func TestCommandExitCodeDoesNotAliasProjectorOrReducerState(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 7
+	delta := projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandFailed, ExitCode: &exitCode,
+	})
+	exitCode = 9
+	if err = reducer.Apply(delta); err != nil {
+		t.Fatal(err)
+	}
+	*delta.Tool.Command.ExitCode = 11
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := *snapshot.Tools[0].Command.ExitCode; got != 7 {
+		t.Fatalf("projector exit code = %d, want 7", got)
+	}
+	if got := *reducer.State().Tools[0].Command.ExitCode; got != 7 {
+		t.Fatalf("reducer exit code = %d, want 7", got)
+	}
+}
+
+func TestCompletedToolReflectsFailedBackgroundCommand(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 7
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandFailed, Background: true, ExitCode: &exitCode,
+	})
+	delta := projector.ToolCompleted("turn-1", "call-1", "exec", "", 0, false, nil)
+	if delta.Tool == nil || delta.Tool.Status != ToolFailed {
+		t.Fatalf("completed background command tool = %+v", delta.Tool)
+	}
+}
+
 func TestRepeatedCallIDAcrossTurnsRemainsDistinctAndConverges(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})
 	if err != nil {

@@ -17,6 +17,12 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+type sessionWriterFunc func([]byte) (int, error)
+
+func (f sessionWriterFunc) Write(data []byte) (int, error) {
+	return f(data)
+}
+
 // TestShellTool_Success verifies successful command execution
 func TestShellTool_Success(t *testing.T) {
 	tool, err := NewExecTool("", false)
@@ -45,6 +51,32 @@ func TestShellTool_Success(t *testing.T) {
 	// ForLLM should contain full output
 	if !strings.Contains(result.ForLLM, "hello world") {
 		t.Errorf("Expected ForLLM to contain 'hello world', got: %s", result.ForLLM)
+	}
+	if result.Observation == nil || result.Observation.Command == nil ||
+		result.Observation.Command.Status != "succeeded" ||
+		!strings.Contains(result.Observation.Command.Stdout, "hello world") {
+		t.Fatalf("command observation = %#v", result.Observation)
+	}
+}
+
+func TestShellTool_CommandObservationBoundsStdoutAndStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertion uses POSIX syntax")
+	}
+	tool, err := NewExecTool(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.Execute(context.Background(), map[string]any{
+		"action": "run", "command": "yes o | head -c 12000; yes e | head -c 12000 >&2",
+	})
+	if result.IsError || result.Observation == nil || result.Observation.Command == nil {
+		t.Fatalf("exec result = %#v", result)
+	}
+	observation := result.Observation.Command
+	if !observation.Truncated || len(observation.Stdout) >= 12000 ||
+		len(observation.Stderr) >= 12000 || observation.Status != "succeeded" {
+		t.Fatalf("bounded command observation = %#v", observation)
 	}
 }
 
@@ -114,6 +146,10 @@ func TestShellTool_CanceledCommandCannotReportSuccess(t *testing.T) {
 	case result := <-done:
 		if !result.IsError || !strings.Contains(result.ForLLM, "interrupted") {
 			t.Fatalf("canceled exec result = %#v", result)
+		}
+		if result.Observation == nil || result.Observation.Command == nil ||
+			!result.Observation.Command.Canceled || result.Observation.Command.Status != "canceled" {
+			t.Fatalf("canceled command observation = %#v", result.Observation)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("canceled command did not return")
@@ -1449,6 +1485,80 @@ func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
 	require.Equal(t, "process_local", response.SessionScope)
 	require.NotNil(t, response.RestartSafe)
 	require.False(t, *response.RestartSafe)
+	require.NotNil(t, result.Observation)
+	require.NotNil(t, result.Observation.Command)
+	require.True(t, result.Observation.Command.Background)
+	require.Equal(t, response.SessionID, result.Observation.Command.SessionID)
+	require.Equal(t, "running", result.Observation.Command.Status)
+	require.Nil(t, result.Observation.Command.ExitCode)
+}
+
+func TestShellTool_BackgroundReadObservesNonzeroExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertion uses POSIX syntax")
+	}
+	tool, err := NewExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	started := tool.Execute(context.Background(), map[string]any{
+		"action": "run", "command": "exit 7", "background": "true",
+	})
+	require.False(t, started.IsError)
+	var response toolshared.ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(started.ForLLM), &response))
+	session, err := sm.Get(response.SessionID)
+	require.NoError(t, err)
+	require.Eventually(t, session.IsDone, 5*time.Second, 10*time.Millisecond)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": response.SessionID,
+	})
+	require.False(t, result.IsError)
+	require.NotNil(t, result.Observation)
+	require.NotNil(t, result.Observation.Command)
+	require.Equal(t, "done", result.Observation.Command.Status)
+	require.NotNil(t, result.Observation.Command.ExitCode)
+	require.Equal(t, 7, *result.Observation.Command.ExitCode)
+}
+
+func TestShellTool_InputObservationCapturesCompletedNonzeroExit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "write", args: map[string]any{"action": "write", "data": "quit\n"}},
+		{name: "send keys", args: map[string]any{"action": "send-keys", "keys": "enter"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tool, err := NewExecTool(t.TempDir(), false)
+			require.NoError(t, err)
+			sm := NewSessionManager()
+			t.Cleanup(sm.Stop)
+			tool.sessionManager = sm
+			session := &ProcessSession{ID: "session-1", Status: "running"}
+			session.stdinWriter = sessionWriterFunc(func(data []byte) (int, error) {
+				// ProcessSession.Write holds the session lock while invoking the
+				// writer, so mutate terminal state directly to model a process
+				// reaped before Write returns.
+				session.Status = "done"
+				session.ExitCode = 7
+				return len(data), nil
+			})
+			require.True(t, sm.Add(session))
+			test.args["sessionId"] = session.ID
+
+			result := tool.Execute(context.Background(), test.args)
+			require.False(t, result.IsError)
+			require.NotNil(t, result.Observation)
+			require.NotNil(t, result.Observation.Command)
+			require.Equal(t, "done", result.Observation.Command.Status)
+			require.NotNil(t, result.Observation.Command.ExitCode)
+			require.Equal(t, 7, *result.Observation.Command.ExitCode)
+		})
+	}
 }
 
 func TestShellTool_DescriptionWarnsBackgroundSessionsAreNotRestartSafe(t *testing.T) {
