@@ -768,6 +768,10 @@ func (worker *playwrightWorker) Observe(ctx context.Context) (DriverObservation,
 func (worker *playwrightWorker) NavigationIdentity(ctx context.Context) (string, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.navigationIdentityLocked(ctx)
+}
+
+func (worker *playwrightWorker) navigationIdentityLocked(ctx context.Context) (string, error) {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl {
 		return "", ErrWorkerUnavailable
 	}
@@ -1186,12 +1190,83 @@ func (worker *playwrightWorker) CaptureScreenshot(
 ) (DriverScreenshot, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.captureScreenshotLocked(ctx, map[string]any{
+		"type": "png", "fullPage": false, "scale": "css",
+	}, maximumBytes)
+}
+
+func (worker *playwrightWorker) CapturePageScreenshot(
+	ctx context.Context,
+	expectedNavigationID string,
+	maximumBytes int,
+) (DriverScreenshot, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if expectedNavigationID == "" || expectedNavigationID != worker.navigationToken {
+		return DriverScreenshot{}, ErrStale
+	}
+	screenshot, err := worker.captureScreenshotLocked(ctx, map[string]any{
+		"type": "png", "fullPage": false, "scale": "css",
+	}, maximumBytes)
+	if err != nil {
+		return DriverScreenshot{}, err
+	}
+	currentNavigationID, err := worker.navigationIdentityLocked(ctx)
+	if err != nil {
+		return DriverScreenshot{}, err
+	}
+	if currentNavigationID != expectedNavigationID {
+		return DriverScreenshot{}, ErrStale
+	}
+	return screenshot, nil
+}
+
+func (worker *playwrightWorker) CaptureElementScreenshot(
+	ctx context.Context,
+	expectedNavigationID string,
+	expectedOrigin string,
+	element DriverElement,
+	maximumBytes int,
+) (DriverScreenshot, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if expectedNavigationID == "" || expectedNavigationID != worker.navigationToken ||
+		expectedOrigin == "" || !playwrightTargetPattern.MatchString(element.Target) || element.Role == "" {
+		return DriverScreenshot{}, ErrStale
+	}
+	resolved, origin, err := worker.resolveElementLocked(ctx, element.Target)
+	if err != nil {
+		return DriverScreenshot{}, err
+	}
+	if resolved != element || origin != expectedOrigin {
+		return DriverScreenshot{}, ErrStale
+	}
+	screenshot, err := worker.captureScreenshotLocked(ctx, map[string]any{
+		"type": "png", "scale": "css", "target": element.Target,
+		"element": "semantic " + element.Role,
+	}, maximumBytes)
+	if err != nil {
+		return DriverScreenshot{}, err
+	}
+	currentNavigationID, err := worker.navigationIdentityLocked(ctx)
+	if err != nil {
+		return DriverScreenshot{}, err
+	}
+	if currentNavigationID != expectedNavigationID {
+		return DriverScreenshot{}, ErrStale
+	}
+	return screenshot, nil
+}
+
+func (worker *playwrightWorker) captureScreenshotLocked(
+	ctx context.Context,
+	arguments map[string]any,
+	maximumBytes int,
+) (DriverScreenshot, error) {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || maximumBytes <= 0 {
 		return DriverScreenshot{}, ErrWorkerUnavailable
 	}
-	result, err := worker.client.CallTool(ctx, "browser_take_screenshot", map[string]any{
-		"type": "png", "fullPage": false, "scale": "css",
-	})
+	result, err := worker.client.CallTool(ctx, "browser_take_screenshot", arguments)
 	if err != nil || result == nil {
 		worker.lost = true
 		return DriverScreenshot{}, ErrWorkerUnavailable
@@ -1230,6 +1305,13 @@ func (worker *playwrightWorker) CaptureScreenshot(
 func (worker *playwrightWorker) Resolve(ctx context.Context, target string) (DriverElement, string, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	return worker.resolveElementLocked(ctx, target)
+}
+
+func (worker *playwrightWorker) resolveElementLocked(
+	ctx context.Context,
+	target string,
+) (DriverElement, string, error) {
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		!playwrightTargetPattern.MatchString(target) {
 		return DriverElement{}, "", ErrWorkerUnavailable

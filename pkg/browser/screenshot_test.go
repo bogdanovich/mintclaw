@@ -72,6 +72,44 @@ func TestBrokerScreenshotRejectsWrongTypeSignatureAndSize(t *testing.T) {
 	}
 }
 
+func TestBrokerElementScreenshotRequiresFreshSemanticReference(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := stableElementRef(observation.SnapshotID, worker.observation.Elements[0].Target)
+	request := ScreenshotRequest{
+		Owner: testOwner(), RequestID: "capture_element_1", SessionID: session.ID,
+		TabID: session.TabID, SnapshotID: observation.SnapshotID,
+		SnapshotGeneration: observation.SnapshotGeneration,
+		Target:             ScreenshotTargetElement, Ref: ref,
+	}
+	capture, err := broker.CaptureScreenshot(t.Context(), request)
+	if err != nil || capture.CaptureTarget != ScreenshotTargetElement ||
+		capture.SnapshotID != observation.SnapshotID ||
+		worker.screenshotElement != worker.observation.Elements[0] ||
+		worker.screenshotNavigationID == "" {
+		t.Fatalf("CaptureScreenshot() = %+v, %v; element = %+v", capture, err, worker.screenshotElement)
+	}
+
+	wrongRef := request
+	wrongRef.Ref = "element_wrong"
+	if _, err = broker.CaptureScreenshot(t.Context(), wrongRef); !errors.Is(err, ErrStale) {
+		t.Fatalf("wrong-ref CaptureScreenshot() error = %v, want ErrStale", err)
+	}
+	pageWithRef := request
+	pageWithRef.Target = ScreenshotTargetPage
+	if _, err = broker.CaptureScreenshot(t.Context(), pageWithRef); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("page-with-ref CaptureScreenshot() error = %v, want ErrInvalid", err)
+	}
+	partialContext := request
+	partialContext.FrameID = "frame_1"
+	if _, err = broker.CaptureScreenshot(t.Context(), partialContext); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("partial-context CaptureScreenshot() error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestBrowserScreenshotLimitUsesBoundedEffectiveValue(t *testing.T) {
 	limits := config.BrowserLimitsConfig{}.Effective()
 	if limits.ScreenshotBytes != config.BrowserMaxScreenshotBytes {

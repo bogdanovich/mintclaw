@@ -52,6 +52,18 @@ func (worker *contextBrokerTestWorker) SelectContext(
 	return worker.observation, cloneContextCatalog(worker.catalog), nil
 }
 
+func (worker *contextBrokerTestWorker) SelectContextWithNavigationIdentity(
+	ctx context.Context,
+	authority ContextMutationAuthority,
+) (DriverObservation, ContextCatalog, string, error) {
+	observation, catalog, err := worker.SelectContext(ctx, authority)
+	if err != nil {
+		return DriverObservation{}, ContextCatalog{}, "", err
+	}
+	navigationID, err := worker.NavigationIdentity(ctx)
+	return observation, catalog, navigationID, err
+}
+
 func (worker *contextBrokerTestWorker) CloseTab(
 	_ context.Context,
 	authority ContextMutationAuthority,
@@ -104,6 +116,9 @@ func openContextBrokerTest(t *testing.T, dryRun bool) (*Broker, *MemoryStore, *c
 	)}
 	actionWorker.resolveElement = actionWorker.observation.Elements[0]
 	actionWorker.resolveOrigin = actionWorker.observation.Origin
+	actionWorker.screenshot = DriverScreenshot{
+		Data: append(append([]byte(nil), pngSignature...), []byte("fixture")...), ContentType: "image/png",
+	}
 	worker := &contextBrokerTestWorker{actionTestWorker: actionWorker, catalog: ContextCatalog{
 		ID: "catalog_gateway", Generation: 9, SelectedTabID: "tab_primary",
 		Tabs: []TabContext{{
@@ -133,6 +148,83 @@ func openContextBrokerTest(t *testing.T, dryRun bool) (*Broker, *MemoryStore, *c
 		t.Fatal(err)
 	}
 	return broker, store, worker, session
+}
+
+func TestContextBrokerSelectedFrameScreenshotBindsDocumentAndCatalog(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	catalog, err := broker.ListContexts(t.Context(), testOwner(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation, err := broker.PrepareContext(t.Context(), ContextRequest{
+		Owner: testOwner(), RequestID: "request_select_frame_capture", SessionID: session.ID,
+		Operation: ContextSelect, ContextCatalogID: catalog.ID,
+		ContextGeneration: catalog.Generation, TabID: "tab_primary", FrameID: "frame_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := broker.ExecuteContext(t.Context(), preparation, nil)
+	if err != nil || selected.Observation == nil {
+		t.Fatalf("ExecuteContext(select) = %#v, %v", selected, err)
+	}
+	observation, err := broker.ObserveContext(t.Context(), ObserveRequest{
+		Owner: testOwner(), SessionID: session.ID, TabID: selected.Catalog.SelectedTabID,
+		FrameID: selected.Catalog.SelectedFrameID, ContextCatalogID: selected.Catalog.ID,
+		ContextGeneration: selected.Catalog.Generation,
+	})
+	if err != nil {
+		t.Fatalf("ObserveContext(selected frame) error = %v", err)
+	}
+	capture, err := broker.CaptureScreenshot(t.Context(), ScreenshotRequest{
+		Owner: testOwner(), RequestID: "request_capture_selected_frame", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: ScreenshotTargetPage,
+	})
+	if err != nil || capture.FrameID != "frame_child" ||
+		capture.ContextCatalogID != observation.ContextCatalogID ||
+		worker.screenshotNavigationID == "" {
+		t.Fatalf("CaptureScreenshot(selected frame) = %#v, %v", capture, err)
+	}
+}
+
+func TestContextBrokerScreenshotRejectsCatalogMutationDuringCapture(t *testing.T) {
+	broker, store, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.beforeScreenshot = func() {
+		worker.beforeScreenshot = nil
+		worker.catalog.Generation++
+		worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	}
+	_, err = broker.CaptureScreenshot(t.Context(), ScreenshotRequest{
+		Owner: testOwner(), RequestID: "request_capture_catalog_race", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: ScreenshotTargetPage,
+	})
+	if !errors.Is(err, ErrStale) {
+		stored, _ := store.GetSession(t.Context(), session.ID)
+		t.Fatalf(
+			"CaptureScreenshot(catalog mutation) error = %v, want ErrStale; worker catalog = %#v; stored = %#v",
+			err,
+			worker.catalog,
+			stored.ContextAuthority,
+		)
+	}
+	stored, getErr := store.GetSession(t.Context(), session.ID)
+	if getErr != nil || stored.ContextAuthority == nil ||
+		stored.ContextAuthority.Generation == observation.ContextGeneration {
+		t.Fatalf("persisted changed catalog = %#v, %v", stored.ContextAuthority, getErr)
+	}
 }
 
 func TestContextBrokerListOpenSelectCloseLifecycle(t *testing.T) {

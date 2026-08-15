@@ -62,6 +62,19 @@ type ContextWorker interface {
 	CloseTab(context.Context, ContextMutationAuthority) (ContextCatalog, error)
 }
 
+// ContextSelectionIdentityWorker optionally binds a selected-context
+// observation to the exact selected page document while the driver still owns
+// its context lock.
+// Child-frame observations use the selected page's main-frame identity plus
+// the context catalog authority to reject either document or frame changes.
+type ContextSelectionIdentityWorker interface {
+	ContextWorker
+	SelectContextWithNavigationIdentity(
+		context.Context,
+		ContextMutationAuthority,
+	) (DriverObservation, ContextCatalog, string, error)
+}
+
 // NavigationIdentityWorker exposes a driver-owned, monotonic identity for the
 // current main-frame navigation state. The identity is private runtime state:
 // callers use it to reject document and same-document transitions that
@@ -117,6 +130,22 @@ type WorkerPreparedAction struct {
 type ScreenshotWorker interface {
 	ActionWorker
 	CaptureScreenshot(context.Context, int) (DriverScreenshot, error)
+}
+
+type BoundScreenshotWorker interface {
+	ActionWorker
+	CapturePageScreenshot(context.Context, string, int) (DriverScreenshot, error)
+}
+
+type ElementScreenshotWorker interface {
+	ActionWorker
+	CaptureElementScreenshot(
+		context.Context,
+		string,
+		string,
+		DriverElement,
+		int,
+	) (DriverScreenshot, error)
 }
 
 type UploadBinding struct {
