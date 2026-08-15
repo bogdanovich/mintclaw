@@ -231,7 +231,8 @@ func validBrowserOutputFilename(filename string) bool {
 		}
 	}
 	device := strings.ToUpper(strings.SplitN(filename, ".", 2)[0])
-	if device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" || device == "CLOCK$" {
+	if device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" || device == "CLOCK$" ||
+		device == "CONIN$" || device == "CONOUT$" {
 		return false
 	}
 	if strings.HasPrefix(device, "COM") || strings.HasPrefix(device, "LPT") {

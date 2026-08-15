@@ -355,7 +355,8 @@ func TestBrowserOutputCancelIsTerminalForOutboundFrames(t *testing.T) {
 
 func TestValidBrowserOutputFilenameRejectsWindowsDevices(t *testing.T) {
 	for _, filename := range []string{
-		"NUL", "nul.txt", "CON.json", "PRN", "AUX.log", "CLOCK$", "COM1", "com9.txt",
+		"NUL", "nul.txt", "CON.json", "PRN", "AUX.log", "CLOCK$", "CONIN$", "conin$.txt",
+		"CONOUT$", "conout$.log", "COM1", "com9.txt",
 		"LPT1", "lpt9.log", "COM¹.txt", "LPT³", "file.", "file ", "a:b", `a\b`, "a\x00b",
 	} {
 		if validBrowserOutputFilename(filename) {
