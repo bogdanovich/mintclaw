@@ -637,8 +637,9 @@ func isRemoteWorkspaceFileCall(toolName string, arguments map[string]any) bool {
 		toolName != "write_file" && toolName != "apply_patch" {
 		return false
 	}
-	_, present := arguments[remoteWorkspaceArgument]
-	return present
+	_, remoteSelector := arguments[remoteWorkspaceArgument]
+	_, removedSelector := arguments["workspace"]
+	return remoteSelector || removedSelector
 }
 
 func exactNodeFileApprovalSize(value any) (uint64, bool) {

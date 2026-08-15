@@ -2118,6 +2118,20 @@ func TestInferSkillNamesFromToolCall_NonSkillFileIgnored(t *testing.T) {
 	}
 }
 
+func TestInferSkillNamesFromToolCall_RemoteSelectorsIgnored(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "skills", "three-one", "SKILL.md")
+	ts := &turnState{workspace: workspace}
+	for _, selector := range []string{"remote_workspace", "workspace"} {
+		got := inferSkillNamesFromToolCall(ts, "read_file", map[string]any{
+			"path": path, selector: "remote",
+		})
+		if len(got) != 0 {
+			t.Fatalf("inferSkillNamesFromToolCall(%s) = %v, want empty", selector, got)
+		}
+	}
+}
+
 func TestIsFatalMCPTransportErrorSummary(t *testing.T) {
 	if !isFatalMCPTransportErrorSummary(
 		`MCP tool execution failed: failed to call tool: connection closed: calling "tools/call": client is closing: invalid character 'ð' looking for beginning of value`,

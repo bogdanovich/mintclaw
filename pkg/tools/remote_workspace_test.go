@@ -561,6 +561,12 @@ func TestToolLogArgumentsRedactsRemoteWorkspaceFileContent(t *testing.T) {
 			}
 		}
 	}
+	legacy := ToolLogArguments("write_file", map[string]any{
+		"workspace": "removed-node", "path": "secret.txt", "content": "secret",
+	})
+	if legacy["redacted"] != true || legacy["argument_count"] != 3 || len(legacy) != 2 {
+		t.Fatalf("legacy remote workspace arguments = %#v", legacy)
+	}
 	if local := ToolLogArguments("search_files", map[string]any{"pattern": "public"}); local["pattern"] != "public" {
 		t.Fatalf("local search arguments unexpectedly redacted: %#v", local)
 	}
