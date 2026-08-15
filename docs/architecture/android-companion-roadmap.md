@@ -36,6 +36,12 @@ gateway AgentLoop.
 - Require durable identity and idempotency for message submission and every
   mutating device invocation.
 - Do not promise an always-online node when Android has suspended the process.
+- Validate the device-node role first through an existing authorized channel,
+  such as Telegram; do not make the new mobile chat client a prerequisite for
+  useful location or messaging capabilities.
+- Represent the mobile conversation picker with canonical MintClaw workspaces,
+  agents, and sessions. Do not copy Telegram topic IDs or semantics into the
+  operator protocol.
 
 ## Product Outcome
 
@@ -54,9 +60,27 @@ A later personal-use release supports this flow:
 1. The operator asks an agent to find a recent message from a landlord.
 2. The agent searches an explicitly authorized phone target.
 3. The agent drafts a response using the returned message and thread context.
-4. The phone displays the exact recipient and text in a native approval card.
-5. After approval, the node sends once and reports a durable terminal or
+4. MintClaw shows the exact recipient, subscription, and text for confirmation
+   in the initiating authorized conversation, the Android application, or
+   both.
+5. The first valid confirmation claims the durable interaction exactly once;
+   stale or duplicate answers cannot trigger another send.
+6. After approval, the node sends once and reports a durable terminal or
    unknown outcome.
+
+A separate location flow remains deliberately compositional:
+
+1. The operator asks an agent what is nearby.
+2. The agent obtains one fresh, explicitly authorized location observation
+   from the selected phone target.
+3. The result states its capture time, age, accuracy, and whether it is coarse
+   or precise.
+4. The gateway agent uses the minimum sufficient location with an independently
+   authorized search or maps capability and returns nearby results to the
+   originating conversation.
+
+The Android node answers only the location question. It does not silently add
+continuous tracking, place search, browsing, or provider authority.
 
 Incoming messages are untrusted data. Their text can inform a draft, but cannot
 authorize sending, broaden node policy, or approve another action.
@@ -166,6 +190,18 @@ chat adapter. It should expose bounded operations for:
 - listing and answering authorized durable interactions;
 - receiving a bounded projection of runtime and tool-feedback events;
 - managing the current installation, connection, and notification settings.
+
+The first mobile UI presents an operator-visible session catalogue grouped by
+workspace and agent, with a manual conversation selector and clearly named
+recent sessions. A Telegram topic-backed conversation may appear because it is
+a canonical authorized session, but the app does not recreate Telegram chats
+or synthesize Telegram topic identifiers. Creating a new conversation asks the
+gateway to allocate a session for one authorized workspace and agent.
+
+The initial release always shows the selected destination before submission.
+Automatic intent-based routing is a later convenience over operator-configured
+route aliases such as `nutrition` or `weight`; it cannot enumerate or select a
+session outside the installation's catalogue.
 
 The gateway allocates or authorizes canonical sessions. The client does not
 gain access by inventing a session ID. Mobile authorization is evaluated
@@ -286,9 +322,13 @@ answer claim. The app never synthesizes approval from a generic chat message,
 notification tap, or device unlock.
 
 Sensitive device actions should use a native approval card that shows bounded,
-policy-owned details. The model cannot choose which details are hidden. For an
-SMS send, the card includes the resolved recipient, destination, exact text,
-subscription when relevant, and whether delivery confirmation is available.
+policy-owned details. The same exact interaction may be projected to the
+authorized initiating channel when the request originated outside the Android
+app. The model cannot choose which details are hidden, and an ordinary chat
+message is not an approval answer. For an SMS send, the card includes the
+resolved recipient, destination, exact text, subscription when relevant, and
+whether delivery confirmation is available. Answer consumption remains
+exactly once even when more than one authorized UI renders the card.
 
 ## Android Lifecycle Model
 
@@ -373,17 +413,87 @@ the resolved destination by supplying a different phone number at send time.
 Raw SMS content is redacted from logs and audit metadata, while the model sees
 only content explicitly returned under the authorized invocation.
 
-Direct send is mutating and defaults to one native approval per message. After
+Direct send is mutating and defaults to one exact durable approval per message,
+rendered as a native card when the Android operator plane is available. After
 the Android API accepts a send, disconnect or process death must not cause an
 automatic retry. The invocation ledger reports terminal status when known and
 `unknown` otherwise. MMS, attachments, group MMS, and RCS remain unsupported
 until separately admitted; notification reply may still work when the source
 application exposes it.
 
+The personal-use landlord flow is the required A7 vertical slice:
+
+1. resolve a configured contact or a bounded recent thread without accepting a
+   model-invented destination;
+2. return a bounded page of the conversation to the requesting authorized
+   session;
+3. let the gateway agent draft, revise, and display a reply without granting
+   send authority;
+4. create one exact approval bound to the resolved destination, subscription,
+   body digest, invocation, actor, and requester route;
+5. accept the approval from the initiating channel or Android operator UI;
+6. send once and recover `sent`, `failed`, or explicit `unknown` without blind
+   retry.
+
+A newly arrived SMS may wake or refresh the companion according to Android
+lifecycle rules, but its body remains untrusted input. It cannot select an
+agent, change a route, approve its own reply, or cause an autonomous send.
+
 Google Play restricts broad SMS and call-log permissions to default handlers
 or approved exception cases. MintClaw should not become the default SMS app
 merely to obtain permissions. The standalone variant therefore has separate
 distribution, signing, privacy disclosure, and update requirements.
+
+## Location And Nearby Search Design
+
+The first location command is `location.current.v1`. It returns one bounded
+observation with coordinates or a policy-selected coarse locality, capture
+time, age, horizontal accuracy, and a stable classification such as `fresh`,
+`stale`, `permission_required`, `foreground_required`, or `unavailable`.
+
+The command accepts no arbitrary provider, tracking interval, hidden accuracy
+upgrade, or retention request. Operator policy decides whether an agent may
+request coarse location, precise location, or neither. The app requests a
+fresh one-shot observation when practical; it may return a bounded last-known
+observation only when its age is explicit and within configured policy.
+
+Location is sensitive read data. Raw coordinates are excluded from logs,
+events, diagnostics, and long-lived caches. A downstream maps, browser, or web
+search call is a separate gateway capability. When a coarse locality is enough
+for a question such as “what cafés are nearby?”, the agent should not disclose
+precise coordinates to a model or search provider. Continuous background
+tracking, geofencing, location history, and presence monitoring require a
+separate admission and are not implied by A5.
+
+## Voice Capture And Routing Design
+
+Voice delivery is split into increasingly capable entry points:
+
+1. **Push-to-talk.** From the visible app, a notification action, widget, Quick
+   Settings tile, or supported lock-screen surface, the operator starts one
+   visible recording. The app uploads one bounded voice message through the
+   durable operator outbox and stops recording explicitly or at a fixed limit.
+2. **Configured route shortcuts.** The operator binds names such as
+   `nutrition` and `weight` to authorized workspace, agent, and session
+   destinations. A shortcut can open recording directly for one binding. The
+   binding, not model text, supplies route authority.
+3. **Intent routing.** After transcription, a bounded router may choose only
+   among those configured aliases. Low confidence or a potentially mutating
+   destination asks the operator to choose; it never falls back silently to a
+   different agent.
+4. **Active Talk mode.** While the operator has explicitly enabled a visible
+   foreground conversation, the app supports interruption and multiple turns
+   with a persistent microphone indicator.
+5. **Optional assistant role.** Gemini-like hotword behavior is considered only
+   if the operator deliberately makes MintClaw an Android assistant and the
+   platform's `VoiceInteractionService` contract is proven on supported
+   devices. A normal background app must not simulate this with an undisclosed
+   always-listening microphone.
+
+Every captured utterance receives a client operation ID before upload. Retry
+reuses that identity, so a connectivity change cannot log the same meal,
+weight, or message twice. Audio and transcripts follow explicit bounded
+retention; neither becomes a routing credential.
 
 ## Capability Safety Classes
 
@@ -427,7 +537,7 @@ Each milestone requires an admission document before implementation.
 | A6 | Notification observation and inline reply | A4 and native approvals |
 | A7 | Standalone full SMS capability | A6 evidence and separate admission |
 | A8 | Contacts, calendar, device status, and motion | A4 and per-capability admission |
-| A9 | Voice conversation and Talk mode | A3 and audio lifecycle evidence |
+| A9 | Quick voice capture, route shortcuts, and Talk mode | A2, A3, and audio lifecycle evidence |
 | A10 | Canvas and bounded visual interaction | A3 and separate rendering threat model |
 | A11 | Distribution, updates, diagnostics, and production operations | A3 and A6 |
 | A12 | Multi-gateway, Wear OS, and additional platforms | Stable production app |
@@ -437,7 +547,35 @@ first useful device-node beta. A7 is the first full personal texting release.
 The operator and node tracks may progress in parallel after A0, but no app
 release may blur their credentials or authority.
 
+### Recommended Personal-Use Priority
+
+The smallest useful validation does not begin with the complete mobile chat
+product. Existing Telegram sessions can operate the Android node while the
+operator plane is still absent:
+
+| Priority | Slice | Evidence of value |
+| --- | --- | --- |
+| 1 | A0 node-role contract plus A4 node foundation | Pair one standalone app as a named target and recover a harmless invocation across reconnect/process death |
+| 2 | A5 `location.current.v1` | Ask from Telegram what is nearby, obtain a fresh bounded phone location, and compose it with an existing search capability |
+| 3 | A6 notification messaging | Inspect one fresh messaging notification and draft or invoke one supported inline reply with exact approval |
+| 4 | A7 standalone SMS | Read a bounded landlord thread, revise a draft, approve the exact recipient and text, send once, and recover status |
+| 5 | A0 operator-role contract plus A1–A3 | Use the Android app as a first-party chat client with manual workspace, agent, and session selection |
+| 6 | A9 push-to-talk and configured route shortcuts | Say a food or weight observation once and deliver it exactly once to the configured conversation |
+
+Priorities 1–4 are the initial personal companion program. Stop after each
+slice for real-device evidence; do not pull the operator UI, assistant role,
+continuous location, contacts, calendar, Canvas, or generic phone control into
+that PR series. Once A3 is complete, the A9 push-to-talk slice may proceed
+without waiting for A8. Active Talk mode and assistant-role hotwording remain
+later A9 admissions.
+
 ### A0: Contract Admission
+
+A0 may be delivered as two explicit documents, A0-N for the node role and A0-O
+for the operator role. Completing A0-N permits the A4 device-node series but
+does not admit the operator protocol; completing A0-O permits A1 but grants no
+device capability. This split preserves the two-role decision while allowing a
+small Telegram-operated personal companion to ship first.
 
 Define and approve:
 
@@ -472,10 +610,12 @@ Completion evidence includes:
 
 ### A2: Native Chat MVP
 
-Create a native Kotlin and Compose application with QR enrollment, gateway and
-session selection, history, live streaming, text submission, connection state,
-and a durable local outbox. Store private keys in Keystore and bounded local
-state in an encrypted database.
+Create a native Kotlin and Compose application with QR enrollment, a grouped
+workspace/agent/session catalogue, explicit conversation selection, history,
+live streaming, text submission, connection state, and a durable local outbox.
+Store private keys in Keystore and bounded local state in an encrypted
+database. The first slice supports manual selection only and does not require
+automatic intent routing or Telegram-topic emulation.
 
 Completion requires airplane-mode, process-death, token-revocation, gateway
 restart, duplicate-send, and large-history tests on supported Android versions.
@@ -506,6 +646,11 @@ Add user-visible camera capture, user-selected photo and file access, bounded
 audio capture where justified, and one-shot current location. Results use the
 existing node artifact and media contracts. Background capture is excluded.
 
+The first A5 PR should contain only `location.current.v1` and one real flow
+that originates in an existing Telegram session. “Nearby” is proven by
+composition with an existing gateway search capability, not by adding a maps
+SDK or browser to the Android node.
+
 ### A6: Notifications
 
 Add bounded notification discovery, freshness-scoped opaque references,
@@ -526,6 +671,10 @@ Completion requires real-device tests with process death before and after the
 send acceptance boundary, duplicate command delivery, permission revocation,
 multi-SIM selection, and malicious message content.
 
+The first completion canary is the landlord flow defined above, including a
+draft revision before approval and proof that changing the text invalidates
+the retained approval.
+
 ### A8: Organizer And Sensors
 
 Admit contacts, calendar, device status, call-state metadata when permitted,
@@ -534,9 +683,18 @@ database export. Calendar writes require exact event projection and approval.
 
 ### A9: Voice And Talk
 
-Add push-to-talk first, then an explicitly active conversation mode with
-foreground audio indication, interruption, headset routing, and bounded audio
-retention. Do not keep a hidden always-listening microphone.
+Add push-to-talk and explicit route shortcuts first, then bounded intent
+routing, and finally an explicitly active conversation mode with foreground
+audio indication, interruption, headset routing, and bounded audio retention.
+The first canary sends one spoken food observation and one spoken weight
+observation to two different operator-configured conversations without a
+duplicate after reconnect.
+
+Default-assistant and hotword integration is a separate last A9 slice. It
+requires explicit user role selection, supported-device evidence, privacy and
+battery measurement, and a clear always-active indicator. Do not keep a hidden
+always-listening microphone or make hotword support a prerequisite for useful
+voice capture.
 
 ### A10: Visual Interaction
 
@@ -618,22 +776,36 @@ After implementation:
 - record supported devices, Android versions, and known OEM restrictions;
 - admit the next milestone only when the current one has operational evidence.
 
-## Initial PR Sequence
+## Initial PR Sequences
 
-The expected first implementation series is deliberately narrow:
+The personal device-node series is first because it can prove user value
+through the deployed Telegram channel without waiting for a second chat UI:
 
-1. A0 operator protocol, identity, and threat-model admission.
+1. A0-N Android node identity, lifecycle, distribution, and threat-model
+   admission.
+2. A4 native Android project and node-only pairing with Keystore identity.
+3. A4 catalogue, harmless device status, reconnect, invocation ledger, and
+   process-death recovery.
+4. A5 admission and implementation of `location.current.v1` only.
+5. A6 notification observation and one freshness-bound inline-reply slice.
+6. A7 standalone SMS privacy/security admission and build separation.
+7. A7 bounded search/thread read followed by the exact landlord send vertical
+   slice.
+
+The operator-client series remains independent and may start after A0-O:
+
+1. A0-O operator protocol, identity, and threat-model admission.
 2. A1 gateway operator domain interfaces and in-memory contract tests.
 3. A1 durable identity, message idempotency, and history cursor stores.
 4. A1 versioned transport adapter and real-process recovery tests.
-5. A2 Android project skeleton, enrollment, Keystore identity, and connection.
-6. A2 session list, history, text outbox, and live response UI.
-7. A3 media, interactions, and push-notification slices.
-8. A4 Android node admission and implementation series.
+5. A2 operator enrollment, session catalogue, history, text outbox, and live
+   response UI in the existing Android project.
+6. A3 media, interactions, and push-notification slices.
+7. A9 push-to-talk and configured-route admission and implementation.
 
 Each PR should prove one vertical invariant and remain independently
 reviewable. Do not combine the gateway operator API, complete Android UI, node
-runtime, and device permissions into one large PR.
+runtime, device permissions, SMS, and voice routing into one large PR.
 
 ## External Platform Constraints
 
@@ -646,3 +818,8 @@ rules rather than treating this roadmap as a permanent platform reference:
 - [NotificationListenerService](https://developer.android.com/reference/android/service/notification/NotificationListenerService)
 - [RemoteInput](https://developer.android.com/reference/android/app/RemoteInput)
 - [Permissions used only in default handlers](https://developer.android.com/guide/topics/permissions/default-handlers)
+- [Retrieve a current location](https://developer.android.com/develop/sensors-and-location/location/retrieve-current)
+- [Foreground-service background start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)
+- [Android assistant role](https://developer.android.com/reference/android/app/role/RoleManager)
+- [VoiceInteractionService](https://developer.android.com/reference/android/service/voice/VoiceInteractionService)
+- [Google Play SMS and call-log permission policy](https://support.google.com/googleplay/android-developer/answer/10208820)
