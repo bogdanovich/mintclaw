@@ -68,6 +68,68 @@ func TestPlaywrightContextCatalogProjectsStableOpaqueTabsAndNestedFrames(t *test
 	}
 }
 
+func TestPlaywrightPendingDialogPreservesCachedContextAuthority(t *testing.T) {
+	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{{
+		Token: "p1", Index: 0, Generation: 1, URL: "https://example.com/form", Title: "Fixture",
+	}}}
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": contextProbeResult(t, raw),
+	}}
+	worker := contextTestWorker(client)
+	catalog, err := worker.ContextCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 1}
+	worker.navigationID = identity
+	worker.navigationToken = identity.token()
+	worker.lastObservation = DriverObservation{
+		URL: "https://example.com/form", Origin: "https://example.com", Title: "Fixture",
+	}
+	worker.pendingDialog = &DialogObservation{Type: "confirm", Message: "Continue?"}
+	callsBefore := len(client.calls)
+
+	cached, err := worker.ContextCatalog(t.Context())
+	if err != nil || cached.ID != catalog.ID || cached.Generation != catalog.Generation {
+		t.Fatalf("ContextCatalog(pending dialog) = %#v, %v; want cached %#v", cached, err, catalog)
+	}
+	if token, identityErr := worker.NavigationIdentity(t.Context()); identityErr != nil || token != identity.token() {
+		t.Fatalf("NavigationIdentity(pending dialog) = %q, %v", token, identityErr)
+	}
+	observation, err := worker.Observe(t.Context())
+	if err != nil || observation.PendingDialog == nil ||
+		*observation.PendingDialog != (DialogObservation{Type: "confirm", Message: "Continue?"}) {
+		t.Fatalf("Observe(pending dialog) = %#v, %v", observation, err)
+	}
+	if len(client.calls) != callsBefore {
+		t.Fatalf("pending dialog authority called blocked MCP tools: %#v", client.calls[callsBefore:])
+	}
+
+	cached.Tabs[0].Title = "mutated caller copy"
+	again, err := worker.ContextCatalog(t.Context())
+	if err != nil || again.Tabs[0].Title == cached.Tabs[0].Title {
+		t.Fatalf("cached context authority was mutable: %#v, %v", again, err)
+	}
+	worker.pendingDialog = nil
+	if _, err = worker.ContextCatalog(t.Context()); err != nil {
+		t.Fatalf("ContextCatalog(after dialog) error = %v", err)
+	}
+	if len(client.calls) != callsBefore+1 {
+		t.Fatalf("context authority did not resume live probing after dialog: %#v", client.calls[callsBefore:])
+	}
+}
+
+func TestPlaywrightPendingDialogWithoutCachedAuthorityFailsClosed(t *testing.T) {
+	worker := contextTestWorker(&fakePlaywrightClient{})
+	worker.pendingDialog = &DialogObservation{Type: "alert", Message: "Blocked"}
+	if _, err := worker.ContextCatalog(t.Context()); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("ContextCatalog(pending dialog without cache) error = %v, want ErrWorkerUnavailable", err)
+	}
+	if _, err := worker.NavigationIdentity(t.Context()); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("NavigationIdentity(pending dialog without cache) error = %v, want ErrWorkerUnavailable", err)
+	}
+}
+
 func TestContextMutationBindingRoundTripRetainsImmutableAuthority(t *testing.T) {
 	catalog := ContextCatalog{
 		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
