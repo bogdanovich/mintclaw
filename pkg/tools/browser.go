@@ -994,6 +994,7 @@ func (*BrowserCaptureTool) Name() string { return "browser_capture" }
 func (*BrowserCaptureTool) Description() string {
 	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference."
 }
+
 func (*BrowserCaptureTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
@@ -1001,6 +1002,7 @@ func (*BrowserCaptureTool) ProtectedDurableResult(map[string]any) bool { return 
 func (*BrowserCaptureTool) DurableArguments(args map[string]any) (map[string]any, error) {
 	return cloneBrowserToolArguments(args)
 }
+
 func (*BrowserCaptureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
@@ -1028,13 +1030,25 @@ type browserCaptureView struct {
 
 func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
-		return browserErrorResult("not_granted", "Browser access is not granted to this agent.", "use_an_authorized_agent")
+		return browserErrorResult(
+			"not_granted",
+			"Browser access is not granted to this agent.",
+			"use_an_authorized_agent",
+		)
 	}
 	if !tool.runtime.source.ScreenshotAvailable() {
-		return browserErrorResult("unsupported_platform", "Browser screenshot delivery is unavailable.", "choose_another_target")
+		return browserErrorResult(
+			"unsupported_platform",
+			"Browser screenshot delivery is unavailable.",
+			"choose_another_target",
+		)
 	}
 	if !toolshared.ToolRecoverableOutbound(ctx) {
-		return browserErrorResult("delivery_unavailable", "Browser screenshots require a durable outbound delivery transaction.", "retry_from_a_routed_turn")
+		return browserErrorResult(
+			"delivery_unavailable",
+			"Browser screenshots require a durable outbound delivery transaction.",
+			"retry_from_a_routed_turn",
+		)
 	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
@@ -1064,7 +1078,12 @@ func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any
 		(contextID == "" && contextGeneration != 0) {
 		return browserToolError(browser.ErrInvalid)
 	}
-	if artifact, found, lookupErr := tool.runtime.source.LookupScreenshot(ctx, owner, requestID, sessionID); lookupErr != nil {
+	if artifact, found, lookupErr := tool.runtime.source.LookupScreenshot(
+		ctx,
+		owner,
+		requestID,
+		sessionID,
+	); lookupErr != nil {
 		return browserToolError(lookupErr)
 	} else if found {
 		return tool.result(ctx, owner, requestID, artifact, true)
@@ -1099,7 +1118,9 @@ func (tool *BrowserCaptureTool) result(
 		Ref: artifact.Ref, MediaRef: artifact.MediaRef, Recovery: recovery,
 	}
 	return result.WithOutboundDelivery(toolshared.OutboundDelivery{
-		Media: []bus.MediaPart{{Type: "image", Ref: artifact.MediaRef, Filename: artifact.Filename, ContentType: artifact.ContentType}},
+		Media: []bus.MediaPart{
+			{Type: "image", Ref: artifact.MediaRef, Filename: artifact.Filename, ContentType: artifact.ContentType},
+		},
 		Recovery: &bus.OutboundRecovery{
 			Kind: bus.OutboundRecoveryBrowserScreenshot, ArtifactRef: artifact.Ref, MediaRef: artifact.MediaRef,
 			WorkspaceID: recovery.WorkspaceID, AgentID: recovery.AgentID, ActorID: recovery.ActorID,

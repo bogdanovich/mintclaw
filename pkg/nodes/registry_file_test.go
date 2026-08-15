@@ -462,7 +462,13 @@ func TestStoredBrowserCatalogRecognizesExactPreCaptureEpoch(t *testing.T) {
 		}
 		descriptorEpochs, legacy, ok := classifyStoredBrowserDescriptor(&descriptor)
 		if !ok {
-			t.Fatalf("pre-capture descriptor %s = epochs %d, legacy %v, ok %v", descriptor.Name, descriptorEpochs, legacy, ok)
+			t.Fatalf(
+				"pre-capture descriptor %s = epochs %d, legacy %v, ok %v",
+				descriptor.Name,
+				descriptorEpochs,
+				legacy,
+				ok,
+			)
 		}
 		anyLegacy = anyLegacy || legacy
 		epochs &= descriptorEpochs
