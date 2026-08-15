@@ -3,6 +3,8 @@ package browser
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -59,7 +61,25 @@ func (broker *Broker) CaptureScreenshot(
 	}
 	maximum := broker.config.Limits.Effective().ScreenshotBytes
 	var screenshot DriverScreenshot
-	if target == ScreenshotTargetElement {
+	if retainedWorker, ok := worker.(RetainedScreenshotWorker); ok {
+		if request.Retention == nil {
+			return ScreenshotCapture{}, ErrDenied
+		}
+		var element DriverElement
+		if target == ScreenshotTargetElement {
+			var found bool
+			element, found = slot.refs[request.Ref]
+			if !found || slot.navigationID == "" {
+				return ScreenshotCapture{}, ErrStale
+			}
+		}
+		if slot.navigationID == "" {
+			return ScreenshotCapture{}, ErrStale
+		}
+		screenshot, err = retainedWorker.CaptureRetainedScreenshot(
+			ctx, request, slot.navigationID, element, maximum,
+		)
+	} else if target == ScreenshotTargetElement {
 		element, ok := slot.refs[request.Ref]
 		if !ok || slot.navigationID == "" {
 			return ScreenshotCapture{}, ErrStale
@@ -89,8 +109,22 @@ func (broker *Broker) CaptureScreenshot(
 			return ScreenshotCapture{}, err
 		}
 	}
-	if screenshot.ContentType != "image/png" || len(screenshot.Data) == 0 ||
-		len(screenshot.Data) > maximum || !bytes.HasPrefix(screenshot.Data, pngSignature) {
+	if screenshot.ContentType != "image/png" {
+		return ScreenshotCapture{}, ErrDriverIncompatible
+	}
+	if screenshot.Retained != nil {
+		retained := screenshot.Retained
+		if len(screenshot.Data) != 0 || retained.ContentType != "image/png" ||
+			retained.Size < 1 || retained.Size > int64(maximum) ||
+			retained.ExpiresAt < 1 || retained.Ref == "" || len(retained.Ref) > 256 ||
+			len(retained.SHA256) != sha256.Size*2 {
+			return ScreenshotCapture{}, ErrDriverIncompatible
+		}
+		if digest, decodeErr := hex.DecodeString(retained.SHA256); decodeErr != nil || len(digest) != sha256.Size {
+			return ScreenshotCapture{}, ErrDriverIncompatible
+		}
+	} else if len(screenshot.Data) == 0 || len(screenshot.Data) > maximum ||
+		!bytes.HasPrefix(screenshot.Data, pngSignature) {
 		return ScreenshotCapture{}, ErrDriverIncompatible
 	}
 	return ScreenshotCapture{
@@ -100,5 +134,6 @@ func (broker *Broker) CaptureScreenshot(
 		ContextGeneration: request.ContextGeneration,
 		SnapshotID:        session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
 		CaptureTarget: target, Data: append([]byte(nil), screenshot.Data...), ContentType: screenshot.ContentType,
+		Retained: screenshot.Retained,
 	}, nil
 }

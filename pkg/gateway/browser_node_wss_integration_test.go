@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	urlpkg "net/url"
@@ -144,6 +145,46 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 			host.commandSequence(),
 		)
 	}
+	captureOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
+		RouteID: "route_capture", SessionID: first.ID, ToolCallID: "capture_wss_1",
+	}
+	host.corruptNextOutputChunk()
+	if _, captureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	}); captureErr == nil || host.outputCancelCount() != 1 {
+		t.Fatalf("corrupt companion screenshot error = %v, cancels = %d", captureErr, host.outputCancelCount())
+	}
+	capture, err := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	})
+	if err != nil || capture.Retained == nil || len(capture.Data) != 0 ||
+		capture.Retained.ContentType != "image/png" {
+		t.Fatalf("companion screenshot capture = %#v, %v", capture, err)
+	}
+	captureSpool, err := runtimeState.gatewayTransferSpool(nodes.GatewayTransferSpoolPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, found, err := captureSpool.LookupTransfer(captureOwner, captureOwner.ToolCallID)
+	if err != nil || !found || retained.State != nodes.TransferArtifactCommitted ||
+		retained.Ref != capture.Retained.Ref || retained.Spec.SHA256 != capture.Retained.SHA256 {
+		t.Fatalf("companion screenshot retention = %#v, %v, found=%v", retained, err, found)
+	}
 	prepared, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-request", SessionID: first.ID, TabID: first.TabID,
 		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
@@ -159,6 +200,34 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	final, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
 	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
 		t.Fatalf("final observation = %#v, %v", final, err)
+	}
+	elementMarker := `[ref=`
+	elementStart := strings.Index(final.Snapshot, elementMarker)
+	elementEnd := -1
+	if elementStart >= 0 {
+		elementStart += len(elementMarker)
+		elementEnd = strings.Index(final.Snapshot[elementStart:], "]")
+	}
+	if elementEnd < 1 {
+		t.Fatalf("element screenshot fixture has no semantic ref: %q", final.Snapshot)
+	}
+	elementOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
+		RouteID: "route_capture", SessionID: first.ID, ToolCallID: "capture_wss_element_1",
+	}
+	elementCapture, err := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: elementOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Target: browser.ScreenshotTargetElement, Ref: final.Snapshot[elementStart : elementStart+elementEnd],
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: elementOwner.WorkspaceID, AgentID: elementOwner.AgentID,
+			ActorID: elementOwner.ActorID, RouteID: elementOwner.RouteID,
+			SessionID: elementOwner.SessionID, ToolCallID: elementOwner.ToolCallID,
+		},
+	})
+	if err != nil || elementCapture.Retained == nil ||
+		elementCapture.CaptureTarget != browser.ScreenshotTargetElement {
+		t.Fatalf("companion element screenshot = %#v, %v", elementCapture, err)
 	}
 	fillMarker := `textbox "Display name" [ref=`
 	fillStart := strings.Index(final.Snapshot, fillMarker)
@@ -715,18 +784,53 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatalf("restarted browser invocation = %#v, %v", restartedRecord, err)
 	}
 	if got, want := host.commandSequence(), []string{
-		"open", "observe", "navigate", "fill", "click", "select", "observe", "press", "observe", "scroll",
+		"open",
+		"observe",
+		"capture",
+		"navigate",
+		"capture",
+		"fill",
+		"click",
+		"select",
+		"observe",
+		"press",
+		"observe",
+		"scroll",
 		// The outer broker binds the current node references; the companion
 		// broker performs the drag's live revalidation and action dispatch.
-		"check", "uncheck", "hover", "drag", "observe", "observe", "observe", "dialog", "fill",
-		"status", "observe", "file_chooser", "close",
-		"open", "status", "close",
-		"open", "observe", "navigate", "close",
+		"check",
+		"uncheck",
+		"hover",
+		"drag",
+		"observe",
+		"observe",
+		"observe",
+		"dialog",
+		"fill",
+		"status",
+		"observe",
+		"file_chooser",
+		"close",
+		"open",
+		"status",
+		"close",
+		"open",
+		"observe",
+		"navigate",
+		"close",
 		// Post-acceptance recovery receives a redacted terminal receipt and
 		// obtains fresh live authority without replaying navigate.
-		"open", "observe", "navigate", "observe", "close",
-		"open", "observe", "navigate", "close",
-		"open", "close",
+		"open",
+		"observe",
+		"navigate",
+		"observe",
+		"close",
+		"open",
+		"observe",
+		"navigate",
+		"close",
+		"open",
+		"close",
 	}; !slices.Equal(got, want) {
 		t.Fatalf("browser host sequence = %#v, want %#v", got, want)
 	}
@@ -1069,20 +1173,25 @@ func prepareWSSBrowserRestartPlan(
 }
 
 type wssBrowserHost struct {
-	mu              sync.Mutex
-	profile         nodes.BrowserProfileDescriptor
-	commands        []string
-	urls            map[string]string
-	contexts        map[string]nodes.BrowserContextCatalog
-	snapshots       map[string]uint64
-	pendingDialogs  map[string]*nodes.BrowserDialogObservation
-	navigateEntered chan struct{}
-	navigateRelease chan struct{}
-	navigateFailure bool
-	fillDenied      bool
-	contextStale    bool
-	transfer        *wssBrowserTransfer
-	uploaded        []byte
+	mu               sync.Mutex
+	profile          nodes.BrowserProfileDescriptor
+	commands         []string
+	urls             map[string]string
+	contexts         map[string]nodes.BrowserContextCatalog
+	snapshots        map[string]uint64
+	pendingDialogs   map[string]*nodes.BrowserDialogObservation
+	navigateEntered  chan struct{}
+	navigateRelease  chan struct{}
+	navigateFailure  bool
+	fillDenied       bool
+	contextStale     bool
+	transfer         *wssBrowserTransfer
+	uploaded         []byte
+	output           []byte
+	outputDescriptor nodes.BrowserOutputDescriptor
+	outputActive     bool
+	corruptOutput    bool
+	outputCancels    int
 }
 
 type wssBrowserTransfer struct {
@@ -1124,6 +1233,49 @@ func (host *wssBrowserHost) HandleTransferFrame(
 	response := frame
 	response.Sequence = 0
 	response.Payload = nil
+	if frame.Direction == protocol.TransferDownload {
+		switch frame.Type {
+		case protocol.TransferFramePrepare:
+			var descriptor nodes.BrowserOutputDescriptor
+			if json.Unmarshal(frame.Payload, &descriptor) != nil || descriptor != host.outputDescriptor ||
+				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive {
+				response.Type = protocol.TransferFrameDeny
+				return send(response)
+			}
+			host.outputActive = true
+			response.Type = protocol.TransferFrameAccept
+			if err := send(response); err != nil {
+				return err
+			}
+			response.Type, response.Sequence = protocol.TransferFrameChunk, 1
+			response.Payload = append([]byte(nil), host.output...)
+			if host.corruptOutput {
+				host.corruptOutput = false
+				response.Payload[len(response.Payload)-1] ^= 0xff
+			}
+			return send(response)
+		case protocol.TransferFrameAck:
+			if frame.Sequence != 1 || !host.outputActive {
+				response.Type = protocol.TransferFrameFailure
+				return send(response)
+			}
+			response.Type, response.Sequence = protocol.TransferFrameStatus, 0
+			response.Payload, _ = json.Marshal(map[string]string{"status": "received"})
+			return send(response)
+		case protocol.TransferFrameCommit:
+			host.outputActive = false
+			response.Type = protocol.TransferFrameCommitted
+			return send(response)
+		case protocol.TransferFrameCancel:
+			host.outputActive = false
+			host.outputCancels++
+			response.Type = protocol.TransferFrameFailure
+			return send(response)
+		default:
+			response.Type = protocol.TransferFrameFailure
+			return send(response)
+		}
+	}
 	switch frame.Type {
 	case protocol.TransferFramePrepare:
 		var prepare browserArtifactTransferPrepare
@@ -1154,6 +1306,56 @@ func (host *wssBrowserHost) HandleTransferFrame(
 		response.Type = protocol.TransferFrameFailure
 	}
 	return send(response)
+}
+
+func (host *wssBrowserHost) corruptNextOutputChunk() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.corruptOutput = true
+}
+
+func (host *wssBrowserHost) outputCancelCount() int {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return host.outputCancels
+}
+
+func (host *wssBrowserHost) Capture(
+	_ context.Context,
+	request nodes.BrowserHostCaptureRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "capture")
+	if host.snapshots[request.SessionID] != request.SnapshotGeneration ||
+		request.DocumentID != wssBrowserDocumentID(request.SessionID, request.SnapshotGeneration) ||
+		(request.Target != "page" && request.Target != "element") ||
+		(request.Target == "page" && request.Ref != "") ||
+		(request.Target == "element" && request.Ref == "") {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostStale
+	}
+	marker := byte(1)
+	if request.Target == "element" {
+		marker = 2
+	}
+	host.output = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', marker, 2, 3}
+	digest := sha256.Sum256(host.output)
+	host.outputDescriptor = nodes.BrowserOutputDescriptor{
+		TransferID: browserNodeStableID("browser_output", request.InvocationID), Kind: nodes.BrowserOutputScreenshot,
+		SessionID: request.SessionID, RoutedSessionID: request.RoutedSessionID,
+		AgentID: request.AgentID, ActorID: request.ActorID, WorkspaceID: request.WorkspaceID,
+		RouteID: request.RouteID,
+		Target:  request.BrowserTarget, ProfileRevision: request.ProfileRevision,
+		BrowserPolicyRevision: request.BrowserPolicyRevision, InvocationID: request.InvocationID,
+		TabID: request.TabID, FrameID: request.FrameID, ContextID: request.ContextID,
+		DocumentID: request.DocumentID, SnapshotID: request.SnapshotID,
+		SnapshotGeneration: request.SnapshotGeneration, CaptureTarget: request.Target, ElementRef: request.Ref,
+		Filename:    browserScreenshotFilename,
+		ContentType: "image/png", Size: uint64(len(host.output)), SHA256: hex.EncodeToString(digest[:]),
+		CapturedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Minute).Unix(),
+		CleanupPolicy: "session_or_expiry",
+	}
+	return host.outputDescriptor, nil
 }
 
 func (host *wssBrowserHost) uploadedArtifact() []byte {
@@ -1210,11 +1412,16 @@ func (host *wssBrowserHost) Observe(
 	}
 	host.snapshots[request.SessionID] = request.SnapshotGeneration
 	result := wssBrowserObservation(request, url)
+	result.DocumentID = wssBrowserDocumentID(request.SessionID, request.SnapshotGeneration)
 	if pending := host.pendingDialogs[request.SessionID]; pending != nil {
 		copy := *pending
 		result.PendingDialog = &copy
 	}
 	return result, nil
+}
+
+func wssBrowserDocumentID(sessionID string, generation uint64) string {
+	return browserNodeStableID("document", sessionID, fmt.Sprint(generation))
 }
 
 func (host *wssBrowserHost) Contexts(
@@ -1330,6 +1537,7 @@ func (host *wssBrowserHost) Navigate(
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	host.urls[request.SessionID] = request.Action.URL
+	host.snapshots[request.SessionID] = request.SnapshotGeneration + 1
 	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
@@ -1713,7 +1921,7 @@ func wssBrowserObservation(
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration,
 		URL:                url, Origin: origin, Title: title, Snapshot: snapshot,
-		Elements: elements,
+		Elements: elements, DocumentID: wssBrowserDocumentID(request.SessionID, request.SnapshotGeneration),
 	}
 }
 
@@ -1745,6 +1953,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionOpen,
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandCapture,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,

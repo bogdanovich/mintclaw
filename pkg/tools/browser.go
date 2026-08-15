@@ -86,6 +86,7 @@ type (
 	BrowserSessionTool  struct{ runtime *browserToolRuntime }
 	BrowserContextsTool struct{ runtime *browserToolRuntime }
 	BrowserObserveTool  struct{ runtime *browserToolRuntime }
+	BrowserCaptureTool  struct{ runtime *browserToolRuntime }
 	BrowserActTool      struct{ runtime *browserToolRuntime }
 )
 
@@ -114,6 +115,10 @@ func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
 
 func NewBrowserObserveTool(cfg *config.Config, source BrowserToolSource) *BrowserObserveTool {
 	return &BrowserObserveTool{runtime: newBrowserToolRuntime(cfg, source)}
+}
+
+func NewBrowserCaptureTool(cfg *config.Config, source BrowserToolSource) *BrowserCaptureTool {
+	return &BrowserCaptureTool{runtime: newBrowserToolRuntime(cfg, source)}
 }
 
 func NewBrowserContextsTool(cfg *config.Config, source BrowserToolSource) *BrowserContextsTool {
@@ -164,6 +169,10 @@ func (tool *BrowserObserveTool) ToolEnabledForAgent(agentID string) bool {
 	return tool != nil && tool.runtime.enabledForAgent(agentID)
 }
 
+func (tool *BrowserCaptureTool) ToolEnabledForAgent(agentID string) bool {
+	return tool != nil && tool.runtime.enabledForAgent(agentID) && tool.runtime.source.ScreenshotAvailable()
+}
+
 func (tool *BrowserContextsTool) ToolEnabledForAgent(agentID string) bool {
 	if tool == nil || !tool.runtime.enabledForAgent(agentID) {
 		return false
@@ -206,15 +215,17 @@ type browserTargetView struct {
 }
 
 type browserFeatureView struct {
-	Tabs        bool `json:"tabs"`
-	Popups      bool `json:"popups"`
-	Frames      bool `json:"frames"`
-	Screenshot  bool `json:"screenshot"`
-	Upload      bool `json:"upload"`
-	Download    bool `json:"download"`
-	Diagnostics bool `json:"diagnostics"`
-	HeadedView  bool `json:"headed_view"`
-	Handoff     bool `json:"handoff"`
+	Tabs              bool `json:"tabs"`
+	Popups            bool `json:"popups"`
+	Frames            bool `json:"frames"`
+	Screenshot        bool `json:"screenshot"`
+	PageScreenshot    bool `json:"page_screenshot"`
+	ElementScreenshot bool `json:"element_screenshot"`
+	Upload            bool `json:"upload"`
+	Download          bool `json:"download"`
+	Diagnostics       bool `json:"diagnostics"`
+	HeadedView        bool `json:"headed_view"`
+	Handoff           bool `json:"handoff"`
 }
 
 type browserProfileView struct {
@@ -347,19 +358,21 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			contextCatalogBytes = browser.MaxContextCatalogBytes
 			contextLabelBytes = browser.MaxContextLabelBytes
 		}
+		screenshotAvailable := capabilitiesAvailable && diagnostics.Screenshot
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
-				Tabs:        contextsAvailable,
-				Popups:      contextsAvailable,
-				Frames:      contextsAvailable,
-				Screenshot:  capabilitiesAvailable && diagnostics.Screenshot,
-				Upload:      uploadAvailable,
-				Download:    downloadAvailable,
-				Diagnostics: true,
-				HeadedView:  capabilitiesAvailable && diagnostics.HeadedView,
-				Handoff:     capabilitiesAvailable && diagnostics.Handoff,
+				Tabs:       contextsAvailable,
+				Popups:     contextsAvailable,
+				Frames:     contextsAvailable,
+				Screenshot: screenshotAvailable, PageScreenshot: screenshotAvailable,
+				ElementScreenshot: screenshotAvailable,
+				Upload:            uploadAvailable,
+				Download:          downloadAvailable,
+				Diagnostics:       true,
+				HeadedView:        capabilitiesAvailable && diagnostics.HeadedView,
+				Handoff:           capabilitiesAvailable && diagnostics.Handoff,
 			},
 			Limits: browserLimitsView{
 				Sessions: limits.Sessions, Tabs: limits.Tabs,
@@ -971,6 +984,147 @@ func (tool *BrowserObserveTool) screenshotResult(
 			WorkspaceID: recovery.WorkspaceID, AgentID: recovery.AgentID,
 			ActorID: recovery.ActorID, RouteID: recovery.RouteID,
 			SessionID: recovery.SessionID, ToolCallID: recovery.ToolCallID,
+		},
+	}).WithOutboundCommit(func(commitCtx context.Context) error {
+		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
+	}).WithImmediateDelivery()
+}
+
+func (*BrowserCaptureTool) Name() string { return "browser_capture" }
+func (*BrowserCaptureTool) Description() string {
+	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference."
+}
+
+func (*BrowserCaptureTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsMutating
+}
+func (*BrowserCaptureTool) ProtectedDurableResult(map[string]any) bool { return true }
+func (*BrowserCaptureTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return cloneBrowserToolArguments(args)
+}
+
+func (*BrowserCaptureTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "target",
+		},
+		"properties": map[string]any{
+			"browser_session_id":  map[string]any{"type": "string"},
+			"tab_id":              map[string]any{"type": "string"},
+			"frame_id":            map[string]any{"type": "string"},
+			"context_catalog_id":  map[string]any{"type": "string"},
+			"context_generation":  map[string]any{"type": "integer"},
+			"snapshot_id":         map[string]any{"type": "string"},
+			"snapshot_generation": map[string]any{"type": "integer"},
+			"target":              map[string]any{"type": "string", "enum": []string{"page", "element"}},
+			"ref":                 map[string]any{"type": "string"},
+		},
+	}
+}
+
+type browserCaptureView struct {
+	Artifact browser.ScreenshotArtifact `json:"artifact"`
+	Replayed bool                       `json:"replayed,omitempty"`
+}
+
+func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
+	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return browserErrorResult(
+			"not_granted",
+			"Browser access is not granted to this agent.",
+			"use_an_authorized_agent",
+		)
+	}
+	if !tool.runtime.source.ScreenshotAvailable() {
+		return browserErrorResult(
+			"unsupported_platform",
+			"Browser screenshot delivery is unavailable.",
+			"choose_another_target",
+		)
+	}
+	if !toolshared.ToolRecoverableOutbound(ctx) {
+		return browserErrorResult(
+			"delivery_unavailable",
+			"Browser screenshots require a durable outbound delivery transaction.",
+			"retry_from_a_routed_turn",
+		)
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browserToolError(err)
+	}
+	requestID, err := browserRequestID(ctx)
+	if err != nil {
+		return browserToolError(err)
+	}
+	sessionID, sessionOK := args["browser_session_id"].(string)
+	tabID, tabOK := args["tab_id"].(string)
+	snapshotID, snapshotOK := args["snapshot_id"].(string)
+	targetValue, targetOK := args["target"].(string)
+	snapshotGeneration, generationOK := browserInteger(args["snapshot_generation"])
+	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
+	frameID, _ := args["frame_id"].(string)
+	contextID, _ := args["context_catalog_id"].(string)
+	ref, _ := args["ref"].(string)
+	target := browser.ScreenshotTarget(targetValue)
+	if !sessionOK || sessionID == "" || !tabOK || tabID == "" || !snapshotOK || snapshotID == "" ||
+		!targetOK || (target != browser.ScreenshotTargetPage && target != browser.ScreenshotTargetElement) ||
+		!generationOK || snapshotGeneration < 1 ||
+		(target == browser.ScreenshotTargetPage && ref != "") ||
+		(target == browser.ScreenshotTargetElement && ref == "") ||
+		(frameID != "" && contextID == "") ||
+		(contextID != "" && (!contextGenerationOK || contextGeneration < 1)) ||
+		(contextID == "" && contextGeneration != 0) {
+		return browserToolError(browser.ErrInvalid)
+	}
+	if artifact, found, lookupErr := tool.runtime.source.LookupScreenshot(
+		ctx,
+		owner,
+		requestID,
+		sessionID,
+	); lookupErr != nil {
+		return browserToolError(lookupErr)
+	} else if found {
+		return tool.result(ctx, owner, requestID, artifact, true)
+	}
+	artifact, err := tool.runtime.source.CaptureScreenshot(ctx, browser.ScreenshotRequest{
+		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
+		FrameID: frameID, ContextCatalogID: contextID, ContextGeneration: uint64(contextGeneration),
+		SnapshotID: snapshotID, SnapshotGeneration: uint64(snapshotGeneration), Target: target, Ref: ref,
+	})
+	if err != nil {
+		return browserToolError(err)
+	}
+	return tool.result(ctx, owner, requestID, artifact, false)
+}
+
+func (tool *BrowserCaptureTool) result(
+	ctx context.Context,
+	owner browser.Owner,
+	requestID string,
+	artifact browser.ScreenshotArtifact,
+	replayed bool,
+) *toolshared.ToolResult {
+	result := tool.runtime.result(browserCaptureView{Artifact: artifact, Replayed: replayed})
+	if result.IsError || artifact.MediaRef == "" || artifact.Recovery == nil ||
+		(artifact.DeliveryState != browser.ScreenshotDeliveryPending &&
+			artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
+		return result
+	}
+	recovery := artifact.Recovery
+	delivery := browser.ScreenshotDeliveryRequest{
+		Owner: owner, RequestID: requestID, SessionID: artifact.SessionID,
+		Ref: artifact.Ref, MediaRef: artifact.MediaRef, Recovery: recovery,
+	}
+	return result.WithOutboundDelivery(toolshared.OutboundDelivery{
+		Media: []bus.MediaPart{
+			{Type: "image", Ref: artifact.MediaRef, Filename: artifact.Filename, ContentType: artifact.ContentType},
+		},
+		Recovery: &bus.OutboundRecovery{
+			Kind: bus.OutboundRecoveryBrowserScreenshot, ArtifactRef: artifact.Ref, MediaRef: artifact.MediaRef,
+			WorkspaceID: recovery.WorkspaceID, AgentID: recovery.AgentID, ActorID: recovery.ActorID,
+			RouteID: recovery.RouteID, SessionID: recovery.SessionID, ToolCallID: recovery.ToolCallID,
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)

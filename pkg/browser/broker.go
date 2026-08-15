@@ -84,6 +84,14 @@ type NavigationIdentityWorker interface {
 	NavigationIdentity(context.Context) (string, error)
 }
 
+// BoundObservationWorker returns an observation and its private document
+// identity from one worker-owned critical section. Remote workers use this to
+// avoid a before/after identity race across a node invocation.
+type BoundObservationWorker interface {
+	ActionWorker
+	ObserveWithNavigationIdentity(context.Context) (DriverObservation, string, error)
+}
+
 // NavigationCheckedActionWorker performs one final private navigation check
 // immediately before issuing a fixed typed action. The check is the authority
 // linearization point; the native input operation that follows is not atomic
@@ -142,6 +150,20 @@ type ElementScreenshotWorker interface {
 	CaptureElementScreenshot(
 		context.Context,
 		string,
+		string,
+		DriverElement,
+		int,
+	) (DriverScreenshot, error)
+}
+
+// RetainedScreenshotWorker captures exact fresh authority remotely and
+// streams the immutable PNG into gateway retention before returning. It never
+// exposes image bytes through the ordinary worker result.
+type RetainedScreenshotWorker interface {
+	ActionWorker
+	CaptureRetainedScreenshot(
+		context.Context,
+		ScreenshotRequest,
 		string,
 		DriverElement,
 		int,

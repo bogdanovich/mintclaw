@@ -31,6 +31,10 @@ type browserContextCommandHost interface {
 	Contexts(context.Context, nodes.BrowserHostContextRequest) (nodes.BrowserContextResult, error)
 }
 
+type browserCaptureCommandHost interface {
+	Capture(context.Context, nodes.BrowserHostCaptureRequest) (nodes.BrowserOutputDescriptor, error)
+}
+
 type browserOrdinaryInteractionCommandHost interface {
 	Check(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Uncheck(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
@@ -132,6 +136,20 @@ func (handler *browserCommandHandler) execute(
 			RoutedSessionID:    invocation.Plan.SessionID,
 			SnapshotGeneration: input.SnapshotGeneration,
 			AgentID:            invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		})
+		return result, browserCommandFailure(err)
+	case nodes.BrowserCommandCapture:
+		captureHost, ok := handler.host.(browserCaptureCommandHost)
+		if !ok {
+			return nil, ErrCommandUnavailable
+		}
+		var input nodes.BrowserCaptureInput
+		if err := json.Unmarshal(invocation.Input, &input); err != nil {
+			return nil, browserCommandFailure(err)
+		}
+		result, err := captureHost.Capture(ctx, nodes.BrowserHostCaptureRequest{
+			BrowserCaptureInput: input, RoutedSessionID: invocation.Plan.SessionID,
+			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandAct:

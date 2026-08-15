@@ -61,7 +61,7 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 		}
 	}
 	commands, err := nodes.BrowserCommandDescriptors(descriptors)
-	if err != nil || len(commands) != 6 {
+	if err != nil || len(commands) != 7 {
 		t.Fatalf("BrowserCommandDescriptors() count = %d, error = %v", len(commands), err)
 	}
 	for _, command := range commands {
