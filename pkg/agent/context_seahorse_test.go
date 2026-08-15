@@ -1090,6 +1090,59 @@ func TestSeahorseCompactEventBackfillsOwnership(t *testing.T) {
 	}
 }
 
+func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().
+		OfKind(runtimeevents.KindAgentContextCompressStart, runtimeevents.KindAgentContextCompressEnd).
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-lifecycle", Buffer: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, nil)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+
+	if err = manager.Compact(t.Context(), &CompactRequest{
+		SessionKey: "empty", Reason: ContextCompressReasonProactive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleNoop, ContextCompressReasonProactive)
+
+	err = manager.Compact(t.Context(), &CompactRequest{
+		Agent: &AgentInstance{ID: "missing"}, SessionKey: "missing", Reason: ContextCompressReasonRetry,
+	})
+	if err == nil {
+		t.Fatal("missing runtime compaction unexpectedly succeeded")
+	}
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry)
+}
+
+func assertCompactLifecyclePair(
+	t *testing.T,
+	events <-chan runtimeevents.Event,
+	wantEnd ContextCompressLifecycleStatus,
+	wantReason ContextCompressReason,
+) {
+	t.Helper()
+	started := receiveRuntimeEvent(t, events)
+	ended := receiveRuntimeEvent(t, events)
+	startPayload, startOK := started.Payload.(ContextCompressLifecyclePayload)
+	endPayload, endOK := ended.Payload.(ContextCompressLifecyclePayload)
+	if started.Kind != runtimeevents.KindAgentContextCompressStart ||
+		ended.Kind != runtimeevents.KindAgentContextCompressEnd || !startOK || !endOK ||
+		startPayload.Status != ContextCompressLifecycleStarted || endPayload.Status != wantEnd ||
+		startPayload.Reason != wantReason || endPayload.Reason != wantReason {
+		t.Fatalf("compaction lifecycle = start:%+v end:%+v", started, ended)
+	}
+}
+
 // TestSeahorseRealLoopNoDuplicateMessages tests the real-world scenario:
 // 1. Start AgentLoop with seahorse context manager
 // 2. Run a turn (user message -> LLM response)

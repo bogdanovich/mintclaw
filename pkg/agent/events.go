@@ -32,6 +32,8 @@ const (
 	EventKindLLMRetry               EventKind = runtimeevents.KindAgentLLMRetry
 	EventKindLLMFallbackAttempt     EventKind = runtimeevents.KindAgentLLMFallbackAttempt
 	EventKindContextCompress        EventKind = runtimeevents.KindAgentContextCompress
+	EventKindContextCompressStart   EventKind = runtimeevents.KindAgentContextCompressStart
+	EventKindContextCompressEnd     EventKind = runtimeevents.KindAgentContextCompressEnd
 	EventKindContextSnapshot        EventKind = runtimeevents.KindAgentContextSnapshot
 	EventKindSessionSummarize       EventKind = runtimeevents.KindAgentSessionSummarize
 	EventKindToolExecStart          EventKind = runtimeevents.KindAgentToolExecStart

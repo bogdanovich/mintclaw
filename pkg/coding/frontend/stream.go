@@ -51,12 +51,24 @@ var (
 	_ bus.ContextUsageStreamer = (*projectedStream)(nil)
 )
 
-func (s *projectedStream) Update(_ context.Context, content string) error {
+func (s *projectedStream) Update(ctx context.Context, content string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
 	s.projector.AssistantAccumulated(s.turnID, content, false)
 	return nil
 }
 
-func (s *projectedStream) Finalize(_ context.Context, content string) error {
+func (s *projectedStream) Finalize(ctx context.Context, content string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
 	s.projector.AssistantAccumulated(s.turnID, content, true)
 	return nil
 }
@@ -75,16 +87,29 @@ func (s *projectedStream) FinalizeWithContext(
 	return nil
 }
 
-func (s *projectedStream) UpdateReasoning(_ context.Context, content string) error {
+func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
 	s.projector.ReasoningAccumulated(s.turnID, content, false)
 	return nil
 }
 
-func (s *projectedStream) FinalizeReasoning(_ context.Context, content string) error {
+func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
 	s.projector.ReasoningAccumulated(s.turnID, content, true)
 	return nil
 }
 
-func (s *projectedStream) Cancel(context.Context) {
-	s.projector.TurnInterrupted(s.turnID, "stream canceled")
-}
+// Cancel discards only the provider delivery stream. Turn lifecycle remains
+// authoritative in the runtime event adapter, which can distinguish a
+// pre-visible fallback from an actual interrupted turn.
+func (*projectedStream) Cancel(context.Context) {}

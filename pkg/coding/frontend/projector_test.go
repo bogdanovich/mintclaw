@@ -115,8 +115,8 @@ func TestLifecycleCorrelationAndSnapshotConvergence(t *testing.T) {
 		projector.ToolCompleted("turn-1", "call-1", "exec", "done", 0, false, []WriteAudit{{
 			Kind: "file", Target: "main.go", Action: "update", Success: true,
 		}}),
-		projector.CompactionStarted(),
-		projector.CompactionCompleted("context compacted"),
+		projector.CompactionStarted("turn-1", "llm_retry", false),
+		projector.CompactionCompleted("turn-1", "llm_retry", 10, false, false),
 		projector.TurnCompleted("turn-1", "completed"),
 	}
 	for i, delta := range deltas {
@@ -318,6 +318,34 @@ func TestTerminalOutcomeSurvivesExpiredDeltaWindowResynchronization(t *testing.T
 	if got.LastTurn == nil || got.LastTurn.TurnID != "turn-1" ||
 		got.LastTurn.Outcome != TurnOutcomeSuspended || got.Activity != ActivityWaitingInput {
 		t.Fatalf("resynchronized terminal outcome = %+v", got)
+	}
+}
+
+func TestCompactionLifecycleSurvivesExpiredDeltaWindowResynchronization(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{Deltas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducer, err := NewReducer(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionFailed("turn-1", "llm_retry", false)
+	projector.ThreadMetadataUpdated(ThreadMetadata{Title: "After compaction"})
+
+	if err = reducer.CatchUp(t.Context(), projector); err != nil {
+		t.Fatal(err)
+	}
+	got := reducer.State()
+	if got.LastCompaction == nil || got.LastCompaction.TurnID != "turn-1" ||
+		got.LastCompaction.Status != CompactionFailed || got.Activity != ActivityRunning {
+		t.Fatalf("resynchronized compaction = %+v", got)
 	}
 }
 

@@ -116,6 +116,23 @@ type ContextUsage struct {
 	LimitTokens int `json:"limit_tokens,omitempty"`
 }
 
+type CompactionStatus string
+
+const (
+	CompactionRunning   CompactionStatus = "running"
+	CompactionCompleted CompactionStatus = "completed"
+	CompactionNoop      CompactionStatus = "no_op"
+	CompactionFailed    CompactionStatus = "failed"
+)
+
+type CompactionState struct {
+	TurnID      string           `json:"turn_id,omitempty"`
+	Reason      string           `json:"reason,omitempty"`
+	Status      CompactionStatus `json:"status"`
+	TokensSaved int              `json:"tokens_saved,omitempty"`
+	Background  bool             `json:"background,omitempty"`
+}
+
 // ThreadSnapshot is the authoritative, bounded frontend projection. It is not
 // the canonical coding transcript and may omit old entries and large output.
 type ThreadSnapshot struct {
@@ -128,6 +145,7 @@ type ThreadSnapshot struct {
 	Entries         []TranscriptEntry         `json:"entries,omitempty"`
 	Tools           []ToolState               `json:"tools,omitempty"`
 	ContextUsage    ContextUsage              `json:"context_usage,omitempty"`
+	LastCompaction  *CompactionState          `json:"last_compaction,omitempty"`
 	Workspace       *codingworkspace.Snapshot `json:"workspace,omitempty"`
 	Status          string                    `json:"status,omitempty"`
 	HasOlderEntries bool                      `json:"has_older_entries,omitempty"`
@@ -174,6 +192,7 @@ type Delta struct {
 	Entry            *TranscriptEntry          `json:"entry,omitempty"`
 	Tool             *ToolState                `json:"tool,omitempty"`
 	ContextUsage     *ContextUsage             `json:"context_usage,omitempty"`
+	Compaction       *CompactionState          `json:"compaction,omitempty"`
 	Workspace        *codingworkspace.Snapshot `json:"workspace,omitempty"`
 	Activity         Activity                  `json:"activity,omitempty"`
 	Status           string                    `json:"status,omitempty"`

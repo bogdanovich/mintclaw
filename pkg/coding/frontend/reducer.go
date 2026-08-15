@@ -71,6 +71,10 @@ func (r *Reducer) Apply(delta Delta) error {
 	if delta.ContextUsage != nil {
 		r.state.ContextUsage = *delta.ContextUsage
 	}
+	if delta.Compaction != nil {
+		compaction := *delta.Compaction
+		r.state.LastCompaction = &compaction
+	}
 	if delta.Workspace != nil {
 		workspace := cloneWorkspaceSnapshot(*delta.Workspace)
 		r.state.Workspace = &workspace

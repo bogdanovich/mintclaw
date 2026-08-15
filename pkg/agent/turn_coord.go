@@ -48,6 +48,14 @@ func (al *AgentLoop) runTurn(
 		attemptedSkills := ts.attemptedSkillsSnapshot()
 		skillContextSnapshots := ts.skillContextSnapshotsSnapshot()
 		llmCalls, promptTokens, completionTokens, totalTokens := ts.llmUsageTotals()
+		contextUsedTokens := 0
+		contextLimitTokens := 0
+		if turnStatus == TurnEndStatusCompleted {
+			if usage := computeContextUsage(ts.agent, ts.sessionKey); usage != nil {
+				contextUsedTokens = usage.UsedTokens
+				contextLimitTokens = usage.TotalTokens
+			}
+		}
 		finalSuccessfulPath := []string(nil)
 		if turnStatus == TurnEndStatusCompleted {
 			if latest := ts.latestSkillContextSnapshot(); len(latest) > 0 {
@@ -77,6 +85,8 @@ func (al *AgentLoop) runTurn(
 				PromptTokens:          promptTokens,
 				CompletionTokens:      completionTokens,
 				TotalTokens:           totalTokens,
+				ContextUsedTokens:     contextUsedTokens,
+				ContextLimitTokens:    contextLimitTokens,
 				FinalContentLen:       ts.finalContentLen(),
 				UserMessage:           ts.userMessage,
 				FinalContent:          ts.finalContentSnapshot(),

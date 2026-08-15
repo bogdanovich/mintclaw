@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -718,6 +719,49 @@ func TestConfiguredStreamingStreamsMintClawReasoningBeforeAnswerContent(t *testi
 	case outbound := <-msgBus.OutboundChan():
 		t.Fatalf("expected streamed reasoning to avoid a later thought outbound, got %+v", outbound)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestConfiguredStreamingProjectsProviderAccumulatedEvents(t *testing.T) {
+	const sessionKey = "agent:main:mintclaw:session-1"
+	projector, err := frontend.NewProjector(sessionKey, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatalf("NewProjector() error = %v", err)
+	}
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
+	provider := &configuredStreamingProvider{
+		eventPlan: []configuredStreamingEventCall{{
+			chunks: []providers.StreamChunk{
+				{ReasoningContent: "thinking"},
+				{ReasoningContent: "thinking 💡"},
+				{Content: "answer"},
+				{Content: "answer ✅"},
+			},
+			response: &providers.LLMResponse{
+				Content:          "answer ✅",
+				ReasoningContent: "thinking 💡",
+			},
+		}},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	if got := runConfiguredStreamingTurn(t, al, "mintclaw"); got != "answer ✅" {
+		t.Fatalf("response = %q, want accumulated provider answer", got)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Entries) != 2 {
+		t.Fatalf("entries = %#v, want one reasoning and one assistant entry", snapshot.Entries)
+	}
+	if got := snapshot.Entries[0]; got.Kind != frontend.EntryReasoning || got.Text != "thinking 💡" || !got.Complete {
+		t.Fatalf("reasoning entry = %#v, want complete accumulated reasoning", got)
+	}
+	if got := snapshot.Entries[1]; got.Kind != frontend.EntryAssistant || got.Text != "answer ✅" || !got.Complete {
+		t.Fatalf("assistant entry = %#v, want complete accumulated answer", got)
 	}
 }
 

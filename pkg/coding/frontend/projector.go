@@ -212,14 +212,21 @@ func (p *Projector) upsertStreamEntry(
 	content string,
 	complete bool,
 ) Delta {
-	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
-		entry := p.boundedEntry(TranscriptEntry{
-			ID:       entryID(turnID, string(entryKind)),
-			TurnID:   normalizeTurnID(turnID),
-			Kind:     entryKind,
-			Text:     content,
-			Complete: complete,
-		})
+	entry := p.boundedEntry(TranscriptEntry{
+		ID:       entryID(turnID, string(entryKind)),
+		TurnID:   normalizeTurnID(turnID),
+		Kind:     entryKind,
+		Text:     content,
+		Complete: complete,
+	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.state.Entries {
+		if p.state.Entries[i].ID == entry.ID && p.state.Entries[i] == entry {
+			return Delta{}
+		}
+	}
+	return p.mutateLocked(kind, func(state *ThreadSnapshot, delta *Delta) {
 		p.upsertEntry(state, delta, entry)
 		delta.Entry = &entry
 		delta.TurnID = entry.TurnID
@@ -339,8 +346,14 @@ func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Dur
 }
 
 func (p *Projector) ContextUsage(used, limit int) Delta {
-	return p.mutate(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
-		state.ContextUsage = ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}
+	usage := ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state.ContextUsage == usage {
+		return Delta{}
+	}
+	return p.mutateLocked(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
+		state.ContextUsage = usage
 		usage := state.ContextUsage
 		delta.ContextUsage = &usage
 	})
@@ -354,22 +367,67 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) Delta {
 	})
 }
 
-func (p *Projector) CompactionStarted() Delta {
-	return p.activity(DeltaCompactionStarted, ActivityCompacting, "compacting context")
+func (p *Projector) CompactionStarted(turnID, reason string, background bool) Delta {
+	return p.compaction(
+		DeltaCompactionStarted,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionRunning, Background: background,
+		},
+	)
 }
 
-func (p *Projector) CompactionCompleted(status string) Delta {
-	return p.activity(DeltaCompactionComplete, ActivityRunning, status)
+func (p *Projector) CompactionCompleted(
+	turnID, reason string,
+	tokensSaved int,
+	noProgress, background bool,
+) Delta {
+	status := CompactionCompleted
+	if noProgress {
+		status = CompactionNoop
+	}
+	return p.compaction(
+		DeltaCompactionComplete,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: status,
+			TokensSaved: max(0, tokensSaved), Background: background,
+		},
+	)
 }
 
-// BackgroundCompactionCompleted records session-scoped maintenance without
-// reopening or relabeling a turn that has already reached a terminal state.
-func (p *Projector) BackgroundCompactionCompleted() Delta {
-	return p.mutate(DeltaCompactionComplete, func(*ThreadSnapshot, *Delta) {})
+func (p *Projector) CompactionFailed(turnID, reason string, background bool) Delta {
+	return p.compaction(
+		DeltaCompactionFailed,
+		CompactionState{
+			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionFailed, Background: background,
+		},
+	)
 }
 
-func (p *Projector) CompactionFailed(status string) Delta {
-	return p.activity(DeltaCompactionFailed, ActivityFailed, status)
+func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta {
+	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
+		state.LastCompaction = &compaction
+		delta.Compaction = &compaction
+		delta.TurnID = compaction.TurnID
+		delta.EntityID = compaction.TurnID
+		if compaction.Background {
+			return
+		}
+		switch compaction.Status {
+		case CompactionRunning:
+			state.Activity = ActivityCompacting
+			state.Status = "compacting context"
+		case CompactionNoop:
+			state.Activity = ActivityRunning
+			state.Status = "context already compact"
+		case CompactionCompleted:
+			state.Activity = ActivityRunning
+			state.Status = fmt.Sprintf("context compacted; %d tokens saved", compaction.TokensSaved)
+		case CompactionFailed:
+			state.Activity = ActivityRunning
+			state.Status = "context compaction failed"
+		}
+	})
 }
 
 func (p *Projector) TurnCompleted(turnID, status string) Delta {
@@ -439,6 +497,10 @@ func (p *Projector) activity(kind DeltaKind, activity Activity, status string) D
 func (p *Projector) mutate(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.mutateLocked(kind, apply)
+}
+
+func (p *Projector) mutateLocked(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
 	previous := p.state.Revision
 	delta := Delta{
 		ProtocolVersion:  ProtocolVersion,
@@ -553,6 +615,10 @@ func normalizeTurnID(turnID string) string {
 	return "current"
 }
 
+func normalizeOptionalTurnID(turnID string) string {
+	return strings.TrimSpace(turnID)
+}
+
 func toolByID(tools []ToolState, turnID, callID string) ToolState {
 	for i := range tools {
 		if tools[i].TurnID == turnID && tools[i].CallID == callID {
@@ -567,6 +633,9 @@ func toolEntityID(turnID, callID string) string {
 }
 
 func boundText(value string, maximum int) (string, bool) {
+	if !utf8.ValidString(value) {
+		value = strings.ToValidUTF8(value, "�")
+	}
 	if maximum <= 0 || len(value) <= maximum {
 		return value, false
 	}
@@ -601,6 +670,10 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		lastTurn := *snapshot.LastTurn
 		snapshot.LastTurn = &lastTurn
 	}
+	if snapshot.LastCompaction != nil {
+		compaction := *snapshot.LastCompaction
+		snapshot.LastCompaction = &compaction
+	}
 	if snapshot.Workspace != nil {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
@@ -625,6 +698,10 @@ func cloneDelta(delta Delta) Delta {
 	if delta.LastTurn != nil {
 		lastTurn := *delta.LastTurn
 		delta.LastTurn = &lastTurn
+	}
+	if delta.Compaction != nil {
+		compaction := *delta.Compaction
+		delta.Compaction = &compaction
 	}
 	if delta.ContextUsage != nil {
 		usage := *delta.ContextUsage

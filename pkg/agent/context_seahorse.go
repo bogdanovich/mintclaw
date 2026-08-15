@@ -278,6 +278,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if req == nil {
 		return nil
 	}
+	status := ContextCompressLifecycleFailed
+	tokensSaved := 0
+	m.emitCompactLifecycleEvent(req, ContextCompressLifecycleStarted, 0)
+	defer func() {
+		m.emitCompactLifecycleEvent(req, status, tokensSaved)
+	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
 		return runtimeErr
@@ -301,7 +307,11 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
 		if compactErr == nil && compactResultHasProgress(result) {
+			status = ContextCompressLifecycleCompleted
+			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
+		} else if compactErr == nil {
+			status = ContextCompressLifecycleNoop
 		}
 		return compactErr
 	}
@@ -310,8 +320,14 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		Force:  req.Reason == ContextCompressReasonRetry,
 		Budget: &req.Budget,
 	})
-	if err == nil && compactResultHasProgress(result) {
-		m.emitCompactEvent(req, result)
+	if err == nil {
+		if compactResultHasProgress(result) {
+			status = ContextCompressLifecycleCompleted
+			tokensSaved = result.TokensSaved
+			m.emitCompactEvent(req, result)
+		} else {
+			status = ContextCompressLifecycleNoop
+		}
 	}
 	return err
 }
@@ -325,6 +341,42 @@ func (m *seahorseContextManager) emitCompactEvent(req *CompactRequest, result *s
 	if m.al == nil || req == nil {
 		return
 	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentContextCompress,
+		m.compactEventMeta(req, "turn.context.compress"),
+		ContextCompressPayload{
+			Reason:             req.Reason,
+			HistoryBudget:      req.Budget,
+			TokensSaved:        result.TokensSaved,
+			SummariesCreated:   len(result.SummariesCreated),
+			LeafSummaries:      result.LeafSummaries,
+			CondensedSummaries: result.CondensedSummaries,
+		},
+	)
+}
+
+func (m *seahorseContextManager) emitCompactLifecycleEvent(
+	req *CompactRequest,
+	status ContextCompressLifecycleStatus,
+	tokensSaved int,
+) {
+	if m.al == nil || req == nil {
+		return
+	}
+	kind := runtimeevents.KindAgentContextCompressEnd
+	tracePath := "turn.context.compress.end"
+	if status == ContextCompressLifecycleStarted {
+		kind = runtimeevents.KindAgentContextCompressStart
+		tracePath = "turn.context.compress.start"
+	}
+	m.al.emitEvent(
+		kind,
+		m.compactEventMeta(req, tracePath),
+		ContextCompressLifecyclePayload{Reason: req.Reason, Status: status, TokensSaved: tokensSaved},
+	)
+}
+
+func (m *seahorseContextManager) compactEventMeta(req *CompactRequest, tracePath string) HookMeta {
 	scope := req.TraceScope
 	workspace := strings.TrimSpace(req.Workspace)
 	agentID := ""
@@ -337,24 +389,13 @@ func (m *seahorseContextManager) emitCompactEvent(req *CompactRequest, result *s
 	if scope.Workspace == "" {
 		scope = runtimeevents.NewTraceScope(workspace, scope.TurnID)
 	}
-	m.al.emitEvent(
-		runtimeevents.KindAgentContextCompress,
-		HookMeta{
-			TraceScope: scope,
-			SessionKey: req.SessionKey,
-			AgentID:    agentID,
-			Source:     "seahorse",
-			TracePath:  "turn.context.compress",
-		},
-		ContextCompressPayload{
-			Reason:             req.Reason,
-			HistoryBudget:      req.Budget,
-			TokensSaved:        result.TokensSaved,
-			SummariesCreated:   len(result.SummariesCreated),
-			LeafSummaries:      result.LeafSummaries,
-			CondensedSummaries: result.CondensedSummaries,
-		},
-	)
+	return HookMeta{
+		TraceScope: scope,
+		SessionKey: req.SessionKey,
+		AgentID:    agentID,
+		Source:     "seahorse",
+		TracePath:  tracePath,
+	}
 }
 
 func (m *seahorseContextManager) Close() error {
