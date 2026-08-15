@@ -247,13 +247,17 @@ func TestFileRegistryLoadsPreReceiptBrowserCatalogWithAuthoritySuspended(t *test
 	}
 }
 
-func TestFileRegistryLoadsPreFileChooserPreDialogCatalogWithAuthoritySuspended(t *testing.T) {
-	inputSchemas := map[string]func(string, []BrowserProfileDescriptor) json.RawMessage{
-		"pre_file_chooser": legacyPreFileChooserBrowserCommandInputSchema,
-		"pre_drag":         legacyPreDragBrowserCommandInputSchema,
+func TestFileRegistryLoadsHistoricalBrowserCatalogWithAuthoritySuspended(t *testing.T) {
+	tests := []struct {
+		name          string
+		inputSchema   func(string, []BrowserProfileDescriptor) json.RawMessage
+		legacyOutputs bool
+	}{
+		{name: "pre_file_chooser", inputSchema: legacyPreFileChooserBrowserCommandInputSchema},
+		{name: "pre_drag_pre_dialog", inputSchema: legacyPreDragBrowserCommandInputSchema, legacyOutputs: true},
 	}
-	for name, inputSchema := range inputSchemas {
-		t.Run(name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "registry.json")
 			publicKey, _, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
@@ -276,10 +280,10 @@ func TestFileRegistryLoadsPreFileChooserPreDialogCatalogWithAuthoritySuspended(t
 			for index := range legacyDescriptors {
 				descriptor := &legacyDescriptors[index]
 				if descriptor.Name == BrowserCommandAct {
-					descriptor.InputSchema = inputSchema(descriptor.Name, descriptor.BrowserProfiles)
+					descriptor.InputSchema = test.inputSchema(descriptor.Name, descriptor.BrowserProfiles)
 				}
-				if descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandAct ||
-					descriptor.Name == BrowserCommandContexts {
+				if test.legacyOutputs && (descriptor.Name == BrowserCommandObserve ||
+					descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandContexts) {
 					descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
 						descriptor.Name, descriptor.BrowserProfiles,
 					)
@@ -324,6 +328,51 @@ func TestFileRegistryLoadsPreFileChooserPreDialogCatalogWithAuthoritySuspended(t
 				t.Fatalf("legacy authority was not suspended: %#v", registration)
 			}
 		})
+	}
+}
+
+func TestFileRegistryRejectsCrossEpochLegacyBrowserSchemas(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Revision = "managed-cross-epoch"
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"click", "fill", "navigate", "press", "scroll", "select"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name != BrowserCommandAct {
+			continue
+		}
+		descriptors[index].InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
+			descriptors[index].Name, descriptors[index].BrowserProfiles,
+		)
+		descriptors[index].OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
+			descriptors[index].Name, descriptors[index].BrowserProfiles,
+		)
+	}
+	catalog := CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := testPendingPairing(t, 1)
+	pairing.Node.Catalog = catalog
+	pairing.Node.CatalogHash = catalogHash
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(pairing.Node.ID): {Snapshot: pairing.Node},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("NewFileRegistry() error = %v", err)
 	}
 }
 

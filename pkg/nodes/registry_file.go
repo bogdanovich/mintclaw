@@ -658,77 +658,165 @@ func normalizeStoredLegacyBrowserDescriptor(descriptor *CommandDescriptor) bool 
 	if descriptor == nil || !IsBrowserCommand(descriptor.Name) {
 		return false
 	}
-	migrated := false
 	currentInput := BrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles)
-	if !storedSchemaMatches(descriptor.InputSchema, currentInput) {
-		var legacyInputs []json.RawMessage
-		if descriptor.Name == BrowserCommandAct &&
-			browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
-			legacyInputs = append(legacyInputs,
-				legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			)
-		}
-		if descriptor.Name == BrowserCommandSessionOpen &&
-			browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) {
-			legacyInputs = append(legacyInputs,
-				legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			)
-		}
-		if descriptor.Name == BrowserCommandAct &&
-			!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") {
-			legacyInputs = append(legacyInputs,
-				legacyPreFileChooserBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			)
-		}
-		if descriptor.Name == BrowserCommandAct &&
-			!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") {
-			legacyInputs = append(legacyInputs,
-				legacyPreDragBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
-			)
-		}
-		if !storedSchemaMatchesAny(descriptor.InputSchema, legacyInputs) {
-			return false
-		}
-		descriptor.InputSchema = currentInput
-		migrated = true
-	}
-
 	currentOutput := BrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles)
-	if !storedSchemaMatches(descriptor.OutputSchema, currentOutput) {
-		var legacyOutputs []json.RawMessage
-		profilesPrecedeDialogs := browserProfilesUseOnlyActions(
-			descriptor.BrowserProfiles,
-			"click", "download", "fill", "navigate", "press", "scroll", "select",
-		)
+	inputEpochs := storedBrowserInputSchemaEpochs(descriptor, currentInput)
+	outputEpochs := storedBrowserOutputSchemaEpochs(descriptor, currentOutput)
+	if inputEpochs&outputEpochs == 0 {
+		return false
+	}
+	migrated := !storedSchemaMatches(descriptor.InputSchema, currentInput) ||
+		!storedSchemaMatches(descriptor.OutputSchema, currentOutput)
+	descriptor.InputSchema = currentInput
+	descriptor.OutputSchema = currentOutput
+	return migrated && descriptor.Validate() == nil
+}
+
+type browserSchemaEpochs uint16
+
+// Browser schemas changed independently across releases. A stored descriptor
+// is historical only when its exact input and output contracts overlap in at
+// least one epoch that MintClaw actually emitted.
+const (
+	browserSchemaEpochPreScroll browserSchemaEpochs = 1 << iota
+	browserSchemaEpochPreApprovedActions
+	browserSchemaEpochPreContexts
+	browserSchemaEpochPreReceipts
+	browserSchemaEpochPreDialogs
+	browserSchemaEpochPreDrag
+	browserSchemaEpochPreFileChooser
+	browserSchemaEpochCurrent
+)
+
+const browserSchemaEpochAll = browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+	browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+	browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+
+func storedBrowserInputSchemaEpochs(
+	descriptor *CommandDescriptor,
+	current json.RawMessage,
+) browserSchemaEpochs {
+	var epochs browserSchemaEpochs
+	if storedSchemaMatches(descriptor.InputSchema, current) {
+		switch descriptor.Name {
+		case BrowserCommandAct:
+			epochs |= browserSchemaEpochCurrent
+		case BrowserCommandSessionOpen:
+			epochs |= browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts |
+				browserSchemaEpochPreDialogs | browserSchemaEpochPreDrag |
+				browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		case BrowserCommandContexts:
+			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		default:
+			epochs |= browserSchemaEpochAll
+		}
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreScroll
+	}
+	if descriptor.Name == BrowserCommandSessionOpen &&
+		browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyDryRunBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "file_chooser") &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyPreFileChooserBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreFileChooser
+	}
+	if descriptor.Name == BrowserCommandAct &&
+		!browserProfilesUseAnyAction(descriptor.BrowserProfiles, "drag", "file_chooser") &&
+		storedSchemaMatches(
+			descriptor.InputSchema,
+			legacyPreDragBrowserCommandInputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+		epochs |= browserSchemaEpochPreApprovedActions | browserSchemaEpochPreContexts |
+			browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs | browserSchemaEpochPreDrag
+	}
+	return epochs
+}
+
+func storedBrowserOutputSchemaEpochs(
+	descriptor *CommandDescriptor,
+	current json.RawMessage,
+) browserSchemaEpochs {
+	var epochs browserSchemaEpochs
+	if storedSchemaMatches(descriptor.OutputSchema, current) {
 		switch descriptor.Name {
 		case BrowserCommandSessionOpen:
-			if profilesPrecedeDialogs {
-				legacyOutputs = append(legacyOutputs,
-					legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
-				)
-			}
-		case BrowserCommandObserve, BrowserCommandContexts:
-			if profilesPrecedeDialogs {
-				legacyOutputs = append(legacyOutputs,
-					legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
-					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
-				)
-			}
-		case BrowserCommandAct:
-			if profilesPrecedeDialogs {
-				legacyOutputs = append(legacyOutputs,
-					legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
-				)
-			}
+			epochs |= browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs |
+				browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		case BrowserCommandObserve, BrowserCommandAct, BrowserCommandContexts:
+			epochs |= browserSchemaEpochPreDrag | browserSchemaEpochPreFileChooser | browserSchemaEpochCurrent
+		default:
+			epochs |= browserSchemaEpochAll
 		}
-		if !storedSchemaMatchesAny(descriptor.OutputSchema, legacyOutputs) {
-			return false
-		}
-		descriptor.OutputSchema = currentOutput
-		migrated = true
 	}
-
-	return migrated && descriptor.Validate() == nil
+	profilesPrecedeDialogs := browserProfilesUseOnlyActions(
+		descriptor.BrowserProfiles,
+		"click", "download", "fill", "navigate", "press", "scroll", "select",
+	)
+	if !profilesPrecedeDialogs {
+		return epochs
+	}
+	switch descriptor.Name {
+	case BrowserCommandSessionOpen:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserSessionOpenOutputSchema(descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts
+		}
+	case BrowserCommandObserve:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts
+		}
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreDialogs
+		}
+	case BrowserCommandContexts:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyBrowserPageResultOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreReceipts
+		}
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreDialogs
+		}
+	case BrowserCommandAct:
+		if storedSchemaMatches(
+			descriptor.OutputSchema,
+			legacyPreDialogBrowserCommandOutputSchema(descriptor.Name, descriptor.BrowserProfiles),
+		) {
+			epochs |= browserSchemaEpochPreScroll | browserSchemaEpochPreApprovedActions |
+				browserSchemaEpochPreContexts | browserSchemaEpochPreReceipts | browserSchemaEpochPreDialogs
+		}
+	}
+	return epochs
 }
 
 func browserProfilesUseAnyAction(profiles []BrowserProfileDescriptor, actions ...string) bool {
@@ -751,15 +839,6 @@ func browserProfilesUseOnlyActions(profiles []BrowserProfileDescriptor, actions 
 		}
 	}
 	return true
-}
-
-func storedSchemaMatchesAny(got json.RawMessage, candidates []json.RawMessage) bool {
-	for _, candidate := range candidates {
-		if storedSchemaMatches(got, candidate) {
-			return true
-		}
-	}
-	return false
 }
 
 func storedSchemaMatches(got json.RawMessage, want json.RawMessage) bool {
