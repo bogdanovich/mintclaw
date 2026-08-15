@@ -191,3 +191,40 @@ func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 		t.Fatalf("later writer after stream cancel = %+v", snapshot)
 	}
 }
+
+func TestStreamCancelDoesNotRollbackIdenticalLaterStreamer(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := NewStreamDelegate(projector, "thread-1")
+	traceScope := runtimeevents.NewTraceScope("/repo", "turn-1")
+	first, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("first matching stream was rejected")
+	}
+	if err = first.Finalize(t.Context(), "accepted answer"); err != nil {
+		t.Fatal(err)
+	}
+	second, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("second matching stream was rejected")
+	}
+	if err = second.Finalize(t.Context(), "accepted answer"); err != nil {
+		t.Fatal(err)
+	}
+	beforeCancel, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Cancel(t.Context())
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != beforeCancel.Revision || len(snapshot.Entries) != 1 ||
+		snapshot.Entries[0].Text != "accepted answer" || !snapshot.Entries[0].Complete {
+		t.Fatalf("identical later streamer after earlier cancel = %+v", snapshot)
+	}
+}

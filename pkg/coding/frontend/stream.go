@@ -66,8 +66,8 @@ func (s *projectedStream) Update(ctx context.Context, content string) error {
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	delta := s.projector.AssistantAccumulated(s.turnID, content, false)
-	s.recordOwned(delta)
+	_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, false)
+	s.recordOwned(owned)
 	return nil
 }
 
@@ -78,8 +78,8 @@ func (s *projectedStream) Finalize(ctx context.Context, content string) error {
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	delta := s.projector.AssistantAccumulated(s.turnID, content, true)
-	s.recordOwned(delta)
+	_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, true)
+	s.recordOwned(owned)
 	return nil
 }
 
@@ -104,8 +104,8 @@ func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) e
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	delta := s.projector.ReasoningAccumulated(s.turnID, content, false)
-	s.recordOwned(delta)
+	_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, false)
+	s.recordOwned(owned)
 	return nil
 }
 
@@ -116,8 +116,8 @@ func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string)
 	if s == nil || s.projector == nil {
 		return nil
 	}
-	delta := s.projector.ReasoningAccumulated(s.turnID, content, true)
-	s.recordOwned(delta)
+	_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, true)
+	s.recordOwned(owned)
 	return nil
 }
 
@@ -137,14 +137,11 @@ func (s *projectedStream) Cancel(context.Context) {
 	s.projector.discardOwnedStream(s.turnID, s.baseline, owned)
 }
 
-func (s *projectedStream) recordOwned(delta Delta) {
-	if delta.Entry == nil || delta.Revision == 0 {
-		return
-	}
+func (s *projectedStream) recordOwned(owned streamOwnedEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.owned == nil {
 		s.owned = make(streamOwnedEntries)
 	}
-	s.owned[delta.Entry.ID] = streamOwnedEntry{entry: *delta.Entry, revision: delta.Revision}
+	s.owned[owned.entry.ID] = owned
 }
