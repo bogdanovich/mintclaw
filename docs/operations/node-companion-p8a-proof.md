@@ -146,6 +146,40 @@ were retained at `/home/server/mintclaw-p8a-profile-fix-20260810T203307Z`,
 `/home/deploy/mintclaw-p8a-profile-fix-20260810T203439Z`, and
 `/Users/ab/mintclaw-p8a-final-20260810T210500Z`.
 
+### Post-closeout model-routing proof
+
+PR #683 (`4b7becde`) corrected the model-facing routing guidance without
+changing the P8a execution contract. Generic node discovery now hides the
+internal `workspace.*` companion commands, and an attempted description of
+one of those commands directs the model to the ordinary file tools with an
+explicit `remote_workspace` alias. The no-snapshot case returns the same
+guidance after target-visibility authorization, before registry resolution.
+
+The correction was deployed from merged `main` at `cdcbeaeb` on 2026-08-15.
+The core, node, and launcher binaries built successfully; gateway, web,
+family, nutrition, spouse, reviewer, review queue, and webhook services were
+healthy afterward; the five restarted services had no error-level journal
+entries in the deployment window. The reviewer process was deliberately not
+restarted. All five live configs loaded successfully under `mintclaw doctor`;
+their exit status 2 was limited to existing policy findings rather than a
+load or schema failure. The rollback backup is
+`/home/server/mintclaw-deploy-backup-20260816T004827Z`.
+
+A natural-language live-agent smoke asked the model to read
+`p8a-patch-live.txt` and search for `p8a-patch-ok` in explicit alias
+`vpn-workspace`, with local fallback forbidden. Passive diagnostic trace
+`trace-turn-a3da94c9b3a7aa52b528057a` is complete with outcome `completed`:
+
+- records 11–12 execute ordinary `read_file` and return `placement=remote`,
+  `remote_workspace=vpn-workspace`, and the expected 13-byte content;
+- records 18–19 execute ordinary `search_files` through the same alias and
+  return exactly one match; and
+- the trace contains no model call to an internal `workspace.*` node command,
+  generic node discovery, shell execution, or a local file-tool fallback.
+
+This is routing and operations evidence only. It does not reopen P8a or admit
+P8b remote coding.
+
 ## Completion and mandatory stop
 
 Every admitted Definition-of-Done gate is evidenced above. P8a is complete.
