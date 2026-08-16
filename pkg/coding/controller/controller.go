@@ -41,6 +41,7 @@ const (
 	commandCompact
 	commandRename
 	commandNewThread
+	commandRefreshWorkspace
 	commandClose
 )
 
@@ -144,6 +145,12 @@ func (c *Controller) Rename(ctx context.Context, title string) error {
 
 func (c *Controller) NewThread(ctx context.Context) error {
 	return c.send(ctx, commandNewThread, "")
+}
+
+// RefreshWorkspace requests a fresh bounded repository observation without
+// exposing runtime or Git implementation details to a frontend.
+func (c *Controller) RefreshWorkspace(ctx context.Context) error {
+	return c.send(ctx, commandRefreshWorkspace, "")
 }
 
 func (c *Controller) Close(ctx context.Context) error {
@@ -300,6 +307,20 @@ func (c *Controller) coordinate() {
 				}
 			case commandRename, commandNewThread:
 				request.reply <- ErrUnsupported
+			case commandRefreshWorkspace:
+				switch {
+				case active:
+					request.reply <- ErrTurnActive
+				case compacting:
+					request.reply <- ErrCompactionActive
+				default:
+					refresher, ok := c.runtime.(frontend.WorkspaceRefresher)
+					if !ok {
+						request.reply <- frontend.ErrWorkspaceRefreshUnsupported
+						continue
+					}
+					request.reply <- refresher.RefreshWorkspace(request.ctx)
+				}
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {

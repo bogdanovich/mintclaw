@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -49,29 +50,38 @@ type TranscriptPageMsg struct {
 	Err  error
 }
 
+// WorkspaceRefreshMsg completes an explicit repository observation.
+type WorkspaceRefreshMsg struct {
+	Err error
+}
+
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
-	controller         frontend.Controller
-	ctx                context.Context
-	reducer            *frontend.Reducer
-	viewport           viewport.Model
-	composer           textarea.Model
-	transcript         transcriptWindow
-	layout             transcriptLayout
-	width              int
-	height             int
-	interruptPending   bool
-	initialTurnPending bool
-	admittedRevision   frontend.Revision
-	admittedLastTurn   *frontend.LastTurnOutcome
-	resyncing          bool
-	focused            bool
-	err                error
-	submitting         bool
-	composerHistory    []string
-	historyIndex       int
-	historyDraft       string
+	controller          frontend.Controller
+	ctx                 context.Context
+	reducer             *frontend.Reducer
+	viewport            viewport.Model
+	composer            textarea.Model
+	transcript          transcriptWindow
+	layout              transcriptLayout
+	width               int
+	height              int
+	interruptPending    bool
+	initialTurnPending  bool
+	admittedRevision    frontend.Revision
+	admittedLastTurn    *frontend.LastTurnOutcome
+	resyncing           bool
+	focused             bool
+	err                 error
+	submitting          bool
+	composerHistory     []string
+	historyIndex        int
+	historyDraft        string
+	selectedToolID      string
+	expandedToolID      string
+	refreshingWorkspace bool
+	workspaceNotice     string
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -182,6 +192,19 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript.apply(message.Page, message.Mode)
 		m.refreshViewport()
 		return m, nil
+	case WorkspaceRefreshMsg:
+		m.refreshingWorkspace = false
+		if message.Err != nil {
+			if errors.Is(message.Err, frontend.ErrWorkspaceRefreshUnsupported) {
+				m.workspaceNotice = "repository refresh unavailable"
+				return m, nil
+			}
+			m.err = message.Err
+			return m, nil
+		}
+		m.err = nil
+		m.workspaceNotice = "repository refreshed"
+		return m, nil
 	case WatchErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
@@ -233,13 +256,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	status := m.reducer.State().Status
-	if strings.TrimSpace(status) == "" {
-		status = string(m.reducer.State().Activity)
-	}
-	if strings.TrimSpace(status) == "" {
-		status = "idle"
-	}
+	status := m.statusLine()
 	if m.resyncing {
 		status = "resynchronizing frontend…"
 	}
@@ -250,7 +267,7 @@ func (m *Model) View() string {
 		status = "frontend error: " + m.err.Error()
 	}
 	if !m.focused {
-		status += " · terminal unfocused"
+		status = "terminal unfocused · " + status
 	}
 	if m.height <= 2 {
 		return clipLine(status, m.width)
@@ -331,23 +348,27 @@ func (m *Model) resize(width, height int) {
 }
 
 func clipLine(value string, width int) string {
-	value = strings.ReplaceAll(value, "\n", " ")
-	if width <= 0 || len([]rune(value)) <= width {
+	value = strings.ReplaceAll(sanitizeTerminalText(value), "\n", " ")
+	if width <= 0 || ansi.StringWidth(value) <= width {
 		return value
 	}
-	runes := []rune(value)
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func (m *Model) refreshViewport() {
 	state := m.reducer.State()
+	m.normalizeToolSelection(state.Tools)
 	wasAtBottom := m.viewport.AtBottom()
 	anchor := m.layout.anchorAt(m.viewport.YOffset)
 	content, layout := renderTranscript(
-		transcriptDisplayEntries(m.transcript.entries(state.Entries), state.Tools),
+		buildTranscriptView(
+			m.transcript.entries(state.Entries),
+			state.Tools,
+			state.ChangedFiles,
+			state.Workspace,
+			m.selectedToolID,
+			m.expandedToolID,
+		),
 		m.viewport.Width,
 		!m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries),
 		m.transcript.hasNewer,
@@ -367,6 +388,28 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	switch message.String() {
+	case "ctrl+r":
+		if activeWork(m.reducer.State().Activity) || m.initialTurnPending {
+			m.workspaceNotice = "repository refresh is available when idle"
+			return true, nil
+		}
+		refresher, ok := m.controller.(frontend.WorkspaceRefresher)
+		if !ok {
+			m.workspaceNotice = "repository refresh unavailable"
+			return true, nil
+		}
+		m.refreshingWorkspace = true
+		m.workspaceNotice = ""
+		return true, workspaceRefreshCmd(m.ctx, refresher)
+	case "alt+j":
+		m.navigateTools(1)
+		return true, nil
+	case "alt+k":
+		m.navigateTools(-1)
+		return true, nil
+	case "ctrl+o":
+		m.toggleSelectedTool()
+		return true, nil
 	case "enter":
 		if message.Paste {
 			return true, nil
@@ -405,6 +448,80 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 	return false, nil
+}
+
+func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
+	if len(tools) == 0 {
+		m.selectedToolID = ""
+		m.expandedToolID = ""
+		return
+	}
+	for _, tool := range tools {
+		if toolViewID(tool) == m.selectedToolID {
+			return
+		}
+	}
+	m.selectedToolID = toolViewID(tools[len(tools)-1])
+	if m.expandedToolID != m.selectedToolID {
+		m.expandedToolID = ""
+	}
+}
+
+func (m *Model) navigateTools(direction int) {
+	tools := m.reducer.State().Tools
+	if len(tools) == 0 {
+		m.workspaceNotice = "no tool cards"
+		return
+	}
+	m.normalizeToolSelection(tools)
+	selected := 0
+	for index, tool := range tools {
+		if toolViewID(tool) == m.selectedToolID {
+			selected = index
+			break
+		}
+	}
+	selected = (selected + direction + len(tools)) % len(tools)
+	m.selectedToolID = toolViewID(tools[selected])
+	m.expandedToolID = ""
+	m.refreshViewport()
+	m.focusSelectedTool()
+}
+
+func (m *Model) toggleSelectedTool() {
+	tools := m.reducer.State().Tools
+	if len(tools) == 0 {
+		m.workspaceNotice = "no tool cards"
+		return
+	}
+	m.normalizeToolSelection(tools)
+	selected := frontend.ToolState{}
+	for _, tool := range tools {
+		if toolViewID(tool) == m.selectedToolID {
+			selected = tool
+			break
+		}
+	}
+	if !toolHasDisplayOutput(selected) {
+		m.expandedToolID = ""
+		m.workspaceNotice = "bounded tool output unavailable"
+		m.refreshViewport()
+		m.focusSelectedTool()
+		return
+	}
+	if m.expandedToolID == m.selectedToolID {
+		m.expandedToolID = ""
+	} else {
+		m.expandedToolID = m.selectedToolID
+	}
+	m.refreshViewport()
+	m.focusSelectedTool()
+}
+
+func (m *Model) focusSelectedTool() {
+	if line, ok := m.layout.lineFor(transcriptAnchor{id: m.selectedToolID, valid: true}); ok {
+		m.viewport.SetYOffset(line)
+	}
 }
 
 func (m *Model) rememberPrompt(prompt string) {
@@ -546,5 +663,11 @@ func transcriptPageCmd(
 			Limit:  transcriptPageSize,
 		})
 		return TranscriptPageMsg{Page: page, Mode: mode, Err: err}
+	}
+}
+
+func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefresher) tea.Cmd {
+	return func() tea.Msg {
+		return WorkspaceRefreshMsg{Err: refresher.RefreshWorkspace(ctx)}
 	}
 }

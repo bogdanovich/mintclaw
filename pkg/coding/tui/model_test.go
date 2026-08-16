@@ -14,17 +14,21 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 type fakeController struct {
 	*frontend.Projector
-	interrupts  atomic.Int32
-	hardCancels atomic.Int32
-	closes      atomic.Int32
-	submits     atomic.Int32
-	mu          sync.Mutex
-	prompts     []string
-	submitErr   error
+	interrupts   atomic.Int32
+	hardCancels  atomic.Int32
+	closes       atomic.Int32
+	submits      atomic.Int32
+	mu           sync.Mutex
+	prompts      []string
+	submitErr    error
+	refreshes    atomic.Int32
+	refreshErr   error
+	refreshState *codingworkspace.Snapshot
 }
 
 func (f *fakeController) Submit(_ context.Context, prompt string) error {
@@ -39,6 +43,17 @@ func (f *fakeController) submittedPrompts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.prompts)
+}
+
+func (f *fakeController) RefreshWorkspace(context.Context) error {
+	f.refreshes.Add(1)
+	if f.refreshErr != nil {
+		return f.refreshErr
+	}
+	if f.refreshState != nil {
+		f.WorkspaceUpdated(*f.refreshState)
+	}
+	return nil
 }
 
 func (f *fakeController) Interrupt(context.Context) error {
@@ -178,8 +193,14 @@ func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
 	tools := []frontend.ToolState{{
 		CallID: "call-1", Name: "exec", Arguments: "SECRET-ARG", Output: "SECRET-OUTPUT", Status: frontend.ToolRunning,
 	}}
-	content, layout := renderTranscript(transcriptDisplayEntries(entries, tools), 12, false, false, false)
-	if len(layout.blocks) != 2 || !strings.Contains(content, "Tool\n  exec ·") {
+	content, layout := renderTranscript(
+		buildTranscriptView(entries, tools, nil, nil, "view:tool::call-1", ""),
+		12,
+		false,
+		false,
+		false,
+	)
+	if len(layout.blocks) != 2 || !strings.Contains(content, "▶ Tool") || !strings.Contains(content, "[running]") {
 		t.Fatalf("semantic transcript = %q layout=%+v", content, layout)
 	}
 	if strings.Contains(content, "SECRET") || strings.Contains(content, "\x1b") || strings.Contains(content, "\x07") {

@@ -19,6 +19,7 @@ var (
 	ErrThreadMismatch              = errors.New("coding frontend thread mismatch")
 	ErrTranscriptPagingUnsupported = errors.New("coding transcript paging is unsupported")
 	ErrTranscriptHistoryChanged    = errors.New("coding transcript history changed after opening")
+	ErrWorkspaceRefreshUnsupported = errors.New("coding workspace refresh is unsupported")
 )
 
 type Revision uint64
@@ -290,4 +291,10 @@ type TranscriptPage struct {
 // frontends for lazy history hydration.
 type TranscriptPager interface {
 	TranscriptPage(context.Context, TranscriptPageRequest) (TranscriptPage, error)
+}
+
+// WorkspaceRefresher is an optional controller extension used by frontends to
+// explicitly observe branch and worktree changes made outside the active turn.
+type WorkspaceRefresher interface {
+	RefreshWorkspace(context.Context) error
 }

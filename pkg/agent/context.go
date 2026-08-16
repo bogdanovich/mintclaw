@@ -633,6 +633,19 @@ func (cb *ContextBuilder) pendingCodingWorkspaceUpdate(
 	return cb.codingWorkspace.PendingUpdate(ctx)
 }
 
+// RefreshCodingWorkspace refreshes and consumes the coding workspace
+// observer's next projection. The same snapshot remains current for prompt
+// construction, keeping explicit frontend refresh and the next turn aligned.
+func (cb *ContextBuilder) RefreshCodingWorkspace(
+	ctx context.Context,
+) (codingworkspace.Snapshot, bool) {
+	if cb == nil || cb.codingWorkspace == nil {
+		return codingworkspace.Snapshot{}, false
+	}
+	cb.codingWorkspace.Refresh(ctx)
+	return cb.codingWorkspace.PendingUpdate(ctx)
+}
+
 func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptContext) string {
 	if cb == nil {
 		return formatCodingThreadContext(CodingPromptContext{}, codingContext)

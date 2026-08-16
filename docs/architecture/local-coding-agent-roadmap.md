@@ -1343,6 +1343,9 @@ Done when:
 
 Dependencies: P3.4, P4.2
 
+Implementation evidence:
+[`local-coding-agent-p4-tool-diff-status.md`](local-coding-agent-p4-tool-diff-status.md)
+
 Scope:
 
 - Render collapsed tool cards with optional expansion.
