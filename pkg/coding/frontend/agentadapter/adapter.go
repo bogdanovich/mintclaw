@@ -121,22 +121,15 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				a.projector.ToolSuspended(turnID, payload.ToolCallID, payload.Tool, payload.Duration)
 				break
 			}
-			result := ""
 			if payload.Observation != nil && payload.Observation.Command != nil {
 				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*payload.Observation.Command))
-			} else {
-				result = fmt.Sprintf(
-					"result available (%d bytes for model, %d bytes for user)",
-					payload.ForLLMLen,
-					payload.ForUserLen,
-				)
 			}
 			audit := projectWriteAudit(payload.WriteAudit)
 			a.projector.ToolCompleted(
 				turnID,
 				payload.ToolCallID,
 				payload.Tool,
-				result,
+				"",
 				payload.Duration,
 				payload.IsError,
 				audit,

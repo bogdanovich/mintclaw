@@ -6,12 +6,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 func (m *Model) statusLine() string {
 	state := m.reducer.State()
+	activity := "activity " + activityStatus(state)
 	segments := make([]string, 0, 7)
 	switch {
 	case m.refreshingWorkspace:
@@ -19,17 +22,29 @@ func (m *Model) statusLine() string {
 	case strings.TrimSpace(m.workspaceNotice) != "":
 		segments = append(segments, m.workspaceNotice)
 	}
-	segments = append(segments,
-		"project "+projectStatus(state.Metadata.ProjectRoot),
-		"branch "+branchStatus(state.Workspace),
-		"model "+modelStatus(state.Metadata),
+	details := []string{
+		"project " + projectStatus(state.Metadata.ProjectRoot),
+		"branch " + branchStatus(state.Workspace),
+		"model " + modelStatus(state.Metadata),
 		contextStatus(state.ContextUsage),
-		"activity "+activityStatus(state),
-	)
+	}
+	segments = append(segments, details...)
 	if !m.refreshingWorkspace && strings.TrimSpace(m.workspaceNotice) == "" {
 		segments = append(segments, "Ctrl+R refresh")
 	}
-	return strings.Join(segments, " · ")
+	return prioritizedStatusLine(m.width, activity, segments)
+}
+
+func prioritizedStatusLine(width int, activity string, optional []string) string {
+	line := activity
+	for _, segment := range optional {
+		candidate := line + " · " + segment
+		if width > 0 && ansi.StringWidth(candidate) > width {
+			continue
+		}
+		line = candidate
+	}
+	return clipLine(line, width)
 }
 
 func projectStatus(root string) string {

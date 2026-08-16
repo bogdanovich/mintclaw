@@ -495,6 +495,20 @@ func (m *Model) toggleSelectedTool() {
 		return
 	}
 	m.normalizeToolSelection(tools)
+	selected := frontend.ToolState{}
+	for _, tool := range tools {
+		if toolViewID(tool) == m.selectedToolID {
+			selected = tool
+			break
+		}
+	}
+	if !toolHasDisplayOutput(selected) {
+		m.expandedToolID = ""
+		m.workspaceNotice = "bounded tool output unavailable"
+		m.refreshViewport()
+		m.focusSelectedTool()
+		return
+	}
 	if m.expandedToolID == m.selectedToolID {
 		m.expandedToolID = ""
 	} else {

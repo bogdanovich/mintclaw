@@ -92,6 +92,9 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
 		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
 	}
+	if snapshot.Tools[0].Output != "" {
+		t.Fatalf("ordinary tool projected non-presentational output = %q", snapshot.Tools[0].Output)
+	}
 	if snapshot.ContextUsage.UsedTokens != 120 || snapshot.ContextUsage.LimitTokens != 1000 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
 	}

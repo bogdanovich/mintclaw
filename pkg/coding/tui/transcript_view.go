@@ -225,18 +225,13 @@ func toolStatusText(status frontend.ToolStatus) string {
 }
 
 func toolHasDisplayOutput(tool frontend.ToolState) bool {
-	if tool.Command != nil {
-		return tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != ""
-	}
-	return tool.Output != ""
+	return tool.Command != nil &&
+		(tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != "")
 }
 
 func expandedToolOutput(tool frontend.ToolState) []string {
 	if tool.Command == nil {
-		if tool.Output == "" {
-			return []string{"output: (empty)"}
-		}
-		return []string{"output:", tool.Output}
+		return nil
 	}
 	command := tool.Command
 	lines := make([]string, 0, 6)

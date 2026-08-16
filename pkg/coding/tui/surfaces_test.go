@@ -6,9 +6,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
 func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *testing.T) {
@@ -64,6 +68,59 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	}
 	if strings.Contains(expanded, "SECRET_TOKEN") || strings.Contains(expanded, "secret command") {
 		t.Fatalf("expanded card leaked arguments: %q", expanded)
+	}
+}
+
+func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := agentadapter.WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1",
+		TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		t.Helper()
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+		ToolCallID: "call-1",
+		Tool:       "read_file",
+		Arguments:  map[string]any{"path": "SECRET-PATH"},
+	})
+	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+		ToolCallID: "call-1", Tool: "read_file", ForLLMLen: 8_192, ForUserLen: 4_096,
+	})
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
+		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
+	}
+	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 20)
+	rendered := renderedModelTranscript(model, 80)
+	for _, forbidden := range []string{"SECRET-PATH", "8192", "4096", "result available", "output available"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("ordinary tool card leaked %q: %q", forbidden, rendered)
+		}
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if model.expandedToolID != "" || strings.Contains(renderedModelTranscript(model, 80), "SECRET-PATH") {
+		t.Fatalf("ordinary tool card expanded without bounded presentation output: %+v", model)
 	}
 }
 
@@ -145,6 +202,40 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 			model.statusLine(),
 			renderedModelTranscript(model, 120),
 		)
+	}
+}
+
+func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.ThreadMetadataUpdated(frontend.ThreadMetadata{
+		ProjectRoot: "/work/representative-project", Model: "representative-coding-model", Provider: "provider",
+	})
+	projector.ContextUsage(20_000, 100_000)
+	projector.WorkspaceUpdated(codingworkspace.Snapshot{
+		ProjectRoot: "/work/representative-project",
+		CWD:         "/work/representative-project",
+		Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "feature/representative-status", Head: "1234567890",
+		},
+	})
+	projector.TurnStarted("turn-1", "work")
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, width := range []int{40, 80} {
+		model.resize(width, 20)
+		status := model.statusLine()
+		if !strings.Contains(status, "activity running") || ansi.StringWidth(status) > width {
+			t.Fatalf("width %d status = %q (%d cells)", width, status, ansi.StringWidth(status))
+		}
 	}
 }
 
