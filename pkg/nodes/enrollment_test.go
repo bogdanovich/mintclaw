@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 func TestEnrollmentOfferIssueAndURIRoundTrip(t *testing.T) {
@@ -133,6 +135,21 @@ func TestEnrollmentOfferConsumeIsSingleUseAndCommitAtomic(t *testing.T) {
 	}
 }
 
+func TestEnrollmentOfferConsumesCommittedWriteWarning(t *testing.T) {
+	manager := NewEnrollmentOfferManager(EnrollmentOfferConfig{})
+	_, proof := newTestEnrollmentProof(t, manager, testP256PrivateKey(t))
+	warning := errors.New("directory sync failed")
+	consumeErr := manager.Consume(proof, func() error {
+		return &fileutil.CommittedWriteError{Err: warning}
+	})
+	if !fileutil.IsCommittedWriteError(consumeErr) || !errors.Is(consumeErr, warning) {
+		t.Fatalf("committed Consume() error = %v", consumeErr)
+	}
+	if err := manager.Consume(proof, func() error { return nil }); !errors.Is(err, ErrEnrollmentOfferUnknown) {
+		t.Fatalf("committed offer replay error = %v", err)
+	}
+}
+
 func TestEnrollmentOfferInvalidProofDoesNotConsume(t *testing.T) {
 	manager := NewEnrollmentOfferManager(EnrollmentOfferConfig{})
 	offer, proof := newTestEnrollmentProof(t, manager, testP256PrivateKey(t))
@@ -152,6 +169,23 @@ func TestEnrollmentOfferIsInvalidatedByManagerRestart(t *testing.T) {
 	restarted := NewEnrollmentOfferManager(EnrollmentOfferConfig{})
 	if err := restarted.Consume(proof, func() error { return nil }); !errors.Is(err, ErrEnrollmentOfferUnknown) {
 		t.Fatalf("restarted Consume() error = %v", err)
+	}
+}
+
+func TestEnrollmentOfferManagerInvalidationIsIrreversible(t *testing.T) {
+	manager := NewEnrollmentOfferManager(EnrollmentOfferConfig{})
+	_, proof := newTestEnrollmentProof(t, manager, testP256PrivateKey(t))
+	manager.Invalidate()
+	manager.Invalidate()
+	if _, err := manager.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, ErrEnrollmentInvalidated) {
+		t.Fatalf("invalidated Issue() error = %v", err)
+	}
+	if err := manager.Consume(proof, func() error { return nil }); !errors.Is(err, ErrEnrollmentInvalidated) {
+		t.Fatalf("invalidated Consume() error = %v", err)
 	}
 }
 

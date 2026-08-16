@@ -112,6 +112,24 @@ func TestNodeEnrollmentOperatorReportsCapacity(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentOperatorReportsInvalidatedGeneration(t *testing.T) {
+	manager := nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{})
+	manager.Invalidate()
+	handler := newNodeEnrollmentOperatorHandler("operator-token", manager)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		nodeEnrollmentOperatorPath,
+		strings.NewReader(`{"endpoint":"wss://gateway.example/nodes/v1/ws","ttl_seconds":60}`),
+	)
+	request.Header.Set("Authorization", "Bearer operator-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(response.Body.String(), "OFFER_UNAVAILABLE") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestNodeEnrollmentOperatorUsesDefaultLifetime(t *testing.T) {
 	now := time.Unix(1000, 0)
 	manager := nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{Now: func() time.Time { return now }})

@@ -152,6 +152,10 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	if err != nil {
 		return Admission{}, err
 	}
+	if (publicKey.Algorithm == KeyAlgorithmECDSAP256SHA256 && proof.Platform != "android") ||
+		(publicKey.Algorithm == KeyAlgorithmEd25519 && proof.Platform == "android") {
+		return Admission{}, ErrEnrollmentOfferInvalid
+	}
 	now := auth.now().Unix()
 	node := Snapshot{
 		ID:              proof.NodeID,
@@ -171,7 +175,8 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 		return Admission{}, err
 	}
 	if !exists {
-		if proof.Platform == "android" {
+		switch publicKey.Algorithm {
+		case KeyAlgorithmECDSAP256SHA256:
 			if auth.enrollmentOffers == nil {
 				return Admission{}, ErrEnrollmentRequired
 			}
@@ -180,13 +185,15 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 			}); consumeErr != nil {
 				return Admission{}, consumeErr
 			}
-		} else {
+		case KeyAlgorithmEd25519:
 			if proof.EnrollmentOfferID != "" || proof.EnrollmentProof != "" {
 				return Admission{}, ErrEnrollmentOfferInvalid
 			}
 			if persistErr := auth.persistPending(node, publicKey, proof, now); persistErr != nil {
 				return Admission{}, persistErr
 			}
+		default:
+			return Admission{}, ErrEnrollmentOfferInvalid
 		}
 		return Admission{Result: AdmissionResult{NodeID: node.ID, State: StatePendingPairing}}, nil
 	}

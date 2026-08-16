@@ -66,6 +66,9 @@ func (handler *nodeEnrollmentOperatorHandler) ServeHTTP(writer http.ResponseWrit
 		if errors.Is(err, nodes.ErrEnrollmentOfferBusy) {
 			status = http.StatusTooManyRequests
 			code = "CAPACITY_REACHED"
+		} else if errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+			status = http.StatusServiceUnavailable
+			code = "OFFER_UNAVAILABLE"
 		}
 		writeNodeEnrollmentError(writer, status, code)
 		return

@@ -139,6 +139,7 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 		return fmt.Errorf("configure Android enrollment operator authentication: %w", err)
 	}
 	enrollmentHandler := newNodeEnrollmentOperatorHandler(operatorToken, offers)
+	oldOffers := runtime.enrollmentOffers
 	if runtime.mounted {
 		err = runtime.routes.ReplaceHTTPHandler(nodews.Path, handler)
 		if err == nil {
@@ -170,6 +171,7 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	runtime.generation++
 	runtime.mounted = true
 	runtime.registryMu.Unlock()
+	oldOffers.Invalidate()
 	logger.InfoCF("nodes", "Node admission enabled", map[string]any{
 		"path":                     nodews.Path,
 		"allow_loopback_plaintext": cfg.Nodes.AllowLoopbackPlaintext,
@@ -500,6 +502,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.registryMu.Lock()
 	wasMounted := runtime.mounted
 	handler := runtime.handler
+	offers := runtime.enrollmentOffers
 	terminalStore := runtime.terminalStore
 	transferSpool := runtime.transferSpool
 	invocationStore := runtime.invocationStore
@@ -510,6 +513,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 		runtime.routes.UnregisterHTTPHandler(nodews.Path)
 		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
 	}
+	offers.Invalidate()
 	runtime.registryMu.Lock()
 	terminalMounted := runtime.terminalMounted
 	terminalHub := runtime.terminalHub

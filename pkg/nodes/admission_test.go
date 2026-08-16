@@ -111,6 +111,13 @@ func TestAuthenticatorAdmitsAndReconnectsP256Identity(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	inconsistentReconnect := newProof()
+	inconsistentReconnect.Platform = "linux"
+	signTestP256IdentityProof(t, privateKey, &inconsistentReconnect)
+	if _, err := authenticator.Authenticate(inconsistentReconnect); !errors.Is(err, ErrEnrollmentOfferInvalid) {
+		t.Fatalf("inconsistent reconnect error = %v", err)
+	}
+
 	reconnect := newProof()
 	admission, err = authenticator.Authenticate(reconnect)
 	if err != nil {
@@ -136,6 +143,33 @@ func TestAuthenticatorRequiresOfferBeforeUnknownAndroidPairing(t *testing.T) {
 	}
 	proof := newTestP256IdentityProof(t, testP256PrivateKey(t), challenge.Nonce)
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentRequired) {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if _, exists, err := registry.Pending(proof.NodeID); err != nil || exists {
+		t.Fatalf("unauthorized Pending() = exists %v, error %v", exists, err)
+	}
+}
+
+func TestAuthenticatorRejectsP256IdentityOutsideAndroidPlatform(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{
+		EnrollmentOffers: NewEnrollmentOfferManager(EnrollmentOfferConfig{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := testP256PrivateKey(t)
+	proof := newTestP256IdentityProof(t, privateKey, challenge.Nonce)
+	proof.Platform = "linux"
+	signTestP256IdentityProof(t, privateKey, &proof)
+	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentOfferInvalid) {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
 	if _, exists, err := registry.Pending(proof.NodeID); err != nil || exists {
@@ -181,6 +215,45 @@ func TestAuthenticatorRejectsEnrollmentAuthorityFromNonAndroidIdentity(t *testin
 		t.Fatal(err)
 	}
 	proof.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, transcript))
+	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentOfferInvalid) {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if _, exists, err := registry.Pending(proof.NodeID); err != nil || exists {
+		t.Fatalf("unauthorized Pending() = exists %v, error %v", exists, err)
+	}
+}
+
+func TestAuthenticatorRejectsEd25519IdentityClaimingAndroidPlatform(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewIdentityProof(
+		privateKey,
+		challenge.Nonce,
+		ProtocolV1,
+		ProtocolV1,
+		"v0.1.0",
+		"android",
+		"arm64-v8a",
+		CapabilityCatalog{},
+		ExecutionProfile{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrEnrollmentOfferInvalid) {
 		t.Fatalf("Authenticate() error = %v", err)
 	}

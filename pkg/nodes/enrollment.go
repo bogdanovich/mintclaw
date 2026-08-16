@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 const (
@@ -36,6 +38,7 @@ var (
 	ErrEnrollmentOfferUnknown = errors.New("android node enrollment offer is unknown or already used")
 	ErrEnrollmentOfferExpired = errors.New("android node enrollment offer expired")
 	ErrEnrollmentOfferBusy    = errors.New("android node enrollment offer capacity reached")
+	ErrEnrollmentInvalidated  = errors.New("android node enrollment offers were invalidated")
 )
 
 // EnrollmentOffer is the bounded, sensitive QR payload returned once to an
@@ -82,6 +85,7 @@ type EnrollmentOfferManager struct {
 	random    io.Reader
 	now       func() time.Time
 	offers    map[string]enrollmentOfferRecord
+	invalid   bool
 }
 
 func NewEnrollmentOfferManager(cfg EnrollmentOfferConfig) *EnrollmentOfferManager {
@@ -125,6 +129,9 @@ func (manager *EnrollmentOfferManager) Issue(
 	now := manager.now()
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if manager.invalid {
+		return EnrollmentOffer{}, ErrEnrollmentInvalidated
+	}
 	manager.pruneExpiredLocked(now)
 	if len(manager.offers) >= manager.maxOffers {
 		return EnrollmentOffer{}, ErrEnrollmentOfferBusy
@@ -162,6 +169,9 @@ func (manager *EnrollmentOfferManager) Consume(proof IdentityProof, commit func(
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if manager.invalid {
+		return ErrEnrollmentInvalidated
+	}
 	now := manager.now()
 	record, exists := manager.offers[proof.EnrollmentOfferID]
 	if !exists {
@@ -183,11 +193,26 @@ func (manager *EnrollmentOfferManager) Consume(proof IdentityProof, commit func(
 	if !hmac.Equal(provided, expected) {
 		return ErrEnrollmentOfferInvalid
 	}
-	if err := commit(); err != nil {
-		return err
+	commitErr := commit()
+	if commitErr == nil || fileutil.IsCommittedWriteError(commitErr) {
+		delete(manager.offers, proof.EnrollmentOfferID)
 	}
-	delete(manager.offers, proof.EnrollmentOfferID)
-	return nil
+	return commitErr
+}
+
+// Invalidate irreversibly revokes every offer owned by this admission
+// generation. Calls already in progress finish before invalidation returns.
+func (manager *EnrollmentOfferManager) Invalidate() {
+	if manager == nil {
+		return
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.invalid = true
+	for id, record := range manager.offers {
+		clear(record.secret)
+		delete(manager.offers, id)
+	}
 }
 
 func EncodeEnrollmentOfferURI(offer EnrollmentOffer) (string, error) {

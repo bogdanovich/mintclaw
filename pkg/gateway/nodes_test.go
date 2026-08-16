@@ -523,7 +523,15 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 	if runtime.sessions != firstSessions {
 		t.Fatal("config reload replaced shared node session ownership")
 	}
+	if _, err := firstOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("reconciled offer manager Issue() error = %v", err)
+	}
 
+	secondOffers := runtime.enrollmentOffers
 	cfg.Agents.Defaults.Workspace = filepath.Join(t.TempDir(), "second")
 	if err := runtime.Reconcile(cfg); err != nil {
 		t.Fatal(err)
@@ -538,7 +546,15 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 		routes.enrollmentUnregisterCount != 1 {
 		t.Fatalf("workspace rotation route counts = %#v", routes)
 	}
+	if _, err := secondOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("workspace-rotated offer manager Issue() error = %v", err)
+	}
 
+	thirdOffers := runtime.enrollmentOffers
 	cfg.Nodes.Enabled = false
 	if err := runtime.Reconcile(cfg); err != nil {
 		t.Fatal(err)
@@ -547,6 +563,13 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 		routes.handler != nil || routes.enrollmentHandler != nil || routes.unregisterCount != 2 ||
 		routes.enrollmentUnregisterCount != 2 {
 		t.Fatalf("disabled runtime = %#v, routes = %#v", runtime, routes)
+	}
+	if _, err := thirdOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("closed offer manager Issue() error = %v", err)
 	}
 }
 
@@ -587,6 +610,9 @@ func TestNodeAdmissionRuntimeRollsBackEnrollmentRouteFailures(t *testing.T) {
 			runtime.enrollmentOffers != oldOffers || routes.handler != oldHandler ||
 			routes.enrollmentHandler != oldEnrollmentHandler {
 			t.Fatalf("failed replacement runtime = %#v, routes = %#v", runtime, routes)
+		}
+		if _, err := oldOffers.Issue("wss://gateway.example/nodes/v1/ws", "", time.Minute); err != nil {
+			t.Fatalf("failed replacement invalidated active manager: %v", err)
 		}
 	})
 }
