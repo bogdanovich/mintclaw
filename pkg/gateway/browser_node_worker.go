@@ -154,7 +154,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 				browser.ActionFileChooser, browser.ActionUpload,
 			}
 			downloadAvailable := true
-			if capability, ok := factory.local.(interface{ DownloadAvailable() bool }); ok {
+			if capability, supported := factory.local.(interface{ DownloadAvailable() bool }); supported {
 				downloadAvailable = capability.DownloadAvailable()
 			}
 			if downloadAvailable {
