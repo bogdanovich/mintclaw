@@ -305,6 +305,21 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 		_ = lease.Release()
 		t.Fatal(err)
 	}
+	refresher, ok := frontendController.(frontend.WorkspaceRefresher)
+	if !ok {
+		t.Fatal("native coding controller does not expose workspace refresh")
+	}
+	if err := refresher.RefreshWorkspace(t.Context()); err != nil {
+		t.Fatalf("RefreshWorkspace() error = %v", err)
+	}
+	refreshed, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Workspace == nil || refreshed.Workspace.ProjectRoot != project.ProjectRoot ||
+		refreshed.Workspace.CWD != project.InvocationCWD {
+		t.Fatalf("refreshed workspace = %+v", refreshed.Workspace)
+	}
 	if err := frontendController.Submit(t.Context(), "inspect the project"); err != nil {
 		t.Fatal(err)
 	}

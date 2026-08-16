@@ -300,11 +300,32 @@ type nativeControllerRuntime struct {
 }
 
 var (
-	_ controller.Runtime       = (*nativeControllerRuntime)(nil)
-	_ frontend.TranscriptPager = (*nativeControllerRuntime)(nil)
+	_ controller.Runtime          = (*nativeControllerRuntime)(nil)
+	_ frontend.TranscriptPager    = (*nativeControllerRuntime)(nil)
+	_ frontend.WorkspaceRefresher = (*nativeControllerRuntime)(nil)
 )
 
 const hydratedTranscriptTextBytes = 32 << 10
+
+func (r *nativeControllerRuntime) RefreshWorkspace(ctx context.Context) error {
+	if r.loop == nil || r.projector == nil {
+		return frontend.ErrWorkspaceRefreshUnsupported
+	}
+	registry := r.loop.GetRegistry()
+	if registry == nil {
+		return frontend.ErrWorkspaceRefreshUnsupported
+	}
+	agentInstance := registry.GetDefaultAgent()
+	if agentInstance == nil || agentInstance.ContextBuilder == nil {
+		return frontend.ErrWorkspaceRefreshUnsupported
+	}
+	snapshot, changed := agentInstance.ContextBuilder.RefreshCodingWorkspace(ctx)
+	if !changed {
+		return nil
+	}
+	r.projector.WorkspaceUpdated(snapshot)
+	return nil
+}
 
 func (r *nativeControllerRuntime) TranscriptPage(
 	ctx context.Context,

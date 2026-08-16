@@ -137,6 +137,16 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 		len(secondPayload.Snapshot.ChangedPaths) != 1 || secondPayload.Snapshot.ChangedPaths[0].Path != "new.txt" {
 		t.Fatalf("workspace events = first %#v, second %#v", first.Payload, second.Payload)
 	}
+
+	runCodingWorkspaceGit(t, project, "switch", "-c", "refreshed-branch")
+	builder := loop.GetRegistry().GetDefaultAgent().ContextBuilder
+	refreshed, changed := builder.RefreshCodingWorkspace(t.Context())
+	if !changed || refreshed.Git.Branch != "refreshed-branch" {
+		t.Fatalf("explicit workspace refresh = changed:%v snapshot:%+v", changed, refreshed)
+	}
+	if _, changed = builder.RefreshCodingWorkspace(t.Context()); changed {
+		t.Fatal("unchanged explicit workspace refresh emitted a duplicate snapshot")
+	}
 }
 
 func writeCodingWorkspaceTestFile(t *testing.T, path, content string) {

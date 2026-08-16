@@ -33,6 +33,13 @@ func (p *Pipeline) refreshCodingWorkspaceAfterTool(
 	if toolName != "exec" && len(result.WriteAudit) == 0 {
 		return
 	}
-	ts.agent.ContextBuilder.refreshCodingWorkspace(context.Background())
-	p.emitPendingCodingWorkspaceSnapshot(ts, "turn.workspace.refresh")
+	snapshot, changed := ts.agent.ContextBuilder.RefreshCodingWorkspace(context.Background())
+	if !changed {
+		return
+	}
+	p.emitEvent(
+		runtimeevents.KindAgentWorkspaceSnapshot,
+		ts.eventMeta("runTurn", "turn.workspace.refresh"),
+		WorkspaceSnapshotPayload{Snapshot: snapshot},
+	)
 }

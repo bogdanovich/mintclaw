@@ -28,6 +28,17 @@ type pagedRuntime struct {
 	page frontend.TranscriptPage
 }
 
+type workspaceRefreshRuntime struct {
+	*blockingRuntime
+	refreshes  int
+	refreshErr error
+}
+
+func (r *workspaceRefreshRuntime) RefreshWorkspace(context.Context) error {
+	r.refreshes++
+	return r.refreshErr
+}
+
 func (r *pagedRuntime) TranscriptPage(
 	context.Context,
 	frontend.TranscriptPageRequest,
@@ -239,6 +250,37 @@ func TestTranscriptPageReportsUnsupportedRuntimeCapability(t *testing.T) {
 		t.Fatalf("TranscriptPage() error = %v", err)
 	}
 	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceRefreshIsSerializedAndOptional(t *testing.T) {
+	runtime := &workspaceRefreshRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	if err := controller.RefreshWorkspace(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.refreshes != 1 {
+		t.Fatalf("refresh calls = %d", runtime.refreshes)
+	}
+	if err := controller.Submit(t.Context(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.RefreshWorkspace(t.Context()); !errors.Is(err, ErrTurnActive) {
+		t.Fatalf("refresh during turn error = %v", err)
+	}
+	if err := controller.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	unsupported := newTestController(t, newBlockingRuntime())
+	if err := unsupported.RefreshWorkspace(t.Context()); !errors.Is(err, frontend.ErrWorkspaceRefreshUnsupported) {
+		t.Fatalf("unsupported refresh error = %v", err)
+	}
+	if err := unsupported.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }
