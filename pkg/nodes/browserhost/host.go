@@ -1196,7 +1196,8 @@ func (host *BrowserHost) executeAction(
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
 	var executeErr error
-	if action == "file_chooser" || action == "upload" {
+	switch action {
+	case "file_chooser", "upload":
 		uploadWorker, ok := session.worker.(browserHostUploadWorker)
 		if !ok {
 			executeErr = browserworker.ErrDriverIncompatible
@@ -1207,7 +1208,7 @@ func (host *BrowserHost) executeAction(
 				driverAction,
 			)
 		}
-	} else if action == "download" {
+	case "download":
 		transferWorker, ok := session.worker.(browserworker.TransferWorker)
 		if !ok || len(downloadResult) != 1 || downloadResult[0] == nil {
 			executeErr = browserworker.ErrDriverIncompatible
@@ -1216,7 +1217,7 @@ func (host *BrowserHost) executeAction(
 				actionCtx, driverAction, int64(session.limits.DownloadBytes),
 			)
 		}
-	} else {
+	default:
 		executeErr = session.navigationWorker.ExecuteAfterNavigationCheck(
 			actionCtx,
 			currentNavigationIdentity,
