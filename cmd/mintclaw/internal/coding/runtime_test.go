@@ -331,12 +331,20 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("provider did not receive the headless turn")
 	}
-	snapshot, err := frontendController.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Activity != frontend.ActivityInterrupting {
-		t.Fatalf("activity = %q, want interrupting", snapshot.Activity)
+	interruptDeadline := time.Now().Add(5 * time.Second)
+	var snapshot frontend.ThreadSnapshot
+	for {
+		snapshot, err = frontendController.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Activity == frontend.ActivityInterrupting {
+			break
+		}
+		if time.Now().After(interruptDeadline) {
+			t.Fatalf("activity = %q, want interrupting", snapshot.Activity)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if len(snapshot.Entries) < 2 || snapshot.Entries[len(snapshot.Entries)-1].Text != "working" {
 		t.Fatalf("streamed entries = %#v", snapshot.Entries)
