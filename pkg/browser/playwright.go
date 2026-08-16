@@ -621,7 +621,8 @@ func (factory *PlaywrightWorkerFactory) Open(
 	worker := &playwrightWorker{
 		client: client, networkProxy: networkProxy,
 		limits: request.Limits.Effective(), cancelLifetime: cancelLifetime,
-		outputDir: outputDir, contextSessionID: request.SessionID,
+		downloadReady: factory.downloadReady,
+		outputDir:     outputDir, contextSessionID: request.SessionID,
 		sensitiveFields: append([]string(nil), factory.profileConfig.SensitiveFields...),
 	}
 	worker.contextSecret = make([]byte, 32)
@@ -673,6 +674,7 @@ type playwrightWorker struct {
 	cancelLifetime  context.CancelFunc
 	outputDir       string
 	sensitiveFields []string
+	downloadReady   bool
 
 	mu              sync.Mutex
 	lost            bool
@@ -1532,12 +1534,20 @@ func (worker *playwrightWorker) Download(
 ) (DriverDownload, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
+	if !worker.downloadReady || worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		action.Kind != DriverDownloadAction || !playwrightTargetPattern.MatchString(action.Target) ||
 		maximumBytes < 1 || maximumBytes > int64(worker.limits.DownloadBytes) {
 		return DriverDownload{}, ErrWorkerUnavailable
 	}
 	return worker.captureDownload(ctx, action, maximumBytes)
+}
+
+func (worker *playwrightWorker) DownloadAvailable() bool {
+	return worker != nil && worker.downloadReady
+}
+
+func (factory *PlaywrightWorkerFactory) DownloadAvailable() bool {
+	return factory != nil && factory.downloadReady
 }
 
 func (worker *playwrightWorker) callRawText(

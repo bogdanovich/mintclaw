@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -268,8 +269,8 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
 					configured.EffectivePlacement() == config.BrowserPlacementNode {
 					screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
-					uploadAvailable = false
-					downloadAvailable = false
+					uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
+					downloadAvailable = downloadAvailable && slices.Contains(actions, browser.ActionDownload)
 					handoffAvailable = false
 				}
 			}

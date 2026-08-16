@@ -43,6 +43,14 @@ type browserOrdinaryInteractionCommandHost interface {
 	FileChooser(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 }
 
+type browserUploadCommandHost interface {
+	Upload(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+}
+
+type browserDownloadCommandHost interface {
+	Download(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserOutputDescriptor, error)
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -243,7 +251,8 @@ func (handler *browserCommandHandler) executeAct(
 	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
 		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
 		input.Action.Kind != "dialog" && input.Action.Kind != "check" && input.Action.Kind != "uncheck" &&
-		input.Action.Kind != "hover" && input.Action.Kind != "drag" && input.Action.Kind != "file_chooser") ||
+		input.Action.Kind != "hover" && input.Action.Kind != "drag" && input.Action.Kind != "file_chooser" &&
+		input.Action.Kind != "upload" && input.Action.Kind != "download") ||
 		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
 		(input.Action.Kind == "scroll" && input.Effect != "read") ||
 		(input.Action.Kind == "select" &&
@@ -278,15 +287,28 @@ func (handler *browserCommandHandler) executeAct(
 				input.ArtifactBytes > nodes.MaxBrowserUploadBytes || input.ArtifactFilename == "" ||
 				len(input.ArtifactFilename) > 255 || input.ArtifactContentType == "" ||
 				len(input.ArtifactContentType) > 255)) ||
+		(input.Action.Kind == "upload" &&
+			(input.Effect != "unknown" || input.Action.Ref == "" || input.Action.ArtifactRef == "" ||
+				input.ExpectedRole != "button" || len(input.ExpectedName) > 4096 ||
+				!nodes.BrowserApprovalDigestMatches(input) || len(input.ArtifactSHA256) != sha256.Size*2 ||
+				input.ArtifactBytes < 1 || input.ArtifactBytes > nodes.MaxBrowserUploadBytes ||
+				input.ArtifactFilename == "" || len(input.ArtifactFilename) > 255 ||
+				input.ArtifactContentType == "" || len(input.ArtifactContentType) > 255)) ||
+		(input.Action.Kind == "download" &&
+			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) || input.Action.Ref == "" ||
+				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input) ||
+				input.WorkspaceID == "" || input.RouteID == "" || input.BrowserTarget == "")) ||
 		(input.Action.Kind != "drag" &&
 			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "")) ||
-		(input.Action.Kind != "file_chooser" &&
+		(input.Action.Kind != "file_chooser" && input.Action.Kind != "upload" &&
 			(input.Action.ArtifactRef != "" || input.ArtifactSHA256 != "" || input.ArtifactBytes != 0 ||
 				input.ArtifactFilename != "" || input.ArtifactContentType != "")) ||
+		(input.Action.Kind != "download" &&
+			(input.WorkspaceID != "" || input.RouteID != "" || input.BrowserTarget != "")) ||
 		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
 			input.Action.Kind != "press" && input.Action.Kind != "dialog" && input.Action.Kind != "check" &&
 			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" && input.Action.Kind != "drag" &&
-			input.Action.Kind != "file_chooser" &&
+			input.Action.Kind != "file_chooser" && input.Action.Kind != "upload" && input.Action.Kind != "download" &&
 			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
@@ -310,7 +332,8 @@ func (handler *browserCommandHandler) executeAct(
 		ArtifactSHA256: input.ArtifactSHA256, ArtifactBytes: input.ArtifactBytes,
 		ArtifactFilename: input.ArtifactFilename, ArtifactContentType: input.ArtifactContentType,
 		ApprovalDigest: input.ApprovalDigest,
-		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		WorkspaceID:    input.WorkspaceID, RouteID: input.RouteID, BrowserTarget: input.BrowserTarget,
+		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
 	var observation nodes.BrowserObservationResult
 	switch input.Action.Kind {
@@ -343,6 +366,27 @@ func (handler *browserCommandHandler) executeAct(
 		default:
 			observation, err = ordinary.Hover(ctx, request)
 		}
+	case "upload":
+		uploadHost, ok := handler.host.(browserUploadCommandHost)
+		if !ok {
+			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
+		}
+		observation, err = uploadHost.Upload(ctx, request)
+	case "download":
+		downloadHost, ok := handler.host.(browserDownloadCommandHost)
+		if !ok {
+			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
+		}
+		output, downloadErr := downloadHost.Download(ctx, request)
+		if downloadErr != nil {
+			if errors.Is(downloadErr, nodes.ErrBrowserHostLost) {
+				return nil, fmt.Errorf("%w: browser action outcome is unknown", ErrInvocationOutcomeUnknown)
+			}
+			return nil, browserCommandFailure(downloadErr)
+		}
+		return nodes.BrowserActResult{
+			ActionInvocationID: input.ActionInvocationID, State: "succeeded", Output: &output,
+		}, nil
 	default:
 		observation, err = handler.host.Navigate(ctx, request)
 	}

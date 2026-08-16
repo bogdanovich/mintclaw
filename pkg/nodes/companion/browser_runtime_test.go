@@ -151,6 +151,33 @@ func (host *fakeBrowserCommandHost) FileChooser(
 	return host.ordinaryAction(request)
 }
 
+func (host *fakeBrowserCommandHost) Upload(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	return host.ordinaryAction(request)
+}
+
+func (host *fakeBrowserCommandHost) Download(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	host.ordinaryRequests = append(host.ordinaryRequests, request)
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return nodes.BrowserOutputDescriptor{
+		TransferID: "browser_output_1", Kind: nodes.BrowserOutputDownload,
+		SessionID: request.SessionID, RoutedSessionID: request.RoutedSessionID,
+		AgentID: request.AgentID, ActorID: request.ActorID, WorkspaceID: request.WorkspaceID,
+		RouteID: request.RouteID, Target: request.BrowserTarget,
+		ProfileRevision: request.ProfileRevision, BrowserPolicyRevision: request.BrowserPolicyRevision,
+		InvocationID: request.ActionInvocationID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+		Filename:           "fixture.txt", ContentType: "text/plain", Size: 7,
+		SHA256: strings.Repeat("e", 64), CapturedAt: 1, ExpiresAt: 2,
+		CleanupPolicy: "session_or_expiry",
+	}, nil
+}
+
 func (host *fakeBrowserCommandHost) ordinaryAction(
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
@@ -192,6 +219,63 @@ func TestRuntimeExecutesTypedFileChooser(t *testing.T) {
 		request.ArtifactBytes != input.ArtifactBytes || request.ArtifactFilename != input.ArtifactFilename ||
 		request.ArtifactContentType != input.ArtifactContentType {
 		t.Fatalf("file chooser request = %#v", request)
+	}
+}
+
+func TestRuntimeExecutesApprovedUploadAndDownload(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].Actions = []string{"download", "navigate", "upload"}
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	runtime := newBrowserRuntimeFixture(t, host)
+
+	upload := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_upload_1",
+		Action: nodes.BrowserAction{Kind: "upload", Ref: "semantic_ref_1",
+			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1"},
+		Effect: "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
+		ArtifactSHA256: strings.Repeat("d", 64), ArtifactBytes: 7,
+		ArtifactFilename: "photo.jpg", ArtifactContentType: "image/jpeg",
+	}
+	var err error
+	upload.ApprovalDigest, err = nodes.BrowserApprovalDigest(upload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(upload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Invoke(t.Context(), testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw))
+	if err != nil || len(host.ordinaryRequests) != 1 || host.ordinaryRequests[0].Action.Kind != "upload" {
+		t.Fatalf("upload result = %s, %v; requests = %#v", result, err, host.ordinaryRequests)
+	}
+	runtime = newBrowserRuntimeFixture(t, host)
+
+	download := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
+		ActionInvocationID: "browser_download_1",
+		Action:             nodes.BrowserAction{Kind: "download", Ref: "semantic_ref_2"},
+		Effect:             "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "link", ExpectedName: "Download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	download.ApprovalDigest, err = nodes.BrowserApprovalDigest(download)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(download)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = runtime.Invoke(t.Context(), testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw))
+	if err != nil || len(host.ordinaryRequests) != 2 || host.ordinaryRequests[1].Action.Kind != "download" ||
+		!bytes.Contains(result, []byte(`"kind":"download"`)) {
+		t.Fatalf("download result = %s, %v; requests = %#v", result, err, host.ordinaryRequests)
 	}
 }
 

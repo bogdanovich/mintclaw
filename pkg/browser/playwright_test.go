@@ -777,7 +777,7 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	download, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
@@ -816,6 +816,21 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerHidesDownloadWithoutSupportedBoundary(t *testing.T) {
+	client := &fakePlaywrightClient{}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: t.TempDir(),
+	}
+	if worker.DownloadAvailable() {
+		t.Fatal("download reported available without a supported browser boundary")
+	}
+	if _, err := worker.Download(context.Background(), DriverAction{
+		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
+	}, 1024); !errors.Is(err, ErrWorkerUnavailable) || len(client.calls) != 0 {
+		t.Fatalf("unsupported Download() error = %v; calls = %#v", err, client.calls)
+	}
+}
+
 func TestPlaywrightWorkerRejectsChunkBeforeWritingPastDownloadLimit(t *testing.T) {
 	output := t.TempDir()
 	oversize := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 2048))
@@ -826,7 +841,7 @@ func TestPlaywrightWorkerRejectsChunkBeforeWritingPastDownloadLimit(t *testing.T
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	_, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
@@ -852,7 +867,7 @@ func TestPlaywrightWorkerAcceptsNearLimitBinaryEncoding(t *testing.T) {
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	download, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",

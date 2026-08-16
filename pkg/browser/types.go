@@ -761,8 +761,12 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed prepared dialog input", ErrInvalid)
 		}
 	case ActionFileChooser, ActionUpload:
+		expectedEffect := EffectLocalEdit
+		if prepared.Action.Kind == ActionUpload {
+			expectedEffect = EffectUnknown
+		}
 		if prepared.DestinationOrigin != "" || prepared.ElementRole != "button" ||
-			prepared.Effect != EffectLocalEdit || !validDigest(prepared.ArtifactSHA256) ||
+			prepared.Effect != expectedEffect || !validDigest(prepared.ArtifactSHA256) ||
 			prepared.ArtifactBytes < 1 || prepared.ArtifactBytes > int64(config.BrowserMaxUploadBytes) ||
 			prepared.ArtifactFilename == "" || len(prepared.ArtifactFilename) > 255 ||
 			prepared.ArtifactContentType == "" || len(prepared.ArtifactContentType) > 255 ||
