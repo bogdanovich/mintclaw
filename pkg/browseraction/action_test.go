@@ -22,6 +22,7 @@ func TestActionValidate(t *testing.T) {
 		{Kind: ActionHover, Ref: "ref_hover"},
 		{Kind: ActionDrag, SourceRef: "ref_source", DestinationRef: "ref_destination"},
 		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
+		{Kind: ActionUpload, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionDownload, Ref: "ref_download", Deliver: true},
 	}
 	for _, action := range valid {
@@ -31,7 +32,6 @@ func TestActionValidate(t *testing.T) {
 	}
 
 	invalid := []Action{
-		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionNavigate},
 		{Kind: ActionClick, Ref: "css:#submit"},
 		{Kind: ActionDialog, Decision: "dismiss"},
@@ -83,8 +83,8 @@ func TestCurrentVocabularyDrivesValidationAndSchema(t *testing.T) {
 		}
 		seen[kind] = struct{}{}
 	}
-	if ActionKind("upload").Valid() {
-		t.Fatal("removed upload action remains valid")
+	if !ActionUpload.Valid() {
+		t.Fatal("upload action is missing from the current vocabulary")
 	}
 	kinds[0] = "mutated"
 	if Kinds()[0] == "mutated" {

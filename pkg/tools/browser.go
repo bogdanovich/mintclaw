@@ -339,7 +339,10 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			})
 		}
 		uploadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Upload
-		downloadAvailable := uploadAvailable && diagnostics.Download
+		downloadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Download
+		if uploadAvailable && !slices.Contains(actions, browser.ActionUpload) {
+			actions = append(actions, browser.ActionUpload)
+		}
 		if uploadAvailable && !slices.Contains(actions, browser.ActionFileChooser) {
 			actions = append(actions, browser.ActionFileChooser)
 		}
@@ -1408,13 +1411,14 @@ func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[stri
 }
 
 type browserActionResult struct {
-	InvocationID string                      `json:"invocation_id"`
-	Effect       browser.Effect              `json:"effect"`
-	State        browser.InvocationState     `json:"state"`
-	Reason       string                      `json:"reason,omitempty"`
-	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
-	Observation  *browserObservationView     `json:"observation,omitempty"`
-	Artifact     *browser.DownloadArtifact   `json:"artifact,omitempty"`
+	InvocationID  string                      `json:"invocation_id"`
+	Effect        browser.Effect              `json:"effect"`
+	State         browser.InvocationState     `json:"state"`
+	Reason        string                      `json:"reason,omitempty"`
+	FailureClass  browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Observation   *browserObservationView     `json:"observation,omitempty"`
+	Artifact      *browser.DownloadArtifact   `json:"artifact,omitempty"`
+	ArtifactState string                      `json:"artifact_state,omitempty"`
 }
 
 func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -1471,6 +1475,12 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		result.FailureClass = invocation.Diagnostic.FailureClass
 	}
 	result.Artifact = invocation.Download
+	if preparation.Action.Action.Kind == browser.ActionDownload {
+		result.ArtifactState = "unavailable"
+		if invocation.Download != nil {
+			result.ArtifactState = "committed"
+		}
+	}
 	if invocation.State == browser.InvocationSucceeded {
 		var observation browser.Observation
 		var observeErr error

@@ -604,6 +604,8 @@ func (host *BrowserHost) Act(
 		return host.drag(ctx, request)
 	case browserworker.ActionFileChooser:
 		return host.fileChooser(ctx, request)
+	case browserworker.ActionUpload:
+		return host.Upload(ctx, request)
 	default:
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
@@ -760,7 +762,93 @@ func (host *BrowserHost) fileChooser(
 		Kind: browserworker.DriverUpload, Value: artifact.path,
 		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
 		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
-	})
+	}, nil)
+}
+
+func (host *BrowserHost) Upload(
+	ctx context.Context,
+	request BrowserHostActRequest,
+) (BrowserHostObservation, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) || !browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "unknown" ||
+		request.Action.Kind != "upload" || !browserHostIdentifier(request.Action.Ref) ||
+		!strings.HasPrefix(request.Action.ArtifactRef, nodes.TransferArtifactRefPrefix) ||
+		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
+		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
+		request.ExpectedRole != "button" || len(request.ExpectedName) > 4096 ||
+		!browserHostDigest(request.ArtifactSHA256) || request.ArtifactBytes < 1 ||
+		request.ArtifactBytes > nodes.MaxBrowserUploadBytes || request.ArtifactFilename == "" ||
+		request.ArtifactFilename != filepath.Base(request.ArtifactFilename) || len(request.ArtifactFilename) > 255 ||
+		request.ArtifactContentType == "" || len(request.ArtifactContentType) > 255 ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	artifact, ok := host.takeBrowserArtifact(request)
+	if !ok {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	defer func() { _ = os.RemoveAll(artifact.directory) }()
+	return host.executeAction(ctx, request, "upload", browserworker.DriverAction{
+		Kind: browserworker.DriverUpload, Value: artifact.path,
+		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
+		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
+	}, nil)
+}
+
+func (host *BrowserHost) Download(
+	ctx context.Context,
+	request BrowserHostActRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	if !browserHostIdentifier(request.ActionInvocationID) || !browserHostDigest(request.PreparedActionHash) ||
+		!browserHostDigest(request.BrowserPolicyRevision) || request.Action.Kind != "download" ||
+		!browserHostIdentifier(request.Action.Ref) || request.Action.URL != "" || request.Action.Target != "" ||
+		request.Action.Value != "" || request.Action.Key != "" || request.Action.Direction != "" ||
+		request.Action.Amount != 0 || request.ExpectedRole == "" || len(request.ExpectedRole) > 128 ||
+		len(request.ExpectedName) > 4096 || !nodes.BrowserClickEffectValid(request.Effect) ||
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
+		!browserHostIdentifier(request.WorkspaceID) || !browserHostIdentifier(request.RouteID) ||
+		!browserHostIdentifier(request.BrowserTarget) ||
+		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostDenied
+	}
+	var download browserworker.DriverDownload
+	if _, err := host.executeAction(ctx, request, "download", browserworker.DriverAction{
+		Kind: browserworker.DriverDownloadAction,
+	}, &download); err != nil {
+		return nodes.BrowserOutputDescriptor{}, err
+	}
+	defer func() { _ = os.Remove(download.Path) }()
+	content, err := os.ReadFile(download.Path)
+	if err != nil || int64(len(content)) != download.Size || download.Size < 1 {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostArtifactUnavailable
+	}
+	host.mu.Lock()
+	session := host.sessions[request.SessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostArtifactUnavailable
+	}
+	session.mu.Lock()
+	expiresAt := host.now().UTC().Add(time.Duration(session.limits.RetentionSecs) * time.Second)
+	if expiresAt.After(session.expiresAt) {
+		expiresAt = session.expiresAt
+	}
+	generation := session.snapshotGeneration
+	session.mu.Unlock()
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputDownload, SessionID: request.SessionID,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, Target: request.BrowserTarget,
+		ProfileRevision: request.ProfileRevision, BrowserPolicyRevision: request.BrowserPolicyRevision,
+		InvocationID: request.ActionInvocationID, TabID: request.TabID,
+		SnapshotGeneration: generation, Filename: download.Filename,
+		ContentType: download.ContentType, ExpiresAt: expiresAt.Unix(),
+	}, content)
+	if err != nil || descriptor.Size != uint64(download.Size) || descriptor.SHA256 != download.SHA256 {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostArtifactUnavailable
+	}
+	return descriptor, nil
 }
 
 func (host *BrowserHost) fill(
@@ -975,13 +1063,14 @@ func (host *BrowserHost) executeAction(
 	request BrowserHostActRequest,
 	action string,
 	driverAction browserworker.DriverAction,
+	downloadResult ...*browserworker.DriverDownload,
 ) (BrowserHostObservation, error) {
 	if action != "drag" &&
 		(request.Action.SourceRef != "" || request.Action.DestinationRef != "" ||
 			request.DestinationExpectedRole != "" || request.DestinationExpectedName != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if action != "file_chooser" && (request.Action.ArtifactRef != "" || request.ArtifactSHA256 != "" ||
+	if action != "file_chooser" && action != "upload" && (request.Action.ArtifactRef != "" || request.ArtifactSHA256 != "" ||
 		request.ArtifactBytes != 0 || request.ArtifactFilename != "" || request.ArtifactContentType != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
@@ -1015,7 +1104,7 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	if ((action == "click" && nodes.BrowserClickRequiresApproval(request.Effect)) ||
-		action == "drag" || action == "press" ||
+		action == "download" || action == "drag" || action == "upload" || action == "press" ||
 		(action == "dialog" && request.Action.Decision == "accept")) &&
 		(session.profile.DryRun || !session.profile.AllowApprovedActions ||
 			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
@@ -1024,7 +1113,8 @@ func (host *BrowserHost) executeAction(
 	var boundElement browserworker.DriverElement
 	var destinationElement browserworker.DriverElement
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
+		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" ||
+		action == "upload" || action == "download" {
 		ref := request.Action.Ref
 		if action == "drag" {
 			ref = request.Action.SourceRef
@@ -1080,7 +1170,8 @@ func (host *BrowserHost) executeAction(
 		}
 	}
 	if action == "click" || action == "fill" || action == "select" || action == "check" ||
-		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
+		action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" ||
+		action == "upload" || action == "download" {
 		targets, matches, destinationTargets, destinationMatches := 0, 0, 0, 0
 		for _, element := range current.Elements {
 			if element.Target == boundElement.Target {
@@ -1133,7 +1224,7 @@ func (host *BrowserHost) executeAction(
 	// reserved, it can never execute again even if the outcome is ambiguous.
 	session.actionInvocations[request.ActionInvocationID] = request.PreparedActionHash
 	var executeErr error
-	if action == "file_chooser" {
+	if action == "file_chooser" || action == "upload" {
 		uploadWorker, ok := session.worker.(browserHostUploadWorker)
 		if !ok {
 			executeErr = browserworker.ErrDriverIncompatible
@@ -1142,6 +1233,15 @@ func (host *BrowserHost) executeAction(
 				actionCtx,
 				currentNavigationIdentity,
 				driverAction,
+			)
+		}
+	} else if action == "download" {
+		transferWorker, ok := session.worker.(browserworker.TransferWorker)
+		if !ok || len(downloadResult) != 1 || downloadResult[0] == nil {
+			executeErr = browserworker.ErrDriverIncompatible
+		} else {
+			*downloadResult[0], executeErr = transferWorker.Download(
+				actionCtx, driverAction, int64(session.limits.DownloadBytes),
 			)
 		}
 	} else {
@@ -1269,6 +1369,7 @@ func browserHostActInput(request BrowserHostActRequest) nodes.BrowserActInput {
 		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
 		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
 		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
+		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, BrowserTarget: request.BrowserTarget,
 		ApprovalDigest: request.ApprovalDigest,
 	}
 }
@@ -1464,6 +1565,11 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 	}
 	_, pageScreenshot := session.worker.(browserworker.BoundScreenshotWorker)
 	_, elementScreenshot := session.worker.(browserworker.ElementScreenshotWorker)
+	transferWorker, transferAvailable := session.worker.(browserworker.TransferWorker)
+	downloadAvailable := transferAvailable && transferWorker != nil
+	if capability, ok := session.worker.(browserworker.DownloadCapabilityWorker); ok {
+		downloadAvailable = downloadAvailable && capability.DownloadAvailable()
+	}
 	return BrowserHostSession{
 		SessionID: session.sessionID,
 		State:     session.state, Reason: session.safeFailure, Recovery: recovery,
@@ -1472,7 +1578,8 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 			Observe:    true,
 			Navigate:   slices.Contains(session.profile.AllowedActions, "navigate"),
 			Contexts:   session.contextWorker != nil,
-			Screenshot: pageScreenshot && elementScreenshot, Download: false,
+			Screenshot: pageScreenshot && elementScreenshot,
+			Download:   downloadAvailable && slices.Contains(session.profile.AllowedActions, "download"),
 		},
 		ExpiresAt: session.expiresAt.Unix(), IdleExpiresAt: session.idleExpiresAt.Unix(),
 	}
