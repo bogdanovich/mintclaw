@@ -519,6 +519,16 @@ func TestNodeAuthSchemaAcceptsP256AndRejectsAlgorithmLengthMismatch(t *testing.T
 	if err := validate(proof); err != nil {
 		t.Fatalf("schema rejected P-256 proof: %v", err)
 	}
+	proof.EnrollmentOfferID = strings.Repeat("a", 22)
+	proof.EnrollmentProof = strings.Repeat("b", 43)
+	if err := validate(proof); err != nil {
+		t.Fatalf("schema rejected enrollment-bound P-256 proof: %v", err)
+	}
+	proof.EnrollmentProof = ""
+	if err := validate(proof); err == nil {
+		t.Fatal("schema accepted incomplete enrollment proof")
+	}
+	proof.EnrollmentOfferID = ""
 	proof.KeyAlgorithm = nodes.KeyAlgorithmEd25519
 	if err := validate(proof); err == nil {
 		t.Fatal("schema accepted P-256 public-key length as Ed25519")

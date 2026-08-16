@@ -2,10 +2,16 @@ package ws
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -582,6 +588,51 @@ func TestAdmissionPersistsSignedIdentityOverWSS(t *testing.T) {
 	}
 }
 
+func TestAdmissionConsumesAndroidEnrollmentOfferOverWSS(t *testing.T) {
+	registry, err := nodes.NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offers := nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{})
+	authenticator, err := nodes.NewAuthenticator(registry, nodes.AdmissionConfig{EnrollmentOffers: offers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewAdmissionHandler(authenticator, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	connection := dialTestAdmission(t, server)
+	defer func() { _ = connection.Close() }()
+
+	challenge := readChallenge(t, connection)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err := offers.Issue("wss://gateway.example/nodes/v1/ws", "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := androidEnrollmentProof(t, privateKey, challenge.Nonce, offer)
+	response := sendAuthenticationProof(t, connection, proof)
+	if response.OK == nil || !*response.OK {
+		t.Fatalf("authentication response = %#v", response)
+	}
+	var result nodes.AdmissionResult
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.NodeID != proof.NodeID || result.State != nodes.StatePendingPairing {
+		t.Fatalf("authentication result = %#v", result)
+	}
+	if _, exists, err := registry.Pending(proof.NodeID); err != nil || !exists {
+		t.Fatalf("pending pairing exists = %v, error = %v", exists, err)
+	}
+}
+
 func TestAdmissionRejectsPlaintextByDefault(t *testing.T) {
 	_, handler := testAdmissionHandler(t, false)
 	server := httptest.NewServer(handler)
@@ -803,6 +854,122 @@ func authenticateTestConnection(
 		t.Fatal(err)
 	}
 	return result
+}
+
+func androidEnrollmentProof(
+	t *testing.T,
+	privateKey *ecdsa.PrivateKey,
+	nonce string,
+	offer nodes.EnrollmentOffer,
+) nodes.IdentityProof {
+	t.Helper()
+	publicKey, err := privateKey.PublicKey.ECDH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKeyBytes := publicKey.Bytes()
+	nodeID, err := nodes.DeriveIDForAlgorithm(nodes.KeyAlgorithmECDSAP256SHA256, publicKeyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{}}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := nodes.IdentityProof{
+		Nonce: nonce, NodeID: nodeID, PublicKey: base64.RawURLEncoding.EncodeToString(publicKeyBytes),
+		KeyAlgorithm: nodes.KeyAlgorithmECDSAP256SHA256, EnrollmentOfferID: offer.OfferID,
+		MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
+		ClientVersion: "android-wss-test", Platform: "android", Architecture: "arm64-v8a",
+		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
+	}
+	transcript := androidIdentityTranscript(t, proof)
+	digest := sha256.Sum256(transcript)
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	halfOrder := new(big.Int).Rsh(new(big.Int).Set(elliptic.P256().Params().N), 1)
+	if s.Cmp(halfOrder) > 0 {
+		s.Sub(elliptic.P256().Params().N, s)
+	}
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	proof.Signature = base64.RawURLEncoding.EncodeToString(signature)
+	secret, err := base64.RawURLEncoding.Strict().DecodeString(offer.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte("mintclaw-android-enrollment-v1\x00"))
+	_, _ = mac.Write([]byte(offer.OfferID))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write(transcript)
+	proof.EnrollmentProof = base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return proof
+}
+
+func androidIdentityTranscript(t *testing.T, proof nodes.IdentityProof) []byte {
+	t.Helper()
+	data, err := json.Marshal(struct {
+		Nonce             string             `json:"nonce"`
+		NodeID            nodes.ID           `json:"node_id"`
+		PublicKey         string             `json:"public_key"`
+		KeyAlgorithm      nodes.KeyAlgorithm `json:"key_algorithm,omitempty"`
+		EnrollmentOfferID string             `json:"enrollment_offer_id,omitempty"`
+		MinProtocol       int                `json:"min_protocol"`
+		MaxProtocol       int                `json:"max_protocol"`
+		ClientVersion     string             `json:"client_version"`
+		Platform          string             `json:"platform"`
+		Architecture      string             `json:"architecture"`
+		RequestedRole     string             `json:"requested_role"`
+		CatalogHash       string             `json:"catalog_hash"`
+		Executor          string             `json:"executor"`
+		PolicyRevision    string             `json:"policy_revision"`
+	}{
+		Nonce: proof.Nonce, NodeID: proof.NodeID, PublicKey: proof.PublicKey,
+		KeyAlgorithm: proof.KeyAlgorithm, EnrollmentOfferID: proof.EnrollmentOfferID,
+		MinProtocol: proof.MinProtocol, MaxProtocol: proof.MaxProtocol,
+		ClientVersion: proof.ClientVersion, Platform: proof.Platform, Architecture: proof.Architecture,
+		RequestedRole: proof.RequestedRole, CatalogHash: proof.CatalogHash,
+		Executor: proof.Executor, PolicyRevision: proof.PolicyRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append([]byte("mintclaw-node-auth-v1:ecdsa-p256-sha256\x00"), data...)
+}
+
+func sendAuthenticationProof(
+	t *testing.T,
+	connection *websocket.Conn,
+	proof nodes.IdentityProof,
+) protocol.Envelope {
+	t.Helper()
+	params, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestData, err := protocol.Encode(protocol.Envelope{
+		Type: protocol.FrameRequest, ID: "req_android_auth", Method: "node.authenticate", Params: params,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.WriteMessage(websocket.TextMessage, requestData); err != nil {
+		t.Fatal(err)
+	}
+	_, responseData, err := connection.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := protocol.Decode(responseData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func readChallenge(t *testing.T, connection *websocket.Conn) nodes.Challenge {

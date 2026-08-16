@@ -819,7 +819,7 @@ func mintClawOperatorCredentials(cfg *config.Config) (terminalOperatorCredential
 	channel := cfg.Channels.GetByType(config.ChannelMintClaw)
 	if channel == nil || !channel.Enabled {
 		return terminalOperatorCredentials{}, errors.New(
-			"enabled MintClaw channel is required for terminal",
+			"enabled MintClaw channel is required for node operator commands",
 		)
 	}
 	decoded, err := channel.GetDecoded()
@@ -828,7 +828,9 @@ func mintClawOperatorCredentials(cfg *config.Config) (terminalOperatorCredential
 	}
 	settings, ok := decoded.(*config.MintClawSettings)
 	if !ok || strings.TrimSpace(settings.Token.String()) == "" {
-		return terminalOperatorCredentials{}, errors.New("MintClaw channel token is required for terminal")
+		return terminalOperatorCredentials{}, errors.New(
+			"MintClaw channel token is required for node operator commands",
+		)
 	}
 	origin := ""
 	for _, allowed := range settings.AllowOrigins {
@@ -851,10 +853,10 @@ func localGatewayURL(cfg *config.Config) (*url.URL, error) {
 	}
 	host := plan.ProbeHost
 	if !netbind.IsLoopbackHost(host) {
-		return nil, errors.New("terminal must run on the gateway host through a loopback address")
+		return nil, errors.New("node operator commands must run on the gateway host through a loopback address")
 	}
 	if cfg.Gateway.Port <= 0 {
-		return nil, errors.New("gateway port is required for terminal")
+		return nil, errors.New("gateway port is required for node operator commands")
 	}
 	return &url.URL{
 		Scheme: "http",

@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	MaxClientVersionLength = 128
-	MaxPlatformLength      = 64
-	MaxArchitectureLength  = 64
-	MaxRoleLength          = 32
+	MaxClientVersionLength     = 128
+	MaxPlatformLength          = 64
+	MaxArchitectureLength      = 64
+	MaxRoleLength              = 32
+	MaxEnrollmentOfferIDLength = 64
 
 	KeyAlgorithmEd25519         KeyAlgorithm = "ed25519"
 	KeyAlgorithmECDSAP256SHA256 KeyAlgorithm = "ecdsa-p256-sha256"
@@ -50,37 +51,40 @@ type IdentityPublicKey struct {
 }
 
 type IdentityProof struct {
-	Nonce          string            `json:"nonce"`
-	NodeID         ID                `json:"node_id"`
-	PublicKey      string            `json:"public_key"`
-	KeyAlgorithm   KeyAlgorithm      `json:"key_algorithm,omitempty"`
-	Signature      string            `json:"signature"`
-	MinProtocol    int               `json:"min_protocol"`
-	MaxProtocol    int               `json:"max_protocol"`
-	ClientVersion  string            `json:"client_version"`
-	Platform       string            `json:"platform"`
-	Architecture   string            `json:"architecture"`
-	RequestedRole  string            `json:"requested_role"`
-	CatalogHash    string            `json:"catalog_hash"`
-	Catalog        CapabilityCatalog `json:"catalog"`
-	Executor       string            `json:"executor,omitempty"`
-	PolicyRevision string            `json:"policy_revision,omitempty"`
+	Nonce             string            `json:"nonce"`
+	NodeID            ID                `json:"node_id"`
+	PublicKey         string            `json:"public_key"`
+	KeyAlgorithm      KeyAlgorithm      `json:"key_algorithm,omitempty"`
+	EnrollmentOfferID string            `json:"enrollment_offer_id,omitempty"`
+	EnrollmentProof   string            `json:"enrollment_proof,omitempty"`
+	Signature         string            `json:"signature"`
+	MinProtocol       int               `json:"min_protocol"`
+	MaxProtocol       int               `json:"max_protocol"`
+	ClientVersion     string            `json:"client_version"`
+	Platform          string            `json:"platform"`
+	Architecture      string            `json:"architecture"`
+	RequestedRole     string            `json:"requested_role"`
+	CatalogHash       string            `json:"catalog_hash"`
+	Catalog           CapabilityCatalog `json:"catalog"`
+	Executor          string            `json:"executor,omitempty"`
+	PolicyRevision    string            `json:"policy_revision,omitempty"`
 }
 
 type identityTranscript struct {
-	Nonce          string       `json:"nonce"`
-	NodeID         ID           `json:"node_id"`
-	PublicKey      string       `json:"public_key"`
-	KeyAlgorithm   KeyAlgorithm `json:"key_algorithm,omitempty"`
-	MinProtocol    int          `json:"min_protocol"`
-	MaxProtocol    int          `json:"max_protocol"`
-	ClientVersion  string       `json:"client_version"`
-	Platform       string       `json:"platform"`
-	Architecture   string       `json:"architecture"`
-	RequestedRole  string       `json:"requested_role"`
-	CatalogHash    string       `json:"catalog_hash"`
-	Executor       string       `json:"executor"`
-	PolicyRevision string       `json:"policy_revision"`
+	Nonce             string       `json:"nonce"`
+	NodeID            ID           `json:"node_id"`
+	PublicKey         string       `json:"public_key"`
+	KeyAlgorithm      KeyAlgorithm `json:"key_algorithm,omitempty"`
+	EnrollmentOfferID string       `json:"enrollment_offer_id,omitempty"`
+	MinProtocol       int          `json:"min_protocol"`
+	MaxProtocol       int          `json:"max_protocol"`
+	ClientVersion     string       `json:"client_version"`
+	Platform          string       `json:"platform"`
+	Architecture      string       `json:"architecture"`
+	RequestedRole     string       `json:"requested_role"`
+	CatalogHash       string       `json:"catalog_hash"`
+	Executor          string       `json:"executor"`
+	PolicyRevision    string       `json:"policy_revision"`
 }
 
 func DeriveID(publicKey ed25519.PublicKey) (ID, error) {
@@ -250,6 +254,16 @@ func (proof IdentityProof) validateClaims() error {
 	if err := proof.NodeID.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
+	if (proof.EnrollmentOfferID == "") != (proof.EnrollmentProof == "") ||
+		len(proof.EnrollmentOfferID) > MaxEnrollmentOfferIDLength {
+		return fmt.Errorf("%w: malformed enrollment proof", ErrInvalidIdentityProof)
+	}
+	if proof.EnrollmentProof != "" {
+		decoded, decodeErr := base64.RawURLEncoding.Strict().DecodeString(proof.EnrollmentProof)
+		if decodeErr != nil || len(decoded) != sha256.Size {
+			return fmt.Errorf("%w: malformed enrollment proof", ErrInvalidIdentityProof)
+		}
+	}
 	if proof.MinProtocol <= 0 || proof.MaxProtocol < proof.MinProtocol ||
 		proof.MinProtocol > ProtocolV1 || proof.MaxProtocol < ProtocolV1 {
 		return fmt.Errorf("%w: incompatible protocol range", ErrInvalidIdentityProof)
@@ -305,19 +319,20 @@ func (proof IdentityProof) transcript() ([]byte, error) {
 		transcriptAlgorithm = algorithm
 	}
 	data, err := json.Marshal(identityTranscript{
-		Nonce:          proof.Nonce,
-		NodeID:         proof.NodeID,
-		PublicKey:      proof.PublicKey,
-		KeyAlgorithm:   transcriptAlgorithm,
-		MinProtocol:    proof.MinProtocol,
-		MaxProtocol:    proof.MaxProtocol,
-		ClientVersion:  proof.ClientVersion,
-		Platform:       proof.Platform,
-		Architecture:   proof.Architecture,
-		RequestedRole:  proof.RequestedRole,
-		CatalogHash:    proof.CatalogHash,
-		Executor:       proof.Executor,
-		PolicyRevision: proof.PolicyRevision,
+		Nonce:             proof.Nonce,
+		NodeID:            proof.NodeID,
+		PublicKey:         proof.PublicKey,
+		KeyAlgorithm:      transcriptAlgorithm,
+		EnrollmentOfferID: proof.EnrollmentOfferID,
+		MinProtocol:       proof.MinProtocol,
+		MaxProtocol:       proof.MaxProtocol,
+		ClientVersion:     proof.ClientVersion,
+		Platform:          proof.Platform,
+		Architecture:      proof.Architecture,
+		RequestedRole:     proof.RequestedRole,
+		CatalogHash:       proof.CatalogHash,
+		Executor:          proof.Executor,
+		PolicyRevision:    proof.PolicyRevision,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode signature transcript: %w", ErrInvalidIdentityProof, err)

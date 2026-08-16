@@ -52,7 +52,9 @@
       ],
       "dependentRequired": {
         "executor": ["policy_revision"],
-        "policy_revision": ["executor"]
+        "policy_revision": ["executor"],
+        "enrollment_offer_id": ["enrollment_proof"],
+        "enrollment_proof": ["enrollment_offer_id"]
       },
       "required": [
         "nonce", "node_id", "public_key", "signature", "min_protocol",
@@ -64,6 +66,8 @@
         "node_id": {"$ref": "#/$defs/nodeID"},
         "public_key": {"type": "string"},
         "key_algorithm": {"enum": ["ed25519", "ecdsa-p256-sha256"]},
+        "enrollment_offer_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22}$"},
+        "enrollment_proof": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
         "min_protocol": {"type": "integer", "minimum": 1},
         "max_protocol": {"type": "integer", "minimum": 1},

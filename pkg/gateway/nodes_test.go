@@ -16,10 +16,16 @@ import (
 )
 
 type fakeNodeAdmissionRoutes struct {
-	handler         http.Handler
-	registerCount   int
-	replaceCount    int
-	unregisterCount int
+	handler                   http.Handler
+	enrollmentHandler         http.Handler
+	enrollmentRegisterErr     error
+	enrollmentReplaceErr      error
+	registerCount             int
+	replaceCount              int
+	unregisterCount           int
+	enrollmentRegisterCount   int
+	enrollmentReplaceCount    int
+	enrollmentUnregisterCount int
 }
 
 type closeErrorNodeAdmissionHandler struct {
@@ -431,7 +437,18 @@ func TestNodeAdmissionCloseRetainsTerminalStoreWhenReconciliationFails(t *testin
 	}
 }
 
-func (routes *fakeNodeAdmissionRoutes) RegisterHTTPHandler(_ string, handler http.Handler) error {
+func (routes *fakeNodeAdmissionRoutes) RegisterHTTPHandler(path string, handler http.Handler) error {
+	if path == nodeEnrollmentOperatorPath {
+		if routes.enrollmentRegisterErr != nil {
+			return routes.enrollmentRegisterErr
+		}
+		if routes.enrollmentHandler != nil {
+			return errors.New("enrollment route already registered")
+		}
+		routes.enrollmentHandler = handler
+		routes.enrollmentRegisterCount++
+		return nil
+	}
 	if routes.handler != nil {
 		return errors.New("route already registered")
 	}
@@ -440,7 +457,18 @@ func (routes *fakeNodeAdmissionRoutes) RegisterHTTPHandler(_ string, handler htt
 	return nil
 }
 
-func (routes *fakeNodeAdmissionRoutes) ReplaceHTTPHandler(_ string, handler http.Handler) error {
+func (routes *fakeNodeAdmissionRoutes) ReplaceHTTPHandler(path string, handler http.Handler) error {
+	if path == nodeEnrollmentOperatorPath {
+		if routes.enrollmentReplaceErr != nil {
+			return routes.enrollmentReplaceErr
+		}
+		if routes.enrollmentHandler == nil {
+			return errors.New("enrollment route not registered")
+		}
+		routes.enrollmentHandler = handler
+		routes.enrollmentReplaceCount++
+		return nil
+	}
 	if routes.handler == nil {
 		return errors.New("route not registered")
 	}
@@ -449,7 +477,12 @@ func (routes *fakeNodeAdmissionRoutes) ReplaceHTTPHandler(_ string, handler http
 	return nil
 }
 
-func (routes *fakeNodeAdmissionRoutes) UnregisterHTTPHandler(string) {
+func (routes *fakeNodeAdmissionRoutes) UnregisterHTTPHandler(path string) {
+	if path == nodeEnrollmentOperatorPath {
+		routes.enrollmentHandler = nil
+		routes.enrollmentUnregisterCount++
+		return
+	}
 	routes.handler = nil
 	routes.unregisterCount++
 }
@@ -473,7 +506,9 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 	}
 	firstRegistry := runtime.registry
 	firstSessions := runtime.sessions
-	if !runtime.mounted || firstRegistry == nil || routes.registerCount != 1 {
+	firstOffers := runtime.enrollmentOffers
+	if !runtime.mounted || firstRegistry == nil || firstOffers == nil || routes.registerCount != 1 ||
+		routes.enrollmentHandler == nil || routes.enrollmentRegisterCount != 1 {
 		t.Fatalf("enabled runtime = %#v, routes = %#v", runtime, routes)
 	}
 
@@ -481,13 +516,22 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 	if err := runtime.Reconcile(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.registry == firstRegistry || routes.replaceCount != 1 {
+	if runtime.registry == firstRegistry || runtime.enrollmentOffers == firstOffers || routes.replaceCount != 1 ||
+		routes.enrollmentReplaceCount != 1 {
 		t.Fatalf("reloaded runtime = %#v, routes = %#v", runtime, routes)
 	}
 	if runtime.sessions != firstSessions {
 		t.Fatal("config reload replaced shared node session ownership")
 	}
+	if _, err := firstOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("reconciled offer manager Issue() error = %v", err)
+	}
 
+	secondOffers := runtime.enrollmentOffers
 	cfg.Agents.Defaults.Workspace = filepath.Join(t.TempDir(), "second")
 	if err := runtime.Reconcile(cfg); err != nil {
 		t.Fatal(err)
@@ -495,19 +539,80 @@ func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
 	if runtime.sessions == firstSessions {
 		t.Fatal("workspace change retained node session ownership across registries")
 	}
-	if routes.replaceCount != 1 {
-		t.Fatalf("route replacement count = %d", routes.replaceCount)
+	if routes.replaceCount != 1 || routes.enrollmentReplaceCount != 1 {
+		t.Fatalf("route replacement counts = %#v", routes)
 	}
-	if routes.registerCount != 2 || routes.unregisterCount != 1 {
+	if routes.registerCount != 2 || routes.unregisterCount != 1 || routes.enrollmentRegisterCount != 2 ||
+		routes.enrollmentUnregisterCount != 1 {
 		t.Fatalf("workspace rotation route counts = %#v", routes)
 	}
+	if _, err := secondOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("workspace-rotated offer manager Issue() error = %v", err)
+	}
 
+	thirdOffers := runtime.enrollmentOffers
 	cfg.Nodes.Enabled = false
 	if err := runtime.Reconcile(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.mounted || runtime.registry != nil || runtime.registryPath != "" || runtime.sessions != nil ||
-		routes.handler != nil || routes.unregisterCount != 2 {
+		routes.handler != nil || routes.enrollmentHandler != nil || routes.unregisterCount != 2 ||
+		routes.enrollmentUnregisterCount != 2 {
 		t.Fatalf("disabled runtime = %#v, routes = %#v", runtime, routes)
 	}
+	if _, err := thirdOffers.Issue(
+		"wss://gateway.example/nodes/v1/ws",
+		"",
+		time.Minute,
+	); !errors.Is(err, nodes.ErrEnrollmentInvalidated) {
+		t.Fatalf("closed offer manager Issue() error = %v", err)
+	}
+}
+
+func TestNodeAdmissionRuntimeRollsBackEnrollmentRouteFailures(t *testing.T) {
+	t.Run("initial mount", func(t *testing.T) {
+		routes := &fakeNodeAdmissionRoutes{enrollmentRegisterErr: errors.New("enrollment unavailable")}
+		runtime := &nodeAdmissionRuntime{routes: routes}
+		cfg := config.DefaultConfig()
+		cfg.Nodes.Enabled = true
+		cfg.Agents.Defaults.Workspace = t.TempDir()
+		if err := runtime.Reconcile(cfg); err == nil || !strings.Contains(err.Error(), "enrollment unavailable") {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if runtime.mounted || runtime.handler != nil || routes.handler != nil || routes.enrollmentHandler != nil ||
+			routes.unregisterCount != 1 {
+			t.Fatalf("failed initial runtime = %#v, routes = %#v", runtime, routes)
+		}
+	})
+
+	t.Run("replacement", func(t *testing.T) {
+		routes := &fakeNodeAdmissionRoutes{}
+		runtime := &nodeAdmissionRuntime{routes: routes}
+		cfg := config.DefaultConfig()
+		cfg.Nodes.Enabled = true
+		cfg.Agents.Defaults.Workspace = t.TempDir()
+		if err := runtime.Reconcile(cfg); err != nil {
+			t.Fatal(err)
+		}
+		oldHandler := runtime.handler
+		oldEnrollmentHandler := runtime.enrollmentHandler
+		oldOffers := runtime.enrollmentOffers
+		routes.enrollmentReplaceErr = errors.New("enrollment unavailable")
+		cfg.Nodes.AllowLoopbackPlaintext = true
+		if err := runtime.Reconcile(cfg); err == nil || !strings.Contains(err.Error(), "enrollment unavailable") {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if runtime.handler != oldHandler || runtime.enrollmentHandler != oldEnrollmentHandler ||
+			runtime.enrollmentOffers != oldOffers || routes.handler != oldHandler ||
+			routes.enrollmentHandler != oldEnrollmentHandler {
+			t.Fatalf("failed replacement runtime = %#v, routes = %#v", runtime, routes)
+		}
+		if _, err := oldOffers.Issue("wss://gateway.example/nodes/v1/ws", "", time.Minute); err != nil {
+			t.Fatalf("failed replacement invalidated active manager: %v", err)
+		}
+	})
 }

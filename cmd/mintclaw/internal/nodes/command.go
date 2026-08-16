@@ -83,6 +83,7 @@ func newNodesCommand(deps commandDeps) *cobra.Command {
 	cmd.AddCommand(
 		newListCommand(open),
 		newDescribeCommand(open),
+		newEnrollCommand(loadConfig),
 		newApproveCommand(open, deps.now),
 		newDenyCommand(open, deps.now),
 		newRevokeCommand(open, deps.now),
