@@ -317,6 +317,30 @@ func (sm *SessionManager) ReadTurnHistory(
 	return append([]providers.Message(nil), session.Messages...), nil
 }
 
+// ReadTurnHistoryPage returns a bounded in-memory history window.
+func (sm *SessionManager) ReadTurnHistoryPage(
+	ctx context.Context,
+	sessionKey string,
+	request memory.HistoryPageRequest,
+) (memory.HistoryPage, error) {
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryPage{}, err
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryPage{}, err
+	}
+	session := sm.sessions[sessionKey]
+	if session == nil {
+		return sliceHistoryPage(nil, memory.HistoryRevision{}, request)
+	}
+	return sliceHistoryPage(session.Messages, memory.HistoryRevision{
+		Revision: session.HistoryRevision,
+		Count:    len(session.Messages),
+	}, request)
+}
+
 func (sm *SessionManager) GetSummary(key string) string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -14,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -512,5 +515,71 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 			runtime.metadata.Preview,
 			snapshot.Metadata.Preview,
 		)
+	}
+}
+
+func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing.T) {
+	sessions := session.NewSessionManager("")
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "user", Content: "inspect 界"})
+	sessions.AddFullMessage("coding:thread", providers.Message{
+		Role: "assistant", ReasoningContent: "consider e\u0301", Content: "done 👩🏽‍💻",
+	})
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "tool", Content: "DO-NOT-HYDRATE-SECRET"})
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "system", Content: "SYSTEM-SECRET"})
+	opening, err := sessions.ReadTurnHistoryPage(
+		t.Context(),
+		"coding:thread",
+		memory.HistoryPageRequest{Before: -1, Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nativeControllerRuntime{nativeCodingRuntime: &nativeCodingRuntime{
+		sessions:      sessions,
+		metadata:      thread.Metadata{SessionKey: "coding:thread"},
+		historyCursor: opening.Cursor,
+	}}
+	page, err := runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Start != 0 || page.End != 4 || page.Total != 4 || page.HasOlder || page.HasNewer {
+		t.Fatalf("page metadata = %+v", page)
+	}
+	if len(page.Entries) != 3 {
+		t.Fatalf("safe entries = %+v", page.Entries)
+	}
+	if page.Entries[0].Kind != frontend.EntryUser || page.Entries[1].Kind != frontend.EntryReasoning ||
+		page.Entries[2].Kind != frontend.EntryAssistant {
+		t.Fatalf("entry kinds = %+v", page.Entries)
+	}
+	for _, entry := range page.Entries {
+		if strings.Contains(entry.Text, "SECRET") {
+			t.Fatalf("non-display history leaked through hydration: %+v", entry)
+		}
+	}
+
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "assistant", Content: "post-open"})
+	page, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil || page.Total != 4 {
+		t.Fatalf("append changed opening prefix page: page=%+v err=%v", page, err)
+	}
+	if err := sessions.ReplaceTurnHistory(t.Context(), "coding:thread", []providers.Message{
+		{Role: "user", Content: "replacement"},
+		{Role: "assistant", Content: "replacement answer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if !errors.Is(err, frontend.ErrTranscriptHistoryChanged) {
+		t.Fatalf("replacement page error = %v", err)
+	}
+}
+
+func TestHydratedTranscriptTextUsesBoundedValidUTF8(t *testing.T) {
+	input := strings.Repeat("界", hydratedTranscriptTextBytes)
+	text, truncated := boundHydratedTranscriptText(input)
+	if !truncated || len(text) > hydratedTranscriptTextBytes || !utf8.ValidString(text) {
+		t.Fatalf("bounded text bytes=%d truncated=%v valid=%v", len(text), truncated, utf8.ValidString(text))
 	}
 }

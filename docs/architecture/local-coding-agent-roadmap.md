@@ -1316,6 +1316,9 @@ Done when:
 
 Dependencies: P4.1
 
+Implementation evidence:
+[`local-coding-agent-p4-transcript-composer.md`](local-coding-agent-p4-transcript-composer.md)
+
 Scope:
 
 - Render user, assistant, reasoning, tool, warning, and error entries.

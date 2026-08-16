@@ -28,6 +28,8 @@ type aliasPromotingStore interface {
 	PromoteAliasHistory(ctx context.Context, sessionKey string, scope json.RawMessage, aliases []string) (bool, error)
 }
 
+const maxTurnHistoryPageMessages = 256
+
 // MetadataAwareSessionStore exposes structured session metadata operations.
 type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope, aliases []string)
@@ -236,6 +238,76 @@ func (b *JSONLBackend) ReadTurnHistory(ctx context.Context, sessionKey string) (
 		return nil, err
 	}
 	return b.store.GetHistory(ctx, resolvedKey)
+}
+
+// ReadTurnHistoryPage reads a bounded canonical-history window when the
+// backing store supports it, with a compatibility fallback for other stores.
+func (b *JSONLBackend) ReadTurnHistoryPage(
+	ctx context.Context,
+	sessionKey string,
+	request memory.HistoryPageRequest,
+) (memory.HistoryPage, error) {
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryPage{}, err
+	}
+	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
+	if err != nil {
+		return memory.HistoryPage{}, err
+	}
+	if paged, ok := b.store.(memory.HistoryPageStore); ok {
+		return paged.GetHistoryPage(ctx, resolvedKey, request)
+	}
+	history, err := b.store.GetHistory(ctx, resolvedKey)
+	if err != nil {
+		return memory.HistoryPage{}, err
+	}
+	return sliceHistoryPage(history, memory.HistoryRevision{Count: len(history)}, request)
+}
+
+func sliceHistoryPage(
+	history []providers.Message,
+	revision memory.HistoryRevision,
+	request memory.HistoryPageRequest,
+) (memory.HistoryPage, error) {
+	if request.Limit <= 0 || request.Limit > maxTurnHistoryPageMessages {
+		return memory.HistoryPage{}, fmt.Errorf(
+			"session: history page limit must be within 1..%d",
+			maxTurnHistoryPageMessages,
+		)
+	}
+	total := len(history)
+	cursorTotal := total
+	if request.Cursor != nil {
+		cursorTotal = request.Cursor.Total
+		if cursorTotal < 0 || cursorTotal > total {
+			return memory.HistoryPage{}, fmt.Errorf(
+				"%w: canonical prefix length changed",
+				memory.ErrHistoryCursorStale,
+			)
+		}
+	}
+	cursor, err := memory.HistoryCursorForMessages(history, cursorTotal)
+	if err != nil {
+		return memory.HistoryPage{}, err
+	}
+	if request.Cursor != nil && *request.Cursor != cursor {
+		return memory.HistoryPage{}, fmt.Errorf("%w: canonical prefix changed", memory.ErrHistoryCursorStale)
+	}
+	end := request.Before
+	if end < 0 || end > cursorTotal {
+		end = cursorTotal
+	}
+	start := max(0, end-request.Limit)
+	return memory.HistoryPage{
+		Messages: append([]providers.Message(nil), history[start:end]...),
+		Revision: revision,
+		Cursor:   cursor,
+		Start:    start,
+		End:      end,
+		Total:    cursorTotal,
+		HasOlder: start > 0,
+		HasNewer: end < cursorTotal,
+	}, nil
 }
 
 func (b *JSONLBackend) ClearSession(ctx context.Context, sessionKey string) error {

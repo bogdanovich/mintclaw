@@ -59,6 +59,103 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreReadsBoundedHistoryPagesAcrossLogicalTruncation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	for index := range 10 {
+		if err := store.AddMessage(ctx, "paged", "user", fmt.Sprintf("message-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest, err := store.GetHistoryPage(ctx, "paged", HistoryPageRequest{Before: -1, Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Start != 7 || latest.End != 10 || latest.Total != 10 || !latest.HasOlder || latest.HasNewer {
+		t.Fatalf("latest page = %+v", latest)
+	}
+	if got := []string{
+		latest.Messages[0].Content,
+		latest.Messages[2].Content,
+	}; !reflect.DeepEqual(
+		got,
+		[]string{"message-7", "message-9"},
+	) {
+		t.Fatalf("latest messages = %v", got)
+	}
+
+	previous, err := store.GetHistoryPage(ctx, "paged", HistoryPageRequest{Before: latest.Start, Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous.Start != 4 || previous.End != 7 || !previous.HasOlder || !previous.HasNewer {
+		t.Fatalf("previous page = %+v", previous)
+	}
+
+	if err := store.TruncateHistory(ctx, "paged", 4); err != nil {
+		t.Fatal(err)
+	}
+	truncated, err := store.GetHistoryPage(ctx, "paged", HistoryPageRequest{Before: -1, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated.Start != 0 || truncated.Total != 4 || truncated.Messages[0].Content != "message-6" {
+		t.Fatalf("truncated page = %+v", truncated)
+	}
+}
+
+func TestJSONLStoreHistoryPageValidatesBoundAndContext(t *testing.T) {
+	store := newTestStore(t)
+	if _, err := store.GetHistoryPage(t.Context(), "paged", HistoryPageRequest{Limit: 0}); err == nil {
+		t.Fatal("zero page limit was accepted")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := store.GetHistoryPage(ctx, "paged", HistoryPageRequest{Limit: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled page error = %v", err)
+	}
+}
+
+func TestJSONLStoreHistoryCursorAllowsAppendAndRejectsReplacement(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	for i := range 4 {
+		if err := store.AddMessage(ctx, "cursor", "user", fmt.Sprintf("original-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opening, err := store.GetHistoryPage(ctx, "cursor", HistoryPageRequest{Before: -1, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddMessage(ctx, "cursor", "assistant", "post-open append"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.GetHistoryPage(ctx, "cursor", HistoryPageRequest{
+		Before: -1, Limit: 2, Cursor: &opening.Cursor,
+	})
+	if err != nil {
+		t.Fatalf("append invalidated prefix cursor: %v", err)
+	}
+	if page.Total != 4 || page.Messages[1].Content != "original-3" {
+		t.Fatalf("cursor page after append = %+v", page)
+	}
+	replacement := make([]providers.Message, 5)
+	for i := range replacement {
+		replacement[i] = providers.Message{Role: "user", Content: fmt.Sprintf("replacement-%d", i)}
+	}
+	if err := store.SetHistory(ctx, "cursor", replacement); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.GetHistoryPage(ctx, "cursor", HistoryPageRequest{
+		Before: -1, Limit: 2, Cursor: &opening.Cursor,
+	})
+	if !errors.Is(err, ErrHistoryCursorStale) {
+		t.Fatalf("replacement cursor error = %v", err)
+	}
+}
+
 func TestJSONLStoreSyncsDirectoryOnlyForFirstSessionFile(t *testing.T) {
 	store := newTestStore(t)
 	var stages []jsonlJournalWriteStage

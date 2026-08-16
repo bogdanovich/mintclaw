@@ -2,12 +2,16 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -18,11 +22,23 @@ type fakeController struct {
 	hardCancels atomic.Int32
 	closes      atomic.Int32
 	submits     atomic.Int32
+	mu          sync.Mutex
+	prompts     []string
+	submitErr   error
 }
 
-func (f *fakeController) Submit(context.Context, string) error {
+func (f *fakeController) Submit(_ context.Context, prompt string) error {
 	f.submits.Add(1)
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prompts = append(f.prompts, prompt)
+	return f.submitErr
+}
+
+func (f *fakeController) submittedPrompts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.prompts)
 }
 
 func (f *fakeController) Interrupt(context.Context) error {
@@ -59,6 +75,138 @@ func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 	})
 	if got := model.ComposerValue(); got != "first line\n第二行 👩🏽‍💻" {
 		t.Fatalf("composer value = %q", got)
+	}
+}
+
+func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = updateModel(t, model, tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("第二行 👩🏽‍💻 e\u0301 שלום"),
+	})
+	prompt := "first\n第二行 👩🏽‍💻 e\u0301 שלום"
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || !model.submitting {
+		t.Fatal("Enter did not start composer submission")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDelete})
+	if model.ComposerValue() != prompt {
+		t.Fatalf("pending submission mutated composer to %q", model.ComposerValue())
+	}
+	message, ok := command().(SubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T", message)
+	}
+	model = updateModel(t, model, message)
+	if got := controller.submittedPrompts(); !slices.Equal(got, []string{prompt}) {
+		t.Fatalf("submitted prompts = %#v", got)
+	}
+	if model.ComposerValue() != "" || model.submitting {
+		t.Fatalf("successful submit left composer=%q submitting=%v", model.ComposerValue(), model.submitting)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("new draft")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp, Alt: true})
+	if got := model.ComposerValue(); got != prompt {
+		t.Fatalf("history previous = %q", got)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown, Alt: true})
+	if got := model.ComposerValue(); got != "new draft" {
+		t.Fatalf("history restored draft = %q", got)
+	}
+}
+
+func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
+	controller, snapshot := newController(t)
+	controller.submitErr = errors.New("admission rejected")
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := strings.Repeat("λ界👩🏽‍💻", 4_000) + "\nlast line"
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(draft), Paste: true})
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	message := command()
+	model = updateModel(t, model, message)
+	if model.ComposerValue() != draft || model.err == nil || model.submitting || model.initialTurnPending {
+		t.Fatalf(
+			"failed submit state: draft bytes=%d want=%d err=%v submitting=%v pending=%v",
+			len(model.ComposerValue()),
+			len(draft),
+			model.err,
+			model.submitting,
+			model.initialTurnPending,
+		)
+	}
+}
+
+func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 12, Height: 8})
+	input := "界e\u0301👩🏽‍💻אבג界e\u0301"
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(input)})
+	info := model.composer.LineInfo()
+	if model.ComposerValue() != input {
+		t.Fatalf("composer round trip = %q", model.ComposerValue())
+	}
+	if info.ColumnOffset < 0 || info.ColumnOffset > info.Width || info.Width > model.composer.Width() {
+		t.Fatalf("cursor line info = %+v, composer width=%d", info, model.composer.Width())
+	}
+}
+
+func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
+	entries := []frontend.TranscriptEntry{{
+		ID:   "unicode",
+		Kind: frontend.EntryAssistant,
+		Text: "界 e\u0301 👩🏽‍💻 אבג \x1b[31mred\x1b[0m\x07 " + strings.Repeat("界", 20) +
+			strings.Repeat("a", 30),
+	}}
+	tools := []frontend.ToolState{{
+		CallID: "call-1", Name: "exec", Arguments: "SECRET-ARG", Output: "SECRET-OUTPUT", Status: frontend.ToolRunning,
+	}}
+	content, layout := renderTranscript(transcriptDisplayEntries(entries, tools), 12, false, false, false)
+	if len(layout.blocks) != 2 || !strings.Contains(content, "Tool\n  exec ·") {
+		t.Fatalf("semantic transcript = %q layout=%+v", content, layout)
+	}
+	if strings.Contains(content, "SECRET") || strings.Contains(content, "\x1b") || strings.Contains(content, "\x07") {
+		t.Fatalf("unsafe terminal/tool content leaked: %q", content)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if width := ansi.StringWidth(line); width > 12 {
+			t.Fatalf("rendered line width=%d > 12: %q", width, line)
+		}
+	}
+}
+
+func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.transcript.loading = true
+	model = updateModel(t, model, TranscriptPageMsg{Err: frontend.ErrTranscriptPagingUnsupported})
+	if !model.transcript.disabled || model.transcript.loading || model.err != nil {
+		t.Fatalf("unsupported paging state = %+v err=%v", model.transcript, model.err)
+	}
+	model.transcript = transcriptWindow{loading: true}
+	model = updateModel(t, model, TranscriptPageMsg{Err: frontend.ErrTranscriptHistoryChanged})
+	if !model.transcript.disabled || model.err != nil {
+		t.Fatalf("changed history state = %+v err=%v", model.transcript, model.err)
 	}
 }
 
@@ -163,6 +311,151 @@ func TestModelRecoversDroppedDeltaThroughControllerSnapshot(t *testing.T) {
 	if state.Revision != latest.Revision || len(state.Entries) != 2 || state.Entries[1].Text != "working" {
 		t.Fatalf("resynchronized model = %+v", state)
 	}
+}
+
+func TestStreamingPreservesManualScrollAndFollowsBottom(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 12 {
+		turnID := fmt.Sprintf("turn-%d", i)
+		projector.TurnStarted(turnID, strings.Repeat(fmt.Sprintf("question-%d ", i), 3))
+		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 5), true)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(24, 9)
+	model.viewport.SetYOffset(5)
+	anchor := model.layout.anchorAt(model.viewport.YOffset)
+	delta := projector.TurnStarted("streaming", "new question")
+	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	if got := model.layout.anchorAt(model.viewport.YOffset); got.id != anchor.id || got.offset != anchor.offset {
+		t.Fatalf("manual scroll anchor moved from %+v to %+v", anchor, got)
+	}
+
+	model.viewport.GotoBottom()
+	delta = projector.AssistantAccumulated("streaming", strings.Repeat("streaming text ", 6), false)
+	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	if !model.viewport.AtBottom() {
+		t.Fatalf("streaming while following bottom left offset=%d", model.viewport.YOffset)
+	}
+}
+
+func TestSnapshotResyncPreservesComposerAndReferencedScrollAnchor(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		turnID := fmt.Sprintf("turn-%d", i)
+		projector.TurnStarted(turnID, strings.Repeat("question ", 4))
+		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 4), true)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(22, 9)
+	model.composer.SetValue("unsubmitted 界 draft")
+	model.viewport.SetYOffset(6)
+	anchor := model.layout.anchorAt(model.viewport.YOffset)
+	projector.TurnStarted("new-turn", "later")
+	latest, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: latest})
+	if model.ComposerValue() != "unsubmitted 界 draft" {
+		t.Fatalf("snapshot replaced composer: %q", model.ComposerValue())
+	}
+	if got := model.layout.anchorAt(model.viewport.YOffset); got.id != anchor.id || got.offset != anchor.offset {
+		t.Fatalf("snapshot scroll anchor moved from %+v to %+v", anchor, got)
+	}
+}
+
+type pagedController struct {
+	*fakeController
+	pages    map[int]frontend.TranscriptPage
+	requests []frontend.TranscriptPageRequest
+}
+
+func (p *pagedController) TranscriptPage(
+	_ context.Context,
+	request frontend.TranscriptPageRequest,
+) (frontend.TranscriptPage, error) {
+	p.requests = append(p.requests, request)
+	return p.pages[request.Before], nil
+}
+
+func TestTranscriptHydrationPagesRemainBoundedAndPreserveLiveEntries(t *testing.T) {
+	controller, snapshot := newController(t)
+	paged := &pagedController{fakeController: controller}
+	model, err := NewModel(paged, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := makeTranscriptEntries("latest", 200)
+	model = updateModel(t, model, TranscriptPageMsg{Page: frontend.TranscriptPage{
+		Entries: latest, Start: 100, End: 300, Total: 300, HasOlder: true,
+	}, Mode: transcriptPageInitial})
+	older := makeTranscriptEntries("older", 100)
+	model = updateModel(t, model, TranscriptPageMsg{Page: frontend.TranscriptPage{
+		Entries: older, Start: 0, End: 100, Total: 300, HasNewer: true,
+	}, Mode: transcriptPageOlder})
+	if got := len(model.transcript.historical); got != maxHydratedTranscriptEntries {
+		t.Fatalf("hydrated entries=%d, want %d", got, maxHydratedTranscriptEntries)
+	}
+	if !model.transcript.hasNewer || model.transcript.hasOlder {
+		t.Fatalf("page flags older=%v newer=%v", model.transcript.hasOlder, model.transcript.hasNewer)
+	}
+
+	live := paged.TurnStarted("live-turn", "live prompt")
+	model = updateModel(t, model, DeltaMsg{Delta: live})
+	entries := model.TranscriptEntries()
+	if len(entries) != maxHydratedTranscriptEntries+1 || entries[len(entries)-1].Text != "live prompt" {
+		t.Fatalf("merged transcript len=%d last=%+v", len(entries), entries[len(entries)-1])
+	}
+}
+
+func TestTranscriptPageCommandRequestsBoundedWindow(t *testing.T) {
+	controller, _ := newController(t)
+	paged := &pagedController{
+		fakeController: controller,
+		pages: map[int]frontend.TranscriptPage{
+			42: {Start: 0, End: 42, Total: 42},
+		},
+	}
+	message, ok := transcriptPageCmd(t.Context(), paged, 42, transcriptPageOlder)().(TranscriptPageMsg)
+	if !ok {
+		t.Fatalf("page command message has unexpected type")
+	}
+	if message.Mode != transcriptPageOlder || message.Page.End != 42 {
+		t.Fatalf("page message = %+v", message)
+	}
+	if !slices.Equal(paged.requests, []frontend.TranscriptPageRequest{{Before: 42, Limit: transcriptPageSize}}) {
+		t.Fatalf("page requests = %+v", paged.requests)
+	}
+}
+
+func makeTranscriptEntries(prefix string, count int) []frontend.TranscriptEntry {
+	entries := make([]frontend.TranscriptEntry, count)
+	for i := range entries {
+		entries[i] = frontend.TranscriptEntry{
+			ID: prefix + "-" + fmt.Sprint(i), Kind: frontend.EntryAssistant, Text: fmt.Sprint(i), Complete: true,
+		}
+	}
+	return entries
 }
 
 func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {

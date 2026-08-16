@@ -107,6 +107,18 @@ func (c *Controller) Watch(ctx context.Context, revision frontend.Revision) (<-c
 	return c.projector.Watch(ctx, revision)
 }
 
+// TranscriptPage delegates optional bounded history hydration to the runtime.
+func (c *Controller) TranscriptPage(
+	ctx context.Context,
+	request frontend.TranscriptPageRequest,
+) (frontend.TranscriptPage, error) {
+	pager, ok := c.runtime.(frontend.TranscriptPager)
+	if !ok {
+		return frontend.TranscriptPage{}, frontend.ErrTranscriptPagingUnsupported
+	}
+	return pager.TranscriptPage(ctx, request)
+}
+
 func (c *Controller) Submit(ctx context.Context, prompt string) error {
 	if err := thread.ValidatePrompt(prompt); err != nil {
 		return err

@@ -23,6 +23,18 @@ type blockingRuntime struct {
 	stopOnce       sync.Once
 }
 
+type pagedRuntime struct {
+	*blockingRuntime
+	page frontend.TranscriptPage
+}
+
+func (r *pagedRuntime) TranscriptPage(
+	context.Context,
+	frontend.TranscriptPageRequest,
+) (frontend.TranscriptPage, error) {
+	return r.page, nil
+}
+
 func newBlockingRuntime() *blockingRuntime {
 	return &blockingRuntime{
 		runStarted:     make(chan string, 1),
@@ -197,6 +209,36 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 		t.Fatalf("Interrupt() error = %v, want %v", err, ErrNoActiveTurn)
 	}
 	if err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranscriptPageDelegatesOptionalRuntimeCapability(t *testing.T) {
+	runtime := &pagedRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		page:            frontend.TranscriptPage{Start: 3, End: 5, Total: 8, HasOlder: true, HasNewer: true},
+	}
+	controller := newTestController(t, runtime)
+	page, err := controller.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: 5, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Start != runtime.page.Start || page.End != runtime.page.End || page.Total != runtime.page.Total ||
+		page.HasOlder != runtime.page.HasOlder || page.HasNewer != runtime.page.HasNewer {
+		t.Fatalf("page = %+v, want %+v", page, runtime.page)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranscriptPageReportsUnsupportedRuntimeCapability(t *testing.T) {
+	controller := newTestController(t, newBlockingRuntime())
+	_, err := controller.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 1})
+	if !errors.Is(err, frontend.ErrTranscriptPagingUnsupported) {
+		t.Fatalf("TranscriptPage() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

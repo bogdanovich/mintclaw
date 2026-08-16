@@ -4,9 +4,9 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +35,20 @@ type CommandErrorMsg struct {
 	Err       error
 }
 
+// SubmitResultMsg completes one composer submission without discarding a
+// draft when controller admission fails.
+type SubmitResultMsg struct {
+	Prompt string
+	Err    error
+}
+
+// TranscriptPageMsg delivers optional canonical transcript hydration.
+type TranscriptPageMsg struct {
+	Page frontend.TranscriptPage
+	Mode transcriptPageMode
+	Err  error
+}
+
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
@@ -43,6 +57,8 @@ type Model struct {
 	reducer            *frontend.Reducer
 	viewport           viewport.Model
 	composer           textarea.Model
+	transcript         transcriptWindow
+	layout             transcriptLayout
 	width              int
 	height             int
 	interruptPending   bool
@@ -52,6 +68,10 @@ type Model struct {
 	resyncing          bool
 	focused            bool
 	err                error
+	submitting         bool
+	composerHistory    []string
+	historyIndex       int
+	historyDraft       string
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -77,22 +97,35 @@ func NewModelWithContext(
 	composer := textarea.New()
 	composer.ShowLineNumbers = false
 	composer.Placeholder = "Describe the coding task…"
+	composer.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("ctrl+j", "shift+enter"),
+		key.WithHelp("ctrl+j", "new line"),
+	)
 	composer.SetHeight(composerHeight)
 	composer.Focus()
 	return &Model{
-		controller: controller,
-		ctx:        ctx,
-		reducer:    reducer,
-		viewport:   viewport.New(80, 18),
-		composer:   composer,
-		width:      80,
-		height:     24,
-		focused:    true,
+		controller:   controller,
+		ctx:          ctx,
+		reducer:      reducer,
+		viewport:     viewport.New(80, 18),
+		composer:     composer,
+		width:        80,
+		height:       24,
+		focused:      true,
+		historyIndex: -1,
 	}, nil
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision))
+	commands := []tea.Cmd{
+		textarea.Blink,
+		nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision),
+	}
+	if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+		m.transcript.loading = true
+		commands = append(commands, transcriptPageCmd(m.ctx, pager, -1, transcriptPageInitial))
+	}
+	return tea.Batch(commands...)
 }
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -134,6 +167,21 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 		return m, nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision)
+	case TranscriptPageMsg:
+		m.transcript.loading = false
+		if message.Err != nil {
+			if errors.Is(message.Err, frontend.ErrTranscriptPagingUnsupported) ||
+				errors.Is(message.Err, frontend.ErrTranscriptHistoryChanged) {
+				m.transcript = transcriptWindow{disabled: true}
+				m.refreshViewport()
+				return m, nil
+			}
+			m.err = message.Err
+			return m, nil
+		}
+		m.transcript.apply(message.Page, message.Mode)
+		m.refreshViewport()
+		return m, nil
 	case WatchErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
@@ -142,9 +190,26 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandErrorMsg:
 		m.err = message.Err
 		return m, nil
+	case SubmitResultMsg:
+		m.submitting = false
+		if message.Err != nil {
+			m.initialTurnPending = false
+			m.interruptPending = false
+			m.err = message.Err
+			return m, nil
+		}
+		m.err = nil
+		m.rememberPrompt(message.Prompt)
+		m.composer.Reset()
+		m.historyIndex = -1
+		m.historyDraft = ""
+		return m, nil
 	case tea.KeyMsg:
 		if message.String() == "ctrl+c" {
 			return m.handleInterrupt()
+		}
+		if handled, command := m.handleComposerKey(message); handled {
+			return m, command
 		}
 	case tea.InterruptMsg:
 		return m.handleInterrupt()
@@ -178,6 +243,9 @@ func (m *Model) View() string {
 	if m.resyncing {
 		status = "resynchronizing frontend…"
 	}
+	if m.submitting {
+		status = "submitting prompt…"
+	}
 	if m.err != nil {
 		status = "frontend error: " + m.err.Error()
 	}
@@ -195,6 +263,17 @@ func (m *Model) View() string {
 
 func (m *Model) ComposerValue() string {
 	return m.composer.Value()
+}
+
+// TranscriptEntries exposes semantic view state for deterministic frontend
+// tests without requiring full-screen golden snapshots.
+func (m *Model) TranscriptEntries() []frontend.TranscriptEntry {
+	return m.transcript.entries(m.reducer.State().Entries)
+}
+
+// ViewportOffset reports the semantic transcript scroll position.
+func (m *Model) ViewportOffset() int {
+	return m.viewport.YOffset
 }
 
 func (m *Model) Snapshot() frontend.ThreadSnapshot {
@@ -266,17 +345,104 @@ func clipLine(value string, width int) string {
 func (m *Model) refreshViewport() {
 	state := m.reducer.State()
 	wasAtBottom := m.viewport.AtBottom()
-	var content strings.Builder
-	for _, entry := range state.Entries {
-		fmt.Fprintf(&content, "%s: %s\n\n", entry.Kind, entry.Text)
-	}
-	for _, tool := range state.Tools {
-		fmt.Fprintf(&content, "tool %s [%s]\n", tool.Name, tool.Status)
-	}
-	m.viewport.SetContent(strings.TrimSpace(content.String()))
+	anchor := m.layout.anchorAt(m.viewport.YOffset)
+	content, layout := renderTranscript(
+		transcriptDisplayEntries(m.transcript.entries(state.Entries), state.Tools),
+		m.viewport.Width,
+		!m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries),
+		m.transcript.hasNewer,
+		m.transcript.loading,
+	)
+	m.viewport.SetContent(strings.TrimSpace(content))
+	m.layout = layout
 	if wasAtBottom {
 		m.viewport.GotoBottom()
+	} else if line, ok := layout.lineFor(anchor); ok {
+		m.viewport.SetYOffset(line)
 	}
+}
+
+func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
+	if m.submitting {
+		return true, nil
+	}
+	switch message.String() {
+	case "enter":
+		if message.Paste {
+			return true, nil
+		}
+		prompt := m.composer.Value()
+		if strings.TrimSpace(prompt) == "" {
+			m.err = errors.New("enter a coding prompt; use Ctrl+J for a new line")
+			return true, nil
+		}
+		m.submitting = true
+		m.err = nil
+		m.admitInitialTurn()
+		return true, submitCmd(m.ctx, m.controller, prompt)
+	case "alt+up":
+		m.navigateHistory(-1)
+		return true, textarea.Blink
+	case "alt+down":
+		m.navigateHistory(1)
+		return true, textarea.Blink
+	case "alt+end":
+		if m.transcript.hasNewer && !m.transcript.loading {
+			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+				m.transcript.loading = true
+				return true, transcriptPageCmd(m.ctx, pager, -1, transcriptPageLatest)
+			}
+		}
+	case "pgup":
+		if m.viewport.AtTop() && m.transcript.hasOlder && !m.transcript.loading {
+			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+				m.transcript.loading = true
+				return true, tea.Batch(
+					transcriptPageCmd(m.ctx, pager, m.transcript.start, transcriptPageOlder),
+					func() tea.Msg { return message },
+				)
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *Model) rememberPrompt(prompt string) {
+	if len(m.composerHistory) == 0 || m.composerHistory[len(m.composerHistory)-1] != prompt {
+		m.composerHistory = append(m.composerHistory, prompt)
+	}
+	const maxComposerHistory = 100
+	if len(m.composerHistory) > maxComposerHistory {
+		m.composerHistory = append([]string(nil), m.composerHistory[len(m.composerHistory)-maxComposerHistory:]...)
+	}
+}
+
+func (m *Model) navigateHistory(direction int) {
+	if len(m.composerHistory) == 0 {
+		return
+	}
+	if m.historyIndex < 0 {
+		if direction > 0 {
+			return
+		}
+		m.historyDraft = m.composer.Value()
+		m.historyIndex = len(m.composerHistory) - 1
+	} else {
+		next := m.historyIndex + direction
+		switch {
+		case next >= len(m.composerHistory):
+			m.historyIndex = -1
+		case next < 0:
+			m.historyIndex = 0
+		default:
+			m.historyIndex = next
+		}
+	}
+	if m.historyIndex < 0 {
+		m.composer.SetValue(m.historyDraft)
+		return
+	}
+	m.composer.SetValue(m.composerHistory[m.historyIndex])
 }
 
 func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
@@ -356,5 +522,29 @@ func commandCmd(operation string, command func(context.Context) error) tea.Cmd {
 			return CommandErrorMsg{Operation: operation, Err: err}
 		}
 		return nil
+	}
+}
+
+func submitCmd(ctx context.Context, controller frontend.Controller, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		if controller == nil {
+			return SubmitResultMsg{Prompt: prompt, Err: errors.New("coding controller is unavailable")}
+		}
+		return SubmitResultMsg{Prompt: prompt, Err: controller.Submit(ctx, prompt)}
+	}
+}
+
+func transcriptPageCmd(
+	ctx context.Context,
+	pager frontend.TranscriptPager,
+	before int,
+	mode transcriptPageMode,
+) tea.Cmd {
+	return func() tea.Msg {
+		page, err := pager.TranscriptPage(ctx, frontend.TranscriptPageRequest{
+			Before: before,
+			Limit:  transcriptPageSize,
+		})
+		return TranscriptPageMsg{Page: page, Mode: mode, Err: err}
 	}
 }

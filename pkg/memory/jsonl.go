@@ -36,6 +36,8 @@ const (
 	// we set a generous limit. The scanner starts at 64 KB and grows
 	// only as needed up to this cap.
 	maxLineSize = 10 * 1024 * 1024 // 10 MB
+
+	maxHistoryPageMessages = 256
 )
 
 // SessionMeta holds per-session metadata stored in a .meta.json file.
@@ -1005,6 +1007,146 @@ func (s *JSONLStore) GetHistory(
 	}
 
 	return msgs, nil
+}
+
+// GetHistoryPage scans canonical JSONL under the session lock but retains and
+// returns only the requested visible-message window.
+func (s *JSONLStore) GetHistoryPage(
+	ctx context.Context,
+	sessionKey string,
+	request HistoryPageRequest,
+) (HistoryPage, error) {
+	if request.Limit <= 0 || request.Limit > maxHistoryPageMessages {
+		return HistoryPage{}, fmt.Errorf(
+			"memory: history page limit must be within 1..%d",
+			maxHistoryPageMessages,
+		)
+	}
+	if err := contextCause(ctx); err != nil {
+		return HistoryPage{}, err
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+		return HistoryPage{}, recoveryErr
+	}
+	path := s.jsonlPath(sessionKey)
+	total, _, err := scanVisibleHistory(ctx, path, meta.Skip, 0, 0, nil, 0)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	cursorTotal := total
+	if request.Cursor != nil {
+		cursorTotal = request.Cursor.Total
+		if cursorTotal < 0 || cursorTotal > total {
+			return HistoryPage{}, fmt.Errorf("%w: canonical prefix length changed", ErrHistoryCursorStale)
+		}
+	}
+	end := request.Before
+	if end < 0 || end > cursorTotal {
+		end = cursorTotal
+	}
+	start := max(0, end-request.Limit)
+	messages := make([]providers.Message, 0, end-start)
+	_, cursor, err := scanVisibleHistory(ctx, path, meta.Skip, start, end, &messages, cursorTotal)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	if err := validateHistoryCursor(request.Cursor, cursor); err != nil {
+		return HistoryPage{}, err
+	}
+	var size, modTimeNS int64
+	if info, statErr := os.Stat(path); statErr == nil {
+		size = info.Size()
+		modTimeNS = info.ModTime().UnixNano()
+	} else if !os.IsNotExist(statErr) {
+		return HistoryPage{}, statErr
+	}
+	return HistoryPage{
+		Messages: messages,
+		Revision: HistoryRevision{
+			Revision:  meta.HistoryRevision,
+			Count:     meta.Count,
+			Skip:      meta.Skip,
+			Dirty:     meta.HistoryDirty,
+			FileSize:  size,
+			ModTimeNS: modTimeNS,
+		},
+		Cursor:   cursor,
+		Start:    start,
+		End:      end,
+		Total:    cursorTotal,
+		HasOlder: start > 0,
+		HasNewer: end < cursorTotal,
+	}, nil
+}
+
+func scanVisibleHistory(
+	ctx context.Context,
+	path string,
+	skip int,
+	start int,
+	end int,
+	destination *[]providers.Message,
+	cursorTotal int,
+) (int, HistoryCursor, error) {
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return 0, newHistoryCursorDigest().cursor(), nil
+	}
+	if err != nil {
+		return 0, HistoryCursor{}, fmt.Errorf("memory: open history page: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	rawIndex := 0
+	visibleIndex := 0
+	digest := newHistoryCursorDigest()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	for scanner.Scan() {
+		if err := contextCause(ctx); err != nil {
+			return 0, HistoryCursor{}, err
+		}
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		rawIndex++
+		if rawIndex <= skip {
+			continue
+		}
+		var message providers.Message
+		if err := json.Unmarshal(
+			line,
+			&message,
+		); err != nil ||
+			messageutil.IsTransientAssistantThoughtMessage(message) {
+			continue
+		}
+		if visibleIndex < cursorTotal {
+			if err := digest.add(message); err != nil {
+				return 0, HistoryCursor{}, err
+			}
+		}
+		if destination != nil && visibleIndex >= start && visibleIndex < end {
+			*destination = append(*destination, message)
+		}
+		visibleIndex++
+		if destination != nil && visibleIndex >= max(end, cursorTotal) {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, HistoryCursor{}, fmt.Errorf("memory: scan history page: %w", err)
+	}
+	return visibleIndex, digest.cursor(), nil
 }
 
 func (s *JSONLStore) GetSummary(

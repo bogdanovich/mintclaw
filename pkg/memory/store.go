@@ -62,6 +62,39 @@ type HistoryRevisionStore interface {
 	GetHistoryRevision(ctx context.Context, sessionKey string) (HistoryRevision, error)
 }
 
+// HistoryPageRequest selects a bounded canonical-history window. Before is an
+// exclusive visible-message index; a negative value selects the current end.
+type HistoryPageRequest struct {
+	Before int
+	Limit  int
+	Cursor *HistoryCursor
+}
+
+// HistoryCursor binds paging to an immutable canonical prefix. Appends after
+// Total are allowed; replacement, truncation, or reordering makes it stale.
+type HistoryCursor struct {
+	Total  int
+	Digest string
+}
+
+// HistoryPage is a stable visible-message window at one history revision.
+type HistoryPage struct {
+	Messages []providers.Message
+	Revision HistoryRevision
+	Cursor   HistoryCursor
+	Start    int
+	End      int
+	Total    int
+	HasOlder bool
+	HasNewer bool
+}
+
+// HistoryPageStore reads bounded history without retaining the full canonical
+// transcript in the caller.
+type HistoryPageStore interface {
+	GetHistoryPage(ctx context.Context, sessionKey string, request HistoryPageRequest) (HistoryPage, error)
+}
+
 // HistoryMutationStore atomically derives and persists a replacement from the
 // latest canonical history while excluding concurrent appends, truncation, and
 // compaction for the same session.
