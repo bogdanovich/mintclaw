@@ -106,7 +106,7 @@ type nativeCodingRuntime struct {
 	model           string
 	provider        string
 	streaming       bool
-	historyLimit    int
+	historyCursor   memory.HistoryCursor
 	closeOnce       sync.Once
 	closeErr        error
 }
@@ -182,7 +182,7 @@ func openNativeCodingRuntime(
 		streaming:       projector != nil,
 	}
 	if projector != nil {
-		runtime.historyLimit, err = codingHistoryCount(
+		runtime.historyCursor, err = codingHistoryCursor(
 			context.Background(),
 			runtime.sessions,
 			request.Metadata.SessionKey,
@@ -195,17 +195,20 @@ func openNativeCodingRuntime(
 	return runtime, nil
 }
 
-func codingHistoryCount(
+func codingHistoryCursor(
 	ctx context.Context,
 	store session.SessionStore,
 	sessionKey string,
-) (int, error) {
+) (memory.HistoryCursor, error) {
 	if reader, ok := store.(session.TurnHistoryPageReader); ok {
 		page, err := reader.ReadTurnHistoryPage(ctx, sessionKey, memory.HistoryPageRequest{Before: -1, Limit: 1})
-		return page.Total, err
+		return page.Cursor, err
 	}
 	history, err := store.ReadTurnHistory(ctx, sessionKey)
-	return len(history), err
+	if err != nil {
+		return memory.HistoryCursor{}, err
+	}
+	return memory.HistoryCursorForMessages(history, len(history))
 }
 
 func (r *nativeCodingRuntime) runTurn(
@@ -312,28 +315,32 @@ func (r *nativeControllerRuntime) TranscriptPage(
 		return frontend.TranscriptPage{}, fmt.Errorf("coding transcript paging is unavailable")
 	}
 	before := request.Before
-	if before < 0 || before > r.historyLimit {
-		before = r.historyLimit
+	if before < 0 || before > r.historyCursor.Total {
+		before = r.historyCursor.Total
 	}
 	page, err := reader.ReadTurnHistoryPage(ctx, r.metadata.SessionKey, memory.HistoryPageRequest{
 		Before: before,
 		Limit:  request.Limit,
+		Cursor: &r.historyCursor,
 	})
 	if err != nil {
+		if errors.Is(err, memory.ErrHistoryCursorStale) {
+			return frontend.TranscriptPage{}, fmt.Errorf("%w: %w", frontend.ErrTranscriptHistoryChanged, err)
+		}
 		return frontend.TranscriptPage{}, err
 	}
 	entries := make([]frontend.TranscriptEntry, 0, len(page.Messages)*2)
 	for offset, message := range page.Messages {
 		entries = append(entries, hydratedTranscriptEntries(page.Start+offset, message)...)
 	}
-	end := min(page.End, r.historyLimit)
+	end := min(page.End, r.historyCursor.Total)
 	return frontend.TranscriptPage{
 		Entries:  entries,
 		Start:    page.Start,
 		End:      end,
-		Total:    r.historyLimit,
+		Total:    r.historyCursor.Total,
 		HasOlder: page.Start > 0,
-		HasNewer: end < r.historyLimit,
+		HasNewer: end < r.historyCursor.Total,
 	}, nil
 }
 

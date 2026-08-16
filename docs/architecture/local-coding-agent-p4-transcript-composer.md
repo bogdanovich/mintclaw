@@ -15,9 +15,12 @@ The terminal keeps two bounded views of a coding thread:
 
 Historical paging crosses optional interfaces at the memory, session, runtime,
 and frontend-controller boundaries. The TUI never reads JSONL files or imports
-agent internals. A native controller records the canonical history length when
-it opens and uses that fixed watermark for every page, so prompts admitted by
-the live controller cannot overlap or reorder the hydrated prefix.
+agent internals. A native controller records the canonical history length and
+content digest when it opens and uses that fixed prefix cursor for every page.
+Later appends are allowed, while replacement, truncation, or reordering disables
+hydration rather than mixing a changed prefix with live projected entries. Thus
+prompts admitted by the live controller cannot overlap or reorder the hydrated
+prefix.
 
 The JSONL reader scans under the per-session lock and retains only the requested
 window. Page size is capped at 256 canonical messages. The TUI requests 64 at a

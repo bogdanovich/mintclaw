@@ -96,6 +96,12 @@ func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
 	if command == nil || !model.submitting {
 		t.Fatal("Enter did not start composer submission")
 	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDelete})
+	if model.ComposerValue() != prompt {
+		t.Fatalf("pending submission mutated composer to %q", model.ComposerValue())
+	}
 	message, ok := command().(SubmitResultMsg)
 	if !ok {
 		t.Fatalf("submit command message = %T", message)
@@ -166,7 +172,8 @@ func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
 	entries := []frontend.TranscriptEntry{{
 		ID:   "unicode",
 		Kind: frontend.EntryAssistant,
-		Text: "界 e\u0301 👩🏽‍💻 אבג \x1b[31mred\x1b[0m\x07",
+		Text: "界 e\u0301 👩🏽‍💻 אבג \x1b[31mred\x1b[0m\x07 " + strings.Repeat("界", 20) +
+			strings.Repeat("a", 30),
 	}}
 	tools := []frontend.ToolState{{
 		CallID: "call-1", Name: "exec", Arguments: "SECRET-ARG", Output: "SECRET-OUTPUT", Status: frontend.ToolRunning,
@@ -182,6 +189,24 @@ func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
 		if width := ansi.StringWidth(line); width > 12 {
 			t.Fatalf("rendered line width=%d > 12: %q", width, line)
 		}
+	}
+}
+
+func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
+	controller, snapshot := newController(t)
+	model, err := NewModel(controller, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.transcript.loading = true
+	model = updateModel(t, model, TranscriptPageMsg{Err: frontend.ErrTranscriptPagingUnsupported})
+	if !model.transcript.disabled || model.transcript.loading || model.err != nil {
+		t.Fatalf("unsupported paging state = %+v err=%v", model.transcript, model.err)
+	}
+	model.transcript = transcriptWindow{loading: true}
+	model = updateModel(t, model, TranscriptPageMsg{Err: frontend.ErrTranscriptHistoryChanged})
+	if !model.transcript.disabled || model.err != nil {
+		t.Fatalf("changed history state = %+v err=%v", model.transcript, model.err)
 	}
 }
 

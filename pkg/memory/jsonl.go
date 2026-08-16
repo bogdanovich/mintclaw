@@ -1037,18 +1037,28 @@ func (s *JSONLStore) GetHistoryPage(
 		return HistoryPage{}, recoveryErr
 	}
 	path := s.jsonlPath(sessionKey)
-	total, err := scanVisibleHistory(ctx, path, meta.Skip, 0, 0, nil)
+	total, _, err := scanVisibleHistory(ctx, path, meta.Skip, 0, 0, nil, 0)
 	if err != nil {
 		return HistoryPage{}, err
 	}
+	cursorTotal := total
+	if request.Cursor != nil {
+		cursorTotal = request.Cursor.Total
+		if cursorTotal < 0 || cursorTotal > total {
+			return HistoryPage{}, fmt.Errorf("%w: canonical prefix length changed", ErrHistoryCursorStale)
+		}
+	}
 	end := request.Before
-	if end < 0 || end > total {
-		end = total
+	if end < 0 || end > cursorTotal {
+		end = cursorTotal
 	}
 	start := max(0, end-request.Limit)
 	messages := make([]providers.Message, 0, end-start)
-	_, err = scanVisibleHistory(ctx, path, meta.Skip, start, end, &messages)
+	_, cursor, err := scanVisibleHistory(ctx, path, meta.Skip, start, end, &messages, cursorTotal)
 	if err != nil {
+		return HistoryPage{}, err
+	}
+	if err := validateHistoryCursor(request.Cursor, cursor); err != nil {
 		return HistoryPage{}, err
 	}
 	var size, modTimeNS int64
@@ -1068,11 +1078,12 @@ func (s *JSONLStore) GetHistoryPage(
 			FileSize:  size,
 			ModTimeNS: modTimeNS,
 		},
+		Cursor:   cursor,
 		Start:    start,
 		End:      end,
-		Total:    total,
+		Total:    cursorTotal,
 		HasOlder: start > 0,
-		HasNewer: end < total,
+		HasNewer: end < cursorTotal,
 	}, nil
 }
 
@@ -1083,23 +1094,25 @@ func scanVisibleHistory(
 	start int,
 	end int,
 	destination *[]providers.Message,
-) (int, error) {
+	cursorTotal int,
+) (int, HistoryCursor, error) {
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return 0, nil
+		return 0, newHistoryCursorDigest().cursor(), nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("memory: open history page: %w", err)
+		return 0, HistoryCursor{}, fmt.Errorf("memory: open history page: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
 	rawIndex := 0
 	visibleIndex := 0
+	digest := newHistoryCursorDigest()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	for scanner.Scan() {
 		if err := contextCause(ctx); err != nil {
-			return 0, err
+			return 0, HistoryCursor{}, err
 		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -1117,18 +1130,23 @@ func scanVisibleHistory(
 			messageutil.IsTransientAssistantThoughtMessage(message) {
 			continue
 		}
+		if visibleIndex < cursorTotal {
+			if err := digest.add(message); err != nil {
+				return 0, HistoryCursor{}, err
+			}
+		}
 		if destination != nil && visibleIndex >= start && visibleIndex < end {
 			*destination = append(*destination, message)
 		}
 		visibleIndex++
-		if destination != nil && visibleIndex >= end {
+		if destination != nil && visibleIndex >= max(end, cursorTotal) {
 			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("memory: scan history page: %w", err)
+		return 0, HistoryCursor{}, fmt.Errorf("memory: scan history page: %w", err)
 	}
-	return visibleIndex, nil
+	return visibleIndex, digest.cursor(), nil
 }
 
 func (s *JSONLStore) GetSummary(

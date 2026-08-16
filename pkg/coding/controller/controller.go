@@ -114,7 +114,7 @@ func (c *Controller) TranscriptPage(
 ) (frontend.TranscriptPage, error) {
 	pager, ok := c.runtime.(frontend.TranscriptPager)
 	if !ok {
-		return frontend.TranscriptPage{}, ErrUnsupported
+		return frontend.TranscriptPage{}, frontend.ErrTranscriptPagingUnsupported
 	}
 	return pager.TranscriptPage(ctx, request)
 }

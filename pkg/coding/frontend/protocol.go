@@ -14,9 +14,11 @@ import (
 const ProtocolVersion = "mintclaw.coding.frontend.v1"
 
 var (
-	ErrRevisionGap         = errors.New("coding frontend revision gap")
-	ErrRevisionUnavailable = errors.New("coding frontend revision is no longer available")
-	ErrThreadMismatch      = errors.New("coding frontend thread mismatch")
+	ErrRevisionGap                 = errors.New("coding frontend revision gap")
+	ErrRevisionUnavailable         = errors.New("coding frontend revision is no longer available")
+	ErrThreadMismatch              = errors.New("coding frontend thread mismatch")
+	ErrTranscriptPagingUnsupported = errors.New("coding transcript paging is unsupported")
+	ErrTranscriptHistoryChanged    = errors.New("coding transcript history changed after opening")
 )
 
 type Revision uint64

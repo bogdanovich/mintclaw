@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -525,10 +526,18 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 	})
 	sessions.AddFullMessage("coding:thread", providers.Message{Role: "tool", Content: "DO-NOT-HYDRATE-SECRET"})
 	sessions.AddFullMessage("coding:thread", providers.Message{Role: "system", Content: "SYSTEM-SECRET"})
+	opening, err := sessions.ReadTurnHistoryPage(
+		t.Context(),
+		"coding:thread",
+		memory.HistoryPageRequest{Before: -1, Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &nativeControllerRuntime{nativeCodingRuntime: &nativeCodingRuntime{
-		sessions:     sessions,
-		metadata:     thread.Metadata{SessionKey: "coding:thread"},
-		historyLimit: 4,
+		sessions:      sessions,
+		metadata:      thread.Metadata{SessionKey: "coding:thread"},
+		historyCursor: opening.Cursor,
 	}}
 	page, err := runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
 	if err != nil {
@@ -548,6 +557,22 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 		if strings.Contains(entry.Text, "SECRET") {
 			t.Fatalf("non-display history leaked through hydration: %+v", entry)
 		}
+	}
+
+	sessions.AddFullMessage("coding:thread", providers.Message{Role: "assistant", Content: "post-open"})
+	page, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil || page.Total != 4 {
+		t.Fatalf("append changed opening prefix page: page=%+v err=%v", page, err)
+	}
+	if err := sessions.ReplaceTurnHistory(t.Context(), "coding:thread", []providers.Message{
+		{Role: "user", Content: "replacement"},
+		{Role: "assistant", Content: "replacement answer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if !errors.Is(err, frontend.ErrTranscriptHistoryChanged) {
+		t.Fatalf("replacement page error = %v", err)
 	}
 }
 

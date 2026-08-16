@@ -170,6 +170,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case TranscriptPageMsg:
 		m.transcript.loading = false
 		if message.Err != nil {
+			if errors.Is(message.Err, frontend.ErrTranscriptPagingUnsupported) ||
+				errors.Is(message.Err, frontend.ErrTranscriptHistoryChanged) {
+				m.transcript = transcriptWindow{disabled: true}
+				m.refreshViewport()
+				return m, nil
+			}
 			m.err = message.Err
 			return m, nil
 		}
@@ -343,7 +349,7 @@ func (m *Model) refreshViewport() {
 	content, layout := renderTranscript(
 		transcriptDisplayEntries(m.transcript.entries(state.Entries), state.Tools),
 		m.viewport.Width,
-		m.transcript.hasOlder || state.HasOlderEntries,
+		!m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries),
 		m.transcript.hasNewer,
 		m.transcript.loading,
 	)
@@ -357,9 +363,12 @@ func (m *Model) refreshViewport() {
 }
 
 func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
+	if m.submitting {
+		return true, nil
+	}
 	switch message.String() {
 	case "enter":
-		if message.Paste || m.submitting {
+		if message.Paste {
 			return true, nil
 		}
 		prompt := m.composer.Value()
@@ -372,15 +381,9 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.admitInitialTurn()
 		return true, submitCmd(m.ctx, m.controller, prompt)
 	case "alt+up":
-		if m.submitting {
-			return true, nil
-		}
 		m.navigateHistory(-1)
 		return true, textarea.Blink
 	case "alt+down":
-		if m.submitting {
-			return true, nil
-		}
 		m.navigateHistory(1)
 		return true, textarea.Blink
 	case "alt+end":
@@ -400,9 +403,6 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 				)
 			}
 		}
-	}
-	if m.submitting && message.Type == tea.KeyRunes {
-		return true, nil
 	}
 	return false, nil
 }

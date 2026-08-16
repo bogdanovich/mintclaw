@@ -231,3 +231,14 @@ func TestTranscriptPageDelegatesOptionalRuntimeCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTranscriptPageReportsUnsupportedRuntimeCapability(t *testing.T) {
+	controller := newTestController(t, newBlockingRuntime())
+	_, err := controller.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 1})
+	if !errors.Is(err, frontend.ErrTranscriptPagingUnsupported) {
+		t.Fatalf("TranscriptPage() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}

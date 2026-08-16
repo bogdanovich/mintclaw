@@ -32,6 +32,7 @@ type transcriptWindow struct {
 	hasNewer    bool
 	loading     bool
 	initialized bool
+	disabled    bool
 }
 
 func (w *transcriptWindow) apply(page frontend.TranscriptPage, mode transcriptPageMode) {
@@ -186,7 +187,7 @@ func renderTranscript(
 		if entry.Truncated {
 			body += "\n[…truncated]"
 		}
-		wrapped := ansi.Wordwrap(body, max(1, width-2), "")
+		wrapped := ansi.Wrap(body, max(1, width-2), "")
 		block := label
 		if wrapped != "" {
 			block += "\n" + indentTranscript(wrapped, "  ")

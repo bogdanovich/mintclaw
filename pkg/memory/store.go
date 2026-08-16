@@ -67,12 +67,21 @@ type HistoryRevisionStore interface {
 type HistoryPageRequest struct {
 	Before int
 	Limit  int
+	Cursor *HistoryCursor
+}
+
+// HistoryCursor binds paging to an immutable canonical prefix. Appends after
+// Total are allowed; replacement, truncation, or reordering makes it stale.
+type HistoryCursor struct {
+	Total  int
+	Digest string
 }
 
 // HistoryPage is a stable visible-message window at one history revision.
 type HistoryPage struct {
 	Messages []providers.Message
 	Revision HistoryRevision
+	Cursor   HistoryCursor
 	Start    int
 	End      int
 	Total    int
