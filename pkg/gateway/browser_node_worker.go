@@ -238,12 +238,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			if action == "drag" && localProfile.DryRun {
 				continue
 			}
-			if action == "check" || action == "click" || action == "dialog" || action == "download" || action == "drag" ||
-				action == "file_chooser" || action == "upload" || action == "fill" || action == "hover" ||
-				action == "navigate" ||
-				action == "press" ||
-				action == "scroll" ||
-				action == "select" || action == "uncheck" {
+			switch action {
+			case "check", "click", "dialog", "download", "drag", "file_chooser", "upload", "fill", "hover",
+				"navigate", "press", "scroll", "select", "uncheck":
 				current[action] = struct{}{}
 			}
 		}

@@ -1206,7 +1206,8 @@ func browserCommandInputSchema(
 				effect = "unknown"
 			}
 			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" || action == "upload" || action == "click" || action == "drag" || action == "press" {
+			if action == "download" || action == "upload" || action == "click" || action == "drag" ||
+				action == "press" {
 				required = append(required, "approval_digest")
 			}
 			properties := map[string]any{
@@ -1219,7 +1220,11 @@ func browserCommandInputSchema(
 				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
 				properties["workspace_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 				properties["route_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
-				properties["browser_target"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+				properties["browser_target"] = map[string]any{
+					"type":      "string",
+					"minLength": 1,
+					"maxLength": MaxIDLength,
+				}
 			}
 			if action == "click" || action == "fill" || action == "select" || action == "check" ||
 				action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" ||

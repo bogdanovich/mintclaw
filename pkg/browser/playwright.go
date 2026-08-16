@@ -1534,9 +1534,12 @@ func (worker *playwrightWorker) Download(
 ) (DriverDownload, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if !worker.downloadReady || worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
-		action.Kind != DriverDownloadAction || !playwrightTargetPattern.MatchString(action.Target) ||
-		maximumBytes < 1 || maximumBytes > int64(worker.limits.DownloadBytes) {
+	if !worker.downloadReady || worker.closing || worker.closed || worker.lost || worker.humanControl ||
+		worker.pendingDialog != nil ||
+		action.Kind != DriverDownloadAction ||
+		!playwrightTargetPattern.MatchString(action.Target) ||
+		maximumBytes < 1 ||
+		maximumBytes > int64(worker.limits.DownloadBytes) {
 		return DriverDownload{}, ErrWorkerUnavailable
 	}
 	return worker.captureDownload(ctx, action, maximumBytes)

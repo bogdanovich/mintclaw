@@ -664,8 +664,10 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	download, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-download", SessionID: first.ID, TabID: first.TabID,
 		SnapshotID: downloadObservation.SnapshotID, SnapshotGeneration: downloadObservation.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionDownload,
-			Ref: downloadObservation.Snapshot[downloadStart : downloadStart+downloadEnd]},
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  downloadObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
 	})
 	if err != nil || !download.RequiresApproval {
 		t.Fatalf("download preparation = %#v, %v", download, err)
@@ -696,8 +698,10 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		Owner: owner, RequestID: "browser-wss-download-corrupt", SessionID: first.ID, TabID: first.TabID,
 		SnapshotID:         corruptObservation.SnapshotID,
 		SnapshotGeneration: corruptObservation.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionDownload,
-			Ref: corruptObservation.Snapshot[downloadStart : downloadStart+downloadEnd]},
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  corruptObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -739,8 +743,10 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		Owner: owner, RequestID: "browser-wss-download-unavailable", SessionID: first.ID, TabID: first.TabID,
 		SnapshotID:         failedObservation.SnapshotID,
 		SnapshotGeneration: failedObservation.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionDownload,
-			Ref: failedObservation.Snapshot[downloadStart : downloadStart+downloadEnd]},
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  failedObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

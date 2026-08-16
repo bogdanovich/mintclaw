@@ -232,8 +232,10 @@ func TestRuntimeExecutesApprovedUploadAndDownload(t *testing.T) {
 	upload := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_upload_1",
-		Action: nodes.BrowserAction{Kind: "upload", Ref: "semantic_ref_1",
-			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1"},
+		Action: nodes.BrowserAction{
+			Kind: "upload", Ref: "semantic_ref_1",
+			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1",
+		},
 		Effect: "unknown", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
