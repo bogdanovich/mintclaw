@@ -1070,8 +1070,9 @@ func (host *BrowserHost) executeAction(
 			request.DestinationExpectedRole != "" || request.DestinationExpectedName != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if action != "file_chooser" && action != "upload" && (request.Action.ArtifactRef != "" || request.ArtifactSHA256 != "" ||
-		request.ArtifactBytes != 0 || request.ArtifactFilename != "" || request.ArtifactContentType != "") {
+	if action != "file_chooser" && action != "upload" &&
+		(request.Action.ArtifactRef != "" || request.ArtifactSHA256 != "" ||
+			request.ArtifactBytes != 0 || request.ArtifactFilename != "" || request.ArtifactContentType != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	session, err := host.authorizedSession(BrowserHostStatusRequest{
