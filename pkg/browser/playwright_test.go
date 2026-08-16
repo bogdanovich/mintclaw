@@ -3002,7 +3002,9 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	}
 	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = fmt.Fprint(writer, "<!doctype html><title>Persistent Fixture</title><main>reached</main>")
+		_, _ = fmt.Fprint(writer,
+			"<!doctype html><title>Persistent Fixture</title><main><button>Capture me</button></main>",
+		)
 	}))
 	defer fixture.Close()
 
@@ -3015,11 +3017,19 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	server := root.Tools.MCP.Servers["playwright"]
 	driverTemp := t.TempDir()
+	driverOutputRoot := filepath.Join(driverTemp, "output")
+	if mkdirErr := os.Mkdir(driverOutputRoot, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
 	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
 		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome",
 		"--user-data-dir=" + filepath.Join(driverTemp, "profile"),
-		"--output-mode=stdout", "--output-dir=" + filepath.Join(driverTemp, "output"),
+		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
+	}
+	if executable := strings.TrimSpace(os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE")); executable != "" {
+		server.Args[3] = "--browser=chromium"
+		server.Args = append(server.Args, "--executable-path="+executable)
 	}
 	root.Tools.MCP.Servers["playwright"] = server
 	factory, err := NewPlaywrightWorkerFactory(root)
@@ -3043,13 +3053,42 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	if err = firstWorker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixture.URL}); err != nil {
 		t.Fatalf("first navigate error = %v", err)
 	}
-	if _, err = firstWorker.Observe(ctx); err != nil {
+	observation, err := firstWorker.Observe(ctx)
+	if err != nil {
 		t.Fatalf("first fixture Observe() error = %v", err)
 	}
 	screenshot, err := firstWorker.CaptureScreenshot(ctx, config.BrowserMaxScreenshotBytes)
 	if err != nil || screenshot.ContentType != "image/png" ||
 		!bytes.HasPrefix(screenshot.Data, pngSignature) {
 		t.Fatalf("first CaptureScreenshot() = %d bytes, %q, %v", len(screenshot.Data), screenshot.ContentType, err)
+	}
+	var captureElement DriverElement
+	for _, element := range observation.Elements {
+		if element.Role == "button" && element.Name == "Capture me" {
+			captureElement = element
+			break
+		}
+	}
+	if captureElement.Target == "" {
+		t.Fatalf("first fixture elements = %#v", observation.Elements)
+	}
+	navigationID, err := firstWorker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("first NavigationIdentity() error = %v", err)
+	}
+	elementScreenshot, err := firstWorker.CaptureElementScreenshot(
+		ctx,
+		navigationID,
+		observation.Origin,
+		captureElement,
+		config.BrowserMaxScreenshotBytes,
+	)
+	if err != nil || elementScreenshot.ContentType != "image/png" ||
+		!bytes.HasPrefix(elementScreenshot.Data, pngSignature) {
+		t.Fatalf(
+			"first CaptureElementScreenshot() = %d bytes, %q, %v",
+			len(elementScreenshot.Data), elementScreenshot.ContentType, err,
+		)
 	}
 	if err = firstWorker.Close(ctx); err != nil {
 		t.Fatalf("first Close() error = %v", err)
@@ -3064,9 +3103,9 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	}
 	secondWorker := second.Owner.(*playwrightWorker)
 	t.Cleanup(func() { _ = secondWorker.Close(context.Background()) })
-	observation, err := secondWorker.Observe(ctx)
-	if err != nil || observation.URL != initialBlankOrigin || observation.Origin != initialBlankOrigin {
-		t.Fatalf("second initial Observe() = %+v, %v", observation, err)
+	secondObservation, err := secondWorker.Observe(ctx)
+	if err != nil || secondObservation.URL != initialBlankOrigin || secondObservation.Origin != initialBlankOrigin {
+		t.Fatalf("second initial Observe() = %+v, %v", secondObservation, err)
 	}
 }
 
