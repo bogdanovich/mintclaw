@@ -83,6 +83,16 @@ func TestTelegramUpdateConversationKeySeparatesTopics(t *testing.T) {
 	}
 }
 
+func TestTelegramUpdateConversationKeySerializesCallbackWithConversation(t *testing.T) {
+	message := telegramMessageUpdate(1, 100, 10)
+	callback := telego.Update{UpdateID: 2, CallbackQuery: &telego.CallbackQuery{
+		Message: &telego.Message{Chat: telego.Chat{ID: 100}, MessageThreadID: 10},
+	}}
+	if got, want := telegramUpdateConversationKey(callback), telegramUpdateConversationKey(message); got != want {
+		t.Fatalf("callback conversation key = %q, want %q", got, want)
+	}
+}
+
 func telegramMessageUpdate(updateID int, chatID int64, topicID int) telego.Update {
 	return telego.Update{
 		UpdateID: updateID,

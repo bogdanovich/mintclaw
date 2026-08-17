@@ -8,6 +8,10 @@ const InboundMetadataKeyInteractionChoice = "interaction_choice"
 // a reply to an interaction prompt without any quoted-message decoration.
 const InboundMetadataKeyInteractionResponse = "interaction_response"
 
+// InboundMetadataKeyInteractionShortID binds a channel-projected response to
+// the exact interaction prompt that produced its controls.
+const InboundMetadataKeyInteractionShortID = "interaction_short_id"
+
 const (
 	InboundInteractionChoiceAllowOnce = "allow_once"
 	InboundInteractionChoiceDeny      = "deny"

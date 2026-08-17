@@ -89,6 +89,13 @@ func runTelegramUpdateWorker(
 }
 
 func telegramUpdateConversationKey(update telego.Update) string {
+	if query := update.CallbackQuery; query != nil && query.Message != nil {
+		message := query.Message.Message()
+		if message != nil {
+			return fmt.Sprintf("chat:%d:topic:%d", message.Chat.ID, message.MessageThreadID)
+		}
+		return fmt.Sprintf("chat:%d:topic:0", query.Message.GetChat().ID)
+	}
 	message := telegramMessageFromUpdate(update)
 	if message == nil {
 		return fmt.Sprintf("update:%d", update.UpdateID)

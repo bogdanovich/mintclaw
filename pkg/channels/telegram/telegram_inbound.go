@@ -231,7 +231,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		content = "[media only]"
 	}
 	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
-	interactionChoice, interactionResponse := c.telegramInteractionMetadata(message, content, platformID)
+	interactionReply := c.telegramInteractionReplyMetadata(message, content, platformID)
 
 	// In group chats, apply unified group trigger filtering
 	isMentioned := false
@@ -297,7 +297,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		if isMentioned {
 			content = c.stripBotMention(message, content)
 		}
-		directedToBot := isMentioned || interactionChoice != "" || interactionResponse != ""
+		directedToBot := isMentioned || interactionReply.choice != "" || interactionReply.response != ""
 		respond, cleaned := c.ShouldRespondInGroupForTopic(directedToBot, content, topicID)
 		if !respond {
 			return nil
@@ -350,11 +350,14 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
-	if interactionChoice != "" {
-		metadata[bus.InboundMetadataKeyInteractionChoice] = interactionChoice
+	if interactionReply.choice != "" {
+		metadata[bus.InboundMetadataKeyInteractionChoice] = interactionReply.choice
 	}
-	if interactionResponse != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionResponse
+	if interactionReply.response != "" {
+		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionReply.response
+	}
+	if interactionReply.shortID != "" {
+		metadata[bus.InboundMetadataKeyInteractionShortID] = interactionReply.shortID
 	}
 	mergeTelegramRawMetadata(metadata, mediaGroupMetadata)
 
