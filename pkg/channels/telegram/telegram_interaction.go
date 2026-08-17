@@ -17,6 +17,7 @@ type telegramInteractionControlKey struct {
 
 type telegramInteractionControls struct {
 	shortID string
+	kind    string
 	choices []string
 }
 
@@ -49,6 +50,7 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 	}
 	c.interactionControls[key] = telegramInteractionControls{
 		shortID: strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID]),
+		kind:    metadata.InteractionKind,
 		choices: metadata.InteractionChoices(),
 	}
 }
@@ -73,8 +75,8 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 		return telegramInteractionReply{}
 	}
 	shortID := telegramInteractionShortID(message.ReplyToMessage)
-	controls, questionActive := c.activeInteractionControls(message, senderID)
-	if questionActive {
+	controls, controlsActive := c.activeInteractionControls(message, senderID)
+	if controlsActive && controls.kind == bus.OutboundInteractionQuestion {
 		if message.Text == bus.InboundInteractionCancelLabel {
 			return telegramInteractionReply{
 				choice: bus.InboundInteractionChoiceCancel, shortID: shortID,

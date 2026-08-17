@@ -3408,6 +3408,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			if test.seed {
 				ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 					{chatID: -100123, senderID: "15"}: {
+						kind:    bus.OutboundInteractionQuestion,
 						choices: []string{test.text},
 					},
 				}
@@ -3502,7 +3503,7 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
 		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
 		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
-			{chatID: -100123, senderID: "15"}: {},
+			{chatID: -100123, senderID: "15"}: {kind: bus.OutboundInteractionQuestion},
 		},
 	}
 	msg := &telego.Message{
@@ -3618,7 +3619,7 @@ func TestTelegramInteractionMetadataRejectsUntrustedOrArbitraryControls(t *testi
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
 		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
-			{chatID: 999, senderID: "15"}: {},
+			{chatID: 999, senderID: "15"}: {kind: bus.OutboundInteractionQuestion},
 		},
 	}
 	choice, _ := ch.telegramInteractionMetadata(&telego.Message{
@@ -3685,7 +3686,7 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
 		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
-			{chatID: 999, senderID: "15"}: {},
+			{chatID: 999, senderID: "15"}: {kind: bus.OutboundInteractionQuestion},
 		},
 	}
 	ownBot := &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"}
@@ -3712,9 +3713,14 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 }
 
 func TestTelegramInteractionReplyMetadataCarriesPromptIdentity(t *testing.T) {
-	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	ch := &TelegramChannel{
+		selfID: 42, selfName: "mintclaw_bot",
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
+			{chatID: 999, senderID: "15"}: {kind: bus.OutboundInteractionApproval},
+		},
+	}
 	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
-		Text: "Allow once",
+		Text: "Allow once", Chat: telego.Chat{ID: 999},
 		ReplyToMessage: &telego.Message{
 			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
 			Text: "Choose an action\n`/answer abc12345 allow_once`\n`/answer abc12345 deny`",
@@ -3733,6 +3739,7 @@ func TestTelegramInteractionShortIDRejectsConflictingPromptIdentity(t *testing.T
 func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	var published bus.InboundMessage
+	var ch *TelegramChannel
 	apiCalls := 0
 	caller := &stubCaller{callFn: func(
 		_ context.Context, _ string, _ *ta.RequestData,
@@ -3744,14 +3751,22 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 			default:
 				t.Fatal("callback was acknowledged before durable inbound publication")
 			}
+			ch.interactionControlsMu.Lock()
+			ch.interactionControls[telegramInteractionControlKey{
+				chatID: -100123, threadID: 1771, senderID: "15",
+			}] = telegramInteractionControls{
+				shortID: "newer567", kind: bus.OutboundInteractionApproval,
+			}
+			ch.interactionControlsMu.Unlock()
 		}
 		return successResponse(t), nil
 	}}
-	ch := newTestChannel(t, caller)
+	ch = newTestChannel(t, caller)
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
 	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: -100123, threadID: 1771, senderID: "15"}: {
-			shortID: "abc12345", choices: []string{"Generate it"},
+			shortID: "abc12345", kind: bus.OutboundInteractionQuestion,
+			choices: []string{"Generate it"},
 		},
 	}
 	repliedMessage := &telego.Message{
@@ -3771,6 +3786,7 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
 	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
 	assert.False(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "newer567"))
 }
 
 func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
@@ -3822,7 +3838,7 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 		selfID:      42,
 		selfName:    "mintclaw_bot",
 		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
-			{chatID: 999, senderID: "15"}: {},
+			{chatID: 999, senderID: "15"}: {kind: bus.OutboundInteractionQuestion},
 		},
 	}
 	msg := &telego.Message{

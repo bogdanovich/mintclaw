@@ -119,13 +119,18 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if message.MessageThreadID != 0 {
 		inbound.TopicID = strconv.Itoa(message.MessageThreadID)
 	}
+	controlsMatched := c.interactionControlsMatch(
+		message.Chat.ID, message.MessageThreadID, platformID, callback.shortID,
+	)
 	c.chatIDsMu.Lock()
 	c.chatIDs[platformID] = message.Chat.ID
 	c.chatIDsMu.Unlock()
 	if err := c.HandleMessageWithContext(ctx, chatID, content, nil, inbound, sender); err != nil {
 		return err
 	}
-	c.settleInteractionCallbackUI(ctx, message, query.ID, platformID, callback.shortID)
+	c.settleInteractionCallbackUI(
+		ctx, message, query.ID, platformID, callback.shortID, controlsMatched,
+	)
 	return nil
 }
 
@@ -135,6 +140,7 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	callbackQueryID string,
 	senderID string,
 	shortID string,
+	controlsMatched bool,
 ) {
 	timeout := c.interactionUITimeout
 	if timeout <= 0 {
@@ -149,9 +155,7 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 	}
-	if !c.interactionControlsMatch(
-		message.Chat.ID, message.MessageThreadID, senderID, shortID,
-	) || uiCtx.Err() != nil {
+	if !controlsMatched || uiCtx.Err() != nil {
 		return
 	}
 	_, err := c.bot.EditMessageReplyMarkup(uiCtx, &telego.EditMessageReplyMarkupParams{
