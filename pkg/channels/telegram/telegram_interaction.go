@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -15,7 +16,14 @@ type telegramQuestionControlKey struct {
 }
 
 type telegramQuestionControls struct {
-	choices map[string]struct{}
+	shortID string
+	choices []string
+}
+
+type telegramInteractionReply struct {
+	choice   string
+	response string
+	shortID  string
 }
 
 func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
@@ -38,12 +46,10 @@ func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID
 	if c.questionControls == nil {
 		c.questionControls = make(map[telegramQuestionControlKey]telegramQuestionControls)
 	}
-	choices := metadata.InteractionChoices()
-	allowed := make(map[string]struct{}, len(choices))
-	for _, choice := range choices {
-		allowed[choice] = struct{}{}
+	c.questionControls[key] = telegramQuestionControls{
+		shortID: strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID]),
+		choices: metadata.InteractionChoices(),
 	}
-	c.questionControls[key] = telegramQuestionControls{choices: allowed}
 }
 
 // SyncInteractionControls projects durable question routing state without
@@ -57,42 +63,77 @@ func (c *TelegramChannel) SyncInteractionControls(msg bus.OutboundMessage) error
 	return nil
 }
 
+func (c *TelegramChannel) telegramInteractionReplyMetadata(
+	message *telego.Message,
+	content string,
+	senderID string,
+) telegramInteractionReply {
+	if c == nil || message == nil {
+		return telegramInteractionReply{}
+	}
+	shortID := telegramInteractionShortID(message.ReplyToMessage)
+	controls, questionActive := c.activeQuestionControls(message, senderID)
+	if questionActive {
+		if message.Text == bus.InboundInteractionCancelLabel {
+			return telegramInteractionReply{
+				choice: bus.InboundInteractionChoiceCancel, shortID: shortID,
+			}
+		}
+		if message.ReplyToMessage != nil && c.isOwnBotUser(message.ReplyToMessage.From) {
+			return telegramInteractionReply{response: strings.TrimSpace(content), shortID: shortID}
+		}
+		response := strings.TrimSpace(message.Text)
+		if response == "" || response != message.Text {
+			return telegramInteractionReply{}
+		}
+		if slices.Contains(controls.choices, response) {
+			return telegramInteractionReply{response: response, shortID: shortID}
+		}
+		return telegramInteractionReply{}
+	}
+	if message.ReplyToMessage == nil || !c.isOwnBotUser(message.ReplyToMessage.From) {
+		return telegramInteractionReply{}
+	}
+	switch message.Text {
+	case "Allow once":
+		return telegramInteractionReply{
+			choice: bus.InboundInteractionChoiceAllowOnce, response: strings.TrimSpace(content), shortID: shortID,
+		}
+	case "Deny":
+		return telegramInteractionReply{
+			choice: bus.InboundInteractionChoiceDeny, response: strings.TrimSpace(content), shortID: shortID,
+		}
+	default:
+		return telegramInteractionReply{}
+	}
+}
+
 func (c *TelegramChannel) telegramInteractionMetadata(
 	message *telego.Message,
 	content string,
 	senderID string,
 ) (string, string) {
-	if c == nil || message == nil {
-		return "", ""
+	reply := c.telegramInteractionReplyMetadata(message, content, senderID)
+	return reply.choice, reply.response
+}
+
+func telegramInteractionShortID(reply *telego.Message) string {
+	if reply == nil {
+		return ""
 	}
-	controls, questionActive := c.activeQuestionControls(message, senderID)
-	if questionActive {
-		if message.Text == bus.InboundInteractionCancelLabel {
-			return bus.InboundInteractionChoiceCancel, ""
+	var shortID string
+	for _, line := range strings.Split(reply.Text, "\n") {
+		fields := strings.Fields(strings.Trim(strings.TrimSpace(line), "`"))
+		if len(fields) < 2 || fields[0] != "/answer" {
+			continue
 		}
-		if message.ReplyToMessage != nil && c.isOwnBotUser(message.ReplyToMessage.From) {
-			return "", strings.TrimSpace(content)
+		candidate := fields[1]
+		if shortID != "" && !strings.EqualFold(shortID, candidate) {
+			return ""
 		}
-		response := strings.TrimSpace(message.Text)
-		if response == "" || response != message.Text {
-			return "", ""
-		}
-		if _, ok := controls.choices[response]; ok {
-			return "", response
-		}
-		return "", ""
+		shortID = candidate
 	}
-	if message.ReplyToMessage == nil || !c.isOwnBotUser(message.ReplyToMessage.From) {
-		return "", ""
-	}
-	switch message.Text {
-	case "Allow once":
-		return bus.InboundInteractionChoiceAllowOnce, strings.TrimSpace(content)
-	case "Deny":
-		return bus.InboundInteractionChoiceDeny, strings.TrimSpace(content)
-	default:
-		return "", ""
-	}
+	return shortID
 }
 
 func (c *TelegramChannel) activeQuestionControls(

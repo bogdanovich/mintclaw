@@ -17,8 +17,8 @@ import (
 
 const (
 	interactionMessageKind = "human_interaction"
-	interactionIDMetadata  = "interaction_id"
-	interactionShortIDMeta = "interaction_short_id"
+	interactionIDMetadata  = bus.OutboundMetadataKeyInteractionID
+	interactionShortIDMeta = bus.OutboundMetadataKeyInteractionShortID
 )
 
 type humanInteractionRuntime struct {

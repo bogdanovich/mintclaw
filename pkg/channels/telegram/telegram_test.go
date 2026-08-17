@@ -1369,7 +1369,7 @@ func TestSend_ShortMessage_SingleCall(t *testing.T) {
 	assert.Len(t, caller.calls, 1, "short message should result in exactly one SendMessage call")
 }
 
-func TestSend_ApprovalPromptUsesSelectiveOneTimeKeyboard(t *testing.T) {
+func TestSend_ApprovalPromptUsesIdentityBoundInlineKeyboard(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			assert.Contains(t, url, "sendMessage")
@@ -1384,6 +1384,7 @@ func TestSend_ApprovalPromptUsesSelectiveOneTimeKeyboard(t *testing.T) {
 		InteractionKind:     bus.OutboundInteractionApproval,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.ApplyToContext(&outboundCtx)
+	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
 	_, err := ch.Send(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "Approve?", ReplyToMessageID: "42",
@@ -1394,12 +1395,11 @@ func TestSend_ApprovalPromptUsesSelectiveOneTimeKeyboard(t *testing.T) {
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
 	assert.Equal(t, float64(42), payload["reply_parameters"].(map[string]any)["message_id"])
 	markup := payload["reply_markup"].(map[string]any)
-	assert.Equal(t, true, markup["resize_keyboard"])
-	assert.Equal(t, true, markup["one_time_keyboard"])
-	assert.Equal(t, true, markup["selective"])
-	row := markup["keyboard"].([]any)[0].([]any)
+	row := markup["inline_keyboard"].([]any)[0].([]any)
 	assert.Equal(t, "Allow once", row[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:allow", row[0].(map[string]any)["callback_data"])
 	assert.Equal(t, "Deny", row[1].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:deny", row[1].(map[string]any)["callback_data"])
 }
 
 func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
@@ -1416,6 +1416,7 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	}
 	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
 	metadata.ApplyToContext(&outboundCtx)
+	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
 	_, err := ch.Send(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "Choose an input method",
@@ -1425,14 +1426,14 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
 	markup := payload["reply_markup"].(map[string]any)
-	assert.Equal(t, true, markup["resize_keyboard"])
-	assert.Equal(t, true, markup["one_time_keyboard"])
-	assert.Equal(t, true, markup["selective"])
-	keyboard := markup["keyboard"].([]any)
+	keyboard := markup["inline_keyboard"].([]any)
 	require.Len(t, keyboard, 3)
 	assert.Equal(t, "Generate it", keyboard[0].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:option:0", keyboard[0].([]any)[0].(map[string]any)["callback_data"])
 	assert.Equal(t, "Enter manually", keyboard[1].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:option:1", keyboard[1].([]any)[0].(map[string]any)["callback_data"])
 	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:cancel", keyboard[2].([]any)[0].(map[string]any)["callback_data"])
 }
 
 func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
@@ -1447,6 +1448,7 @@ func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.ApplyToContext(&outboundCtx)
+	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
 	_, err := ch.Send(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "What value should be used?",
@@ -1454,7 +1456,7 @@ func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
 	require.NoError(t, err)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
-	keyboard := payload["reply_markup"].(map[string]any)["keyboard"].([]any)
+	keyboard := payload["reply_markup"].(map[string]any)["inline_keyboard"].([]any)
 	require.Len(t, keyboard, 1)
 	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[0].([]any)[0].(map[string]any)["text"])
 }
@@ -3388,7 +3390,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			if test.seed {
 				ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
 					{chatID: -100123, senderID: "15"}: {
-						choices: map[string]struct{}{test.text: {}},
+						choices: []string{test.text},
 					},
 				}
 			}
@@ -3673,6 +3675,74 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 		"answer",
 		"15",
 	)
+	assert.Empty(t, response)
+}
+
+func TestTelegramInteractionReplyMetadataCarriesPromptIdentity(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "Allow once",
+		ReplyToMessage: &telego.Message{
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+			Text: "Choose an action\n`/answer abc12345 allow_once`\n`/answer abc12345 deny`",
+		},
+	}, "Allow once", "15")
+	assert.Equal(t, bus.InboundInteractionChoiceAllowOnce, reply.choice)
+	assert.Equal(t, "Allow once", reply.response)
+	assert.Equal(t, "abc12345", reply.shortID)
+}
+
+func TestTelegramInteractionShortIDRejectsConflictingPromptIdentity(t *testing.T) {
+	reply := &telego.Message{Text: "`/answer abc12345 allow_once`\n`/answer deadbeef deny`"}
+	assert.Empty(t, telegramInteractionShortID(reply))
+}
+
+func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	var published bus.InboundMessage
+	caller := &stubCaller{callFn: func(
+		context.Context, string, *ta.RequestData,
+	) (*ta.Response, error) {
+		select {
+		case published = <-messageBus.InboundChan():
+		default:
+			t.Fatal("callback was acknowledged before durable inbound publication")
+		}
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
+		{chatID: -100123, threadID: 1771, senderID: "15"}: {
+			shortID: "abc12345", choices: []string{"Generate it"},
+		},
+	}
+	repliedMessage := &telego.Message{
+		MessageID: 72, MessageThreadID: 1771,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup", IsForum: true},
+	}
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-1", From: telego.User{ID: 15, FirstName: "Eve"},
+		Message: repliedMessage, Data: "mc:i:abc12345:option:0",
+	}))
+	assert.Equal(t, "Generate it", published.Content)
+	assert.Equal(t, "callback-1", published.Context.MessageID)
+	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(t, "1771", published.Context.TopicID)
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+}
+
+func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
+	ch := &TelegramChannel{}
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		-100123,
+		1771,
+		"15",
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.False(t, resolved)
 	assert.Empty(t, response)
 }
 

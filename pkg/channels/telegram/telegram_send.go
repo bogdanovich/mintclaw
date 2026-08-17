@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -46,7 +47,7 @@ func (c *TelegramChannel) SendMessageResult(
 	}
 
 	isToolFeedback := outboundMessageIsToolFeedback(msg)
-	replyMarkup := telegramInteractionReplyMarkup(bus.OutboundMetadataFromMessage(msg))
+	replyMarkup := telegramInteractionReplyMarkup(msg)
 	textContent := msg.Content
 	if isToolFeedback {
 		textContent = fitToolFeedbackForTelegram(msg.Content, useMarkdownV2, 4096)
@@ -97,30 +98,34 @@ type sendChunkParams struct {
 	replyMarkup   telego.ReplyMarkup
 }
 
-func telegramInteractionReplyMarkup(metadata bus.OutboundMetadata) telego.ReplyMarkup {
+func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup {
+	metadata := bus.OutboundMetadataFromMessage(msg)
+	shortID := strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID])
+	if (metadata.IsApprovalPrompt() || metadata.IsQuestionPrompt()) && shortID == "" {
+		return nil
+	}
 	if metadata.IsApprovalPrompt() {
-		return &telego.ReplyKeyboardMarkup{
-			Keyboard: [][]telego.KeyboardButton{{
-				{Text: "Allow once"},
-				{Text: "Deny"},
+		return &telego.InlineKeyboardMarkup{
+			InlineKeyboard: [][]telego.InlineKeyboardButton{{
+				{Text: "Allow once", CallbackData: telegramInteractionCallback(shortID, "allow", -1)},
+				{Text: "Deny", CallbackData: telegramInteractionCallback(shortID, "deny", -1)},
 			}},
-			ResizeKeyboard:  true,
-			OneTimeKeyboard: true,
-			Selective:       true,
 		}
 	}
 	if metadata.IsQuestionPrompt() {
 		choices := metadata.InteractionChoices()
-		keyboard := make([][]telego.KeyboardButton, 0, len(choices)+1)
-		for _, choice := range choices {
-			keyboard = append(keyboard, []telego.KeyboardButton{{Text: choice}})
+		keyboard := make([][]telego.InlineKeyboardButton, 0, len(choices)+1)
+		for index, choice := range choices {
+			keyboard = append(keyboard, []telego.InlineKeyboardButton{{
+				Text: choice, CallbackData: telegramInteractionCallback(shortID, "option", index),
+			}})
 		}
-		keyboard = append(keyboard, []telego.KeyboardButton{{Text: bus.InboundInteractionCancelLabel}})
-		return &telego.ReplyKeyboardMarkup{
-			Keyboard:        keyboard,
-			ResizeKeyboard:  true,
-			OneTimeKeyboard: true,
-			Selective:       true,
+		keyboard = append(keyboard, []telego.InlineKeyboardButton{{
+			Text:         bus.InboundInteractionCancelLabel,
+			CallbackData: telegramInteractionCallback(shortID, "cancel", -1),
+		}})
+		return &telego.InlineKeyboardMarkup{
+			InlineKeyboard: keyboard,
 		}
 	}
 	if metadata.RemovesInteractionControls() {

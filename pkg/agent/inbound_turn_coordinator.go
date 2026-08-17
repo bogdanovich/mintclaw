@@ -65,7 +65,8 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
-	if c.routeExplicitInteractionAnswer(ctx, msg, target) {
+	if c.routeProjectedInteractionAnswer(ctx, msg, target) ||
+		c.routeExplicitInteractionAnswer(ctx, msg, target) {
 		return
 	}
 	if al.shouldHandleInteractionInbound(msg, target) {

@@ -92,6 +92,7 @@ const (
 	explicitInteractionAnswerUnauthorized explicitInteractionAnswerDisposition = "unauthorized"
 	explicitInteractionAnswerUnavailable  explicitInteractionAnswerDisposition = "unavailable"
 	explicitInteractionAnswerRetry        explicitInteractionAnswerDisposition = "retry"
+	explicitInteractionAnswerInvalid      explicitInteractionAnswerDisposition = "invalid"
 )
 
 type explicitInteractionAnswer struct {
@@ -121,6 +122,14 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
 	record, found := activeInteractionForSession(registry, target.SessionKey)
 	if !found || !interactionRouteAuthorizes(record.Route, target, msg.Context) {
+		return result, nil
+	}
+	projectedChoice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+	projectedShortID := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	if projectedChoice == bus.InboundInteractionChoiceCancel && projectedShortID == "" {
+		return result, nil
+	}
+	if projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
 		return result, nil
 	}
 	result.Matched = true
@@ -350,6 +359,127 @@ func (c *inboundTurnCoordinator) routeExplicitInteractionAnswer(
 	return true
 }
 
+func (al *AgentLoop) classifyInteractionAnswer(
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) (explicitInteractionAnswer, bool) {
+	if shortID, projected := projectedInteractionAnswer(msg); projected {
+		return al.classifyProjectedInteractionAnswer(msg, target, shortID), true
+	}
+	return al.classifyExplicitInteractionAnswer(msg, target)
+}
+
+func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) bool {
+	shortID, projected := projectedInteractionAnswer(msg)
+	if !projected {
+		return false
+	}
+	classification := c.al.classifyProjectedInteractionAnswer(msg, target, shortID)
+	responseError := strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
+	)
+	if responseError != "" && classification.Disposition == explicitInteractionAnswerActive {
+		logExplicitInteractionAnswerDisposition(
+			classification.Record,
+			msg,
+			explicitInteractionAnswerInvalid,
+		)
+		_ = c.al.settleInboundAdmission(
+			ctx,
+			msg,
+			finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+		)
+		return true
+	}
+	if classification.Disposition == explicitInteractionAnswerActive {
+		c.handleInteractionInbound(ctx, msg, target)
+		return true
+	}
+	if shortID != "" && (classification.Disposition == explicitInteractionAnswerRetry ||
+		classification.Disposition == explicitInteractionAnswerUnavailable) {
+		logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
+		c.al.releaseInboundMessage(
+			context.Background(),
+			msg,
+			fmt.Errorf("interaction answer identity is waiting for durable admission"),
+		)
+		return true
+	}
+	logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
+	_ = c.al.settleInboundAdmission(
+		ctx,
+		msg,
+		finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+	)
+	return true
+}
+
+func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
+	if len(msg.Context.Raw) == 0 {
+		return "", false
+	}
+	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
+	if choice == "" && response == "" && responseError == "" {
+		return "", false
+	}
+	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
+}
+
+func (al *AgentLoop) classifyProjectedInteractionAnswer(
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	shortID string,
+) explicitInteractionAnswer {
+	if al == nil || target == nil || target.Agent == nil || shortID == "" {
+		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
+	}
+	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
+	if registry == nil || registry.LastLoadError() != nil {
+		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
+	}
+	var unauthorizedMatch interactions.Record
+	for _, record := range registry.List() {
+		if !strings.EqualFold(shortID, record.ShortID) {
+			continue
+		}
+		if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
+			unauthorizedMatch = record
+			continue
+		}
+		if interactionInboundReplaysAnswer(record, msg.Context) {
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerReplay,
+			}
+		}
+		switch record.Status {
+		case interactions.StatusWaiting:
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerActive,
+			}
+		case interactions.StatusCreated:
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerRetry,
+			}
+		default:
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerDuplicate,
+			}
+		}
+	}
+	if unauthorizedMatch.ID != "" {
+		return explicitInteractionAnswer{
+			Record: unauthorizedMatch, Disposition: explicitInteractionAnswerUnauthorized,
+		}
+	}
+	return explicitInteractionAnswer{Disposition: explicitInteractionAnswerWrongID}
+}
+
 func (al *AgentLoop) classifyExplicitInteractionAnswer(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
@@ -497,8 +627,8 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 ) {
 	claim, _, claimed := c.claimSession(target)
 	if !claimed {
-		if _, _, explicit := splitExplicitInteractionAnswer(msg.Content); explicit {
-			go c.runContendedExplicitInteractionInbound(ctx, msg, target)
+		if _, interactionAnswer := c.al.classifyInteractionAnswer(msg, target); interactionAnswer {
+			go c.runContendedInteractionInbound(ctx, msg, target)
 			return
 		}
 		c.deferInteractionInbound(ctx, msg, target)
@@ -507,13 +637,13 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 	go c.runInteractionWorker(ctx, msg, target, claim)
 }
 
-func (c *inboundTurnCoordinator) runContendedExplicitInteractionInbound(
+func (c *inboundTurnCoordinator) runContendedInteractionInbound(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) {
 	for attempt := 0; attempt < interactionAnswerClaimAttempts; attempt++ {
-		classification, _ := c.al.classifyExplicitInteractionAnswer(msg, target)
+		classification, _ := c.al.classifyInteractionAnswer(msg, target)
 		if classification.Disposition != explicitInteractionAnswerActive {
 			c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
 			return
@@ -529,7 +659,7 @@ func (c *inboundTurnCoordinator) runContendedExplicitInteractionInbound(
 			return
 		}
 		if claim, _, claimed := c.claimSession(target); claimed {
-			current, _ := c.al.classifyExplicitInteractionAnswer(msg, target)
+			current, _ := c.al.classifyInteractionAnswer(msg, target)
 			if current.Disposition != explicitInteractionAnswerActive {
 				claim.releaseIfOwned()
 				c.consumeExplicitInteractionAnswer(ctx, msg, target, current)
@@ -547,7 +677,7 @@ func (c *inboundTurnCoordinator) runContendedExplicitInteractionInbound(
 		case <-timer.C:
 		}
 	}
-	classification, _ := c.al.classifyExplicitInteractionAnswer(msg, target)
+	classification, _ := c.al.classifyInteractionAnswer(msg, target)
 	if classification.Disposition == explicitInteractionAnswerActive {
 		if classification.Record.Status == interactions.StatusCreated ||
 			classification.Record.Status == interactions.StatusWaiting {

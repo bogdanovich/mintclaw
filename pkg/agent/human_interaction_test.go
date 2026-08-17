@@ -3821,6 +3821,10 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 			Content: "/answer " + record.ShortID + " второй", SpoolID: "spool-answer-wrong-topic",
 			Context: inboundContextForInteraction(request.Route),
 		},
+		{
+			Content: "Allow once", SpoolID: "spool-projected-answer-second",
+			Context: inboundContextForInteraction(request.Route),
+		},
 	}
 	contenders[0].SpoolID = "spool-answer-replay"
 	contenders[1].Context.MessageID = "answer-same"
@@ -3832,8 +3836,18 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	contenders[5].Context.ChatID = "chat-2"
 	contenders[6].Context.MessageID = "answer-wrong-topic"
 	contenders[6].Context.TopicID = "topic-2"
+	contenders[7].Context.MessageID = "projected-answer-second"
+	contenders[7].Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse: "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
 	for _, contender := range contenders {
-		if !coordinator.routeExplicitInteractionAnswer(t.Context(), contender, target) {
+		if _, projected := projectedInteractionAnswer(contender); projected {
+			if !coordinator.routeProjectedInteractionAnswer(t.Context(), contender, target) {
+				t.Fatalf("projected contender escaped protocol routing: %q", contender.Content)
+			}
+		} else if !coordinator.routeExplicitInteractionAnswer(t.Context(), contender, target) {
 			t.Fatalf("explicit contender escaped protocol routing: %q", contender.Content)
 		}
 	}
@@ -3927,10 +3941,17 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 	for _, test := range []struct {
 		name        string
 		markWaiting bool
+		projected   bool
+		unresolved  bool
+		consumed    bool
 		status      interactions.Status
 	}{
-		{name: "created_after_delivery", status: interactions.StatusCreated},
+		{name: "created_after_delivery", projected: true, status: interactions.StatusCreated},
 		{name: "waiting", markWaiting: true, status: interactions.StatusWaiting},
+		{
+			name: "unresolved_waiting_callback", markWaiting: true, projected: true,
+			unresolved: true, consumed: true, status: interactions.StatusWaiting,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
@@ -3969,24 +3990,40 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 				Context: inboundContextForInteraction(request.Route),
 			}
 			contender.Context.MessageID = "admission-contender-" + test.name
-			if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(
-				t.Context(),
-				contender,
-				target,
-			) {
-				t.Fatal("pre-admission contender escaped interaction protocol routing")
+			coordinator := newInboundTurnCoordinator(al)
+			if test.projected {
+				contender.Content = "Allow once"
+				contender.Context.Raw = map[string]string{
+					bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
+					bus.InboundMetadataKeyInteractionResponse: "Allow once",
+					bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+				}
+				if test.unresolved {
+					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionChoice)
+					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionResponse)
+					contender.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+				}
+				if !coordinator.routeProjectedInteractionAnswer(t.Context(), contender, target) {
+					t.Fatal("projected pre-admission contender escaped protocol routing")
+				}
+			} else if !coordinator.routeExplicitInteractionAnswer(t.Context(), contender, target) {
+				t.Fatal("explicit pre-admission contender escaped protocol routing")
 			}
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				acked, released := tracker.counts()
-				if released == 1 {
-					if acked != 0 {
-						t.Fatalf("contender was acknowledged before a durable claim: %d", acked)
-					}
+				if test.consumed && acked == 1 && released == 0 {
+					break
+				}
+				if !test.consumed && released == 1 && acked == 0 {
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatal("timed out waiting for contended answer transport release")
+					t.Fatalf(
+						"timed out waiting for answer ownership: acked=%d released=%d",
+						acked,
+						released,
+					)
 				}
 				time.Sleep(time.Millisecond)
 			}
@@ -4062,8 +4099,23 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), replay, target) {
 		t.Fatal("retained replay escaped interaction protocol routing")
 	}
+	staleButton := bus.InboundMessage{
+		Content: bus.InboundInteractionCancelLabel, SpoolID: "spool-retained-stale-button",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	staleButton.Context.MessageID = "later-button-message"
+	staleButton.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:  bus.InboundInteractionChoiceCancel,
+		bus.InboundMetadataKeyInteractionShortID: first.ShortID,
+	}
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), staleButton)
+	identitylessCancel := staleButton
+	identitylessCancel.SpoolID = "spool-retained-identityless-cancel"
+	identitylessCancel.Context.MessageID = "identityless-cancel"
+	delete(identitylessCancel.Context.Raw, bus.InboundMetadataKeyInteractionShortID)
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), identitylessCancel)
 	acked, released := tracker.counts()
-	if acked != 1 || released != 0 {
+	if acked != 3 || released != 0 {
 		t.Fatalf("retained replay ownership = acked:%d released:%d", acked, released)
 	}
 	second, _ = registry.Get(second.ID)
@@ -4088,7 +4140,7 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	}
 }
 
-func TestReloadedClaimedInteractionRejectsLosingExplicitAnswer(t *testing.T) {
+func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
@@ -4127,11 +4179,16 @@ func TestReloadedClaimedInteractionRejectsLosingExplicitAnswer(t *testing.T) {
 		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 	}
 	loser := bus.InboundMessage{
-		Content: "/answer " + record.ShortID + " второй", SpoolID: "spool-reloaded-loser",
+		Content: "Allow once", SpoolID: "spool-reloaded-loser",
 		Context: inboundContextForInteraction(request.Route),
 	}
 	loser.Context.MessageID = "answer-second"
-	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), loser, target) {
+	loser.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse: "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), loser, target) {
 		t.Fatal("reloaded losing answer escaped interaction protocol routing")
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -5199,7 +5256,8 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 			},
 		},
 	})
-	_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
 
 	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
 	if err != nil {
@@ -5261,6 +5319,7 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		},
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
 
