@@ -4109,8 +4109,13 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 		bus.InboundMetadataKeyInteractionShortID: first.ShortID,
 	}
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), staleButton)
+	identitylessCancel := staleButton
+	identitylessCancel.SpoolID = "spool-retained-identityless-cancel"
+	identitylessCancel.Context.MessageID = "identityless-cancel"
+	delete(identitylessCancel.Context.Raw, bus.InboundMetadataKeyInteractionShortID)
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), identitylessCancel)
 	acked, released := tracker.counts()
-	if acked != 2 || released != 0 {
+	if acked != 3 || released != 0 {
 		t.Fatalf("retained replay ownership = acked:%d released:%d", acked, released)
 	}
 	second, _ = registry.Get(second.ID)
@@ -5251,7 +5256,8 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 			},
 		},
 	})
-	_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
 
 	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
 	if err != nil {
@@ -5313,6 +5319,7 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		},
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
 

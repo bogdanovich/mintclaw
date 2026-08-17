@@ -124,9 +124,12 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	if !found || !interactionRouteAuthorizes(record.Route, target, msg.Context) {
 		return result, nil
 	}
-	if projectedShortID := strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID],
-	); projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
+	projectedChoice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+	projectedShortID := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	if projectedChoice == bus.InboundInteractionChoiceCancel && projectedShortID == "" {
+		return result, nil
+	}
+	if projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
 		return result, nil
 	}
 	result.Matched = true
