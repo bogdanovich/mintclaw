@@ -42,6 +42,37 @@ type blockingInteractionProvider struct {
 	messages [][]providers.Message
 }
 
+type interactionDrainProvider struct {
+	secondStarted chan struct{}
+	secondRelease chan struct{}
+	mu            sync.Mutex
+	calls         int
+}
+
+func (p *interactionDrainProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 2 {
+		close(p.secondStarted)
+		select {
+		case <-p.secondRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &providers.LLMResponse{Content: "interaction drain complete", FinishReason: "stop"}, nil
+}
+
+func (*interactionDrainProvider) GetDefaultModel() string { return "interaction-drain-model" }
+
 func newBlockingInteractionProvider() *blockingInteractionProvider {
 	return &blockingInteractionProvider{
 		started: make(chan struct{}, 1),
@@ -5732,7 +5763,9 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 }
 
 func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testing.T) {
-	provider := &simpleConvProvider{}
+	provider := &interactionDrainProvider{
+		secondStarted: make(chan struct{}), secondRelease: make(chan struct{}),
+	}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	al.channelManager = newInteractionChannelManager()
@@ -5774,7 +5807,7 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 		RouteClaimKey: runtimeRouteClaimKey(request.Route.RouteSessionKey, ""),
 		Allocation:    session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 	}
-	claim, claimed := al.claimRuntimeSession(scope, "pending-interaction-drain")
+	claim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-drain")
 	if !claimed {
 		t.Fatal("failed to claim interaction session")
 	}
@@ -5783,7 +5816,29 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 	}
 	answer.Context.MessageID = "answer-drain"
 
-	newInboundTurnCoordinator(al).runInteractionWorker(t.Context(), answer, target, claim)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		newInboundTurnCoordinator(al).runInteractionWorker(t.Context(), answer, target, claim)
+	}()
+	select {
+	case <-provider.secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deferred continuation")
+	}
+	if contender, _, contenderClaimed := al.claimRuntimeRouteSession(
+		target,
+		"newer-inbound-during-drain",
+	); contenderClaimed {
+		contender.releaseIfOwned()
+		t.Fatal("newer inbound claimed the route during deferred drain")
+	}
+	close(provider.secondRelease)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for interaction drain")
+	}
 
 	if active := al.GetActiveTurnByScope(agent.Workspace, sessionKey); active != nil {
 		t.Fatalf("interaction drain left active turn: %#v", active)
