@@ -12,6 +12,10 @@ const InboundMetadataKeyInteractionResponse = "interaction_response"
 // the exact interaction prompt that produced its controls.
 const InboundMetadataKeyInteractionShortID = "interaction_short_id"
 
+// InboundMetadataKeyInteractionResponseError marks a channel-projected
+// interaction response that could not be resolved to a valid answer.
+const InboundMetadataKeyInteractionResponseError = "interaction_response_error"
+
 const (
 	InboundInteractionChoiceAllowOnce = "allow_once"
 	InboundInteractionChoiceDeny      = "deny"

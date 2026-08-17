@@ -3698,12 +3698,18 @@ func TestTelegramInteractionShortIDRejectsConflictingPromptIdentity(t *testing.T
 }
 
 func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	var published bus.InboundMessage
 	caller := &stubCaller{callFn: func(
 		context.Context, string, *ta.RequestData,
 	) (*ta.Response, error) {
+		select {
+		case published = <-messageBus.InboundChan():
+		default:
+			t.Fatal("callback was acknowledged before durable inbound publication")
+		}
 		return successResponse(t), nil
 	}}
-	messageBus := bus.NewMessageBus()
 	ch := newTestChannel(t, caller)
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
 	ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
@@ -3719,18 +3725,25 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 		ID: "callback-1", From: telego.User{ID: 15, FirstName: "Eve"},
 		Message: repliedMessage, Data: "mc:i:abc12345:option:0",
 	}))
-	select {
-	case inbound := <-messageBus.InboundChan():
-		assert.Equal(t, "Generate it", inbound.Content)
-		assert.Equal(t, "callback-1", inbound.Context.MessageID)
-		assert.Equal(t, "abc12345", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
-		assert.Equal(t, "Generate it", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
-		assert.Equal(t, "1771", inbound.Context.TopicID)
-	case <-time.After(time.Second):
-		t.Fatal("callback answer was not published")
-	}
+	assert.Equal(t, "Generate it", published.Content)
+	assert.Equal(t, "callback-1", published.Context.MessageID)
+	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(t, "1771", published.Context.TopicID)
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+}
+
+func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
+	ch := &TelegramChannel{}
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		-100123,
+		1771,
+		"15",
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.False(t, resolved)
+	assert.Empty(t, response)
 }
 
 func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {

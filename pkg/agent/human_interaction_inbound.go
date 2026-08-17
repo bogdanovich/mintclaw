@@ -92,6 +92,7 @@ const (
 	explicitInteractionAnswerUnauthorized explicitInteractionAnswerDisposition = "unauthorized"
 	explicitInteractionAnswerUnavailable  explicitInteractionAnswerDisposition = "unavailable"
 	explicitInteractionAnswerRetry        explicitInteractionAnswerDisposition = "retry"
+	explicitInteractionAnswerInvalid      explicitInteractionAnswerDisposition = "invalid"
 )
 
 type explicitInteractionAnswer struct {
@@ -121,6 +122,11 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
 	record, found := activeInteractionForSession(registry, target.SessionKey)
 	if !found || !interactionRouteAuthorizes(record.Route, target, msg.Context) {
+		return result, nil
+	}
+	if projectedShortID := strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID],
+	); projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
 		return result, nil
 	}
 	result.Matched = true
@@ -370,6 +376,22 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		return false
 	}
 	classification := c.al.classifyProjectedInteractionAnswer(msg, target, shortID)
+	responseError := strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
+	)
+	if responseError != "" && classification.Disposition == explicitInteractionAnswerActive {
+		logExplicitInteractionAnswerDisposition(
+			classification.Record,
+			msg,
+			explicitInteractionAnswerInvalid,
+		)
+		_ = c.al.settleInboundAdmission(
+			ctx,
+			msg,
+			finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+		)
+		return true
+	}
 	if classification.Disposition == explicitInteractionAnswerActive {
 		c.handleInteractionInbound(ctx, msg, target)
 		return true
@@ -399,7 +421,8 @@ func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
 	}
 	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
 	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
-	if choice == "" && response == "" {
+	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
+	if choice == "" && response == "" && responseError == "" {
 		return "", false
 	}
 	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true

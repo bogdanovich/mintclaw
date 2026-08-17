@@ -3942,10 +3942,16 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 		name        string
 		markWaiting bool
 		projected   bool
+		unresolved  bool
+		consumed    bool
 		status      interactions.Status
 	}{
 		{name: "created_after_delivery", projected: true, status: interactions.StatusCreated},
 		{name: "waiting", markWaiting: true, status: interactions.StatusWaiting},
+		{
+			name: "unresolved_waiting_callback", markWaiting: true, projected: true,
+			unresolved: true, consumed: true, status: interactions.StatusWaiting,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
@@ -3992,6 +3998,11 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 					bus.InboundMetadataKeyInteractionResponse: "Allow once",
 					bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
 				}
+				if test.unresolved {
+					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionChoice)
+					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionResponse)
+					contender.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+				}
 				if !coordinator.routeProjectedInteractionAnswer(t.Context(), contender, target) {
 					t.Fatal("projected pre-admission contender escaped protocol routing")
 				}
@@ -4001,14 +4012,18 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				acked, released := tracker.counts()
-				if released == 1 {
-					if acked != 0 {
-						t.Fatalf("contender was acknowledged before a durable claim: %d", acked)
-					}
+				if test.consumed && acked == 1 && released == 0 {
+					break
+				}
+				if !test.consumed && released == 1 && acked == 0 {
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatal("timed out waiting for contended answer transport release")
+					t.Fatalf(
+						"timed out waiting for answer ownership: acked=%d released=%d",
+						acked,
+						released,
+					)
 				}
 				time.Sleep(time.Millisecond)
 			}
@@ -4085,20 +4100,15 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 		t.Fatal("retained replay escaped interaction protocol routing")
 	}
 	staleButton := bus.InboundMessage{
-		Content: "Allow once", SpoolID: "spool-retained-stale-button",
+		Content: bus.InboundInteractionCancelLabel, SpoolID: "spool-retained-stale-button",
 		Context: inboundContextForInteraction(request.Route),
 	}
 	staleButton.Context.MessageID = "later-button-message"
 	staleButton.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse: "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:  first.ShortID,
+		bus.InboundMetadataKeyInteractionChoice:  bus.InboundInteractionChoiceCancel,
+		bus.InboundMetadataKeyInteractionShortID: first.ShortID,
 	}
-	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
-		t.Context(), staleButton, target,
-	) {
-		t.Fatal("stale projected button escaped interaction protocol routing")
-	}
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), staleButton)
 	acked, released := tracker.counts()
 	if acked != 2 || released != 0 {
 		t.Fatalf("retained replay ownership = acked:%d released:%d", acked, released)

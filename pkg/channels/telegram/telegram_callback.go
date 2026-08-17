@@ -79,7 +79,7 @@ func (c *TelegramChannel) handleInteractionCallback(
 		return nil
 	}
 
-	content, choice, response := c.resolveInteractionCallback(
+	content, choice, response, resolved := c.resolveInteractionCallback(
 		message.Chat.ID,
 		message.MessageThreadID,
 		platformID,
@@ -97,6 +97,9 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if response != "" {
 		metadata[bus.InboundMetadataKeyInteractionResponse] = response
 	}
+	if !resolved {
+		metadata[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+	}
 	chatID := strconv.FormatInt(message.Chat.ID, 10)
 	if message.Chat.IsForum && message.MessageThreadID != 0 {
 		chatID += "/" + strconv.Itoa(message.MessageThreadID)
@@ -113,6 +116,12 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if message.MessageThreadID != 0 {
 		inbound.TopicID = strconv.Itoa(message.MessageThreadID)
 	}
+	c.chatIDsMu.Lock()
+	c.chatIDs[platformID] = message.Chat.ID
+	c.chatIDsMu.Unlock()
+	if err := c.HandleMessageWithContext(ctx, chatID, content, nil, inbound, sender); err != nil {
+		return err
+	}
 	if err := c.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: query.ID,
 	}); err != nil {
@@ -120,10 +129,6 @@ func (c *TelegramChannel) handleInteractionCallback(
 			"callback_query_id": query.ID, "error": err.Error(),
 		})
 	}
-	c.chatIDsMu.Lock()
-	c.chatIDs[platformID] = message.Chat.ID
-	c.chatIDsMu.Unlock()
-	_ = c.HandleMessageWithContext(ctx, chatID, content, nil, inbound, sender)
 	return nil
 }
 
@@ -132,14 +137,14 @@ func (c *TelegramChannel) resolveInteractionCallback(
 	threadID int,
 	senderID string,
 	callback telegramInteractionCallbackData,
-) (content, choice, response string) {
+) (content, choice, response string, resolved bool) {
 	switch callback.action {
 	case "allow":
-		return "Allow once", bus.InboundInteractionChoiceAllowOnce, "Allow once"
+		return "Allow once", bus.InboundInteractionChoiceAllowOnce, "Allow once", true
 	case "deny":
-		return "Deny", bus.InboundInteractionChoiceDeny, "Deny"
+		return "Deny", bus.InboundInteractionChoiceDeny, "Deny", true
 	case "cancel":
-		return bus.InboundInteractionCancelLabel, bus.InboundInteractionChoiceCancel, ""
+		return bus.InboundInteractionCancelLabel, bus.InboundInteractionChoiceCancel, "", true
 	case "option":
 		key := telegramQuestionControlKey{chatID: chatID, threadID: threadID, senderID: senderID}
 		c.questionControlsMu.RLock()
@@ -148,10 +153,10 @@ func (c *TelegramChannel) resolveInteractionCallback(
 		if active && controls.shortID == callback.shortID &&
 			callback.index >= 0 && callback.index < len(controls.choices) {
 			response = controls.choices[callback.index]
-			return response, "", response
+			return response, "", response, true
 		}
-		return fmt.Sprintf("Interaction option %d", callback.index+1), "", "stale option"
+		return fmt.Sprintf("Interaction option %d", callback.index+1), "", "", false
 	default:
-		return "Interaction response", "", "invalid interaction response"
+		return "Interaction response", "", "", false
 	}
 }
