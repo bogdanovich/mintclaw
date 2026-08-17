@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -14,6 +15,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
+
+const defaultTelegramEditRequestTimeout = 10 * time.Second
 
 // EditMessage implements channels.MessageEditor.
 func (c *TelegramChannel) EditMessage(
@@ -41,6 +44,14 @@ func (c *TelegramChannel) editMessageText(
 	content string,
 	useRichMessages bool,
 ) error {
+	timeout := c.editRequestTimeout
+	if timeout <= 0 {
+		timeout = defaultTelegramEditRequestTimeout
+	}
+	requestCtx, requestCancel := context.WithTimeout(ctx, timeout)
+	defer requestCancel()
+	ctx = requestCtx
+
 	useMarkdownV2 := c.tgCfg.UseMarkdownV2
 	cid, _, err := parseTelegramChatID(chatID)
 	if err != nil {

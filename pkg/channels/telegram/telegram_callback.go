@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 
@@ -14,6 +15,8 @@ import (
 )
 
 const telegramInteractionCallbackPrefix = "mc:i:"
+
+const defaultTelegramInteractionUITimeout = 3 * time.Second
 
 type telegramInteractionCallbackData struct {
 	shortID string
@@ -122,14 +125,46 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if err := c.HandleMessageWithContext(ctx, chatID, content, nil, inbound, sender); err != nil {
 		return err
 	}
-	if err := c.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
-		CallbackQueryID: query.ID,
+	c.settleInteractionCallbackUI(ctx, message, query.ID, platformID, callback.shortID)
+	return nil
+}
+
+func (c *TelegramChannel) settleInteractionCallbackUI(
+	ctx context.Context,
+	message *telego.Message,
+	callbackQueryID string,
+	senderID string,
+	shortID string,
+) {
+	timeout := c.interactionUITimeout
+	if timeout <= 0 {
+		timeout = defaultTelegramInteractionUITimeout
+	}
+	uiCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := c.bot.AnswerCallbackQuery(uiCtx, &telego.AnswerCallbackQueryParams{
+		CallbackQueryID: callbackQueryID,
 	}); err != nil {
 		logger.WarnCF("telegram", "Failed to acknowledge interaction callback", map[string]any{
-			"callback_query_id": query.ID, "error": err.Error(),
+			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 	}
-	return nil
+	if !c.interactionControlsMatch(
+		message.Chat.ID, message.MessageThreadID, senderID, shortID,
+	) || uiCtx.Err() != nil {
+		return
+	}
+	_, err := c.bot.EditMessageReplyMarkup(uiCtx, &telego.EditMessageReplyMarkupParams{
+		ChatID: telego.ChatID{ID: message.Chat.ID}, MessageID: message.MessageID,
+		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
+	})
+	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+		logger.WarnCF("telegram", "Failed to remove interaction callback controls", map[string]any{
+			"callback_query_id": callbackQueryID, "error": err.Error(),
+		})
+		return
+	}
+	c.removeInteractionControls(message.Chat.ID, message.MessageThreadID, senderID, shortID)
 }
 
 func (c *TelegramChannel) resolveInteractionCallback(
@@ -146,10 +181,10 @@ func (c *TelegramChannel) resolveInteractionCallback(
 	case "cancel":
 		return bus.InboundInteractionCancelLabel, bus.InboundInteractionChoiceCancel, "", true
 	case "option":
-		key := telegramQuestionControlKey{chatID: chatID, threadID: threadID, senderID: senderID}
-		c.questionControlsMu.RLock()
-		controls, active := c.questionControls[key]
-		c.questionControlsMu.RUnlock()
+		key := telegramInteractionControlKey{chatID: chatID, threadID: threadID, senderID: senderID}
+		c.interactionControlsMu.RLock()
+		controls, active := c.interactionControls[key]
+		c.interactionControlsMu.RUnlock()
 		if active && controls.shortID == callback.shortID &&
 			callback.index >= 0 && callback.index < len(controls.choices) {
 			response = controls.choices[callback.index]

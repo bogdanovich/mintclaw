@@ -65,8 +65,10 @@ type TelegramChannel struct {
 	mediaGroups     map[string]*telegramMediaGroup
 	mediaGroupDelay time.Duration
 
-	questionControlsMu sync.RWMutex
-	questionControls   map[telegramQuestionControlKey]telegramQuestionControls
+	interactionControlsMu sync.RWMutex
+	interactionControls   map[telegramInteractionControlKey]telegramInteractionControls
+	editRequestTimeout    time.Duration
+	interactionUITimeout  time.Duration
 }
 
 type telegramMediaGroup struct {

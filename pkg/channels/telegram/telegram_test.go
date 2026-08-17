@@ -1622,6 +1622,24 @@ func TestEditMessage_LegacyHTMLUsesHTMLParseMode(t *testing.T) {
 	assert.Empty(t, payload["rich_message"])
 }
 
+func TestEditMessageHasChannelOwnedTotalTimeout(t *testing.T) {
+	caller := &stubCaller{callFn: func(
+		ctx context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	ch := newTestChannel(t, caller)
+	ch.editRequestTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	err := ch.EditMessage(context.Background(), "12345", "1", "bounded edit")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 250*time.Millisecond)
+	require.Len(t, caller.calls, 1)
+}
+
 func TestSend_FinalReplyUsesTransportSend(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -3388,7 +3406,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 				chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
 			}
 			if test.seed {
-				ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
+				ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 					{chatID: -100123, senderID: "15"}: {
 						choices: []string{test.text},
 					},
@@ -3483,7 +3501,7 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 		),
 		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
 		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
-		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
 			{chatID: -100123, senderID: "15"}: {},
 		},
 	}
@@ -3504,14 +3522,14 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 	}
 }
 
-func TestQuestionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *testing.T) {
+func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *testing.T) {
 	ch := &TelegramChannel{}
 	ctx := bus.InboundContext{SenderID: "15"}
 	bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
-	ch.updateQuestionControls(bus.OutboundMessage{Context: ctx}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx}, -100123, 1771)
 	message := &telego.Message{
 		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
 	}
@@ -3525,7 +3543,7 @@ func TestQuestionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *test
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
 	}.ApplyToContext(&removeCtx)
-	ch.updateQuestionControls(bus.OutboundMessage{Context: removeCtx}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: removeCtx}, -100123, 1771)
 	_, response = ch.telegramInteractionMetadata(message, message.Text, "15")
 	assert.Empty(t, response)
 }
@@ -3581,10 +3599,25 @@ func TestSyncInteractionControlsTracksFreeTextQuestionWithoutChoices(t *testing.
 	assert.Empty(t, response)
 }
 
+func TestSyncInteractionControlsTracksApprovalIdentity(t *testing.T) {
+	ch := &TelegramChannel{}
+	ctx := bus.InboundContext{SenderID: "15", Raw: map[string]string{
+		bus.OutboundMetadataKeyInteractionShortID: "abc12345",
+	}}
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionApproval,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&ctx)
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
+	}))
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
+}
+
 func TestTelegramInteractionMetadataRejectsUntrustedOrArbitraryControls(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
-		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
 			{chatID: 999, senderID: "15"}: {},
 		},
 	}
@@ -3651,7 +3684,7 @@ func TestTelegramInteractionMetadataRejectsUntrustedOrArbitraryControls(t *testi
 func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
-		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
 			{chatID: 999, senderID: "15"}: {},
 		},
 	}
@@ -3700,19 +3733,23 @@ func TestTelegramInteractionShortIDRejectsConflictingPromptIdentity(t *testing.T
 func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	var published bus.InboundMessage
+	apiCalls := 0
 	caller := &stubCaller{callFn: func(
-		context.Context, string, *ta.RequestData,
+		_ context.Context, _ string, _ *ta.RequestData,
 	) (*ta.Response, error) {
-		select {
-		case published = <-messageBus.InboundChan():
-		default:
-			t.Fatal("callback was acknowledged before durable inbound publication")
+		apiCalls++
+		if apiCalls == 1 {
+			select {
+			case published = <-messageBus.InboundChan():
+			default:
+				t.Fatal("callback was acknowledged before durable inbound publication")
+			}
 		}
 		return successResponse(t), nil
 	}}
 	ch := newTestChannel(t, caller)
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
-	ch.questionControls = map[telegramQuestionControlKey]telegramQuestionControls{
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: -100123, threadID: 1771, senderID: "15"}: {
 			shortID: "abc12345", choices: []string{"Generate it"},
 		},
@@ -3730,8 +3767,37 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
 	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 	assert.Equal(t, "1771", published.Context.TopicID)
-	require.Len(t, caller.calls, 1)
+	require.Len(t, caller.calls, 2)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
+	assert.False(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
+}
+
+func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		ctx context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	ch.interactionUITimeout = 20 * time.Millisecond
+	message := &telego.Message{MessageID: 72, Chat: telego.Chat{ID: 12345, Type: "private"}}
+
+	started := time.Now()
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-timeout", From: telego.User{ID: 15}, Message: message,
+		Data: "mc:i:abc12345:allow",
+	}))
+	assert.Less(t, time.Since(started), 250*time.Millisecond)
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "callback-timeout", inbound.Context.MessageID)
+	case <-time.After(time.Second):
+		t.Fatal("bounded callback UI lost durable inbound publication")
+	}
 }
 
 func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
@@ -3755,7 +3821,7 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 		bot:         newTestTelegramBot(t, "mintclaw_bot"),
 		selfID:      42,
 		selfName:    "mintclaw_bot",
-		questionControls: map[telegramQuestionControlKey]telegramQuestionControls{
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
 			{chatID: 999, senderID: "15"}: {},
 		},
 	}

@@ -65,7 +65,7 @@ func (c *TelegramChannel) SendMessageResult(
 		replyMarkup:   replyMarkup,
 	}, c.richMessagesEnabled(useMarkdownV2) && !isToolFeedback && replyMarkup == nil, isToolFeedback)
 	if result.Delivered() {
-		c.updateQuestionControls(msg, chatID, threadID)
+		c.updateInteractionControls(msg, chatID, threadID)
 	}
 	var remaining []bus.OutboundMessage
 	if result.Remaining != nil {
