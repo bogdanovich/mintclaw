@@ -5731,6 +5731,77 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	}
 }
 
+func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testing.T) {
+	provider := &simpleConvProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+
+	sessionKey := "session-interaction-drain"
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-drain-question", Name: "request_user_input",
+			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+		}},
+	})
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = sessionKey
+	request.Origin.ToolCallID = "call-drain-question"
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
+	const followUp = "Check the deployment after approval."
+	if err = al.enqueueSteeringMessageWithSender(scope, agent.ID, "user-1", providers.Message{
+		Role: "user", Content: followUp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: sessionKey,
+		RouteClaimKey: runtimeRouteClaimKey(request.Route.RouteSessionKey, ""),
+		Allocation:    session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	claim, claimed := al.claimRuntimeSession(scope, "pending-interaction-drain")
+	if !claimed {
+		t.Fatal("failed to claim interaction session")
+	}
+	answer := bus.InboundMessage{
+		Content: "Canary", Context: inboundContextForInteraction(request.Route),
+	}
+	answer.Context.MessageID = "answer-drain"
+
+	newInboundTurnCoordinator(al).runInteractionWorker(t.Context(), answer, target, claim)
+
+	if active := al.GetActiveTurnByScope(agent.Workspace, sessionKey); active != nil {
+		t.Fatalf("interaction drain left active turn: %#v", active)
+	}
+	if got := al.pendingSteeringCountForScope(scope); got != 0 {
+		t.Fatalf("deferred queue depth = %d, want 0", got)
+	}
+	followUps := 0
+	for _, message := range agent.Sessions.GetHistory(sessionKey) {
+		if message.Role == "user" && strings.Contains(message.Content, followUp) {
+			followUps++
+		}
+	}
+	if followUps != 1 {
+		t.Fatalf("deferred follow-up history entries = %d, want 1", followUps)
+	}
+}
+
 func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testing.T) {
 	provider := &simpleConvProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)

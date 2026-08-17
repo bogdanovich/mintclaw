@@ -610,6 +610,9 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 	if c.al.hasNonterminalInteraction(target.Agent.Workspace, target.SessionKey) {
 		return
 	}
+	// Continuation must reacquire the route session. Release the interaction
+	// worker's claim before draining messages that arrived while it was active.
+	claim.releaseIfOwned()
 	if err := c.al.drainDeferredInteractionIngress(ctx, target.Agent.Workspace, interactions.Route{
 		SessionKey: target.SessionKey,
 		Channel:    msg.Channel,
