@@ -5722,6 +5722,54 @@ func TestRecoveryRestoresWaitingQuestionControlsWithoutRepublishingPrompt(t *tes
 	}
 }
 
+func TestRecoveryRestoresWaitingApprovalControlsWithoutRepublishingPrompt(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Prompt.Kind = interactions.KindApproval
+	request.Prompt.Questions = nil
+	request.Origin.ArgumentHash = strings.Repeat("a", 64)
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		ApprovalAction: "Run the protected action", ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 0 durable transitions", recovered)
+	}
+	select {
+	case synced := <-manager.synced:
+		metadata := bus.OutboundMetadataFromMessage(synced)
+		if synced.Channel != "telegram" || synced.Context.SenderID != "user-1" ||
+			!metadata.IsApprovalPrompt() {
+			t.Fatalf("synced approval controls = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting approval controls were not restored")
+	}
+	select {
+	case duplicate := <-manager.sent:
+		t.Fatalf("recovery republished prompt: %#v", duplicate)
+	default:
+	}
+}
+
 func TestDeferredInteractionIngressQueuesWithoutChangingHistory(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

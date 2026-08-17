@@ -129,7 +129,8 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 }
 
 func (al *AgentLoop) syncInteractionControls(workspace string, record interactions.Record, controls string) {
-	if record.Kind != interactions.KindQuestion || al.channelManager == nil {
+	if (record.Kind != interactions.KindQuestion && record.Kind != interactions.KindApproval) ||
+		al.channelManager == nil {
 		return
 	}
 	syncer, ok := al.channelManager.(interactionControlSyncManager)
@@ -137,8 +138,12 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 		return
 	}
 	message := interactionPromptMessage(record)
+	interactionKind := bus.OutboundInteractionQuestion
+	if record.Kind == interactions.KindApproval {
+		interactionKind = bus.OutboundInteractionApproval
+	}
 	bus.OutboundMetadata{
-		InteractionKind:     bus.OutboundInteractionQuestion,
+		InteractionKind:     interactionKind,
 		InteractionControls: controls,
 	}.ApplyToContext(&message.Context)
 	if err := syncer.SyncInteractionControls(message); err != nil {

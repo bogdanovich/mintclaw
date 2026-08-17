@@ -9,14 +9,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 )
 
-type telegramQuestionControlKey struct {
+type telegramInteractionControlKey struct {
 	chatID   int64
 	threadID int
 	senderID string
 }
 
-type telegramQuestionControls struct {
+type telegramInteractionControls struct {
 	shortID string
+	kind    string
 	choices []string
 }
 
@@ -26,40 +27,42 @@ type telegramInteractionReply struct {
 	shortID  string
 }
 
-func (c *TelegramChannel) updateQuestionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
+func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
 	metadata := bus.OutboundMetadataFromMessage(msg)
-	if !metadata.IsQuestionPrompt() && !metadata.RemovesInteractionControls() {
+	if !metadata.IsQuestionPrompt() && !metadata.IsApprovalPrompt() &&
+		!metadata.RemovesInteractionControls() {
 		return
 	}
-	key := telegramQuestionControlKey{
+	key := telegramInteractionControlKey{
 		chatID: chatID, threadID: threadID, senderID: strings.TrimSpace(msg.Context.SenderID),
 	}
 	if key.senderID == "" {
 		return
 	}
-	c.questionControlsMu.Lock()
-	defer c.questionControlsMu.Unlock()
+	c.interactionControlsMu.Lock()
+	defer c.interactionControlsMu.Unlock()
 	if metadata.RemovesInteractionControls() {
-		delete(c.questionControls, key)
+		delete(c.interactionControls, key)
 		return
 	}
-	if c.questionControls == nil {
-		c.questionControls = make(map[telegramQuestionControlKey]telegramQuestionControls)
+	if c.interactionControls == nil {
+		c.interactionControls = make(map[telegramInteractionControlKey]telegramInteractionControls)
 	}
-	c.questionControls[key] = telegramQuestionControls{
+	c.interactionControls[key] = telegramInteractionControls{
 		shortID: strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID]),
+		kind:    metadata.InteractionKind,
 		choices: metadata.InteractionChoices(),
 	}
 }
 
-// SyncInteractionControls projects durable question routing state without
+// SyncInteractionControls projects durable interaction routing state without
 // delivering a Telegram message.
 func (c *TelegramChannel) SyncInteractionControls(msg bus.OutboundMessage) error {
 	chatID, threadID, err := resolveTelegramOutboundTarget(msg.ChatID, &msg.Context)
 	if err != nil {
 		return err
 	}
-	c.updateQuestionControls(msg, chatID, threadID)
+	c.updateInteractionControls(msg, chatID, threadID)
 	return nil
 }
 
@@ -72,8 +75,8 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 		return telegramInteractionReply{}
 	}
 	shortID := telegramInteractionShortID(message.ReplyToMessage)
-	controls, questionActive := c.activeQuestionControls(message, senderID)
-	if questionActive {
+	controls, controlsActive := c.activeInteractionControls(message, senderID)
+	if controlsActive && controls.kind == bus.OutboundInteractionQuestion {
 		if message.Text == bus.InboundInteractionCancelLabel {
 			return telegramInteractionReply{
 				choice: bus.InboundInteractionChoiceCancel, shortID: shortID,
@@ -136,18 +139,49 @@ func telegramInteractionShortID(reply *telego.Message) string {
 	return shortID
 }
 
-func (c *TelegramChannel) activeQuestionControls(
+func (c *TelegramChannel) activeInteractionControls(
 	message *telego.Message,
 	senderID string,
-) (telegramQuestionControls, bool) {
+) (telegramInteractionControls, bool) {
 	if c == nil || message == nil {
-		return telegramQuestionControls{}, false
+		return telegramInteractionControls{}, false
 	}
-	key := telegramQuestionControlKey{
+	key := telegramInteractionControlKey{
 		chatID: message.Chat.ID, threadID: message.MessageThreadID, senderID: strings.TrimSpace(senderID),
 	}
-	c.questionControlsMu.RLock()
-	controls, active := c.questionControls[key]
-	c.questionControlsMu.RUnlock()
+	c.interactionControlsMu.RLock()
+	controls, active := c.interactionControls[key]
+	c.interactionControlsMu.RUnlock()
 	return controls, active
+}
+
+func (c *TelegramChannel) interactionControlsMatch(
+	chatID int64,
+	threadID int,
+	senderID string,
+	shortID string,
+) bool {
+	key := telegramInteractionControlKey{
+		chatID: chatID, threadID: threadID, senderID: strings.TrimSpace(senderID),
+	}
+	c.interactionControlsMu.RLock()
+	controls, active := c.interactionControls[key]
+	c.interactionControlsMu.RUnlock()
+	return active && shortID != "" && controls.shortID == shortID
+}
+
+func (c *TelegramChannel) removeInteractionControls(
+	chatID int64,
+	threadID int,
+	senderID string,
+	shortID string,
+) {
+	key := telegramInteractionControlKey{
+		chatID: chatID, threadID: threadID, senderID: strings.TrimSpace(senderID),
+	}
+	c.interactionControlsMu.Lock()
+	if controls, active := c.interactionControls[key]; active && controls.shortID == shortID {
+		delete(c.interactionControls, key)
+	}
+	c.interactionControlsMu.Unlock()
 }
