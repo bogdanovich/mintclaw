@@ -348,6 +348,13 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 		forbid   []string
 	}{
 		{
+			name: "click", action: DriverAction{Kind: DriverClick, Target: "e4", Element: "Delete"},
+			required: []string{
+				`page.locator("aria-ref=" + "e4").click({ button: "left", noWaitAfter: true })`,
+			},
+			forbid: []string{"waitForLoadState", "waitForNavigation"},
+		},
+		{
 			name: "check", action: DriverAction{Kind: DriverCheck, Target: "e5", Element: "Notify"},
 			required: []string{
 				`const checkTarget = page.locator("aria-ref=" + "e5")`,

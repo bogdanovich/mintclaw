@@ -958,7 +958,7 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = "await page.goto(" + jsonString(normalizedURL) + ");"
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
-			").click({ button: \"left\" });"
+			").click({ button: \"left\", noWaitAfter: true });"
 	case "browser_type":
 		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields)
 	case "browser_select_option":
