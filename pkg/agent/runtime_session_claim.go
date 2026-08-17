@@ -58,9 +58,7 @@ func (claim *runtimeSessionClaim) releaseIfOwned() {
 	if claim == nil || claim.placeholder == nil || claim.al == nil {
 		return
 	}
-	if actual, ok := claim.al.activeTurnStates.Load(claim.scope); ok && actual == claim.placeholder {
-		claim.al.activeTurnStates.Delete(claim.scope)
-	}
+	claim.releaseSessionIfOwned()
 	if claim.routeScope.claimKey != "" {
 		if target, ok := claim.al.activeRouteSessions.Load(claim.routeScope); ok {
 			activeTarget, targetOK := target.(*inboundDispatchTarget)
@@ -68,5 +66,14 @@ func (claim *runtimeSessionClaim) releaseIfOwned() {
 				claim.al.activeRouteSessions.CompareAndDelete(claim.routeScope, target)
 			}
 		}
+	}
+}
+
+func (claim *runtimeSessionClaim) releaseSessionIfOwned() {
+	if claim == nil || claim.placeholder == nil || claim.al == nil {
+		return
+	}
+	if actual, ok := claim.al.activeTurnStates.Load(claim.scope); ok && actual == claim.placeholder {
+		claim.al.activeTurnStates.Delete(claim.scope)
 	}
 }
