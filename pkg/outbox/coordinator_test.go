@@ -1,6 +1,8 @@
 package outbox
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,102 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 )
+
+func TestCoordinatorAwaitTerminalObservesDeliveredTransition(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "await me"},
+	)
+	if err != nil {
+		t.Fatalf("AdmitMessage() error = %v", err)
+	}
+	commitTestAdmission(t, coordinator, admission.Lease)
+
+	done := make(chan Intent, 1)
+	go func() {
+		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), admission.Intent.ID)
+		if awaitErr == nil {
+			done <- intent
+		}
+	}()
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt() error = %v", err)
+	}
+	if err = coordinator.MarkDelivered(
+		admission.Intent.ID,
+		Outcome{PlatformMessageIDs: []string{"telegram-1"}},
+	); err != nil {
+		t.Fatalf("MarkDelivered() error = %v", err)
+	}
+	select {
+	case intent := <-done:
+		if intent.Status != StatusDelivered ||
+			!slices.Equal(intent.PlatformMessageIDs, []string{"telegram-1"}) {
+			t.Fatalf("terminal intent = %+v", intent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AwaitTerminal() did not observe delivery")
+	}
+}
+
+func TestCoordinatorAwaitTerminalReturnsExistingFailure(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "reject me"},
+	)
+	if err != nil {
+		t.Fatalf("AdmitMessage() error = %v", err)
+	}
+	commitTestAdmission(t, coordinator, admission.Lease)
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt() error = %v", err)
+	}
+	if err = coordinator.MarkDefinitelyFailed(
+		admission.Intent.ID,
+		Outcome{Error: "request entity too large"},
+	); err != nil {
+		t.Fatalf("MarkDefinitelyFailed() error = %v", err)
+	}
+
+	intent, err := coordinator.AwaitTerminal(context.Background(), admission.Intent.ID)
+	if err != nil || intent.Status != StatusDefinitelyFailed ||
+		intent.LastError != "request entity too large" {
+		t.Fatalf("AwaitTerminal() = %+v, %v", intent, err)
+	}
+}
+
+func TestCoordinatorAwaitTerminalHonorsCancellation(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "pending"},
+	)
+	if err != nil {
+		t.Fatalf("AdmitMessage() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = coordinator.AwaitTerminal(ctx, admission.Intent.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AwaitTerminal() error = %v, want context canceled", err)
+	}
+}
 
 func TestCoordinatorReleaseRelinquishesLeaseWhenRecordCannotBeRead(t *testing.T) {
 	store, err := Open(t.TempDir())

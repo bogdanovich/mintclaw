@@ -103,6 +103,13 @@ func WithOutboundOutbox(coordinator *outbox.Coordinator) ManagerOption {
 	}
 }
 
+// SupportsDurableDeliveryReceipts reports whether durable outcomes can make
+// progress now. A configured outbox alone is insufficient when dispatchers are
+// not running, as in startup, shutdown, and isolated tests.
+func (m *Manager) SupportsDurableDeliveryReceipts() bool {
+	return m != nil && m.outboundOutbox != nil && m.deliveryRuntime().dispatcherRunning()
+}
+
 // ChannelLifecyclePayload describes channel lifecycle runtime events.
 type ChannelLifecyclePayload struct {
 	Type  string `json:"type,omitempty"`

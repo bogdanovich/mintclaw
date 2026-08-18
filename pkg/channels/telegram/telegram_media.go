@@ -17,6 +17,41 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
+// Telegram's Bot API documents a 50 MB upload limit for sendVideo and the
+// other file-upload methods used here. Decimal bytes avoid accepting a file
+// that exceeds the documented bound due to unit ambiguity.
+const telegramMediaUploadMaxBytes int64 = 50_000_000
+
+// PreflightMedia validates local attachment sizes before durable admission.
+func (c *TelegramChannel) PreflightMedia(
+	_ context.Context,
+	msg bus.OutboundMediaMessage,
+) error {
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("telegram media preflight: no media store available")
+	}
+	for _, part := range msg.Parts {
+		localPath, err := store.Resolve(part.Ref)
+		if err != nil {
+			return fmt.Errorf("telegram media preflight resolve %q: %w", part.Ref, err)
+		}
+		info, err := os.Stat(localPath)
+		if err != nil {
+			return fmt.Errorf("telegram media preflight stat %q: %w", part.Ref, err)
+		}
+		if info.Size() > telegramMediaUploadMaxBytes {
+			return &channels.MediaConstraintError{
+				Channel: "telegram",
+				Ref:     part.Ref,
+				Size:    info.Size(),
+				MaxSize: telegramMediaUploadMaxBytes,
+			}
+		}
+	}
+	return nil
+}
+
 // SendMedia implements the channels.MediaSender compatibility interface.
 func (c *TelegramChannel) SendMedia(
 	ctx context.Context,

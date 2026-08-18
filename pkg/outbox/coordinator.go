@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,8 +23,14 @@ type Coordinator struct {
 	publishing map[string]uint64
 	published  map[string]bool
 	attempting map[string]bool
+	waiters    map[string]map[chan terminalResult]struct{}
 	now        func() time.Time
 	closed     bool
+}
+
+type terminalResult struct {
+	intent Intent
+	err    error
 }
 
 var coordinatorRoots = struct {
@@ -82,6 +89,7 @@ func newCoordinator(store *Store) *Coordinator {
 		publishing: make(map[string]uint64),
 		published:  make(map[string]bool),
 		attempting: make(map[string]bool),
+		waiters:    make(map[string]map[chan terminalResult]struct{}),
 		now:        time.Now,
 	}
 }
@@ -206,6 +214,55 @@ func (c *Coordinator) Get(deliveryID string) (Intent, error) {
 	return c.store.Get(deliveryID)
 }
 
+// AwaitTerminal waits until the durable intent reaches a transport-terminal
+// state. Registration and state inspection share the coordinator lock, so a
+// transition cannot be lost between the initial read and waiter setup.
+func (c *Coordinator) AwaitTerminal(ctx context.Context, deliveryID string) (Intent, error) {
+	if c == nil || c.store == nil {
+		return Intent{}, errors.New("outbox coordinator is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validateID(deliveryID); err != nil {
+		return Intent{}, err
+	}
+
+	waiter := make(chan terminalResult, 1)
+	c.mu.Lock()
+	if err := c.validateOpenLocked(); err != nil {
+		c.mu.Unlock()
+		return Intent{}, err
+	}
+	intent, err := c.store.Get(deliveryID)
+	if err != nil {
+		c.mu.Unlock()
+		return Intent{}, err
+	}
+	if isTerminalStatus(intent.Status) {
+		c.mu.Unlock()
+		return intent, nil
+	}
+	if c.waiters[deliveryID] == nil {
+		c.waiters[deliveryID] = make(map[chan terminalResult]struct{})
+	}
+	c.waiters[deliveryID][waiter] = struct{}{}
+	c.mu.Unlock()
+
+	select {
+	case result := <-waiter:
+		return result.intent, result.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.waiters[deliveryID], waiter)
+		if len(c.waiters[deliveryID]) == 0 {
+			delete(c.waiters, deliveryID)
+		}
+		c.mu.Unlock()
+		return Intent{}, ctx.Err()
+	}
+}
+
 // Recover classifies persisted crash states and claims every intent that is
 // safe for this process to publish again.
 func (c *Coordinator) Recover() ([]Admission, error) {
@@ -259,8 +316,13 @@ func (c *Coordinator) transitionPublished(
 	if err := transition(); err != nil {
 		return err
 	}
+	intent, err := c.store.Get(deliveryID)
+	if err != nil {
+		return err
+	}
 	delete(c.attempting, deliveryID)
 	delete(c.published, deliveryID)
+	c.notifyTerminalLocked(deliveryID, terminalResult{intent: intent})
 	return nil
 }
 
@@ -275,6 +337,11 @@ func (c *Coordinator) Close() error {
 		return nil
 	}
 	c.closed = true
+	for deliveryID := range c.waiters {
+		c.notifyTerminalLocked(deliveryID, terminalResult{
+			err: errors.New("outbox coordinator is closed"),
+		})
+	}
 	if c.root != "" {
 		coordinatorRoots.Lock()
 		delete(coordinatorRoots.active, c.root)
@@ -374,8 +441,30 @@ func (c *Coordinator) MarkAdmissionUnrecoverable(lease DispatchLease, outcome Ou
 	if _, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome); err != nil {
 		return err
 	}
+	intent, err := c.store.Get(lease.deliveryID)
+	if err != nil {
+		return err
+	}
 	delete(c.leases, lease.deliveryID)
+	c.notifyTerminalLocked(lease.deliveryID, terminalResult{intent: intent})
 	return nil
+}
+
+func isTerminalStatus(status Status) bool {
+	switch status {
+	case StatusDelivered, StatusDefinitelyFailed, StatusAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Coordinator) notifyTerminalLocked(deliveryID string, result terminalResult) {
+	for waiter := range c.waiters[deliveryID] {
+		waiter <- result
+		close(waiter)
+	}
+	delete(c.waiters, deliveryID)
 }
 
 func (c *Coordinator) admit(candidate Intent) (Admission, error) {

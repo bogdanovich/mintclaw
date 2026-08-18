@@ -85,3 +85,15 @@ type ProvisionalChannelSender interface {
 	SendMessageProvisional(ctx context.Context, msg bus.OutboundMessage) error
 	SendMediaProvisional(ctx context.Context, msg bus.OutboundMediaMessage) error
 }
+
+// MediaPreflightChannelManager exposes channel-owned deterministic media
+// constraints without making them part of the generic message tool.
+type MediaPreflightChannelManager interface {
+	PreflightMedia(ctx context.Context, msg bus.OutboundMediaMessage) error
+}
+
+// DurableDeliveryReceiptManager marks the production manager adapter that can
+// settle durable outbox receipts while the owning turn is still active.
+type DurableDeliveryReceiptManager interface {
+	SupportsDurableDeliveryReceipts() bool
+}

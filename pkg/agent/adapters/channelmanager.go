@@ -58,6 +58,17 @@ func (a *channelManagerAdapter) SendMedia(ctx context.Context, msg bus.OutboundM
 	return a.inner.SendMedia(ctx, msg)
 }
 
+func (a *channelManagerAdapter) PreflightMedia(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) error {
+	return a.inner.PreflightMedia(ctx, msg)
+}
+
+func (a *channelManagerAdapter) SupportsDurableDeliveryReceipts() bool {
+	return a.inner.SupportsDurableDeliveryReceipts()
+}
+
 func (a *channelManagerAdapter) SendMediaProvisional(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,

@@ -227,14 +227,12 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: err.Error(), IsError: true, Err: err}
 	}
 
-	sessionKey := ToolSessionKey(ctx)
-	t.mu.Lock()
-	t.sentTargets[sessionKey] = append(t.sentTargets[sessionKey], sentTarget{Channel: channel, ChatID: chatID})
-	t.mu.Unlock()
-
-	status := fmt.Sprintf("Message sent to %s:%s", channel, chatID)
+	status := fmt.Sprintf("Message prepared for delivery to %s:%s", channel, chatID)
 	if len(parts) > 0 {
-		status = fmt.Sprintf("Message with %d media attachment(s) sent to %s:%s", len(parts), channel, chatID)
+		status = fmt.Sprintf(
+			"Message with %d media attachment(s) prepared for delivery to %s:%s",
+			len(parts), channel, chatID,
+		)
 	}
 
 	result := (&ToolResult{
@@ -247,6 +245,15 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		Text:             content,
 		Media:            parts,
 	})
+	sessionKey := ToolSessionKey(ctx)
+	result.ConfirmOutbound = func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.sentTargets[sessionKey] = append(
+			t.sentTargets[sessionKey],
+			sentTarget{Channel: channel, ChatID: chatID},
+		)
+	}
 	result.WithDeliveryIntent(messageDeliveryIntent(args))
 	return result
 }

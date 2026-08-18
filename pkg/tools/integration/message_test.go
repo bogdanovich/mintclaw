@@ -49,8 +49,8 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	}
 
 	// - ForLLM contains send status description
-	if result.ForLLM != "Message sent to test-channel:test-chat-id" {
-		t.Errorf("Expected ForLLM 'Message sent to test-channel:test-chat-id', got '%s'", result.ForLLM)
+	if result.ForLLM != "Message prepared for delivery to test-channel:test-chat-id" {
+		t.Errorf("unexpected ForLLM status: %q", result.ForLLM)
 	}
 
 	// - ForUser is empty (user already received message directly)
@@ -90,8 +90,8 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	if !result.Silent {
 		t.Error("Expected Silent=true")
 	}
-	if result.ForLLM != "Message sent to custom-channel:custom-chat-id" {
-		t.Errorf("Expected ForLLM 'Message sent to custom-channel:custom-chat-id', got '%s'", result.ForLLM)
+	if result.ForLLM != "Message prepared for delivery to custom-channel:custom-chat-id" {
+		t.Errorf("unexpected ForLLM status: %q", result.ForLLM)
 	}
 }
 
@@ -372,6 +372,10 @@ func TestMessageTool_Execute_TracksSentTargetForTurnSuppression(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
+	if tool.HasSentTo("sk_v1_tool", "test-channel", "test-chat-id") {
+		t.Fatal("prepared delivery must not be tracked as sent")
+	}
+	result.ConfirmOutbound()
 	if !tool.HasSentTo("sk_v1_tool", "test-channel", "test-chat-id") {
 		t.Fatal("expected sent target tracking for final-response suppression")
 	}

@@ -60,7 +60,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
 		}
-		if outcome != toolResultDeliveryDirect && len(toolResultMediaRefs(result)) > 0 {
+		if outcome != toolResultDeliveryDirect {
 			result.ResponseHandled = false
 		}
 		if outcome == toolResultDeliveryDirect {
@@ -69,6 +69,15 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 	}
 
 	return nil, result
+}
+
+func confirmToolResultOutbound(result *toolshared.ToolResult) {
+	if result == nil || result.ConfirmOutbound == nil {
+		return
+	}
+	confirm := result.ConfirmOutbound
+	result.ConfirmOutbound = nil
+	confirm()
 }
 
 func commitToolResultOutbound(ctx context.Context, result *toolshared.ToolResult) error {
