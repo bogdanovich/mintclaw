@@ -605,6 +605,7 @@ func (r *Registry) claim(
 		answer.Values[key] = strings.TrimSpace(value)
 	}
 	answer.MessageID = strings.TrimSpace(answer.MessageID)
+	answer.ResponseMessageID = strings.TrimSpace(answer.ResponseMessageID)
 	return r.update(
 		id,
 		expectedRevision,
@@ -615,7 +616,11 @@ func (r *Registry) claim(
 			if rec.ExpiresAt > 0 && now >= rec.ExpiresAt {
 				rec.Status = StatusClaimed
 				rec.Outcome = OutcomeTimedOut
-				rec.Answer = &Answer{MessageID: answer.MessageID, ReceivedAt: now}
+				rec.Answer = &Answer{
+					MessageID:         answer.MessageID,
+					ResponseMessageID: answer.ResponseMessageID,
+					ReceivedAt:        now,
+				}
 				return EventAnswerClaimed, "timeout_at_answer_claim", nil, nil
 			}
 			if rec.Kind == KindQuestion && outcome != OutcomeAnswered {

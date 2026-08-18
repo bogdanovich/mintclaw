@@ -1035,6 +1035,70 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 }
 
+func TestInteractionResponseReplyTargetUsesPersistedCallbackMessage(t *testing.T) {
+	record := interactions.Record{
+		Kind:  interactions.KindQuestion,
+		Route: interactions.Route{Channel: "telegram"},
+		Answer: &interactions.Answer{
+			MessageID:         "10698106213006357",
+			ResponseMessageID: "7716",
+		},
+	}
+	inbound := bus.InboundContext{
+		Channel: "telegram", MessageID: "10698106213006357", ReplyToMessageID: "7716",
+	}
+
+	if got := interactionResponseReplyTarget(record, inbound); got != "7716" {
+		t.Fatalf("callback final reply target = %q, want original Telegram message 7716", got)
+	}
+	if got := interactionResponseReplyTarget(record, bus.InboundContext{}); got != "7716" {
+		t.Fatalf("recovered callback final reply target = %q, want persisted Telegram message 7716", got)
+	}
+}
+
+func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "Canary",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:callback-reply-target"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			MessageID: "10698106213006357", ReplyToMessageID: "7716",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	msg.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse:          "Canary",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	}
+
+	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), msg, target)
+
+	select {
+	case final := <-manager.sent:
+		if final.ReplyToMessageID != "7716" {
+			t.Fatalf("callback final reply target = %q, want original Telegram message 7716", final.ReplyToMessageID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("callback continuation final was not delivered")
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	deadline := time.Now().Add(time.Second)
+	resolved, _ := registry.Get(record.ID)
+	for resolved.Status != interactions.StatusResolved && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		resolved, _ = registry.Get(record.ID)
+	}
+	if resolved.Status != interactions.StatusResolved || resolved.Answer == nil ||
+		resolved.Answer.MessageID != "10698106213006357" || resolved.Answer.ResponseMessageID != "7716" {
+		t.Fatalf("persisted callback answer = %#v", resolved)
+	}
+}
+
 func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

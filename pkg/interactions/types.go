@@ -157,10 +157,11 @@ type Origin struct {
 }
 
 type Answer struct {
-	Text       string            `json:"text,omitempty"`
-	Values     map[string]string `json:"values,omitempty"`
-	MessageID  string            `json:"message_id,omitempty"`
-	ReceivedAt int64             `json:"received_at"`
+	Text              string            `json:"text,omitempty"`
+	Values            map[string]string `json:"values,omitempty"`
+	MessageID         string            `json:"message_id,omitempty"`
+	ResponseMessageID string            `json:"response_message_id,omitempty"`
+	ReceivedAt        int64             `json:"received_at"`
 }
 
 type Record struct {
