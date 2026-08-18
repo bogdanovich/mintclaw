@@ -16,6 +16,11 @@ const InboundMetadataKeyInteractionShortID = "interaction_short_id"
 // interaction response that could not be resolved to a valid answer.
 const InboundMetadataKeyInteractionResponseError = "interaction_response_error"
 
+// InboundMetadataKeyInteractionResponseMessageID carries the channel message
+// that a final interaction response can safely reply to when the inbound event
+// itself is not a message, such as a Telegram callback query.
+const InboundMetadataKeyInteractionResponseMessageID = "interaction_response_message_id"
+
 const (
 	InboundInteractionChoiceAllowOnce = "allow_once"
 	InboundInteractionChoiceDeny      = "deny"

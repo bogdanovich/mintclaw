@@ -888,6 +888,9 @@ func (al *AgentLoop) processInteractionInbound(
 			"I could not accept that answer: "+err.Error(),
 		)
 	}
+	answer.ResponseMessageID = strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+	)
 	outcome := interactionAnswerOutcome(record, answer)
 	claimed, err := registry.ClaimAnswer(
 		record.ID,
@@ -1734,6 +1737,9 @@ func interactionResponseReplyTarget(record interactions.Record, inbound bus.Inbo
 		return ""
 	}
 	if record.Answer != nil {
+		if messageID := strings.TrimSpace(record.Answer.ResponseMessageID); messageID != "" {
+			return messageID
+		}
 		if messageID := strings.TrimSpace(record.Answer.MessageID); messageID != "" {
 			return messageID
 		}
