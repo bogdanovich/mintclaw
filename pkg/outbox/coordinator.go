@@ -171,33 +171,29 @@ func (c *Coordinator) BeginAttempt(deliveryID string) error {
 
 // MarkDispatchRejected records a published intent that could not reach an adapter.
 func (c *Coordinator) MarkDispatchRejected(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, false, func() error {
-		_, err := c.store.MarkDispatchRejected(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, false, func() (Intent, error) {
+		return c.store.MarkDispatchRejected(deliveryID, outcome)
 	})
 }
 
 // MarkDelivered records confirmed remote acceptance and releases in-process ownership.
 func (c *Coordinator) MarkDelivered(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkDelivered(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkDelivered(deliveryID, outcome)
 	})
 }
 
 // MarkDefinitelyFailed records a failure known to precede remote acceptance.
 func (c *Coordinator) MarkDefinitelyFailed(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkDefinitelyFailed(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkDefinitelyFailed(deliveryID, outcome)
 	})
 }
 
 // MarkAmbiguous records a transport outcome that must not be blindly retried.
 func (c *Coordinator) MarkAmbiguous(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkAmbiguous(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkAmbiguous(deliveryID, outcome)
 	})
 }
 
@@ -291,7 +287,7 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 func (c *Coordinator) transitionPublished(
 	deliveryID string,
 	requireAttempt bool,
-	transition func() error,
+	transition func() (Intent, error),
 ) error {
 	if c == nil || c.store == nil {
 		return errors.New("outbox coordinator is unavailable")
@@ -313,10 +309,7 @@ func (c *Coordinator) transitionPublished(
 	if !requireAttempt && c.attempting[deliveryID] {
 		return fmt.Errorf("outbox intent %q already has an active delivery attempt", deliveryID)
 	}
-	if err := transition(); err != nil {
-		return err
-	}
-	intent, err := c.store.Get(deliveryID)
+	intent, err := transition()
 	if err != nil {
 		return err
 	}
@@ -438,10 +431,7 @@ func (c *Coordinator) MarkAdmissionUnrecoverable(lease DispatchLease, outcome Ou
 	if c.publishing[lease.deliveryID] != 0 || c.published[lease.deliveryID] || c.attempting[lease.deliveryID] {
 		return fmt.Errorf("outbox intent %q already reached publication", lease.deliveryID)
 	}
-	if _, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome); err != nil {
-		return err
-	}
-	intent, err := c.store.Get(lease.deliveryID)
+	intent, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome)
 	if err != nil {
 		return err
 	}
