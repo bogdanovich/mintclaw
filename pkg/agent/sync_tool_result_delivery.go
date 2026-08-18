@@ -71,6 +71,15 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 	return nil, result
 }
 
+func confirmToolResultOutbound(result *toolshared.ToolResult) {
+	if result == nil || result.ConfirmOutbound == nil {
+		return
+	}
+	confirm := result.ConfirmOutbound
+	result.ConfirmOutbound = nil
+	confirm()
+}
+
 func commitToolResultOutbound(ctx context.Context, result *toolshared.ToolResult) error {
 	if result == nil || result.CommitOutbound == nil {
 		return nil

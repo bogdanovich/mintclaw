@@ -632,6 +632,7 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	if result == nil || result.IsError {
 		t.Fatalf("message tool execute failed: %+v", result)
 	}
+	result.ConfirmOutbound()
 	admission := al.publishResponseWithContextIfNeeded(
 		context.Background(),
 		defaultAgent.Workspace,
@@ -683,6 +684,7 @@ func TestPublishResponseAlwaysPublishMarksFinalReplyAfterMessageTool(t *testing.
 	if result == nil || result.IsError {
 		t.Fatalf("message tool execute failed: %+v", result)
 	}
+	result.ConfirmOutbound()
 
 	al.publishResponseWithContextIfNeeded(
 		context.Background(),

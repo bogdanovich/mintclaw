@@ -9,6 +9,11 @@ conversation has an independent FIFO worker, so media download and voice
 transcription cannot let a later short message overtake an earlier long one;
 unrelated chats and topics still process concurrently.
 
+Local media uploads are preflighted against Telegram's documented 50 MB Bot
+API limit before durable delivery admission. Oversized files are rejected with
+their actual size and the 50,000,000-byte bound so an agent can transcode or
+otherwise reduce the artifact before retrying.
+
 ## Configuration
 
 ```json

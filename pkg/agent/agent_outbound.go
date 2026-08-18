@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/constants"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -639,16 +640,34 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 					})
 				return nil, toolResultDeliveryNone, err
 			}
+			confirmToolResultOutbound(result)
+			setConfirmedToolDeliveryText(result, len(out.Media))
 			return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
 		}
 		if al.bus != nil {
-			if _, err := al.publishTransactionMediaAtBoundary(
+			receipt, err := al.publishTransactionMediaReceiptAtBoundary(
 				ctx, ts.workspace, outboundMedia,
 				func(commitCtx context.Context) error {
 					return commitToolResultOutbound(commitCtx, result)
 				},
-			); err != nil {
+			)
+			if err != nil {
 				return nil, toolResultDeliveryNone, err
+			}
+			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+			if isFinalHandledDelivery(result) && receiptsSupported {
+				if err = settleFinalHandledDelivery(ctx, receipt, result, len(out.Media)); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				if isFinalHandledDelivery(result) {
+					return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
+				}
+			}
+			if !receiptsSupported {
+				confirmToolResultOutbound(result)
+				if isFinalHandledDelivery(result) {
+					return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
+				}
 			}
 			return nil, toolResultDeliveryQueued, nil
 		}
@@ -677,20 +696,109 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		if err := al.channelManager.SendMessage(ctx, outboundMessage); err != nil {
 			return nil, toolResultDeliveryNone, err
 		}
+		confirmToolResultOutbound(result)
+		setConfirmedToolDeliveryText(result, 0)
 		return nil, toolResultDeliveryDirect, nil
 	}
 	if al.bus != nil {
-		if _, err := al.publishTransactionMessageAtBoundary(
+		receipt, err := al.publishTransactionMessageReceiptAtBoundary(
 			ctx, ts.workspace, outboundMessage,
 			func(commitCtx context.Context) error {
 				return commitToolResultOutbound(commitCtx, result)
 			},
-		); err != nil {
+		)
+		if err != nil {
 			return nil, toolResultDeliveryNone, err
+		}
+		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+		if isFinalHandledDelivery(result) && receiptsSupported {
+			if err = settleFinalHandledDelivery(ctx, receipt, result, 0); err != nil {
+				return nil, toolResultDeliveryNone, err
+			}
+			if isFinalHandledDelivery(result) {
+				return nil, toolResultDeliveryDirect, nil
+			}
+		}
+		if !receiptsSupported {
+			confirmToolResultOutbound(result)
+			if isFinalHandledDelivery(result) {
+				return nil, toolResultDeliveryDirect, nil
+			}
 		}
 		return nil, toolResultDeliveryQueued, nil
 	}
 	return nil, toolResultDeliveryNone, nil
+}
+
+func supportsDurableDeliveryReceipts(manager agentinterfaces.ChannelManager) bool {
+	receipts, ok := manager.(agentinterfaces.DurableDeliveryReceiptManager)
+	return ok && receipts.SupportsDurableDeliveryReceipts()
+}
+
+func isFinalHandledDelivery(result *toolshared.ToolResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.DeliveryIntent != toolshared.DeliveryDefault {
+		return result.DeliveryIntent == toolshared.DeliveryFinalHandled
+	}
+	return result.ResponseHandled && !result.ImmediateDelivery
+}
+
+func settleFinalHandledDelivery(
+	ctx context.Context,
+	receipt outboundPublication,
+	result *toolshared.ToolResult,
+	mediaCount int,
+) error {
+	intent, err := receipt.awaitTerminal(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("wait for durable delivery receipt: %w", err)
+		}
+		result.ResponseHandled = false
+		result.ForLLM = "Message was queued, but delivery confirmation is still pending. Do not claim it was sent."
+		return nil
+	}
+	switch intent.Status {
+	case outbox.StatusDelivered:
+		confirmToolResultOutbound(result)
+		setConfirmedToolDeliveryText(result, mediaCount)
+		return nil
+	case outbox.StatusDefinitelyFailed:
+		return fmt.Errorf(
+			"delivery %s definitely failed before remote acceptance: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "channel rejected the message"),
+		)
+	case outbox.StatusAmbiguous:
+		return fmt.Errorf(
+			"delivery %s has an ambiguous outcome and must not be retried blindly: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
+		)
+	default:
+		result.ResponseHandled = false
+		result.ForLLM = fmt.Sprintf(
+			"Message was queued as delivery %s, but delivery confirmation is still pending. Do not claim it was sent.",
+			intent.ID,
+		)
+		return nil
+	}
+}
+
+func setConfirmedToolDeliveryText(result *toolshared.ToolResult, mediaCount int) {
+	if result == nil {
+		return
+	}
+	if mediaCount > 0 {
+		result.ForLLM = fmt.Sprintf(
+			"Message with %d media attachment(s) delivered to the user.",
+			mediaCount,
+		)
+		return
+	}
+	result.ForLLM = "Message delivered to the user."
 }
 
 func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx *bus.InboundContext) {

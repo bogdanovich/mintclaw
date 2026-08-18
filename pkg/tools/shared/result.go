@@ -133,6 +133,10 @@ type ToolResult struct {
 	// immediately before synchronous delivery. It is never model-visible.
 	CommitOutbound func(context.Context) error `json:"-"`
 
+	// ConfirmOutbound records local bookkeeping that is only valid after the
+	// channel has confirmed remote acceptance. It is never model-visible.
+	ConfirmOutbound func() `json:"-"`
+
 	// WriteAudit records verified write-side effects performed by this tool.
 	// Agents should use this as the source of truth for claims like "saved",
 	// "updated", or "created"; prose in ForLLM/ForUser is only descriptive.

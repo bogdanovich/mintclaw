@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
 
@@ -87,7 +88,32 @@ func (m *Manager) persistDurableOutbound(deliveryID string, outcome OutboundDeli
 	if err != nil {
 		return fmt.Errorf("persist durable delivery %q: %w", deliveryID, err)
 	}
+	fields := map[string]any{
+		"delivery_id": deliveryID,
+		"outcome":     durableOutcomeLabel(outcome.Status),
+	}
+	if outcome.Err != nil {
+		fields["error"] = outcome.Err.Error()
+	}
+	if outcome.Status == OutboundDeliveryDelivered {
+		logger.InfoCF("channels", "Durable outbound reached terminal outcome", fields)
+	} else {
+		logger.WarnCF("channels", "Durable outbound reached terminal outcome", fields)
+	}
 	return nil
+}
+
+func durableOutcomeLabel(status OutboundDeliveryStatus) string {
+	switch status {
+	case OutboundDeliveryDelivered:
+		return string(outbox.StatusDelivered)
+	case OutboundDeliveryDefinitelyFailed:
+		return string(outbox.StatusDefinitelyFailed)
+	case OutboundDeliveryAmbiguous:
+		return string(outbox.StatusAmbiguous)
+	default:
+		return "unknown"
+	}
 }
 
 func durableOutcome[T any](result DeliveryResult[T], priorMessageIDs []string) OutboundDeliveryOutcome {

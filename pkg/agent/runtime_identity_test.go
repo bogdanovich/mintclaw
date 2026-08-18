@@ -307,6 +307,10 @@ func TestMessageToolSuppressionUsesExplicitSessionOwner(t *testing.T) {
 	firstAgent := &AgentInstance{ID: "first", Tools: firstRegistry}
 	secondAgent := &AgentInstance{ID: "second", Tools: secondRegistry}
 
+	if messageToolSentToSameChat(firstAgent, "shared-session", "test", "same") {
+		t.Fatal("message target was recorded before outbound confirmation")
+	}
+	result.ConfirmOutbound()
 	if !messageToolSentToSameChat(firstAgent, "shared-session", "test", "same") {
 		t.Fatal("first owner should report its sent message")
 	}

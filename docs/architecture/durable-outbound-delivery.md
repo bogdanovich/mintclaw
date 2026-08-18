@@ -65,6 +65,18 @@ steering, system, async, and delegated-turn paths use the same transaction.
 Child transaction failure propagates to the root turn and blocks its inbound
 acknowledgement.
 
+Durable admission is not a user-visible delivery receipt. A tool using
+`final_handled` waits on the canonical outbox record while its owning turn is
+active. It may claim that a message was sent only after the record reaches
+`delivered`. A `definitely_failed` result is returned to the model as an
+actionable tool error, while `ambiguous` explicitly forbids blind retry. If the
+owning context ends first, the tool reports only that delivery is pending and
+does not suppress a later assistant response.
+
+Channel-owned deterministic media constraints run before outbox admission.
+This keeps transport policy out of generic tools and prevents known-invalid
+payloads from becoming durable retry work.
+
 ## Channel Outcome Boundary
 
 Immediately before an adapter call, the channel manager persists `attempting`.
@@ -135,6 +147,8 @@ The regression suite covers these boundaries:
 - outcome persistence failure after a transport call;
 - canonical text and media replay, including retry deadlines;
 - duplicate and concurrent admissions;
+- terminal receipt waiting before and after transition, plus cancellation;
+- channel media preflight before durable admission;
 - corrupt startup records and coordinator ownership conflicts;
 - gateway shutdown with delayed recovery work;
 - race checks and Linux/Windows compile checks for the affected packages.

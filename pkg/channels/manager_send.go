@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -142,6 +143,9 @@ func (r *DeliveryRuntime) rejectMessageBeforeSend(
 // retries are exhausted), which preserves ordering when later agent behavior
 // depends on actual media delivery.
 func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if err := m.PreflightMedia(ctx, msg); err != nil {
+		return newDeliveryError(err, false)
+	}
 	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome)
 }
 
@@ -149,7 +153,29 @@ func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) e
 // caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if err := m.PreflightMedia(ctx, msg); err != nil {
+		return newDeliveryError(err, false)
+	}
 	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly)
+}
+
+// PreflightMedia applies deterministic channel-owned media constraints before
+// the message reaches durable admission or a transport worker.
+func (m *Manager) PreflightMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if m == nil {
+		return errors.New("channel manager is unavailable")
+	}
+	channelName := outboundMediaChannel(msg)
+	channel, ok := m.deliveryChannel(channelName)
+	if !ok {
+		// Preserve the normal send path's definitive rejection and runtime event.
+		return nil
+	}
+	preflighter, ok := channel.(MediaPreflighter)
+	if !ok {
+		return nil
+	}
+	return preflighter.PreflightMedia(ctx, msg)
 }
 
 func (r *DeliveryRuntime) sendMedia(

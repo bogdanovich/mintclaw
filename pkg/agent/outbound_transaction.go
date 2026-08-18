@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	agentinterfaces "github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -38,6 +39,19 @@ type durableMediaAdmission struct {
 	lease       outbox.DispatchLease
 	durable     bool
 	dispatch    bool
+}
+
+type outboundPublication struct {
+	published   bool
+	deliveryID  string
+	coordinator *outbox.Coordinator
+}
+
+func (p outboundPublication) awaitTerminal(ctx context.Context) (outbox.Intent, error) {
+	if p.coordinator == nil || strings.TrimSpace(p.deliveryID) == "" {
+		return outbox.Intent{}, errors.New("durable delivery receipt is unavailable")
+	}
+	return p.coordinator.AwaitTerminal(ctx, p.deliveryID)
 }
 
 func withOutboundTransaction(ctx context.Context, sourceID string) context.Context {
@@ -262,9 +276,23 @@ func (al *AgentLoop) publishTransactionMessageAtBoundary(
 	msg bus.OutboundMessage,
 	commit func(context.Context) error,
 ) (bool, error) {
+	receipt, err := al.publishTransactionMessageReceiptAtBoundary(ctx, workspace, msg, commit)
+	return receipt.published, err
+}
+
+func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
+	ctx context.Context,
+	workspace string,
+	msg bus.OutboundMessage,
+	commit func(context.Context) error,
+) (outboundPublication, error) {
 	admission, err := al.admitDurableMessage(ctx, workspace, msg)
 	if err != nil {
-		return false, err
+		return outboundPublication{}, err
+	}
+	receipt := outboundPublication{
+		deliveryID:  admission.message.DeliveryID,
+		coordinator: admission.coordinator,
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
@@ -272,47 +300,49 @@ func (al *AgentLoop) publishTransactionMessageAtBoundary(
 				if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 					transaction.fail(err)
 				}
-				return false, err
+				return receipt, err
 			}
 		}
-		return false, nil
+		return receipt, nil
 	}
 	if al == nil || al.bus == nil {
 		err = errors.New("message bus is unavailable")
 		if admission.durable {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
-		return false, err
+		return receipt, err
 	}
 	if commit != nil {
 		if err = commit(ctx); err != nil {
 			if admission.durable {
 				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 			}
-			return false, err
+			return receipt, err
 		}
 	}
 	if admission.durable {
 		if err = admission.coordinator.PrepareAdmission(admission.lease); err != nil {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
-			return false, err
+			return receipt, err
 		}
 	}
 	if err = al.bus.PublishOutbound(ctx, admission.message); err != nil {
 		if admission.durable {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
-		return false, err
+		return receipt, err
 	}
 	if admission.durable {
 		if err = admission.coordinator.CommitAdmission(admission.lease); err != nil {
 			if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 				transaction.fail(err)
 			}
-			return true, err
+			receipt.published = true
+			return receipt, err
 		}
 	}
-	return true, nil
+	receipt.published = true
+	return receipt, nil
 }
 
 func (al *AgentLoop) publishTransactionMedia(
@@ -329,9 +359,28 @@ func (al *AgentLoop) publishTransactionMediaAtBoundary(
 	msg bus.OutboundMediaMessage,
 	commit func(context.Context) error,
 ) (bool, error) {
+	receipt, err := al.publishTransactionMediaReceiptAtBoundary(ctx, workspace, msg, commit)
+	return receipt.published, err
+}
+
+func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
+	ctx context.Context,
+	workspace string,
+	msg bus.OutboundMediaMessage,
+	commit func(context.Context) error,
+) (outboundPublication, error) {
+	if preflighter, ok := al.channelManager.(agentinterfaces.MediaPreflightChannelManager); ok {
+		if err := preflighter.PreflightMedia(ctx, msg); err != nil {
+			return outboundPublication{}, err
+		}
+	}
 	admission, err := al.admitDurableMedia(ctx, workspace, msg)
 	if err != nil {
-		return false, err
+		return outboundPublication{}, err
+	}
+	receipt := outboundPublication{
+		deliveryID:  admission.message.DeliveryID,
+		coordinator: admission.coordinator,
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
@@ -339,45 +388,47 @@ func (al *AgentLoop) publishTransactionMediaAtBoundary(
 				if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 					transaction.fail(err)
 				}
-				return false, err
+				return receipt, err
 			}
 		}
-		return false, nil
+		return receipt, nil
 	}
 	if al == nil || al.bus == nil {
 		err = errors.New("message bus is unavailable")
 		if admission.durable {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
-		return false, err
+		return receipt, err
 	}
 	if commit != nil {
 		if err = commit(ctx); err != nil {
 			if admission.durable {
 				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 			}
-			return false, err
+			return receipt, err
 		}
 	}
 	if admission.durable {
 		if err = admission.coordinator.PrepareAdmission(admission.lease); err != nil {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
-			return false, err
+			return receipt, err
 		}
 	}
 	if err = al.bus.PublishOutboundMedia(ctx, admission.message); err != nil {
 		if admission.durable {
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
-		return false, err
+		return receipt, err
 	}
 	if admission.durable {
 		if err = admission.coordinator.CommitAdmission(admission.lease); err != nil {
 			if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 				transaction.fail(err)
 			}
-			return true, err
+			receipt.published = true
+			return receipt, err
 		}
 	}
-	return true, nil
+	receipt.published = true
+	return receipt, nil
 }

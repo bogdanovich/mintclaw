@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,8 +23,14 @@ type Coordinator struct {
 	publishing map[string]uint64
 	published  map[string]bool
 	attempting map[string]bool
+	waiters    map[string]map[chan terminalResult]struct{}
 	now        func() time.Time
 	closed     bool
+}
+
+type terminalResult struct {
+	intent Intent
+	err    error
 }
 
 var coordinatorRoots = struct {
@@ -82,6 +89,7 @@ func newCoordinator(store *Store) *Coordinator {
 		publishing: make(map[string]uint64),
 		published:  make(map[string]bool),
 		attempting: make(map[string]bool),
+		waiters:    make(map[string]map[chan terminalResult]struct{}),
 		now:        time.Now,
 	}
 }
@@ -163,33 +171,29 @@ func (c *Coordinator) BeginAttempt(deliveryID string) error {
 
 // MarkDispatchRejected records a published intent that could not reach an adapter.
 func (c *Coordinator) MarkDispatchRejected(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, false, func() error {
-		_, err := c.store.MarkDispatchRejected(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, false, func() (Intent, error) {
+		return c.store.MarkDispatchRejected(deliveryID, outcome)
 	})
 }
 
 // MarkDelivered records confirmed remote acceptance and releases in-process ownership.
 func (c *Coordinator) MarkDelivered(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkDelivered(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkDelivered(deliveryID, outcome)
 	})
 }
 
 // MarkDefinitelyFailed records a failure known to precede remote acceptance.
 func (c *Coordinator) MarkDefinitelyFailed(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkDefinitelyFailed(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkDefinitelyFailed(deliveryID, outcome)
 	})
 }
 
 // MarkAmbiguous records a transport outcome that must not be blindly retried.
 func (c *Coordinator) MarkAmbiguous(deliveryID string, outcome Outcome) error {
-	return c.transitionPublished(deliveryID, true, func() error {
-		_, err := c.store.MarkAmbiguous(deliveryID, outcome)
-		return err
+	return c.transitionPublished(deliveryID, true, func() (Intent, error) {
+		return c.store.MarkAmbiguous(deliveryID, outcome)
 	})
 }
 
@@ -204,6 +208,55 @@ func (c *Coordinator) Get(deliveryID string) (Intent, error) {
 		return Intent{}, err
 	}
 	return c.store.Get(deliveryID)
+}
+
+// AwaitTerminal waits until the durable intent reaches a transport-terminal
+// state. Registration and state inspection share the coordinator lock, so a
+// transition cannot be lost between the initial read and waiter setup.
+func (c *Coordinator) AwaitTerminal(ctx context.Context, deliveryID string) (Intent, error) {
+	if c == nil || c.store == nil {
+		return Intent{}, errors.New("outbox coordinator is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validateID(deliveryID); err != nil {
+		return Intent{}, err
+	}
+
+	waiter := make(chan terminalResult, 1)
+	c.mu.Lock()
+	if err := c.validateOpenLocked(); err != nil {
+		c.mu.Unlock()
+		return Intent{}, err
+	}
+	intent, err := c.store.Get(deliveryID)
+	if err != nil {
+		c.mu.Unlock()
+		return Intent{}, err
+	}
+	if isTerminalStatus(intent.Status) {
+		c.mu.Unlock()
+		return intent, nil
+	}
+	if c.waiters[deliveryID] == nil {
+		c.waiters[deliveryID] = make(map[chan terminalResult]struct{})
+	}
+	c.waiters[deliveryID][waiter] = struct{}{}
+	c.mu.Unlock()
+
+	select {
+	case result := <-waiter:
+		return result.intent, result.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.waiters[deliveryID], waiter)
+		if len(c.waiters[deliveryID]) == 0 {
+			delete(c.waiters, deliveryID)
+		}
+		c.mu.Unlock()
+		return Intent{}, ctx.Err()
+	}
 }
 
 // Recover classifies persisted crash states and claims every intent that is
@@ -234,7 +287,7 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 func (c *Coordinator) transitionPublished(
 	deliveryID string,
 	requireAttempt bool,
-	transition func() error,
+	transition func() (Intent, error),
 ) error {
 	if c == nil || c.store == nil {
 		return errors.New("outbox coordinator is unavailable")
@@ -256,11 +309,13 @@ func (c *Coordinator) transitionPublished(
 	if !requireAttempt && c.attempting[deliveryID] {
 		return fmt.Errorf("outbox intent %q already has an active delivery attempt", deliveryID)
 	}
-	if err := transition(); err != nil {
+	intent, err := transition()
+	if err != nil {
 		return err
 	}
 	delete(c.attempting, deliveryID)
 	delete(c.published, deliveryID)
+	c.notifyTerminalLocked(deliveryID, terminalResult{intent: intent})
 	return nil
 }
 
@@ -275,6 +330,11 @@ func (c *Coordinator) Close() error {
 		return nil
 	}
 	c.closed = true
+	for deliveryID := range c.waiters {
+		c.notifyTerminalLocked(deliveryID, terminalResult{
+			err: errors.New("outbox coordinator is closed"),
+		})
+	}
 	if c.root != "" {
 		coordinatorRoots.Lock()
 		delete(coordinatorRoots.active, c.root)
@@ -371,11 +431,30 @@ func (c *Coordinator) MarkAdmissionUnrecoverable(lease DispatchLease, outcome Ou
 	if c.publishing[lease.deliveryID] != 0 || c.published[lease.deliveryID] || c.attempting[lease.deliveryID] {
 		return fmt.Errorf("outbox intent %q already reached publication", lease.deliveryID)
 	}
-	if _, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome); err != nil {
+	intent, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome)
+	if err != nil {
 		return err
 	}
 	delete(c.leases, lease.deliveryID)
+	c.notifyTerminalLocked(lease.deliveryID, terminalResult{intent: intent})
 	return nil
+}
+
+func isTerminalStatus(status Status) bool {
+	switch status {
+	case StatusDelivered, StatusDefinitelyFailed, StatusAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Coordinator) notifyTerminalLocked(deliveryID string, result terminalResult) {
+	for waiter := range c.waiters[deliveryID] {
+		waiter <- result
+		close(waiter)
+	}
+	delete(c.waiters, deliveryID)
 }
 
 func (c *Coordinator) admit(candidate Intent) (Admission, error) {
