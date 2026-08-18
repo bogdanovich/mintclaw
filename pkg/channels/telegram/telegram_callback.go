@@ -93,6 +93,7 @@ func (c *TelegramChannel) handleInteractionCallback(
 		"first_name":                             query.From.FirstName,
 		"is_group":                               strconv.FormatBool(message.Chat.Type != "private"),
 		bus.InboundMetadataKeyInteractionShortID: callback.shortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: strconv.Itoa(message.MessageID),
 	}
 	if choice != "" {
 		metadata[bus.InboundMetadataKeyInteractionChoice] = choice

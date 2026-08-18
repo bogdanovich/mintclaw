@@ -3779,6 +3779,11 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	}))
 	assert.Equal(t, "Generate it", published.Content)
 	assert.Equal(t, "callback-1", published.Context.MessageID)
+	assert.Equal(
+		t,
+		"72",
+		published.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+	)
 	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
 	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 	assert.Equal(t, "1771", published.Context.TopicID)
