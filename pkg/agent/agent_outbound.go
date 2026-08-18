@@ -654,11 +654,18 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			if err != nil {
 				return nil, toolResultDeliveryNone, err
 			}
-			if result.ResponseHandled && supportsDurableDeliveryReceipts(al.channelManager) {
+			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+			if isFinalHandledDelivery(result) && receiptsSupported {
 				if err = settleFinalHandledDelivery(ctx, receipt, result, len(out.Media)); err != nil {
 					return nil, toolResultDeliveryNone, err
 				}
-				if result.ResponseHandled {
+				if isFinalHandledDelivery(result) {
+					return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
+				}
+			}
+			if !receiptsSupported {
+				confirmToolResultOutbound(result)
+				if isFinalHandledDelivery(result) {
 					return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
 				}
 			}
@@ -703,11 +710,18 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		if err != nil {
 			return nil, toolResultDeliveryNone, err
 		}
-		if result.ResponseHandled && supportsDurableDeliveryReceipts(al.channelManager) {
+		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+		if isFinalHandledDelivery(result) && receiptsSupported {
 			if err = settleFinalHandledDelivery(ctx, receipt, result, 0); err != nil {
 				return nil, toolResultDeliveryNone, err
 			}
-			if result.ResponseHandled {
+			if isFinalHandledDelivery(result) {
+				return nil, toolResultDeliveryDirect, nil
+			}
+		}
+		if !receiptsSupported {
+			confirmToolResultOutbound(result)
+			if isFinalHandledDelivery(result) {
 				return nil, toolResultDeliveryDirect, nil
 			}
 		}
@@ -719,6 +733,16 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 func supportsDurableDeliveryReceipts(manager agentinterfaces.ChannelManager) bool {
 	receipts, ok := manager.(agentinterfaces.DurableDeliveryReceiptManager)
 	return ok && receipts.SupportsDurableDeliveryReceipts()
+}
+
+func isFinalHandledDelivery(result *toolshared.ToolResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.DeliveryIntent != toolshared.DeliveryDefault {
+		return result.DeliveryIntent == toolshared.DeliveryFinalHandled
+	}
+	return result.ResponseHandled && !result.ImmediateDelivery
 }
 
 func settleFinalHandledDelivery(

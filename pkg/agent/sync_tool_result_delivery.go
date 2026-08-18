@@ -60,7 +60,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
 		}
-		if outcome != toolResultDeliveryDirect {
+		if outcome != toolResultDeliveryDirect && len(toolResultMediaRefs(result)) > 0 {
 			result.ResponseHandled = false
 		}
 		if outcome == toolResultDeliveryDirect {
