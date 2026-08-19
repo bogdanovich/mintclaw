@@ -72,12 +72,14 @@ type toolFeedbackEntry struct {
 }
 
 type toolFeedbackTerminal struct {
-	key        string
-	entry      *toolFeedbackEntry
-	generation uint64
-	retain     bool
-	absorbed   bool
-	completed  bool
+	key                 string
+	entry               *toolFeedbackEntry
+	generation          uint64
+	retain              bool
+	absorbed            bool
+	completed           bool
+	traceGenerations    []string
+	admittedGenerations []string
 }
 
 // ToolFeedbackCoordinator is the single owner of editable tool-feedback
@@ -438,7 +440,8 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 			return nil
 		}
 		entry.mu.Lock()
-		entry.addActiveGenerations(generations)
+		traceGenerations := normalizeToolFeedbackGenerations(generations)
+		admittedGenerations := entry.addActiveGenerations(traceGenerations)
 		if entry.retired {
 			entry.mu.Unlock()
 			c.removeEntry(key, entry)
@@ -450,6 +453,7 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 			entry.mu.Unlock()
 			return &toolFeedbackTerminal{
 				key: key, entry: entry, generation: generation, retain: retain, absorbed: true,
+				traceGenerations: traceGenerations, admittedGenerations: admittedGenerations,
 			}
 		}
 		if !entry.terminal {
@@ -467,26 +471,58 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 		generation := entry.terminalGeneration
 		entry.mu.Unlock()
 
-		return &toolFeedbackTerminal{key: key, entry: entry, generation: generation, retain: retain}
+		return &toolFeedbackTerminal{
+			key: key, entry: entry, generation: generation, retain: retain,
+			traceGenerations: traceGenerations, admittedGenerations: admittedGenerations,
+		}
 	}
 }
 
-func (entry *toolFeedbackEntry) addActiveGenerations(generations []string) {
+func normalizeToolFeedbackGenerations(generations []string) []string {
+	normalized := make([]string, 0, len(generations))
+	seen := make(map[string]struct{}, len(generations))
 	for _, generation := range generations {
 		generation = strings.TrimSpace(generation)
 		if generation == "" {
 			continue
 		}
+		if _, exists := seen[generation]; exists {
+			continue
+		}
+		seen[generation] = struct{}{}
+		normalized = append(normalized, generation)
+	}
+	return normalized
+}
+
+func (entry *toolFeedbackEntry) addActiveGenerations(generations []string) []string {
+	admitted := make([]string, 0, len(generations))
+	for _, generation := range generations {
 		if entry.activeGenerations == nil {
 			entry.activeGenerations = make(map[string]struct{})
 		}
+		if _, exists := entry.activeGenerations[generation]; exists {
+			continue
+		}
 		entry.activeGenerations[generation] = struct{}{}
+		admitted = append(admitted, generation)
 	}
+	return admitted
 }
 
 func (entry *toolFeedbackEntry) terminalizeActiveGenerations() {
+	generations := make([]string, 0, len(entry.activeGenerations))
 	for generation := range entry.activeGenerations {
+		generations = append(generations, generation)
+	}
+	entry.terminalizeGenerations(generations)
+	entry.activeGenerations = nil
+}
+
+func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
+	for _, generation := range generations {
 		if _, exists := entry.terminalizedGenerations[generation]; exists {
+			delete(entry.activeGenerations, generation)
 			continue
 		}
 		if entry.terminalizedGenerations == nil {
@@ -494,12 +530,18 @@ func (entry *toolFeedbackEntry) terminalizeActiveGenerations() {
 		}
 		entry.terminalizedGenerations[generation] = struct{}{}
 		entry.terminalizedOrder = append(entry.terminalizedOrder, generation)
+		delete(entry.activeGenerations, generation)
 	}
-	entry.activeGenerations = nil
 	for len(entry.terminalizedOrder) > toolFeedbackGenerationHistoryLimit {
 		oldest := entry.terminalizedOrder[0]
 		entry.terminalizedOrder = entry.terminalizedOrder[1:]
 		delete(entry.terminalizedGenerations, oldest)
+	}
+}
+
+func (entry *toolFeedbackEntry) releaseActiveGenerations(generations []string) {
+	for _, generation := range generations {
+		delete(entry.activeGenerations, generation)
 	}
 }
 
@@ -525,13 +567,23 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	entry.opMu.Lock()
 	c.retryPendingCleanup(ctx, terminal.key, entry)
 	entry.mu.Lock()
-	if terminal.completed || terminal.absorbed || entry.retired || !entry.terminal ||
+	if terminal.completed || entry.retired || !entry.terminal ||
 		entry.terminalGeneration != terminal.generation {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
 	}
 	terminal.completed = true
+	if terminal.absorbed {
+		if success && terminal.retain {
+			entry.terminalizeGenerations(terminal.traceGenerations)
+		} else {
+			entry.releaseActiveGenerations(terminal.admittedGenerations)
+		}
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		return
+	}
 	if entry.terminalPending > 0 {
 		entry.terminalPending--
 	}

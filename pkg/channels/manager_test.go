@@ -3605,6 +3605,53 @@ func TestDismissToolFeedback_StableSessionWithoutTraceRetainsGenerationTombstone
 	}
 }
 
+func TestAbsorbedFinalTerminalizesItsFeedbackGeneration(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnA := runtimeevents.NewTraceScope("/workspace/main", "turn-a")
+	turnB := runtimeevents.NewTraceScope("/workspace/main", "turn-b")
+	turnC := runtimeevents.NewTraceScope("/workspace/main", "turn-c")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working A",
+		TraceScopes: []runtimeevents.TraceScope{turnA},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("feedback A = (%v, %v)", sent, err)
+	}
+	for _, final := range []struct {
+		content string
+		scope   runtimeevents.TraceScope
+	}{{content: "final A", scope: turnA}, {content: "final B", scope: turnB}} {
+		message := testOutboundMessage(bus.OutboundMessage{
+			Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: final.content,
+			TraceScopes: []runtimeevents.TraceScope{final.scope},
+			Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+		})
+		if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, message); err != nil || !sent {
+			t.Fatalf("%s = (%v, %v)", final.content, sent, err)
+		}
+	}
+
+	feedback.Content = "working C"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnC}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-4"}) {
+		t.Fatalf("feedback C = (%v, %v, %v), want msg-4", ids, sent, err)
+	}
+	feedback.Content = "delayed B"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnB}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("delayed B = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+}
+
 func TestFinalOutboundTerminalizesAllCorrelatedToolFeedbackGenerations(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)
