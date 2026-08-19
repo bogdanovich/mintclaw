@@ -457,6 +457,7 @@ func TestStoresInitializeContextAuthorityByInvalidatingExistingSnapshot(t *testi
 			session.ContextAuthority = &catalog
 			session.SnapshotID = ""
 			session.SnapshotOrigin = ""
+			session.PageStateHash = ""
 			session.Revision++
 			session.UpdatedAt++
 			session.LastActivityAt++

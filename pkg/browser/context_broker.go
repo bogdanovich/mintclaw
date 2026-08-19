@@ -387,7 +387,7 @@ func (broker *Broker) persistContextCatalogLocked(
 		return ContextCatalog{}, err
 	}
 	if slot := broker.slots[session.ID]; slot != nil {
-		slot.refs, slot.inputs, slot.uploads, slot.navigationID = nil, nil, nil, ""
+		slot.refs, slot.refPositions, slot.inputs, slot.uploads, slot.navigationID = nil, nil, nil, nil, ""
 	}
 	return catalog, nil
 }

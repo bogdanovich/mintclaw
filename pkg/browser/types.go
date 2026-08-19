@@ -39,6 +39,7 @@ var (
 	ErrInvalid              = errors.New("invalid browser state")
 	ErrNotFound             = errors.New("browser state not found")
 	ErrApprovalRequired     = errors.New("browser action requires approval")
+	ErrNoProgress           = errors.New("browser action is not making progress")
 	ErrSnapshotInvalidation = errors.New("browser snapshot invalidation failed")
 	ErrStale                = errors.New("browser state revision is stale")
 	ErrWorkerUnavailable    = errors.New("browser worker is unavailable")
@@ -514,6 +515,9 @@ type Session struct {
 	SnapshotID           string          `json:"snapshot_id,omitempty"`
 	SnapshotGeneration   uint64          `json:"snapshot_generation"`
 	SnapshotOrigin       string          `json:"snapshot_origin,omitempty"`
+	PageStateHash        string          `json:"page_state_hash,omitempty"`
+	ProgressSignature    string          `json:"progress_signature,omitempty"`
+	ProgressCount        uint32          `json:"progress_count,omitempty"`
 	Revision             uint64          `json:"revision"`
 	CreatedAt            int64           `json:"created_at"`
 	UpdatedAt            int64           `json:"updated_at"`
@@ -545,6 +549,9 @@ func (session Session) Validate() error {
 	if (session.SnapshotID == "") != (session.SnapshotOrigin == "") ||
 		(session.SnapshotID != "" &&
 			(!validIdentifier(session.SnapshotID) || session.SnapshotGeneration == 0)) ||
+		(session.PageStateHash != "" && (session.SnapshotID == "" || !validDigest(session.PageStateHash))) ||
+		(session.ProgressSignature == "") != (session.ProgressCount == 0) ||
+		(session.ProgressSignature != "" && !validDigest(session.ProgressSignature)) ||
 		len(session.SnapshotOrigin) > MaxURLBytes {
 		return fmt.Errorf("%w: malformed session snapshot", ErrInvalid)
 	}
@@ -602,43 +609,46 @@ func cloneSession(session Session) Session {
 // deliberately omits the driver-local element target; that target remains in
 // the live worker slot and is usable only while the bound snapshot is fresh.
 type PreparedAction struct {
-	ID                     string `json:"id"`
-	RequestID              string `json:"request_id"`
-	SessionID              string `json:"session_id"`
-	Owner                  Owner  `json:"owner"`
-	Target                 string `json:"target"`
-	Profile                string `json:"profile"`
-	ControllerGeneration   uint64 `json:"controller_generation"`
-	TabID                  string `json:"tab_id"`
-	FrameID                string `json:"frame_id,omitempty"`
-	ContextCatalogID       string `json:"context_catalog_id,omitempty"`
-	ContextGeneration      uint64 `json:"context_generation,omitempty"`
-	SnapshotID             string `json:"snapshot_id"`
-	SnapshotGeneration     uint64 `json:"snapshot_generation"`
-	CurrentOrigin          string `json:"current_origin"`
-	DestinationOrigin      string `json:"destination_origin,omitempty"`
-	Action                 Action `json:"action"`
-	InputDigest            string `json:"input_digest,omitempty"`
-	InputBytes             int    `json:"input_bytes,omitempty"`
-	ArtifactSHA256         string `json:"artifact_sha256,omitempty"`
-	ArtifactBytes          int64  `json:"artifact_bytes,omitempty"`
-	ArtifactFilename       string `json:"artifact_filename,omitempty"`
-	ArtifactContentType    string `json:"artifact_content_type,omitempty"`
-	ElementRole            string `json:"element_role,omitempty"`
-	ElementName            string `json:"element_name,omitempty"`
-	DestinationElementRole string `json:"destination_element_role,omitempty"`
-	DestinationElementName string `json:"destination_element_name,omitempty"`
-	DialogType             string `json:"dialog_type,omitempty"`
-	LegacyDialogMessage    string `json:"dialog_message,omitempty"`
-	DialogMessageDigest    string `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes     int    `json:"dialog_message_bytes,omitempty"`
-	Effect                 Effect `json:"effect"`
-	DryRun                 bool   `json:"dry_run"`
-	PolicyRevision         string `json:"policy_revision"`
-	CatalogRevision        string `json:"catalog_revision"`
-	ActionHash             string `json:"action_hash"`
-	CreatedAt              int64  `json:"created_at"`
-	ExpiresAt              int64  `json:"expires_at"`
+	ID                         string `json:"id"`
+	RequestID                  string `json:"request_id"`
+	SessionID                  string `json:"session_id"`
+	Owner                      Owner  `json:"owner"`
+	Target                     string `json:"target"`
+	Profile                    string `json:"profile"`
+	ControllerGeneration       uint64 `json:"controller_generation"`
+	TabID                      string `json:"tab_id"`
+	FrameID                    string `json:"frame_id,omitempty"`
+	ContextCatalogID           string `json:"context_catalog_id,omitempty"`
+	ContextGeneration          uint64 `json:"context_generation,omitempty"`
+	SnapshotID                 string `json:"snapshot_id"`
+	SnapshotGeneration         uint64 `json:"snapshot_generation"`
+	CurrentOrigin              string `json:"current_origin"`
+	DestinationOrigin          string `json:"destination_origin,omitempty"`
+	Action                     Action `json:"action"`
+	InputDigest                string `json:"input_digest,omitempty"`
+	InputBytes                 int    `json:"input_bytes,omitempty"`
+	ArtifactSHA256             string `json:"artifact_sha256,omitempty"`
+	ArtifactBytes              int64  `json:"artifact_bytes,omitempty"`
+	ArtifactFilename           string `json:"artifact_filename,omitempty"`
+	ArtifactContentType        string `json:"artifact_content_type,omitempty"`
+	ElementRole                string `json:"element_role,omitempty"`
+	ElementName                string `json:"element_name,omitempty"`
+	ElementPosition            uint32 `json:"element_position,omitempty"`
+	DestinationElementRole     string `json:"destination_element_role,omitempty"`
+	DestinationElementName     string `json:"destination_element_name,omitempty"`
+	DestinationElementPosition uint32 `json:"destination_element_position,omitempty"`
+	DialogType                 string `json:"dialog_type,omitempty"`
+	LegacyDialogMessage        string `json:"dialog_message,omitempty"`
+	DialogMessageDigest        string `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes         int    `json:"dialog_message_bytes,omitempty"`
+	Effect                     Effect `json:"effect"`
+	DryRun                     bool   `json:"dry_run"`
+	PolicyRevision             string `json:"policy_revision"`
+	CatalogRevision            string `json:"catalog_revision"`
+	ActionHash                 string `json:"action_hash"`
+	ProgressSignature          string `json:"progress_signature,omitempty"`
+	CreatedAt                  int64  `json:"created_at"`
+	ExpiresAt                  int64  `json:"expires_at"`
 }
 
 func (prepared PreparedAction) Validate(maxTextBytes int) error {
@@ -653,12 +663,15 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		len(prepared.DestinationElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
-		!validDigest(prepared.ActionHash) || prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
+		!validDigest(prepared.ActionHash) ||
+		(prepared.ProgressSignature != "" && !validDigest(prepared.ProgressSignature)) ||
+		prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}
 	if prepared.Action.Kind != ActionDrag &&
-		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "") {
+		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "" ||
+			prepared.DestinationElementPosition != 0) {
 		return fmt.Errorf("%w: unexpected prepared drag destination binding", ErrInvalid)
 	}
 	if !validContextBinding(

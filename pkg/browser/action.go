@@ -34,6 +34,7 @@ type Observation struct {
 	Snapshot           string             `json:"snapshot"`
 	PendingDialog      *DialogObservation `json:"pending_dialog,omitempty"`
 	Truncated          bool               `json:"truncated"`
+	PageStateHash      string             `json:"page_state_hash"`
 }
 
 type DialogObservation struct {
@@ -233,16 +234,23 @@ func (broker *Broker) persistDriverObservationLocked(
 		return Observation{}, fmt.Errorf("generate browser snapshot ID: %w", err)
 	}
 	refs := make(map[string]DriverElement, len(driverObservation.Elements))
+	refPositions := make(map[string]uint32, len(driverObservation.Elements))
 	visibleSnapshot := driverObservation.Snapshot
-	for _, element := range driverObservation.Elements {
+	for index, element := range driverObservation.Elements {
 		ref := stableElementRef(snapshotID, element.Target)
 		refs[ref] = element
+		refPositions[ref] = uint32(index + 1)
 		visibleSnapshot = strings.ReplaceAll(visibleSnapshot, "[ref="+element.Target+"]", "[ref="+ref+"]")
 	}
 	now := broker.now().UTC().UnixNano()
+	pageStateHash, err := browserPageStateHash(driverObservation)
+	if err != nil {
+		return Observation{}, err
+	}
 	session.SnapshotGeneration++
 	session.SnapshotID = snapshotID
 	session.SnapshotOrigin = driverObservation.Origin
+	session.PageStateHash = pageStateHash
 	session.Revision++
 	session.UpdatedAt = timestampAtLeast(now, session.UpdatedAt)
 	session.LastActivityAt = session.UpdatedAt
@@ -254,6 +262,7 @@ func (broker *Broker) persistDriverObservationLocked(
 		return Observation{}, ErrWorkerUnavailable
 	}
 	slot.refs = refs
+	slot.refPositions = refPositions
 	slot.inputs = nil
 	slot.uploads = nil
 	slot.navigationID = ""
@@ -270,6 +279,7 @@ func (broker *Broker) persistDriverObservationLocked(
 		Origin: driverObservation.Origin, Title: driverObservation.Title, Snapshot: visibleSnapshot,
 		PendingDialog: pendingDialog,
 		Truncated:     driverObservation.Truncated,
+		PageStateHash: pageStateHash,
 	}
 	if session.ContextAuthority != nil {
 		observation.ContextCatalogID = session.ContextAuthority.ID
@@ -363,6 +373,14 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	if err != nil {
 		return Preparation{}, err
 	}
+	prepared.ProgressSignature, err = browserActionProgressSignature(session.PageStateHash, prepared)
+	if err != nil {
+		return Preparation{}, err
+	}
+	if actionRequiresApproval(prepared.Effect) && session.ProgressSignature == prepared.ProgressSignature &&
+		session.ProgressCount >= 2 {
+		return Preparation{}, ErrNoProgress
+	}
 	prepared.ID = preparedID
 	prepared.RequestID = request.RequestID
 	prepared.ActionHash, err = hashPreparedAction(prepared)
@@ -424,7 +442,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		currentInvocation = diagnoseRecoveredOutcome(currentInvocation)
 		if currentInvocation.State == InvocationUnknown {
 			return currentInvocation, broker.finalizeActionInvocationLocked(
-				ctx, prepared.SessionID, currentInvocation,
+				ctx, prepared.SessionID, currentInvocation, "",
 			)
 		}
 		return currentInvocation, nil
@@ -441,7 +459,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		)
 		return invocation, errors.Join(
 			executeErr,
-			broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation),
+			broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation, ""),
 		)
 	}
 	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt {
@@ -568,7 +586,13 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 			return json.RawMessage(`{"status":"completed"}`), nil
 		},
 	)
-	postActionErr := broker.finalizeActionInvocationLocked(ctx, prepared.SessionID, invocation)
+	progressSignature := ""
+	if invocation.State == InvocationSucceeded && actionRequiresApproval(prepared.Effect) {
+		progressSignature = prepared.ProgressSignature
+	}
+	postActionErr := broker.finalizeActionInvocationLocked(
+		ctx, prepared.SessionID, invocation, progressSignature,
+	)
 	return invocation, errors.Join(executeErr, postActionErr)
 }
 
@@ -576,6 +600,7 @@ func (broker *Broker) finalizeActionInvocationLocked(
 	ctx context.Context,
 	sessionID string,
 	invocation Invocation,
+	progressSignature string,
 ) error {
 	finalizationCtx, cancelFinalization := context.WithTimeout(
 		context.WithoutCancel(ctx),
@@ -584,7 +609,7 @@ func (broker *Broker) finalizeActionInvocationLocked(
 	defer cancelFinalization()
 	var finalizationErr error
 	if invocation.State == InvocationAccepted || invocation.State.Terminal() {
-		finalizationErr = broker.invalidateSnapshotLocked(finalizationCtx, sessionID)
+		finalizationErr = broker.invalidateSnapshotLocked(finalizationCtx, sessionID, progressSignature)
 	}
 	if invocation.State != InvocationUnknown {
 		return finalizationErr
@@ -668,6 +693,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if !ok {
 			return PreparedAction{}, ErrStale
 		}
+		position, positionOK := slot.refPositions[request.Action.Ref]
+		if !positionOK || position == 0 {
+			return PreparedAction{}, ErrStale
+		}
 		resolved, origin, resolveErr := worker.Resolve(ctx, element.Target)
 		if resolveErr != nil {
 			return PreparedAction{}, resolveErr
@@ -678,6 +707,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		element = resolved
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
+		prepared.ElementPosition = position
 		switch request.Action.Kind {
 		case ActionCheck, ActionUncheck:
 			if !checkableElementRole(request.Action.Kind, element.Role) {
@@ -716,7 +746,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 	case ActionDrag:
 		source, sourceOK := slot.refs[request.Action.SourceRef]
 		destination, destinationOK := slot.refs[request.Action.DestinationRef]
-		if !sourceOK || !destinationOK || source.Target == destination.Target {
+		sourcePosition, sourcePositionOK := slot.refPositions[request.Action.SourceRef]
+		destinationPosition, destinationPositionOK := slot.refPositions[request.Action.DestinationRef]
+		if !sourceOK || !destinationOK || !sourcePositionOK || !destinationPositionOK ||
+			sourcePosition == 0 || destinationPosition == 0 || source.Target == destination.Target {
 			return PreparedAction{}, ErrStale
 		}
 		resolvedSource, resolvedDestination, origin, navigationID, validationDelegated, resolveErr := resolveDragBindings(
@@ -736,8 +769,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 		}
 		prepared.ElementRole = resolvedSource.Role
 		prepared.ElementName = resolvedSource.Name
+		prepared.ElementPosition = sourcePosition
 		prepared.DestinationElementRole = resolvedDestination.Role
 		prepared.DestinationElementName = resolvedDestination.Name
+		prepared.DestinationElementPosition = destinationPosition
 		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
 		observation, observeErr := worker.Observe(ctx)
@@ -985,7 +1020,11 @@ func (broker *Broker) quarantineWorkerSessionLocked(
 	return err
 }
 
-func (broker *Broker) invalidateSnapshotLocked(ctx context.Context, sessionID string) error {
+func (broker *Broker) invalidateSnapshotLocked(
+	ctx context.Context,
+	sessionID string,
+	progressSignature string,
+) error {
 	session, err := broker.store.GetSession(ctx, sessionID)
 	if err != nil || session.State != SessionReady {
 		return err
@@ -996,12 +1035,22 @@ func (broker *Broker) invalidateSnapshotLocked(ctx context.Context, sessionID st
 		// Live references become invalid at dispatch and must never depend on a
 		// later durable write succeeding.
 		slot.refs = nil
+		slot.refPositions = nil
 		slot.inputs = nil
 		slot.uploads = nil
 		slot.navigationID = ""
 	}
 	session.SnapshotID = ""
 	session.SnapshotOrigin = ""
+	session.PageStateHash = ""
+	if progressSignature != "" {
+		if session.ProgressSignature == progressSignature {
+			session.ProgressCount++
+		} else {
+			session.ProgressSignature = progressSignature
+			session.ProgressCount = 1
+		}
+	}
 	session.Revision++
 	session.UpdatedAt = timestampAtLeast(broker.now().UTC().UnixNano(), session.UpdatedAt)
 	session.LastActivityAt = session.UpdatedAt
@@ -1511,6 +1560,71 @@ func hashPreparedAction(prepared PreparedAction) (string, error) {
 	encoded, err := json.Marshal(prepared)
 	if err != nil {
 		return "", fmt.Errorf("encode prepared browser action: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func browserPageStateHash(observation DriverObservation) (string, error) {
+	snapshot := observation.Snapshot
+	for _, element := range observation.Elements {
+		if element.Target != "" {
+			snapshot = strings.ReplaceAll(snapshot, "[ref="+element.Target+"]", "[ref]")
+		}
+	}
+	payload := struct {
+		URL           string
+		Origin        string
+		Title         string
+		Snapshot      string
+		PendingDialog *DialogObservation
+		Truncated     bool
+	}{
+		URL: observation.URL, Origin: observation.Origin, Title: observation.Title,
+		Snapshot: snapshot, PendingDialog: observation.PendingDialog, Truncated: observation.Truncated,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode browser page state: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func browserActionProgressSignature(pageStateHash string, prepared PreparedAction) (string, error) {
+	if !validDigest(pageStateHash) {
+		return "", nil
+	}
+	action := prepared.Action
+	action.Ref = ""
+	action.SourceRef = ""
+	action.DestinationRef = ""
+	action.DialogID = ""
+	action.ArtifactRef = ""
+	payload := struct {
+		PageStateHash       string
+		Action              Action
+		InputDigest         string
+		ArtifactSHA256      string
+		ElementRole         string
+		ElementName         string
+		ElementPosition     uint32
+		DestinationRole     string
+		DestinationName     string
+		DestinationPosition uint32
+		DialogMessageDigest string
+	}{
+		PageStateHash: pageStateHash, Action: action, InputDigest: prepared.InputDigest,
+		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
+		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
+		DestinationRole:     prepared.DestinationElementRole,
+		DestinationName:     prepared.DestinationElementName,
+		DestinationPosition: prepared.DestinationElementPosition,
+		DialogMessageDigest: prepared.DialogMessageDigest,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode browser action progress: %w", err)
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil

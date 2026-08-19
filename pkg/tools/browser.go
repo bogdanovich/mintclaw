@@ -760,7 +760,9 @@ func browserContextApprovalSummary(preparation browser.ContextPreparation) strin
 
 func (*BrowserObserveTool) Name() string { return "browser_observe" }
 func (*BrowserObserveTool) Description() string {
-	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot."
+	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot. " +
+		"Before repeating a collection search, verify that its scope can contain the target: inactive, expired, deleted, or historical items require all, old, history, or archive views. " +
+		"After one empty or mismatched search, widen scope; when the snapshot is truncated, ambiguous, or follows a no-progress action, request one bounded screenshot."
 }
 
 func (*BrowserObserveTool) Parameters() map[string]any {
@@ -812,6 +814,7 @@ type browserObservationView struct {
 	Artifact           *browser.ScreenshotArtifact `json:"artifact,omitempty"`
 	Replayed           bool                        `json:"replayed,omitempty"`
 	StaleRecovered     bool                        `json:"stale_recovered,omitempty"`
+	PageStateHash      string                      `json:"page_state_hash,omitempty"`
 }
 
 type browserObservationLimits struct {
@@ -829,6 +832,7 @@ func (runtime *browserToolRuntime) observationResult(observation browser.Observa
 		SnapshotID:        observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		URL: observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: observation.Snapshot, PendingDialog: observation.PendingDialog,
+		PageStateHash: observation.PageStateHash,
 		Tabs: []browserTabView{{
 			TabID: observation.TabID, SnapshotID: observation.SnapshotID,
 			SnapshotGeneration: observation.SnapshotGeneration,
@@ -1212,7 +1216,9 @@ func (*BrowserActTool) Description() string {
 	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval. " +
 		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
 		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
-		"context_generation, copy both together; missing or incomplete context authority fails closed."
+		"context_generation, copy both together; missing or incomplete context authority fails closed. " +
+		"A third equivalent approval-bound action on unchanged page state is rejected before approval and requires replanning. " +
+		"Use navigate only for a known ordinary GET URL; POST, scripted, submit, or ambiguous interactions remain clicks and approval-bound."
 }
 
 func (tool *BrowserActTool) Parameters() map[string]any {
@@ -1744,6 +1750,13 @@ func browserToolError(err error) *toolshared.ToolResult {
 }
 
 func browserActionToolError(err error) *toolshared.ToolResult {
+	if errors.Is(err, browser.ErrNoProgress) {
+		return browserErrorResult(
+			"no_progress",
+			"Equivalent browser actions did not change page state.",
+			"replan_collection_scope",
+		)
+	}
 	if errors.Is(err, browser.ErrStale) {
 		return browserErrorResult(
 			"stale_snapshot",

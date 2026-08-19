@@ -153,10 +153,11 @@ func validSnapshotTransition(current, next Session) bool {
 	}
 	if next.SnapshotID == current.SnapshotID {
 		return next.SnapshotGeneration == current.SnapshotGeneration &&
-			next.SnapshotOrigin == current.SnapshotOrigin
+			next.SnapshotOrigin == current.SnapshotOrigin && next.PageStateHash == current.PageStateHash
 	}
 	if next.SnapshotID == "" {
-		return next.SnapshotGeneration == current.SnapshotGeneration && next.SnapshotOrigin == ""
+		return next.SnapshotGeneration == current.SnapshotGeneration && next.SnapshotOrigin == "" &&
+			next.PageStateHash == ""
 	}
 	return next.SnapshotGeneration == current.SnapshotGeneration+1 && next.SnapshotOrigin != ""
 }
