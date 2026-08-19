@@ -1111,6 +1111,49 @@ func TestToolFeedbackCoordinator_OverlappingRetainedFinalsSettleOnlyOwnedGenerat
 	}
 }
 
+func TestToolFeedbackCoordinator_SameGenerationClaimsRemainUntilLastPendingTerminal(t *testing.T) {
+	for _, secondSuccess := range []bool{true, false} {
+		t.Run(fmt.Sprintf("second_success_%t", secondSuccess), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			first := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			second := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			coordinator.CompleteTerminal(t.Context(), first, false)
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "while second pending", operations, send,
+			); err != nil || len(ids) != 0 || sends != 0 {
+				t.Fatalf("pending peer delivery = (%v, %v), sends %d, want suppressed", ids, err, sends)
+			}
+
+			coordinator.CompleteTerminal(t.Context(), second, secondSuccess)
+			ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "after second completion", operations, send,
+			)
+			if secondSuccess {
+				if err != nil || len(ids) != 0 || sends != 0 {
+					t.Fatalf("successful peer delivery = (%v, %v), sends %d, want suppressed", ids, err, sends)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, []string{"progress-1"}) || sends != 1 {
+				t.Fatalf("all-failed delivery = (%v, %v), sends %d, want progress-1", ids, err, sends)
+			}
+		})
+	}
+}
+
 func TestToolFeedbackCoordinator_TransientSuccessSurvivesRetainedFailure(t *testing.T) {
 	coordinator := newTestToolFeedbackCoordinator(false)
 	defer coordinator.StopAll()

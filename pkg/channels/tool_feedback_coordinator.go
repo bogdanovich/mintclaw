@@ -51,6 +51,11 @@ const (
 	toolFeedbackTerminalSuccessRetained
 )
 
+type toolFeedbackGenerationClaim struct {
+	pending  int
+	admitted bool
+}
+
 type toolFeedbackEntry struct {
 	opMu sync.Mutex
 	mu   sync.Mutex
@@ -65,6 +70,7 @@ type toolFeedbackEntry struct {
 	sending                 bool
 	paused                  bool
 	activeGenerations       map[string]struct{}
+	generationClaims        map[string]toolFeedbackGenerationClaim
 	terminalizedGenerations map[string]struct{}
 	terminalizedOrder       []string
 	current                 trackedToolFeedbackMessage
@@ -72,14 +78,14 @@ type toolFeedbackEntry struct {
 }
 
 type toolFeedbackTerminal struct {
-	key                 string
-	entry               *toolFeedbackEntry
-	generation          uint64
-	retain              bool
-	absorbed            bool
-	completed           bool
-	traceGenerations    []string
-	admittedGenerations []string
+	key                string
+	entry              *toolFeedbackEntry
+	generation         uint64
+	retain             bool
+	absorbed           bool
+	completed          bool
+	traceGenerations   []string
+	claimedGenerations []string
 }
 
 // ToolFeedbackCoordinator is the single owner of editable tool-feedback
@@ -441,7 +447,8 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 		}
 		entry.mu.Lock()
 		traceGenerations := normalizeToolFeedbackGenerations(generations)
-		admittedGenerations := entry.addActiveGenerations(traceGenerations)
+		claimedGenerations := append([]string(nil), traceGenerations...)
+		entry.claimTerminalGenerations(claimedGenerations)
 		if retain && (!entry.terminal || len(traceGenerations) == 0) {
 			traceGenerations = entry.activeGenerationsSnapshot()
 		}
@@ -456,7 +463,7 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 			entry.mu.Unlock()
 			return &toolFeedbackTerminal{
 				key: key, entry: entry, generation: generation, retain: retain, absorbed: true,
-				traceGenerations: traceGenerations, admittedGenerations: admittedGenerations,
+				traceGenerations: traceGenerations, claimedGenerations: claimedGenerations,
 			}
 		}
 		if !entry.terminal {
@@ -476,7 +483,7 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 
 		return &toolFeedbackTerminal{
 			key: key, entry: entry, generation: generation, retain: retain,
-			traceGenerations: traceGenerations, admittedGenerations: admittedGenerations,
+			traceGenerations: traceGenerations, claimedGenerations: claimedGenerations,
 		}
 	}
 }
@@ -498,19 +505,23 @@ func normalizeToolFeedbackGenerations(generations []string) []string {
 	return normalized
 }
 
-func (entry *toolFeedbackEntry) addActiveGenerations(generations []string) []string {
-	admitted := make([]string, 0, len(generations))
+func (entry *toolFeedbackEntry) claimTerminalGenerations(generations []string) {
 	for _, generation := range generations {
 		if entry.activeGenerations == nil {
 			entry.activeGenerations = make(map[string]struct{})
 		}
-		if _, exists := entry.activeGenerations[generation]; exists {
-			continue
+		_, active := entry.activeGenerations[generation]
+		if !active {
+			entry.activeGenerations[generation] = struct{}{}
 		}
-		entry.activeGenerations[generation] = struct{}{}
-		admitted = append(admitted, generation)
+		if entry.generationClaims == nil {
+			entry.generationClaims = make(map[string]toolFeedbackGenerationClaim)
+		}
+		claim := entry.generationClaims[generation]
+		claim.pending++
+		claim.admitted = claim.admitted || !active
+		entry.generationClaims[generation] = claim
 	}
-	return admitted
 }
 
 func (entry *toolFeedbackEntry) activeGenerationsSnapshot() []string {
@@ -525,6 +536,7 @@ func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
 	for _, generation := range generations {
 		if _, exists := entry.terminalizedGenerations[generation]; exists {
 			delete(entry.activeGenerations, generation)
+			delete(entry.generationClaims, generation)
 			continue
 		}
 		if entry.terminalizedGenerations == nil {
@@ -533,6 +545,7 @@ func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
 		entry.terminalizedGenerations[generation] = struct{}{}
 		entry.terminalizedOrder = append(entry.terminalizedOrder, generation)
 		delete(entry.activeGenerations, generation)
+		delete(entry.generationClaims, generation)
 	}
 	for len(entry.terminalizedOrder) > toolFeedbackGenerationHistoryLimit {
 		oldest := entry.terminalizedOrder[0]
@@ -541,9 +554,21 @@ func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
 	}
 }
 
-func (entry *toolFeedbackEntry) releaseActiveGenerations(generations []string) {
+func (entry *toolFeedbackEntry) releaseTerminalClaims(generations []string) {
 	for _, generation := range generations {
-		delete(entry.activeGenerations, generation)
+		claim, exists := entry.generationClaims[generation]
+		if !exists {
+			continue
+		}
+		claim.pending--
+		if claim.pending > 0 {
+			entry.generationClaims[generation] = claim
+			continue
+		}
+		if claim.admitted {
+			delete(entry.activeGenerations, generation)
+		}
+		delete(entry.generationClaims, generation)
 	}
 }
 
@@ -552,7 +577,7 @@ func (entry *toolFeedbackEntry) settleTerminalGenerations(terminal *toolFeedback
 		entry.terminalizeGenerations(terminal.traceGenerations)
 		return
 	}
-	entry.releaseActiveGenerations(terminal.admittedGenerations)
+	entry.releaseTerminalClaims(terminal.claimedGenerations)
 }
 
 func resetToolFeedbackTerminal(entry *toolFeedbackEntry) {
