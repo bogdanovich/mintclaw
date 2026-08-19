@@ -927,6 +927,13 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	} else {
 		observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
 		if errors.Is(err, browser.ErrStale) {
+			session, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
+			if statusErr != nil {
+				return browserToolError(statusErr)
+			}
+			if strings.TrimSpace(session.FrameID) != "" {
+				return browserContextToolError(browser.ErrStale)
+			}
 			observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
 			if err == nil {
 				staleRecovered = true

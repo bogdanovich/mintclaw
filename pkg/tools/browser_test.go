@@ -1043,6 +1043,27 @@ func TestBrowserObserveDoesNotReplayFrameSpecificStaleRead(t *testing.T) {
 	}
 }
 
+func TestBrowserObserveDoesNotReplayImplicitSelectedFrameStaleRead(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		status: browser.Session{
+			ID: "browser_session_1", TabID: "tab_primary", FrameID: "frame_selected",
+		},
+		observeErrors: []error{browser.ErrStale, nil},
+	}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"browser_session_id": "browser_session_1", "tab_id": "tab_primary"},
+	)
+	if result == nil || !result.IsError || source.observeCalls != 1 || source.contextObserveCalls != 0 ||
+		source.statusSessionID != "browser_session_1" ||
+		!strings.Contains(result.ContentForLLM(), `"code":"context_catalog_stale"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"list_contexts_again"`) ||
+		source.prepareCalls != 0 || source.executeCalls != 0 {
+		t.Fatalf("implicit frame stale result = %#v; source = %#v", result, source)
+	}
+}
+
 func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testing.T) {
 	parameters := NewBrowserActTool(
 		browserToolTestConfig(),
