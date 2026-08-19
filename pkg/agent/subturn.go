@@ -618,12 +618,24 @@ func spawnSubTurn(
 		if !durableTask {
 			removeDurableInteractionTools(agent.Tools)
 		}
-		if !cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly {
-			removeUserDeliveryTools(agent.Tools)
-		}
 	}
 	requireObjectiveOutcome := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
 	objectiveChecklist := normalizeObjectiveChecklist(cfg.ObjectiveItems)
+	if requireObjectiveOutcome && len(objectiveChecklist) == 0 {
+		outcome := blockedObjectiveOutcome("a valid declared objective checklist is required before browser execution")
+		projection := objectiveOutcomeUserContent("", outcome)
+		return (&toolshared.ToolResult{ForLLM: projection, ForUser: projection}).
+			WithCompletion(&toolshared.CompletionResult{
+				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
+			}).
+			WithDeliverable(&toolshared.DeliverableResult{
+				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
+			}), nil
+	}
+	if agent.Tools != nil && (requireObjectiveOutcome ||
+		(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly)) {
+		removeUserDeliveryTools(agent.Tools)
+	}
 	childTask := cfg.SystemPrompt
 	if requireObjectiveOutcome {
 		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
@@ -671,10 +683,11 @@ func spawnSubTurn(
 		EnableSummary:           false,
 		SendResponse: !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
 			(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent),
-		SuppressToolUserDelivery: !cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly,
-		SuppressToolFeedback:     parentTS.opts.SuppressToolFeedback,
-		NoHistory:                !durableTask,
-		SkipInitialSteeringPoll:  true,
+		SuppressToolUserDelivery: requireObjectiveOutcome ||
+			(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly),
+		SuppressToolFeedback:    parentTS.opts.SuppressToolFeedback,
+		NoHistory:               !durableTask,
+		SkipInitialSteeringPoll: true,
 	}
 	if !opts.TurnProfile.Enabled {
 		opts.TurnProfile = parentTS.opts.TurnProfile

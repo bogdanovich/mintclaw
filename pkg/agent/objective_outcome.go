@@ -162,6 +162,7 @@ func validateObjectiveOutcome(
 		expected[item.ID] = item
 	}
 	partitioned := make(map[string]struct{}, len(checklist))
+	consumedReceipts := make(map[string]struct{})
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
 		item = boundedObjectiveText(item)
@@ -217,11 +218,16 @@ func validateObjectiveOutcome(
 				continue
 			}
 			seenReceipts[receiptID] = struct{}{}
+			if _, consumed := consumedReceipts[receiptID]; consumed {
+				valid = false
+				continue
+			}
 			receipt, found := receipts[receiptID]
 			if !found {
 				valid = false
 				continue
 			}
+			consumedReceipts[receiptID] = struct{}{}
 			item.Receipts = append(item.Receipts, receipt)
 		}
 		if item.Kind == "external_action" && len(item.Receipts) == 0 {

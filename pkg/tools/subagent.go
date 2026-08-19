@@ -211,7 +211,7 @@ func (sm *SubagentManager) Spawn(
 func objectiveItemsParameter() map[string]any {
 	return map[string]any{
 		"type":        "array",
-		"description": "Checklist of every independently verifiable requested outcome. Required for browser-capable child agents. Use external_action for state changes and result for read-only findings.",
+		"description": "Declared verification contract for the child. Required and validated before browser-capable children execute. Include every outcome the caller needs verified; use external_action for state changes and result for read-only findings. The runtime does not infer omitted intent from task prose.",
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

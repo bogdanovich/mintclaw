@@ -2538,6 +2538,76 @@ func TestSpawnSubTurn_DefaultSyncDeliveryRemovesUserDeliveryTools(t *testing.T) 
 	}
 }
 
+func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
+	provider := &subturnToolCaptureProvider{}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	tool := &outcomeBrowserApprovalTool{}
+	betaAgent.Tools.Register(tool)
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-browser-preflight",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alphaAgent,
+		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", SystemPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+	})
+	if err != nil || result == nil || result.Completion == nil || result.Completion.ObjectiveOutcome == nil ||
+		result.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomeBlocked {
+		t.Fatalf("browser preflight result = (%#v, %v)", result, err)
+	}
+	if tool.executions != 0 || len(provider.toolNames()) != 0 {
+		t.Fatalf(
+			"browser child executed before checklist validation: executions=%d tools=%v",
+			tool.executions,
+			provider.toolNames(),
+		)
+	}
+}
+
+func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) {
+	provider := &subturnToolCaptureProvider{}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	betaAgent.Tools.Register(&outcomeBrowserApprovalTool{})
+	for _, name := range []string{"message", "send_file", "send_tts", "reaction", "read_file"} {
+		betaAgent.Tools.Register(&allowlistTestTool{name: name})
+	}
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-browser-delivery",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alphaAgent,
+		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
+	}
+	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", SystemPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "inspect one item", Kind: "result"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := provider.toolNames()
+	for _, name := range []string{"message", "send_file", "send_tts", "reaction"} {
+		if names[name] {
+			t.Fatalf("browser child provider saw direct-delivery tool %q", name)
+		}
+	}
+	if !names["read_file"] || !names["browser_act"] {
+		t.Fatalf("browser child lost non-delivery tools: %v", names)
+	}
+}
+
 func TestSpawnSubTurn_TargetAgentIDRemovesNodeFileTools(t *testing.T) {
 	provider := &subturnToolCaptureProvider{}
 	al, cleanup := newMultiAgentLoop(t, provider)

@@ -115,6 +115,27 @@ func TestExtractObjectiveOutcomeRejectsOmittedRequestedItem(t *testing.T) {
 	}
 }
 
+func TestExtractObjectiveOutcomeDoesNotReuseReceiptAcrossActions(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv-one"]},` +
+		`{"objective_id":"objective_2","receipt_ids":["inv-one"]}],"missing_items":[]}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "publish Yakima", Kind: "external_action"},
+		{Item: "publish Vissani", Kind: "external_action"},
+	})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-one", "effect": "external_commit"},
+	}}
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome.Status != toolshared.ObjectiveOutcomePartial || len(outcome.CompletedItems) != 1 ||
+		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "Vissani") {
+		t.Fatalf("one receipt certified multiple actions: %#v", outcome)
+	}
+}
+
 func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing.T) {
 	outcome := &toolshared.ObjectiveOutcome{
 		Status:         toolshared.ObjectiveOutcomePartial,
