@@ -236,20 +236,23 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
 	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
-	spawner := &mockSpawner{done: make(chan struct{})}
+	spawner := &mockSpawner{}
 	tool.SetSpawner(spawner)
+	completed := make(chan struct{})
 
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
 		"task":          "wait for deployment mode",
 		"delivery_mode": string(toolshared.AsyncDeliveryParentOnly),
-	}, nil)
+	}, func(context.Context, *toolshared.ToolResult) {
+		close(completed)
+	})
 	if result == nil || !result.Async {
 		t.Fatalf("spawn result = %#v", result)
 	}
 	select {
-	case <-spawner.done:
+	case <-completed:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for spawned subturn")
+		t.Fatal("timed out waiting for spawned subturn completion")
 	}
 	if !strings.HasPrefix(spawner.lastConfig.TaskID, "subagent-") {
 		t.Fatalf("subturn TaskID = %q", spawner.lastConfig.TaskID)
