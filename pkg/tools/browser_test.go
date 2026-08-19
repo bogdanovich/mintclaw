@@ -36,29 +36,31 @@ type fakeBrowserToolSource struct {
 	contextPreparation    browser.ContextPreparation
 	contextResult         browser.ContextResult
 	err                   error
+	observeErrors         []error
 	executeErr            error
 
-	openRequest       browser.OpenRequest
-	statusOwner       browser.Owner
-	statusSessionID   string
-	prepareRequest    browser.PrepareActionRequest
-	screenshotRequest browser.ScreenshotRequest
-	deliveryRequest   browser.ScreenshotDeliveryRequest
-	downloadDelivery  browser.DownloadDeliveryRequest
-	observeCalls      int
-	executeOwner      browser.Owner
-	executePrepared   string
-	executeApproval   *browser.ApprovalBinding
-	prepareCalls      int
-	executeCalls      int
-	contextRequest    browser.ContextRequest
-	contextApproval   *browser.ApprovalBinding
-	profileStatus     browser.ProfileAvailability
-	readiness         browser.PassiveReadiness
-	readinessCalls    int
-	actions           []browser.ActionKind
-	cleanupOwner      browser.Owner
-	cleanupCalls      int
+	openRequest         browser.OpenRequest
+	statusOwner         browser.Owner
+	statusSessionID     string
+	prepareRequest      browser.PrepareActionRequest
+	screenshotRequest   browser.ScreenshotRequest
+	deliveryRequest     browser.ScreenshotDeliveryRequest
+	downloadDelivery    browser.DownloadDeliveryRequest
+	observeCalls        int
+	contextObserveCalls int
+	executeOwner        browser.Owner
+	executePrepared     string
+	executeApproval     *browser.ApprovalBinding
+	prepareCalls        int
+	executeCalls        int
+	contextRequest      browser.ContextRequest
+	contextApproval     *browser.ApprovalBinding
+	profileStatus       browser.ProfileAvailability
+	readiness           browser.PassiveReadiness
+	readinessCalls      int
+	actions             []browser.ActionKind
+	cleanupOwner        browser.Owner
+	cleanupCalls        int
 }
 
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
@@ -181,7 +183,8 @@ func (source *fakeBrowserToolSource) ObserveContext(
 	_ context.Context,
 	_ browser.ObserveRequest,
 ) (browser.Observation, error) {
-	return source.observe, source.err
+	source.contextObserveCalls++
+	return source.observe, source.nextObserveError()
 }
 
 func (source *fakeBrowserToolSource) ListContexts(
@@ -364,7 +367,16 @@ func (source *fakeBrowserToolSource) Observe(
 	source.observeCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID + ":" + tabID
-	return source.observe, source.err
+	return source.observe, source.nextObserveError()
+}
+
+func (source *fakeBrowserToolSource) nextObserveError() error {
+	if len(source.observeErrors) == 0 {
+		return source.err
+	}
+	err := source.observeErrors[0]
+	source.observeErrors = source.observeErrors[1:]
+	return err
 }
 
 func (source *fakeBrowserToolSource) LookupScreenshot(
@@ -971,6 +983,63 @@ func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
 		!strings.Contains(result.ContentForLLM(), `"action":"observe_again"`) ||
 		strings.Contains(result.ContentForLLM(), "into the action") {
 		t.Fatalf("neutral stale browser result = %#v", result)
+	}
+}
+
+func TestBrowserObserveRecoversOneStaleTopLevelRead(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		observe: browser.Observation{
+			SessionID: "browser_session_1", TabID: "tab_primary",
+			SnapshotID: "snapshot_fresh", SnapshotGeneration: 2,
+			URL: "https://example.com/postings", Origin: "https://example.com",
+			Snapshot: "fresh postings",
+		},
+		observeErrors: []error{browser.ErrStale, nil},
+	}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"browser_session_id": "browser_session_1", "tab_id": "tab_primary"},
+	)
+	var view browserObservationView
+	decodeBrowserToolResult(t, result, &view)
+	if result.IsError || source.observeCalls != 2 || source.contextObserveCalls != 0 ||
+		!view.StaleRecovered || view.SnapshotID != "snapshot_fresh" ||
+		source.prepareCalls != 0 || source.executeCalls != 0 {
+		t.Fatalf("stale recovery result = %#v; view = %#v; source = %#v", result, view, source)
+	}
+}
+
+func TestBrowserObserveBoundsRepeatedStaleTopLevelRead(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available:     true,
+		observeErrors: []error{browser.ErrStale, browser.ErrStale, nil},
+	}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"browser_session_id": "browser_session_1", "tab_id": "tab_primary"},
+	)
+	if result == nil || !result.IsError || source.observeCalls != 2 ||
+		!strings.Contains(result.ContentForLLM(), `"action":"list_contexts_again"`) ||
+		source.prepareCalls != 0 || source.executeCalls != 0 {
+		t.Fatalf("bounded stale result = %#v; source = %#v", result, source)
+	}
+}
+
+func TestBrowserObserveDoesNotReplayFrameSpecificStaleRead(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, err: browser.ErrStale}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"frame_id": "frame_1", "context_catalog_id": "catalog_1", "context_generation": 4,
+		},
+	)
+	if result == nil || !result.IsError || source.contextObserveCalls != 1 || source.observeCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), `"code":"context_catalog_stale"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"list_contexts_again"`) ||
+		source.prepareCalls != 0 || source.executeCalls != 0 {
+		t.Fatalf("frame stale result = %#v; source = %#v", result, source)
 	}
 }
 

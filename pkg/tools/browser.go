@@ -811,6 +811,7 @@ type browserObservationView struct {
 	Limits             browserObservationLimits    `json:"limits"`
 	Artifact           *browser.ScreenshotArtifact `json:"artifact,omitempty"`
 	Replayed           bool                        `json:"replayed,omitempty"`
+	StaleRecovered     bool                        `json:"stale_recovered,omitempty"`
 }
 
 type browserObservationLimits struct {
@@ -912,8 +913,10 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		return browserToolError(browser.ErrInvalid)
 	}
 	var observation browser.Observation
+	staleRecovered := false
 	contextSource, contextAvailable := tool.runtime.contextSource()
-	if frameID != "" || catalogID != "" || contextGeneration != 0 {
+	explicitContext := frameID != "" || catalogID != "" || contextGeneration != 0
+	if explicitContext {
 		if !contextAvailable {
 			return browserToolError(browser.ErrDriverIncompatible)
 		}
@@ -923,11 +926,28 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		})
 	} else {
 		observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+		if errors.Is(err, browser.ErrStale) {
+			observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+			if err == nil {
+				staleRecovered = true
+			}
+			if errors.Is(err, browser.ErrStale) {
+				return browserErrorResult(
+					"stale_snapshot",
+					"Browser observation remained stale after one read-only refresh.",
+					"list_contexts_again",
+				)
+			}
+		}
 	}
 	if err != nil {
+		if explicitContext {
+			return browserContextToolError(err)
+		}
 		return browserToolError(err)
 	}
 	view := tool.runtime.observationResult(observation)
+	view.StaleRecovered = staleRecovered
 	if !wantScreenshot {
 		return tool.runtime.result(view)
 	}
