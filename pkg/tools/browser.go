@@ -909,7 +909,7 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	staleRecovered := false
 	contextSource, contextAvailable := tool.runtime.contextSource()
 	explicitContext := frameID != "" || catalogID != "" || contextGeneration != 0
-	implicitSelectedFrame := false
+	var observedSession browser.Session
 	if tabID == "" || !explicitContext {
 		session, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
 		if statusErr != nil {
@@ -918,7 +918,7 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		if tabID == "" {
 			tabID = session.TabID
 		}
-		implicitSelectedFrame = !explicitContext && strings.TrimSpace(session.FrameID) != ""
+		observedSession = session
 	}
 	if explicitContext {
 		if !contextAvailable {
@@ -929,12 +929,32 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 			ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
 		})
 	} else {
-		observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+		if contextAvailable {
+			observation, err = contextSource.ObserveContext(
+				ctx,
+				browserObserveRequestForSession(owner, sessionID, tabID, observedSession),
+			)
+		} else {
+			observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+		}
 		if errors.Is(err, browser.ErrStale) {
-			if implicitSelectedFrame {
+			if strings.TrimSpace(observedSession.FrameID) != "" {
 				return browserContextToolError(browser.ErrStale)
 			}
-			observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
+			if !contextAvailable {
+				return browserToolError(browser.ErrStale)
+			}
+			refreshedSession, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
+			if statusErr != nil {
+				return browserToolError(statusErr)
+			}
+			if strings.TrimSpace(refreshedSession.FrameID) != "" {
+				return browserContextToolError(browser.ErrStale)
+			}
+			observation, err = contextSource.ObserveContext(
+				ctx,
+				browserObserveRequestForSession(owner, sessionID, tabID, refreshedSession),
+			)
 			if err == nil {
 				staleRecovered = true
 			}
@@ -971,6 +991,22 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	}
 	view.Artifact = &artifact
 	return tool.screenshotResult(ctx, view, owner, requestID, artifact)
+}
+
+func browserObserveRequestForSession(
+	owner browser.Owner,
+	sessionID string,
+	tabID string,
+	session browser.Session,
+) browser.ObserveRequest {
+	request := browser.ObserveRequest{
+		Owner: owner, SessionID: sessionID, TabID: tabID, FrameID: session.FrameID,
+	}
+	if session.ContextAuthority != nil {
+		request.ContextCatalogID = session.ContextAuthority.ID
+		request.ContextGeneration = session.ContextAuthority.Generation
+	}
+	return request
 }
 
 func (tool *BrowserObserveTool) screenshotResult(
