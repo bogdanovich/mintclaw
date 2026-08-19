@@ -3472,7 +3472,222 @@ func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 	}
 }
 
-func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing.T) {
+func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	m.lifecycle.storeChannel("test", ch)
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
+
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+	m.PauseToolFeedback(t.Context(), feedback)
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
+		t.Fatalf("ActiveCount() after pause = %d, want 1", count)
+	}
+
+	approval := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "allow action?",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionApproval,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&approval.Context)
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, approval); err != nil || !sent {
+		t.Fatalf("approval prompt = (%v, %v)", sent, err)
+	}
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
+		t.Fatalf("ActiveCount() after approval = %d, want 1", count)
+	}
+
+	feedback.Content = "resumed"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnTwo}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-1"}) {
+		t.Fatalf("resumed feedback = (%v, %v, %v), want edit of msg-1", ids, sent, err)
+	}
+	final := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "done",
+		TraceScopes: []runtimeevents.TraceScope{turnTwo},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, final); err != nil || !sent {
+		t.Fatalf("final response = (%v, %v)", sent, err)
+	}
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
+		t.Fatalf("ActiveCount() after final = %d, want 0", count)
+	}
+
+	feedback.Content = "late prior turn"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnOne}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late prior-turn feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+
+	turnThree := runtimeevents.NewTraceScope("/workspace/main", "turn-3")
+	feedback.Content = "next request"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnThree}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-4"}) {
+		t.Fatalf("next-turn feedback = (%v, %v, %v), want fresh msg-4", ids, sent, err)
+	}
+	feedback.Content = "delayed prior turn after reopen"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnOne}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("delayed prior-turn feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+	feedback.Content = "next request"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnThree}
+	m.DismissToolFeedback(t.Context(), feedback)
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
+		t.Fatalf("ActiveCount() after next-turn cleanup = %d, want 0", count)
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	want := []string{
+		"send:working", "send:allow action?", "edit:msg-1", "send:done", "delete:msg-1",
+		"send:next request", "delete:msg-4",
+	}
+	if !slices.Equal(ch.operations, want) {
+		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
+func TestDismissToolFeedback_StableSessionWithoutTraceRetainsGenerationTombstone(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	m.lifecycle.storeChannel("test", ch)
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+
+	m.DismissToolFeedback(t.Context(), bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session",
+		Context: bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	feedback.Content = "late working"
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if want := []string{"send:working", "delete:msg-1"}; !slices.Equal(ch.operations, want) {
+		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
+func TestAbsorbedFinalTerminalizesItsFeedbackGeneration(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnA := runtimeevents.NewTraceScope("/workspace/main", "turn-a")
+	turnB := runtimeevents.NewTraceScope("/workspace/main", "turn-b")
+	turnC := runtimeevents.NewTraceScope("/workspace/main", "turn-c")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working A",
+		TraceScopes: []runtimeevents.TraceScope{turnA},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("feedback A = (%v, %v)", sent, err)
+	}
+	for _, final := range []struct {
+		content string
+		scope   runtimeevents.TraceScope
+	}{{content: "final A", scope: turnA}, {content: "final B", scope: turnB}} {
+		message := testOutboundMessage(bus.OutboundMessage{
+			Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: final.content,
+			TraceScopes: []runtimeevents.TraceScope{final.scope},
+			Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+		})
+		if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, message); err != nil || !sent {
+			t.Fatalf("%s = (%v, %v)", final.content, sent, err)
+		}
+	}
+
+	feedback.Content = "working C"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnC}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-4"}) {
+		t.Fatalf("feedback C = (%v, %v, %v), want msg-4", ids, sent, err)
+	}
+	feedback.Content = "delayed B"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnB}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("delayed B = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+}
+
+func TestFinalOutboundTerminalizesAllCorrelatedToolFeedbackGenerations(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+	final := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "done",
+		TraceScopes: []runtimeevents.TraceScope{turnOne, turnTwo},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, final); err != nil || !sent {
+		t.Fatalf("final response = (%v, %v)", sent, err)
+	}
+
+	feedback.Content = "late correlated turn"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnTwo}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late correlated feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+}
+
+func TestDismissToolFeedback_StableSessionSpansTurnScopes(t *testing.T) {
 	tests := []struct {
 		name       string
 		turnIDs    []string
@@ -3485,10 +3700,10 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 			wantOps: []string{"send:turn-1", "delete:msg-1"},
 		},
 		{
-			name:       "ambiguous",
+			name:       "multiple turns",
 			turnIDs:    []string{"turn-1", "turn-2"},
-			wantActive: 2,
-			wantOps:    []string{"send:turn-1", "send:turn-2"},
+			wantActive: 0,
+			wantOps:    []string{"send:turn-1", "edit:msg-1", "delete:msg-1"},
 		},
 	}
 	for _, tt := range tests {
@@ -3533,7 +3748,7 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 	}
 }
 
-func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testing.T) {
+func TestToolFeedbackTerminal_StableSessionSpansTurnScopes(t *testing.T) {
 	tests := []struct {
 		name       string
 		turnIDs    []string
@@ -3546,10 +3761,12 @@ func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testin
 			wantOps: []string{"send:turn-1", "send:done", "delete:msg-1"},
 		},
 		{
-			name:       "ambiguous",
+			name:       "multiple turns",
 			turnIDs:    []string{"turn-1", "turn-2"},
-			wantActive: 2,
-			wantOps:    []string{"send:turn-1", "send:turn-2", "send:done"},
+			wantActive: 0,
+			wantOps: []string{
+				"send:turn-1", "edit:msg-1", "send:done", "delete:msg-1",
+			},
 		},
 	}
 	for _, tt := range tests {

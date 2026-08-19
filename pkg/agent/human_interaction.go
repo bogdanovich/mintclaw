@@ -154,6 +154,11 @@ func (al *AgentLoop) observeInteractionEvent(
 		return
 	}
 	record := observation.Record
+	chained := observation.Event.Code == "continued_with_next_interaction"
+	if !chained && (record.Status == interactions.StatusResolved || record.Status == interactions.StatusCancelled ||
+		record.Status == interactions.StatusFailed) {
+		al.dismissTerminalInteractionToolFeedback(record)
+	}
 	al.runtimeEventEmitter().emitEvent(kind, HookMeta{
 		TraceScope: runtimeevents.NewTraceScope(workspace, record.Origin.TurnID),
 		AgentID:    record.Route.AgentID,
@@ -170,6 +175,21 @@ func (al *AgentLoop) observeInteractionEvent(
 		Code:          observation.Event.Code,
 		Success:       observation.Event.Success,
 	})
+}
+
+func (al *AgentLoop) dismissTerminalInteractionToolFeedback(record interactions.Record) {
+	if al == nil || al.channelManager == nil || strings.TrimSpace(record.Route.Channel) == "" ||
+		strings.TrimSpace(record.Route.ChatID) == "" {
+		return
+	}
+	target := toolFeedbackTargetForSession(
+		record.Route.Channel,
+		record.Route.ChatID,
+		record.Origin.ExecutionContext,
+		interactionContinuationSessionKey(record),
+		nil,
+	)
+	al.toolFeedbackPublisher().dismissToolFeedback(context.Background(), target)
 }
 
 func (al *AgentLoop) resolveInteractionDomainState(observation interactions.EventObservation) {

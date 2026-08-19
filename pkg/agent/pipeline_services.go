@@ -219,3 +219,10 @@ func (p *Pipeline) dismissToolFeedbackForTurn(ctx context.Context, ts *turnState
 	}
 	p.Interaction.ToolFeedback.dismissToolFeedbackForTurn(ctx, ts)
 }
+
+func (p *Pipeline) pauseToolFeedbackForTurn(ctx context.Context, ts *turnState) {
+	if p == nil || p.Interaction.ToolFeedback == nil {
+		return
+	}
+	p.Interaction.ToolFeedback.pauseToolFeedbackForTurn(ctx, ts)
+}

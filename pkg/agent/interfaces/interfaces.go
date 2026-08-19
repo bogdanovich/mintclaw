@@ -76,6 +76,10 @@ type ChannelManager interface {
 	// target. The message envelope keeps route, session, and turn identity
 	// together; content and settlement fields are ignored.
 	DismissToolFeedback(ctx context.Context, target bus.OutboundMessage)
+
+	// PauseToolFeedback stops animation without deleting the logical session's
+	// carrier so a durable continuation can resume editing it.
+	PauseToolFeedback(ctx context.Context, target bus.OutboundMessage)
 }
 
 // ProvisionalChannelSender exposes sends whose definitely-not-sent failures

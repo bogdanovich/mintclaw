@@ -584,6 +584,66 @@ func TestToolFeedbackCoordinator_PendingSendTerminalDeletesLateMessage(t *testin
 	}
 }
 
+func TestToolFeedbackCoordinator_PauseRacingSendRetainsSingleCarrier(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	const key = "telegram:chat-1#session:task-1"
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	deliverDone := make(chan error, 1)
+	edits := 0
+	operations := toolFeedbackOperations{
+		edit: func(context.Context, string, string, string) error {
+			edits++
+			return nil
+		},
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	go func() {
+		_, err := coordinator.Deliver(
+			t.Context(), key, "chat-1", "working", operations,
+			func(context.Context, string) ([]string, error) {
+				close(sendStarted)
+				<-releaseSend
+				return []string{"progress-1"}, nil
+			},
+		)
+		deliverDone <- err
+	}()
+	<-sendStarted
+	pauseDone := make(chan struct{})
+	go func() {
+		coordinator.Pause(key)
+		close(pauseDone)
+	}()
+	close(releaseSend)
+	if err := <-deliverDone; err != nil {
+		t.Fatal(err)
+	}
+	<-pauseDone
+	if count := coordinator.ActiveCount(); count != 1 {
+		t.Fatalf("ActiveCount() after racing pause = %d, want 1", count)
+	}
+	if _, active := coordinator.animator.Current(key); active {
+		t.Fatal("paused carrier still has an active animator")
+	}
+
+	sends := 0
+	ids, err := coordinator.Deliver(
+		t.Context(), key, "chat-1", "resumed", operations,
+		func(context.Context, string) ([]string, error) {
+			sends++
+			return []string{"progress-2"}, nil
+		},
+	)
+	if err != nil || !slices.Equal(ids, []string{"progress-1"}) {
+		t.Fatalf("resumed delivery = (%v, %v), want progress-1", ids, err)
+	}
+	if sends != 0 || edits != 1 {
+		t.Fatalf("resume operations = sends:%d edits:%d, want 0/1", sends, edits)
+	}
+}
+
 func TestToolFeedbackCoordinator_PendingSendTerminalRetriesLateMessageCleanup(t *testing.T) {
 	coordinator := newTestToolFeedbackCoordinator(false)
 	defer coordinator.StopAll()
@@ -902,6 +962,314 @@ func TestToolFeedbackCoordinator_RetainedTerminalWinsOverOverlappingTransient(t 
 		t.Context(), key, "chat-1", "after final", operations, send,
 	); err != nil || len(ids) != 0 || sends != 1 {
 		t.Fatalf("post-final Deliver() = (%v, %v), sends %d, want tombstone suppression", ids, err, sends)
+	}
+}
+
+func TestToolFeedbackCoordinator_AbsorbedTerminalSettlesAfterFreshGenerationRollover(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(fmt.Sprintf("success_%t", success), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			if _, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "working A", operations, send,
+			); err != nil {
+				t.Fatal(err)
+			}
+			finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+			coordinator.CompleteTerminal(t.Context(), finalA, true)
+			finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			if finalB == nil || !finalB.absorbed {
+				t.Fatalf("final B = %#v, want absorbed terminal", finalB)
+			}
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-c", "chat-1", "working C", operations, send,
+			); err != nil || !slices.Equal(ids, []string{"progress-2"}) {
+				t.Fatalf("fresh C = (%v, %v), want progress-2", ids, err)
+			}
+
+			coordinator.CompleteTerminal(t.Context(), finalB, success)
+			ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+			)
+			if success {
+				if err != nil || len(ids) != 0 || sends != 2 {
+					t.Fatalf("successful delayed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, []string{"progress-2"}) || sends != 2 {
+				t.Fatalf("failed delayed B = (%v, %v), sends %d, want resumed carrier", ids, err, sends)
+			}
+		})
+	}
+}
+
+func TestToolFeedbackCoordinator_RetainedTerminalSettlesAfterFreshGenerationRollover(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(fmt.Sprintf("success_%t", success), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			if _, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "working A", operations, send,
+			); err != nil {
+				t.Fatal(err)
+			}
+			finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+			if finalA == nil || finalA.absorbed {
+				t.Fatalf("final A = %#v, want retained terminal", finalA)
+			}
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-c", "chat-1", "working C", operations, send,
+			); err != nil || !slices.Equal(ids, []string{"progress-1"}) {
+				t.Fatalf("fresh C = (%v, %v), want edited progress-1", ids, err)
+			}
+
+			coordinator.CompleteTerminal(t.Context(), finalA, success)
+			ids, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "delayed A", operations, send,
+			)
+			if success {
+				if err != nil || len(ids) != 0 || sends != 1 {
+					t.Fatalf("successful delayed A = (%v, %v), sends %d, want suppressed", ids, err, sends)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, []string{"progress-1"}) || sends != 1 {
+				t.Fatalf("failed delayed A = (%v, %v), sends %d, want resumed carrier", ids, err, sends)
+			}
+		})
+	}
+}
+
+func TestToolFeedbackCoordinator_FailedFreshProgressKeepsPendingTerminalSettlement(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{}, ErrTemporary
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	if finalA == nil {
+		t.Fatal("final A was not created")
+	}
+	if ids, err := coordinator.deliver(
+		t.Context(), key, "generation-c", "chat-1", "working C", operations, send,
+	); !errors.Is(err, ErrTemporary) || len(ids) != 0 || sends != 1 {
+		t.Fatalf("failed fresh C = (%v, %v), sends %d", ids, err, sends)
+	}
+	entry := coordinator.findEntry(key)
+	if entry == nil {
+		t.Fatal("pending settlement entry was removed after failed send")
+	}
+	entry.mu.Lock()
+	retired := entry.retired
+	pendingClaims := len(entry.generationClaims)
+	entry.mu.Unlock()
+	if retired || pendingClaims != 1 {
+		t.Fatalf("pending settlement state = retired:%t claims:%d", retired, pendingClaims)
+	}
+
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-a", "chat-1", "delayed A", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 1 {
+		t.Fatalf("delayed completed A = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+}
+
+func TestToolFeedbackCoordinator_AbsorbedFinalSurvivesTombstoneMaintenance(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{messageIDs: []string{"unexpected"}, editable: true}, nil
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+	if finalB == nil || !finalB.absorbed {
+		t.Fatalf("final B = %#v, want absorbed", finalB)
+	}
+	entry := finalA.entry
+	entry.mu.Lock()
+	entry.terminalUntil = time.Now().Add(-time.Second)
+	entry.mu.Unlock()
+	coordinator.maintainTerminal(finalA)
+	if coordinator.findEntry(key) == nil {
+		t.Fatal("maintenance retired tombstone with a pending absorbed claim")
+	}
+
+	coordinator.CompleteTerminal(t.Context(), finalB, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 0 {
+		t.Fatalf("delayed completed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+	entry.mu.Lock()
+	refreshedUntil := entry.terminalUntil
+	entry.mu.Unlock()
+	if time.Until(refreshedUntil) < toolFeedbackTerminalTombstoneTTL/2 {
+		t.Fatalf("absorbed successful final did not refresh tombstone: %v", refreshedUntil)
+	}
+}
+
+func TestToolFeedbackCoordinator_ReleasePreservesAbsorbedFinalClaim(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{messageIDs: []string{"unexpected"}, editable: true}, nil
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+	if finalB == nil || !finalB.absorbed {
+		t.Fatalf("final B = %#v, want absorbed", finalB)
+	}
+
+	coordinator.ReleaseTerminal(key)
+	if coordinator.findEntry(key) == nil {
+		t.Fatal("explicit release removed a pending absorbed final claim")
+	}
+	coordinator.CompleteTerminal(t.Context(), finalB, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 0 {
+		t.Fatalf("delayed completed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+}
+
+func TestToolFeedbackCoordinator_OverlappingRetainedFinalsSettleOnlyOwnedGenerations(t *testing.T) {
+	for _, successfulFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("successful_first_%t", successfulFirst), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			if _, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "working A", operations, send,
+			); err != nil {
+				t.Fatal(err)
+			}
+			finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+			finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			if successfulFirst {
+				coordinator.CompleteTerminal(t.Context(), finalA, true)
+				coordinator.CompleteTerminal(t.Context(), finalB, false)
+			} else {
+				coordinator.CompleteTerminal(t.Context(), finalB, false)
+				coordinator.CompleteTerminal(t.Context(), finalA, true)
+			}
+
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "delayed A", operations, send,
+			); err != nil || len(ids) != 0 || sends != 1 {
+				t.Fatalf("delayed successful A = (%v, %v), sends %d, want suppressed", ids, err, sends)
+			}
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "resumed B", operations, send,
+			); err != nil || !slices.Equal(ids, []string{"progress-2"}) || sends != 2 {
+				t.Fatalf("resumed failed B = (%v, %v), sends %d, want progress-2", ids, err, sends)
+			}
+		})
+	}
+}
+
+func TestToolFeedbackCoordinator_SameGenerationClaimsRemainUntilLastPendingTerminal(t *testing.T) {
+	for _, secondSuccess := range []bool{true, false} {
+		t.Run(fmt.Sprintf("second_success_%t", secondSuccess), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			first := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			second := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			coordinator.CompleteTerminal(t.Context(), first, false)
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "while second pending", operations, send,
+			); err != nil || len(ids) != 0 || sends != 0 {
+				t.Fatalf("pending peer delivery = (%v, %v), sends %d, want suppressed", ids, err, sends)
+			}
+
+			coordinator.CompleteTerminal(t.Context(), second, secondSuccess)
+			ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "after second completion", operations, send,
+			)
+			if secondSuccess {
+				if err != nil || len(ids) != 0 || sends != 0 {
+					t.Fatalf("successful peer delivery = (%v, %v), sends %d, want suppressed", ids, err, sends)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, []string{"progress-1"}) || sends != 1 {
+				t.Fatalf("all-failed delivery = (%v, %v), sends %d, want progress-1", ids, err, sends)
+			}
+		})
 	}
 }
 

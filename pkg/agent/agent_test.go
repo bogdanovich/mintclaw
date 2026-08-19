@@ -113,6 +113,7 @@ type recordingChannelManager struct {
 	dismissedSessions []string
 	dismissedScopes   [][]runtimeevents.TraceScope
 	dismissedTargets  []bus.OutboundMessage
+	pausedTargets     []bus.OutboundMessage
 	sentMedia         []bus.OutboundMediaMessage
 }
 
@@ -191,6 +192,13 @@ func (m *recordingChannelManager) DismissToolFeedback(
 		m.dismissedScopes,
 		append([]runtimeevents.TraceScope(nil), target.TraceScopes...),
 	)
+}
+
+func (m *recordingChannelManager) PauseToolFeedback(
+	_ context.Context,
+	target bus.OutboundMessage,
+) {
+	m.pausedTargets = append(m.pausedTargets, target)
 }
 
 func newStartedTestChannelManager(

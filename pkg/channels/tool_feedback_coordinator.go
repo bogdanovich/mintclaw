@@ -2,16 +2,21 @@ package channels
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 const (
-	toolFeedbackTerminalTombstoneTTL = 30 * time.Second
-	toolFeedbackCleanupRetryDelay    = 5 * time.Second
-	toolFeedbackCleanupRetention     = 30 * time.Second
+	toolFeedbackTerminalTombstoneTTL   = 30 * time.Second
+	toolFeedbackCleanupRetryDelay      = 5 * time.Second
+	toolFeedbackCleanupRetention       = 30 * time.Second
+	toolFeedbackGenerationHistoryLimit = 64
 )
 
 type toolFeedbackOperations struct {
@@ -35,6 +40,7 @@ type trackedToolFeedbackMessage struct {
 type pendingToolFeedbackCleanup struct {
 	message   trackedToolFeedbackMessage
 	expiresAt time.Time
+	lastError string
 }
 
 type toolFeedbackTerminalSuccess uint8
@@ -45,29 +51,41 @@ const (
 	toolFeedbackTerminalSuccessRetained
 )
 
+type toolFeedbackGenerationClaim struct {
+	pending  int
+	admitted bool
+}
+
 type toolFeedbackEntry struct {
 	opMu sync.Mutex
 	mu   sync.Mutex
 
-	terminalGeneration uint64
-	terminal           bool
-	terminalUntil      time.Time
-	terminalPending    int
-	terminalRetained   int
-	terminalSuccess    toolFeedbackTerminalSuccess
-	retired            bool
-	sending            bool
-	current            trackedToolFeedbackMessage
-	pendingCleanup     []pendingToolFeedbackCleanup
+	terminalGeneration      uint64
+	terminal                bool
+	terminalUntil           time.Time
+	terminalPending         int
+	terminalRetained        int
+	terminalSuccess         toolFeedbackTerminalSuccess
+	retired                 bool
+	sending                 bool
+	paused                  bool
+	activeGenerations       map[string]struct{}
+	generationClaims        map[string]toolFeedbackGenerationClaim
+	terminalizedGenerations map[string]struct{}
+	terminalizedOrder       []string
+	current                 trackedToolFeedbackMessage
+	pendingCleanup          []pendingToolFeedbackCleanup
 }
 
 type toolFeedbackTerminal struct {
-	key        string
-	entry      *toolFeedbackEntry
-	generation uint64
-	retain     bool
-	absorbed   bool
-	completed  bool
+	key                string
+	entry              *toolFeedbackEntry
+	generation         uint64
+	retain             bool
+	absorbed           bool
+	completed          bool
+	traceGenerations   []string
+	claimedGenerations []string
 }
 
 // ToolFeedbackCoordinator is the single owner of editable tool-feedback
@@ -112,7 +130,7 @@ func (c *ToolFeedbackCoordinator) Deliver(
 	if send == nil {
 		return nil, ErrSendFailed
 	}
-	return c.deliver(ctx, key, chatID, content, operations, func(
+	return c.deliver(ctx, key, "", chatID, content, operations, func(
 		sendCtx context.Context,
 		prepared string,
 	) (toolFeedbackSendResult, error) {
@@ -124,6 +142,7 @@ func (c *ToolFeedbackCoordinator) Deliver(
 func (c *ToolFeedbackCoordinator) deliver(
 	ctx context.Context,
 	key string,
+	generation string,
 	chatID string,
 	content string,
 	operations toolFeedbackOperations,
@@ -144,20 +163,28 @@ func (c *ToolFeedbackCoordinator) deliver(
 		return nil, ErrNotRunning
 	}
 	defer entry.opMu.Unlock()
-	c.retryPendingCleanup(ctx, entry)
+	c.retryPendingCleanup(ctx, key, entry)
 
 	entry.mu.Lock()
+	generation = strings.TrimSpace(generation)
+	if _, terminalized := entry.terminalizedGenerations[generation]; generation != "" && terminalized {
+		entry.mu.Unlock()
+		return nil, nil
+	}
 	if entry.terminal {
-		if entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil) {
+		_, generationActive := entry.activeGenerations[generation]
+		freshGeneration := generation != "" && !generationActive
+		if !freshGeneration && (entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil)) {
 			entry.mu.Unlock()
 			return nil, nil
 		}
-		entry.terminal = false
-		entry.terminalUntil = time.Time{}
-		entry.terminalPending = 0
-		entry.terminalRetained = 0
-		entry.terminalSuccess = toolFeedbackTerminalSuccessNone
-		entry.terminalGeneration++
+		resetToolFeedbackTerminal(entry)
+	}
+	if generation != "" {
+		if entry.activeGenerations == nil {
+			entry.activeGenerations = make(map[string]struct{})
+		}
+		entry.activeGenerations[generation] = struct{}{}
 	}
 	if separate && entry.current.messageID != "" {
 		entry.current = trackedToolFeedbackMessage{}
@@ -171,6 +198,8 @@ func (c *ToolFeedbackCoordinator) deliver(
 	}
 	if entry.current.messageID != "" {
 		current := entry.current
+		wasPaused := entry.paused
+		entry.paused = false
 		if !current.editable {
 			entry.mu.Unlock()
 			return c.replaceTrackedMessage(ctx, key, entry, current, chatID, content, operations, send)
@@ -180,6 +209,9 @@ func (c *ToolFeedbackCoordinator) deliver(
 			mergedContent = mergeToolFeedbackContent(current.content, content)
 		}
 		entry.mu.Unlock()
+		if wasPaused {
+			c.animator.Record(key, current.messageID, current.content)
+		}
 
 		updatedID, handled, err := c.animator.Update(ctx, key, content)
 		entry.mu.Lock()
@@ -296,7 +328,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 		ctx, current.operations.delete, current.chatID, current.messageID,
 	); cleanupErr != nil {
 		entry.mu.Lock()
-		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current))
+		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, cleanupErr))
 		entry.mu.Unlock()
 		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 		return messageIDs, sendErr
@@ -306,6 +338,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 
 func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	ctx context.Context,
+	key string,
 	entry *toolFeedbackEntry,
 ) {
 	entry.mu.Lock()
@@ -318,14 +351,17 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	remaining := make([]pendingToolFeedbackCleanup, 0, len(pending))
 	for _, cleanup := range pending {
 		if !time.Now().Before(cleanup.expiresAt) {
+			logToolFeedbackCleanupExhausted(key, cleanup, "retention_expired")
 			continue
 		}
 		message := cleanup.message
 		if err := tryDeleteToolFeedbackMessage(
 			ctx, message.operations.delete, message.chatID, message.messageID,
 		); err != nil {
+			cleanup.lastError = err.Error()
 			if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) ||
 				!time.Now().Before(cleanup.expiresAt) {
+				logToolFeedbackCleanupExhausted(key, cleanup, "non_retryable")
 				continue
 			}
 			remaining = append(remaining, cleanup)
@@ -336,11 +372,33 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	entry.mu.Unlock()
 }
 
-func newPendingToolFeedbackCleanup(message trackedToolFeedbackMessage) pendingToolFeedbackCleanup {
+func newPendingToolFeedbackCleanup(
+	message trackedToolFeedbackMessage,
+	cause error,
+) pendingToolFeedbackCleanup {
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
 	return pendingToolFeedbackCleanup{
 		message:   message,
 		expiresAt: time.Now().Add(toolFeedbackCleanupRetention),
+		lastError: lastError,
 	}
+}
+
+func logToolFeedbackCleanupExhausted(
+	key string,
+	cleanup pendingToolFeedbackCleanup,
+	reason string,
+) {
+	messageHash := sha256.Sum256([]byte(cleanup.message.messageID))
+	logger.ErrorCF("channels", "Tool feedback cleanup exhausted", map[string]any{
+		"coordinator_key": strings.TrimSpace(key),
+		"message_id_hash": hex.EncodeToString(messageHash[:6]),
+		"reason":          reason,
+		"error":           cleanup.lastError,
+	})
 }
 
 func (c *ToolFeedbackCoordinator) cleanupLateMessage(
@@ -360,20 +418,24 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 		entry.mu.Unlock()
 		return
 	}
-	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message))
+	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message, err))
 	entry.mu.Unlock()
 	c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, true)
+	return c.beginTerminal(key, true, nil)
 }
 
 func (c *ToolFeedbackCoordinator) BeginTransientTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, false)
+	return c.beginTerminal(key, false, nil)
 }
 
-func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFeedbackTerminal {
+func (c *ToolFeedbackCoordinator) beginTerminal(
+	key string,
+	retain bool,
+	generations []string,
+) *toolFeedbackTerminal {
 	if c == nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
@@ -384,6 +446,12 @@ func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFe
 			return nil
 		}
 		entry.mu.Lock()
+		traceGenerations := normalizeToolFeedbackGenerations(generations)
+		claimedGenerations := append([]string(nil), traceGenerations...)
+		entry.claimTerminalGenerations(claimedGenerations)
+		if retain && (!entry.terminal || len(traceGenerations) == 0) {
+			traceGenerations = entry.activeGenerationsSnapshot()
+		}
 		if entry.retired {
 			entry.mu.Unlock()
 			c.removeEntry(key, entry)
@@ -395,6 +463,7 @@ func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFe
 			entry.mu.Unlock()
 			return &toolFeedbackTerminal{
 				key: key, entry: entry, generation: generation, retain: retain, absorbed: true,
+				traceGenerations: traceGenerations, claimedGenerations: claimedGenerations,
 			}
 		}
 		if !entry.terminal {
@@ -412,8 +481,112 @@ func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFe
 		generation := entry.terminalGeneration
 		entry.mu.Unlock()
 
-		return &toolFeedbackTerminal{key: key, entry: entry, generation: generation, retain: retain}
+		return &toolFeedbackTerminal{
+			key: key, entry: entry, generation: generation, retain: retain,
+			traceGenerations: traceGenerations, claimedGenerations: claimedGenerations,
+		}
 	}
+}
+
+func normalizeToolFeedbackGenerations(generations []string) []string {
+	normalized := make([]string, 0, len(generations))
+	seen := make(map[string]struct{}, len(generations))
+	for _, generation := range generations {
+		generation = strings.TrimSpace(generation)
+		if generation == "" {
+			continue
+		}
+		if _, exists := seen[generation]; exists {
+			continue
+		}
+		seen[generation] = struct{}{}
+		normalized = append(normalized, generation)
+	}
+	return normalized
+}
+
+func (entry *toolFeedbackEntry) claimTerminalGenerations(generations []string) {
+	for _, generation := range generations {
+		if entry.activeGenerations == nil {
+			entry.activeGenerations = make(map[string]struct{})
+		}
+		_, active := entry.activeGenerations[generation]
+		if !active {
+			entry.activeGenerations[generation] = struct{}{}
+		}
+		if entry.generationClaims == nil {
+			entry.generationClaims = make(map[string]toolFeedbackGenerationClaim)
+		}
+		claim := entry.generationClaims[generation]
+		claim.pending++
+		claim.admitted = claim.admitted || !active
+		entry.generationClaims[generation] = claim
+	}
+}
+
+func (entry *toolFeedbackEntry) activeGenerationsSnapshot() []string {
+	generations := make([]string, 0, len(entry.activeGenerations))
+	for generation := range entry.activeGenerations {
+		generations = append(generations, generation)
+	}
+	return generations
+}
+
+func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
+	for _, generation := range generations {
+		if _, exists := entry.terminalizedGenerations[generation]; exists {
+			delete(entry.activeGenerations, generation)
+			delete(entry.generationClaims, generation)
+			continue
+		}
+		if entry.terminalizedGenerations == nil {
+			entry.terminalizedGenerations = make(map[string]struct{})
+		}
+		entry.terminalizedGenerations[generation] = struct{}{}
+		entry.terminalizedOrder = append(entry.terminalizedOrder, generation)
+		delete(entry.activeGenerations, generation)
+		delete(entry.generationClaims, generation)
+	}
+	for len(entry.terminalizedOrder) > toolFeedbackGenerationHistoryLimit {
+		oldest := entry.terminalizedOrder[0]
+		entry.terminalizedOrder = entry.terminalizedOrder[1:]
+		delete(entry.terminalizedGenerations, oldest)
+	}
+}
+
+func (entry *toolFeedbackEntry) releaseTerminalClaims(generations []string) {
+	for _, generation := range generations {
+		claim, exists := entry.generationClaims[generation]
+		if !exists {
+			continue
+		}
+		claim.pending--
+		if claim.pending > 0 {
+			entry.generationClaims[generation] = claim
+			continue
+		}
+		if claim.admitted {
+			delete(entry.activeGenerations, generation)
+		}
+		delete(entry.generationClaims, generation)
+	}
+}
+
+func (entry *toolFeedbackEntry) settleTerminalGenerations(terminal *toolFeedbackTerminal, success bool) {
+	if success && terminal.retain {
+		entry.terminalizeGenerations(terminal.traceGenerations)
+		return
+	}
+	entry.releaseTerminalClaims(terminal.claimedGenerations)
+}
+
+func resetToolFeedbackTerminal(entry *toolFeedbackEntry) {
+	entry.terminal = false
+	entry.terminalUntil = time.Time{}
+	entry.terminalPending = 0
+	entry.terminalRetained = 0
+	entry.terminalSuccess = toolFeedbackTerminalSuccessNone
+	entry.terminalGeneration++
 }
 
 func (c *ToolFeedbackCoordinator) CompleteTerminal(
@@ -427,15 +600,36 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	separate := c.separateMessages()
 	entry := terminal.entry
 	entry.opMu.Lock()
-	c.retryPendingCleanup(ctx, entry)
+	c.retryPendingCleanup(ctx, terminal.key, entry)
 	entry.mu.Lock()
-	if terminal.completed || terminal.absorbed || entry.retired || !entry.terminal ||
-		entry.terminalGeneration != terminal.generation {
+	if terminal.completed || entry.retired {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
 	}
 	terminal.completed = true
+	if terminal.absorbed {
+		entry.settleTerminalGenerations(terminal, success)
+		refreshRetainedTombstone := success && terminal.retain && entry.terminal &&
+			entry.terminalGeneration == terminal.generation &&
+			entry.terminalSuccess == toolFeedbackTerminalSuccessRetained
+		if refreshRetainedTombstone {
+			entry.terminalUntil = time.Now().Add(toolFeedbackTerminalTombstoneTTL)
+		}
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		if refreshRetainedTombstone {
+			c.scheduleTerminalMaintenance(terminal, toolFeedbackTerminalTombstoneTTL)
+		}
+		return
+	}
+	if !entry.terminal || entry.terminalGeneration != terminal.generation {
+		entry.settleTerminalGenerations(terminal, success)
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		return
+	}
+	entry.settleTerminalGenerations(terminal, success)
 	if entry.terminalPending > 0 {
 		entry.terminalPending--
 	}
@@ -479,13 +673,13 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 		current := entry.current
 		entry.current = trackedToolFeedbackMessage{}
 		if !separate && current.messageID != "" && current.operations.delete != nil {
-			entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current))
+			entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, nil))
 		}
 	}
 	entry.mu.Unlock()
 	if clearCurrent {
 		c.animator.Clear(terminal.key)
-		c.retryPendingCleanup(ctx, entry)
+		c.retryPendingCleanup(ctx, terminal.key, entry)
 	}
 	entry.mu.Lock()
 	pendingCleanup := len(entry.pendingCleanup) != 0
@@ -531,6 +725,30 @@ func (c *ToolFeedbackCoordinator) DismissTransient(ctx context.Context, key stri
 	c.CompleteTerminal(ctx, terminal, true)
 }
 
+// Pause retains the current carrier but stops animation until the next
+// delivery for the same logical key resumes it.
+func (c *ToolFeedbackCoordinator) Pause(key string) {
+	if c == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	key = strings.TrimSpace(key)
+	entry := c.findEntry(key)
+	if entry == nil {
+		return
+	}
+	entry.opMu.Lock()
+	entry.mu.Lock()
+	if entry.retired || entry.terminal || entry.current.messageID == "" {
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		return
+	}
+	entry.paused = true
+	entry.mu.Unlock()
+	c.animator.Clear(key)
+	entry.opMu.Unlock()
+}
+
 func (c *ToolFeedbackCoordinator) ReleaseTerminal(key string) {
 	if c == nil || strings.TrimSpace(key) == "" {
 		return
@@ -543,7 +761,7 @@ func (c *ToolFeedbackCoordinator) ReleaseTerminal(key string) {
 	entry.opMu.Lock()
 	entry.mu.Lock()
 	if entry.retired || !entry.terminal || entry.current.messageID != "" ||
-		entry.sending || len(entry.pendingCleanup) != 0 {
+		entry.sending || len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
@@ -742,7 +960,7 @@ func (c *ToolFeedbackCoordinator) findEntry(key string) *toolFeedbackEntry {
 func (c *ToolFeedbackCoordinator) retireIdleEntryLocked(key string, entry *toolFeedbackEntry) {
 	entry.mu.Lock()
 	if entry.terminal || entry.sending || entry.current.messageID != "" ||
-		len(entry.pendingCleanup) != 0 {
+		len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		return
 	}
@@ -812,7 +1030,7 @@ func (c *ToolFeedbackCoordinator) maintainTerminal(terminal *toolFeedbackTermina
 		c.scheduleTerminalMaintenance(terminal, delay)
 		return
 	}
-	if len(entry.pendingCleanup) != 0 {
+	if len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		c.scheduleTerminalMaintenance(terminal, toolFeedbackCleanupRetryDelay)
@@ -847,7 +1065,7 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 		return
 	}
 	entry.mu.Unlock()
-	c.retryPendingCleanup(context.Background(), entry)
+	c.retryPendingCleanup(context.Background(), key, entry)
 	entry.mu.Lock()
 	if len(entry.pendingCleanup) != 0 {
 		entry.mu.Unlock()
@@ -855,7 +1073,9 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 		return
 	}
-	retire := !entry.terminal && !entry.sending && entry.current.messageID == ""
+	retire := !entry.terminal && !entry.sending && entry.current.messageID == "" &&
+		len(entry.generationClaims) == 0
+	pendingClaims := len(entry.generationClaims) != 0
 	if retire {
 		entry.retired = true
 	}
@@ -863,6 +1083,8 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 	entry.opMu.Unlock()
 	if retire {
 		c.removeEntry(key, entry)
+	} else if pendingClaims {
+		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 	}
 }
 

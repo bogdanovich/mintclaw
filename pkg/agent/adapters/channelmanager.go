@@ -86,3 +86,10 @@ func (a *channelManagerAdapter) DismissToolFeedback(
 ) {
 	a.inner.DismissToolFeedback(ctx, target)
 }
+
+func (a *channelManagerAdapter) PauseToolFeedback(
+	ctx context.Context,
+	target bus.OutboundMessage,
+) {
+	a.inner.PauseToolFeedback(ctx, target)
+}

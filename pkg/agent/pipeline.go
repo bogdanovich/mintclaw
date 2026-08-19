@@ -273,6 +273,7 @@ type toolFeedbackManager interface {
 		messages []providers.Message,
 	)
 	dismissToolFeedbackForTurn(ctx context.Context, ts *turnState)
+	pauseToolFeedbackForTurn(ctx context.Context, ts *turnState)
 	shouldPublishToolFeedback(ts *turnState) bool
 }
 

@@ -97,7 +97,13 @@ func TestStreamCoordinatorOwnsToolFeedbackCoordinator(t *testing.T) {
 	if state.hasToolFeedback() {
 		t.Fatal("zero interaction state unexpectedly has tool feedback")
 	}
-	if terminals := state.beginToolFeedbackTerminals([]string{"test:chat-1"}, true, false); terminals != nil {
+	if terminals := state.beginToolFeedbackTerminals(
+		[]string{"test:chat-1"},
+		true,
+		false,
+		false,
+		nil,
+	); terminals != nil {
 		t.Fatalf("zero-state terminals = %+v, want nil", terminals)
 	}
 
@@ -110,7 +116,7 @@ func TestStreamCoordinatorOwnsToolFeedbackCoordinator(t *testing.T) {
 		t.Fatal("initialized interaction state has no tool feedback")
 	}
 
-	terminals := state.beginToolFeedbackTerminals([]string{"test:chat-1"}, true, false)
+	terminals := state.beginToolFeedbackTerminals([]string{"test:chat-1"}, true, false, false, nil)
 	if len(terminals) != 1 || terminals[0] == nil {
 		t.Fatalf("beginToolFeedbackTerminals() = %+v", terminals)
 	}
@@ -129,6 +135,7 @@ func TestStreamCoordinatorToolFeedbackFallback(t *testing.T) {
 	messageIDs, err := state.deliverToolFeedback(
 		context.Background(),
 		"test:chat-1",
+		"",
 		"chat-1",
 		"working",
 		toolFeedbackOperations{},

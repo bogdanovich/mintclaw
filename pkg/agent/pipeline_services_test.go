@@ -30,6 +30,7 @@ func (d *immediateDeliveryFeedbackCheck) applySyncToolResultDelivery(
 
 type immediateDeliveryFeedbackManager struct {
 	dismissed bool
+	paused    bool
 }
 
 func (m *immediateDeliveryFeedbackManager) publishToolFeedbackForCall(
@@ -48,6 +49,13 @@ func (m *immediateDeliveryFeedbackManager) dismissToolFeedbackForTurn(
 	*turnState,
 ) {
 	m.dismissed = true
+}
+
+func (m *immediateDeliveryFeedbackManager) pauseToolFeedbackForTurn(
+	context.Context,
+	*turnState,
+) {
+	m.paused = true
 }
 
 func (m *immediateDeliveryFeedbackManager) shouldPublishToolFeedback(*turnState) bool {

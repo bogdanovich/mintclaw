@@ -27,6 +27,32 @@ import (
 
 const testToken = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
 
+func TestTelegramMessageDeleteAlreadyAbsent(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "telegram missing message",
+			err:  &ta.Error{ErrorCode: 400, Description: "Bad Request: message to delete not found"},
+			want: true,
+		},
+		{
+			name: "rate limited",
+			err:  &ta.Error{ErrorCode: 429, Description: "Too Many Requests"},
+		},
+		{name: "transport error", err: errors.New("connection reset")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := telegramMessageDeleteAlreadyAbsent(test.err); got != test.want {
+				t.Fatalf("telegramMessageDeleteAlreadyAbsent() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 // stubCaller implements ta.Caller for testing.
 type stubCaller struct {
 	calls  []stubCall

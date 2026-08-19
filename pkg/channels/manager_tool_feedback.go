@@ -100,9 +100,10 @@ func toolFeedbackTarget(
 ) (string, string) {
 	deliveryChatID := trackedToolFeedbackMessageChatID(ch, chatID, outboundCtx)
 	trackedChatID := sessionScopedToolFeedbackMessageChatID(deliveryChatID, sessionKey)
-	key, _ := traceScopedDeliveryKey(
-		toolFeedbackCoordinatorKey(channelName, trackedChatID), traceScope,
-	)
+	key := toolFeedbackCoordinatorKey(channelName, trackedChatID)
+	if strings.TrimSpace(sessionKey) == "" {
+		key, _ = traceScopedDeliveryKey(key, traceScope)
+	}
 	return key, deliveryChatID
 }
 
@@ -117,6 +118,9 @@ func toolFeedbackTargets(
 	base, _ := toolFeedbackTarget(
 		channelName, ch, chatID, outboundCtx, sessionKey, runtimeevents.TraceScope{},
 	)
+	if strings.TrimSpace(sessionKey) != "" {
+		return []string{base}, false
+	}
 	normalized, err := bus.NormalizeTraceScopes(traceScopes)
 	if err != nil || len(normalized) == 0 {
 		return []string{base}, false
@@ -157,7 +161,13 @@ func (m *Manager) beginToolFeedbackTerminals(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.streamCoordinator().beginToolFeedbackTerminals(keys, scoped, transient)
+	return m.streamCoordinator().beginToolFeedbackTerminals(
+		keys,
+		scoped,
+		strings.TrimSpace(sessionKey) != "",
+		transient,
+		toolFeedbackGenerations(traceScopes),
+	)
 }
 
 func (m *Manager) completeToolFeedbackTerminals(
@@ -208,6 +218,7 @@ func (m *Manager) deliverToolFeedback(
 	return m.streamCoordinator().deliverToolFeedback(
 		ctx,
 		key,
+		toolFeedbackGeneration(primaryTraceScope(msg.TraceScopes)),
 		deliveryChatID,
 		content,
 		operations,
@@ -222,6 +233,28 @@ func (m *Manager) deliverToolFeedback(
 			return toolFeedbackSendResult{messageIDs: messageIDs, editable: operations.edit != nil}, err
 		},
 	)
+}
+
+func toolFeedbackGeneration(traceScope runtimeevents.TraceScope) string {
+	key, scoped := traceScopedDeliveryKey("tool_feedback_generation", traceScope)
+	if !scoped {
+		return ""
+	}
+	return key
+}
+
+func toolFeedbackGenerations(traceScopes []runtimeevents.TraceScope) []string {
+	normalized, err := bus.NormalizeTraceScopes(traceScopes)
+	if err != nil || len(normalized) == 0 {
+		return nil
+	}
+	generations := make([]string, 0, len(normalized))
+	for _, traceScope := range normalized {
+		if generation := toolFeedbackGeneration(traceScope); generation != "" {
+			generations = append(generations, generation)
+		}
+	}
+	return generations
 }
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
@@ -245,6 +278,28 @@ func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMe
 	)
 }
 
+// PauseToolFeedback stops animation while retaining the editable progress
+// carrier for a later turn in the same logical session.
+func (m *Manager) PauseToolFeedback(ctx context.Context, target bus.OutboundMessage) {
+	if m == nil || !m.streamCoordinator().hasToolFeedback() {
+		return
+	}
+	channelName := outboundMessageChannel(target)
+	ch, ok := m.GetChannel(channelName)
+	if !ok {
+		return
+	}
+	keys, scoped := m.resolveToolFeedbackTargets(
+		channelName,
+		ch,
+		outboundMessageChatID(target),
+		&target.Context,
+		target.SessionKey,
+		target.TraceScopes,
+	)
+	m.streamCoordinator().pauseToolFeedback(ctx, keys, scoped)
+}
+
 func (m *Manager) dismissToolFeedbackTargets(
 	ctx context.Context,
 	channelName string,
@@ -257,7 +312,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped)
+	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
 }
 
 func (m *Manager) resolveToolFeedbackTargets(

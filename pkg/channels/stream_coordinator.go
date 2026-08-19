@@ -220,17 +220,19 @@ func (s *StreamCoordinator) hasToolFeedback() bool {
 func (s *StreamCoordinator) beginToolFeedbackTerminals(
 	keys []string,
 	scoped bool,
+	stableSession bool,
 	transient bool,
+	generations []string,
 ) []*toolFeedbackTerminal {
 	if !s.hasToolFeedback() {
 		return nil
 	}
 	terminals := make([]*toolFeedbackTerminal, 0, len(keys))
 	for _, key := range keys {
-		if scoped && !transient {
-			terminals = append(terminals, s.toolFeedback.BeginTerminal(key))
+		if (scoped || stableSession || len(generations) != 0) && !transient {
+			terminals = append(terminals, s.toolFeedback.beginTerminal(key, true, generations))
 		} else {
-			terminals = append(terminals, s.toolFeedback.BeginTransientTerminal(key))
+			terminals = append(terminals, s.toolFeedback.beginTerminal(key, false, generations))
 		}
 	}
 	return terminals
@@ -251,7 +253,7 @@ func (s *StreamCoordinator) completeToolFeedbackTerminals(
 
 func (s *StreamCoordinator) deliverToolFeedback(
 	ctx context.Context,
-	key, chatID, content string,
+	key, generation, chatID, content string,
 	operations toolFeedbackOperations,
 	send func(context.Context, string) (toolFeedbackSendResult, error),
 ) ([]string, error) {
@@ -259,23 +261,36 @@ func (s *StreamCoordinator) deliverToolFeedback(
 		result, err := send(ctx, content)
 		return result.messageIDs, err
 	}
-	return s.toolFeedback.deliver(ctx, key, chatID, content, operations, send)
+	return s.toolFeedback.deliver(ctx, key, generation, chatID, content, operations, send)
 }
 
 func (s *StreamCoordinator) dismissToolFeedback(
 	ctx context.Context,
 	keys []string,
-	scoped bool,
+	retained bool,
 ) {
 	if !s.hasToolFeedback() {
 		return
 	}
 	for _, key := range keys {
-		if scoped {
+		if retained {
 			s.toolFeedback.Dismiss(ctx, key)
 		} else {
 			s.toolFeedback.DismissTransient(ctx, key)
 		}
+	}
+}
+
+func (s *StreamCoordinator) pauseToolFeedback(
+	_ context.Context,
+	keys []string,
+	_ bool,
+) {
+	if !s.hasToolFeedback() {
+		return
+	}
+	for _, key := range keys {
+		s.toolFeedback.Pause(key)
 	}
 }
 
