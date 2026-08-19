@@ -567,8 +567,7 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	entry.opMu.Lock()
 	c.retryPendingCleanup(ctx, terminal.key, entry)
 	entry.mu.Lock()
-	if terminal.completed || entry.retired || !entry.terminal ||
-		entry.terminalGeneration != terminal.generation {
+	if terminal.completed || entry.retired {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
@@ -580,6 +579,11 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 		} else {
 			entry.releaseActiveGenerations(terminal.admittedGenerations)
 		}
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		return
+	}
+	if !entry.terminal || entry.terminalGeneration != terminal.generation {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return

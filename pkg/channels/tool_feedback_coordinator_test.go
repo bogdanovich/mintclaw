@@ -965,6 +965,57 @@ func TestToolFeedbackCoordinator_RetainedTerminalWinsOverOverlappingTransient(t 
 	}
 }
 
+func TestToolFeedbackCoordinator_AbsorbedTerminalSettlesAfterFreshGenerationRollover(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(fmt.Sprintf("success_%t", success), func(t *testing.T) {
+			coordinator := newTestToolFeedbackCoordinator(false)
+			defer coordinator.StopAll()
+			operations := toolFeedbackOperations{
+				edit:   func(context.Context, string, string, string) error { return nil },
+				delete: func(context.Context, string, string) error { return nil },
+			}
+			sends := 0
+			send := func(context.Context, string) (toolFeedbackSendResult, error) {
+				sends++
+				return toolFeedbackSendResult{
+					messageIDs: []string{fmt.Sprintf("progress-%d", sends)}, editable: true,
+				}, nil
+			}
+			const key = "telegram:session-1"
+			if _, err := coordinator.deliver(
+				t.Context(), key, "generation-a", "chat-1", "working A", operations, send,
+			); err != nil {
+				t.Fatal(err)
+			}
+			finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+			coordinator.CompleteTerminal(t.Context(), finalA, true)
+			finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+			if finalB == nil || !finalB.absorbed {
+				t.Fatalf("final B = %#v, want absorbed terminal", finalB)
+			}
+			if ids, err := coordinator.deliver(
+				t.Context(), key, "generation-c", "chat-1", "working C", operations, send,
+			); err != nil || !slices.Equal(ids, []string{"progress-2"}) {
+				t.Fatalf("fresh C = (%v, %v), want progress-2", ids, err)
+			}
+
+			coordinator.CompleteTerminal(t.Context(), finalB, success)
+			ids, err := coordinator.deliver(
+				t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+			)
+			if success {
+				if err != nil || len(ids) != 0 || sends != 2 {
+					t.Fatalf("successful delayed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, []string{"progress-2"}) || sends != 2 {
+				t.Fatalf("failed delayed B = (%v, %v), sends %d, want resumed carrier", ids, err, sends)
+			}
+		})
+	}
+}
+
 func TestToolFeedbackCoordinator_TransientSuccessSurvivesRetainedFailure(t *testing.T) {
 	coordinator := newTestToolFeedbackCoordinator(false)
 	defer coordinator.StopAll()
