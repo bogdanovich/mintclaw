@@ -675,7 +675,12 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	}
 
 	input["action"] = map[string]any{"kind": "download", "ref": "ref_1"}
-	input["effect"] = "download"
+	input["effect"] = "unknown"
+	input["expected_role"] = "link"
+	input["expected_name"] = "Download"
+	input["workspace_id"] = "workspace_1"
+	input["route_id"] = "route_1"
+	input["browser_target"] = "companion"
 	if err = validateInvocationInput(act.InputSchema, input); err == nil {
 		t.Fatal("download input without approval_digest was accepted")
 	}
@@ -715,6 +720,36 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	input["expected_role"] = "link"
 	if err = validateInvocationInput(act.InputSchema, input); err != nil {
 		t.Fatalf("unknown-effect link click rejected: %v", err)
+	}
+}
+
+func TestBrowserActSchemaBindsApprovedUploadAlias(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"navigate", "upload"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := browserActInputFixture()
+	input["action"] = map[string]any{
+		"kind": "upload", "ref": "ref_1",
+		"artifact_ref": TransferArtifactRefPrefix + "artifact_1",
+	}
+	input["effect"] = "unknown"
+	input["expected_role"] = "button"
+	input["expected_name"] = "Choose file"
+	input["artifact_sha256"] = strings.Repeat("c", 64)
+	input["artifact_bytes"] = 7
+	input["artifact_filename"] = "fixture.txt"
+	input["artifact_content_type"] = "text/plain"
+	if err = validateInvocationInput(descriptors[3].InputSchema, input); err == nil {
+		t.Fatal("upload input without approval_digest was accepted")
+	}
+	input["approval_digest"] = strings.Repeat("d", 64)
+	if err = validateInvocationInput(descriptors[3].InputSchema, input); err != nil {
+		t.Fatalf("approved upload input rejected: %v", err)
 	}
 }
 

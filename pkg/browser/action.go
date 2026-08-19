@@ -513,11 +513,11 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					}
 					return json.RawMessage(`{"status":"completed"}`), nil
 				}
-				transferWorker, ok := worker.(TransferWorker)
-				if !ok {
-					return nil, ErrDriverIncompatible
-				}
 				if artifactInputAction(prepared.Action.Kind) {
+					_, ok := worker.(TransferWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
 					checkedUpload, ok := worker.(NavigationCheckedUploadWorker)
 					if !ok || slot.navigationID == "" {
 						return nil, ErrDriverIncompatible
@@ -534,10 +534,27 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				if sink == nil {
 					return nil, ErrDriverIncompatible
 				}
-				download, executeErr := transferWorker.Download(
-					executeCtx, driverAction, int64(broker.config.Limits.Effective().DownloadBytes),
-				)
+				maximum := int64(broker.config.Limits.Effective().DownloadBytes)
+				var download DriverDownload
+				var executeErr error
+				if preparedDispatch {
+					remote, ok := worker.(PreparedDownloadWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
+					download, executeErr = remote.DownloadPrepared(executeCtx, workerPreparedAction, maximum)
+				} else {
+					transferWorker, ok := worker.(TransferWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
+					download, executeErr = transferWorker.Download(executeCtx, driverAction, maximum)
+				}
 				if executeErr != nil {
+					var artifactFailure *DownloadArtifactError
+					if errors.As(executeErr, &artifactFailure) {
+						return json.RawMessage(`{"status":"completed","artifact_state":"unavailable"}`), nil
+					}
 					return nil, executeErr
 				}
 				return sink(executeCtx, prepared, download)
@@ -697,7 +714,11 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.ArtifactBytes = request.Upload.Size
 			prepared.ArtifactFilename = request.Upload.Filename
 			prepared.ArtifactContentType = request.Upload.ContentType
-			prepared.Effect = EffectLocalEdit
+			if request.Action.Kind == ActionUpload {
+				prepared.Effect = EffectUnknown
+			} else {
+				prepared.Effect = EffectLocalEdit
+			}
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:

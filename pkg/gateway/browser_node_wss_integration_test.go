@@ -598,6 +598,177 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		!bytes.Equal(host.uploadedArtifact(), uploadData) {
 		t.Fatalf("file chooser invocation = %#v, %v; uploaded = %q", invocation, err, host.uploadedArtifact())
 	}
+
+	uploadAliasObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadStart = strings.Index(uploadAliasObservation.Snapshot, uploadMarker)
+	if uploadStart < 0 {
+		t.Fatalf("upload fixture has no bounded ref: %q", uploadAliasObservation.Snapshot)
+	}
+	uploadStart += len(uploadMarker)
+	uploadEnd = strings.Index(uploadAliasObservation.Snapshot[uploadStart:], "]")
+	aliasOwner, err := tools.RoutedNodeFileArtifactOwner(uploadContext, "browser_wss_upload_alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasWriter, aliasArtifact, aliasCreated, err := spool.Begin(aliasOwner, nodes.TransferArtifactSpec{
+		TransferID: "browser_wss_upload_alias", Direction: nodes.TransferDirectionDownload,
+		Target: "companion", ProfileRevision: "files-v1", Filename: "alias.txt",
+		ContentType: "text/plain", DeclaredSize: int64(len(uploadData)),
+		SHA256: hex.EncodeToString(uploadDigest[:]), ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil || !aliasCreated || aliasWriter == nil {
+		t.Fatalf("browser upload alias Begin() = %#v, %t, %v", aliasArtifact, aliasCreated, err)
+	}
+	if err = aliasWriter.WriteChunk(1, uploadData); err != nil {
+		t.Fatal(err)
+	}
+	aliasArtifact, err = aliasWriter.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadAlias, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser_wss_upload_alias", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID:         uploadAliasObservation.SnapshotID,
+		SnapshotGeneration: uploadAliasObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind:        browser.ActionUpload,
+			Ref:         uploadAliasObservation.Snapshot[uploadStart : uploadStart+uploadEnd],
+			ArtifactRef: aliasArtifact.Ref,
+		},
+	})
+	if err != nil || !uploadAlias.RequiresApproval || uploadAlias.Action.Effect != browser.EffectUnknown {
+		t.Fatalf("upload alias preparation = %#v, %v", uploadAlias, err)
+	}
+	invocation, err = browserSource.ExecuteAction(
+		uploadContext, owner, uploadAlias.Action.ID, &uploadAlias.Approval,
+	)
+	if err != nil || invocation.State != browser.InvocationSucceeded ||
+		!bytes.Equal(host.uploadedArtifact(), uploadData) {
+		t.Fatalf("upload alias invocation = %#v, %v; uploaded = %q", invocation, err, host.uploadedArtifact())
+	}
+
+	downloadObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadMarker := `link "Download fixture" [ref=`
+	downloadStart := strings.Index(downloadObservation.Snapshot, downloadMarker)
+	if downloadStart < 0 {
+		t.Fatalf("download fixture has no bounded ref: %q", downloadObservation.Snapshot)
+	}
+	downloadStart += len(downloadMarker)
+	downloadEnd := strings.Index(downloadObservation.Snapshot[downloadStart:], "]")
+	download, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-download", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: downloadObservation.SnapshotID, SnapshotGeneration: downloadObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  downloadObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
+	})
+	if err != nil || !download.RequiresApproval {
+		t.Fatalf("download preparation = %#v, %v", download, err)
+	}
+	invocation, err = browserSource.ExecuteAction(uploadContext, owner, download.Action.ID, &download.Approval)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("download invocation = %#v, %v", invocation, err)
+	}
+	downloadArtifact, found, err := browserSource.lookupBrowserDownload(
+		uploadContext, owner, "browser-wss-download", first.ID, false,
+	)
+	if err != nil || !found || downloadArtifact.Kind != "download" ||
+		downloadArtifact.Filename != "fixture.txt" || downloadArtifact.Size != int64(len(host.output)) {
+		t.Fatalf("download artifact = %#v, found=%t, %v", downloadArtifact, found, err)
+	}
+
+	corruptObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadStart = strings.Index(corruptObservation.Snapshot, downloadMarker)
+	if downloadStart < 0 {
+		t.Fatalf("corrupt download fixture has no bounded ref: %q", corruptObservation.Snapshot)
+	}
+	downloadStart += len(downloadMarker)
+	downloadEnd = strings.Index(corruptObservation.Snapshot[downloadStart:], "]")
+	corruptDownload, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-download-corrupt", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID:         corruptObservation.SnapshotID,
+		SnapshotGeneration: corruptObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  corruptObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.corruptNextOutputChunk()
+	beforeDownloads := countWSSBrowserCommand(host.commandSequence(), "download")
+	invocation, err = browserSource.ExecuteAction(
+		uploadContext, owner, corruptDownload.Action.ID, &corruptDownload.Approval,
+	)
+	if err != nil || invocation.State != browser.InvocationSucceeded || host.outputCancelCount() != 2 ||
+		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
+		t.Fatalf("corrupt download invocation = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
+	}
+	invocation, retryErr := browserSource.ExecuteAction(
+		uploadContext, owner, corruptDownload.Action.ID, &corruptDownload.Approval,
+	)
+	if retryErr != nil || invocation.State != browser.InvocationSucceeded ||
+		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
+		t.Fatalf("corrupt download replay = %#v, %v; commands = %#v", invocation, retryErr, host.commandSequence())
+	}
+	recoveredArtifact, recoveredFound, recoveryErr := browserSource.lookupBrowserDownload(
+		uploadContext, owner, "browser-wss-download-corrupt", first.ID, false,
+	)
+	if recoveryErr != nil || !recoveredFound || recoveredArtifact.Size != int64(len(host.output)) {
+		t.Fatalf("recovered download artifact = %#v, found=%t, %v", recoveredArtifact, recoveredFound, recoveryErr)
+	}
+
+	failedObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadStart = strings.Index(failedObservation.Snapshot, downloadMarker)
+	if downloadStart < 0 {
+		t.Fatalf("failed download fixture has no bounded ref: %q", failedObservation.Snapshot)
+	}
+	downloadStart += len(downloadMarker)
+	downloadEnd = strings.Index(failedObservation.Snapshot[downloadStart:], "]")
+	failedDownload, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-download-unavailable", SessionID: first.ID, TabID: first.TabID,
+		SnapshotID:         failedObservation.SnapshotID,
+		SnapshotGeneration: failedObservation.SnapshotGeneration,
+		Action: browser.Action{
+			Kind: browser.ActionDownload,
+			Ref:  failedObservation.Snapshot[downloadStart : downloadStart+downloadEnd],
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.corruptOutputChunks(2)
+	beforeDownloads = countWSSBrowserCommand(host.commandSequence(), "download")
+	invocation, err = browserSource.ExecuteAction(
+		uploadContext, owner, failedDownload.Action.ID, &failedDownload.Approval,
+	)
+	if err != nil || invocation.State != browser.InvocationSucceeded || invocation.Download != nil ||
+		!bytes.Contains(invocation.TerminalResult, []byte(`"artifact_state":"unavailable"`)) ||
+		host.outputCancelCount() != 4 ||
+		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
+		t.Fatalf("unavailable download invocation = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
+	}
+	invocation, err = browserSource.ExecuteAction(
+		uploadContext, owner, failedDownload.Action.ID, &failedDownload.Approval,
+	)
+	if err != nil || invocation.State != browser.InvocationSucceeded ||
+		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
+		t.Fatalf("unavailable download replay = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
+	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("first close = %#v, %v", closed, err)
@@ -810,6 +981,12 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"status",
 		"observe",
 		"file_chooser",
+		"upload",
+		"download",
+		"observe",
+		"download",
+		"observe",
+		"download",
 		"close",
 		"open",
 		"status",
@@ -1190,7 +1367,7 @@ type wssBrowserHost struct {
 	output           []byte
 	outputDescriptor nodes.BrowserOutputDescriptor
 	outputActive     bool
-	corruptOutput    bool
+	corruptOutputs   int
 	outputCancels    int
 }
 
@@ -1249,8 +1426,8 @@ func (host *wssBrowserHost) HandleTransferFrame(
 			}
 			response.Type, response.Sequence = protocol.TransferFrameChunk, 1
 			response.Payload = append([]byte(nil), host.output...)
-			if host.corruptOutput {
-				host.corruptOutput = false
+			if host.corruptOutputs > 0 {
+				host.corruptOutputs--
 				response.Payload[len(response.Payload)-1] ^= 0xff
 			}
 			return send(response)
@@ -1309,9 +1486,13 @@ func (host *wssBrowserHost) HandleTransferFrame(
 }
 
 func (host *wssBrowserHost) corruptNextOutputChunk() {
+	host.corruptOutputChunks(1)
+}
+
+func (host *wssBrowserHost) corruptOutputChunks(count int) {
 	host.mu.Lock()
 	defer host.mu.Unlock()
-	host.corruptOutput = true
+	host.corruptOutputs = count
 }
 
 func (host *wssBrowserHost) outputCancelCount() int {
@@ -1653,6 +1834,88 @@ func (host *wssBrowserHost) FileChooser(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) Upload(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "upload")
+	url, found := host.urls[request.SessionID]
+	input := nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration, ActionInvocationID: request.ActionInvocationID,
+		Action: request.Action, Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash: request.PreparedActionHash, BrowserPolicyRevision: request.BrowserPolicyRevision,
+		ProfileRevision: request.ProfileRevision, ExpectedRole: request.ExpectedRole,
+		ExpectedName: request.ExpectedName, ArtifactSHA256: request.ArtifactSHA256,
+		ArtifactBytes: request.ArtifactBytes, ArtifactFilename: request.ArtifactFilename,
+		ArtifactContentType: request.ArtifactContentType, ApprovalDigest: request.ApprovalDigest,
+	}
+	if !found || host.transfer == nil || request.Action.Kind != "upload" ||
+		request.Action.Ref != "host_ref_9" || request.ExpectedRole != "button" ||
+		request.ExpectedName != "Choose file" || request.Effect != "unknown" ||
+		!nodes.BrowserApprovalDigestMatches(input) ||
+		request.Action.ArtifactRef != host.transfer.prepare.ArtifactRef ||
+		request.ActionInvocationID != host.transfer.prepare.ActionInvocationID ||
+		request.PreparedActionHash != host.transfer.prepare.PreparedActionHash ||
+		request.BrowserPolicyRevision != host.transfer.prepare.BrowserPolicyRevision ||
+		request.RoutedSessionID != host.transfer.prepare.RoutedSessionID ||
+		request.ArtifactBytes != int64(len(host.transfer.data)) ||
+		request.ArtifactSHA256 != hex.EncodeToString(host.transfer.binding.SHA256[:]) ||
+		request.ArtifactFilename != host.transfer.prepare.Filename ||
+		request.ArtifactContentType != host.transfer.prepare.ContentType {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	host.uploaded = append([]byte(nil), host.transfer.data...)
+	host.transfer = nil
+	host.snapshots[request.SessionID] = request.SnapshotGeneration + 1
+	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration + 1,
+	}, url), nil
+}
+
+func (host *wssBrowserHost) Download(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "download")
+	_, found := host.urls[request.SessionID]
+	input := nodes.BrowserActInput{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration, ActionInvocationID: request.ActionInvocationID,
+		Action: request.Action, Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		PreparedActionHash: request.PreparedActionHash, BrowserPolicyRevision: request.BrowserPolicyRevision,
+		ProfileRevision: request.ProfileRevision, ExpectedRole: request.ExpectedRole,
+		ExpectedName: request.ExpectedName, ApprovalDigest: request.ApprovalDigest,
+		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, BrowserTarget: request.BrowserTarget,
+	}
+	if !found || request.Action.Kind != "download" || request.Action.Ref != "host_ref_10" ||
+		request.ExpectedRole != "link" || request.ExpectedName != "Download fixture" ||
+		request.Effect != "unknown" || !nodes.BrowserApprovalDigestMatches(input) {
+		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostDenied
+	}
+	host.output = []byte("browser companion WSS download")
+	digest := sha256.Sum256(host.output)
+	generation := request.SnapshotGeneration + 1
+	host.snapshots[request.SessionID] = generation
+	host.outputDescriptor = nodes.BrowserOutputDescriptor{
+		TransferID: browserNodeStableID("browser_output", request.ActionInvocationID),
+		Kind:       nodes.BrowserOutputDownload, SessionID: request.SessionID,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, Target: request.BrowserTarget,
+		ProfileRevision: request.ProfileRevision, BrowserPolicyRevision: request.BrowserPolicyRevision,
+		InvocationID: request.ActionInvocationID, TabID: request.TabID, SnapshotGeneration: generation,
+		Filename: "fixture.txt", ContentType: "text/plain", Size: uint64(len(host.output)),
+		SHA256: hex.EncodeToString(digest[:]), CapturedAt: time.Now().Unix(),
+		ExpiresAt: time.Now().Add(time.Minute).Unix(), CleanupPolicy: "session_or_expiry",
+	}
+	return host.outputDescriptor, nil
+}
+
 func (host *wssBrowserHost) ordinaryInteraction(
 	request nodes.BrowserHostActRequest,
 	action, ref, role, name, effect string,
@@ -1883,10 +2146,22 @@ func (host *wssBrowserHost) commandSequence() []string {
 	return append([]string(nil), host.commands...)
 }
 
+func countWSSBrowserCommand(commands []string, expected string) int {
+	count := 0
+	for _, command := range commands {
+		if command == expected {
+			count++
+		}
+	}
+	return count
+}
+
 func wssBrowserSessionResult(sessionID, state string) nodes.BrowserSessionResult {
 	return nodes.BrowserSessionResult{
 		SessionID: sessionID, State: state, TabID: "tab_primary", Controller: "agent",
-		Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true, Contexts: true},
+		Features: nodes.BrowserHostFeatures{
+			Observe: true, Navigate: true, Contexts: true, Screenshot: true, Download: true,
+		},
 		ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 	}
 }
@@ -1899,7 +2174,8 @@ func wssBrowserObservation(
 		"- combobox \"State\" [ref=host_ref_2]\n- textbox \"Display name\" [ref=host_ref_3]\n"+
 		"- checkbox \"Notify\" [ref=host_ref_4]\n- switch \"Dark mode\" [ref=host_ref_5]\n"+
 		"- button \"Menu\" [ref=host_ref_6]\n- listitem \"Todo\" [ref=host_ref_7]\n"+
-		"- list \"Done\" [ref=host_ref_8]\n- button \"Choose file\" [ref=host_ref_9]"
+		"- list \"Done\" [ref=host_ref_8]\n- button \"Choose file\" [ref=host_ref_9]\n"+
+		"- link \"Download fixture\" [ref=host_ref_10]"
 	elements := []nodes.BrowserElement{
 		{Ref: "host_ref_1", Role: "button", Name: "Save"},
 		{Ref: "host_ref_2", Role: "combobox", Name: "State"},
@@ -1910,6 +2186,7 @@ func wssBrowserObservation(
 		{Ref: "host_ref_7", Role: "listitem", Name: "Todo"},
 		{Ref: "host_ref_8", Role: "list", Name: "Done"},
 		{Ref: "host_ref_9", Role: "button", Name: "Choose file"},
+		{Ref: "host_ref_10", Role: "link", Name: "Download fixture"},
 	}
 	if url == "about:blank" {
 		title, snapshot = "", ""
@@ -1934,6 +2211,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 			"check",
 			"click",
 			"dialog",
+			"download",
 			"drag",
 			"file_chooser",
 			"fill",
@@ -1943,6 +2221,7 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 			"scroll",
 			"select",
 			"uncheck",
+			"upload",
 		},
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}

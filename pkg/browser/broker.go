@@ -129,6 +129,15 @@ type PreparedActionStager interface {
 	StagePreparedAction(context.Context, WorkerPreparedAction) error
 }
 
+// PreparedDownloadWorker executes one accepted remote download against the
+// exact durable authority carried by WorkerPreparedAction. The returned file
+// is gateway-local: the remote worker must first transfer and commit the
+// immutable browser-owned output without replaying the page action.
+type PreparedDownloadWorker interface {
+	PreparedActionWorker
+	DownloadPrepared(context.Context, WorkerPreparedAction, int64) (DriverDownload, error)
+}
+
 type WorkerPreparedAction struct {
 	InvocationID string
 	Prepared     PreparedAction
@@ -180,10 +189,33 @@ type DriverDownload struct {
 	Size                                int64
 }
 
+// DownloadArtifactError means the accepted browser download completed, but
+// its immutable output could not be committed into gateway retention. The
+// action is terminal and must never be replayed; callers report artifact
+// availability separately from the action outcome.
+type DownloadArtifactError struct {
+	Err error
+}
+
+func (failure *DownloadArtifactError) Error() string {
+	return "browser download artifact is unavailable"
+}
+
+func (failure *DownloadArtifactError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
 type TransferWorker interface {
 	ActionWorker
 	Upload(context.Context, DriverAction) error
 	Download(context.Context, DriverAction, int64) (DriverDownload, error)
+}
+
+type DownloadCapabilityWorker interface {
+	DownloadAvailable() bool
 }
 
 // NavigationCheckedUploadWorker performs the final driver-owned navigation

@@ -393,6 +393,9 @@ type BrowserActInput struct {
 	ArtifactFilename        string        `json:"artifact_filename,omitempty"`
 	ArtifactContentType     string        `json:"artifact_content_type,omitempty"`
 	ApprovalDigest          string        `json:"approval_digest,omitempty"`
+	WorkspaceID             string        `json:"workspace_id,omitempty"`
+	RouteID                 string        `json:"route_id,omitempty"`
+	BrowserTarget           string        `json:"browser_target,omitempty"`
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -435,6 +438,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactFilename        string          `json:"artifact_filename,omitempty"`
 		ArtifactContentType     string          `json:"artifact_content_type,omitempty"`
 		ApprovalDigest          string          `json:"approval_digest,omitempty"`
+		WorkspaceID             string          `json:"workspace_id,omitempty"`
+		RouteID                 string          `json:"route_id,omitempty"`
+		BrowserTarget           string          `json:"browser_target,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -474,6 +480,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactSHA256: value.ArtifactSHA256, ArtifactBytes: int64(artifactBytes),
 		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
 		ApprovalDigest: value.ApprovalDigest,
+		WorkspaceID:    value.WorkspaceID, RouteID: value.RouteID, BrowserTarget: value.BrowserTarget,
 	}
 	return nil
 }
@@ -802,6 +809,7 @@ type BrowserActResult struct {
 	State              string                    `json:"state"`
 	Reason             string                    `json:"reason,omitempty"`
 	Observation        *BrowserObservationResult `json:"observation,omitempty"`
+	Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
 }
 
 const (
@@ -976,6 +984,9 @@ type BrowserHostActRequest struct {
 	ArtifactBytes           int64
 	ArtifactFilename        string
 	ArtifactContentType     string
+	WorkspaceID             string
+	RouteID                 string
+	BrowserTarget           string
 	AgentID                 string
 	ActorID                 string
 }
@@ -1009,7 +1020,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
 		if action != "check" && action != "click" && action != "dialog" && action != "download" && action != "drag" &&
-			action != "file_chooser" && action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
+			action != "file_chooser" && action != "upload" && action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
 			action != "scroll" && action != "select" && action != "uncheck" {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
@@ -1181,6 +1192,8 @@ func browserCommandInputSchema(
 				effect = "download"
 			case "check", "file_chooser", "fill", "select", "uncheck":
 				effect = "local_edit"
+			case "upload":
+				effect = "unknown"
 			case "hover":
 				effect = "read"
 			case "drag":
@@ -1193,7 +1206,8 @@ func browserCommandInputSchema(
 				effect = "unknown"
 			}
 			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" || action == "click" || action == "drag" || action == "press" {
+			if action == "download" || action == "upload" || action == "click" || action == "drag" ||
+				action == "press" {
 				required = append(required, "approval_digest")
 			}
 			properties := map[string]any{
@@ -1201,8 +1215,20 @@ func browserCommandInputSchema(
 				"action":           browserActionSchema([]string{action}),
 				"effect":           map[string]any{"const": effect},
 			}
+			if action == "download" {
+				required = append(required, "workspace_id", "route_id", "browser_target")
+				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
+				properties["workspace_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+				properties["route_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+				properties["browser_target"] = map[string]any{
+					"type":      "string",
+					"minLength": 1,
+					"maxLength": MaxIDLength,
+				}
+			}
 			if action == "click" || action == "fill" || action == "select" || action == "check" ||
-				action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
+				action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" ||
+				action == "upload" || action == "download" {
 				required = append(required, "expected_role")
 				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
@@ -1226,7 +1252,7 @@ func browserCommandInputSchema(
 					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
 				}
 			}
-			if action == "file_chooser" {
+			if action == "file_chooser" || action == "upload" {
 				required = append(required,
 					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
 				)
@@ -1373,7 +1399,7 @@ func browserCommandInputSchema(
 							"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
 						)
 					}
-				case "file_chooser":
+				case "file_chooser", "upload":
 					forbiddenFields = []string{
 						"destination_expected_role", "destination_expected_name", "dialog_type",
 						"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
@@ -1473,9 +1499,21 @@ func browserCommandInputSchema(
 		if _, hasCheck := allActions["check"]; hasCheck && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
 		}
-		if _, hasFileChooser := allActions["file_chooser"]; hasFileChooser &&
+		_, hasUpload := allActions["upload"]
+		if _, hasFileChooser := allActions["file_chooser"]; (hasFileChooser || hasUpload) &&
 			!slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
+		}
+		if hasUpload && !slices.Contains(actEffects, "unknown") {
+			actEffects = append(actEffects, "unknown")
+		}
+		if _, hasDownload := allActions["download"]; hasDownload {
+			if !slices.Contains(actEffects, "external_commit") {
+				actEffects = append(actEffects, "external_commit")
+			}
+			if !slices.Contains(actEffects, "unknown") {
+				actEffects = append(actEffects, "unknown")
+			}
 		}
 		if _, hasUncheck := allActions["uncheck"]; hasUncheck && !slices.Contains(actEffects, "local_edit") {
 			actEffects = append(actEffects, "local_edit")
@@ -1495,6 +1533,9 @@ func browserCommandInputSchema(
 		add("prepared_action_hash", digest)
 		add("browser_policy_revision", digest)
 		add("profile_revision", identifier)
+		properties["workspace_id"] = identifier
+		properties["route_id"] = identifier
+		properties["browser_target"] = identifier
 		_, hasClick := allActions["click"]
 		_, hasFill := allActions["fill"]
 		_, hasSelect := allActions["select"]
@@ -1504,7 +1545,10 @@ func browserCommandInputSchema(
 		_, hasHover := allActions["hover"]
 		_, hasDrag := allActions["drag"]
 		_, hasFileChooser := allActions["file_chooser"]
-		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag || hasFileChooser {
+		_, hasUpload = allActions["upload"]
+		_, hasDownload := allActions["download"]
+		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag || hasFileChooser ||
+			hasUpload || hasDownload {
 			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
 		}
@@ -1533,7 +1577,7 @@ func browserCommandInputSchema(
 				"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
 			}
 		}
-		if hasFileChooser {
+		if hasFileChooser || hasUpload {
 			properties["artifact_sha256"] = digest
 			properties["artifact_bytes"] = map[string]any{
 				"type": "integer", "minimum": 1, "maximum": MaxBrowserUploadBytes,
@@ -1667,6 +1711,7 @@ func BrowserCommandOutputSchema(
 				"reason":               safeReason,
 				"observation":          rawSchema(browserObservationSchema(limits)),
 				"artifact":             browserArtifactSchema(limits.DownloadBytes),
+				"output":               browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
 			},
 		})
 	case BrowserCommandContexts:
@@ -1994,12 +2039,12 @@ func browserActionSchema(actions []string) map[string]any {
 					"prompt_provided": map[string]any{"type": "boolean"},
 				},
 			})
-		case "file_chooser":
+		case "file_chooser", "upload":
 			branches = append(branches, map[string]any{
 				"type": "object", "additionalProperties": false,
 				"required": []string{"kind", "ref", "artifact_ref"},
 				"properties": map[string]any{
-					"kind":         map[string]any{"const": "file_chooser"},
+					"kind":         map[string]any{"const": action},
 					"ref":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 					"artifact_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": 512},
 				},
@@ -2179,6 +2224,35 @@ func browserOutputDescriptorSchema(maximumBytes int) map[string]any {
 			"element_ref":         optionalIdentifier,
 			"filename":            map[string]any{"const": "browser-screenshot.png"},
 			"content_type":        map[string]any{"const": "image/png"},
+			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
+			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
+			"expires_at":          map[string]any{"type": "integer", "minimum": 1},
+			"cleanup_policy":      map[string]any{"const": "session_or_expiry"},
+		},
+	}
+}
+
+func browserDownloadOutputDescriptorSchema(maximumBytes int) map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"transfer_id", "kind", "session_id", "routed_session_id", "agent_id", "actor_id",
+			"workspace_id", "route_id", "target", "profile_revision", "browser_policy_revision", "invocation_id",
+			"tab_id", "snapshot_generation", "filename", "content_type", "size", "sha256", "captured_at",
+			"expires_at", "cleanup_policy",
+		},
+		"properties": map[string]any{
+			"transfer_id": identifier, "kind": map[string]any{"const": BrowserOutputDownload},
+			"session_id": identifier, "routed_session_id": identifier, "agent_id": identifier,
+			"actor_id": identifier, "workspace_id": identifier, "route_id": identifier, "target": identifier,
+			"profile_revision":        identifier,
+			"browser_policy_revision": map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"invocation_id":           identifier, "tab_id": identifier,
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+			"filename":            map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
+			"content_type":        map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
 			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
 			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
 			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
