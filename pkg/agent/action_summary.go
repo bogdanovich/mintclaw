@@ -217,10 +217,14 @@ func appendTurnWriteAudit(
 		}
 		duplicate := false
 		for _, existing := range records {
+			existingInvocationID := strings.TrimSpace(existing.Metadata["invocation_id"])
+			entryInvocationID := strings.TrimSpace(entry.Metadata["invocation_id"])
 			if existing.Kind == entry.Kind &&
 				existing.Target == entry.Target &&
 				existing.Action == entry.Action &&
-				existing.Tool == entry.Tool {
+				existing.Tool == entry.Tool &&
+				(existingInvocationID == "" || entryInvocationID == "" ||
+					existingInvocationID == entryInvocationID) {
 				duplicate = true
 				break
 			}

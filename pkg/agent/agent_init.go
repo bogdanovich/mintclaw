@@ -420,6 +420,7 @@ func registerSharedTools(
 				ctx context.Context,
 				taskID string,
 				task, label, targetAgentID string,
+				objectiveItems []toolshared.ObjectiveSpec,
 				tls *tools.ToolRegistry,
 				maxTokens int,
 				temperature float64,
@@ -464,10 +465,11 @@ func registerSharedTools(
 
 				// 5. Build SubTurnConfig
 				cfg := SubTurnConfig{
-					TaskID:       taskID,
-					Model:        modelToUse,
-					Tools:        tlSlice,
-					SystemPrompt: systemPrompt,
+					TaskID:         taskID,
+					Model:          modelToUse,
+					Tools:          tlSlice,
+					SystemPrompt:   systemPrompt,
+					ObjectiveItems: objectiveItems,
 				}
 				if hasMaxTokens {
 					cfg.MaxTokens = maxTokens

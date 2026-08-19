@@ -1844,6 +1844,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			TaskID:                 r.ts.opts.TaskID,
 			ContinuationSessionKey: r.ts.sessionKey,
 			ArgumentHash:           strings.TrimSpace(argumentHash),
+			ObjectiveChecklist:     interactionObjectiveChecklist(r.ts.opts.ObjectiveChecklist),
 		},
 	})
 	if !disposition.Durable {

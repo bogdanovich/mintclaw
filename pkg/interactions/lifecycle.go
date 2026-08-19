@@ -719,6 +719,35 @@ func (r *Registry) transition(
 	)
 }
 
+// RecordOutcomeReceipts durably attaches safe external-action evidence to an
+// interaction before its continuation is allowed to finalize. Replays are
+// idempotent by receipt ID.
+func (r *Registry) RecordOutcomeReceipts(
+	id string,
+	expectedRevision int64,
+	receipts []OutcomeReceipt,
+) (Record, error) {
+	return r.update(id, expectedRevision, func(rec *Record, _ int64) (EventType, string, *bool, error) {
+		seen := make(map[string]struct{}, len(rec.OutcomeReceipts))
+		for _, receipt := range rec.OutcomeReceipts {
+			seen[strings.TrimSpace(receipt.ID)] = struct{}{}
+		}
+		for _, receipt := range receipts {
+			receipt.ID = strings.TrimSpace(receipt.ID)
+			if receipt.ID == "" {
+				continue
+			}
+			if _, exists := seen[receipt.ID]; exists {
+				continue
+			}
+			receipt.Metadata = cloneStringMap(receipt.Metadata)
+			rec.OutcomeReceipts = append(rec.OutcomeReceipts, receipt)
+			seen[receipt.ID] = struct{}{}
+		}
+		return EventRecoveryObserved, "outcome_receipts_recorded", nil, nil
+	})
+}
+
 func (r *Registry) update(
 	id string,
 	expectedRevision int64,

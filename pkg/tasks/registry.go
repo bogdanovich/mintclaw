@@ -77,8 +77,9 @@ const (
 )
 
 type CompletionPayload struct {
-	Text  string            `json:"text,omitempty"`
-	Media []CompletionMedia `json:"media,omitempty"`
+	Text             string            `json:"text,omitempty"`
+	Media            []CompletionMedia `json:"media,omitempty"`
+	ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
 }
 
 type CompletionMedia struct {
@@ -89,10 +90,33 @@ type CompletionMedia struct {
 }
 
 type DeliverablePayload struct {
-	Text      string             `json:"text,omitempty"`
-	Artifacts []DeliverableItem  `json:"artifacts,omitempty"`
-	Metadata  map[string]string  `json:"metadata,omitempty"`
-	Report    *DeliverableReport `json:"report,omitempty"`
+	Text             string             `json:"text,omitempty"`
+	Artifacts        []DeliverableItem  `json:"artifacts,omitempty"`
+	Metadata         map[string]string  `json:"metadata,omitempty"`
+	Report           *DeliverableReport `json:"report,omitempty"`
+	ObjectiveOutcome *ObjectiveOutcome  `json:"objective_outcome,omitempty"`
+}
+
+type ObjectiveOutcome struct {
+	Status         string          `json:"status"`
+	CompletedItems []ObjectiveItem `json:"completed_items,omitempty"`
+	MissingItems   []string        `json:"missing_items,omitempty"`
+}
+
+type ObjectiveItem struct {
+	Item     string             `json:"item"`
+	Kind     string             `json:"kind,omitempty"`
+	Receipts []ObjectiveReceipt `json:"receipts,omitempty"`
+}
+
+type ObjectiveReceipt struct {
+	ID       string            `json:"id"`
+	Kind     string            `json:"kind,omitempty"`
+	Target   string            `json:"target,omitempty"`
+	Action   string            `json:"action,omitempty"`
+	Tool     string            `json:"tool,omitempty"`
+	Summary  string            `json:"summary,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type DeliverableItem struct {

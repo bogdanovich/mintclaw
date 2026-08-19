@@ -54,6 +54,7 @@ func normalizeDeliverablePayload(payload *DeliverablePayload, generatedAt int64)
 	out := *payload
 	out.Artifacts = append([]DeliverableItem(nil), payload.Artifacts...)
 	out.Metadata = copyStringMap(payload.Metadata)
+	out.ObjectiveOutcome = cloneObjectiveOutcome(payload.ObjectiveOutcome)
 	if payload.Report != nil {
 		report := cloneDeliverableReport(payload.Report)
 		if report.SchemaVersion == "" {
@@ -103,14 +104,16 @@ func deliverableContentHash(payload *DeliverablePayload) string {
 		return ""
 	}
 	type hashPayload struct {
-		Text      string            `json:"text,omitempty"`
-		Artifacts []DeliverableItem `json:"artifacts,omitempty"`
-		Metadata  map[string]string `json:"metadata,omitempty"`
+		Text             string            `json:"text,omitempty"`
+		Artifacts        []DeliverableItem `json:"artifacts,omitempty"`
+		Metadata         map[string]string `json:"metadata,omitempty"`
+		ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
 	}
 	data, _ := json.Marshal(hashPayload{
-		Text:      strings.TrimSpace(payload.Text),
-		Artifacts: append([]DeliverableItem(nil), payload.Artifacts...),
-		Metadata:  copyStringMap(payload.Metadata),
+		Text:             strings.TrimSpace(payload.Text),
+		Artifacts:        append([]DeliverableItem(nil), payload.Artifacts...),
+		Metadata:         copyStringMap(payload.Metadata),
+		ObjectiveOutcome: cloneObjectiveOutcome(payload.ObjectiveOutcome),
 	})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

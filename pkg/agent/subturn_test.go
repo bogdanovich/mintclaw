@@ -380,19 +380,21 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
-			ID: "call-task-approval", Name: "approval_counting",
+			ID: "call-task-approval", Name: "browser_act",
 			Arguments: map[string]any{"target": "production"},
 			Function: &providers.FunctionCall{
-				Name: "approval_counting", Arguments: `{"target":"production"}`,
+				Name: "browser_act", Arguments: `{"target":"production"}`,
 			},
 		}}},
-		{Content: "approved task completed", FinishReason: "stop"},
+		{Content: "approved task completed\n" + objectiveOutcomeStart +
+			`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-approved"]}],"missing_items":[]}` +
+			objectiveOutcomeEnd, FinishReason: "stop"},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
-	tool := &approvalCountingTool{}
+	tool := &outcomeBrowserApprovalTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("task-approval", &durableApprovalHook{
 		actionSummary: "Run the production task action",
@@ -426,6 +428,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
 		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-approval", Critical: true,
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "production action", Kind: "external_action"}},
 	})
 	if err != nil || result == nil || !result.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
@@ -455,9 +458,86 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	task, _ = tasks.Get("subagent-approval")
 	if task.Status != taskregistry.StatusSucceeded ||
 		task.DeliveryStatus != taskregistry.DeliveryDelivered ||
-		tool.executions != 1 {
+		tool.executions != 1 || task.Completion == nil || task.Completion.ObjectiveOutcome == nil ||
+		task.Completion.ObjectiveOutcome.Status != string(toolshared.ObjectiveOutcomeSucceeded) ||
+		len(task.Completion.ObjectiveOutcome.CompletedItems) != 1 ||
+		task.Completion.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv-approved" {
 		t.Fatalf("completed approval task = %#v, executions=%d", task, tool.executions)
 	}
+}
+
+type outcomeBrowserApprovalTool struct {
+	executions int
+}
+
+func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "Both items were published.\n" + objectiveOutcomeStart +
+			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"]}` +
+			objectiveOutcomeEnd,
+		FinishReason: "stop",
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(&outcomeBrowserApprovalTool{})
+	inbound := &bus.InboundContext{Channel: "telegram", ChatID: "chat-user-only", SenderID: "user"}
+	parent := newTurnState(agent, processOptions{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-user-only", SessionKey: "parent-user-only", InboundContext: inbound,
+	}}, al.newTurnEventScope(
+		agent.ID, agent.Workspace, "parent-user-only", newTurnContext(inbound, nil, nil),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 4)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model: agent.Model, SystemPrompt: "publish both items",
+		DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		ObjectiveItems: []toolshared.ObjectiveSpec{
+			{Item: "Yakima published", Kind: "result"},
+			{Item: "Vissani not published", Kind: "result"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userText := toolResultUserText(result)
+	if strings.Contains(userText, "Both items") || !strings.Contains(userText, "Yakima published") ||
+		!strings.Contains(userText, "Vissani not published") || !result.ResponseHandled {
+		t.Fatalf("user-only verified result = %#v, user text = %q", result, userText)
+	}
+	if strings.Contains(result.ForLLM, "Both items") || result.Completion == nil ||
+		strings.Contains(result.Completion.Text, "Both items") || result.Deliverable == nil ||
+		strings.Contains(result.Deliverable.Text, "Both items") {
+		t.Fatalf("parent or durable projection retained contradictory prose: %#v", result)
+	}
+	msgBus := al.bus.(*bus.MessageBus)
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("browser child published before outcome validation: %#v", outbound)
+	default:
+	}
+}
+
+func (*outcomeBrowserApprovalTool) Name() string { return "browser_act" }
+
+func (*outcomeBrowserApprovalTool) Description() string { return "Perform a protected browser action" }
+
+func (*outcomeBrowserApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *outcomeBrowserApprovalTool) Execute(
+	_ context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	return toolshared.NewToolResult(`{"invocation_id":"inv-approved","state":"succeeded"}`).
+		WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: "https://example.com", Action: "click",
+			Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-approved", "effect": "external_commit"},
+		})
 }
 
 type scopeRecordingApprovalTool struct {
@@ -2455,6 +2535,76 @@ func TestSpawnSubTurn_DefaultSyncDeliveryRemovesUserDeliveryTools(t *testing.T) 
 	}
 	if !names["read_file"] {
 		t.Fatalf("child provider did not see non-delivery tool read_file")
+	}
+}
+
+func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
+	provider := &subturnToolCaptureProvider{}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	tool := &outcomeBrowserApprovalTool{}
+	betaAgent.Tools.Register(tool)
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-browser-preflight",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alphaAgent,
+		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", SystemPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+	})
+	if err != nil || result == nil || result.Completion == nil || result.Completion.ObjectiveOutcome == nil ||
+		result.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomeBlocked {
+		t.Fatalf("browser preflight result = (%#v, %v)", result, err)
+	}
+	if tool.executions != 0 || len(provider.toolNames()) != 0 {
+		t.Fatalf(
+			"browser child executed before checklist validation: executions=%d tools=%v",
+			tool.executions,
+			provider.toolNames(),
+		)
+	}
+}
+
+func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) {
+	provider := &subturnToolCaptureProvider{}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	betaAgent.Tools.Register(&outcomeBrowserApprovalTool{})
+	for _, name := range []string{"message", "send_file", "send_tts", "reaction", "read_file"} {
+		betaAgent.Tools.Register(&allowlistTestTool{name: name})
+	}
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-browser-delivery",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alphaAgent,
+		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
+	}
+	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", SystemPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "inspect one item", Kind: "result"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := provider.toolNames()
+	for _, name := range []string{"message", "send_file", "send_tts", "reaction"} {
+		if names[name] {
+			t.Fatalf("browser child provider saw direct-delivery tool %q", name)
+		}
+	}
+	if !names["read_file"] || !names["browser_act"] {
+		t.Fatalf("browser child lost non-delivery tools: %v", names)
 	}
 }
 

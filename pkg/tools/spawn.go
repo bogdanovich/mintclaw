@@ -40,21 +40,23 @@ func (t *SpawnTool) SetSpawner(spawner SubTurnSpawner) {
 			ctx context.Context,
 			taskID string,
 			task, label, agentID string,
+			objectiveItems []toolshared.ObjectiveSpec,
 			tools *ToolRegistry,
 			maxTokens int,
 			temperature float64,
 			hasMaxTokens, hasTemperature bool,
 		) (*toolshared.ToolResult, error) {
 			return spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				TaskID:        taskID,
-				TargetAgentID: strings.TrimSpace(agentID),
-				Model:         t.defaultModel,
-				Tools:         nil,
-				SystemPrompt:  buildSpawnSystemPrompt(task, label),
-				MaxTokens:     maxTokens,
-				Temperature:   temperature,
-				Async:         false,
-				Critical:      true,
+				TaskID:         taskID,
+				TargetAgentID:  strings.TrimSpace(agentID),
+				Model:          t.defaultModel,
+				Tools:          nil,
+				SystemPrompt:   buildSpawnSystemPrompt(task, label),
+				MaxTokens:      maxTokens,
+				Temperature:    temperature,
+				Async:          false,
+				Critical:       true,
+				ObjectiveItems: objectiveItems,
 			})
 		})
 	}
@@ -91,6 +93,7 @@ func (t *SpawnTool) Parameters() map[string]any {
 				string(toolshared.AsyncDeliveryUserAndParent),
 			},
 		},
+		"objective_items": objectiveItemsParameter(),
 	}
 	return map[string]any{
 		"type":       "object",
@@ -140,6 +143,10 @@ func (t *SpawnTool) execute(
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
+	objectiveItems, err := parseObjectiveItems(args["objective_items"])
+	if err != nil {
+		return toolshared.ErrorResult(err.Error()).WithError(err)
+	}
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -169,6 +176,7 @@ func (t *SpawnTool) execute(
 			toolshared.ToolChatID(ctx),
 			deliveryMode,
 			wrappedCallback,
+			objectiveItems,
 		)
 		if err != nil {
 			return toolshared.ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)

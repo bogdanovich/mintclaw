@@ -1547,14 +1547,20 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		t.Fatalf("suspended result = %#v; execute calls = %d", suspended, source.executeCalls)
 	}
 	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
+	toolResult := tool.Execute(resumeCtx, args)
 	var result browserActionResult
-	decodeBrowserToolResult(t, tool.Execute(resumeCtx, args), &result)
+	decodeBrowserToolResult(t, toolResult, &result)
 	if result.InvocationID != "invocation_1" || result.Observation == nil ||
 		!result.Observation.Truncated ||
 		source.executePrepared != "prepared_1" || source.executeApproval == nil ||
 		*source.executeApproval != binding || source.prepareRequest.RequestID == "" ||
 		source.prepareRequest.Owner != source.executeOwner {
 		t.Fatalf("action result = %#v; source = %#v", result, source)
+	}
+	if len(toolResult.WriteAudit) != 1 || toolResult.WriteAudit[0].Kind != "external_action" ||
+		toolResult.WriteAudit[0].Tool != "browser_act" ||
+		toolResult.WriteAudit[0].Metadata["invocation_id"] != "invocation_1" {
+		t.Fatalf("browser action receipts = %#v", toolResult.WriteAudit)
 	}
 }
 
@@ -1689,6 +1695,34 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 		!strings.Contains(result.ContentForLLM(), `"failure_class":"driver_rejected"`) ||
 		!strings.Contains(result.ContentForLLM(), `"action":"do_not_retry_reopen_session"`) {
 		t.Fatalf("post-action state result = %#v", result)
+	}
+}
+
+func TestBrowserActPreservesCommittedReceiptOnPostActionStateFailure(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare: browser.Preparation{Action: browser.PreparedAction{
+			ID: "prepared_commit", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+			Action: browser.Action{Kind: browser.ActionClick, Ref: "publish"},
+			Effect: browser.EffectExternalCommit,
+		}},
+		execute: browser.Invocation{
+			ID: "invocation_commit", SessionID: "browser_session_1",
+			Effect: browser.EffectExternalCommit, State: browser.InvocationSucceeded,
+		},
+		executeErr: browser.ErrSnapshotInvalidation,
+	}
+	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+			"action": map[string]any{"kind": "click", "ref": "publish"},
+		},
+	)
+	if !result.IsError || len(result.WriteAudit) != 1 ||
+		result.WriteAudit[0].Metadata["invocation_id"] != "invocation_commit" {
+		t.Fatalf("committed post-action receipt was lost: %#v", result)
 	}
 }
 

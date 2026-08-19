@@ -160,6 +160,13 @@ message ID.
    - project it through task status and async delivery;
    - ground parent-facing action claims in receipts.
 
+The objective verifier proves only the explicit structured checklist supplied
+at the child-task boundary. It does not attempt to recover omitted intent from
+free-form prose. Browser-capable children fail before execution without that
+checklist; callers must register every outcome they need verified. Runtime IDs,
+partition validation, and receipt consumption then prevent the child from
+rewriting, omitting, or double-certifying registered items.
+
 Dependent pull requests start from the merged predecessor or a fresh current
 `origin/main` as appropriate. Each code PR requires targeted tests, formatting,
 changed-package lint, required CI, review, and repository-owner rocket approval
@@ -180,7 +187,8 @@ continuations:
 8. recover once from a stale read authority if injected;
 9. use protected visual fallback when the accessibility fixture is ambiguous;
 10. request approval only for the final external commit;
-11. report `succeeded` only when both requested items are verified;
+11. register both requested items in the child checklist and report
+    `succeeded` only when both are verified;
 12. remove the single feedback carrier at terminal delivery with no orphan.
 
 The initiative is not complete when only prompts are changed. The routing,

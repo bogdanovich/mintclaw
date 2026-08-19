@@ -118,6 +118,8 @@ type turnResult struct {
 	usageOutputTokens      int
 	usageTotalTokens       int
 	completionMedia        []toolshared.CompletionMedia
+	writeAudit             []toolshared.WriteAuditEntry
+	objectiveOutcome       *toolshared.ObjectiveOutcome
 	status                 TurnEndStatus
 	followUps              []bus.InboundMessage
 	preferNewOutboundReply bool

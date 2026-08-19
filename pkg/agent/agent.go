@@ -114,15 +114,17 @@ type AgentLoop struct {
 type processOptions struct {
 	Dispatch                     DispatchRequest // Normalized routed request boundary for this turn
 	ModelBinding                 effectiveModelBinding
-	SessionKey                   string              // Session identifier for history/context
-	SessionAliases               []string            // Compatibility aliases for the session key
-	TaskID                       string              // Durable task owning this turn, when one exists
+	SessionKey                   string   // Session identifier for history/context
+	SessionAliases               []string // Compatibility aliases for the session key
+	TaskID                       string   // Durable task owning this turn, when one exists
+	ObjectiveChecklist           []runtimeObjectiveItem
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
 	InteractionSessionKey        string              // User-facing session that owns interaction answers
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers
 	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
 	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
 	TurnStatus                   *TurnEndStatus
+	TurnResult                   *turnResult         // Optional caller-owned terminal snapshot
 	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
 	Channel                      string              // Target channel for tool execution
 	ChatID                       string              // Target chat ID for tool execution
@@ -514,6 +516,9 @@ func (al *AgentLoop) runAgentLoop(
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {
 		return "", err
+	}
+	if opts.TurnResult != nil {
+		*opts.TurnResult = result
 	}
 	if opts.TurnStatus != nil {
 		*opts.TurnStatus = result.status

@@ -1122,7 +1122,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
 	if err := al.deliverTaskInteractionFinal(
-		t.Context(), registry, workspace, record, inbound, "raw child final", nil,
+		t.Context(), registry, workspace, record, inbound, "raw child final", nil, nil,
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -1307,7 +1307,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 		bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "recovery-message",
 		},
-		"raw child final", nil,
+		"raw child final", nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1389,17 +1389,25 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only interaction must wait for user delivery settlement")
 	}
 	traceScope := runtimeevents.NewTraceScope(workspace, "resume-turn")
+	objectiveOutcome := &toolshared.ObjectiveOutcome{
+		Status:         toolshared.ObjectiveOutcomePartial,
+		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published", Kind: "external_action"}},
+		MissingItems:   []string{"Vissani not published"},
+	}
+	projection := objectiveOutcomeUserContent("Both items were published.", objectiveOutcome)
 	if err := al.deliverTaskInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		"raw child final", []runtimeevents.TraceScope{traceScope},
+		"Both items were published.", objectiveOutcome, []runtimeevents.TraceScope{traceScope},
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
 	select {
 	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
-		if outbound.Content != "raw child final" || !outbound.TraceSettlement ||
-			len(outbound.TraceScopes) != 1 || outbound.TraceScopes[0] != traceScope {
+		if outbound.Content != projection || strings.Contains(outbound.Content, "Both items") ||
+			!outbound.TraceSettlement ||
+			len(outbound.TraceScopes) != 1 ||
+			outbound.TraceScopes[0] != traceScope {
 			t.Fatalf("task user delivery = %#v", outbound)
 		}
 		metadata := bus.OutboundMetadataFromMessage(outbound)
@@ -1409,6 +1417,11 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("user-only task completion was not queued")
+	}
+	task, _ := tasks.Get("subagent-user")
+	if task.TerminalSummary != projection || task.Completion == nil || task.Completion.Text != projection ||
+		task.Deliverable == nil || task.Deliverable.Text != projection || strings.Contains(task.TerminalSummary, "Both items") {
+		t.Fatalf("task retained optimistic resume projection: %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.Status != interactions.StatusResolved ||
@@ -3582,6 +3595,100 @@ func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
 			cleanupTool.executionID,
 			cleanupTool.inbound,
 		)
+	}
+}
+
+type journalReceiptApprovalTool struct {
+	executions int
+}
+
+func (*journalReceiptApprovalTool) Name() string { return "browser_act" }
+
+func (*journalReceiptApprovalTool) Description() string { return "Commit an approved external action" }
+
+func (*journalReceiptApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *journalReceiptApprovalTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	return toolshared.NewToolResult(`{"invocation_id":"inv-journal","state":"succeeded"}`).
+		WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: "https://example.com", Action: "click",
+			Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-journal", "effect": "external_commit"},
+		})
+}
+
+func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-journal-receipt", Name: "browser_act",
+			Function: &providers.FunctionCall{Name: "browser_act", Arguments: `{}`},
+		}}},
+		{Content: "Recovered committed action", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.channelManager = newInteractionChannelManager()
+	tool := &journalReceiptApprovalTool{}
+	agent.Tools.Register(tool)
+	if err := al.MountHook(NamedHook("approved-journal-receipt", &durableApprovalHook{
+		actionSummary: "Commit the external action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-journal-receipt", SenderID: "user",
+	}
+	turnStatus := TurnEndStatusCompleted
+	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+		TurnStatus: &turnStatus,
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-journal-receipt", SessionKey: "session-journal-receipt",
+			UserMessage: "commit action", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, SendResponse: false,
+	}); err != nil || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %v)", turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-journal-receipt")
+	if !ok {
+		t.Fatal("approval interaction is missing")
+	}
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "answer-journal-receipt", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseStore := agent.Sessions
+	journalErr := errors.New("persist committed browser result")
+	agent.Sessions = &toolResultFailingJournal{SessionStore: baseStore, err: journalErr}
+	err = al.resumeClaimedInteraction(t.Context(), registry, agent.Workspace, agent, nil, *inbound, record)
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("first resume error = %v, want %v", err, journalErr)
+	}
+	current, _ := registry.Get(record.ID)
+	if tool.executions != 1 || len(current.OutcomeReceipts) != 1 ||
+		current.OutcomeReceipts[0].ID != "inv-journal" {
+		t.Fatalf("post-journal interaction = %#v, executions=%d", current, tool.executions)
+	}
+
+	agent.Sessions = baseStore
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, current,
+	); err != nil {
+		t.Fatal(err)
+	}
+	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(current))
+	_, resultIndex := interactionToolPairIndexes(history, current.Origin.ToolCallID)
+	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, "inv-journal") || tool.executions != 1 {
+		t.Fatalf("recovered history = %#v, executions=%d", history, tool.executions)
 	}
 }
 
@@ -5765,6 +5872,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 					inboundContextForInteraction(record.Route),
 					"undelivered task final",
 					nil,
+					nil,
 				)
 			}()
 			select {
@@ -6860,7 +6968,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	if err = al.deliverInteractionFinal(
 		t.Context(), registry, agent.Workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		content, nil,
+		content, nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}

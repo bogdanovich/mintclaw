@@ -55,6 +55,22 @@ func TestAppendTurnWriteAuditNormalizesAndDedupes(t *testing.T) {
 	}
 }
 
+func TestAppendTurnWriteAuditPreservesDistinctInvocationReceipts(t *testing.T) {
+	records := appendTurnWriteAudit(nil, "browser_act", []toolshared.WriteAuditEntry{
+		{
+			Kind: "external_action", Target: "https://example.com", Action: "click",
+			Success: true, Metadata: map[string]string{"invocation_id": "inv-1"},
+		},
+		{
+			Kind: "external_action", Target: "https://example.com", Action: "click",
+			Success: true, Metadata: map[string]string{"invocation_id": "inv-2"},
+		},
+	})
+	if len(records) != 2 {
+		t.Fatalf("distinct invocation receipts were deduplicated: %+v", records)
+	}
+}
+
 func TestBuildFinalTurnRenderInstructionOmitsUnverifiedWriteClaims(t *testing.T) {
 	exec := &turnExecution{
 		actionLog: []TurnActionRecord{

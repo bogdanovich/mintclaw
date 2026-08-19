@@ -187,8 +187,9 @@ type SubTurnConfig struct {
 	// DeliveryMode controls user-facing delivery ownership for synchronous
 	// delegate/sub-turn flows. Reuses the same enum names as async spawn:
 	// parent_only, user_only, user_and_parent.
-	DeliveryMode toolshared.AsyncDeliveryMode
-	TaskID       string
+	DeliveryMode   toolshared.AsyncDeliveryMode
+	TaskID         string
+	ObjectiveItems []toolshared.ObjectiveSpec
 }
 
 // ====================== Context Keys ======================
@@ -617,9 +618,27 @@ func spawnSubTurn(
 		if !durableTask {
 			removeDurableInteractionTools(agent.Tools)
 		}
-		if !cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly {
-			removeUserDeliveryTools(agent.Tools)
-		}
+	}
+	requireObjectiveOutcome := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	objectiveChecklist := normalizeObjectiveChecklist(cfg.ObjectiveItems)
+	if requireObjectiveOutcome && len(objectiveChecklist) == 0 {
+		outcome := blockedObjectiveOutcome("a valid declared objective checklist is required before browser execution")
+		projection := objectiveOutcomeUserContent("", outcome)
+		return (&toolshared.ToolResult{ForLLM: projection, ForUser: projection}).
+			WithCompletion(&toolshared.CompletionResult{
+				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
+			}).
+			WithDeliverable(&toolshared.DeliverableResult{
+				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
+			}), nil
+	}
+	if agent.Tools != nil && (requireObjectiveOutcome ||
+		(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly)) {
+		removeUserDeliveryTools(agent.Tools)
+	}
+	childTask := cfg.SystemPrompt
+	if requireObjectiveOutcome {
+		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
 	}
 
 	// Create processOptions for the child turn
@@ -638,7 +657,7 @@ func spawnSubTurn(
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
 		SessionKey:      childSessionKey,
 		SessionAliases:  append([]string(nil), parentTS.opts.Dispatch.SessionAliases...),
-		UserMessage:     cfg.SystemPrompt,
+		UserMessage:     childTask,
 		Media:           nil,
 		InboundContext:  cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
 		RouteResult:     cloneResolvedRoute(parentTS.opts.Dispatch.RouteResult),
@@ -649,6 +668,7 @@ func spawnSubTurn(
 	}
 	opts := processOptions{
 		TaskID:                  strings.TrimSpace(cfg.TaskID),
+		ObjectiveChecklist:      objectiveChecklist,
 		InteractionWorkspace:    parentTS.workspace,
 		InteractionSessionKey:   parentTS.sessionKey,
 		InteractionRouteKey:     parentTS.opts.Dispatch.RouteSessionKey,
@@ -661,12 +681,13 @@ func spawnSubTurn(
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
 		EnableSummary:           false,
-		SendResponse: !hasOutboundTransaction(childCtx) && !cfg.Async &&
+		SendResponse: !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
 			(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent),
-		SuppressToolUserDelivery: !cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly,
-		SuppressToolFeedback:     parentTS.opts.SuppressToolFeedback,
-		NoHistory:                !durableTask,
-		SkipInitialSteeringPoll:  true,
+		SuppressToolUserDelivery: requireObjectiveOutcome ||
+			(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly),
+		SuppressToolFeedback:    parentTS.opts.SuppressToolFeedback,
+		NoHistory:               !durableTask,
+		SkipInitialSteeringPoll: true,
 	}
 	if !opts.TurnProfile.Enabled {
 		opts.TurnProfile = parentTS.opts.TurnProfile
@@ -784,6 +805,14 @@ func spawnSubTurn(
 	// 8. Execute sub-turn via the real agent loop.
 	pipeline := NewPipeline(al)
 	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
+	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
+		turnRes.finalContent, turnRes.objectiveOutcome = extractObjectiveOutcome(
+			turnRes.finalContent,
+			turnRes.writeAudit,
+			requireObjectiveOutcome,
+			objectiveChecklist,
+		)
+	}
 
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
@@ -806,14 +835,24 @@ func spawnSubTurn(
 	} else if turnRes.status == TurnEndStatusSuspended {
 		result = &toolshared.ToolResult{TaskSuspended: true}
 	} else {
-		result = &toolshared.ToolResult{
-			ForLLM:  turnRes.finalContent,
-			ForUser: turnRes.finalContent,
+		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
+		parentContent := turnRes.finalContent
+		if turnRes.objectiveOutcome != nil &&
+			turnRes.objectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
+			parentContent = userContent
 		}
-		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 {
+		result = &toolshared.ToolResult{
+			ForLLM:  parentContent,
+			ForUser: userContent,
+		}
+		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
+		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||
+			turnRes.objectiveOutcome != nil {
 			result.WithCompletion(&toolshared.CompletionResult{
-				Text:  turnRes.finalContent,
-				Media: append([]toolshared.CompletionMedia(nil), turnRes.completionMedia...),
+				Text: parentContent, Media: append(
+					[]toolshared.CompletionMedia(nil), turnRes.completionMedia...,
+				),
+				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
 			})
 			result.Media = append(result.Media, completionMediaRefs(turnRes.completionMedia)...)
 		}
@@ -822,7 +861,6 @@ func spawnSubTurn(
 			case toolshared.AsyncDeliveryParentOnly:
 				result.ForUser = ""
 			case toolshared.AsyncDeliveryUserOnly:
-				result.ForUser = ""
 				result.Silent = true
 				result.ResponseHandled = true
 			case toolshared.AsyncDeliveryUserAndParent:
@@ -835,6 +873,15 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.WriteAuditEntry {
+	cloned := make([]toolshared.WriteAuditEntry, len(entries))
+	for index, entry := range entries {
+		cloned[index] = entry
+		cloned[index].Metadata = copyObjectiveMetadata(entry.Metadata)
+	}
+	return cloned
 }
 
 func durableTaskSessionKey(ownerWorkspace, taskID string) string {
