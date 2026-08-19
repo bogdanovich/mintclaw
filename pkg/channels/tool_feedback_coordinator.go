@@ -442,6 +442,9 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 		entry.mu.Lock()
 		traceGenerations := normalizeToolFeedbackGenerations(generations)
 		admittedGenerations := entry.addActiveGenerations(traceGenerations)
+		if retain && (!entry.terminal || len(traceGenerations) == 0) {
+			traceGenerations = entry.activeGenerationsSnapshot()
+		}
 		if entry.retired {
 			entry.mu.Unlock()
 			c.removeEntry(key, entry)
@@ -510,13 +513,12 @@ func (entry *toolFeedbackEntry) addActiveGenerations(generations []string) []str
 	return admitted
 }
 
-func (entry *toolFeedbackEntry) terminalizeActiveGenerations() {
+func (entry *toolFeedbackEntry) activeGenerationsSnapshot() []string {
 	generations := make([]string, 0, len(entry.activeGenerations))
 	for generation := range entry.activeGenerations {
 		generations = append(generations, generation)
 	}
-	entry.terminalizeGenerations(generations)
-	entry.activeGenerations = nil
+	return generations
 }
 
 func (entry *toolFeedbackEntry) terminalizeGenerations(generations []string) {
@@ -593,6 +595,7 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 		entry.opMu.Unlock()
 		return
 	}
+	entry.settleTerminalGenerations(terminal, success)
 	if entry.terminalPending > 0 {
 		entry.terminalPending--
 	}
@@ -607,7 +610,6 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	}
 	if success {
 		if terminal.retain {
-			entry.terminalizeActiveGenerations()
 			entry.terminalSuccess = toolFeedbackTerminalSuccessRetained
 			entry.terminalUntil = time.Now().Add(toolFeedbackTerminalTombstoneTTL)
 		} else if previousSuccess == toolFeedbackTerminalSuccessNone {
