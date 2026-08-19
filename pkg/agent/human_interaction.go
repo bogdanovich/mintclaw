@@ -154,8 +154,9 @@ func (al *AgentLoop) observeInteractionEvent(
 		return
 	}
 	record := observation.Record
-	if record.Status == interactions.StatusResolved || record.Status == interactions.StatusCancelled ||
-		record.Status == interactions.StatusFailed {
+	chained := observation.Event.Code == "continued_with_next_interaction"
+	if !chained && (record.Status == interactions.StatusResolved || record.Status == interactions.StatusCancelled ||
+		record.Status == interactions.StatusFailed) {
 		al.dismissTerminalInteractionToolFeedback(record)
 	}
 	al.runtimeEventEmitter().emitEvent(kind, HookMeta{

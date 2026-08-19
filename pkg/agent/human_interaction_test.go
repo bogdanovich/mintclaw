@@ -770,6 +770,38 @@ func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.
 	}
 }
 
+func TestChainedInteractionKeepsContinuationToolFeedbackCarrier(t *testing.T) {
+	manager := &recordingChannelManager{}
+	al := &AgentLoop{channelManager: manager}
+	record := interactions.Record{
+		ID: "interaction-chain", Status: interactions.StatusResolved,
+		Route: interactions.Route{
+			AgentID: "main", Channel: "telegram", ChatID: "chat-1", SessionKey: "owner-session",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-1", ContinuationSessionKey: "task-continuation-session",
+			ExecutionContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
+		},
+	}
+	al.observeInteractionEvent(t.TempDir(), interactions.EventObservation{
+		Record: record,
+		Event: interactions.Event{
+			Type: interactions.EventResolved, Code: "continued_with_next_interaction",
+		},
+	})
+	if len(manager.dismissedTargets) != 0 {
+		t.Fatalf("chained interaction dismissed carrier: %#v", manager.dismissedTargets)
+	}
+
+	al.observeInteractionEvent(t.TempDir(), interactions.EventObservation{
+		Record: record,
+		Event:  interactions.Event{Type: interactions.EventResolved, Code: "completed"},
+	})
+	if len(manager.dismissedTargets) != 1 {
+		t.Fatalf("final interaction dismissed targets = %#v, want one", manager.dismissedTargets)
+	}
+}
+
 func TestNonTelegramApprovalPromptCarriesGenericControlsWithoutReplyThread(t *testing.T) {
 	manager := newInteractionChannelManager()
 	al := &AgentLoop{cfg: config.DefaultConfig(), channelManager: manager}

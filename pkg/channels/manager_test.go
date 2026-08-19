@@ -3531,10 +3531,30 @@ func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) 
 		t.Fatalf("ActiveCount() after final = %d, want 0", count)
 	}
 
+	feedback.Content = "late prior turn"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnOne}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late prior-turn feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+
+	turnThree := runtimeevents.NewTraceScope("/workspace/main", "turn-3")
+	feedback.Content = "next request"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnThree}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-4"}) {
+		t.Fatalf("next-turn feedback = (%v, %v, %v), want fresh msg-4", ids, sent, err)
+	}
+	m.DismissToolFeedback(t.Context(), feedback)
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
+		t.Fatalf("ActiveCount() after next-turn cleanup = %d, want 0", count)
+	}
+
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 	want := []string{
 		"send:working", "send:allow action?", "edit:msg-1", "send:done", "delete:msg-1",
+		"send:next request", "delete:msg-4",
 	}
 	if !slices.Equal(ch.operations, want) {
 		t.Fatalf("operations = %v, want %v", ch.operations, want)

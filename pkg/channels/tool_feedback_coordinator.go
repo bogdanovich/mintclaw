@@ -63,6 +63,7 @@ type toolFeedbackEntry struct {
 	retired            bool
 	sending            bool
 	paused             bool
+	generations        map[string]struct{}
 	current            trackedToolFeedbackMessage
 	pendingCleanup     []pendingToolFeedbackCleanup
 }
@@ -118,7 +119,7 @@ func (c *ToolFeedbackCoordinator) Deliver(
 	if send == nil {
 		return nil, ErrSendFailed
 	}
-	return c.deliver(ctx, key, chatID, content, operations, func(
+	return c.deliver(ctx, key, "", chatID, content, operations, func(
 		sendCtx context.Context,
 		prepared string,
 	) (toolFeedbackSendResult, error) {
@@ -130,6 +131,7 @@ func (c *ToolFeedbackCoordinator) Deliver(
 func (c *ToolFeedbackCoordinator) deliver(
 	ctx context.Context,
 	key string,
+	generation string,
 	chatID string,
 	content string,
 	operations toolFeedbackOperations,
@@ -154,16 +156,20 @@ func (c *ToolFeedbackCoordinator) deliver(
 
 	entry.mu.Lock()
 	if entry.terminal {
-		if entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil) {
+		_, generationSeen := entry.generations[strings.TrimSpace(generation)]
+		freshGeneration := strings.TrimSpace(generation) != "" && !generationSeen
+		if !freshGeneration && (entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil)) {
 			entry.mu.Unlock()
 			return nil, nil
 		}
-		entry.terminal = false
-		entry.terminalUntil = time.Time{}
-		entry.terminalPending = 0
-		entry.terminalRetained = 0
-		entry.terminalSuccess = toolFeedbackTerminalSuccessNone
-		entry.terminalGeneration++
+		resetToolFeedbackTerminal(entry)
+		entry.generations = nil
+	}
+	if generation = strings.TrimSpace(generation); generation != "" {
+		if entry.generations == nil {
+			entry.generations = make(map[string]struct{})
+		}
+		entry.generations[generation] = struct{}{}
 	}
 	if separate && entry.current.messageID != "" {
 		entry.current = trackedToolFeedbackMessage{}
@@ -403,14 +409,18 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, true)
+	return c.beginTerminal(key, true, "")
 }
 
 func (c *ToolFeedbackCoordinator) BeginTransientTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, false)
+	return c.beginTerminal(key, false, "")
 }
 
-func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFeedbackTerminal {
+func (c *ToolFeedbackCoordinator) beginTerminal(
+	key string,
+	retain bool,
+	generation string,
+) *toolFeedbackTerminal {
 	if c == nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
@@ -421,6 +431,12 @@ func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFe
 			return nil
 		}
 		entry.mu.Lock()
+		if generation = strings.TrimSpace(generation); generation != "" {
+			if entry.generations == nil {
+				entry.generations = make(map[string]struct{})
+			}
+			entry.generations[generation] = struct{}{}
+		}
 		if entry.retired {
 			entry.mu.Unlock()
 			c.removeEntry(key, entry)
@@ -451,6 +467,15 @@ func (c *ToolFeedbackCoordinator) beginTerminal(key string, retain bool) *toolFe
 
 		return &toolFeedbackTerminal{key: key, entry: entry, generation: generation, retain: retain}
 	}
+}
+
+func resetToolFeedbackTerminal(entry *toolFeedbackEntry) {
+	entry.terminal = false
+	entry.terminalUntil = time.Time{}
+	entry.terminalPending = 0
+	entry.terminalRetained = 0
+	entry.terminalSuccess = toolFeedbackTerminalSuccessNone
+	entry.terminalGeneration++
 }
 
 func (c *ToolFeedbackCoordinator) CompleteTerminal(

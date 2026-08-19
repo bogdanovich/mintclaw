@@ -161,7 +161,9 @@ func (m *Manager) beginToolFeedbackTerminals(
 	keys, scoped := m.resolveToolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.streamCoordinator().beginToolFeedbackTerminals(keys, scoped, transient)
+	return m.streamCoordinator().beginToolFeedbackTerminals(
+		keys, scoped, transient, toolFeedbackGeneration(primaryTraceScope(traceScopes)),
+	)
 }
 
 func (m *Manager) completeToolFeedbackTerminals(
@@ -212,6 +214,7 @@ func (m *Manager) deliverToolFeedback(
 	return m.streamCoordinator().deliverToolFeedback(
 		ctx,
 		key,
+		toolFeedbackGeneration(primaryTraceScope(msg.TraceScopes)),
 		deliveryChatID,
 		content,
 		operations,
@@ -226,6 +229,14 @@ func (m *Manager) deliverToolFeedback(
 			return toolFeedbackSendResult{messageIDs: messageIDs, editable: operations.edit != nil}, err
 		},
 	)
+}
+
+func toolFeedbackGeneration(traceScope runtimeevents.TraceScope) string {
+	key, scoped := traceScopedDeliveryKey("tool_feedback_generation", traceScope)
+	if !scoped {
+		return ""
+	}
+	return key
 }
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
