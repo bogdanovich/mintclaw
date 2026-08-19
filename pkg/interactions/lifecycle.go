@@ -593,11 +593,20 @@ func (r *Registry) claim(
 	answer Answer,
 	outcome Outcome,
 ) (Record, error) {
-	if !validBoundedString(answer.Text, MaxAnswerLength) || len(answer.Values) > MaxQuestions {
+	if !validBoundedString(answer.Text, MaxAnswerLength) || len(answer.Values) > MaxQuestions ||
+		len(answer.Media) > MaxAnswerMedia {
 		return Record{}, fmt.Errorf("%w: answer exceeds bounds", ErrInvalidInteraction)
 	}
 	answer.Text = strings.TrimSpace(answer.Text)
 	answer.Values = cloneStringMap(answer.Values)
+	answer.Media = append([]string(nil), answer.Media...)
+	for index, ref := range answer.Media {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || !validBoundedString(ref, MaxAnswerMediaRefLength) {
+			return Record{}, fmt.Errorf("%w: invalid answer media ref", ErrInvalidInteraction)
+		}
+		answer.Media[index] = ref
+	}
 	for key, value := range answer.Values {
 		if !questionIDPattern.MatchString(key) || !validBoundedString(value, MaxAnswerLength) {
 			return Record{}, fmt.Errorf("%w: invalid answer value %q", ErrInvalidInteraction, key)
@@ -628,6 +637,19 @@ func (r *Registry) claim(
 					"%w: question outcome %q",
 					ErrInvalidInteraction,
 					outcome,
+				)
+			}
+			if answer.Superseded && (rec.Kind != KindApproval || outcome != OutcomeDenied ||
+				len(answer.Values) != 0 || (answer.Text == "" && len(answer.Media) == 0)) {
+				return "", "", nil, fmt.Errorf(
+					"%w: invalid superseding guidance",
+					ErrInvalidInteraction,
+				)
+			}
+			if !answer.Superseded && len(answer.Media) != 0 {
+				return "", "", nil, fmt.Errorf(
+					"%w: answer media requires superseding guidance",
+					ErrInvalidInteraction,
 				)
 			}
 			if rec.Kind == KindApproval && outcome != OutcomeAllowed && outcome != OutcomeDenied {

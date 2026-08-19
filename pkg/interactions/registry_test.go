@@ -189,6 +189,48 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 	}
 }
 
+func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_steering111111", "owner-session")
+	request.Kind = KindApproval
+	request.Questions = nil
+	request.ApprovalAction = "Click the active-only search button"
+	request.Origin.ArgumentHash = strings.Repeat("a", 64)
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "origin-1",
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
+		Text: "Open All postings instead", Media: []string{"media://guidance-image"},
+		Superseded: true, MessageID: "guidance-1",
+	}, OutcomeDenied)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.Get(record.ID)
+	if !ok || got.Answer == nil || !got.Answer.Superseded ||
+		got.Answer.Text != "Open All postings instead" ||
+		len(got.Answer.Media) != 1 || got.Answer.Media[0] != "media://guidance-image" ||
+		got.Outcome != OutcomeDenied {
+		t.Fatalf("reloaded superseding guidance = %#v, found=%v", got, ok)
+	}
+	got.Answer.Media[0] = "mutated"
+	again, _ := reloaded.Get(record.ID)
+	if again.Answer.Media[0] != "media://guidance-image" {
+		t.Fatal("superseding media escaped record cloning")
+	}
+}
+
 func TestRegistryCreateRejectsSecondActiveSessionAndShortID(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	first := makeWaiting(t, registry, clock, "interaction_aaaaaaaa11111111", "session-1")

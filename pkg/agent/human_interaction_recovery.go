@@ -467,6 +467,10 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		strings.TrimSpace(agent.Workspace) != strings.TrimSpace(workspace)) {
 		return false
 	}
+	if err := configureInteractionSteeringHandoff(flight, workspace, record, agent); err != nil {
+		recoveryErr = err
+		return false
+	}
 	scope := sessionScopeForRecovery(agent.Sessions, interactionContinuationSessionKey(record))
 	if scope == nil {
 		scope = &session.SessionScope{

@@ -36,6 +36,7 @@ type interactionChannelManager struct {
 type blockingInteractionProvider struct {
 	started chan struct{}
 	release chan struct{}
+	err     error
 
 	mu       sync.Mutex
 	calls    int
@@ -48,6 +49,23 @@ type interactionDrainProvider struct {
 	mu            sync.Mutex
 	calls         int
 }
+
+type interactionCaptureProvider struct {
+	messages []providers.Message
+}
+
+func (p *interactionCaptureProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.messages = append([]providers.Message(nil), messages...)
+	return &providers.LLMResponse{Content: "continued with corrected navigation", FinishReason: "stop"}, nil
+}
+
+func (*interactionCaptureProvider) GetDefaultModel() string { return "interaction-capture-model" }
 
 func (p *interactionDrainProvider) Chat(
 	ctx context.Context,
@@ -99,6 +117,9 @@ func (p *blockingInteractionProvider) Chat(
 	case <-p.release:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	if p.err != nil {
+		return nil, p.err
 	}
 	return &providers.LLMResponse{
 		Content: "DUPLICATE_INTERACTION_OK: первый", FinishReason: "stop",
@@ -470,6 +491,22 @@ func (b *interactionOwnershipBus) counts() (int, int) {
 	return len(b.acked), len(b.released)
 }
 
+func (b *interactionOwnershipBus) ownership() ([]string, []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.acked...), append([]string(nil), b.released...)
+}
+
+func countMatchingStrings(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
 func newInteractionChannelManager() *interactionChannelManager {
 	return &interactionChannelManager{
 		recordingChannelManager: &recordingChannelManager{},
@@ -587,6 +624,57 @@ func prepareWaitingControlInteraction(
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: interactions.KindQuestion, Route: route, Origin: origin,
 		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record, target
+}
+
+func prepareWaitingControlInteractionWithContinuation(
+	t *testing.T,
+	al *AgentLoop,
+	ownerAgent *AgentInstance,
+	continuationAgent *AgentInstance,
+	msg bus.InboundMessage,
+	continuationKey string,
+) (interactions.Record, *inboundDispatchTarget) {
+	t.Helper()
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("failed to resolve interaction target")
+	}
+	origin := interactions.Origin{
+		TurnID: "turn-distinct-continuation", ToolCallID: "call-distinct-continuation",
+		ToolName: "request_user_input", ContinuationSessionKey: continuationKey,
+	}
+	continuationAgent.Sessions.AddFullMessage(continuationKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: origin.ToolCallID, Name: origin.ToolName,
+			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+		}},
+	})
+	registry := al.interactionRegistryForWorkspace(ownerAgent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: continuationAgent.ID, SessionKey: target.SessionKey,
+			RouteSessionKey: target.Allocation.RouteScopeKey,
+			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
+			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
+			SenderID: msg.Context.SenderID,
+		},
+		Origin: origin, Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
 		ExpiresAt: time.Now().Add(time.Hour),
 	})
 	if err != nil {
@@ -3759,8 +3847,10 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 	sessionKey := "session-resume-additional-input"
+	continuationSessionKey := "task-resume-additional-input"
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ContinuationSessionKey = continuationSessionKey
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -3785,24 +3875,152 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	msg.Context.MessageID = "answer-2"
-	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
-	claim, claimed := al.claimRuntimeSession(scope, "test-active-resume")
+	ownerScope := newRuntimeSessionScope(agent.Workspace, sessionKey)
+	claim, claimed := al.claimRuntimeSession(ownerScope, "test-active-resume")
 	if !claimed {
 		t.Fatal("failed to claim test session")
 	}
 	defer claim.releaseIfOwned()
+	flightKey, flight, flightOwner := al.startInteractionResumeFlight(agent.Workspace, record.ID)
+	if !flightOwner {
+		t.Fatal("failed to own test interaction resume flight")
+	}
+	if err := configureInteractionSteeringHandoff(
+		flight, agent.Workspace, record, agent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	defer al.finishInteractionResumeFlight(flightKey, flight, true, nil)
 
 	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), msg, target)
 	acked, released := tracker.counts()
 	if acked != 0 || released != 0 {
 		t.Fatalf("deferred spool ownership = acked:%d released:%d, want 0/0", acked, released)
 	}
-	if got := al.pendingSteeringCountForScope(scope); got != 1 {
+	continuationScope := newRuntimeSessionScope(agent.Workspace, continuationSessionKey)
+	if got := al.pendingSteeringCountForScope(continuationScope); got != 1 {
 		t.Fatalf("deferred queue depth = %d, want 1", got)
 	}
-	queued := al.dequeueSteeringMessagesForTurn(scope, request.Route.SenderID)
+	if got := al.pendingSteeringCountForScope(ownerScope); got != 0 {
+		t.Fatalf("owner queue depth = %d, want 0", got)
+	}
+	queued := al.dequeueSteeringMessagesForTurn(continuationScope, request.Route.SenderID)
 	if len(queued) != 1 || queued[0].InboundSpoolID != "spool-correction" {
 		t.Fatalf("deferred message = %#v", queued)
+	}
+}
+
+func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation(t *testing.T) {
+	provider := &interactionCaptureProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+
+	const (
+		ownerSession        = "owner-approval-steering"
+		continuationSession = "task-approval-steering"
+		guidance            = "Открой All postings и найди микроволновку там"
+	)
+	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
+		Version: 1, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
+	}, nil)
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+		Role: "user", Content: "Find the expired microwave listing",
+	})
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-pending-click", Name: "browser_act",
+			Function: &providers.FunctionCall{Name: "browser_act", Arguments: `{}`},
+		}},
+	})
+	inbound := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
+		SenderID: "user-1", MessageID: "guidance-1",
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: ownerSession, RouteSessionKey: "route-owner",
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-pending-click", ToolCallID: "call-pending-click", ToolName: "browser_act",
+			ContinuationSessionKey: continuationSession, ArgumentHash: strings.Repeat("a", 64),
+			ExecutionContext: &inbound,
+		},
+		PromptSummary:  "Approve the pending browser click",
+		ApprovalAction: "Click search",
+		ExpiresAt:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: ownerSession,
+		RouteClaimKey: runtimeRouteClaimKey("route-owner", ""),
+		Allocation:    session.Allocation{RouteScopeKey: "route-owner"},
+	}
+	msg := bus.InboundMessage{
+		Content: guidance, SpoolID: "spool-guidance", Context: inbound,
+	}
+	if !al.shouldHandleInteractionInbound(msg, target) {
+		t.Fatal("plain guidance escaped interaction-aware routing")
+	}
+	ownership, _, err := al.processInteractionInbound(t.Context(), msg, target)
+	if err != nil || ownership != interactionInboundClaimed {
+		t.Fatalf("processInteractionInbound() = ownership:%v err:%v", ownership, err)
+	}
+
+	current, _ := registry.Get(record.ID)
+	if current.Status != interactions.StatusResolved || current.Outcome != interactions.OutcomeDenied ||
+		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance {
+		t.Fatalf("superseded interaction = %#v", current)
+	}
+	var sawGuidance bool
+	for _, message := range provider.messages {
+		if message.Role == "user" && strings.Contains(message.Content, guidance) {
+			sawGuidance = true
+		}
+	}
+	if !sawGuidance {
+		t.Fatalf("resumed request missing guidance: %#v", provider.messages)
+	}
+	_, resultIndex := interactionToolPairIndexes(
+		agent.Sessions.GetHistory(continuationSession),
+		"call-pending-click",
+	)
+	if resultIndex < 0 || !strings.Contains(
+		agent.Sessions.GetHistory(continuationSession)[resultIndex].Content,
+		"superseded by new user guidance",
+	) {
+		t.Fatalf("superseded tool result missing from continuation history")
+	}
+	acked, released := tracker.counts()
+	if acked != 1 || released != 0 {
+		t.Fatalf("guidance spool ownership = acked:%d released:%d, want 1/0", acked, released)
+	}
+}
+
+func TestExplicitApprovalDecisionDoesNotBecomeSteering(t *testing.T) {
+	record := interactions.Record{Kind: interactions.KindApproval, ShortID: "apr123"}
+	for _, content := range []string{"allow_once", "allow", "deny", "/answer apr123 allow_once"} {
+		msg := bus.InboundMessage{Content: content}
+		if interactionApprovalSupersededByInbound(record, msg) {
+			t.Fatalf("approval decision %q was classified as steering", content)
+		}
+	}
+	if !interactionApprovalSupersededByInbound(
+		record,
+		bus.InboundMessage{Content: "Open All postings instead"},
+	) {
+		t.Fatal("plain correction was not classified as superseding guidance")
 	}
 }
 
@@ -5057,6 +5275,364 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	}
 	if !errors.Is(releaseCause, errInteractionFinalizationCanceled) {
 		t.Fatalf("held steering release cause = %v", releaseCause)
+	}
+}
+
+func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+	al.channelManager = newInteractionChannelManager()
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start interaction",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:late-resume-owner"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("failed to resolve interaction target")
+	}
+	continuationKey := session.BuildOpaqueSessionKey("agent:main:test:late-resume-child")
+	origin := interactions.Origin{
+		TurnID: "turn-late-resume", ToolCallID: "call-late-resume", ToolName: "request_user_input",
+		ContinuationSessionKey: continuationKey,
+	}
+	agent.Sessions.AddFullMessage(continuationKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: origin.ToolCallID, Name: origin.ToolName,
+			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+		}},
+	})
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: target.SessionKey,
+			RouteSessionKey: target.Allocation.RouteScopeKey,
+			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
+			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
+			SenderID: msg.Context.SenderID,
+		},
+		Origin: origin, Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boundaryReached := make(chan struct{})
+	releaseFinalization := make(chan struct{})
+	var hookOnce sync.Once
+	answerCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryModelFinal {
+				return
+			}
+			hookOnce.Do(func() { close(boundaryReached) })
+			<-releaseFinalization
+		}),
+	)
+	answer := msg
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-late-steering"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(answerCtx, answer, target) {
+		t.Fatal("interaction answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the interaction provider")
+	}
+	close(provider.release)
+	select {
+	case <-boundaryReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continuation did not reach the final-delivery boundary")
+	}
+
+	const correctionSpoolID = "spool-late-resuming-correction"
+	correction := msg
+	correction.Content = "open all postings and find the expired microwave"
+	correction.Context.MessageID = "late-resuming-correction"
+	correction.SpoolID = correctionSpoolID
+	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), correction, target)
+	childScope := newRuntimeSessionScope(agent.Workspace, continuationKey)
+	if depth := al.steering.lenScope(childScope); depth != 0 {
+		t.Fatalf("continuation steering depth = %d, want 0 after handoff", depth)
+	}
+	if depth := al.steering.lenScope(target.runtimeSessionScope()); depth != 1 {
+		t.Fatalf("owner steering depth = %d, want 1 after handoff", depth)
+	}
+	close(releaseFinalization)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls, messages := provider.snapshot()
+		acked, released := tracker.ownership()
+		if calls >= 2 && countMatchingStrings(acked, correctionSpoolID) == 1 {
+			if countMatchingStrings(released, correctionSpoolID) != 0 {
+				t.Fatalf("late correction released unexpectedly: %v", released)
+			}
+			seen := 0
+			for _, callMessages := range messages {
+				for _, callMessage := range callMessages {
+					if strings.Contains(callMessage.Content, correction.Content) {
+						seen++
+					}
+				}
+			}
+			if seen != 1 {
+				t.Fatalf("late correction appeared in provider history %d times, want 1", seen)
+			}
+			if al.steering.lenScope(target.runtimeSessionScope()) != 0 {
+				t.Fatal("owner steering queue was not drained")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"late correction was not drained exactly once: calls=%d acked=%v released=%v",
+				calls,
+				acked,
+				released,
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestResumeErrorTeardownSealsStaleInboundFlight(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	provider.err = errors.New("resume provider failed")
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start interaction",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:error-handoff-owner"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	continuationKey := session.BuildOpaqueSessionKey("agent:main:test:error-handoff-child")
+	record, target := prepareWaitingControlInteractionWithContinuation(
+		t, al, agent, agent, msg, continuationKey,
+	)
+	answer := msg
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-resume-error"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("interaction answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the interaction provider")
+	}
+
+	flightRead := make(chan struct{})
+	releaseFlightRead := make(chan struct{})
+	var hookOnce sync.Once
+	correctionCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryResumeFlightRead {
+				return
+			}
+			hookOnce.Do(func() { close(flightRead) })
+			<-releaseFlightRead
+		}),
+	)
+	const correctionSpoolID = "spool-stale-resume-flight"
+	correction := msg
+	correction.Content = "use the old postings tab"
+	correction.Context.MessageID = "correction-during-resume-error"
+	correction.SpoolID = correctionSpoolID
+	correctionDone := make(chan struct{})
+	go func() {
+		defer close(correctionDone)
+		newInboundTurnCoordinator(al).handleInteractionInbound(correctionCtx, correction, target)
+	}()
+	select {
+	case <-flightRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("correction did not load the active resume flight")
+	}
+
+	close(provider.release)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		_, flightActive := al.loadInteractionResumeFlight(agent.Workspace, record.ID)
+		if current.ResumeError != "" && !flightActive {
+			record = current
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("resume error did not tear down its flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFlightRead)
+	select {
+	case <-correctionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale-flight correction did not finish routing")
+	}
+
+	childScope := newRuntimeSessionScope(agent.Workspace, continuationKey)
+	ownerScope := target.runtimeSessionScope()
+	if depth := al.steering.lenScope(childScope); depth != 0 {
+		t.Fatalf("retired continuation steering depth = %d, want 0", depth)
+	}
+	queued := al.dequeueSteeringMessagesForScope(ownerScope)
+	if len(queued) != 1 || queued[0].InboundSpoolID != correctionSpoolID {
+		t.Fatalf("owner handoff queue = %#v", queued)
+	}
+	if _, err := registry.Fail(record.ID, record.Revision, "resume_failed", record.ResumeError); err != nil {
+		t.Fatal(err)
+	}
+	if err := al.settleSteeringMessages(
+		finalResponseAdmission{status: finalResponseAdmissionAccepted}, queued,
+	); err != nil {
+		t.Fatal(err)
+	}
+	acked, released := tracker.ownership()
+	if countMatchingStrings(acked, correctionSpoolID) != 1 ||
+		countMatchingStrings(released, correctionSpoolID) != 0 {
+		t.Fatalf("stale-flight ownership = acked:%v released:%v", acked, released)
+	}
+}
+
+func TestCrossAgentResumeErrorHandoffUsesContinuationWorkspace(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	provider.err = errors.New("cross-agent resume provider failed")
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	ownerAgent, _ := al.registry.GetAgent("alpha")
+	continuationAgent, _ := al.registry.GetAgent("beta")
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start cross-agent interaction",
+		SessionKey: session.BuildOpaqueSessionKey("agent:alpha:test:cross-agent-handoff-owner"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	continuationKey := session.BuildOpaqueSessionKey("agent:beta:test:cross-agent-handoff-child")
+	record, target := prepareWaitingControlInteractionWithContinuation(
+		t, al, ownerAgent, continuationAgent, msg, continuationKey,
+	)
+	if target.Agent.ID != ownerAgent.ID {
+		t.Fatalf("interaction owner agent = %q, want %q", target.Agent.ID, ownerAgent.ID)
+	}
+	answer := msg
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-cross-agent-resume-error"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("cross-agent answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the cross-agent continuation provider")
+	}
+
+	flightRead := make(chan struct{})
+	releaseFlightRead := make(chan struct{})
+	var hookOnce sync.Once
+	correctionCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryResumeFlightRead {
+				return
+			}
+			hookOnce.Do(func() { close(flightRead) })
+			<-releaseFlightRead
+		}),
+	)
+	const correctionSpoolID = "spool-cross-agent-stale-flight"
+	correction := msg
+	correction.Content = "open the old postings collection"
+	correction.Context.MessageID = "cross-agent-correction-during-resume-error"
+	correction.SpoolID = correctionSpoolID
+	correctionDone := make(chan struct{})
+	go func() {
+		defer close(correctionDone)
+		newInboundTurnCoordinator(al).handleInteractionInbound(correctionCtx, correction, target)
+	}()
+	select {
+	case <-flightRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cross-agent correction did not load the active resume flight")
+	}
+
+	close(provider.release)
+	registry := al.interactionRegistryForWorkspace(ownerAgent.Workspace)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		_, flightActive := al.loadInteractionResumeFlight(ownerAgent.Workspace, record.ID)
+		if current.ResumeError != "" && !flightActive {
+			record = current
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cross-agent resume error did not tear down its flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFlightRead)
+	select {
+	case <-correctionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cross-agent stale-flight correction did not finish routing")
+	}
+
+	childScope := newRuntimeSessionScope(continuationAgent.Workspace, continuationKey)
+	ownerScope := target.runtimeSessionScope()
+	if depth := al.steering.lenScope(childScope); depth != 0 {
+		t.Fatalf("cross-agent child steering depth = %d, want 0", depth)
+	}
+	queued := al.dequeueSteeringMessagesForScope(ownerScope)
+	if len(queued) != 1 || queued[0].InboundSpoolID != correctionSpoolID {
+		t.Fatalf("cross-agent owner handoff queue = %#v", queued)
+	}
+	if _, err := registry.Fail(record.ID, record.Revision, "resume_failed", record.ResumeError); err != nil {
+		t.Fatal(err)
+	}
+	if err := al.settleSteeringMessages(
+		finalResponseAdmission{status: finalResponseAdmissionAccepted}, queued,
+	); err != nil {
+		t.Fatal(err)
+	}
+	acked, released := tracker.ownership()
+	if countMatchingStrings(acked, correctionSpoolID) != 1 ||
+		countMatchingStrings(released, correctionSpoolID) != 0 {
+		t.Fatalf("cross-agent stale-flight ownership = acked:%v released:%v", acked, released)
 	}
 }
 

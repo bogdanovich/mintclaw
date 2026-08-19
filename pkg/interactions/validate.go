@@ -88,6 +88,9 @@ func validateStoredRecord(rec Record) error {
 			!validStoredOutcome(rec.Kind, rec.Outcome) {
 			return fmt.Errorf("invalid answered interaction %q", rec.ID)
 		}
+		if err := validateStoredAnswer(rec); err != nil {
+			return err
+		}
 		if (rec.Status == StatusResuming || rec.Status == StatusResolved) && rec.ResumeTries == 0 {
 			return fmt.Errorf("invalid resuming interaction %q", rec.ID)
 		}
@@ -99,6 +102,28 @@ func validateStoredRecord(rec Record) error {
 		rec.Outcome != OutcomeAllowed || rec.Status == StatusCreated ||
 		rec.Status == StatusWaiting || rec.Status == StatusClaimed) {
 		return fmt.Errorf("invalid consumed approval %q", rec.ID)
+	}
+	return nil
+}
+
+func validateStoredAnswer(rec Record) error {
+	answer := rec.Answer
+	if answer == nil || !validBoundedString(answer.Text, MaxAnswerLength) ||
+		len(answer.Values) > MaxQuestions || len(answer.Media) > MaxAnswerMedia {
+		return fmt.Errorf("invalid stored answer for interaction %q", rec.ID)
+	}
+	for _, ref := range answer.Media {
+		if strings.TrimSpace(ref) == "" || !validBoundedString(ref, MaxAnswerMediaRefLength) {
+			return fmt.Errorf("invalid stored answer media for interaction %q", rec.ID)
+		}
+	}
+	if answer.Superseded {
+		if rec.Kind != KindApproval || rec.Outcome != OutcomeDenied || len(answer.Values) != 0 ||
+			(strings.TrimSpace(answer.Text) == "" && len(answer.Media) == 0) {
+			return fmt.Errorf("invalid superseding answer for interaction %q", rec.ID)
+		}
+	} else if len(answer.Media) != 0 {
+		return fmt.Errorf("unexpected answer media for interaction %q", rec.ID)
 	}
 	return nil
 }

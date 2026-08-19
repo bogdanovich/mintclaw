@@ -79,17 +79,19 @@ const (
 	DefaultMaxBytes       = 2 * 1024 * 1024
 	MaxDeliveryAttempts   = 3
 
-	MaxQuestions         = 3
-	MaxOptions           = 3
-	MaxQuestionIDLength  = 64
-	MaxHeaderLength      = 64
-	MaxQuestionLength    = 1000
-	MaxOptionLabelLength = 64
-	MaxDescriptionLength = 500
-	MaxAnswerLength      = 16 * 1024
-	MaxSummaryLength     = 1000
-	MaxApprovalAction    = 2000
-	MaxExecutionContext  = 64 * 1024
+	MaxQuestions            = 3
+	MaxOptions              = 3
+	MaxQuestionIDLength     = 64
+	MaxHeaderLength         = 64
+	MaxQuestionLength       = 1000
+	MaxOptionLabelLength    = 64
+	MaxDescriptionLength    = 500
+	MaxAnswerLength         = 16 * 1024
+	MaxAnswerMedia          = 16
+	MaxAnswerMediaRefLength = 8 * 1024
+	MaxSummaryLength        = 1000
+	MaxApprovalAction       = 2000
+	MaxExecutionContext     = 64 * 1024
 )
 
 var questionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -159,6 +161,8 @@ type Origin struct {
 type Answer struct {
 	Text              string            `json:"text,omitempty"`
 	Values            map[string]string `json:"values,omitempty"`
+	Media             []string          `json:"media,omitempty"`
+	Superseded        bool              `json:"superseded,omitempty"`
 	MessageID         string            `json:"message_id,omitempty"`
 	ResponseMessageID string            `json:"response_message_id,omitempty"`
 	ReceivedAt        int64             `json:"received_at"`

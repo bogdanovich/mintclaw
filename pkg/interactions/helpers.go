@@ -84,6 +84,7 @@ func cloneRecord(rec Record) Record {
 	if rec.Answer != nil {
 		answer := *rec.Answer
 		answer.Values = cloneStringMap(rec.Answer.Values)
+		answer.Media = append([]string(nil), rec.Answer.Media...)
 		rec.Answer = &answer
 	}
 	return rec
