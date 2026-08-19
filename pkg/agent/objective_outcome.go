@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
@@ -18,6 +19,25 @@ type reportedObjectiveOutcome struct {
 	Status         string                  `json:"status"`
 	CompletedItems []reportedObjectiveItem `json:"completed_items"`
 	MissingItems   []string                `json:"missing_items"`
+}
+
+func objectiveOutcomeUserContent(content string, outcome *toolshared.ObjectiveOutcome) string {
+	if outcome == nil || outcome.Status == toolshared.ObjectiveOutcomeSucceeded {
+		return content
+	}
+	var lines []string
+	if outcome.Status == toolshared.ObjectiveOutcomePartial {
+		lines = append(lines, "Task completed partially.")
+	} else {
+		lines = append(lines, "Task could not be completed.")
+	}
+	for _, item := range outcome.CompletedItems {
+		lines = append(lines, fmt.Sprintf("Completed: %s", item.Item))
+	}
+	for _, item := range outcome.MissingItems {
+		lines = append(lines, fmt.Sprintf("Not completed: %s", item))
+	}
+	return strings.Join(lines, "\n")
 }
 
 type reportedObjectiveItem struct {

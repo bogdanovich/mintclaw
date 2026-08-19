@@ -196,6 +196,25 @@ func TestSubagentTool_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestSubagentToolPreservesStructuredSpawnResult(t *testing.T) {
+	provider := &MockLLMProvider{}
+	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	tool := NewSubagentTool(manager)
+	want := (&toolshared.ToolResult{ForLLM: "verified", ForUser: "verified"}).
+		WithWriteAudit(toolshared.WriteAuditEntry{Target: "https://example.com", Success: true}).
+		WithCompletion(&toolshared.CompletionResult{ObjectiveOutcome: &toolshared.ObjectiveOutcome{
+			Status: toolshared.ObjectiveOutcomePartial, MissingItems: []string{"second item"},
+		}})
+	tool.SetSpawner(&delegateMockSpawner{result: want})
+
+	got := tool.Execute(context.Background(), map[string]any{"task": "publish items"})
+	if got != want || len(got.WriteAudit) != 1 || got.Completion == nil ||
+		got.Completion.ObjectiveOutcome == nil ||
+		got.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomePartial {
+		t.Fatalf("structured spawn result was lost: %#v", got)
+	}
+}
+
 // TestSubagentTool_Execute_NoLabel tests execution without label
 func TestSubagentTool_Execute_NoLabel(t *testing.T) {
 	provider := &MockLLMProvider{}

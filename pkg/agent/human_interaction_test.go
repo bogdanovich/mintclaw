@@ -1122,7 +1122,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
 	if err := al.deliverTaskInteractionFinal(
-		t.Context(), registry, workspace, record, inbound, "raw child final", nil,
+		t.Context(), registry, workspace, record, inbound, "raw child final", nil, nil,
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -1307,7 +1307,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 		bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "recovery-message",
 		},
-		"raw child final", nil,
+		"raw child final", nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1392,7 +1392,7 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 	if err := al.deliverTaskInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		"raw child final", []runtimeevents.TraceScope{traceScope},
+		"raw child final", nil, []runtimeevents.TraceScope{traceScope},
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -5765,6 +5765,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 					inboundContextForInteraction(record.Route),
 					"undelivered task final",
 					nil,
+					nil,
 				)
 			}()
 			select {
@@ -6860,7 +6861,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	if err = al.deliverInteractionFinal(
 		t.Context(), registry, agent.Workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		content, nil,
+		content, nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -1604,9 +1604,12 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
+		cleanContent, objectiveOutcome := extractResumedObjectiveOutcome(
+			finalContent, interactionOutcomeAudits(resuming), resuming, agent,
+		)
 		al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 		_, finalizeErr := al.finalizeResumedInteraction(
-			ctx, registry, interactionWorkspace, resuming, inbound, finalContent, nil,
+			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent, objectiveOutcome, nil,
 			interactionBoundaryPrecomputedFinal,
 		)
 		return finalizeErr
@@ -1626,6 +1629,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 	if expectFinalDelivery {
 		deliveryObservation = &finalDeliveryObservation{}
 	}
+	var resumedTurn turnResult
 	finalContent, runErr := al.runAgentLoop(ctx, agent, processOptions{
 		ModelBinding:               modelBinding,
 		TaskID:                     record.Origin.TaskID,
@@ -1635,6 +1639,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		InteractionOriginExecution: record.Origin.ExecutionID,
 		InteractionOriginContext:   cloneInboundContext(record.Origin.ExecutionContext),
 		TurnStatus:                 &turnStatus,
+		TurnResult:                 &resumedTurn,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: routeSessionKey,
 			BaseSessionKey:  continuationSessionKey,
@@ -1661,6 +1666,11 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 	if turnStatus == TurnEndStatusAborted {
 		return nil
 	}
+	audits := interactionOutcomeAudits(resuming)
+	audits = appendTurnWriteAudit(audits, "", resumedTurn.writeAudit)
+	finalContent, objectiveOutcome := extractResumedObjectiveOutcome(
+		finalContent, audits, resuming, agent,
+	)
 	al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 	var traceScopes []runtimeevents.TraceScope
 	if deliveryObservation != nil {
@@ -1673,6 +1683,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		resuming,
 		inbound,
 		finalContent,
+		objectiveOutcome,
 		traceScopes,
 		interactionBoundaryModelFinal,
 	)
@@ -1724,6 +1735,7 @@ func (al *AgentLoop) finalizeResumedInteraction(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
+	objectiveOutcome *toolshared.ObjectiveOutcome,
 	traceScopes []runtimeevents.TraceScope,
 	boundary string,
 ) (interactionFinalizationDisposition, error) {
@@ -1737,13 +1749,24 @@ func (al *AgentLoop) finalizeResumedInteraction(
 		return interactionFinalizationCanceled, nil
 	case interactions.StatusResuming:
 		return interactionFinalizationDelivered, al.deliverInteractionFinal(
-			ctx, registry, interactionWorkspace, current, inbound, content, traceScopes,
+			ctx, registry, interactionWorkspace, current, inbound, content, objectiveOutcome, traceScopes,
 		)
 	default:
 		return interactionFinalizationDelivered, fmt.Errorf(
 			"cannot finalize interaction from status %q", current.Status,
 		)
 	}
+}
+
+func extractResumedObjectiveOutcome(
+	content string,
+	audits []toolshared.WriteAuditEntry,
+	record interactions.Record,
+	agent *AgentInstance,
+) (string, *toolshared.ObjectiveOutcome) {
+	required := strings.TrimSpace(record.Origin.TaskID) != "" && agent != nil &&
+		agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	return extractObjectiveOutcome(content, audits, required)
 }
 
 func (al *AgentLoop) executeApprovedInteractionTool(
@@ -1864,6 +1887,15 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	if outcome.Control == ToolControlSuspend {
 		return outcome.Control, false, nil
 	}
+	if receipts := interactionOutcomeReceipts(exec.writeAudit); len(receipts) > 0 {
+		current, exists := registry.Get(record.ID)
+		if !exists {
+			return outcome.Control, false, interactions.ErrNotFound
+		}
+		if _, err = registry.RecordOutcomeReceipts(current.ID, current.Revision, receipts); err != nil {
+			return outcome.Control, false, fmt.Errorf("persist approved action receipts: %w", err)
+		}
+	}
 	if _, resultIndex := interactionToolPairIndexes(
 		agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
 		record.Origin.ToolCallID,
@@ -1875,6 +1907,33 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		return outcome.Control, false, interactions.ErrNotFound
 	}
 	return outcome.Control, false, nil
+}
+
+func interactionOutcomeReceipts(audits []toolshared.WriteAuditEntry) []interactions.OutcomeReceipt {
+	var receipts []interactions.OutcomeReceipt
+	for _, audit := range audits {
+		id := strings.TrimSpace(audit.Metadata["invocation_id"])
+		if !audit.Success || audit.Kind != "external_action" || id == "" {
+			continue
+		}
+		receipts = append(receipts, interactions.OutcomeReceipt{
+			ID: id, Kind: audit.Kind, Target: audit.Target, Action: audit.Action,
+			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
+		})
+	}
+	return receipts
+}
+
+func interactionOutcomeAudits(record interactions.Record) []toolshared.WriteAuditEntry {
+	audits := make([]toolshared.WriteAuditEntry, 0, len(record.OutcomeReceipts))
+	for _, receipt := range record.OutcomeReceipts {
+		audits = append(audits, toolshared.WriteAuditEntry{
+			Kind: receipt.Kind, Target: receipt.Target, Action: receipt.Action,
+			Tool: receipt.Tool, Summary: receipt.Summary, Success: true,
+			Metadata: copyObjectiveMetadata(receipt.Metadata),
+		})
+	}
+	return audits
 }
 
 func (al *AgentLoop) interactionContinuationAgent(
@@ -1905,6 +1964,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
+	objectiveOutcome *toolshared.ObjectiveOutcome,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
@@ -1916,7 +1976,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	}.ApplyToContext(&inbound)
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
-			ctx, registry, interactionWorkspace, record, inbound, content, traceScopes,
+			ctx, registry, interactionWorkspace, record, inbound, content, objectiveOutcome, traceScopes,
 		)
 	}
 	if strings.TrimSpace(content) == "" && record.Kind == interactions.KindQuestion &&
@@ -2043,6 +2103,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
+	objectiveOutcome *toolshared.ObjectiveOutcome,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	taskRegistry := al.taskRegistryForWorkspace(workspace)
@@ -2059,8 +2120,8 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
-	if err := taskRegistry.CompleteInteractionTask(
-		taskID, record.ID, content, taskregistry.DeliveryPending,
+	if err := taskRegistry.CompleteInteractionTaskResult(
+		taskID, record.ID, content, taskregistryObjectiveOutcome(objectiveOutcome), taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
@@ -2099,11 +2160,15 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 			return err
 		}
 	}
-	result := (&toolshared.ToolResult{ForLLM: content, ForUser: content}).
+	result := (&toolshared.ToolResult{
+		ForLLM: content, ForUser: objectiveOutcomeUserContent(content, objectiveOutcome),
+	}).
 		WithAsyncTaskID(taskID).
 		WithAsyncDelivery(mode)
-	if strings.TrimSpace(content) != "" {
-		result.WithCompletion(&toolshared.CompletionResult{Text: content})
+	if strings.TrimSpace(content) != "" || objectiveOutcome != nil {
+		result.WithCompletion(&toolshared.CompletionResult{
+			Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+		})
 	}
 	agent := al.interactionContinuationAgent(record, nil)
 	turnState := &turnState{
@@ -2155,6 +2220,27 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	_, err := registry.Resolve(updated.ID, updated.Revision)
 	return err
+}
+
+func taskregistryObjectiveOutcome(outcome *toolshared.ObjectiveOutcome) *taskregistry.ObjectiveOutcome {
+	if outcome == nil {
+		return nil
+	}
+	result := &taskregistry.ObjectiveOutcome{
+		Status: string(outcome.Status), MissingItems: append([]string(nil), outcome.MissingItems...),
+	}
+	for _, item := range outcome.CompletedItems {
+		mapped := taskregistry.ObjectiveItem{Item: item.Item, Kind: item.Kind}
+		for _, receipt := range item.Receipts {
+			mapped.Receipts = append(mapped.Receipts, taskregistry.ObjectiveReceipt{
+				ID: receipt.ID, Kind: receipt.Kind, Target: receipt.Target,
+				Action: receipt.Action, Tool: receipt.Tool, Summary: receipt.Summary,
+				Metadata: copyObjectiveMetadata(receipt.Metadata),
+			})
+		}
+		result.CompletedItems = append(result.CompletedItems, mapped)
+	}
+	return result
 }
 
 func (al *AgentLoop) deliverInteractionControlsRemoved(

@@ -965,6 +965,12 @@ Task: %s`,
 		if err != nil {
 			return toolshared.ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)
 		}
+		if result == nil {
+			return toolshared.ErrorResult("Subagent execution returned no result")
+		}
+		if result.TaskSuspended {
+			return result
+		}
 
 		// Format result for display
 		userContent := result.ForLLM
@@ -983,13 +989,11 @@ Task: %s`,
 		llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
 			labelStr, result.ForLLM)
 
-		return &toolshared.ToolResult{
-			ForLLM:  llmContent,
-			ForUser: userContent,
-			Silent:  false,
-			IsError: result.IsError,
-			Async:   false,
-		}
+		result.ForLLM = llmContent
+		result.ForUser = userContent
+		result.Silent = false
+		result.Async = false
+		return result
 	}
 
 	// Fallback: spawner not configured

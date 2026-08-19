@@ -123,6 +123,7 @@ type processOptions struct {
 	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
 	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
 	TurnStatus                   *TurnEndStatus
+	TurnResult                   *turnResult         // Optional caller-owned terminal snapshot
 	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
 	Channel                      string              // Target channel for tool execution
 	ChatID                       string              // Target chat ID for tool execution
@@ -514,6 +515,9 @@ func (al *AgentLoop) runAgentLoop(
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {
 		return "", err
+	}
+	if opts.TurnResult != nil {
+		*opts.TurnResult = result
 	}
 	if opts.TurnStatus != nil {
 		*opts.TurnStatus = result.status

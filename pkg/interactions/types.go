@@ -168,41 +168,55 @@ type Answer struct {
 	ReceivedAt        int64             `json:"received_at"`
 }
 
+// OutcomeReceipt is durable, non-sensitive evidence that an approved external
+// action reached a successful terminal state. Protected page content is never
+// stored here.
+type OutcomeReceipt struct {
+	ID       string            `json:"id"`
+	Kind     string            `json:"kind"`
+	Target   string            `json:"target,omitempty"`
+	Action   string            `json:"action,omitempty"`
+	Tool     string            `json:"tool,omitempty"`
+	Summary  string            `json:"summary,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
 type Record struct {
-	ID                  string        `json:"id"`
-	ShortID             string        `json:"short_id"`
-	Kind                Kind          `json:"kind"`
-	Status              Status        `json:"status"`
-	Outcome             Outcome       `json:"outcome,omitempty"`
-	Revision            int64         `json:"revision"`
-	LastEventSeq        int64         `json:"last_event_sequence"`
-	Route               Route         `json:"route"`
-	Origin              Origin        `json:"origin"`
-	Questions           []Question    `json:"questions,omitempty"`
-	PromptSummary       string        `json:"prompt_summary,omitempty"`
-	ApprovalAction      string        `json:"approval_action,omitempty"`
-	Answer              *Answer       `json:"answer,omitempty"`
-	CreatedAt           int64         `json:"created_at"`
-	UpdatedAt           int64         `json:"updated_at"`
-	ExpiresAt           int64         `json:"expires_at"`
-	ResolvedAt          int64         `json:"resolved_at,omitempty"`
-	CleanupAfter        int64         `json:"cleanup_after,omitempty"`
-	DeliveryTries       int           `json:"delivery_tries,omitempty"`
-	LastDeliveryAt      int64         `json:"last_delivery_at,omitempty"`
-	DeliveryError       string        `json:"delivery_error,omitempty"`
-	PromptDelivered     bool          `json:"prompt_delivered,omitempty"`
-	PromptDeliveryState DeliveryState `json:"prompt_delivery_state,omitempty"`
-	FinalDeliveryTries  int           `json:"final_delivery_tries,omitempty"`
-	LastFinalDeliveryAt int64         `json:"last_final_delivery_at,omitempty"`
-	FinalDelivered      bool          `json:"final_delivered,omitempty"`
-	FinalDeliveryError  string        `json:"final_delivery_error,omitempty"`
-	FinalDeliveryState  DeliveryState `json:"final_delivery_state,omitempty"`
-	ResumeTries         int           `json:"resume_tries,omitempty"`
-	LastResumeAt        int64         `json:"last_resume_at,omitempty"`
-	ResumeError         string        `json:"resume_error,omitempty"`
-	FailureCode         string        `json:"failure_code,omitempty"`
-	FailureDetail       string        `json:"failure_detail,omitempty"`
-	ApprovalConsumedAt  int64         `json:"approval_consumed_at,omitempty"`
+	ID                  string           `json:"id"`
+	ShortID             string           `json:"short_id"`
+	Kind                Kind             `json:"kind"`
+	Status              Status           `json:"status"`
+	Outcome             Outcome          `json:"outcome,omitempty"`
+	Revision            int64            `json:"revision"`
+	LastEventSeq        int64            `json:"last_event_sequence"`
+	Route               Route            `json:"route"`
+	Origin              Origin           `json:"origin"`
+	Questions           []Question       `json:"questions,omitempty"`
+	PromptSummary       string           `json:"prompt_summary,omitempty"`
+	ApprovalAction      string           `json:"approval_action,omitempty"`
+	Answer              *Answer          `json:"answer,omitempty"`
+	CreatedAt           int64            `json:"created_at"`
+	UpdatedAt           int64            `json:"updated_at"`
+	ExpiresAt           int64            `json:"expires_at"`
+	ResolvedAt          int64            `json:"resolved_at,omitempty"`
+	CleanupAfter        int64            `json:"cleanup_after,omitempty"`
+	DeliveryTries       int              `json:"delivery_tries,omitempty"`
+	LastDeliveryAt      int64            `json:"last_delivery_at,omitempty"`
+	DeliveryError       string           `json:"delivery_error,omitempty"`
+	PromptDelivered     bool             `json:"prompt_delivered,omitempty"`
+	PromptDeliveryState DeliveryState    `json:"prompt_delivery_state,omitempty"`
+	FinalDeliveryTries  int              `json:"final_delivery_tries,omitempty"`
+	LastFinalDeliveryAt int64            `json:"last_final_delivery_at,omitempty"`
+	FinalDelivered      bool             `json:"final_delivered,omitempty"`
+	FinalDeliveryError  string           `json:"final_delivery_error,omitempty"`
+	FinalDeliveryState  DeliveryState    `json:"final_delivery_state,omitempty"`
+	ResumeTries         int              `json:"resume_tries,omitempty"`
+	LastResumeAt        int64            `json:"last_resume_at,omitempty"`
+	ResumeError         string           `json:"resume_error,omitempty"`
+	FailureCode         string           `json:"failure_code,omitempty"`
+	FailureDetail       string           `json:"failure_detail,omitempty"`
+	ApprovalConsumedAt  int64            `json:"approval_consumed_at,omitempty"`
+	OutcomeReceipts     []OutcomeReceipt `json:"outcome_receipts,omitempty"`
 }
 
 type Event struct {

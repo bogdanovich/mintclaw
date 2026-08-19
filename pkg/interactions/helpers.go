@@ -87,6 +87,10 @@ func cloneRecord(rec Record) Record {
 		answer.Media = append([]string(nil), rec.Answer.Media...)
 		rec.Answer = &answer
 	}
+	rec.OutcomeReceipts = append([]OutcomeReceipt(nil), rec.OutcomeReceipts...)
+	for index := range rec.OutcomeReceipts {
+		rec.OutcomeReceipts[index].Metadata = cloneStringMap(rec.OutcomeReceipts[index].Metadata)
+	}
 	return rec
 }
 

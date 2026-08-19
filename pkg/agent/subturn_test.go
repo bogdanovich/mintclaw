@@ -380,19 +380,21 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
-			ID: "call-task-approval", Name: "approval_counting",
+			ID: "call-task-approval", Name: "browser_act",
 			Arguments: map[string]any{"target": "production"},
 			Function: &providers.FunctionCall{
-				Name: "approval_counting", Arguments: `{"target":"production"}`,
+				Name: "browser_act", Arguments: `{"target":"production"}`,
 			},
 		}}},
-		{Content: "approved task completed", FinishReason: "stop"},
+		{Content: "approved task completed\n" + objectiveOutcomeStart +
+			`{"status":"succeeded","completed_items":[{"item":"production action","kind":"external_action","receipt_ids":["inv-approved"]}],"missing_items":[]}` +
+			objectiveOutcomeEnd, FinishReason: "stop"},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
-	tool := &approvalCountingTool{}
+	tool := &outcomeBrowserApprovalTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("task-approval", &durableApprovalHook{
 		actionSummary: "Run the production task action",
@@ -455,9 +457,37 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	task, _ = tasks.Get("subagent-approval")
 	if task.Status != taskregistry.StatusSucceeded ||
 		task.DeliveryStatus != taskregistry.DeliveryDelivered ||
-		tool.executions != 1 {
+		tool.executions != 1 || task.Completion == nil || task.Completion.ObjectiveOutcome == nil ||
+		task.Completion.ObjectiveOutcome.Status != string(toolshared.ObjectiveOutcomeSucceeded) ||
+		len(task.Completion.ObjectiveOutcome.CompletedItems) != 1 ||
+		task.Completion.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv-approved" {
 		t.Fatalf("completed approval task = %#v, executions=%d", task, tool.executions)
 	}
+}
+
+type outcomeBrowserApprovalTool struct {
+	executions int
+}
+
+func (*outcomeBrowserApprovalTool) Name() string { return "browser_act" }
+
+func (*outcomeBrowserApprovalTool) Description() string { return "Perform a protected browser action" }
+
+func (*outcomeBrowserApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *outcomeBrowserApprovalTool) Execute(
+	_ context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	return toolshared.NewToolResult(`{"invocation_id":"inv-approved","state":"succeeded"}`).
+		WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: "https://example.com", Action: "click",
+			Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-approved"},
+		})
 }
 
 type scopeRecordingApprovalTool struct {

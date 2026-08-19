@@ -189,6 +189,31 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 	}
 }
 
+func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	record, err := registry.Create(validCreate(clock, "interaction_receipt111111", "session-receipt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordOutcomeReceipts(record.ID, record.Revision, []OutcomeReceipt{{
+		ID: "inv-1", Kind: "external_action", Target: "https://example.com",
+		Metadata: map[string]string{"invocation_id": "inv-1"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	got, ok := reloaded.Get(record.ID)
+	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" {
+		t.Fatalf("reloaded receipts = %#v, found=%v", got.OutcomeReceipts, ok)
+	}
+	got.OutcomeReceipts[0].Metadata["invocation_id"] = "mutated"
+	again, _ := reloaded.Get(record.ID)
+	if again.OutcomeReceipts[0].Metadata["invocation_id"] != "inv-1" {
+		t.Fatal("outcome receipt metadata escaped record cloning")
+	}
+}
+
 func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_steering111111", "owner-session")

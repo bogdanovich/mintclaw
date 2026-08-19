@@ -1698,6 +1698,34 @@ func TestBrowserActSurfacesTerminalPostActionStateFailure(t *testing.T) {
 	}
 }
 
+func TestBrowserActPreservesCommittedReceiptOnPostActionStateFailure(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare: browser.Preparation{Action: browser.PreparedAction{
+			ID: "prepared_commit", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+			Action: browser.Action{Kind: browser.ActionClick, Ref: "publish"},
+			Effect: browser.EffectExternalCommit,
+		}},
+		execute: browser.Invocation{
+			ID: "invocation_commit", SessionID: "browser_session_1",
+			Effect: browser.EffectExternalCommit, State: browser.InvocationSucceeded,
+		},
+		executeErr: browser.ErrSnapshotInvalidation,
+	}
+	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+			"action": map[string]any{"kind": "click", "ref": "publish"},
+		},
+	)
+	if !result.IsError || len(result.WriteAudit) != 1 ||
+		result.WriteAudit[0].Metadata["invocation_id"] != "invocation_commit" {
+		t.Fatalf("committed post-action receipt was lost: %#v", result)
+	}
+}
+
 func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 	source := &fakeBrowserToolSource{
 		available: true,

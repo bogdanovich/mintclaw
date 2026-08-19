@@ -818,9 +818,10 @@ func spawnSubTurn(
 	} else if turnRes.status == TurnEndStatusSuspended {
 		result = &toolshared.ToolResult{TaskSuspended: true}
 	} else {
+		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
 		result = &toolshared.ToolResult{
 			ForLLM:  turnRes.finalContent,
-			ForUser: turnRes.finalContent,
+			ForUser: userContent,
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
 		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||

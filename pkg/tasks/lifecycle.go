@@ -297,6 +297,16 @@ func (r *Registry) CompleteInteractionTask(
 	taskID, interactionID, content string,
 	delivery DeliveryStatus,
 ) error {
+	return r.CompleteInteractionTaskResult(taskID, interactionID, content, nil, delivery)
+}
+
+// CompleteInteractionTaskResult terminalizes a suspended task and preserves
+// its runtime-verified objective outcome across restart and delivery recovery.
+func (r *Registry) CompleteInteractionTaskResult(
+	taskID, interactionID, content string,
+	objectiveOutcome *ObjectiveOutcome,
+	delivery DeliveryStatus,
+) error {
 	interactionID = strings.TrimSpace(interactionID)
 	if interactionID == "" {
 		return fmt.Errorf("interaction ID is required")
@@ -327,7 +337,11 @@ func (r *Registry) CompleteInteractionTask(
 		rec.TerminalSummary = summary
 		rec.Error = ""
 		if strings.TrimSpace(content) != "" {
-			rec.Completion = &CompletionPayload{Text: content}
+			rec.Completion = &CompletionPayload{
+				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+			}
+		} else if objectiveOutcome != nil {
+			rec.Completion = &CompletionPayload{ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome)}
 		}
 		if delivery == DeliveryDelivered || delivery == DeliveryNotApplicable {
 			rec.DeliveredAt = time.Now().UnixMilli()

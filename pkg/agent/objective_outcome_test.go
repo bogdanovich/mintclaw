@@ -63,3 +63,16 @@ func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.
 		t.Fatalf("outcome = %#v", outcome)
 	}
 }
+
+func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing.T) {
+	outcome := &toolshared.ObjectiveOutcome{
+		Status:         toolshared.ObjectiveOutcomePartial,
+		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published"}},
+		MissingItems:   []string{"Vissani not verified"},
+	}
+	got := objectiveOutcomeUserContent("Both items were published.", outcome)
+	if strings.Contains(got, "Both items") || !strings.Contains(got, "Yakima published") ||
+		!strings.Contains(got, "Vissani not verified") {
+		t.Fatalf("user content contradicts verified outcome: %q", got)
+	}
+}
