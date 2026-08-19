@@ -1151,6 +1151,39 @@ func TestToolFeedbackCoordinator_AbsorbedFinalSurvivesTombstoneMaintenance(t *te
 	}
 }
 
+func TestToolFeedbackCoordinator_ReleasePreservesAbsorbedFinalClaim(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{messageIDs: []string{"unexpected"}, editable: true}, nil
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+	if finalB == nil || !finalB.absorbed {
+		t.Fatalf("final B = %#v, want absorbed", finalB)
+	}
+
+	coordinator.ReleaseTerminal(key)
+	if coordinator.findEntry(key) == nil {
+		t.Fatal("explicit release removed a pending absorbed final claim")
+	}
+	coordinator.CompleteTerminal(t.Context(), finalB, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 0 {
+		t.Fatalf("delayed completed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+}
+
 func TestToolFeedbackCoordinator_OverlappingRetainedFinalsSettleOnlyOwnedGenerations(t *testing.T) {
 	for _, successfulFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("successful_first_%t", successfulFirst), func(t *testing.T) {

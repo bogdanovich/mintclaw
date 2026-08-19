@@ -761,7 +761,7 @@ func (c *ToolFeedbackCoordinator) ReleaseTerminal(key string) {
 	entry.opMu.Lock()
 	entry.mu.Lock()
 	if entry.retired || !entry.terminal || entry.current.messageID != "" ||
-		entry.sending || len(entry.pendingCleanup) != 0 {
+		entry.sending || len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
