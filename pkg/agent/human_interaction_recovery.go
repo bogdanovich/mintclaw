@@ -402,7 +402,6 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	var recoveryErr error
 	recoveryHandled := false
 	defer func() {
-		al.sealInteractionSteeringHandoff(workspace, record)
 		al.finishInteractionResumeFlight(flightKey, flight, recoveryHandled, recoveryErr)
 	}()
 	registry := al.interactionRegistryForWorkspace(workspace)
@@ -466,6 +465,10 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	agent, ok := agentRegistry.GetAgent(record.Route.AgentID)
 	if !ok || agent == nil || (record.Origin.TaskID == "" &&
 		strings.TrimSpace(agent.Workspace) != strings.TrimSpace(workspace)) {
+		return false
+	}
+	if err := configureInteractionSteeringHandoff(flight, workspace, record, agent); err != nil {
+		recoveryErr = err
 		return false
 	}
 	scope := sessionScopeForRecovery(agent.Sessions, interactionContinuationSessionKey(record))
