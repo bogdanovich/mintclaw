@@ -610,8 +610,17 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	terminal.completed = true
 	if terminal.absorbed {
 		entry.settleTerminalGenerations(terminal, success)
+		refreshRetainedTombstone := success && terminal.retain && entry.terminal &&
+			entry.terminalGeneration == terminal.generation &&
+			entry.terminalSuccess == toolFeedbackTerminalSuccessRetained
+		if refreshRetainedTombstone {
+			entry.terminalUntil = time.Now().Add(toolFeedbackTerminalTombstoneTTL)
+		}
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
+		if refreshRetainedTombstone {
+			c.scheduleTerminalMaintenance(terminal, toolFeedbackTerminalTombstoneTTL)
+		}
 		return
 	}
 	if !entry.terminal || entry.terminalGeneration != terminal.generation {
@@ -1021,7 +1030,7 @@ func (c *ToolFeedbackCoordinator) maintainTerminal(terminal *toolFeedbackTermina
 		c.scheduleTerminalMaintenance(terminal, delay)
 		return
 	}
-	if len(entry.pendingCleanup) != 0 {
+	if len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		c.scheduleTerminalMaintenance(terminal, toolFeedbackCleanupRetryDelay)
@@ -1064,7 +1073,9 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 		return
 	}
-	retire := !entry.terminal && !entry.sending && entry.current.messageID == ""
+	retire := !entry.terminal && !entry.sending && entry.current.messageID == "" &&
+		len(entry.generationClaims) == 0
+	pendingClaims := len(entry.generationClaims) != 0
 	if retire {
 		entry.retired = true
 	}
@@ -1072,6 +1083,8 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 	entry.opMu.Unlock()
 	if retire {
 		c.removeEntry(key, entry)
+	} else if pendingClaims {
+		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 	}
 }
 

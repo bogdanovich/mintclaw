@@ -1108,6 +1108,49 @@ func TestToolFeedbackCoordinator_FailedFreshProgressKeepsPendingTerminalSettleme
 	}
 }
 
+func TestToolFeedbackCoordinator_AbsorbedFinalSurvivesTombstoneMaintenance(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{messageIDs: []string{"unexpected"}, editable: true}, nil
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	finalB := coordinator.beginTerminal(key, true, []string{"generation-b"})
+	if finalB == nil || !finalB.absorbed {
+		t.Fatalf("final B = %#v, want absorbed", finalB)
+	}
+	entry := finalA.entry
+	entry.mu.Lock()
+	entry.terminalUntil = time.Now().Add(-time.Second)
+	entry.mu.Unlock()
+	coordinator.maintainTerminal(finalA)
+	if coordinator.findEntry(key) == nil {
+		t.Fatal("maintenance retired tombstone with a pending absorbed claim")
+	}
+
+	coordinator.CompleteTerminal(t.Context(), finalB, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-b", "chat-1", "delayed B", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 0 {
+		t.Fatalf("delayed completed B = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+	entry.mu.Lock()
+	refreshedUntil := entry.terminalUntil
+	entry.mu.Unlock()
+	if time.Until(refreshedUntil) < toolFeedbackTerminalTombstoneTTL/2 {
+		t.Fatalf("absorbed successful final did not refresh tombstone: %v", refreshedUntil)
+	}
+}
+
 func TestToolFeedbackCoordinator_OverlappingRetainedFinalsSettleOnlyOwnedGenerations(t *testing.T) {
 	for _, successfulFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("successful_first_%t", successfulFirst), func(t *testing.T) {
