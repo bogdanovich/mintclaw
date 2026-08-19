@@ -469,6 +469,46 @@ type outcomeBrowserApprovalTool struct {
 	executions int
 }
 
+func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "Both items were published.\n" + objectiveOutcomeStart +
+			`{"status":"partial","completed_items":[{"item":"Yakima published","kind":"result","receipt_ids":[]}],"missing_items":["Vissani not published"]}` +
+			objectiveOutcomeEnd,
+		FinishReason: "stop",
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(&outcomeBrowserApprovalTool{})
+	inbound := &bus.InboundContext{Channel: "telegram", ChatID: "chat-user-only", SenderID: "user"}
+	parent := newTurnState(agent, processOptions{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-user-only", SessionKey: "parent-user-only", InboundContext: inbound,
+	}}, al.newTurnEventScope(
+		agent.ID, agent.Workspace, "parent-user-only", newTurnContext(inbound, nil, nil),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 4)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model: agent.Model, SystemPrompt: "publish both items",
+		DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userText := toolResultUserText(result)
+	if strings.Contains(userText, "Both items") || !strings.Contains(userText, "Yakima published") ||
+		!strings.Contains(userText, "Vissani not published") || !result.ResponseHandled {
+		t.Fatalf("user-only verified result = %#v, user text = %q", result, userText)
+	}
+	msgBus := al.bus.(*bus.MessageBus)
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("browser child published before outcome validation: %#v", outbound)
+	default:
+	}
+}
+
 func (*outcomeBrowserApprovalTool) Name() string { return "browser_act" }
 
 func (*outcomeBrowserApprovalTool) Description() string { return "Perform a protected browser action" }
@@ -486,7 +526,7 @@ func (tool *outcomeBrowserApprovalTool) Execute(
 		WithWriteAudit(toolshared.WriteAuditEntry{
 			Kind: "external_action", Target: "https://example.com", Action: "click",
 			Tool: "browser_act", Success: true,
-			Metadata: map[string]string{"invocation_id": "inv-approved"},
+			Metadata: map[string]string{"invocation_id": "inv-approved", "effect": "external_commit"},
 		})
 }
 

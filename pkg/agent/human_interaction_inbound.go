@@ -1562,15 +1562,22 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 			resuming.Origin.ToolCallID,
 		); resultIndex < 0 {
 			if resuming.ApprovalConsumedAt != 0 {
+				outcome := interactions.OutcomeDeliveryUnknown
+				text := "The one-time approval was consumed before restart, but tool execution " +
+					"could not be confirmed. The tool was not retried."
+				if receiptIDs := interactionOutcomeReceiptIDs(resuming); len(receiptIDs) > 0 {
+					outcome = interactions.OutcomeAllowed
+					text = "The approved external action completed before restart. Verified runtime receipt IDs: " +
+						strings.Join(receiptIDs, ", ") + "."
+				}
 				if err := al.persistInteractionToolResult(
 					ctx,
 					agent,
 					resuming,
 					interactionToolResultPayload{
 						InteractionID: resuming.ID,
-						Outcome:       interactions.OutcomeDeliveryUnknown,
-						Text: "The one-time approval was consumed before restart, but tool execution " +
-							"could not be confirmed. The tool was not retried.",
+						Outcome:       outcome,
+						Text:          text,
 					},
 				); err != nil {
 					return err
@@ -1878,15 +1885,6 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	pipeline.pauseToolFeedbackForTurn(pauseCtx, ts)
 	pauseCancel()
-	if outcome.JournalErr != nil {
-		return outcome.Control, false, outcome.JournalErr
-	}
-	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
-		return outcome.Control, true, nil
-	}
-	if outcome.Control == ToolControlSuspend {
-		return outcome.Control, false, nil
-	}
 	if receipts := interactionOutcomeReceipts(exec.writeAudit); len(receipts) > 0 {
 		current, exists := registry.Get(record.ID)
 		if !exists {
@@ -1895,6 +1893,15 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		if _, err = registry.RecordOutcomeReceipts(current.ID, current.Revision, receipts); err != nil {
 			return outcome.Control, false, fmt.Errorf("persist approved action receipts: %w", err)
 		}
+	}
+	if outcome.JournalErr != nil {
+		return outcome.Control, false, outcome.JournalErr
+	}
+	if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+		return outcome.Control, true, nil
+	}
+	if outcome.Control == ToolControlSuspend {
+		return outcome.Control, false, nil
 	}
 	if _, resultIndex := interactionToolPairIndexes(
 		agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
@@ -1934,6 +1941,16 @@ func interactionOutcomeAudits(record interactions.Record) []toolshared.WriteAudi
 		})
 	}
 	return audits
+}
+
+func interactionOutcomeReceiptIDs(record interactions.Record) []string {
+	ids := make([]string, 0, len(record.OutcomeReceipts))
+	for _, receipt := range record.OutcomeReceipts {
+		if id := strings.TrimSpace(receipt.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (al *AgentLoop) interactionContinuationAgent(

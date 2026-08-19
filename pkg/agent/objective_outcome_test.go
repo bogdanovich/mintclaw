@@ -19,7 +19,7 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	audits := []toolshared.WriteAuditEntry{{
 		Kind: "external_action", Target: "https://example.com/yakima", Action: "click",
 		Tool: "browser_act", Success: true, Summary: "publish",
-		Metadata: map[string]string{"invocation_id": "inv_yakima"},
+		Metadata: map[string]string{"invocation_id": "inv_yakima", "effect": "external_commit"},
 	}}
 
 	clean, outcome := extractObjectiveOutcome(content, audits, true)
@@ -30,6 +30,21 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 		outcome.CompletedItems[0].Receipts[0].ID != "inv_yakima" || len(outcome.MissingItems) != 1 ||
 		!strings.Contains(outcome.MissingItems[0], "Vissani") {
 		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"item":"published","kind":"external_action","receipt_ids":["inv-fake"]}],"missing_items":[]}` +
+		objectiveOutcomeEnd
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "custom_tool", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-fake", "effect": "external_commit"},
+	}}
+	_, outcome := extractObjectiveOutcome(content, audits, true)
+	if outcome.Status != toolshared.ObjectiveOutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 1 {
+		t.Fatalf("non-browser receipt verified external action: %#v", outcome)
 	}
 }
 

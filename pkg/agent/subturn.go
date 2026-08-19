@@ -666,7 +666,7 @@ func spawnSubTurn(
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
 		EnableSummary:           false,
-		SendResponse: !hasOutboundTransaction(childCtx) && !cfg.Async &&
+		SendResponse: !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
 			(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent),
 		SuppressToolUserDelivery: !cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly,
 		SuppressToolFeedback:     parentTS.opts.SuppressToolFeedback,
@@ -839,7 +839,6 @@ func spawnSubTurn(
 			case toolshared.AsyncDeliveryParentOnly:
 				result.ForUser = ""
 			case toolshared.AsyncDeliveryUserOnly:
-				result.ForUser = ""
 				result.Silent = true
 				result.ResponseHandled = true
 			case toolshared.AsyncDeliveryUserAndParent:

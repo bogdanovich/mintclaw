@@ -94,7 +94,8 @@ func validateObjectiveOutcome(
 	}
 	receipts := make(map[string]toolshared.ObjectiveReceipt)
 	for _, audit := range audits {
-		if !audit.Success {
+		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
+			strings.TrimSpace(audit.Metadata["effect"]) != "external_commit" {
 			continue
 		}
 		id := strings.TrimSpace(audit.Metadata["invocation_id"])
