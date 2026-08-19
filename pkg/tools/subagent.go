@@ -551,7 +551,10 @@ func completionPayloadForTaskRegistry(result *toolshared.ToolResult) *taskregist
 	if result == nil || result.Completion == nil {
 		return nil
 	}
-	payload := &taskregistry.CompletionPayload{Text: result.Completion.Text}
+	payload := &taskregistry.CompletionPayload{
+		Text:             result.Completion.Text,
+		ObjectiveOutcome: objectiveOutcomePayloadForTaskRegistry(result.Completion.ObjectiveOutcome),
+	}
 	for _, item := range result.Completion.Media {
 		payload.Media = append(payload.Media, taskregistry.CompletionMedia{
 			Ref:         item.Ref,
@@ -560,7 +563,7 @@ func completionPayloadForTaskRegistry(result *toolshared.ToolResult) *taskregist
 			ContentType: item.ContentType,
 		})
 	}
-	if payload.Text == "" && len(payload.Media) == 0 {
+	if payload.Text == "" && len(payload.Media) == 0 && payload.ObjectiveOutcome == nil {
 		return nil
 	}
 	return payload
@@ -573,7 +576,7 @@ func deliverablePayloadForTaskRegistry(result *toolshared.ToolResult) *taskregis
 	deliverable := result.Deliverable
 	if deliverable == nil && result.Completion != nil {
 		deliverable = &toolshared.DeliverableResult{
-			Text: result.Completion.Text,
+			Text: result.Completion.Text, ObjectiveOutcome: result.Completion.ObjectiveOutcome,
 		}
 		for _, item := range result.Completion.Media {
 			deliverable.Artifacts = append(deliverable.Artifacts, toolshared.DeliverableItem{
@@ -594,9 +597,10 @@ func deliverablePayloadForTaskRegistry(result *toolshared.ToolResult) *taskregis
 		)
 	}
 	payload := &taskregistry.DeliverablePayload{
-		Text:     deliverable.Text,
-		Metadata: copyDeliverableMetadata(deliverable.Metadata),
-		Report:   deliverableReportPayloadForTaskRegistry(deliverable.Report),
+		Text:             deliverable.Text,
+		Metadata:         copyDeliverableMetadata(deliverable.Metadata),
+		Report:           deliverableReportPayloadForTaskRegistry(deliverable.Report),
+		ObjectiveOutcome: objectiveOutcomePayloadForTaskRegistry(deliverable.ObjectiveOutcome),
 	}
 	for _, item := range deliverable.Artifacts {
 		payload.Artifacts = append(payload.Artifacts, taskregistry.DeliverableItem{
@@ -607,8 +611,32 @@ func deliverablePayloadForTaskRegistry(result *toolshared.ToolResult) *taskregis
 			Delivered:   item.Delivered,
 		})
 	}
-	if payload.Text == "" && len(payload.Artifacts) == 0 && len(payload.Metadata) == 0 && payload.Report == nil {
+	if payload.Text == "" && len(payload.Artifacts) == 0 && len(payload.Metadata) == 0 && payload.Report == nil &&
+		payload.ObjectiveOutcome == nil {
 		return nil
+	}
+	return payload
+}
+
+func objectiveOutcomePayloadForTaskRegistry(
+	outcome *toolshared.ObjectiveOutcome,
+) *taskregistry.ObjectiveOutcome {
+	if outcome == nil {
+		return nil
+	}
+	payload := &taskregistry.ObjectiveOutcome{
+		Status: string(outcome.Status), MissingItems: append([]string(nil), outcome.MissingItems...),
+	}
+	for _, item := range outcome.CompletedItems {
+		mapped := taskregistry.ObjectiveItem{Item: item.Item, Kind: item.Kind}
+		for _, receipt := range item.Receipts {
+			mapped.Receipts = append(mapped.Receipts, taskregistry.ObjectiveReceipt{
+				ID: receipt.ID, Kind: receipt.Kind, Target: receipt.Target, Action: receipt.Action,
+				Tool: receipt.Tool, Summary: receipt.Summary,
+				Metadata: copyDeliverableMetadata(receipt.Metadata),
+			})
+		}
+		payload.CompletedItems = append(payload.CompletedItems, mapped)
 	}
 	return payload
 }

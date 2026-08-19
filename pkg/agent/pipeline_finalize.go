@@ -46,6 +46,7 @@ type FinalizationContext struct {
 	defaultModelName string
 	usage            finalizationUsage
 	completionMedia  []toolshared.CompletionMedia
+	writeAudit       []toolshared.WriteAuditEntry
 	followUps        []bus.InboundMessage
 	historyMessage   *providers.Message
 	stream           finalizationStream
@@ -88,6 +89,7 @@ func newFinalizationContext(
 			totalTokens:  totalTokens,
 		},
 		completionMedia: append([]toolshared.CompletionMedia(nil), exec.completionMedia...),
+		writeAudit:      append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
 		followUps:       append([]bus.InboundMessage(nil), ts.followUps...),
 		historyMessage:  historyMessage,
 		stream: finalizationStream{
@@ -178,6 +180,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		usageOutputTokens:      f.usage.outputTokens,
 		usageTotalTokens:       f.usage.totalTokens,
 		completionMedia:        append([]toolshared.CompletionMedia(nil), f.completionMedia...),
+		writeAudit:             append([]toolshared.WriteAuditEntry(nil), f.writeAudit...),
 		status:                 f.status,
 		followUps:              append([]bus.InboundMessage(nil), f.followUps...),
 		preferNewOutboundReply: f.delivery.preferNewOutboundReply,

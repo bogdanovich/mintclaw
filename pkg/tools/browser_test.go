@@ -1547,14 +1547,20 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		t.Fatalf("suspended result = %#v; execute calls = %d", suspended, source.executeCalls)
 	}
 	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
+	toolResult := tool.Execute(resumeCtx, args)
 	var result browserActionResult
-	decodeBrowserToolResult(t, tool.Execute(resumeCtx, args), &result)
+	decodeBrowserToolResult(t, toolResult, &result)
 	if result.InvocationID != "invocation_1" || result.Observation == nil ||
 		!result.Observation.Truncated ||
 		source.executePrepared != "prepared_1" || source.executeApproval == nil ||
 		*source.executeApproval != binding || source.prepareRequest.RequestID == "" ||
 		source.prepareRequest.Owner != source.executeOwner {
 		t.Fatalf("action result = %#v; source = %#v", result, source)
+	}
+	if len(toolResult.WriteAudit) != 1 || toolResult.WriteAudit[0].Kind != "external_action" ||
+		toolResult.WriteAudit[0].Tool != "browser_act" ||
+		toolResult.WriteAudit[0].Metadata["invocation_id"] != "invocation_1" {
+		t.Fatalf("browser action receipts = %#v", toolResult.WriteAudit)
 	}
 }
 

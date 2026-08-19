@@ -621,6 +621,11 @@ func spawnSubTurn(
 			removeUserDeliveryTools(agent.Tools)
 		}
 	}
+	requireObjectiveOutcome := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	childTask := cfg.SystemPrompt
+	if requireObjectiveOutcome {
+		childTask = browserObjectiveOutcomeInstruction(childTask)
+	}
 
 	// Create processOptions for the child turn
 	childSessionKey := childID
@@ -638,7 +643,7 @@ func spawnSubTurn(
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
 		SessionKey:      childSessionKey,
 		SessionAliases:  append([]string(nil), parentTS.opts.Dispatch.SessionAliases...),
-		UserMessage:     cfg.SystemPrompt,
+		UserMessage:     childTask,
 		Media:           nil,
 		InboundContext:  cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
 		RouteResult:     cloneResolvedRoute(parentTS.opts.Dispatch.RouteResult),
@@ -784,6 +789,13 @@ func spawnSubTurn(
 	// 8. Execute sub-turn via the real agent loop.
 	pipeline := NewPipeline(al)
 	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
+	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
+		turnRes.finalContent, turnRes.objectiveOutcome = extractObjectiveOutcome(
+			turnRes.finalContent,
+			turnRes.writeAudit,
+			requireObjectiveOutcome,
+		)
+	}
 
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
@@ -810,10 +822,14 @@ func spawnSubTurn(
 			ForLLM:  turnRes.finalContent,
 			ForUser: turnRes.finalContent,
 		}
-		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 {
+		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
+		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||
+			turnRes.objectiveOutcome != nil {
 			result.WithCompletion(&toolshared.CompletionResult{
-				Text:  turnRes.finalContent,
-				Media: append([]toolshared.CompletionMedia(nil), turnRes.completionMedia...),
+				Text: turnRes.finalContent, Media: append(
+					[]toolshared.CompletionMedia(nil), turnRes.completionMedia...,
+				),
+				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
 			})
 			result.Media = append(result.Media, completionMediaRefs(turnRes.completionMedia)...)
 		}
@@ -835,6 +851,15 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.WriteAuditEntry {
+	cloned := make([]toolshared.WriteAuditEntry, len(entries))
+	for index, entry := range entries {
+		cloned[index] = entry
+		cloned[index].Metadata = copyObjectiveMetadata(entry.Metadata)
+	}
+	return cloned
 }
 
 func durableTaskSessionKey(ownerWorkspace, taskID string) string {

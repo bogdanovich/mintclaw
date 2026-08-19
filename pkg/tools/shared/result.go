@@ -202,8 +202,9 @@ type WriteAuditEntry struct {
 // completes work for another. It intentionally describes data/artifacts only;
 // the caller still owns any user-facing delivery decision.
 type CompletionResult struct {
-	Text  string            `json:"text,omitempty"`
-	Media []CompletionMedia `json:"media,omitempty"`
+	Text             string            `json:"text,omitempty"`
+	Media            []CompletionMedia `json:"media,omitempty"`
+	ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
 }
 
 // CompletionMedia describes a media artifact in a child completion handoff.
@@ -220,10 +221,41 @@ type CompletionMedia struct {
 // child runs. It represents what was produced, not how it should be worded to
 // the LLM or user.
 type DeliverableResult struct {
-	Text      string             `json:"text,omitempty"`
-	Artifacts []DeliverableItem  `json:"artifacts,omitempty"`
-	Metadata  map[string]string  `json:"metadata,omitempty"`
-	Report    *DeliverableReport `json:"report,omitempty"`
+	Text             string             `json:"text,omitempty"`
+	Artifacts        []DeliverableItem  `json:"artifacts,omitempty"`
+	Metadata         map[string]string  `json:"metadata,omitempty"`
+	Report           *DeliverableReport `json:"report,omitempty"`
+	ObjectiveOutcome *ObjectiveOutcome  `json:"objective_outcome,omitempty"`
+}
+
+type ObjectiveOutcomeStatus string
+
+const (
+	ObjectiveOutcomeSucceeded ObjectiveOutcomeStatus = "succeeded"
+	ObjectiveOutcomePartial   ObjectiveOutcomeStatus = "partial"
+	ObjectiveOutcomeBlocked   ObjectiveOutcomeStatus = "blocked"
+)
+
+type ObjectiveOutcome struct {
+	Status         ObjectiveOutcomeStatus `json:"status"`
+	CompletedItems []ObjectiveItem        `json:"completed_items,omitempty"`
+	MissingItems   []string               `json:"missing_items,omitempty"`
+}
+
+type ObjectiveItem struct {
+	Item     string             `json:"item"`
+	Kind     string             `json:"kind,omitempty"`
+	Receipts []ObjectiveReceipt `json:"receipts,omitempty"`
+}
+
+type ObjectiveReceipt struct {
+	ID       string            `json:"id"`
+	Kind     string            `json:"kind,omitempty"`
+	Target   string            `json:"target,omitempty"`
+	Action   string            `json:"action,omitempty"`
+	Tool     string            `json:"tool,omitempty"`
+	Summary  string            `json:"summary,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // DeliverableItem describes a concrete produced artifact. Ref may be a
@@ -318,14 +350,16 @@ func (tr *ToolResult) completionNoteForLLM() string {
 		return ""
 	}
 	type completionForLLM struct {
-		Text  string            `json:"text,omitempty"`
-		Media []CompletionMedia `json:"media,omitempty"`
+		Text             string            `json:"text,omitempty"`
+		Media            []CompletionMedia `json:"media,omitempty"`
+		ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
 	}
 	payload := completionForLLM{
-		Text:  strings.TrimSpace(tr.Completion.Text),
-		Media: append([]CompletionMedia(nil), tr.Completion.Media...),
+		Text:             strings.TrimSpace(tr.Completion.Text),
+		Media:            append([]CompletionMedia(nil), tr.Completion.Media...),
+		ObjectiveOutcome: tr.Completion.ObjectiveOutcome,
 	}
-	if payload.Text == "" && len(payload.Media) == 0 {
+	if payload.Text == "" && len(payload.Media) == 0 && payload.ObjectiveOutcome == nil {
 		return ""
 	}
 	data, err := json.Marshal(payload)
@@ -352,7 +386,8 @@ func (tr *ToolResult) deliverableNoteForLLM() string {
 	if strings.TrimSpace(payload.Text) == "" &&
 		len(payload.Artifacts) == 0 &&
 		len(payload.Metadata) == 0 &&
-		payload.Report == nil {
+		payload.Report == nil &&
+		payload.ObjectiveOutcome == nil {
 		return ""
 	}
 	data, err := json.Marshal(payload)
@@ -418,7 +453,9 @@ func (tr *ToolResult) effectiveDeliverable() *DeliverableResult {
 	if tr.Completion == nil {
 		return nil
 	}
-	deliverable := &DeliverableResult{Text: tr.Completion.Text}
+	deliverable := &DeliverableResult{
+		Text: tr.Completion.Text, ObjectiveOutcome: tr.Completion.ObjectiveOutcome,
+	}
 	for _, item := range tr.Completion.Media {
 		deliverable.Artifacts = append(deliverable.Artifacts, DeliverableItem{
 			Ref:         item.Ref,
@@ -427,7 +464,8 @@ func (tr *ToolResult) effectiveDeliverable() *DeliverableResult {
 			ContentType: item.ContentType,
 		})
 	}
-	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 {
+	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 &&
+		deliverable.ObjectiveOutcome == nil {
 		return nil
 	}
 	return deliverable

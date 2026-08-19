@@ -1030,8 +1030,9 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	}
 	if result.Completion != nil {
 		cloned.Completion = &toolshared.CompletionResult{
-			Text:  result.Completion.Text,
-			Media: append([]toolshared.CompletionMedia(nil), result.Completion.Media...),
+			Text:             result.Completion.Text,
+			Media:            append([]toolshared.CompletionMedia(nil), result.Completion.Media...),
+			ObjectiveOutcome: cloneObjectiveOutcome(result.Completion.ObjectiveOutcome),
 		}
 	}
 	if result.Deliverable != nil {
@@ -1041,7 +1042,8 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 				[]toolshared.DeliverableItem(nil),
 				result.Deliverable.Artifacts...,
 			),
-			Report: cloneToolDeliverableReport(result.Deliverable.Report),
+			Report:           cloneToolDeliverableReport(result.Deliverable.Report),
+			ObjectiveOutcome: cloneObjectiveOutcome(result.Deliverable.ObjectiveOutcome),
 		}
 		if len(result.Deliverable.Metadata) > 0 {
 			cloned.Deliverable.Metadata = make(map[string]string, len(result.Deliverable.Metadata))

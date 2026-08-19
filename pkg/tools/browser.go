@@ -1484,6 +1484,17 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		}
 	}
 	toolResult := tool.runtime.result(result)
+	if invocation.State == browser.InvocationSucceeded && invocation.Effect == browser.EffectExternalCommit {
+		toolResult.WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: preparation.Action.CurrentOrigin,
+			Action: string(preparation.Action.Action.Kind), Tool: tool.Name(),
+			Summary: "browser external action committed",
+			Metadata: map[string]string{
+				"invocation_id": invocation.ID, "browser_session_id": invocation.SessionID,
+				"effect": string(invocation.Effect), "element_role": preparation.Action.ElementRole,
+			},
+		})
+	}
 	if invocation.Download == nil || !invocation.Download.Deliver {
 		return toolResult
 	}

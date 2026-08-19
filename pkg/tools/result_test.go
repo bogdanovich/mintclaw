@@ -137,6 +137,14 @@ func TestToolResultContentForLLMIncludesCompletion(t *testing.T) {
 				ContentType: "video/mp4",
 			},
 		},
+		ObjectiveOutcome: &toolshared.ObjectiveOutcome{
+			Status: toolshared.ObjectiveOutcomePartial,
+			CompletedItems: []toolshared.ObjectiveItem{{
+				Item: "Yakima published", Kind: "external_action",
+				Receipts: []toolshared.ObjectiveReceipt{{ID: "inv_yakima", Tool: "browser_act"}},
+			}},
+			MissingItems: []string{"Vissani not published"},
+		},
 	})
 
 	content := result.ContentForLLM()
@@ -155,11 +163,20 @@ func TestToolResultContentForLLMIncludesCompletion(t *testing.T) {
 	if !strings.Contains(content, `"type":"video"`) {
 		t.Fatalf("expected completion media type JSON, got %q", content)
 	}
+	if !strings.Contains(content, `"status":"partial"`) ||
+		!strings.Contains(content, `"id":"inv_yakima"`) ||
+		!strings.Contains(content, `"missing_items":["Vissani not published"]`) {
+		t.Fatalf("expected verified objective outcome JSON, got %q", content)
+	}
 	if result.Deliverable == nil {
 		t.Fatalf("expected completion to mirror into deliverable")
 	}
 	if len(result.Deliverable.Artifacts) != 1 || result.Deliverable.Artifacts[0].Ref != "media://video" {
 		t.Fatalf("unexpected deliverable: %+v", result.Deliverable)
+	}
+	if result.Deliverable.ObjectiveOutcome == nil ||
+		result.Deliverable.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomePartial {
+		t.Fatalf("completion objective outcome was not mirrored: %+v", result.Deliverable)
 	}
 }
 
