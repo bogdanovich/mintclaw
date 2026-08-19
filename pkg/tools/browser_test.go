@@ -1046,6 +1046,49 @@ func TestBrowserObserveBoundsRepeatedStaleTopLevelRead(t *testing.T) {
 	}
 }
 
+func TestBrowserObserveRetryUsesRefreshedImplicitSelectedTab(t *testing.T) {
+	refreshed := browser.Session{ID: "browser_session_1", TabID: "tab_new"}
+	source := &fakeBrowserToolSource{
+		available:          true,
+		status:             browser.Session{ID: "browser_session_1", TabID: "tab_old"},
+		statusAfterObserve: &refreshed,
+		observe: browser.Observation{
+			SessionID: "browser_session_1", TabID: "tab_new", SnapshotID: "snapshot_fresh",
+			SnapshotGeneration: 2,
+		},
+		observeErrors: []error{browser.ErrStale, nil},
+	}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(), map[string]any{"browser_session_id": "browser_session_1"},
+	)
+	var view browserObservationView
+	decodeBrowserToolResult(t, result, &view)
+	if result.IsError || !view.StaleRecovered || view.TabID != "tab_new" || source.statusCalls != 2 ||
+		len(source.contextObserveRequests) != 2 || source.contextObserveRequests[0].TabID != "tab_old" ||
+		source.contextObserveRequests[1].TabID != "tab_new" {
+		t.Fatalf("implicit tab refresh result = %#v; view = %#v; source = %#v", result, view, source)
+	}
+}
+
+func TestBrowserObserveExplicitTabFailsClosedWhenSelectedTabChanges(t *testing.T) {
+	refreshed := browser.Session{ID: "browser_session_1", TabID: "tab_new"}
+	source := &fakeBrowserToolSource{
+		available:          true,
+		status:             browser.Session{ID: "browser_session_1", TabID: "tab_old"},
+		statusAfterObserve: &refreshed,
+		observeErrors:      []error{browser.ErrStale, nil},
+	}
+	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"browser_session_id": "browser_session_1", "tab_id": "tab_old"},
+	)
+	if result == nil || !result.IsError || source.statusCalls != 2 || source.contextObserveCalls != 1 ||
+		!strings.Contains(result.ContentForLLM(), `"code":"context_catalog_stale"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"list_contexts_again"`) {
+		t.Fatalf("explicit tab transition result = %#v; source = %#v", result, source)
+	}
+}
+
 func TestBrowserObserveDoesNotReplayFrameSpecificStaleRead(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true, err: browser.ErrStale}
 	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(

@@ -898,6 +898,7 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		}
 	}
 	tabID, _ := args["tab_id"].(string)
+	tabSupplied := strings.TrimSpace(tabID) != ""
 	frameID, _ := args["frame_id"].(string)
 	catalogID, _ := args["context_catalog_id"].(string)
 	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
@@ -917,6 +918,9 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		}
 		if tabID == "" {
 			tabID = session.TabID
+		}
+		if tabSupplied && strings.TrimSpace(session.TabID) != "" && session.TabID != tabID {
+			return browserContextToolError(browser.ErrStale)
 		}
 		observedSession = session
 	}
@@ -951,9 +955,18 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 			if strings.TrimSpace(refreshedSession.FrameID) != "" {
 				return browserContextToolError(browser.ErrStale)
 			}
+			retryTabID := tabID
+			if !tabSupplied {
+				retryTabID = refreshedSession.TabID
+			} else if strings.TrimSpace(refreshedSession.TabID) != "" && refreshedSession.TabID != tabID {
+				return browserContextToolError(browser.ErrStale)
+			}
+			if strings.TrimSpace(retryTabID) == "" {
+				return browserContextToolError(browser.ErrStale)
+			}
 			observation, err = contextSource.ObserveContext(
 				ctx,
-				browserObserveRequestForSession(owner, sessionID, tabID, refreshedSession),
+				browserObserveRequestForSession(owner, sessionID, retryTabID, refreshedSession),
 			)
 			if err == nil {
 				staleRecovered = true
