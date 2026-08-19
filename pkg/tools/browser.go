@@ -898,13 +898,6 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 		}
 	}
 	tabID, _ := args["tab_id"].(string)
-	if tabID == "" {
-		session, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
-		if statusErr != nil {
-			return browserToolError(statusErr)
-		}
-		tabID = session.TabID
-	}
 	frameID, _ := args["frame_id"].(string)
 	catalogID, _ := args["context_catalog_id"].(string)
 	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
@@ -916,6 +909,17 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	staleRecovered := false
 	contextSource, contextAvailable := tool.runtime.contextSource()
 	explicitContext := frameID != "" || catalogID != "" || contextGeneration != 0
+	implicitSelectedFrame := false
+	if tabID == "" || !explicitContext {
+		session, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
+		if statusErr != nil {
+			return browserToolError(statusErr)
+		}
+		if tabID == "" {
+			tabID = session.TabID
+		}
+		implicitSelectedFrame = !explicitContext && strings.TrimSpace(session.FrameID) != ""
+	}
 	if explicitContext {
 		if !contextAvailable {
 			return browserToolError(browser.ErrDriverIncompatible)
@@ -927,11 +931,7 @@ func (tool *BrowserObserveTool) Execute(ctx context.Context, args map[string]any
 	} else {
 		observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)
 		if errors.Is(err, browser.ErrStale) {
-			session, statusErr := tool.runtime.source.Status(ctx, owner, sessionID)
-			if statusErr != nil {
-				return browserToolError(statusErr)
-			}
-			if strings.TrimSpace(session.FrameID) != "" {
+			if implicitSelectedFrame {
 				return browserContextToolError(browser.ErrStale)
 			}
 			observation, err = tool.runtime.source.Observe(ctx, owner, sessionID, tabID)

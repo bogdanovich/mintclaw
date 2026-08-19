@@ -20,6 +20,7 @@ type fakeBrowserToolSource struct {
 	available             bool
 	open                  browser.Session
 	status                browser.Session
+	statusAfterObserve    *browser.Session
 	observe               browser.Observation
 	screenshot            browser.ScreenshotArtifact
 	lookup                browser.ScreenshotArtifact
@@ -42,6 +43,7 @@ type fakeBrowserToolSource struct {
 	openRequest         browser.OpenRequest
 	statusOwner         browser.Owner
 	statusSessionID     string
+	statusCalls         int
 	prepareRequest      browser.PrepareActionRequest
 	screenshotRequest   browser.ScreenshotRequest
 	deliveryRequest     browser.ScreenshotDeliveryRequest
@@ -343,6 +345,7 @@ func (source *fakeBrowserToolSource) Status(
 	owner browser.Owner,
 	sessionID string,
 ) (browser.Session, error) {
+	source.statusCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID
 	return source.status, source.err
@@ -367,6 +370,9 @@ func (source *fakeBrowserToolSource) Observe(
 	source.observeCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID + ":" + tabID
+	if source.statusAfterObserve != nil {
+		source.status = *source.statusAfterObserve
+	}
 	return source.observe, source.nextObserveError()
 }
 
@@ -1044,19 +1050,21 @@ func TestBrowserObserveDoesNotReplayFrameSpecificStaleRead(t *testing.T) {
 }
 
 func TestBrowserObserveDoesNotReplayImplicitSelectedFrameStaleRead(t *testing.T) {
+	clearedStatus := browser.Session{ID: "browser_session_1", TabID: "tab_primary"}
 	source := &fakeBrowserToolSource{
 		available: true,
 		status: browser.Session{
 			ID: "browser_session_1", TabID: "tab_primary", FrameID: "frame_selected",
 		},
-		observeErrors: []error{browser.ErrStale, nil},
+		statusAfterObserve: &clearedStatus,
+		observeErrors:      []error{browser.ErrStale, nil},
 	}
 	result := NewBrowserObserveTool(browserToolTestConfig(), source).Execute(
 		browserToolTestContext(),
 		map[string]any{"browser_session_id": "browser_session_1", "tab_id": "tab_primary"},
 	)
-	if result == nil || !result.IsError || source.observeCalls != 1 || source.contextObserveCalls != 0 ||
-		source.statusSessionID != "browser_session_1" ||
+	if result == nil || !result.IsError || source.statusCalls != 1 || source.observeCalls != 1 ||
+		source.contextObserveCalls != 0 ||
 		!strings.Contains(result.ContentForLLM(), `"code":"context_catalog_stale"`) ||
 		!strings.Contains(result.ContentForLLM(), `"action":"list_contexts_again"`) ||
 		source.prepareCalls != 0 || source.executeCalls != 0 {
