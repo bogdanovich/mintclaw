@@ -819,15 +819,20 @@ func spawnSubTurn(
 		result = &toolshared.ToolResult{TaskSuspended: true}
 	} else {
 		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
+		parentContent := turnRes.finalContent
+		if turnRes.objectiveOutcome != nil &&
+			turnRes.objectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
+			parentContent = userContent
+		}
 		result = &toolshared.ToolResult{
-			ForLLM:  turnRes.finalContent,
+			ForLLM:  parentContent,
 			ForUser: userContent,
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
 		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||
 			turnRes.objectiveOutcome != nil {
 			result.WithCompletion(&toolshared.CompletionResult{
-				Text: turnRes.finalContent, Media: append(
+				Text: parentContent, Media: append(
 					[]toolshared.CompletionMedia(nil), turnRes.completionMedia...,
 				),
 				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),

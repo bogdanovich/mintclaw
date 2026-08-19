@@ -501,6 +501,11 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 		!strings.Contains(userText, "Vissani not published") || !result.ResponseHandled {
 		t.Fatalf("user-only verified result = %#v, user text = %q", result, userText)
 	}
+	if strings.Contains(result.ForLLM, "Both items") || result.Completion == nil ||
+		strings.Contains(result.Completion.Text, "Both items") || result.Deliverable == nil ||
+		strings.Contains(result.Deliverable.Text, "Both items") {
+		t.Fatalf("parent or durable projection retained contradictory prose: %#v", result)
+	}
 	msgBus := al.bus.(*bus.MessageBus)
 	select {
 	case outbound := <-msgBus.OutboundChan():

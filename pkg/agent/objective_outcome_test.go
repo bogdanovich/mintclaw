@@ -48,6 +48,17 @@ func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 	}
 }
 
+func TestExtractObjectiveOutcomeRejectsPublishClaimMisclassifiedAsResult(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"item":"Vissani published","kind":"result","receipt_ids":[]}],"missing_items":[]}` +
+		objectiveOutcomeEnd
+	_, outcome := extractObjectiveOutcome(content, nil, true)
+	if outcome.Status != toolshared.ObjectiveOutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 1 {
+		t.Fatalf("misclassified publish claim was accepted: %#v", outcome)
+	}
+}
+
 func TestExtractObjectiveOutcomeRequiresBrowserChildReport(t *testing.T) {
 	clean, outcome := extractObjectiveOutcome("I think it worked.", nil, true)
 	if clean != "I think it worked." || outcome == nil ||

@@ -135,6 +135,11 @@ func validateObjectiveOutcome(
 			appendMissing("an objective item had an invalid description or kind")
 			continue
 		}
+		if item.Kind == "result" &&
+			(len(reportedItem.ReceiptIDs) > 0 || objectiveItemClaimsExternalAction(item.Item)) {
+			appendMissing(item.Item + " (external action must be reported with a verified runtime receipt)")
+			continue
+		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
 		for _, receiptID := range reportedItem.ReceiptIDs {
@@ -183,6 +188,21 @@ func validateObjectiveOutcome(
 		}
 	}
 	return outcome
+}
+
+func objectiveItemClaimsExternalAction(item string) bool {
+	item = strings.ToLower(strings.Join(strings.Fields(item), " "))
+	for _, marker := range []string{
+		"publish", "posted", "posting created", "repost", "sent", "send completed", "submitted",
+		"deleted", "removed", "updated", "edited", "created", "uploaded", "purchased", "ordered",
+		"booked", "опублик", "размещ", "репост", "отправ", "удален", "удалён", "изменен",
+		"изменён", "обновлен", "обновлён", "создан", "загружен", "куплен", "заказан", "забронирован",
+	} {
+		if strings.Contains(item, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func blockedObjectiveOutcome(reason string) *toolshared.ObjectiveOutcome {
