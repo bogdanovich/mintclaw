@@ -49,6 +49,23 @@ type interactionDrainProvider struct {
 	calls         int
 }
 
+type interactionCaptureProvider struct {
+	messages []providers.Message
+}
+
+func (p *interactionCaptureProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.messages = append([]providers.Message(nil), messages...)
+	return &providers.LLMResponse{Content: "continued with corrected navigation", FinishReason: "stop"}, nil
+}
+
+func (*interactionCaptureProvider) GetDefaultModel() string { return "interaction-capture-model" }
+
 func (p *interactionDrainProvider) Chat(
 	ctx context.Context,
 	_ []providers.Message,
@@ -3759,8 +3776,10 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 	sessionKey := "session-resume-additional-input"
+	continuationSessionKey := "task-resume-additional-input"
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.ContinuationSessionKey = continuationSessionKey
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
@@ -3785,8 +3804,8 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	msg.Context.MessageID = "answer-2"
-	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
-	claim, claimed := al.claimRuntimeSession(scope, "test-active-resume")
+	ownerScope := newRuntimeSessionScope(agent.Workspace, sessionKey)
+	claim, claimed := al.claimRuntimeSession(ownerScope, "test-active-resume")
 	if !claimed {
 		t.Fatal("failed to claim test session")
 	}
@@ -3797,12 +3816,130 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	if acked != 0 || released != 0 {
 		t.Fatalf("deferred spool ownership = acked:%d released:%d, want 0/0", acked, released)
 	}
-	if got := al.pendingSteeringCountForScope(scope); got != 1 {
+	continuationScope := newRuntimeSessionScope(agent.Workspace, continuationSessionKey)
+	if got := al.pendingSteeringCountForScope(continuationScope); got != 1 {
 		t.Fatalf("deferred queue depth = %d, want 1", got)
 	}
-	queued := al.dequeueSteeringMessagesForTurn(scope, request.Route.SenderID)
+	if got := al.pendingSteeringCountForScope(ownerScope); got != 0 {
+		t.Fatalf("owner queue depth = %d, want 0", got)
+	}
+	queued := al.dequeueSteeringMessagesForTurn(continuationScope, request.Route.SenderID)
 	if len(queued) != 1 || queued[0].InboundSpoolID != "spool-correction" {
 		t.Fatalf("deferred message = %#v", queued)
+	}
+}
+
+func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation(t *testing.T) {
+	provider := &interactionCaptureProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.channelManager = manager
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+
+	const (
+		ownerSession        = "owner-approval-steering"
+		continuationSession = "task-approval-steering"
+		guidance            = "Открой All postings и найди микроволновку там"
+	)
+	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
+		Version: 1, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
+	}, nil)
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+		Role: "user", Content: "Find the expired microwave listing",
+	})
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-pending-click", Name: "browser_act",
+			Function: &providers.FunctionCall{Name: "browser_act", Arguments: `{}`},
+		}},
+	})
+	inbound := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
+		SenderID: "user-1", MessageID: "guidance-1",
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: ownerSession, RouteSessionKey: "route-owner",
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-pending-click", ToolCallID: "call-pending-click", ToolName: "browser_act",
+			ContinuationSessionKey: continuationSession, ArgumentHash: strings.Repeat("a", 64),
+			ExecutionContext: &inbound,
+		},
+		PromptSummary:  "Approve the pending browser click",
+		ApprovalAction: "Click search",
+		ExpiresAt:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: ownerSession,
+		RouteClaimKey: runtimeRouteClaimKey("route-owner", ""),
+		Allocation:    session.Allocation{RouteScopeKey: "route-owner"},
+	}
+	msg := bus.InboundMessage{
+		Content: guidance, SpoolID: "spool-guidance", Context: inbound,
+	}
+	if !al.shouldHandleInteractionInbound(msg, target) {
+		t.Fatal("plain guidance escaped interaction-aware routing")
+	}
+	ownership, _, err := al.processInteractionInbound(t.Context(), msg, target)
+	if err != nil || ownership != interactionInboundClaimed {
+		t.Fatalf("processInteractionInbound() = ownership:%v err:%v", ownership, err)
+	}
+
+	current, _ := registry.Get(record.ID)
+	if current.Status != interactions.StatusResolved || current.Outcome != interactions.OutcomeDenied ||
+		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance {
+		t.Fatalf("superseded interaction = %#v", current)
+	}
+	var sawGuidance bool
+	for _, message := range provider.messages {
+		if message.Role == "user" && strings.Contains(message.Content, guidance) {
+			sawGuidance = true
+		}
+	}
+	if !sawGuidance {
+		t.Fatalf("resumed request missing guidance: %#v", provider.messages)
+	}
+	_, resultIndex := interactionToolPairIndexes(
+		agent.Sessions.GetHistory(continuationSession),
+		"call-pending-click",
+	)
+	if resultIndex < 0 || !strings.Contains(
+		agent.Sessions.GetHistory(continuationSession)[resultIndex].Content,
+		"superseded by new user guidance",
+	) {
+		t.Fatalf("superseded tool result missing from continuation history")
+	}
+	acked, released := tracker.counts()
+	if acked != 1 || released != 0 {
+		t.Fatalf("guidance spool ownership = acked:%d released:%d, want 1/0", acked, released)
+	}
+}
+
+func TestExplicitApprovalDecisionDoesNotBecomeSteering(t *testing.T) {
+	record := interactions.Record{Kind: interactions.KindApproval, ShortID: "apr123"}
+	for _, content := range []string{"allow_once", "allow", "deny", "/answer apr123 allow_once"} {
+		msg := bus.InboundMessage{Content: content}
+		if interactionApprovalSupersededByInbound(record, msg) {
+			t.Fatalf("approval decision %q was classified as steering", content)
+		}
+	}
+	if !interactionApprovalSupersededByInbound(
+		record,
+		bus.InboundMessage{Content: "Open All postings instead"},
+	) {
+		t.Fatal("plain correction was not classified as superseding guidance")
 	}
 }
 

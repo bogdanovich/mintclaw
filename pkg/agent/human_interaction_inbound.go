@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -366,7 +367,23 @@ func (al *AgentLoop) classifyInteractionAnswer(
 	if shortID, projected := projectedInteractionAnswer(msg); projected {
 		return al.classifyProjectedInteractionAnswer(msg, target, shortID), true
 	}
-	return al.classifyExplicitInteractionAnswer(msg, target)
+	if classification, explicit := al.classifyExplicitInteractionAnswer(msg, target); explicit {
+		return classification, true
+	}
+	if !al.shouldHandleInteractionInbound(msg, target) {
+		return explicitInteractionAnswer{}, false
+	}
+	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
+	record, ok := activeInteractionForSession(registry, target.SessionKey)
+	if !ok {
+		return explicitInteractionAnswer{}, false
+	}
+	if record.Status == interactions.StatusWaiting || interactionInboundReplaysAnswer(record, msg.Context) {
+		return explicitInteractionAnswer{
+			Record: record, Disposition: explicitInteractionAnswerActive,
+		}, true
+	}
+	return explicitInteractionAnswer{}, false
 }
 
 func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
@@ -631,6 +648,15 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 			go c.runContendedInteractionInbound(ctx, msg, target)
 			return
 		}
+		registry := c.al.interactionRegistryForWorkspace(target.Agent.Workspace)
+		if record, ok := activeInteractionForSession(registry, target.SessionKey); ok &&
+			interactionRouteAuthorizes(record.Route, target, msg.Context) &&
+			(record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming) {
+			if err := c.al.enqueueInteractionContinuationInbound(ctx, msg, target, record); err != nil {
+				c.al.releaseInboundMessage(context.Background(), msg, err)
+			}
+			return
+		}
 		c.deferInteractionInbound(ctx, msg, target)
 		return
 	}
@@ -854,11 +880,7 @@ func (al *AgentLoop) processInteractionInbound(
 				"An answer has already been accepted for this interaction.",
 			), nil
 		}
-		if err := newInboundTurnCoordinator(al).enqueueDeferredInteractionInbound(
-			ctx,
-			msg,
-			target,
-		); err != nil {
+		if err := al.enqueueInteractionContinuationInbound(ctx, msg, target, record); err != nil {
 			return interactionInboundCallerOwned, notRequired, err
 		}
 		return interactionInboundDeferred, notRequired, nil
@@ -877,6 +899,46 @@ func (al *AgentLoop) processInteractionInbound(
 			target.SessionKey,
 			"This session is waiting for an answer from the authorized user.",
 		), nil
+	}
+	if interactionApprovalSupersededByInbound(record, msg) {
+		msg = al.prepareInboundMessageForAgent(ctx, msg)
+		answer := interactions.Answer{
+			Text:       msg.Content,
+			Media:      append([]string(nil), msg.Media...),
+			Superseded: true,
+			MessageID:  strings.TrimSpace(msg.Context.MessageID),
+			ReceivedAt: time.Now().UnixMilli(),
+		}
+		claimed, err := registry.ClaimAnswer(
+			record.ID,
+			record.Revision,
+			answer,
+			interactions.OutcomeDenied,
+		)
+		if err != nil {
+			if errors.Is(err, interactions.ErrAnswerTooLate) || errors.Is(err, interactions.ErrDuplicateAnswer) {
+				return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(
+					ctx,
+					msg,
+					target.SessionKey,
+					"This interaction changed while applying your new guidance; please retry.",
+				), nil
+			}
+			return interactionInboundCallerOwned, notRequired, err
+		}
+		al.syncInteractionControls(target.Agent.Workspace, claimed, bus.OutboundInteractionControlsRemove)
+		if err := al.settleInboundAdmission(ctx, msg, notRequired); err != nil {
+			return interactionInboundClaimed, notRequired, err
+		}
+		return interactionInboundClaimed, notRequired, al.resumeClaimedInteraction(
+			ctx,
+			registry,
+			target.Agent.Workspace,
+			al.interactionContinuationAgent(claimed, target.Agent),
+			&target.Allocation.Scope,
+			msg.Context,
+			claimed,
+		)
 	}
 	answerContent := al.interactionAnswerContent(record, msg)
 	answer, err := parseInteractionAnswer(record, answerContent, msg.Context.MessageID)
@@ -921,6 +983,47 @@ func (al *AgentLoop) processInteractionInbound(
 		&target.Allocation.Scope,
 		msg.Context,
 		claimed,
+	)
+}
+
+func interactionApprovalSupersededByInbound(
+	record interactions.Record,
+	msg bus.InboundMessage,
+) bool {
+	if record.Kind != interactions.KindApproval {
+		return false
+	}
+	if _, projected := projectedInteractionAnswer(msg); projected {
+		return false
+	}
+	if _, _, explicit, _ := parseInteractionAnswerEnvelope(msg.Content); explicit {
+		return false
+	}
+	_, err := parseInteractionAnswer(record, msg.Content, msg.Context.MessageID)
+	return err != nil
+}
+
+func (al *AgentLoop) enqueueInteractionContinuationInbound(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	record interactions.Record,
+) error {
+	agent := al.interactionContinuationAgent(record, target.Agent)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	return al.enqueueSteeringMessageWithSender(
+		newRuntimeSessionScope(agent.Workspace, interactionContinuationSessionKey(record)),
+		agent.ID,
+		msg.SenderID,
+		providers.Message{
+			Role:           "user",
+			Content:        msg.Content,
+			Media:          append([]string(nil), msg.Media...),
+			InboundSpoolID: msg.SpoolID,
+		},
 	)
 }
 
@@ -1297,6 +1400,10 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 			return err
 		}
 	}
+	supersedingSteering := interactionSupersedingSteering(
+		record,
+		agent.Sessions.GetHistory(continuationSessionKey),
+	)
 	resuming := record
 	if record.Status == interactions.StatusClaimed {
 		var err error
@@ -1403,6 +1510,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		ExpectFinalDelivery:         expectFinalDelivery,
 		FinalDeliveryObservation:    deliveryObservation,
 		AllowInterimMintClawPublish: true,
+		InitialSteeringMessages:     supersedingSteering,
 		SkipInitialSteeringPoll:     true,
 	})
 	if runErr != nil {
@@ -1444,6 +1552,30 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		}
 	}
 	return deliveryErr
+}
+
+func interactionSupersedingSteering(
+	record interactions.Record,
+	history []providers.Message,
+) []providers.Message {
+	if record.Answer == nil || !record.Answer.Superseded {
+		return nil
+	}
+	message := steeringPromptMessage(providers.Message{
+		Role:    "user",
+		Content: record.Answer.Text,
+		Media:   append([]string(nil), record.Answer.Media...),
+	})
+	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+	if resultIndex >= 0 {
+		for _, existing := range history[resultIndex+1:] {
+			if existing.Role == message.Role && existing.Content == message.Content &&
+				slices.Equal(existing.Media, message.Media) {
+				return nil
+			}
+		}
+	}
+	return []providers.Message{message}
 }
 
 func (al *AgentLoop) finalizeResumedInteraction(
@@ -1993,12 +2125,16 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	if record.Answer == nil {
 		return fmt.Errorf("interaction %q has no claimed answer", record.ID)
 	}
-	return al.persistInteractionToolResult(ctx, agent, record, interactionToolResultPayload{
+	payload := interactionToolResultPayload{
 		InteractionID: record.ID,
 		Outcome:       record.Outcome,
 		Text:          record.Answer.Text,
 		Answers:       record.Answer.Values,
-	})
+	}
+	if record.Answer.Superseded {
+		payload.Text = "The pending action was superseded by new user guidance and was not executed."
+	}
+	return al.persistInteractionToolResult(ctx, agent, record, payload)
 }
 
 func (al *AgentLoop) ensureInteractionCancellationToolResult(
