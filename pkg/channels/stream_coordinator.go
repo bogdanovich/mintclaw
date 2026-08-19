@@ -279,6 +279,19 @@ func (s *StreamCoordinator) dismissToolFeedback(
 	}
 }
 
+func (s *StreamCoordinator) pauseToolFeedback(
+	_ context.Context,
+	keys []string,
+	_ bool,
+) {
+	if !s.hasToolFeedback() {
+		return
+	}
+	for _, key := range keys {
+		s.toolFeedback.Pause(key)
+	}
+}
+
 func (s *StreamCoordinator) singleActiveScopedToolFeedbackKey(base string) (string, bool) {
 	if !s.hasToolFeedback() {
 		return "", false

@@ -1849,9 +1849,9 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			"error":          err.Error(),
 		})
 	}
-	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	r.p.dismissToolFeedbackForTurn(dismissCtx, r.ts)
-	dismissCancel()
+	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	r.p.pauseToolFeedbackForTurn(pauseCtx, r.ts)
+	pauseCancel()
 
 	r.appendSkippedToolMessages(
 		callIndex+1,

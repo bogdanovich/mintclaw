@@ -584,6 +584,66 @@ func TestToolFeedbackCoordinator_PendingSendTerminalDeletesLateMessage(t *testin
 	}
 }
 
+func TestToolFeedbackCoordinator_PauseRacingSendRetainsSingleCarrier(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	const key = "telegram:chat-1#session:task-1"
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	deliverDone := make(chan error, 1)
+	edits := 0
+	operations := toolFeedbackOperations{
+		edit: func(context.Context, string, string, string) error {
+			edits++
+			return nil
+		},
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	go func() {
+		_, err := coordinator.Deliver(
+			t.Context(), key, "chat-1", "working", operations,
+			func(context.Context, string) ([]string, error) {
+				close(sendStarted)
+				<-releaseSend
+				return []string{"progress-1"}, nil
+			},
+		)
+		deliverDone <- err
+	}()
+	<-sendStarted
+	pauseDone := make(chan struct{})
+	go func() {
+		coordinator.Pause(key)
+		close(pauseDone)
+	}()
+	close(releaseSend)
+	if err := <-deliverDone; err != nil {
+		t.Fatal(err)
+	}
+	<-pauseDone
+	if count := coordinator.ActiveCount(); count != 1 {
+		t.Fatalf("ActiveCount() after racing pause = %d, want 1", count)
+	}
+	if _, active := coordinator.animator.Current(key); active {
+		t.Fatal("paused carrier still has an active animator")
+	}
+
+	sends := 0
+	ids, err := coordinator.Deliver(
+		t.Context(), key, "chat-1", "resumed", operations,
+		func(context.Context, string) ([]string, error) {
+			sends++
+			return []string{"progress-2"}, nil
+		},
+	)
+	if err != nil || !slices.Equal(ids, []string{"progress-1"}) {
+		t.Fatalf("resumed delivery = (%v, %v), want progress-1", ids, err)
+	}
+	if sends != 0 || edits != 1 {
+		t.Fatalf("resume operations = sends:%d edits:%d, want 0/1", sends, edits)
+	}
+}
+
 func TestToolFeedbackCoordinator_PendingSendTerminalRetriesLateMessageCleanup(t *testing.T) {
 	coordinator := newTestToolFeedbackCoordinator(false)
 	defer coordinator.StopAll()

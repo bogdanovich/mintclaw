@@ -999,15 +999,23 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	manager := &fakeToolSuspensionManager{
 		disposition: ToolSuspensionDisposition{InteractionID: "interaction-1", Durable: true},
 	}
+	feedback := &immediateDeliveryFeedbackManager{}
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{
 		Runtime:     PipelineRuntimeServices{Events: emitter},
-		Interaction: PipelineInteractionServices{Suspension: manager},
+		Interaction: PipelineInteractionServices{Suspension: manager, ToolFeedback: feedback},
 	}
 
 	control := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
 	if control.Control != ToolControlSuspend {
 		t.Fatalf("control = %v, want suspend", control.Control)
+	}
+	if !feedback.paused || feedback.dismissed {
+		t.Fatalf(
+			"suspension feedback lifecycle = paused:%v dismissed:%v, want true/false",
+			feedback.paused,
+			feedback.dismissed,
+		)
 	}
 	if deferredTool.executions != 0 {
 		t.Fatalf("deferred tool executions = %d, want 0", deferredTool.executions)

@@ -28,5 +28,8 @@ func OutboundMessageDismissesTrackedToolFeedback(msg bus.OutboundMessage) bool {
 	if metadata.IsToolFeedback() || metadata.IsThought() || metadata.IsToolCalls() {
 		return false
 	}
+	if metadata.IsApprovalPrompt() || metadata.IsQuestionPrompt() || metadata.RemovesInteractionControls() {
+		return false
+	}
 	return true
 }

@@ -2,10 +2,14 @@ package channels
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 const (
@@ -35,6 +39,7 @@ type trackedToolFeedbackMessage struct {
 type pendingToolFeedbackCleanup struct {
 	message   trackedToolFeedbackMessage
 	expiresAt time.Time
+	lastError string
 }
 
 type toolFeedbackTerminalSuccess uint8
@@ -57,6 +62,7 @@ type toolFeedbackEntry struct {
 	terminalSuccess    toolFeedbackTerminalSuccess
 	retired            bool
 	sending            bool
+	paused             bool
 	current            trackedToolFeedbackMessage
 	pendingCleanup     []pendingToolFeedbackCleanup
 }
@@ -144,7 +150,7 @@ func (c *ToolFeedbackCoordinator) deliver(
 		return nil, ErrNotRunning
 	}
 	defer entry.opMu.Unlock()
-	c.retryPendingCleanup(ctx, entry)
+	c.retryPendingCleanup(ctx, key, entry)
 
 	entry.mu.Lock()
 	if entry.terminal {
@@ -171,6 +177,8 @@ func (c *ToolFeedbackCoordinator) deliver(
 	}
 	if entry.current.messageID != "" {
 		current := entry.current
+		wasPaused := entry.paused
+		entry.paused = false
 		if !current.editable {
 			entry.mu.Unlock()
 			return c.replaceTrackedMessage(ctx, key, entry, current, chatID, content, operations, send)
@@ -180,6 +188,9 @@ func (c *ToolFeedbackCoordinator) deliver(
 			mergedContent = mergeToolFeedbackContent(current.content, content)
 		}
 		entry.mu.Unlock()
+		if wasPaused {
+			c.animator.Record(key, current.messageID, current.content)
+		}
 
 		updatedID, handled, err := c.animator.Update(ctx, key, content)
 		entry.mu.Lock()
@@ -296,7 +307,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 		ctx, current.operations.delete, current.chatID, current.messageID,
 	); cleanupErr != nil {
 		entry.mu.Lock()
-		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current))
+		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, cleanupErr))
 		entry.mu.Unlock()
 		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 		return messageIDs, sendErr
@@ -306,6 +317,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 
 func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	ctx context.Context,
+	key string,
 	entry *toolFeedbackEntry,
 ) {
 	entry.mu.Lock()
@@ -318,14 +330,17 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	remaining := make([]pendingToolFeedbackCleanup, 0, len(pending))
 	for _, cleanup := range pending {
 		if !time.Now().Before(cleanup.expiresAt) {
+			logToolFeedbackCleanupExhausted(key, cleanup, "retention_expired")
 			continue
 		}
 		message := cleanup.message
 		if err := tryDeleteToolFeedbackMessage(
 			ctx, message.operations.delete, message.chatID, message.messageID,
 		); err != nil {
+			cleanup.lastError = err.Error()
 			if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) ||
 				!time.Now().Before(cleanup.expiresAt) {
+				logToolFeedbackCleanupExhausted(key, cleanup, "non_retryable")
 				continue
 			}
 			remaining = append(remaining, cleanup)
@@ -336,11 +351,33 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	entry.mu.Unlock()
 }
 
-func newPendingToolFeedbackCleanup(message trackedToolFeedbackMessage) pendingToolFeedbackCleanup {
+func newPendingToolFeedbackCleanup(
+	message trackedToolFeedbackMessage,
+	cause error,
+) pendingToolFeedbackCleanup {
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
 	return pendingToolFeedbackCleanup{
 		message:   message,
 		expiresAt: time.Now().Add(toolFeedbackCleanupRetention),
+		lastError: lastError,
 	}
+}
+
+func logToolFeedbackCleanupExhausted(
+	key string,
+	cleanup pendingToolFeedbackCleanup,
+	reason string,
+) {
+	messageHash := sha256.Sum256([]byte(cleanup.message.messageID))
+	logger.ErrorCF("channels", "Tool feedback cleanup exhausted", map[string]any{
+		"coordinator_key": strings.TrimSpace(key),
+		"message_id_hash": hex.EncodeToString(messageHash[:6]),
+		"reason":          reason,
+		"error":           cleanup.lastError,
+	})
 }
 
 func (c *ToolFeedbackCoordinator) cleanupLateMessage(
@@ -360,7 +397,7 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 		entry.mu.Unlock()
 		return
 	}
-	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message))
+	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message, err))
 	entry.mu.Unlock()
 	c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 }
@@ -427,7 +464,7 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	separate := c.separateMessages()
 	entry := terminal.entry
 	entry.opMu.Lock()
-	c.retryPendingCleanup(ctx, entry)
+	c.retryPendingCleanup(ctx, terminal.key, entry)
 	entry.mu.Lock()
 	if terminal.completed || terminal.absorbed || entry.retired || !entry.terminal ||
 		entry.terminalGeneration != terminal.generation {
@@ -479,13 +516,13 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 		current := entry.current
 		entry.current = trackedToolFeedbackMessage{}
 		if !separate && current.messageID != "" && current.operations.delete != nil {
-			entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current))
+			entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, nil))
 		}
 	}
 	entry.mu.Unlock()
 	if clearCurrent {
 		c.animator.Clear(terminal.key)
-		c.retryPendingCleanup(ctx, entry)
+		c.retryPendingCleanup(ctx, terminal.key, entry)
 	}
 	entry.mu.Lock()
 	pendingCleanup := len(entry.pendingCleanup) != 0
@@ -529,6 +566,30 @@ func (c *ToolFeedbackCoordinator) Dismiss(ctx context.Context, key string) {
 func (c *ToolFeedbackCoordinator) DismissTransient(ctx context.Context, key string) {
 	terminal := c.BeginTransientTerminal(key)
 	c.CompleteTerminal(ctx, terminal, true)
+}
+
+// Pause retains the current carrier but stops animation until the next
+// delivery for the same logical key resumes it.
+func (c *ToolFeedbackCoordinator) Pause(key string) {
+	if c == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	key = strings.TrimSpace(key)
+	entry := c.findEntry(key)
+	if entry == nil {
+		return
+	}
+	entry.opMu.Lock()
+	entry.mu.Lock()
+	if entry.retired || entry.terminal || entry.current.messageID == "" {
+		entry.mu.Unlock()
+		entry.opMu.Unlock()
+		return
+	}
+	entry.paused = true
+	entry.mu.Unlock()
+	c.animator.Clear(key)
+	entry.opMu.Unlock()
 }
 
 func (c *ToolFeedbackCoordinator) ReleaseTerminal(key string) {
@@ -847,7 +908,7 @@ func (c *ToolFeedbackCoordinator) maintainCleanup(key string, entry *toolFeedbac
 		return
 	}
 	entry.mu.Unlock()
-	c.retryPendingCleanup(context.Background(), entry)
+	c.retryPendingCleanup(context.Background(), key, entry)
 	entry.mu.Lock()
 	if len(entry.pendingCleanup) != 0 {
 		entry.mu.Unlock()

@@ -745,6 +745,31 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	}
 }
 
+func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.T) {
+	manager := &recordingChannelManager{}
+	al := &AgentLoop{channelManager: manager}
+	record := interactions.Record{
+		Route: interactions.Route{
+			Channel: "telegram", ChatID: "chat-1", SessionKey: "owner-session",
+		},
+		Origin: interactions.Origin{
+			ContinuationSessionKey: "task-continuation-session",
+			ExecutionContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", TopicID: "topic-1",
+			},
+		},
+	}
+	al.dismissTerminalInteractionToolFeedback(record)
+	if len(manager.dismissedTargets) != 1 {
+		t.Fatalf("dismissed targets = %#v, want one", manager.dismissedTargets)
+	}
+	target := manager.dismissedTargets[0]
+	if target.SessionKey != record.Origin.ContinuationSessionKey ||
+		target.SessionKey == record.Route.SessionKey {
+		t.Fatalf("terminal feedback target = %#v", target)
+	}
+}
+
 func TestNonTelegramApprovalPromptCarriesGenericControlsWithoutReplyThread(t *testing.T) {
 	manager := newInteractionChannelManager()
 	al := &AgentLoop{cfg: config.DefaultConfig(), channelManager: manager}
@@ -2578,9 +2603,14 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("approval prompt was not delivered")
 			}
-			if len(manager.dismissedSessions) != 1 ||
-				manager.dismissedSessions[0] != "telegram:chat-1:session-approval" {
-				t.Fatalf("suspension feedback cleanup = %#v", manager.dismissedSessions)
+			if len(manager.pausedTargets) != 1 ||
+				manager.pausedTargets[0].SessionKey != "session-approval" ||
+				len(manager.dismissedSessions) != 0 {
+				t.Fatalf(
+					"suspension feedback lifecycle = paused:%#v dismissed:%#v",
+					manager.pausedTargets,
+					manager.dismissedSessions,
+				)
 			}
 			if test.revokePolicy {
 				hook.revoked = true
@@ -2627,15 +2657,8 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				t.Fatal("approval continuation final was not delivered")
 			}
 			wantDismissed := []string{
-				"telegram:chat-1:session-approval",
 				"telegram:chat-1:owner-session",
-			}
-			if test.outcome == interactions.OutcomeAllowed {
-				wantDismissed = []string{
-					"telegram:chat-1:session-approval",
-					"telegram:chat-1:session-approval",
-					"telegram:chat-1:owner-session",
-				}
+				"telegram:chat-1:session-approval",
 			}
 			if strings.Join(manager.dismissedSessions, "\n") != strings.Join(wantDismissed, "\n") {
 				t.Fatalf(

@@ -111,6 +111,16 @@ func (tf *toolFeedbackPublisher) dismissToolFeedbackForTurn(ctx context.Context,
 	tf.dismissToolFeedback(ctx, target)
 }
 
+func (tf *toolFeedbackPublisher) pauseToolFeedbackForTurn(ctx context.Context, ts *turnState) {
+	if tf == nil || tf.channelManager == nil || ts == nil || ts.channel == "" {
+		return
+	}
+	target := outboundMessageForTurn(ts, "")
+	pauseCtx, pauseCancel := context.WithTimeout(ctx, 5*time.Second)
+	tf.channelManager.PauseToolFeedback(pauseCtx, target)
+	pauseCancel()
+}
+
 func toolFeedbackTargetForSession(
 	channel string,
 	chatID string,

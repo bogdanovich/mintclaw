@@ -3472,7 +3472,76 @@ func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 	}
 }
 
-func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing.T) {
+func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	m.lifecycle.storeChannel("test", ch)
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
+
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+	m.PauseToolFeedback(t.Context(), feedback)
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
+		t.Fatalf("ActiveCount() after pause = %d, want 1", count)
+	}
+
+	approval := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "allow action?",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	bus.OutboundMetadata{
+		InteractionKind:     bus.OutboundInteractionApproval,
+		InteractionControls: bus.OutboundInteractionControlsPrompt,
+	}.ApplyToContext(&approval.Context)
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, approval); err != nil || !sent {
+		t.Fatalf("approval prompt = (%v, %v)", sent, err)
+	}
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
+		t.Fatalf("ActiveCount() after approval = %d, want 1", count)
+	}
+
+	feedback.Content = "resumed"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnTwo}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-1"}) {
+		t.Fatalf("resumed feedback = (%v, %v, %v), want edit of msg-1", ids, sent, err)
+	}
+	final := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "done",
+		TraceScopes: []runtimeevents.TraceScope{turnTwo},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, final); err != nil || !sent {
+		t.Fatalf("final response = (%v, %v)", sent, err)
+	}
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
+		t.Fatalf("ActiveCount() after final = %d, want 0", count)
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	want := []string{
+		"send:working", "send:allow action?", "edit:msg-1", "send:done", "delete:msg-1",
+	}
+	if !slices.Equal(ch.operations, want) {
+		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
+func TestDismissToolFeedback_StableSessionSpansTurnScopes(t *testing.T) {
 	tests := []struct {
 		name       string
 		turnIDs    []string
@@ -3485,10 +3554,10 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 			wantOps: []string{"send:turn-1", "delete:msg-1"},
 		},
 		{
-			name:       "ambiguous",
+			name:       "multiple turns",
 			turnIDs:    []string{"turn-1", "turn-2"},
-			wantActive: 2,
-			wantOps:    []string{"send:turn-1", "send:turn-2"},
+			wantActive: 0,
+			wantOps:    []string{"send:turn-1", "edit:msg-1", "delete:msg-1"},
 		},
 	}
 	for _, tt := range tests {
@@ -3533,7 +3602,7 @@ func TestDismissToolFeedback_UnscopedFallbackRequiresSingleActiveTurn(t *testing
 	}
 }
 
-func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testing.T) {
+func TestToolFeedbackTerminal_StableSessionSpansTurnScopes(t *testing.T) {
 	tests := []struct {
 		name       string
 		turnIDs    []string
@@ -3546,10 +3615,12 @@ func TestToolFeedbackTerminal_UnscopedFallbackRequiresSingleActiveTurn(t *testin
 			wantOps: []string{"send:turn-1", "send:done", "delete:msg-1"},
 		},
 		{
-			name:       "ambiguous",
+			name:       "multiple turns",
 			turnIDs:    []string{"turn-1", "turn-2"},
-			wantActive: 2,
-			wantOps:    []string{"send:turn-1", "send:turn-2", "send:done"},
+			wantActive: 0,
+			wantOps: []string{
+				"send:turn-1", "edit:msg-1", "send:done", "delete:msg-1",
+			},
 		},
 	}
 	for _, tt := range tests {

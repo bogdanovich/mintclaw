@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -156,10 +157,24 @@ func (c *TelegramChannel) DeleteMessage(
 	if err != nil {
 		return err
 	}
-	return c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+	err = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    tu.ID(cid),
 		MessageID: mid,
 	})
+	if telegramMessageDeleteAlreadyAbsent(err) {
+		return nil
+	}
+	return err
+}
+
+func telegramMessageDeleteAlreadyAbsent(err error) bool {
+	var apiErr *telegoapi.Error
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode != 400 {
+		return false
+	}
+	description := strings.ToLower(strings.TrimSpace(apiErr.Description))
+	return strings.Contains(description, "message to delete not found") ||
+		strings.Contains(description, "message not found")
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {

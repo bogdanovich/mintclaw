@@ -1852,9 +1852,9 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	llm.toolResponseDisposition = toolResponseHandled
 	llm.assistantToolCallsPersisted = true
 	outcome := pipeline.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
-	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
-	pipeline.dismissToolFeedbackForTurn(dismissCtx, ts)
-	dismissCancel()
+	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
+	pipeline.pauseToolFeedbackForTurn(pauseCtx, ts)
+	pauseCancel()
 	if outcome.JournalErr != nil {
 		return outcome.Control, false, outcome.JournalErr
 	}
