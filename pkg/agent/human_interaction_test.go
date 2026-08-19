@@ -36,6 +36,7 @@ type interactionChannelManager struct {
 type blockingInteractionProvider struct {
 	started chan struct{}
 	release chan struct{}
+	err     error
 
 	mu       sync.Mutex
 	calls    int
@@ -116,6 +117,9 @@ func (p *blockingInteractionProvider) Chat(
 	case <-p.release:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	if p.err != nil {
+		return nil, p.err
 	}
 	return &providers.LLMResponse{
 		Content: "DUPLICATE_INTERACTION_OK: первый", FinishReason: "stop",
@@ -620,6 +624,56 @@ func prepareWaitingControlInteraction(
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: interactions.KindQuestion, Route: route, Origin: origin,
 		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record, target
+}
+
+func prepareWaitingControlInteractionWithContinuation(
+	t *testing.T,
+	al *AgentLoop,
+	agent *AgentInstance,
+	msg bus.InboundMessage,
+	continuationKey string,
+) (interactions.Record, *inboundDispatchTarget) {
+	t.Helper()
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("failed to resolve interaction target")
+	}
+	origin := interactions.Origin{
+		TurnID: "turn-distinct-continuation", ToolCallID: "call-distinct-continuation",
+		ToolName: "request_user_input", ContinuationSessionKey: continuationKey,
+	}
+	agent.Sessions.AddFullMessage(continuationKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: origin.ToolCallID, Name: origin.ToolName,
+			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+		}},
+	})
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: target.SessionKey,
+			RouteSessionKey: target.Allocation.RouteScopeKey,
+			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
+			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
+			SenderID: msg.Context.SenderID,
+		},
+		Origin: origin, Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
 		ExpiresAt: time.Now().Add(time.Hour),
 	})
 	if err != nil {
@@ -5354,6 +5408,113 @@ func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
 			)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestResumeErrorTeardownSealsStaleInboundFlight(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	provider.err = errors.New("resume provider failed")
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start interaction",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:error-handoff-owner"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	continuationKey := session.BuildOpaqueSessionKey("agent:main:test:error-handoff-child")
+	record, target := prepareWaitingControlInteractionWithContinuation(
+		t, al, agent, msg, continuationKey,
+	)
+	answer := msg
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-resume-error"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("interaction answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the interaction provider")
+	}
+
+	flightRead := make(chan struct{})
+	releaseFlightRead := make(chan struct{})
+	var hookOnce sync.Once
+	correctionCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryResumeFlightRead {
+				return
+			}
+			hookOnce.Do(func() { close(flightRead) })
+			<-releaseFlightRead
+		}),
+	)
+	const correctionSpoolID = "spool-stale-resume-flight"
+	correction := msg
+	correction.Content = "use the old postings tab"
+	correction.Context.MessageID = "correction-during-resume-error"
+	correction.SpoolID = correctionSpoolID
+	correctionDone := make(chan struct{})
+	go func() {
+		defer close(correctionDone)
+		newInboundTurnCoordinator(al).handleInteractionInbound(correctionCtx, correction, target)
+	}()
+	select {
+	case <-flightRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("correction did not load the active resume flight")
+	}
+
+	close(provider.release)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, _ := registry.Get(record.ID)
+		_, flightActive := al.loadInteractionResumeFlight(agent.Workspace, record.ID)
+		if current.ResumeError != "" && !flightActive {
+			record = current
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("resume error did not tear down its flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFlightRead)
+	select {
+	case <-correctionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale-flight correction did not finish routing")
+	}
+
+	childScope := newRuntimeSessionScope(agent.Workspace, continuationKey)
+	ownerScope := target.runtimeSessionScope()
+	if depth := al.steering.lenScope(childScope); depth != 0 {
+		t.Fatalf("retired continuation steering depth = %d, want 0", depth)
+	}
+	queued := al.dequeueSteeringMessagesForScope(ownerScope)
+	if len(queued) != 1 || queued[0].InboundSpoolID != correctionSpoolID {
+		t.Fatalf("owner handoff queue = %#v", queued)
+	}
+	if _, err := registry.Fail(record.ID, record.Revision, "resume_failed", record.ResumeError); err != nil {
+		t.Fatal(err)
+	}
+	if err := al.settleSteeringMessages(
+		finalResponseAdmission{status: finalResponseAdmissionAccepted}, queued,
+	); err != nil {
+		t.Fatal(err)
+	}
+	acked, released := tracker.ownership()
+	if countMatchingStrings(acked, correctionSpoolID) != 1 ||
+		countMatchingStrings(released, correctionSpoolID) != 0 {
+		t.Fatalf("stale-flight ownership = acked:%v released:%v", acked, released)
 	}
 }
 

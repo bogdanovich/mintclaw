@@ -44,6 +44,7 @@ const (
 	interactionBoundaryModelFinal       = "model_final"
 	interactionBoundaryFinalPrepared    = "final_delivery_prepared"
 	interactionBoundaryTaskCompleted    = "task_completion_persisted"
+	interactionBoundaryResumeFlightRead = "resume_flight_read"
 )
 
 type interactionFinalizationDisposition uint8
@@ -674,6 +675,7 @@ func (c *inboundTurnCoordinator) enqueueContendedInteractionInbound(
 	if !ok {
 		return c.enqueueDeferredInteractionInbound(ctx, msg, target)
 	}
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryResumeFlightRead)
 
 	flight.handoffMu.Lock()
 	defer flight.handoffMu.Unlock()
@@ -1397,6 +1399,7 @@ func (al *AgentLoop) resumeClaimedInteraction(
 		}
 		var resumeErr error
 		defer func() {
+			al.sealInteractionSteeringHandoff(interactionWorkspace, record)
 			al.finishInteractionResumeFlight(flightKey, flight, true, resumeErr)
 		}()
 		resumeErr = al.resumeClaimedInteractionOwned(

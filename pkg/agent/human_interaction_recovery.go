@@ -402,6 +402,7 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	var recoveryErr error
 	recoveryHandled := false
 	defer func() {
+		al.sealInteractionSteeringHandoff(workspace, record)
 		al.finishInteractionResumeFlight(flightKey, flight, recoveryHandled, recoveryErr)
 	}()
 	registry := al.interactionRegistryForWorkspace(workspace)
