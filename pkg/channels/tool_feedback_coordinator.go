@@ -545,6 +545,14 @@ func (entry *toolFeedbackEntry) releaseActiveGenerations(generations []string) {
 	}
 }
 
+func (entry *toolFeedbackEntry) settleTerminalGenerations(terminal *toolFeedbackTerminal, success bool) {
+	if success && terminal.retain {
+		entry.terminalizeGenerations(terminal.traceGenerations)
+		return
+	}
+	entry.releaseActiveGenerations(terminal.admittedGenerations)
+}
+
 func resetToolFeedbackTerminal(entry *toolFeedbackEntry) {
 	entry.terminal = false
 	entry.terminalUntil = time.Time{}
@@ -574,16 +582,13 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	}
 	terminal.completed = true
 	if terminal.absorbed {
-		if success && terminal.retain {
-			entry.terminalizeGenerations(terminal.traceGenerations)
-		} else {
-			entry.releaseActiveGenerations(terminal.admittedGenerations)
-		}
+		entry.settleTerminalGenerations(terminal, success)
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
 	}
 	if !entry.terminal || entry.terminalGeneration != terminal.generation {
+		entry.settleTerminalGenerations(terminal, success)
 		entry.mu.Unlock()
 		entry.opMu.Unlock()
 		return
