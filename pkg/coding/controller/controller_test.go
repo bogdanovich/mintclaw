@@ -36,13 +36,14 @@ type workspaceRefreshRuntime struct {
 
 type cancelCauseRuntime struct {
 	*blockingRuntime
+	joinedError error
 }
 
 func (r *cancelCauseRuntime) RunTurn(ctx context.Context, prompt string, ready func()) error {
 	r.runStarted <- prompt
 	ready()
 	<-ctx.Done()
-	return context.Cause(ctx)
+	return errors.Join(context.Cause(ctx), r.joinedError)
 }
 
 func (r *workspaceRefreshRuntime) RefreshWorkspace(context.Context) error {
@@ -183,6 +184,34 @@ func TestHardCancelCauseIsNotProjectedAsTurnFailure(t *testing.T) {
 			t.Fatalf("intentional hard cancel was projected as a turn failure: %#v", entry)
 		}
 	}
+}
+
+func TestHardCancelDoesNotHideJoinedTurnFailure(t *testing.T) {
+	runtime := &cancelCauseRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		joinedError:     errors.New("persist turn metadata"),
+	}
+	controller := newTestController(t, runtime)
+	ctx := context.Background()
+	if err := controller.Submit(ctx, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.HardCancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := controller.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.ID == "controller:turn-error" {
+			return
+		}
+	}
+	t.Fatal("hard cancel hid an independent joined turn failure")
 }
 
 func TestCompactionIsAsynchronousAndSerialized(t *testing.T) {

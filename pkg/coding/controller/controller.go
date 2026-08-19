@@ -356,7 +356,7 @@ func (c *Controller) run(ctx context.Context, kind operationKind, prompt string,
 }
 
 func (c *Controller) projectOperationError(result operationResult) {
-	if result.err == nil || errors.Is(result.err, context.Canceled) || errors.Is(result.err, ErrHardCanceled) {
+	if result.err == nil || isOnlyIntentionalCancellation(result.err) {
 		return
 	}
 	if result.kind == operationTurn {
@@ -364,4 +364,26 @@ func (c *Controller) projectOperationError(result operationResult) {
 	} else {
 		c.projector.Error("", "controller:compaction-error", "coding compaction failed")
 	}
+}
+
+func isOnlyIntentionalCancellation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isOnlyIntentionalCancellation(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return isOnlyIntentionalCancellation(wrapped.Unwrap())
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, ErrHardCanceled)
 }
