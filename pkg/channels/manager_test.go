@@ -3545,6 +3545,14 @@ func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) 
 		!slices.Equal(ids, []string{"msg-4"}) {
 		t.Fatalf("next-turn feedback = (%v, %v, %v), want fresh msg-4", ids, sent, err)
 	}
+	feedback.Content = "delayed prior turn after reopen"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnOne}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("delayed prior-turn feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+	feedback.Content = "next request"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnThree}
 	m.DismissToolFeedback(t.Context(), feedback)
 	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
 		t.Fatalf("ActiveCount() after next-turn cleanup = %d, want 0", count)
@@ -3558,6 +3566,77 @@ func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) 
 	}
 	if !slices.Equal(ch.operations, want) {
 		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
+func TestDismissToolFeedback_StableSessionWithoutTraceRetainsGenerationTombstone(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	m.lifecycle.storeChannel("test", ch)
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+
+	m.DismissToolFeedback(t.Context(), bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session",
+		Context: bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	feedback.Content = "late working"
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late feedback = (%v, %v, %v), want suppressed", ids, sent, err)
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if want := []string{"send:working", "delete:msg-1"}; !slices.Equal(ch.operations, want) {
+		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
+func TestFinalOutboundTerminalizesAllCorrelatedToolFeedbackGenerations(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	turnOne := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	turnTwo := runtimeevents.NewTraceScope("/workspace/main", "turn-2")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+	final := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "done",
+		TraceScopes: []runtimeevents.TraceScope{turnOne, turnTwo},
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, final); err != nil || !sent {
+		t.Fatalf("final response = (%v, %v)", sent, err)
+	}
+
+	feedback.Content = "late correlated turn"
+	feedback.TraceScopes = []runtimeevents.TraceScope{turnTwo}
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		len(ids) != 0 {
+		t.Fatalf("late correlated feedback = (%v, %v, %v), want suppressed", ids, sent, err)
 	}
 }
 

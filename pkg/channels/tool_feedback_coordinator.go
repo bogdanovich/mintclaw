@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	toolFeedbackTerminalTombstoneTTL = 30 * time.Second
-	toolFeedbackCleanupRetryDelay    = 5 * time.Second
-	toolFeedbackCleanupRetention     = 30 * time.Second
+	toolFeedbackTerminalTombstoneTTL   = 30 * time.Second
+	toolFeedbackCleanupRetryDelay      = 5 * time.Second
+	toolFeedbackCleanupRetention       = 30 * time.Second
+	toolFeedbackGenerationHistoryLimit = 64
 )
 
 type toolFeedbackOperations struct {
@@ -54,18 +55,20 @@ type toolFeedbackEntry struct {
 	opMu sync.Mutex
 	mu   sync.Mutex
 
-	terminalGeneration uint64
-	terminal           bool
-	terminalUntil      time.Time
-	terminalPending    int
-	terminalRetained   int
-	terminalSuccess    toolFeedbackTerminalSuccess
-	retired            bool
-	sending            bool
-	paused             bool
-	generations        map[string]struct{}
-	current            trackedToolFeedbackMessage
-	pendingCleanup     []pendingToolFeedbackCleanup
+	terminalGeneration      uint64
+	terminal                bool
+	terminalUntil           time.Time
+	terminalPending         int
+	terminalRetained        int
+	terminalSuccess         toolFeedbackTerminalSuccess
+	retired                 bool
+	sending                 bool
+	paused                  bool
+	activeGenerations       map[string]struct{}
+	terminalizedGenerations map[string]struct{}
+	terminalizedOrder       []string
+	current                 trackedToolFeedbackMessage
+	pendingCleanup          []pendingToolFeedbackCleanup
 }
 
 type toolFeedbackTerminal struct {
@@ -155,21 +158,25 @@ func (c *ToolFeedbackCoordinator) deliver(
 	c.retryPendingCleanup(ctx, key, entry)
 
 	entry.mu.Lock()
+	generation = strings.TrimSpace(generation)
+	if _, terminalized := entry.terminalizedGenerations[generation]; generation != "" && terminalized {
+		entry.mu.Unlock()
+		return nil, nil
+	}
 	if entry.terminal {
-		_, generationSeen := entry.generations[strings.TrimSpace(generation)]
-		freshGeneration := strings.TrimSpace(generation) != "" && !generationSeen
+		_, generationActive := entry.activeGenerations[generation]
+		freshGeneration := generation != "" && !generationActive
 		if !freshGeneration && (entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil)) {
 			entry.mu.Unlock()
 			return nil, nil
 		}
 		resetToolFeedbackTerminal(entry)
-		entry.generations = nil
 	}
-	if generation = strings.TrimSpace(generation); generation != "" {
-		if entry.generations == nil {
-			entry.generations = make(map[string]struct{})
+	if generation != "" {
+		if entry.activeGenerations == nil {
+			entry.activeGenerations = make(map[string]struct{})
 		}
-		entry.generations[generation] = struct{}{}
+		entry.activeGenerations[generation] = struct{}{}
 	}
 	if separate && entry.current.messageID != "" {
 		entry.current = trackedToolFeedbackMessage{}
@@ -409,17 +416,17 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, true, "")
+	return c.beginTerminal(key, true, nil)
 }
 
 func (c *ToolFeedbackCoordinator) BeginTransientTerminal(key string) *toolFeedbackTerminal {
-	return c.beginTerminal(key, false, "")
+	return c.beginTerminal(key, false, nil)
 }
 
 func (c *ToolFeedbackCoordinator) beginTerminal(
 	key string,
 	retain bool,
-	generation string,
+	generations []string,
 ) *toolFeedbackTerminal {
 	if c == nil || strings.TrimSpace(key) == "" {
 		return nil
@@ -431,12 +438,7 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 			return nil
 		}
 		entry.mu.Lock()
-		if generation = strings.TrimSpace(generation); generation != "" {
-			if entry.generations == nil {
-				entry.generations = make(map[string]struct{})
-			}
-			entry.generations[generation] = struct{}{}
-		}
+		entry.addActiveGenerations(generations)
 		if entry.retired {
 			entry.mu.Unlock()
 			c.removeEntry(key, entry)
@@ -466,6 +468,38 @@ func (c *ToolFeedbackCoordinator) beginTerminal(
 		entry.mu.Unlock()
 
 		return &toolFeedbackTerminal{key: key, entry: entry, generation: generation, retain: retain}
+	}
+}
+
+func (entry *toolFeedbackEntry) addActiveGenerations(generations []string) {
+	for _, generation := range generations {
+		generation = strings.TrimSpace(generation)
+		if generation == "" {
+			continue
+		}
+		if entry.activeGenerations == nil {
+			entry.activeGenerations = make(map[string]struct{})
+		}
+		entry.activeGenerations[generation] = struct{}{}
+	}
+}
+
+func (entry *toolFeedbackEntry) terminalizeActiveGenerations() {
+	for generation := range entry.activeGenerations {
+		if _, exists := entry.terminalizedGenerations[generation]; exists {
+			continue
+		}
+		if entry.terminalizedGenerations == nil {
+			entry.terminalizedGenerations = make(map[string]struct{})
+		}
+		entry.terminalizedGenerations[generation] = struct{}{}
+		entry.terminalizedOrder = append(entry.terminalizedOrder, generation)
+	}
+	entry.activeGenerations = nil
+	for len(entry.terminalizedOrder) > toolFeedbackGenerationHistoryLimit {
+		oldest := entry.terminalizedOrder[0]
+		entry.terminalizedOrder = entry.terminalizedOrder[1:]
+		delete(entry.terminalizedGenerations, oldest)
 	}
 }
 
@@ -512,6 +546,7 @@ func (c *ToolFeedbackCoordinator) CompleteTerminal(
 	}
 	if success {
 		if terminal.retain {
+			entry.terminalizeActiveGenerations()
 			entry.terminalSuccess = toolFeedbackTerminalSuccessRetained
 			entry.terminalUntil = time.Now().Add(toolFeedbackTerminalTombstoneTTL)
 		} else if previousSuccess == toolFeedbackTerminalSuccessNone {

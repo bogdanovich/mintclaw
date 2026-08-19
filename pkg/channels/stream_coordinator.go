@@ -220,18 +220,19 @@ func (s *StreamCoordinator) hasToolFeedback() bool {
 func (s *StreamCoordinator) beginToolFeedbackTerminals(
 	keys []string,
 	scoped bool,
+	stableSession bool,
 	transient bool,
-	generation string,
+	generations []string,
 ) []*toolFeedbackTerminal {
 	if !s.hasToolFeedback() {
 		return nil
 	}
 	terminals := make([]*toolFeedbackTerminal, 0, len(keys))
 	for _, key := range keys {
-		if (scoped || strings.TrimSpace(generation) != "") && !transient {
-			terminals = append(terminals, s.toolFeedback.beginTerminal(key, true, generation))
+		if (scoped || stableSession || len(generations) != 0) && !transient {
+			terminals = append(terminals, s.toolFeedback.beginTerminal(key, true, generations))
 		} else {
-			terminals = append(terminals, s.toolFeedback.beginTerminal(key, false, generation))
+			terminals = append(terminals, s.toolFeedback.beginTerminal(key, false, generations))
 		}
 	}
 	return terminals
@@ -266,13 +267,13 @@ func (s *StreamCoordinator) deliverToolFeedback(
 func (s *StreamCoordinator) dismissToolFeedback(
 	ctx context.Context,
 	keys []string,
-	scoped bool,
+	retained bool,
 ) {
 	if !s.hasToolFeedback() {
 		return
 	}
 	for _, key := range keys {
-		if scoped {
+		if retained {
 			s.toolFeedback.Dismiss(ctx, key)
 		} else {
 			s.toolFeedback.DismissTransient(ctx, key)
