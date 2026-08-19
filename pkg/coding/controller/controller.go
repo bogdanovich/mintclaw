@@ -356,7 +356,7 @@ func (c *Controller) run(ctx context.Context, kind operationKind, prompt string,
 }
 
 func (c *Controller) projectOperationError(result operationResult) {
-	if result.err == nil || errors.Is(result.err, context.Canceled) {
+	if result.err == nil || errors.Is(result.err, context.Canceled) || errors.Is(result.err, ErrHardCanceled) {
 		return
 	}
 	if result.kind == operationTurn {

@@ -34,6 +34,17 @@ type workspaceRefreshRuntime struct {
 	refreshErr error
 }
 
+type cancelCauseRuntime struct {
+	*blockingRuntime
+}
+
+func (r *cancelCauseRuntime) RunTurn(ctx context.Context, prompt string, ready func()) error {
+	r.runStarted <- prompt
+	ready()
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
 func (r *workspaceRefreshRuntime) RefreshWorkspace(context.Context) error {
 	r.refreshes++
 	return r.refreshErr
@@ -147,6 +158,30 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 			runtime.hardCancels,
 			runtime.closes,
 		)
+	}
+}
+
+func TestHardCancelCauseIsNotProjectedAsTurnFailure(t *testing.T) {
+	runtime := &cancelCauseRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	ctx := context.Background()
+	if err := controller.Submit(ctx, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.HardCancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := controller.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.ID == "controller:turn-error" {
+			t.Fatalf("intentional hard cancel was projected as a turn failure: %#v", entry)
+		}
 	}
 }
 
