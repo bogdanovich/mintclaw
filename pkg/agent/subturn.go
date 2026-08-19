@@ -187,8 +187,9 @@ type SubTurnConfig struct {
 	// DeliveryMode controls user-facing delivery ownership for synchronous
 	// delegate/sub-turn flows. Reuses the same enum names as async spawn:
 	// parent_only, user_only, user_and_parent.
-	DeliveryMode toolshared.AsyncDeliveryMode
-	TaskID       string
+	DeliveryMode   toolshared.AsyncDeliveryMode
+	TaskID         string
+	ObjectiveItems []toolshared.ObjectiveSpec
 }
 
 // ====================== Context Keys ======================
@@ -622,9 +623,10 @@ func spawnSubTurn(
 		}
 	}
 	requireObjectiveOutcome := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	objectiveChecklist := normalizeObjectiveChecklist(cfg.ObjectiveItems)
 	childTask := cfg.SystemPrompt
 	if requireObjectiveOutcome {
-		childTask = browserObjectiveOutcomeInstruction(childTask)
+		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
 	}
 
 	// Create processOptions for the child turn
@@ -654,6 +656,7 @@ func spawnSubTurn(
 	}
 	opts := processOptions{
 		TaskID:                  strings.TrimSpace(cfg.TaskID),
+		ObjectiveChecklist:      objectiveChecklist,
 		InteractionWorkspace:    parentTS.workspace,
 		InteractionSessionKey:   parentTS.sessionKey,
 		InteractionRouteKey:     parentTS.opts.Dispatch.RouteSessionKey,
@@ -794,6 +797,7 @@ func spawnSubTurn(
 			turnRes.finalContent,
 			turnRes.writeAudit,
 			requireObjectiveOutcome,
+			objectiveChecklist,
 		)
 	}
 

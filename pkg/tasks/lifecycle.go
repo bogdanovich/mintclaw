@@ -340,8 +340,12 @@ func (r *Registry) CompleteInteractionTaskResult(
 			rec.Completion = &CompletionPayload{
 				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
 			}
+			rec.Deliverable = &DeliverablePayload{
+				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+			}
 		} else if objectiveOutcome != nil {
 			rec.Completion = &CompletionPayload{ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome)}
+			rec.Deliverable = &DeliverablePayload{ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome)}
 		}
 		if delivery == DeliveryDelivered || delivery == DeliveryNotApplicable {
 			rec.DeliveredAt = time.Now().UnixMilli()

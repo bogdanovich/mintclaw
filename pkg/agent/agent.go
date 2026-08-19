@@ -114,9 +114,10 @@ type AgentLoop struct {
 type processOptions struct {
 	Dispatch                     DispatchRequest // Normalized routed request boundary for this turn
 	ModelBinding                 effectiveModelBinding
-	SessionKey                   string              // Session identifier for history/context
-	SessionAliases               []string            // Compatibility aliases for the session key
-	TaskID                       string              // Durable task owning this turn, when one exists
+	SessionKey                   string   // Session identifier for history/context
+	SessionAliases               []string // Compatibility aliases for the session key
+	TaskID                       string   // Durable task owning this turn, when one exists
+	ObjectiveChecklist           []runtimeObjectiveItem
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
 	InteractionSessionKey        string              // User-facing session that owns interaction answers
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers

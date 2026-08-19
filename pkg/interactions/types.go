@@ -148,14 +148,21 @@ type Route struct {
 }
 
 type Origin struct {
-	TurnID                 string              `json:"turn_id"`
-	ExecutionID            string              `json:"execution_id,omitempty"`
-	ToolCallID             string              `json:"tool_call_id"`
-	ToolName               string              `json:"tool_name"`
-	TaskID                 string              `json:"task_id,omitempty"`
-	ContinuationSessionKey string              `json:"continuation_session_key,omitempty"`
-	ArgumentHash           string              `json:"argument_hash,omitempty"`
-	ExecutionContext       *bus.InboundContext `json:"execution_context,omitempty"`
+	TurnID                 string                   `json:"turn_id"`
+	ExecutionID            string                   `json:"execution_id,omitempty"`
+	ToolCallID             string                   `json:"tool_call_id"`
+	ToolName               string                   `json:"tool_name"`
+	TaskID                 string                   `json:"task_id,omitempty"`
+	ContinuationSessionKey string                   `json:"continuation_session_key,omitempty"`
+	ArgumentHash           string                   `json:"argument_hash,omitempty"`
+	ExecutionContext       *bus.InboundContext      `json:"execution_context,omitempty"`
+	ObjectiveChecklist     []ObjectiveChecklistItem `json:"objective_checklist,omitempty"`
+}
+
+type ObjectiveChecklistItem struct {
+	ID   string `json:"id"`
+	Item string `json:"item"`
+	Kind string `json:"kind"`
 }
 
 type Answer struct {

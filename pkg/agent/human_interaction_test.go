@@ -1389,17 +1389,25 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only interaction must wait for user delivery settlement")
 	}
 	traceScope := runtimeevents.NewTraceScope(workspace, "resume-turn")
+	objectiveOutcome := &toolshared.ObjectiveOutcome{
+		Status:         toolshared.ObjectiveOutcomePartial,
+		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published", Kind: "external_action"}},
+		MissingItems:   []string{"Vissani not published"},
+	}
+	projection := objectiveOutcomeUserContent("Both items were published.", objectiveOutcome)
 	if err := al.deliverTaskInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		"raw child final", nil, []runtimeevents.TraceScope{traceScope},
+		"Both items were published.", objectiveOutcome, []runtimeevents.TraceScope{traceScope},
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
 	select {
 	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
-		if outbound.Content != "raw child final" || !outbound.TraceSettlement ||
-			len(outbound.TraceScopes) != 1 || outbound.TraceScopes[0] != traceScope {
+		if outbound.Content != projection || strings.Contains(outbound.Content, "Both items") ||
+			!outbound.TraceSettlement ||
+			len(outbound.TraceScopes) != 1 ||
+			outbound.TraceScopes[0] != traceScope {
 			t.Fatalf("task user delivery = %#v", outbound)
 		}
 		metadata := bus.OutboundMetadataFromMessage(outbound)
@@ -1409,6 +1417,11 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("user-only task completion was not queued")
+	}
+	task, _ := tasks.Get("subagent-user")
+	if task.TerminalSummary != projection || task.Completion == nil || task.Completion.Text != projection ||
+		task.Deliverable == nil || task.Deliverable.Text != projection || strings.Contains(task.TerminalSummary, "Both items") {
+		t.Fatalf("task retained optimistic resume projection: %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.Status != interactions.StatusResolved ||

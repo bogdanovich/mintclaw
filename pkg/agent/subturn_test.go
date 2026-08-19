@@ -387,7 +387,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 			},
 		}}},
 		{Content: "approved task completed\n" + objectiveOutcomeStart +
-			`{"status":"succeeded","completed_items":[{"item":"production action","kind":"external_action","receipt_ids":["inv-approved"]}],"missing_items":[]}` +
+			`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-approved"]}],"missing_items":[]}` +
 			objectiveOutcomeEnd, FinishReason: "stop"},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -428,6 +428,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
 		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-approval", Critical: true,
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "production action", Kind: "external_action"}},
 	})
 	if err != nil || result == nil || !result.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
@@ -472,7 +473,7 @@ type outcomeBrowserApprovalTool struct {
 func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content: "Both items were published.\n" + objectiveOutcomeStart +
-			`{"status":"partial","completed_items":[{"item":"Yakima published","kind":"result","receipt_ids":[]}],"missing_items":["Vissani not published"]}` +
+			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"]}` +
 			objectiveOutcomeEnd,
 		FinishReason: "stop",
 	}}}
@@ -492,6 +493,10 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
 		Model: agent.Model, SystemPrompt: "publish both items",
 		DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		ObjectiveItems: []toolshared.ObjectiveSpec{
+			{Item: "Yakima published", Kind: "result"},
+			{Item: "Vissani not published", Kind: "result"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

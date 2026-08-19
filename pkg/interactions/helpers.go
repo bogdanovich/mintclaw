@@ -64,6 +64,12 @@ func normalizeOrigin(origin Origin) Origin {
 	origin.ContinuationSessionKey = strings.TrimSpace(origin.ContinuationSessionKey)
 	origin.ArgumentHash = strings.TrimSpace(origin.ArgumentHash)
 	origin.ExecutionContext = cloneExecutionContext(origin.ExecutionContext)
+	origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), origin.ObjectiveChecklist...)
+	for index := range origin.ObjectiveChecklist {
+		origin.ObjectiveChecklist[index].ID = strings.TrimSpace(origin.ObjectiveChecklist[index].ID)
+		origin.ObjectiveChecklist[index].Item = strings.TrimSpace(origin.ObjectiveChecklist[index].Item)
+		origin.ObjectiveChecklist[index].Kind = strings.TrimSpace(origin.ObjectiveChecklist[index].Kind)
+	}
 	return origin
 }
 
@@ -79,6 +85,7 @@ func routesEqual(left, right Route) bool {
 }
 
 func cloneRecord(rec Record) Record {
+	rec.Origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), rec.Origin.ObjectiveChecklist...)
 	rec.Origin.ExecutionContext = cloneExecutionContext(rec.Origin.ExecutionContext)
 	rec.Questions = cloneQuestions(rec.Questions)
 	if rec.Answer != nil {

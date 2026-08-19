@@ -242,6 +242,13 @@ type ObjectiveOutcome struct {
 	MissingItems   []string               `json:"missing_items,omitempty"`
 }
 
+// ObjectiveSpec is a caller-declared objective that the runtime normalizes
+// into a stable, runtime-owned checklist before a browser-capable child runs.
+type ObjectiveSpec struct {
+	Item string `json:"item"`
+	Kind string `json:"kind"`
+}
+
 type ObjectiveItem struct {
 	Item     string             `json:"item"`
 	Kind     string             `json:"kind,omitempty"`

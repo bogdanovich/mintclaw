@@ -79,6 +79,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"type":        "number",
 			"description": "Optional maximum time to wait for this delegated child step. If omitted, the runtime subturn default is used.",
 		},
+		"objective_items": objectiveItemsParameter(),
 	}
 	return map[string]any{
 		"type":       "object",
@@ -103,6 +104,10 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
 	timeout, err := parseOptionalTimeoutSeconds(args["timeout_seconds"])
+	if err != nil {
+		return toolshared.ErrorResult(err.Error()).WithError(err)
+	}
+	objectiveItems, err := parseObjectiveItems(args["objective_items"])
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
@@ -132,12 +137,13 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	defer stopHeartbeat()
 
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-		TaskID:        taskID,
-		TargetAgentID: agentID,
-		SystemPrompt:  task,
-		Async:         false,
-		DeliveryMode:  deliveryMode,
-		Timeout:       timeout,
+		TaskID:         taskID,
+		TargetAgentID:  agentID,
+		SystemPrompt:   task,
+		Async:          false,
+		DeliveryMode:   deliveryMode,
+		Timeout:        timeout,
+		ObjectiveItems: objectiveItems,
 	})
 	if err != nil {
 		msg := fmt.Sprintf("delegation to agent %q failed: %v", agentID, err)

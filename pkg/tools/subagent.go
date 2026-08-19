@@ -47,25 +47,28 @@ type SubTurnConfig struct {
 	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
 	DeliveryMode       toolshared.AsyncDeliveryMode
 	TaskID             string // Durable task owning this child turn, when one exists.
+	ObjectiveItems     []toolshared.ObjectiveSpec
 }
 
 type SubagentTask struct {
-	ID            string
-	Task          string
-	Label         string
-	AgentID       string
-	OriginChannel string
-	OriginChatID  string
-	DeliveryMode  toolshared.AsyncDeliveryMode
-	Status        string
-	Result        string
-	Created       int64
+	ID             string
+	Task           string
+	Label          string
+	AgentID        string
+	OriginChannel  string
+	OriginChatID   string
+	DeliveryMode   toolshared.AsyncDeliveryMode
+	Status         string
+	Result         string
+	Created        int64
+	ObjectiveItems []toolshared.ObjectiveSpec
 }
 
 type SpawnSubTurnFunc func(
 	ctx context.Context,
 	taskID string,
 	task, label, agentID string,
+	objectiveItems []toolshared.ObjectiveSpec,
 	tools *ToolRegistry,
 	maxTokens int,
 	temperature float64,
@@ -169,21 +172,27 @@ func (sm *SubagentManager) Spawn(
 	task, label, agentID, originChannel, originChatID string,
 	deliveryMode toolshared.AsyncDeliveryMode,
 	callback toolshared.AsyncCallback,
+	objectiveSets ...[]toolshared.ObjectiveSpec,
 ) (string, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	taskID := "subagent-" + uuid.NewString()
+	var objectiveItems []toolshared.ObjectiveSpec
+	if len(objectiveSets) > 0 {
+		objectiveItems = objectiveSets[0]
+	}
 	subagentTask := &SubagentTask{
-		ID:            taskID,
-		Task:          task,
-		Label:         label,
-		AgentID:       agentID,
-		OriginChannel: originChannel,
-		OriginChatID:  originChatID,
-		DeliveryMode:  deliveryMode,
-		Status:        "running",
-		Created:       time.Now().UnixMilli(),
+		ID:             taskID,
+		Task:           task,
+		Label:          label,
+		AgentID:        agentID,
+		OriginChannel:  originChannel,
+		OriginChatID:   originChatID,
+		DeliveryMode:   deliveryMode,
+		Status:         "running",
+		Created:        time.Now().UnixMilli(),
+		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
 	}
 	if err := sm.createTask(subagentTask); err != nil {
 		return "", fmt.Errorf("persist spawned subagent: %w", err)
@@ -197,6 +206,49 @@ func (sm *SubagentManager) Spawn(
 		return fmt.Sprintf("Spawned subagent '%s' for task: %s", label, task), nil
 	}
 	return fmt.Sprintf("Spawned subagent for task: %s", task), nil
+}
+
+func objectiveItemsParameter() map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"description": "Checklist of every independently verifiable requested outcome. Required for browser-capable child agents. Use external_action for state changes and result for read-only findings.",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"item": map[string]any{"type": "string"},
+				"kind": map[string]any{"type": "string", "enum": []string{"result", "external_action"}},
+			},
+			"required": []string{"item", "kind"},
+		},
+	}
+}
+
+func parseObjectiveItems(raw any) ([]toolshared.ObjectiveSpec, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("objective_items must be an array")
+	}
+	if len(values) > 64 {
+		return nil, fmt.Errorf("objective_items cannot contain more than 64 entries")
+	}
+	items := make([]toolshared.ObjectiveSpec, 0, len(values))
+	for index, value := range values {
+		entry, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("objective_items[%d] must be an object", index)
+		}
+		item, _ := entry["item"].(string)
+		kind, _ := entry["kind"].(string)
+		item, kind = strings.TrimSpace(item), strings.TrimSpace(kind)
+		if item == "" || (kind != "result" && kind != "external_action") {
+			return nil, fmt.Errorf("objective_items[%d] requires item and kind result|external_action", index)
+		}
+		items = append(items, toolshared.ObjectiveSpec{Item: item, Kind: kind})
+	}
+	return items, nil
 }
 
 func (sm *SubagentManager) runTask(
@@ -250,6 +302,7 @@ func (sm *SubagentManager) runTask(
 			task.Task,
 			task.Label,
 			task.AgentID,
+			task.ObjectiveItems,
 			tools,
 			maxTokens,
 			temperature,
@@ -918,6 +971,7 @@ func (t *SubagentTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional short label for the task (for display)",
 			},
+			"objective_items": objectiveItemsParameter(),
 		},
 		"required": []string{"task"},
 	}
@@ -932,6 +986,10 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	label, ok := args["label"].(string)
 	if !ok {
 		label = ""
+	}
+	objectiveItems, parseErr := parseObjectiveItems(args["objective_items"])
+	if parseErr != nil {
+		return toolshared.ErrorResult(parseErr.Error()).WithError(parseErr)
 	}
 
 	// Build system prompt for subagent
@@ -955,12 +1013,13 @@ Task: %s`,
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:        t.defaultModel,
-			Tools:        nil, // Will inherit from parent via context
-			SystemPrompt: systemPrompt,
-			MaxTokens:    t.maxTokens,
-			Temperature:  t.temperature,
-			Async:        false, // Synchronous execution
+			Model:          t.defaultModel,
+			Tools:          nil, // Will inherit from parent via context
+			SystemPrompt:   systemPrompt,
+			MaxTokens:      t.maxTokens,
+			Temperature:    t.temperature,
+			Async:          false, // Synchronous execution
+			ObjectiveItems: objectiveItems,
 		})
 		if err != nil {
 			return toolshared.ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)

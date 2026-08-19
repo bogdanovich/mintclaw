@@ -337,6 +337,9 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 			ContinuationSessionKey: request.Origin.ContinuationSessionKey,
 			ArgumentHash:           request.Origin.ArgumentHash,
 			ExecutionContext:       executionContext,
+			ObjectiveChecklist: append(
+				[]interactions.ObjectiveChecklistItem(nil),
+				request.Origin.ObjectiveChecklist...),
 		},
 		Questions:      request.Prompt.Questions,
 		PromptSummary:  request.Prompt.PromptSummary,

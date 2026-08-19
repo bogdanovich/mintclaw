@@ -1645,6 +1645,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		InteractionRouteKey:        routeSessionKey,
 		InteractionOriginExecution: record.Origin.ExecutionID,
 		InteractionOriginContext:   cloneInboundContext(record.Origin.ExecutionContext),
+		ObjectiveChecklist:         runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
 		TurnStatus:                 &turnStatus,
 		TurnResult:                 &resumedTurn,
 		Dispatch: DispatchRequest{
@@ -1773,7 +1774,9 @@ func extractResumedObjectiveOutcome(
 ) (string, *toolshared.ObjectiveOutcome) {
 	required := strings.TrimSpace(record.Origin.TaskID) != "" && agent != nil &&
 		agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
-	return extractObjectiveOutcome(content, audits, required)
+	return extractObjectiveOutcome(
+		content, audits, required, runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
+	)
 }
 
 func (al *AgentLoop) executeApprovedInteractionTool(
@@ -2136,9 +2139,10 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if stateErr != nil {
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
+	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
 	if err := taskRegistry.CompleteInteractionTaskResult(
-		taskID, record.ID, content, taskregistryObjectiveOutcome(objectiveOutcome), taskregistry.DeliveryPending,
+		taskID, record.ID, projection, taskregistryObjectiveOutcome(objectiveOutcome), taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
@@ -2178,13 +2182,16 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		}
 	}
 	result := (&toolshared.ToolResult{
-		ForLLM: content, ForUser: objectiveOutcomeUserContent(content, objectiveOutcome),
+		ForLLM: projection, ForUser: projection,
 	}).
 		WithAsyncTaskID(taskID).
 		WithAsyncDelivery(mode)
-	if strings.TrimSpace(content) != "" || objectiveOutcome != nil {
+	if strings.TrimSpace(projection) != "" || objectiveOutcome != nil {
 		result.WithCompletion(&toolshared.CompletionResult{
-			Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+			Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+		})
+		result.WithDeliverable(&toolshared.DeliverableResult{
+			Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
 		})
 	}
 	agent := al.interactionContinuationAgent(record, nil)

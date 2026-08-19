@@ -191,7 +191,11 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 
 func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
-	record, err := registry.Create(validCreate(clock, "interaction_receipt111111", "session-receipt"))
+	request := validCreate(clock, "interaction_receipt111111", "session-receipt")
+	request.Origin.ObjectiveChecklist = []ObjectiveChecklistItem{{
+		ID: "objective_1", Item: "publish microwave", Kind: "external_action",
+	}}
+	record, err := registry.Create(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,13 +208,16 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	}
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
 	got, ok := reloaded.Get(record.ID)
-	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" {
+	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" ||
+		len(got.Origin.ObjectiveChecklist) != 1 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" {
 		t.Fatalf("reloaded receipts = %#v, found=%v", got.OutcomeReceipts, ok)
 	}
 	got.OutcomeReceipts[0].Metadata["invocation_id"] = "mutated"
+	got.Origin.ObjectiveChecklist[0].Item = "mutated"
 	again, _ := reloaded.Get(record.ID)
-	if again.OutcomeReceipts[0].Metadata["invocation_id"] != "inv-1" {
-		t.Fatal("outcome receipt metadata escaped record cloning")
+	if again.OutcomeReceipts[0].Metadata["invocation_id"] != "inv-1" ||
+		again.Origin.ObjectiveChecklist[0].Item != "publish microwave" {
+		t.Fatal("outcome evidence escaped record cloning")
 	}
 }
 
