@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -652,7 +653,7 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 		if record, ok := activeInteractionForSession(registry, target.SessionKey); ok &&
 			interactionRouteAuthorizes(record.Route, target, msg.Context) &&
 			(record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming) {
-			if err := c.al.enqueueInteractionContinuationInbound(ctx, msg, target, record); err != nil {
+			if err := c.enqueueContendedInteractionInbound(ctx, msg, target, record); err != nil {
 				c.al.releaseInboundMessage(context.Background(), msg, err)
 			}
 			return
@@ -661,6 +662,25 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 		return
 	}
 	go c.runInteractionWorker(ctx, msg, target, claim)
+}
+
+func (c *inboundTurnCoordinator) enqueueContendedInteractionInbound(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	record interactions.Record,
+) error {
+	flight, ok := c.al.loadInteractionResumeFlight(target.Agent.Workspace, record.ID)
+	if !ok {
+		return c.enqueueDeferredInteractionInbound(ctx, msg, target)
+	}
+
+	flight.handoffMu.Lock()
+	defer flight.handoffMu.Unlock()
+	if flight.handoffSealed {
+		return c.enqueueDeferredInteractionInbound(ctx, msg, target)
+	}
+	return c.al.enqueueInteractionContinuationInbound(ctx, msg, target, record)
 }
 
 func (c *inboundTurnCoordinator) runContendedInteractionInbound(
@@ -1278,9 +1298,45 @@ type interactionToolResultPayload struct {
 }
 
 type interactionResumeFlight struct {
-	done    chan struct{}
-	handled bool
-	err     error
+	done          chan struct{}
+	handled       bool
+	err           error
+	handoffMu     sync.Mutex
+	handoffSealed bool
+}
+
+func (al *AgentLoop) loadInteractionResumeFlight(
+	workspace string,
+	interactionID string,
+) (*interactionResumeFlight, bool) {
+	flight, ok := al.interactionResumeFlights.Load(interactionResumeFlightKey(workspace, interactionID))
+	if !ok {
+		return nil, false
+	}
+	return flight.(*interactionResumeFlight), true
+}
+
+func (al *AgentLoop) sealInteractionSteeringHandoff(
+	workspace string,
+	record interactions.Record,
+) {
+	flight, ok := al.loadInteractionResumeFlight(workspace, record.ID)
+	if !ok {
+		return
+	}
+	flight.handoffMu.Lock()
+	defer flight.handoffMu.Unlock()
+	if flight.handoffSealed {
+		return
+	}
+	flight.handoffSealed = true
+	if al.steering == nil {
+		return
+	}
+	al.steering.moveScope(
+		newRuntimeSessionScope(workspace, interactionContinuationSessionKey(record)),
+		newRuntimeSessionScope(workspace, record.Route.SessionKey),
+	)
 }
 
 func interactionResumeFlightKey(workspace, interactionID string) string {
@@ -1467,6 +1523,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
+		al.sealInteractionSteeringHandoff(interactionWorkspace, resuming)
 		_, finalizeErr := al.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, finalContent, nil,
 			interactionBoundaryPrecomputedFinal,
@@ -1523,6 +1580,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 	if turnStatus == TurnEndStatusAborted {
 		return nil
 	}
+	al.sealInteractionSteeringHandoff(interactionWorkspace, resuming)
 	var traceScopes []runtimeevents.TraceScope
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes

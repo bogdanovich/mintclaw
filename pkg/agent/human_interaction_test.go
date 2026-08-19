@@ -487,6 +487,22 @@ func (b *interactionOwnershipBus) counts() (int, int) {
 	return len(b.acked), len(b.released)
 }
 
+func (b *interactionOwnershipBus) ownership() ([]string, []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.acked...), append([]string(nil), b.released...)
+}
+
+func countMatchingStrings(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
 func newInteractionChannelManager() *interactionChannelManager {
 	return &interactionChannelManager{
 		recordingChannelManager: &recordingChannelManager{},
@@ -3810,6 +3826,11 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 		t.Fatal("failed to claim test session")
 	}
 	defer claim.releaseIfOwned()
+	flightKey, flight, flightOwner := al.startInteractionResumeFlight(agent.Workspace, record.ID)
+	if !flightOwner {
+		t.Fatal("failed to own test interaction resume flight")
+	}
+	defer al.finishInteractionResumeFlight(flightKey, flight, true, nil)
 
 	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), msg, target)
 	acked, released := tracker.counts()
@@ -5194,6 +5215,145 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	}
 	if !errors.Is(releaseCause, errInteractionFinalizationCanceled) {
 		t.Fatalf("held steering release cause = %v", releaseCause)
+	}
+}
+
+func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	al.bus = tracker
+	al.channelManager = newInteractionChannelManager()
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start interaction",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:late-resume-owner"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
+		},
+	})
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("failed to resolve interaction target")
+	}
+	continuationKey := session.BuildOpaqueSessionKey("agent:main:test:late-resume-child")
+	origin := interactions.Origin{
+		TurnID: "turn-late-resume", ToolCallID: "call-late-resume", ToolName: "request_user_input",
+		ContinuationSessionKey: continuationKey,
+	}
+	agent.Sessions.AddFullMessage(continuationKey, providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: origin.ToolCallID, Name: origin.ToolName,
+			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+		}},
+	})
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: target.SessionKey,
+			RouteSessionKey: target.Allocation.RouteScopeKey,
+			Channel:         msg.Context.Channel, AccountID: msg.Context.Account,
+			ChatID: msg.Context.ChatID, ChatType: msg.Context.ChatType,
+			SenderID: msg.Context.SenderID,
+		},
+		Origin: origin, Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boundaryReached := make(chan struct{})
+	releaseFinalization := make(chan struct{})
+	var hookOnce sync.Once
+	answerCtx := context.WithValue(
+		t.Context(),
+		interactionLifecycleBoundaryHookKey{},
+		interactionLifecycleBoundaryHook(func(boundary string) {
+			if boundary != interactionBoundaryModelFinal {
+				return
+			}
+			hookOnce.Do(func() { close(boundaryReached) })
+			<-releaseFinalization
+		}),
+	)
+	answer := msg
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.Context.MessageID = "answer-before-late-steering"
+	if !newInboundTurnCoordinator(al).routeExplicitInteractionAnswer(answerCtx, answer, target) {
+		t.Fatal("interaction answer did not enter the continuation worker")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the interaction provider")
+	}
+	close(provider.release)
+	select {
+	case <-boundaryReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continuation did not reach the final-delivery boundary")
+	}
+
+	const correctionSpoolID = "spool-late-resuming-correction"
+	correction := msg
+	correction.Content = "open all postings and find the expired microwave"
+	correction.Context.MessageID = "late-resuming-correction"
+	correction.SpoolID = correctionSpoolID
+	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), correction, target)
+	childScope := newRuntimeSessionScope(agent.Workspace, continuationKey)
+	if depth := al.steering.lenScope(childScope); depth != 0 {
+		t.Fatalf("continuation steering depth = %d, want 0 after handoff", depth)
+	}
+	if depth := al.steering.lenScope(target.runtimeSessionScope()); depth != 1 {
+		t.Fatalf("owner steering depth = %d, want 1 after handoff", depth)
+	}
+	close(releaseFinalization)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls, messages := provider.snapshot()
+		acked, released := tracker.ownership()
+		if calls >= 2 && countMatchingStrings(acked, correctionSpoolID) == 1 {
+			if countMatchingStrings(released, correctionSpoolID) != 0 {
+				t.Fatalf("late correction released unexpectedly: %v", released)
+			}
+			seen := 0
+			for _, callMessages := range messages {
+				for _, callMessage := range callMessages {
+					if strings.Contains(callMessage.Content, correction.Content) {
+						seen++
+					}
+				}
+			}
+			if seen != 1 {
+				t.Fatalf("late correction appeared in provider history %d times, want 1", seen)
+			}
+			if al.steering.lenScope(target.runtimeSessionScope()) != 0 {
+				t.Fatal("owner steering queue was not drained")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"late correction was not drained exactly once: calls=%d acked=%v released=%v",
+				calls,
+				acked,
+				released,
+			)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

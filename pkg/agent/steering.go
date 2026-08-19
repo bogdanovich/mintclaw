@@ -288,6 +288,25 @@ func (sq *steeringQueue) clearScope(scope runtimeSessionScope) int {
 	return count
 }
 
+// moveScope atomically hands queued steering from one runtime session to
+// another. The combined queue may temporarily exceed MaxQueueSize because all
+// messages were already durably admitted and must not be dropped at handoff.
+func (sq *steeringQueue) moveScope(from, to runtimeSessionScope) int {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	if from == to {
+		return 0
+	}
+	queue := sq.queues[from]
+	if len(queue) == 0 {
+		return 0
+	}
+	sq.queues[to] = append(sq.queues[to], queue...)
+	delete(sq.queues, from)
+	return len(queue)
+}
+
 // setMode updates the steering mode.
 func (sq *steeringQueue) setMode(mode SteeringMode) {
 	sq.mu.Lock()
