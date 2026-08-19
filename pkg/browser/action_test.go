@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -321,7 +322,8 @@ func TestBrokerObservationScopesOpaqueReferencesToFreshGeneration(t *testing.T) 
 		t.Fatal(err)
 	}
 	if second.SnapshotGeneration != first.SnapshotGeneration+1 ||
-		onlyVisibleRef(t, second.Snapshot) == firstRef {
+		onlyVisibleRef(t, second.Snapshot) == firstRef || first.PageStateHash == "" ||
+		second.PageStateHash != first.PageStateHash {
 		t.Fatalf("observations did not rotate authority: first=%+v second=%+v", first, second)
 	}
 	_, err = broker.PrepareAction(context.Background(), PrepareActionRequest{
@@ -334,6 +336,87 @@ func TestBrokerObservationScopesOpaqueReferencesToFreshGeneration(t *testing.T) 
 	}
 	if len(worker.actions) != 0 {
 		t.Fatalf("stale preparation dispatched actions: %+v", worker.actions)
+	}
+}
+
+func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) {
+	store := NewMemoryStore()
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+	search := DriverElement{Target: "search", Role: "button", Name: "Search"}
+	worker.observation = driverObservationFixture(search)
+	worker.resolveElement = search
+	worker.resolveOrigin = worker.observation.Origin
+
+	var pageStateHash string
+	for attempt := 1; attempt <= 2; attempt++ {
+		observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pageStateHash == "" {
+			pageStateHash = observed.PageStateHash
+		} else if observed.PageStateHash != pageStateHash {
+			t.Fatalf(
+				"page state hash changed across equivalent snapshots: %q != %q",
+				observed.PageStateHash,
+				pageStateHash,
+			)
+		}
+		prepared, prepareErr := broker.PrepareAction(t.Context(), PrepareActionRequest{
+			Owner: owner, RequestID: fmt.Sprintf("request_search_%d", attempt),
+			SessionID: session.ID, TabID: session.TabID,
+			SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+			Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		})
+		if prepareErr != nil || !prepared.RequiresApproval {
+			t.Fatalf("PrepareAction(attempt %d) = %+v, %v", attempt, prepared, prepareErr)
+		}
+		invocation, executeErr := broker.ExecuteAction(
+			t.Context(), owner, prepared.Action.ID, &prepared.Approval,
+		)
+		if executeErr != nil || invocation.State != InvocationSucceeded {
+			t.Fatalf("ExecuteAction(attempt %d) = %+v, %v", attempt, invocation, executeErr)
+		}
+	}
+
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_search_3", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+	})
+	if !errors.Is(err, ErrNoProgress) || len(worker.actions) != 2 {
+		t.Fatalf("third equivalent preparation error = %v; actions = %+v", err, worker.actions)
+	}
+	stored, getErr := store.GetSession(t.Context(), session.ID)
+	if getErr != nil || stored.ProgressSignature == "" || stored.ProgressCount != 2 {
+		t.Fatalf("stored progress = %+v, %v", stored, getErr)
+	}
+
+	worker.observation.Title = "All postings"
+	changed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || changed.PageStateHash == pageStateHash {
+		t.Fatalf("changed observation = %+v, %v", changed, err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_search_changed_scope",
+		SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: changed.SnapshotID, SnapshotGeneration: changed.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, changed.Snapshot)},
+	})
+	if err != nil || !prepared.RequiresApproval {
+		t.Fatalf("changed-page preparation = %+v, %v", prepared, err)
 	}
 }
 

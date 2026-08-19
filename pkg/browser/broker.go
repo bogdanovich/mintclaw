@@ -277,7 +277,11 @@ func (broker *Broker) RecoverAcceptedDownload(
 	if completeErr != nil {
 		return recovered, completeErr
 	}
-	return recovered, broker.invalidateSnapshotLocked(ctx, prepared.SessionID)
+	progressSignature := ""
+	if actionRequiresApproval(prepared.Effect) {
+		progressSignature = prepared.ProgressSignature
+	}
+	return recovered, broker.invalidateSnapshotLocked(ctx, prepared.SessionID, progressSignature)
 }
 
 // WorkerOpenResult transfers exactly one lifecycle owner to the broker. Owner
@@ -1539,6 +1543,7 @@ func clearSessionSnapshot(session *Session) {
 	}
 	session.SnapshotID = ""
 	session.SnapshotOrigin = ""
+	session.PageStateHash = ""
 }
 
 func (broker *Broker) cleanupSlot(ctx context.Context, slot *workerSlot) error {

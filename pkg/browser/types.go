@@ -39,6 +39,7 @@ var (
 	ErrInvalid              = errors.New("invalid browser state")
 	ErrNotFound             = errors.New("browser state not found")
 	ErrApprovalRequired     = errors.New("browser action requires approval")
+	ErrNoProgress           = errors.New("browser action is not making progress")
 	ErrSnapshotInvalidation = errors.New("browser snapshot invalidation failed")
 	ErrStale                = errors.New("browser state revision is stale")
 	ErrWorkerUnavailable    = errors.New("browser worker is unavailable")
@@ -514,6 +515,9 @@ type Session struct {
 	SnapshotID           string          `json:"snapshot_id,omitempty"`
 	SnapshotGeneration   uint64          `json:"snapshot_generation"`
 	SnapshotOrigin       string          `json:"snapshot_origin,omitempty"`
+	PageStateHash        string          `json:"page_state_hash,omitempty"`
+	ProgressSignature    string          `json:"progress_signature,omitempty"`
+	ProgressCount        uint32          `json:"progress_count,omitempty"`
 	Revision             uint64          `json:"revision"`
 	CreatedAt            int64           `json:"created_at"`
 	UpdatedAt            int64           `json:"updated_at"`
@@ -545,6 +549,9 @@ func (session Session) Validate() error {
 	if (session.SnapshotID == "") != (session.SnapshotOrigin == "") ||
 		(session.SnapshotID != "" &&
 			(!validIdentifier(session.SnapshotID) || session.SnapshotGeneration == 0)) ||
+		(session.PageStateHash != "" && (session.SnapshotID == "" || !validDigest(session.PageStateHash))) ||
+		(session.ProgressSignature == "") != (session.ProgressCount == 0) ||
+		(session.ProgressSignature != "" && !validDigest(session.ProgressSignature)) ||
 		len(session.SnapshotOrigin) > MaxURLBytes {
 		return fmt.Errorf("%w: malformed session snapshot", ErrInvalid)
 	}
@@ -637,6 +644,7 @@ type PreparedAction struct {
 	PolicyRevision         string `json:"policy_revision"`
 	CatalogRevision        string `json:"catalog_revision"`
 	ActionHash             string `json:"action_hash"`
+	ProgressSignature      string `json:"progress_signature,omitempty"`
 	CreatedAt              int64  `json:"created_at"`
 	ExpiresAt              int64  `json:"expires_at"`
 }
@@ -653,7 +661,9 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		len(prepared.DestinationElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
-		!validDigest(prepared.ActionHash) || prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
+		!validDigest(prepared.ActionHash) ||
+		(prepared.ProgressSignature != "" && !validDigest(prepared.ProgressSignature)) ||
+		prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}

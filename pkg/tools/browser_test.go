@@ -996,6 +996,15 @@ func TestBrowserActionToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
 	}
 }
 
+func TestBrowserActionNoProgressErrorRequiresScopeReplanning(t *testing.T) {
+	result := browserActionToolError(browser.ErrNoProgress)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"no_progress"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"replan_collection_scope"`) {
+		t.Fatalf("no-progress browser result = %#v", result)
+	}
+}
+
 func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
 	result := browserToolError(browser.ErrStale)
 	if result == nil || !result.IsError ||
