@@ -1053,6 +1053,7 @@ func (tool *BrowserObserveTool) screenshotResult(
 		Ref: artifact.Ref, MediaRef: artifact.MediaRef, Recovery: &deliveryRecovery,
 	}
 	recovery := artifact.Recovery
+	result.Media = []string{artifact.MediaRef}
 	return result.WithOutboundDelivery(toolshared.OutboundDelivery{
 		Media: []bus.MediaPart{{
 			Type: "image", Ref: artifact.MediaRef, Filename: artifact.Filename,
@@ -1197,6 +1198,7 @@ func (tool *BrowserCaptureTool) result(
 		Owner: owner, RequestID: requestID, SessionID: artifact.SessionID,
 		Ref: artifact.Ref, MediaRef: artifact.MediaRef, Recovery: recovery,
 	}
+	result.Media = []string{artifact.MediaRef}
 	return result.WithOutboundDelivery(toolshared.OutboundDelivery{
 		Media: []bus.MediaPart{
 			{Type: "image", Ref: artifact.MediaRef, Filename: artifact.Filename, ContentType: artifact.ContentType},

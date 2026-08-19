@@ -844,7 +844,7 @@ func turnIntroducedMedia(ts *turnState) bool {
 	if len(ts.media) > 0 {
 		return true
 	}
-	return hasMediaRefs(ts.persistedMessagesSnapshot())
+	return hasMediaRefs(ts.liveTurnMessagesSnapshot())
 }
 
 func (p *Pipeline) applyBeforeLLMModelRewrite(

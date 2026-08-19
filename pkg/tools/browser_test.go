@@ -1419,7 +1419,8 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 	}
 	if observation.Artifact == nil || observation.Artifact.Ref != "transfer-artifact://opaque" ||
 		observation.Artifact.SnapshotID != "snapshot_1" ||
-		observation.Artifact.MediaRef != "" || len(result.Media) != 0 || result.Outbound == nil ||
+		observation.Artifact.MediaRef != "" || !slices.Equal(result.Media, []string{"media://opaque"}) ||
+		result.Outbound == nil ||
 		len(result.Outbound.Media) != 1 || result.Outbound.Media[0].Ref != "media://opaque" ||
 		result.Outbound.Recovery == nil || result.Outbound.Recovery.ArtifactRef != "transfer-artifact://opaque" ||
 		!result.ImmediateDelivery || result.CommitOutbound == nil ||
@@ -1451,6 +1452,7 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 	)
 	var replay browserObservationView
 	if duplicate.IsError || duplicate.Outbound == nil || duplicate.CommitOutbound == nil ||
+		!slices.Equal(duplicate.Media, []string{"media://opaque"}) ||
 		source.observeCalls != 0 || source.contextObserveCalls != 1 ||
 		json.Unmarshal([]byte(duplicate.ForLLM), &replay) != nil ||
 		!replay.Replayed || replay.Artifact == nil || replay.Artifact.Ref != observation.Artifact.Ref ||
@@ -1489,7 +1491,8 @@ func TestBrowserCaptureUsesExactFreshElementAuthorityAndReturnsArtifactOnly(t *t
 	var view browserCaptureView
 	if result == nil || result.IsError || json.Unmarshal([]byte(result.ForLLM), &view) != nil ||
 		view.Artifact.Ref != source.screenshot.Ref || strings.Contains(result.ForLLM, `"snapshot":`) ||
-		result.Outbound == nil || len(result.Outbound.Media) != 1 || !result.ImmediateDelivery {
+		result.Outbound == nil || len(result.Outbound.Media) != 1 ||
+		!slices.Equal(result.Media, []string{"media://element"}) || !result.ImmediateDelivery {
 		t.Fatalf("browser capture result = %#v; view = %#v", result, view)
 	}
 	request := source.screenshotRequest

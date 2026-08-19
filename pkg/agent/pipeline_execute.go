@@ -512,10 +512,12 @@ func (runner *toolLoopRunner) admitToolCall(
 					})
 				}
 				var toolResultMedia []string
-				if len(hookResult.Media) > 0 && !hookResult.ResponseHandled && !hookResult.ImmediateDelivery {
-					recordCompletionMedia(exec, p.Context.MediaResolver, hookResult.Media)
-					hookResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, hookResult.Media)
+				if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
+					if !hookResult.ImmediateDelivery {
+						recordCompletionMedia(exec, p.Context.MediaResolver, hookResult.Media)
+						hookResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, hookResult.Media)
+					}
 				}
 				contentForLLM := p.filterToolContentForLLM(hookResult.ContentForLLM())
 				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
@@ -535,6 +537,9 @@ func (runner *toolLoopRunner) admitToolCall(
 				durableContent := durableToolResultContent(contentForLLM, protectedResult)
 				durableToolResultMsg := toolResultMsg
 				durableToolResultMsg.Content = durableContent
+				if protectedResult {
+					durableToolResultMsg.Media = nil
+				}
 				aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 				if err != nil {
 					return stopToolBatch(ToolLoopOutcome{})
@@ -1247,6 +1252,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	durableContent := durableToolResultContent(contentForLLM, protectedResult)
 	durableToolResultMsg := toolResultMsg
 	durableToolResultMsg.Content = durableContent
+	if protectedResult {
+		durableToolResultMsg.Media = nil
+	}
 	aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 	if err != nil {
 		return stopToolBatch(ToolLoopOutcome{})
@@ -1604,6 +1612,9 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	)
 	durableMsg := msg
 	durableMsg.Content = durableToolResultContent(msg.Content, protectedResult)
+	if protectedResult {
+		durableMsg.Media = nil
+	}
 	return r.appendToolMessageWithDurableContext(
 		ctx,
 		msg,

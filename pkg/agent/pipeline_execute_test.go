@@ -141,6 +141,12 @@ type fixedToolResultTool struct {
 	executions int
 }
 
+type protectedFixedToolResultTool struct {
+	*fixedToolResultTool
+}
+
+func (*protectedFixedToolResultTool) ProtectedDurableResult(map[string]any) bool { return true }
+
 type boundApprovalSuspensionTool struct {
 	executions       int
 	preparationCalls int
@@ -667,7 +673,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 	}
 }
 
-func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
+func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHistory(t *testing.T) {
 	const (
 		mediaRef = "media://private-browser-screenshot"
 		hostPath = "/private/workspace/state/media/browser-screenshot.png"
@@ -691,7 +697,10 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 			return nil
 		}).
 		WithImmediateDelivery()
-	tool := &fixedToolResultTool{name: "browser_observe", result: result}
+	result.Media = []string{mediaRef}
+	tool := &protectedFixedToolResultTool{fixedToolResultTool: &fixedToolResultTool{
+		name: "browser_observe", result: result,
+	}}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
 	agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: store}
@@ -723,7 +732,7 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 		journaled := store.GetHistory(ts.sessionKey)
 		if commitCalls != 0 || got.Outbound == nil || got.Outbound.Recovery == nil ||
 			len(got.Outbound.Media) != 1 ||
-			got.Outbound.Media[0].Ref != mediaRef || len(got.Media) != 0 ||
+			got.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
 			len(got.ArtifactTags) != 0 || len(journaled) != 2 || journaled[1].Role != "tool" {
 			t.Fatalf(
 				"delivery result = %#v; commit calls = %d; journaled = %#v",
@@ -741,12 +750,76 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 	history := store.GetHistory(ts.sessionKey)
 	if deliveryCalls != 1 || commitCalls != 1 || len(history) != 2 ||
 		history[1].Role != "tool" || len(history[1].Media) != 0 ||
+		len(exec.messages) != 2 || !slices.Equal(exec.messages[1].Media, []string{mediaRef}) ||
 		strings.Contains(history[1].Content, mediaRef) || strings.Contains(history[1].Content, hostPath) ||
 		strings.Contains(history[1].Content, "private_workspace") {
 		t.Fatalf(
 			"delivery calls = %d, commit calls = %d, history = %#v",
 			deliveryCalls, commitCalls, history,
 		)
+	}
+}
+
+func TestPipelineProtectedImmediateArtifactVisionErrorDoesNotRetryWithoutCurrentMedia(t *testing.T) {
+	for _, hook := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hook_%t", hook), func(t *testing.T) {
+			const mediaRef = "media://private-browser-screenshot"
+			store := session.NewSessionManager("")
+			result := (&toolshared.ToolResult{
+				ForLLM: `{"artifact":{"ref":"transfer-artifact://opaque"}}`,
+				Media:  []string{mediaRef},
+			}).WithImmediateDelivery()
+			tool := &protectedFixedToolResultTool{fixedToolResultTool: &fixedToolResultTool{
+				name: "browser_observe", result: result,
+			}}
+			registry := tools.NewToolRegistry()
+			registry.Register(tool)
+			agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: store}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-browser-screenshot",
+				sessionKey: "session-browser-screenshot",
+				opts: processOptions{
+					SuppressToolUserDelivery: true,
+					Dispatch:                 DispatchRequest{SessionKey: "session-browser-screenshot"},
+				},
+			}
+			toolCall := providers.ToolCall{ID: "call-browser", Name: tool.Name(), Arguments: map[string]any{}}
+			intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
+				t.Fatal(err)
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+			llm.assistantToolCallsPersisted = true
+			pipeline := &Pipeline{}
+			if hook {
+				pipeline.Interaction.Hooks = &toolResultRespondHook{result: result}
+			}
+
+			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+			if outcome.JournalErr != nil {
+				t.Fatalf("ExecuteTools() journal error = %v", outcome.JournalErr)
+			}
+			history := store.GetHistory(ts.sessionKey)
+			if len(history) != 2 || len(history[1].Media) != 0 ||
+				len(exec.messages) != 2 || !slices.Equal(exec.messages[1].Media, []string{mediaRef}) {
+				t.Fatalf("durable history = %#v; live messages = %#v", history, exec.messages)
+			}
+
+			provider := &visionUnsupportedMediaProvider{}
+			exec.model.activeProvider = provider
+			visionLLM := newLLMIterationState(2)
+			visionLLM.llmModel = provider.GetDefaultModel()
+			visionLLM.callMessages = append([]providers.Message(nil), exec.messages...)
+			_, err := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, visionLLM)
+			if err == nil || !isVisionUnsupportedError(err) {
+				t.Fatalf("invokeLLMWithRetry() error = %v, want vision unsupported", err)
+			}
+			if provider.calls != 1 || !slices.Equal(provider.mediaSeen, []bool{true}) {
+				t.Fatalf("provider calls = %d, media = %v, want one media call", provider.calls, provider.mediaSeen)
+			}
+		})
 	}
 }
 
