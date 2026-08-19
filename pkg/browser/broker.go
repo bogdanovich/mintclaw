@@ -317,6 +317,7 @@ type InvocationExecutor func(context.Context) (json.RawMessage, error)
 type workerSlot struct {
 	worker          Worker
 	refs            map[string]DriverElement
+	refPositions    map[string]uint32
 	inputs          map[string]string
 	uploads         map[string]UploadBinding
 	navigationID    string
@@ -787,7 +788,7 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 	if pending, err = broker.updateSessionExact(ctx, session.Revision, pending); err != nil {
 		return Session{}, err
 	}
-	slot.refs, slot.inputs, slot.uploads = nil, nil, nil
+	slot.refs, slot.refPositions, slot.inputs, slot.uploads = nil, nil, nil, nil
 	if err = worker.BeginHumanControl(ctx); err != nil {
 		failed, finishErr := broker.finishSessionLocked(
 			context.WithoutCancel(ctx), pending, SessionLost, "handoff_failed",

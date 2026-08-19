@@ -234,10 +234,12 @@ func (broker *Broker) persistDriverObservationLocked(
 		return Observation{}, fmt.Errorf("generate browser snapshot ID: %w", err)
 	}
 	refs := make(map[string]DriverElement, len(driverObservation.Elements))
+	refPositions := make(map[string]uint32, len(driverObservation.Elements))
 	visibleSnapshot := driverObservation.Snapshot
-	for _, element := range driverObservation.Elements {
+	for index, element := range driverObservation.Elements {
 		ref := stableElementRef(snapshotID, element.Target)
 		refs[ref] = element
+		refPositions[ref] = uint32(index + 1)
 		visibleSnapshot = strings.ReplaceAll(visibleSnapshot, "[ref="+element.Target+"]", "[ref="+ref+"]")
 	}
 	now := broker.now().UTC().UnixNano()
@@ -260,6 +262,7 @@ func (broker *Broker) persistDriverObservationLocked(
 		return Observation{}, ErrWorkerUnavailable
 	}
 	slot.refs = refs
+	slot.refPositions = refPositions
 	slot.inputs = nil
 	slot.uploads = nil
 	slot.navigationID = ""
@@ -690,6 +693,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 		if !ok {
 			return PreparedAction{}, ErrStale
 		}
+		position, positionOK := slot.refPositions[request.Action.Ref]
+		if !positionOK || position == 0 {
+			return PreparedAction{}, ErrStale
+		}
 		resolved, origin, resolveErr := worker.Resolve(ctx, element.Target)
 		if resolveErr != nil {
 			return PreparedAction{}, resolveErr
@@ -700,6 +707,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		element = resolved
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
+		prepared.ElementPosition = position
 		switch request.Action.Kind {
 		case ActionCheck, ActionUncheck:
 			if !checkableElementRole(request.Action.Kind, element.Role) {
@@ -738,7 +746,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 	case ActionDrag:
 		source, sourceOK := slot.refs[request.Action.SourceRef]
 		destination, destinationOK := slot.refs[request.Action.DestinationRef]
-		if !sourceOK || !destinationOK || source.Target == destination.Target {
+		sourcePosition, sourcePositionOK := slot.refPositions[request.Action.SourceRef]
+		destinationPosition, destinationPositionOK := slot.refPositions[request.Action.DestinationRef]
+		if !sourceOK || !destinationOK || !sourcePositionOK || !destinationPositionOK ||
+			sourcePosition == 0 || destinationPosition == 0 || source.Target == destination.Target {
 			return PreparedAction{}, ErrStale
 		}
 		resolvedSource, resolvedDestination, origin, navigationID, validationDelegated, resolveErr := resolveDragBindings(
@@ -758,8 +769,10 @@ func (broker *Broker) resolvePreparedActionLocked(
 		}
 		prepared.ElementRole = resolvedSource.Role
 		prepared.ElementName = resolvedSource.Name
+		prepared.ElementPosition = sourcePosition
 		prepared.DestinationElementRole = resolvedDestination.Role
 		prepared.DestinationElementName = resolvedDestination.Name
+		prepared.DestinationElementPosition = destinationPosition
 		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
 		observation, observeErr := worker.Observe(ctx)
@@ -1022,6 +1035,7 @@ func (broker *Broker) invalidateSnapshotLocked(
 		// Live references become invalid at dispatch and must never depend on a
 		// later durable write succeeding.
 		slot.refs = nil
+		slot.refPositions = nil
 		slot.inputs = nil
 		slot.uploads = nil
 		slot.navigationID = ""
@@ -1594,14 +1608,19 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 		ArtifactSHA256      string
 		ElementRole         string
 		ElementName         string
+		ElementPosition     uint32
 		DestinationRole     string
 		DestinationName     string
+		DestinationPosition uint32
 		DialogMessageDigest string
 	}{
 		PageStateHash: pageStateHash, Action: action, InputDigest: prepared.InputDigest,
 		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
-		ElementName: prepared.ElementName, DestinationRole: prepared.DestinationElementRole,
-		DestinationName: prepared.DestinationElementName, DialogMessageDigest: prepared.DialogMessageDigest,
+		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
+		DestinationRole:     prepared.DestinationElementRole,
+		DestinationName:     prepared.DestinationElementName,
+		DestinationPosition: prepared.DestinationElementPosition,
+		DialogMessageDigest: prepared.DialogMessageDigest,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

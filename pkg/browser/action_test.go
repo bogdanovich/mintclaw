@@ -420,6 +420,81 @@ func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) 
 	}
 }
 
+func TestBrokerDistinguishesSameLabeledControlsByStructuralPosition(t *testing.T) {
+	store := NewMemoryStore()
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+	controls := []DriverElement{
+		{Target: "open_first", Role: "button", Name: "Open"},
+		{Target: "open_second", Role: "button", Name: "Open"},
+		{Target: "open_third", Role: "button", Name: "Open"},
+	}
+	worker.observation = driverObservationFixture(controls...)
+	worker.resolveElements = map[string]DriverElement{
+		controls[0].Target: controls[0],
+		controls[1].Target: controls[1],
+		controls[2].Target: controls[2],
+	}
+	worker.resolveOrigin = worker.observation.Origin
+
+	for index := range controls {
+		observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs := visibleRefs(t, observed.Snapshot)
+		prepared, prepareErr := broker.PrepareAction(t.Context(), PrepareActionRequest{
+			Owner: owner, RequestID: fmt.Sprintf("request_open_%d", index+1),
+			SessionID: session.ID, TabID: session.TabID,
+			SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+			Action: Action{Kind: ActionClick, Ref: refs[index]},
+		})
+		if prepareErr != nil || !prepared.RequiresApproval {
+			t.Fatalf("PrepareAction(control %d) = %+v, %v", index+1, prepared, prepareErr)
+		}
+		stored, getErr := store.GetPreparedAction(t.Context(), prepared.Action.ID)
+		if getErr != nil || stored.ElementPosition != uint32(index+1) {
+			t.Fatalf("stored control %d = %+v, %v", index+1, stored, getErr)
+		}
+		invocation, executeErr := broker.ExecuteAction(
+			t.Context(), owner, prepared.Action.ID, &prepared.Approval,
+		)
+		if executeErr != nil || invocation.State != InvocationSucceeded {
+			t.Fatalf("ExecuteAction(control %d) = %+v, %v", index+1, invocation, executeErr)
+		}
+	}
+	if len(worker.actions) != len(controls) {
+		t.Fatalf("actions = %+v, want all distinct controls executed", worker.actions)
+	}
+}
+
+func TestBrowserActionProgressSignatureDistinguishesDragEndpointPositions(t *testing.T) {
+	prepared := PreparedAction{
+		Action: Action{Kind: ActionDrag}, ElementRole: "listitem", ElementName: "Item",
+		ElementPosition: 1, DestinationElementRole: "listitem", DestinationElementName: "Item",
+		DestinationElementPosition: 2,
+	}
+	first, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.DestinationElementPosition = 3
+	second, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("drag signatures conflate distinct destination positions: %q", first)
+	}
+}
+
 func TestBrokerObservationWorkerLossQuarantinesSessionAndReleasesProfile(t *testing.T) {
 	store := NewMemoryStore()
 	broker, worker, session := openActionTestBroker(t, store)
