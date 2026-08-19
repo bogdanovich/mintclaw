@@ -141,6 +141,12 @@ type fixedToolResultTool struct {
 	executions int
 }
 
+type protectedFixedToolResultTool struct {
+	*fixedToolResultTool
+}
+
+func (*protectedFixedToolResultTool) ProtectedDurableResult(map[string]any) bool { return true }
+
 type boundApprovalSuspensionTool struct {
 	executions       int
 	preparationCalls int
@@ -667,7 +673,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 	}
 }
 
-func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
+func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHistory(t *testing.T) {
 	const (
 		mediaRef = "media://private-browser-screenshot"
 		hostPath = "/private/workspace/state/media/browser-screenshot.png"
@@ -691,7 +697,10 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 			return nil
 		}).
 		WithImmediateDelivery()
-	tool := &fixedToolResultTool{name: "browser_observe", result: result}
+	result.Media = []string{mediaRef}
+	tool := &protectedFixedToolResultTool{fixedToolResultTool: &fixedToolResultTool{
+		name: "browser_observe", result: result,
+	}}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
 	agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: store}
@@ -723,7 +732,7 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 		journaled := store.GetHistory(ts.sessionKey)
 		if commitCalls != 0 || got.Outbound == nil || got.Outbound.Recovery == nil ||
 			len(got.Outbound.Media) != 1 ||
-			got.Outbound.Media[0].Ref != mediaRef || len(got.Media) != 0 ||
+			got.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
 			len(got.ArtifactTags) != 0 || len(journaled) != 2 || journaled[1].Role != "tool" {
 			t.Fatalf(
 				"delivery result = %#v; commit calls = %d; journaled = %#v",
@@ -741,6 +750,7 @@ func TestPipelineDeliveryOnlyArtifactStaysOutOfProviderHistory(t *testing.T) {
 	history := store.GetHistory(ts.sessionKey)
 	if deliveryCalls != 1 || commitCalls != 1 || len(history) != 2 ||
 		history[1].Role != "tool" || len(history[1].Media) != 0 ||
+		len(exec.messages) != 2 || !slices.Equal(exec.messages[1].Media, []string{mediaRef}) ||
 		strings.Contains(history[1].Content, mediaRef) || strings.Contains(history[1].Content, hostPath) ||
 		strings.Contains(history[1].Content, "private_workspace") {
 		t.Fatalf(
