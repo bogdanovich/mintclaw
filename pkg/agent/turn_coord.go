@@ -38,9 +38,6 @@ func (al *AgentLoop) runTurn(
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
 	defer ts.Finish(false)
-	if ts.opts.OnTurnReady != nil {
-		ts.opts.OnTurnReady()
-	}
 
 	if al.takePendingStop(ts.runtimeSessionScope()) {
 		_ = ts.requestHardAbort()
@@ -149,6 +146,9 @@ func (al *AgentLoop) runTurn(
 			Workspace:   ts.workspace,
 		},
 	)
+	if ts.opts.OnTurnReady != nil {
+		ts.opts.OnTurnReady()
+	}
 
 	result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts, host)
 	return result, err
