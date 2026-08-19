@@ -951,7 +951,7 @@ func (c *ToolFeedbackCoordinator) findEntry(key string) *toolFeedbackEntry {
 func (c *ToolFeedbackCoordinator) retireIdleEntryLocked(key string, entry *toolFeedbackEntry) {
 	entry.mu.Lock()
 	if entry.terminal || entry.sending || entry.current.messageID != "" ||
-		len(entry.pendingCleanup) != 0 {
+		len(entry.pendingCleanup) != 0 || len(entry.generationClaims) != 0 {
 		entry.mu.Unlock()
 		return
 	}

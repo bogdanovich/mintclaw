@@ -1065,6 +1065,49 @@ func TestToolFeedbackCoordinator_RetainedTerminalSettlesAfterFreshGenerationRoll
 	}
 }
 
+func TestToolFeedbackCoordinator_FailedFreshProgressKeepsPendingTerminalSettlement(t *testing.T) {
+	coordinator := newTestToolFeedbackCoordinator(false)
+	defer coordinator.StopAll()
+	operations := toolFeedbackOperations{
+		edit:   func(context.Context, string, string, string) error { return nil },
+		delete: func(context.Context, string, string) error { return nil },
+	}
+	sends := 0
+	send := func(context.Context, string) (toolFeedbackSendResult, error) {
+		sends++
+		return toolFeedbackSendResult{}, ErrTemporary
+	}
+	const key = "telegram:session-1"
+	finalA := coordinator.beginTerminal(key, true, []string{"generation-a"})
+	if finalA == nil {
+		t.Fatal("final A was not created")
+	}
+	if ids, err := coordinator.deliver(
+		t.Context(), key, "generation-c", "chat-1", "working C", operations, send,
+	); !errors.Is(err, ErrTemporary) || len(ids) != 0 || sends != 1 {
+		t.Fatalf("failed fresh C = (%v, %v), sends %d", ids, err, sends)
+	}
+	entry := coordinator.findEntry(key)
+	if entry == nil {
+		t.Fatal("pending settlement entry was removed after failed send")
+	}
+	entry.mu.Lock()
+	retired := entry.retired
+	pendingClaims := len(entry.generationClaims)
+	entry.mu.Unlock()
+	if retired || pendingClaims != 1 {
+		t.Fatalf("pending settlement state = retired:%t claims:%d", retired, pendingClaims)
+	}
+
+	coordinator.CompleteTerminal(t.Context(), finalA, true)
+	ids, err := coordinator.deliver(
+		t.Context(), key, "generation-a", "chat-1", "delayed A", operations, send,
+	)
+	if err != nil || len(ids) != 0 || sends != 1 {
+		t.Fatalf("delayed completed A = (%v, %v), sends %d, want suppressed", ids, err, sends)
+	}
+}
+
 func TestToolFeedbackCoordinator_OverlappingRetainedFinalsSettleOnlyOwnedGenerations(t *testing.T) {
 	for _, successfulFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("successful_first_%t", successfulFirst), func(t *testing.T) {
