@@ -10,6 +10,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // SetupTurn extracts the one-time initialization phase, returning a
@@ -190,6 +191,14 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		summary,
 		messages,
 	)
+	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
+		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
+		recoveryHistory := history
+		if ts.agent != nil && ts.agent.Sessions != nil {
+			recoveryHistory = ts.agent.Sessions.GetHistory(ts.sessionKey)
+		}
+		exec.deliverable = openToolRoundDeliverable(recoveryHistory)
+	}
 	exec.model.selectedCandidates = selection.selectedCandidates
 	exec.model.activeCandidates = selection.activeCandidates
 	exec.model.activeModel = selection.model
@@ -251,6 +260,26 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 
 	return exec, nil
+}
+
+func openToolRoundDeliverable(history []providers.Message) *taskresult.Deliverable {
+	index := len(history) - 1
+	for index >= 0 && history[index].Role == "tool" {
+		index--
+	}
+	if index < 0 || index == len(history)-1 || history[index].Role != "assistant" ||
+		len(history[index].ToolCalls) == 0 {
+		return nil
+	}
+
+	var deliverable *taskresult.Deliverable
+	for _, message := range history[index+1:] {
+		if message.Role != "tool" {
+			return nil
+		}
+		deliverable = mergeDeliverables(deliverable, message.Deliverable)
+	}
+	return deliverable
 }
 
 func effectiveHistoryBudget(contextWindow, maxTokens, reserveTokens int) int {

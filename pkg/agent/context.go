@@ -1310,8 +1310,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 
 	sanitized := make([]providers.Message, 0, len(history))
 	for _, msg := range history {
-		msg.ToolExecutions = nil
-		msg.Deliverable = nil
+		msg = stripCanonicalMessageState(msg)
 		switch msg.Role {
 		case "system":
 			// Drop system messages from history. BuildMessages always
@@ -1489,6 +1488,23 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	}
 
 	return final
+}
+
+func stripCanonicalMessageState(message providers.Message) providers.Message {
+	message.ToolExecutions = nil
+	message.Deliverable = nil
+	return message
+}
+
+func stripCanonicalMessageStateFromAll(messages []providers.Message) []providers.Message {
+	if messages == nil {
+		return nil
+	}
+	stripped := make([]providers.Message, len(messages))
+	for index, message := range messages {
+		stripped[index] = stripCanonicalMessageState(message)
+	}
+	return stripped
 }
 
 func (cb *ContextBuilder) AddToolResult(

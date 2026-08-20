@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -34,6 +35,43 @@ type protectedLoopGuardTool struct {
 }
 
 type protectedResultProjectionTool struct{}
+
+func TestToolResultJournalPreservesDeliverableForOpenRoundRecovery(t *testing.T) {
+	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
+		Text:      "tool-owned result",
+		Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/result.txt", Kind: "file"}},
+		Metadata:  map[string]string{"producer": "tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "report-1",
+		},
+	})
+	message := buildToolResultJournalMessage(
+		&Pipeline{}, &turnState{}, "call-1", "test_tool", result, result.ForLLM,
+	)
+	result.Deliverable.Metadata["producer"] = "mutated"
+	if message.Deliverable == nil || message.Deliverable.Text != "tool-owned result" ||
+		message.Deliverable.Metadata["producer"] != "tool" ||
+		message.Deliverable.Report == nil || message.Deliverable.Report.ReportID != "report-1" {
+		t.Fatalf("journal message lost detached deliverable: %#v", message)
+	}
+
+	history := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1"}}},
+		message,
+	}
+	recovered := openToolRoundDeliverable(history)
+	message.Deliverable.Metadata["producer"] = "journal mutated"
+	if recovered == nil || recovered.Text != "tool-owned result" || len(recovered.Artifacts) != 1 ||
+		recovered.Artifacts[0].Ref != "file:/tmp/result.txt" || recovered.Metadata["producer"] != "tool" ||
+		recovered.Report == nil || recovered.Report.ReportID != "report-1" {
+		t.Fatalf("open tool round lost deliverable: %#v", recovered)
+	}
+	closed := append(history, providers.Message{Role: "assistant", Content: "final"})
+	if deliverable := openToolRoundDeliverable(closed); deliverable != nil {
+		t.Fatalf("closed tool round recovered stale deliverable: %#v", deliverable)
+	}
+}
 
 type protectedResultRegistrySwapHook struct {
 	agent *AgentInstance

@@ -299,7 +299,7 @@ func sliceHistoryPage(
 	}
 	start := max(0, end-request.Limit)
 	return memory.HistoryPage{
-		Messages: append([]providers.Message(nil), history[start:end]...),
+		Messages: cloneSessionMessages(history[start:end]),
 		Revision: revision,
 		Cursor:   cursor,
 		Start:    start,

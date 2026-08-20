@@ -963,6 +963,9 @@ func toolResultMediaRefs(result *toolshared.ToolResult) []string {
 	}
 	if result.Deliverable != nil {
 		for _, item := range result.Deliverable.Artifacts {
+			if item.Delivered {
+				continue
+			}
 			if strings.HasPrefix(strings.TrimSpace(item.Ref), "media://") {
 				appendRef(item.Ref)
 			}

@@ -895,6 +895,9 @@ func durableTaskSessionKey(ownerWorkspace, taskID string) string {
 func mediaArtifactRefs(items []taskresult.Artifact) []string {
 	refs := make([]string, 0, len(items))
 	for _, item := range items {
+		if item.Delivered {
+			continue
+		}
 		ref := strings.TrimSpace(item.Ref)
 		if strings.HasPrefix(ref, "media://") {
 			refs = append(refs, ref)

@@ -6906,7 +6906,7 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
 		t.Fatal(ensureErr)
 	}
-	record, err = registry.MarkResuming(record.ID, record.Revision)
+	_, err = registry.MarkResuming(record.ID, record.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6950,6 +6950,97 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for replayed final")
+	}
+}
+
+func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *testing.T) {
+	provider := &interactionCaptureProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	const (
+		sessionKey    = "session-recover-open-tool-round"
+		taskID        = "recover-open-tool-round-task"
+		interactionID = "recover-open-tool-round-interaction"
+	)
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
+	})
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = sessionKey
+	request.Origin.TaskID = taskID
+	request.Origin.ContinuationSessionKey = sessionKey
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "recover open tool round", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
+		InteractionID:  interactionID,
+		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		ID:   interactionID,
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
+	}, interactions.OutcomeAnswered)
+	if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
+		t.Fatal(ensureErr)
+	}
+	_, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-produced-result"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-produced-result", Content: "structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned recovered result",
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/recovered.txt", Kind: "file"}},
+			Metadata:  map[string]string{"producer": "recovered-tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "recovered-report",
+			},
+		},
+	})
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+	}
+	for _, message := range provider.messages {
+		if message.Deliverable != nil {
+			t.Fatalf("provider received canonical deliverable: %#v", message)
+		}
+	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 1 ||
+		task.Deliverable.Artifacts[0].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
+		t.Fatalf("open-round recovery lost canonical deliverable: task=%#v deliverable=%+v", task, task.Deliverable)
+	}
+	select {
+	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+		if outbound.Content != "continued with corrected navigation" {
+			t.Fatalf("outbound = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered completion")
 	}
 }
 
