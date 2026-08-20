@@ -99,6 +99,26 @@ func TestSettleFinalHandledDeliveryWaitErrorRemainsPending(t *testing.T) {
 	}
 }
 
+func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
+	commitErr := errors.New("commit durable admission")
+	result := (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+		toolshared.DeliveryFinalHandled,
+	)
+
+	err := classifyFinalHandledPublicationError(
+		outboundPublication{published: true},
+		result,
+		commitErr,
+	)
+	if !errors.Is(err, errFinalHandledDeliveryPending) || !errors.Is(err, commitErr) {
+		t.Fatalf("classification error = %v, want pending and commit causes", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "state is uncertain") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
+	}
+}
+
 func testOutboundReceipt(t *testing.T) (outboundPublication, *outbox.Coordinator, string) {
 	t.Helper()
 	coordinator, err := outbox.OpenCoordinator(t.TempDir())

@@ -67,6 +67,10 @@ const (
 
 var errFinalHandledDeliveryPending = errors.New("final-handled delivery confirmation is still pending")
 
+func isNonPublishableTurnError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, errFinalHandledDeliveryPending)
+}
+
 func (al *AgentLoop) maybePublishErrorWithScopes(
 	ctx context.Context,
 	workspace, agentID string,
@@ -75,7 +79,7 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 	policy finalResponseDeliveryPolicy,
 	traceScopes []runtimeevents.TraceScope,
 ) finalResponseAdmission {
-	if errors.Is(err, context.Canceled) {
+	if isNonPublishableTurnError(err) {
 		return rejectedFinalResponseAdmission(err)
 	}
 	return al.publishResponseWithContextAndScopes(
@@ -679,7 +683,8 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				},
 			)
 			if err != nil {
-				return nil, toolResultDeliveryNone, err
+				return nil, toolResultDeliveryNone,
+					classifyFinalHandledPublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 			if isFinalHandledDelivery(result) && receiptsSupported {
@@ -735,7 +740,8 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			},
 		)
 		if err != nil {
-			return nil, toolResultDeliveryNone, err
+			return nil, toolResultDeliveryNone,
+				classifyFinalHandledPublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 		if isFinalHandledDelivery(result) && receiptsSupported {
@@ -755,6 +761,20 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		return nil, toolResultDeliveryQueued, nil
 	}
 	return nil, toolResultDeliveryNone, nil
+}
+
+func classifyFinalHandledPublicationError(
+	receipt outboundPublication,
+	result *toolshared.ToolResult,
+	err error,
+) error {
+	if err == nil || !receipt.published || !isFinalHandledDelivery(result) {
+		return err
+	}
+	result.ResponseHandled = false
+	result.ForLLM = "Message publication was accepted, but durable delivery state is uncertain. " +
+		"Do not claim delivery or retry the outbound side effect."
+	return fmt.Errorf("%w: published before durable commit failed: %w", errFinalHandledDeliveryPending, err)
 }
 
 func supportsDurableDeliveryReceipts(manager agentinterfaces.ChannelManager) bool {

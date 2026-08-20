@@ -98,6 +98,53 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T)
 	}
 }
 
+func TestRunTurnAndDrainSteeringPendingDeliveryPublishesNothingAndDoesNotDrain(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	initial := bus.InboundMessage{
+		Context:    bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
+		SessionKey: "session-pending-delivery",
+	}
+	target := &continuationTarget{
+		SessionKey: initial.SessionKey,
+		Channel:    initial.Channel,
+		ChatID:     initial.ChatID,
+		AgentID:    agent.ID,
+		Workspace:  agent.Workspace,
+	}
+	scope := newRuntimeSessionScope(target.Workspace, target.SessionKey)
+	if err := al.steering.pushScopeWithSender(
+		scope,
+		providers.Message{Role: "user", Content: "queued steering"},
+		"user-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	pendingErr := fmt.Errorf("%w: coordinator closed", errFinalHandledDeliveryPending)
+
+	admission := al.runTurnAndDrainSteering(
+		t.Context(),
+		initial,
+		func() (string, error) { return "", pendingErr },
+		target,
+	)
+	if admission.permitsInboundAck() || !errors.Is(admission.err, errFinalHandledDeliveryPending) {
+		t.Fatalf("admission = %+v, want rejected pending delivery", admission)
+	}
+	if depth := al.steering.lenScope(scope); depth != 1 {
+		t.Fatalf("queued steering depth = %d, want 1", depth)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("pending delivery published duplicate output: %#v", outbound)
+	default:
+	}
+}
+
 // --- steeringQueue unit tests ---
 
 func TestSteeringQueue_PushDequeue_OneAtATime(t *testing.T) {
