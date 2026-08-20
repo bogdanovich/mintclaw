@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -254,6 +255,36 @@ func TestSanitizeHistoryForProvider_DropsAssistantWithEmptyToolCallID(t *testing
 	assertRoles(t, result, "user", "assistant")
 }
 
+func TestSanitizeHistoryForProvider_DropsAssistantWithWhitespaceToolCallID(t *testing.T) {
+	history := []providers.Message{
+		msg("user", "do something"),
+		assistantWithTools(" \t "),
+		toolResult(" \t "),
+		msg("assistant", "done"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
+	}
+	assertRoles(t, result, "user", "assistant")
+}
+
+func TestSanitizeHistoryForProvider_DropsAssistantWithDuplicateToolCallIDs(t *testing.T) {
+	history := []providers.Message{
+		msg("user", "do two things"),
+		assistantWithTools("duplicate", "duplicate"),
+		toolResult("duplicate"),
+		msg("assistant", "done"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
+	}
+	assertRoles(t, result, "user", "assistant")
+}
+
 func roles(msgs []providers.Message) []string {
 	r := make([]string, len(msgs))
 	for i, m := range msgs {
@@ -290,13 +321,17 @@ func TestSanitizeHistoryForProvider_IncompleteToolResults(t *testing.T) {
 	}
 
 	result := sanitizeHistoryForProvider(history)
-	// The assistant message with incomplete tool results should be dropped,
-	// along with its partial tool result. The remaining messages are:
-	// user ("do two things"), user ("next question"), assistant ("answer")
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d: %+v", len(result), roles(result))
+	// Preserve the real result and synthesize a conservative unresolved result
+	// for the missing call so earlier side effects remain visible.
+	if len(result) != 6 {
+		t.Fatalf("expected 6 messages, got %d: %+v", len(result), roles(result))
 	}
-	assertRoles(t, result, "user", "user", "assistant")
+	assertRoles(t, result, "user", "assistant", "tool", "tool", "user", "assistant")
+	if result[2].ToolCallID != "A" || result[3].ToolCallID != "B" ||
+		result[3].ToolResultStatus != providers.ToolResultStatusUnresolved ||
+		!strings.Contains(result[3].Content, "do not assume success") {
+		t.Fatalf("repaired tool block = %#v", result[2:4])
+	}
 }
 
 // TestSanitizeHistoryForProvider_MissingAllToolResults tests the case where
@@ -311,12 +346,15 @@ func TestSanitizeHistoryForProvider_MissingAllToolResults(t *testing.T) {
 	}
 
 	result := sanitizeHistoryForProvider(history)
-	// The assistant message with no tool results should be dropped.
-	// Remaining: user ("do something"), user ("hello"), assistant ("hi")
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d: %+v", len(result), roles(result))
+	// A valid call ID is repairable even when no result was persisted.
+	if len(result) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %+v", len(result), roles(result))
 	}
-	assertRoles(t, result, "user", "user", "assistant")
+	assertRoles(t, result, "user", "assistant", "tool", "user", "assistant")
+	if result[2].ToolCallID != "A" ||
+		result[2].ToolResultStatus != providers.ToolResultStatusUnresolved {
+		t.Fatalf("repaired missing result = %#v", result[2])
+	}
 }
 
 // TestSanitizeHistoryForProvider_PartialToolResultsInMiddle tests that
@@ -339,11 +377,16 @@ func TestSanitizeHistoryForProvider_PartialToolResultsInMiddle(t *testing.T) {
 
 	result := sanitizeHistoryForProvider(history)
 	// First round is complete (user, assistant+tools, tool, assistant),
-	// second round is incomplete and dropped (assistant+tools, partial tool),
+	// second round is repaired with a synthetic unresolved result for C,
 	// third round is complete (user, assistant+tools, tool, assistant).
-	// Remaining: user, assistant, tool, assistant, user, user, assistant, tool, assistant
-	if len(result) != 9 {
-		t.Fatalf("expected 9 messages, got %d: %+v", len(result), roles(result))
+	if len(result) != 12 {
+		t.Fatalf("expected 12 messages, got %d: %+v", len(result), roles(result))
 	}
-	assertRoles(t, result, "user", "assistant", "tool", "assistant", "user", "user", "assistant", "tool", "assistant")
+	assertRoles(
+		t,
+		result,
+		"user", "assistant", "tool", "assistant",
+		"user", "assistant", "tool", "tool",
+		"user", "assistant", "tool", "assistant",
+	)
 }

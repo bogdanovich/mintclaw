@@ -1897,6 +1897,9 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 			return outcome.Control, false, fmt.Errorf("persist approved action receipts: %w", err)
 		}
 	}
+	if outcome.TurnErr != nil {
+		return outcome.Control, false, outcome.TurnErr
+	}
 	if outcome.JournalErr != nil {
 		return outcome.Control, false, outcome.JournalErr
 	}

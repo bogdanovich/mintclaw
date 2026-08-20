@@ -73,6 +73,45 @@ actionable tool error, while `ambiguous` explicitly forbids blind retry. If the
 owning context ends first, the tool reports only that delivery is pending and
 does not suppress a later assistant response.
 
+The tool journal uses the same terminal boundary. Before a `final_handled`
+outbound side effect starts, the turn persists one unresolved tool result. Once
+delivery settles, that exact entry is atomically replaced with the confirmed
+delivery receipt or the actionable transport failure. The provider cannot
+continue from a provisional "prepared" result, and a journal-finalization
+failure stops the turn instead of risking a duplicate side effect.
+The unresolved barrier and non-executed results for every remaining call in the
+same emitted tool batch are reserved by one atomic history mutation before the
+outbound side effect starts. Terminal settlement ends that emitted batch; a
+later model turn may reissue a skipped call if it is still needed. If terminal
+receipt waiting is canceled or otherwise ends without a definite terminal
+intent, the complete batch and unresolved barrier remain in place rather than
+recording a false success. This keeps strict-provider history valid across
+cancellation, hard-abort, and persistence-failure boundaries.
+
+An `ambiguous` receipt is durably settled as an actionable terminal tool error,
+but also returns a non-publishable turn outcome. The current turn must not make
+another provider call, render another response, or drain steering after remote
+acceptance becomes uncertain. A pending receipt uses the same stop boundary
+while retaining its unresolved journal barrier. Steering already dequeued at
+either boundary transfers to the normal inbound release/requeue owner so it is
+not stranded or acknowledged as completed work.
+
+When a final-handled tool must use synchronous channel delivery without a
+durable receipt, text and media retry only failures proven to occur before
+remote acceptance. Every other failure is treated as ambiguous, journaled as
+an actionable result, and propagated through the same non-publishable turn
+boundary. This conservative fallback prevents a lost transport response from
+causing a duplicate send.
+
+If storage fails after an earlier call in the emitted batch was already
+journaled but before terminal reservation, provider-history sanitization keeps
+the real result and supplies conservative unresolved results for missing call
+IDs. Those provider-only repairs say that execution status is unknown and
+forbid blind side-effect retries. Invalid or empty call IDs remain
+unrepairable, as do duplicate IDs whose results cannot be assigned uniquely.
+This fallback prevents an incomplete durable batch from hiding a side effect
+that did complete.
+
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid
 payloads from becoming durable retry work.

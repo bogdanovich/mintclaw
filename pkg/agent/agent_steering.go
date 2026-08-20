@@ -39,7 +39,7 @@ func (al *AgentLoop) processMessageSync(ctx context.Context, msg bus.InboundMess
 	}
 	response, err := al.processMessage(ctx, msg)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if isNonPublishableTurnError(err) {
 			return rejectedFinalResponseAdmission(err)
 		}
 		return al.publishResponseWithContextIfNeeded(
@@ -152,7 +152,7 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 		if rootAdmissionRejected {
 			initialAdmission = rejectedFinalResponseAdmission(err)
 		}
-		if errors.Is(initialAdmission.err, context.Canceled) {
+		if isNonPublishableTurnError(initialAdmission.err) {
 			return initialAdmission
 		}
 		response = ""
@@ -163,6 +163,16 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 	steeringAggregate, continueErr := al.drainSteeringForAggregate(ctx, target)
 	continued := steeringAggregate.response
 	if continueErr != nil {
+		if isNonPublishableTurnError(continueErr) {
+			admission := rejectedFinalResponseAdmission(continueErr)
+			if settleErr := al.settleSteeringMessages(
+				admission,
+				steeringAggregate.messages,
+			); settleErr != nil {
+				return rejectedFinalResponseAdmission(settleErr)
+			}
+			return admission
+		}
 		if ctx.Err() == nil {
 			logger.WarnCF("agent", "Failed to continue queued steering",
 				map[string]any{

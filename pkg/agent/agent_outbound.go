@@ -65,6 +65,17 @@ const (
 	toolResultDeliveryQueued
 )
 
+var (
+	errFinalHandledDeliveryPending   = errors.New("final-handled delivery confirmation is still pending")
+	errFinalHandledDeliveryAmbiguous = errors.New("final-handled delivery outcome is ambiguous")
+)
+
+func isNonPublishableTurnError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, errFinalHandledDeliveryPending) ||
+		errors.Is(err, errFinalHandledDeliveryAmbiguous)
+}
+
 func (al *AgentLoop) maybePublishErrorWithScopes(
 	ctx context.Context,
 	workspace, agentID string,
@@ -73,7 +84,7 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 	policy finalResponseDeliveryPolicy,
 	traceScopes []runtimeevents.TraceScope,
 ) finalResponseAdmission {
-	if errors.Is(err, context.Canceled) {
+	if isNonPublishableTurnError(err) {
 		return rejectedFinalResponseAdmission(err)
 	}
 	return al.publishResponseWithContextAndScopes(
@@ -483,6 +494,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
+	al.normalizeLegacyFinalHandledOutbound(ts, result)
 
 	if result.Outbound != nil {
 		return al.deliverExplicitToolOutbound(ctx, ts, result, toolName, traceScopes, traceSettlement)
@@ -514,7 +526,9 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 		if !hasOutboundTransaction(ctx) && al.channelManager != nil && ts.channel != "" &&
 			!constants.IsInternalChannel(ts.channel) {
 			sendMedia := al.channelManager.SendMedia
-			if toolName == "final_turn" {
+			if isFinalHandledDelivery(result) {
+				sendMedia = al.channelManager.SendMediaDefiniteRetryOnly
+			} else if toolName == "final_turn" {
 				provisional, ok := al.channelManager.(agentinterfaces.ProvisionalChannelSender)
 				if !ok {
 					if al.bus != nil {
@@ -536,7 +550,8 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 						"chat_id":  ts.chatID,
 						"error":    err.Error(),
 					})
-				return nil, toolResultDeliveryNone, err
+				return nil, toolResultDeliveryNone,
+					classifySynchronousFinalHandledDeliveryError(result, err)
 			}
 			return buildProviderAttachments(al.mediaStore, mediaRefs), toolResultDeliveryDirect, nil
 		}
@@ -579,6 +594,30 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			"content_len": len(text),
 		})
 	return nil, toolResultDeliveryQueued, nil
+}
+
+func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
+	ts *turnState,
+	result *toolshared.ToolResult,
+) {
+	if al == nil || ts == nil || result == nil || result.Outbound != nil || !isFinalHandledDelivery(result) {
+		return
+	}
+	mediaRefs := toolResultMediaRefs(result)
+	text := toolResultUserText(result)
+	if len(mediaRefs) == 0 && strings.TrimSpace(text) == "" {
+		return
+	}
+	if len(mediaRefs) > 0 && !supportsDurableDeliveryReceipts(al.channelManager) {
+		return
+	}
+	result.Outbound = &toolshared.OutboundDelivery{
+		Channel:          ts.channel,
+		ChatID:           ts.chatID,
+		ReplyToMessageID: ts.opts.Dispatch.ReplyToMessageID(),
+		Text:             text,
+		Media:            al.mediaPartsFromRefs(mediaRefs, result.Completion, text),
+	}
 }
 
 func (al *AgentLoop) deliverExplicitToolOutbound(
@@ -627,9 +666,16 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			return nil, toolResultDeliveryNone, err
 		}
 		outboundMedia.TraceSettlement = traceSettlement
-		if !hasOutboundTransaction(ctx) && al.channelManager != nil && channel != "" &&
+		syncWithoutReceipt := isFinalHandledDelivery(result) &&
+			!supportsDurableDeliveryReceipts(al.channelManager)
+		if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
+			al.channelManager != nil && channel != "" &&
 			!constants.IsInternalChannel(channel) {
-			if err := al.channelManager.SendMedia(ctx, outboundMedia); err != nil {
+			sendMedia := al.channelManager.SendMedia
+			if isFinalHandledDelivery(result) {
+				sendMedia = al.channelManager.SendMediaDefiniteRetryOnly
+			}
+			if err := sendMedia(ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver explicit tool media",
 					map[string]any{
 						"agent_id": agentID,
@@ -638,7 +684,12 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 						"chat_id":  chatID,
 						"error":    err.Error(),
 					})
-				return nil, toolResultDeliveryNone, err
+				return nil, toolResultDeliveryNone,
+					classifySynchronousFinalHandledDeliveryError(result, err)
+			}
+			if err := commitToolResultOutbound(ctx, result); err != nil {
+				return nil, toolResultDeliveryNone,
+					classifySynchronousFinalHandledDeliveryError(result, err)
 			}
 			confirmToolResultOutbound(result)
 			setConfirmedToolDeliveryText(result, len(out.Media))
@@ -652,7 +703,8 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				},
 			)
 			if err != nil {
-				return nil, toolResultDeliveryNone, err
+				return nil, toolResultDeliveryNone,
+					classifyFinalHandledPublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 			if isFinalHandledDelivery(result) && receiptsSupported {
@@ -691,10 +743,22 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		return nil, toolResultDeliveryNone, err
 	}
 	outboundMessage.TraceSettlement = traceSettlement
-	if !hasOutboundTransaction(ctx) && al.channelManager != nil && channel != "" &&
+	syncWithoutReceipt := isFinalHandledDelivery(result) &&
+		!supportsDurableDeliveryReceipts(al.channelManager)
+	if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
+		al.channelManager != nil && channel != "" &&
 		!constants.IsInternalChannel(channel) {
-		if err := al.channelManager.SendMessage(ctx, outboundMessage); err != nil {
-			return nil, toolResultDeliveryNone, err
+		sendMessage := al.channelManager.SendMessage
+		if isFinalHandledDelivery(result) {
+			sendMessage = al.channelManager.SendMessageDefiniteRetryOnly
+		}
+		if err := sendMessage(ctx, outboundMessage); err != nil {
+			return nil, toolResultDeliveryNone,
+				classifySynchronousFinalHandledDeliveryError(result, err)
+		}
+		if err := commitToolResultOutbound(ctx, result); err != nil {
+			return nil, toolResultDeliveryNone,
+				classifySynchronousFinalHandledDeliveryError(result, err)
 		}
 		confirmToolResultOutbound(result)
 		setConfirmedToolDeliveryText(result, 0)
@@ -708,7 +772,8 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			},
 		)
 		if err != nil {
-			return nil, toolResultDeliveryNone, err
+			return nil, toolResultDeliveryNone,
+				classifyFinalHandledPublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 		if isFinalHandledDelivery(result) && receiptsSupported {
@@ -728,6 +793,33 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		return nil, toolResultDeliveryQueued, nil
 	}
 	return nil, toolResultDeliveryNone, nil
+}
+
+func classifySynchronousFinalHandledDeliveryError(
+	result *toolshared.ToolResult,
+	err error,
+) error {
+	if err == nil || !isFinalHandledDelivery(result) || channels.DeliveryDefinitelyNotSent(err) {
+		return err
+	}
+	result.ResponseHandled = false
+	result.ForLLM = "Synchronous delivery may have reached the remote channel. " +
+		"Do not claim delivery or retry the outbound side effect without confirmation."
+	return fmt.Errorf("%w: %w", errFinalHandledDeliveryAmbiguous, err)
+}
+
+func classifyFinalHandledPublicationError(
+	receipt outboundPublication,
+	result *toolshared.ToolResult,
+	err error,
+) error {
+	if err == nil || !receipt.published || !isFinalHandledDelivery(result) {
+		return err
+	}
+	result.ResponseHandled = false
+	result.ForLLM = "Message publication was accepted, but durable delivery state is uncertain. " +
+		"Do not claim delivery or retry the outbound side effect."
+	return fmt.Errorf("%w: published before durable commit failed: %w", errFinalHandledDeliveryPending, err)
 }
 
 func supportsDurableDeliveryReceipts(manager agentinterfaces.ChannelManager) bool {
@@ -753,12 +845,9 @@ func settleFinalHandledDelivery(
 ) error {
 	intent, err := receipt.awaitTerminal(ctx)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("wait for durable delivery receipt: %w", err)
-		}
 		result.ResponseHandled = false
 		result.ForLLM = "Message was queued, but delivery confirmation is still pending. Do not claim it was sent."
-		return nil
+		return fmt.Errorf("%w: %w", errFinalHandledDeliveryPending, err)
 	}
 	switch intent.Status {
 	case outbox.StatusDelivered:
@@ -773,7 +862,8 @@ func settleFinalHandledDelivery(
 		)
 	case outbox.StatusAmbiguous:
 		return fmt.Errorf(
-			"delivery %s has an ambiguous outcome and must not be retried blindly: %s",
+			"%w: delivery %s must not be retried blindly: %s",
+			errFinalHandledDeliveryAmbiguous,
 			intent.ID,
 			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
 		)
@@ -783,7 +873,12 @@ func settleFinalHandledDelivery(
 			"Message was queued as delivery %s, but delivery confirmation is still pending. Do not claim it was sent.",
 			intent.ID,
 		)
-		return nil
+		return fmt.Errorf(
+			"%w: delivery %s has status %s",
+			errFinalHandledDeliveryPending,
+			intent.ID,
+			intent.Status,
+		)
 	}
 }
 
@@ -793,12 +888,12 @@ func setConfirmedToolDeliveryText(result *toolshared.ToolResult, mediaCount int)
 	}
 	if mediaCount > 0 {
 		result.ForLLM = fmt.Sprintf(
-			"Message with %d media attachment(s) delivered to the user.",
+			"Message with %d media attachment(s) confirmed delivered to the user.",
 			mediaCount,
 		)
 		return
 	}
-	result.ForLLM = "Message delivered to the user."
+	result.ForLLM = "Message confirmed delivered to the user."
 }
 
 func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx *bus.InboundContext) {

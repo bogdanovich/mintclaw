@@ -1385,18 +1385,24 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 		msg := sanitized[i]
 
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			expected := make(map[string]bool, len(msg.ToolCalls))
-			invalidToolCallID := false
+			expected := make(map[string]struct{}, len(msg.ToolCalls))
+			seenCallIDs := make(map[string]struct{}, len(msg.ToolCalls))
+			invalidToolCallIDs := false
 			for _, tc := range msg.ToolCalls {
-				if tc.ID == "" {
-					invalidToolCallID = true
+				callID := strings.TrimSpace(tc.ID)
+				if callID == "" {
+					invalidToolCallIDs = true
 					continue
 				}
-				expected[tc.ID] = false
+				if _, duplicate := seenCallIDs[callID]; duplicate {
+					invalidToolCallIDs = true
+					continue
+				}
+				seenCallIDs[callID] = struct{}{}
+				expected[tc.ID] = struct{}{}
 			}
 
-			block := make([]providers.Message, 0, len(expected))
-			seenInBlock := make(map[string]bool, len(expected))
+			resultsByCallID := make(map[string]providers.Message, len(expected))
 			j := i + 1
 			for ; j < len(sanitized); j++ {
 				next := sanitized[j]
@@ -1417,7 +1423,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 					})
 					continue
 				}
-				if seenInBlock[next.ToolCallID] {
+				if _, seen := resultsByCallID[next.ToolCallID]; seen {
 					logger.DebugCF(
 						"agent",
 						"Dropping duplicate tool result in tool block",
@@ -1427,42 +1433,42 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 					)
 					continue
 				}
-				seenInBlock[next.ToolCallID] = true
-				expected[next.ToolCallID] = true
-				block = append(block, next)
+				resultsByCallID[next.ToolCallID] = next
 			}
 
-			allFound := !invalidToolCallID
-			if invalidToolCallID {
+			if invalidToolCallIDs {
 				logger.DebugCF(
 					"agent",
-					"Dropping assistant message with empty tool_call_id",
+					"Dropping assistant message with invalid tool_call_ids",
 					map[string]any{},
 				)
-			}
-			for toolCallID, found := range expected {
-				if !found {
-					allFound = false
-					logger.DebugCF(
-						"agent",
-						"Dropping assistant message with incomplete tool results",
-						map[string]any{
-							"missing_tool_call_id": toolCallID,
-							"expected_count":       len(expected),
-							"found_count":          len(block),
-						},
-					)
-					break
-				}
-			}
-
-			if !allFound {
 				i = j - 1
 				continue
 			}
 
 			final = append(final, msg)
-			final = append(final, block...)
+			for _, toolCall := range msg.ToolCalls {
+				if result, ok := resultsByCallID[toolCall.ID]; ok {
+					final = append(final, result)
+					continue
+				}
+				logger.WarnCF(
+					"agent",
+					"Repairing incomplete tool batch for provider",
+					map[string]any{
+						"missing_tool_call_id": toolCall.ID,
+						"expected_count":       len(expected),
+						"found_count":          len(resultsByCallID),
+					},
+				)
+				final = append(final, providers.Message{
+					Role: "tool",
+					Content: "No durable result exists because the prior tool batch was interrupted. " +
+						"Execution status is unknown; do not assume success or retry side effects without confirmation.",
+					ToolCallID:       toolCall.ID,
+					ToolResultStatus: providers.ToolResultStatusUnresolved,
+				})
+			}
 			i = j - 1
 			continue
 		}

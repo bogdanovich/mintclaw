@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -60,8 +62,94 @@ func TestSettleFinalHandledDeliveryPreservesAmbiguousSafety(t *testing.T) {
 	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	err := settleFinalHandledDelivery(context.Background(), receipt, result, 0)
-	if err == nil || !strings.Contains(err.Error(), "must not be retried blindly") {
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
+		!strings.Contains(err.Error(), "must not be retried blindly") {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
+	}
+	if !isNonPublishableTurnError(err) {
+		t.Fatalf("ambiguous delivery error must stop user-visible continuation")
+	}
+}
+
+func TestSettleFinalHandledDeliveryCancellationRemainsPending(t *testing.T) {
+	receipt, _, _ := testOutboundReceipt(t)
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := settleFinalHandledDelivery(ctx, receipt, result, 1)
+	if !errors.Is(err, errFinalHandledDeliveryPending) {
+		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
+	}
+}
+
+func TestSettleFinalHandledDeliveryWaitErrorRemainsPending(t *testing.T) {
+	receipt, coordinator, _ := testOutboundReceipt(t)
+	if err := coordinator.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+
+	err := settleFinalHandledDelivery(t.Context(), receipt, result, 1)
+	if !errors.Is(err, errFinalHandledDeliveryPending) {
+		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
+	}
+}
+
+func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
+	commitErr := errors.New("commit durable admission")
+	result := (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+		toolshared.DeliveryFinalHandled,
+	)
+
+	err := classifyFinalHandledPublicationError(
+		outboundPublication{published: true},
+		result,
+		commitErr,
+	)
+	if !errors.Is(err, errFinalHandledDeliveryPending) || !errors.Is(err, commitErr) {
+		t.Fatalf("classification error = %v, want pending and commit causes", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "state is uncertain") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
+	}
+}
+
+func TestClassifySynchronousFinalHandledDeliveryError(t *testing.T) {
+	newResult := func() *toolshared.ToolResult {
+		return (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+			toolshared.DeliveryFinalHandled,
+		)
+	}
+
+	ambiguous := newResult()
+	err := classifySynchronousFinalHandledDeliveryError(
+		ambiguous,
+		errors.New("transport response was lost"),
+	)
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) || ambiguous.ResponseHandled ||
+		!strings.Contains(ambiguous.ForLLM, "Do not claim delivery") {
+		t.Fatalf("ambiguous classification = %v, result = %#v", err, ambiguous)
+	}
+
+	definiteCause := errors.New("preflight rejected payload")
+	definite := newResult()
+	err = classifySynchronousFinalHandledDeliveryError(
+		definite,
+		channels.DefiniteNotSentDeliveryError(definiteCause),
+	)
+	if !errors.Is(err, definiteCause) || errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
+		!definite.ResponseHandled {
+		t.Fatalf("definite classification = %v, result = %#v", err, definite)
 	}
 }
 
