@@ -298,6 +298,20 @@ func (p *Pipeline) buildTurnMessages(
 	media []string,
 	activeSkills []string,
 ) []providers.Message {
+	return p.buildTurnMessagesWithProtectedTurnBoundary(
+		ts, history, summary, currentMessage, media, activeSkills, 0,
+	)
+}
+
+func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
+	ts *turnState,
+	history []providers.Message,
+	summary string,
+	currentMessage string,
+	media []string,
+	activeSkills []string,
+	protectedTurnTailCount int,
+) []providers.Message {
 	if p == nil {
 		return nil
 	}
@@ -319,6 +333,12 @@ func (p *Pipeline) buildTurnMessages(
 		terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)
 		if len(terminalContext) > 0 {
 			currentTurnStart := promptCurrentTurnStart(messages, currentMessage, media)
+			if protectedTurnTailCount > 0 {
+				currentTurnStart = normalizeCurrentTurnStart(
+					messages,
+					len(messages)-protectedTurnTailCount,
+				)
+			}
 			withTerminalContext := make([]providers.Message, 0, len(messages)+len(terminalContext))
 			withTerminalContext = append(withTerminalContext, messages[:currentTurnStart]...)
 			withTerminalContext = append(withTerminalContext, terminalContext...)
