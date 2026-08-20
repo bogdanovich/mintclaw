@@ -632,6 +632,29 @@ func TestCloneProviderMessagesDetachesNonNilEmptySlices(t *testing.T) {
 	}
 }
 
+func TestCloneProviderMessagesDetachesDeliverable(t *testing.T) {
+	messages := []providers.Message{{
+		Deliverable: &taskresult.Deliverable{
+			Text:     "tool-owned result",
+			Metadata: map[string]string{"producer": "tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+				Metadata:      map[string]string{"format": "summary"},
+			},
+		},
+	}}
+
+	cloned := cloneProviderMessages(messages)
+	messages[0].Deliverable.Metadata["producer"] = "mutated"
+	messages[0].Deliverable.Report.Metadata["format"] = "mutated"
+	if cloned[0].Deliverable == nil || cloned[0].Deliverable.Text != "tool-owned result" ||
+		cloned[0].Deliverable.Metadata["producer"] != "tool" ||
+		cloned[0].Deliverable.Report.Metadata["format"] != "summary" {
+		t.Fatalf("cloned message deliverable was not detached: %#v", cloned[0].Deliverable)
+	}
+}
+
 func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)

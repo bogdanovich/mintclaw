@@ -1311,6 +1311,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	sanitized := make([]providers.Message, 0, len(history))
 	for _, msg := range history {
 		msg.ToolExecutions = nil
+		msg.Deliverable = nil
 		switch msg.Role {
 		case "system":
 			// Drop system messages from history. BuildMessages always

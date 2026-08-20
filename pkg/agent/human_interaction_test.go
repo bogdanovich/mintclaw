@@ -6866,16 +6866,32 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	provider := &toolCallRespProvider{toolName: "must_not_run", response: "must not run"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	manager := newInteractionChannelManager()
-	al.channelManager = manager
 	sessionKey := "session-recover-final"
+	const (
+		taskID        = "recover-final-task"
+		interactionID = "recover-final-interaction"
+	)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.TaskID = taskID
+	request.Origin.ContinuationSessionKey = sessionKey
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "recover final", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
+		InteractionID:  interactionID,
+		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
+		ID:   interactionID,
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
 		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
 	})
@@ -6894,7 +6910,20 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Recovered final"})
+	recoveredDeliverable := &taskresult.Deliverable{
+		Text: "tool-owned recovered result",
+		Artifacts: []taskresult.Artifact{{
+			Ref: "file:/tmp/recovered.txt", LocalPath: "/tmp/recovered.txt", Kind: "file",
+		}},
+		Metadata: map[string]string{"producer": "recovered-tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "recovered-report",
+		},
+	}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", Content: "Recovered final", Deliverable: recoveredDeliverable,
+	})
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -6906,10 +6935,17 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
 		t.Fatalf("status = %q, want resolved", record.Status)
 	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 1 ||
+		task.Deliverable.Artifacts[0].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
+		t.Fatalf("recovered task lost canonical deliverable: %#v", task)
+	}
 	select {
-	case outbound := <-manager.sent:
-		if outbound.Content != "Recovered final" ||
-			outbound.Context.Raw["delivery_key"] != interactionDeliveryKey(record.ID, "final") {
+	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+		if outbound.Content != "Recovered final" {
 			t.Fatalf("outbound = %#v", outbound)
 		}
 	case <-time.After(time.Second):
@@ -6924,11 +6960,38 @@ func TestInteractionFinalAfterToolResultRequiresMatchingOrder(t *testing.T) {
 		{Role: "tool", ToolCallID: "call-1", Content: "answer"},
 		{Role: "assistant", Content: "continued"},
 	}
-	if content, ok := interactionFinalAfterToolResult(history, "call-1"); !ok || content != "continued" {
-		t.Fatalf("interactionFinalAfterToolResult() = (%q, %v)", content, ok)
+	if content, deliverable, ok := interactionFinalAfterToolResult(
+		history,
+		"call-1",
+	); !ok || content != "continued" ||
+		deliverable != nil {
+		t.Fatalf("interactionFinalAfterToolResult() = (%q, %#v, %v)", content, deliverable, ok)
 	}
-	if _, ok := interactionFinalAfterToolResult(history, "other"); ok {
+	if _, _, ok := interactionFinalAfterToolResult(history, "other"); ok {
 		t.Fatal("unmatched tool result produced a final response")
+	}
+}
+
+func TestInteractionFinalAfterToolResultDetachesDeliverable(t *testing.T) {
+	history := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1"}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "answer"},
+		{
+			Role: "assistant", Content: "continued",
+			Deliverable: &taskresult.Deliverable{
+				Text:     "tool-owned result",
+				Metadata: map[string]string{"producer": "tool"},
+			},
+		},
+	}
+
+	_, deliverable, ok := interactionFinalAfterToolResult(history, "call-1")
+	if !ok || deliverable == nil {
+		t.Fatalf("interaction final = (%#v, %t), want deliverable", deliverable, ok)
+	}
+	history[2].Deliverable.Metadata["producer"] = "mutated"
+	if deliverable.Text != "tool-owned result" || deliverable.Metadata["producer"] != "tool" {
+		t.Fatalf("recovered deliverable was not detached: %#v", deliverable)
 	}
 }
 
@@ -6944,7 +7007,7 @@ func TestInteractionFinalAfterToolResultDoesNotDuplicateHandledAttachment(t *tes
 			}},
 		},
 	}
-	if content, ok := interactionFinalAfterToolResult(history, "call-media"); !ok || content != "" {
+	if content, _, ok := interactionFinalAfterToolResult(history, "call-media"); !ok || content != "" {
 		t.Fatalf("interactionFinalAfterToolResult() = (%q, %v), want empty handled final", content, ok)
 	}
 }
@@ -6983,7 +7046,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 			Attachments: []providers.Attachment{{Ref: "media://delivered"}},
 		},
 	}
-	content, ok := interactionFinalAfterToolResult(history, record.Origin.ToolCallID)
+	content, _, ok := interactionFinalAfterToolResult(history, record.Origin.ToolCallID)
 	if !ok || content != "" {
 		t.Fatalf("handled attachment final = (%q, %t)", content, ok)
 	}
@@ -7023,7 +7086,7 @@ func TestInteractionPairingIgnoresReusedToolCallIDFromOlderRound(t *testing.T) {
 	if origin != 4 || result != -1 {
 		t.Fatalf("interactionToolPairIndexes() = (%d, %d), want (4, -1)", origin, result)
 	}
-	if _, ok := interactionFinalAfterToolResult(history, "call-reused"); ok {
+	if _, _, ok := interactionFinalAfterToolResult(history, "call-reused"); ok {
 		t.Fatal("older reused result was treated as current continuation")
 	}
 }

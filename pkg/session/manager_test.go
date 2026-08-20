@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestSessionManagerAppendTurnMessagePersistsBeforeReturn(t *testing.T) {
@@ -22,6 +23,37 @@ func TestSessionManagerAppendTurnMessagePersistsBeforeReturn(t *testing.T) {
 	history := reopened.GetHistory("turn")
 	if len(history) != 1 || history[0].Content != msg.Content {
 		t.Fatalf("reopened history = %+v", history)
+	}
+}
+
+func TestSessionManagerPersistsCanonicalDeliverable(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewSessionManager(dir)
+	msg := providers.Message{
+		Role: "assistant", Content: "done",
+		Deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned result",
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/result.txt", Kind: "file"}},
+			Metadata:  map[string]string{"producer": "tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+			},
+		},
+	}
+	if err := manager.AppendTurnMessage(t.Context(), "turn", msg); err != nil {
+		t.Fatalf("AppendTurnMessage() error = %v", err)
+	}
+
+	reopened := NewSessionManager(dir)
+	history := reopened.GetHistory("turn")
+	if len(history) != 1 || history[0].Deliverable == nil ||
+		history[0].Deliverable.Text != "tool-owned result" ||
+		len(history[0].Deliverable.Artifacts) != 1 ||
+		history[0].Deliverable.Artifacts[0].Ref != "file:/tmp/result.txt" ||
+		history[0].Deliverable.Metadata["producer"] != "tool" ||
+		history[0].Deliverable.Report == nil || history[0].Deliverable.Report.ReportID != "report-1" {
+		t.Fatalf("reopened history lost canonical deliverable: %#v", history)
 	}
 }
 

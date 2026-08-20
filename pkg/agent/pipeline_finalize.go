@@ -74,6 +74,7 @@ func newFinalizationContext(
 			Content:          content,
 			ModelName:        exec.model.llmModelName,
 			ReasoningContent: responseReasoningContent(llm.response),
+			Deliverable:      taskresult.CloneDeliverable(exec.deliverable),
 		}
 		historyMessage = &message
 	}

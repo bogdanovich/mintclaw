@@ -1608,7 +1608,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		}
 		resuming = current
 	}
-	if finalContent, ok := interactionFinalAfterToolResult(
+	if finalContent, recoveredDeliverable, ok := interactionFinalAfterToolResult(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
@@ -1618,7 +1618,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 		_, finalizeErr := al.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent,
-			terminalTurnDeliverable(nil, cleanContent, objectiveOutcome), nil,
+			terminalTurnDeliverable(recoveredDeliverable, cleanContent, objectiveOutcome), nil,
 			interactionBoundaryPrecomputedFinal,
 		)
 		return finalizeErr
@@ -2347,21 +2347,21 @@ func (al *AgentLoop) completeInteractionTask(
 func interactionFinalAfterToolResult(
 	history []providers.Message,
 	toolCallID string,
-) (string, bool) {
+) (string, *taskresult.Deliverable, bool) {
 	_, resultIndex := interactionToolPairIndexes(history, toolCallID)
 	if resultIndex < 0 {
-		return "", false
+		return "", nil, false
 	}
 	for _, message := range history[resultIndex+1:] {
 		if message.Role == "assistant" && len(message.ToolCalls) == 0 &&
 			strings.TrimSpace(message.Content) != "" {
 			if message.Content == handledToolResponseSummary && len(message.Attachments) > 0 {
-				return "", true
+				return "", taskresult.CloneDeliverable(message.Deliverable), true
 			}
-			return message.Content, true
+			return message.Content, taskresult.CloneDeliverable(message.Deliverable), true
 		}
 	}
-	return "", false
+	return "", nil, false
 }
 
 func (al *AgentLoop) ensureInteractionToolResult(

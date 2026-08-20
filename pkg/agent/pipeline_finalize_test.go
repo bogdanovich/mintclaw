@@ -85,6 +85,13 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 		finalization.deliverable.Report.Metadata["format"] != "summary" {
 		t.Fatalf("deliverable changed after capture: %+v", finalization.deliverable)
 	}
+	if finalization.historyMessage.Deliverable == nil ||
+		finalization.historyMessage.Deliverable.Text != "tool-owned result" ||
+		finalization.historyMessage.Deliverable.Artifacts[0].Ref != "media://result" ||
+		finalization.historyMessage.Deliverable.Metadata["producer"] != "test-tool" ||
+		finalization.historyMessage.Deliverable.Report.Metadata["format"] != "summary" {
+		t.Fatalf("history message deliverable changed after capture: %+v", finalization.historyMessage.Deliverable)
+	}
 	if finalization.followUps[0].Content != "follow up" {
 		t.Fatalf("follow ups changed after capture: %+v", finalization.followUps)
 	}
