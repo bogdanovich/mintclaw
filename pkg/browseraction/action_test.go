@@ -130,3 +130,49 @@ func strictSchemaTestBranch(t *testing.T, schema map[string]any, kind ActionKind
 	t.Fatalf("strict schema omitted %q: %#v", kind, schema)
 	return nil
 }
+
+func TestDecodeModelActionPreservesTypedInputAndDialogPresence(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		args map[string]any
+		want Action
+	}{
+		{map[string]any{"kind": "check", "ref": "element_1"}, Action{Kind: ActionCheck, Ref: "element_1"}},
+		{map[string]any{
+			"kind": "drag", "source_ref": "element_1", "destination_ref": "element_2",
+		}, Action{Kind: ActionDrag, SourceRef: "element_1", DestinationRef: "element_2"}},
+		{map[string]any{
+			"kind": "fill", "ref": "element_1", "value": "draft text",
+		}, Action{Kind: ActionFill, Ref: "element_1", Value: "draft text"}},
+		{map[string]any{
+			"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": "",
+		}, Action{Kind: ActionDialog, DialogID: "dialog_1", Decision: "accept", PromptProvided: true}},
+		{map[string]any{
+			"kind": "dialog", "dialog_id": "dialog_1", "decision": "dismiss",
+		}, Action{Kind: ActionDialog, DialogID: "dialog_1", Decision: "dismiss"}},
+	}
+	for _, test := range tests {
+		got, err := DecodeModelAction(test.args, 1024)
+		if err != nil || got != test.want {
+			t.Fatalf("DecodeModelAction(%#v) = %#v, %v; want %#v", test.args, got, err, test.want)
+		}
+	}
+}
+
+func TestDecodeModelActionRejectsInvalidWireFields(t *testing.T) {
+	t.Parallel()
+	invalid := []map[string]any{
+		{"kind": "scroll", "direction": "down", "amount": 1, "target": "document"},
+		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
+		{"kind": "scroll", "direction": false, "amount": 1},
+		{"kind": "scroll", "direction": "down", "amount": 1.5},
+		{"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": false},
+		{"kind": "dialog", "decision": "dismiss"},
+		{"kind": "download", "ref": "download_1", "deliver": "true"},
+	}
+	for _, args := range invalid {
+		if _, err := DecodeModelAction(args, 1024); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("DecodeModelAction(%#v) error = %v, want ErrInvalid", args, err)
+		}
+	}
+}

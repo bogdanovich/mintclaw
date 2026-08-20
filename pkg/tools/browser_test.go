@@ -1802,46 +1802,6 @@ func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 	}
 }
 
-func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T) {
-	for _, kind := range []string{"check", "uncheck", "hover"} {
-		action, err := browserActionFromArgs(map[string]any{"kind": kind, "ref": "element_1"})
-		if err != nil || action.Kind != browser.ActionKind(kind) || action.Ref != "element_1" {
-			t.Fatalf("%s action = %#v, error = %v", kind, action, err)
-		}
-	}
-	drag, err := browserActionFromArgs(map[string]any{
-		"kind": "drag", "source_ref": "element_1", "destination_ref": "element_2",
-	})
-	if err != nil || drag.Kind != browser.ActionDrag || drag.SourceRef != "element_1" ||
-		drag.DestinationRef != "element_2" {
-		t.Fatalf("drag action = %#v, error = %v", drag, err)
-	}
-	press, err := browserActionFromArgs(map[string]any{
-		"kind": "press", "target": "document", "key": "Tab",
-	})
-	if err != nil || press.Target != "document" || press.Key != "Tab" {
-		t.Fatalf("press action = %#v, error = %v", press, err)
-	}
-	fill, err := browserActionFromArgs(map[string]any{
-		"kind": "fill", "ref": "element_1", "value": "draft text",
-	})
-	if err != nil || fill.Value != "draft text" || fill.PromptProvided {
-		t.Fatalf("fill action = %#v, error = %v", fill, err)
-	}
-	prompt, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": "",
-	})
-	if err != nil || !prompt.PromptProvided || prompt.Value != "" {
-		t.Fatalf("prompt action = %#v, error = %v", prompt, err)
-	}
-	dismiss, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "dialog_id": "dialog_1", "decision": "dismiss",
-	})
-	if err != nil || dismiss.PromptProvided {
-		t.Fatalf("dismiss action = %#v, error = %v", dismiss, err)
-	}
-}
-
 func TestBrowserApprovalSummaryNamesDocumentKey(t *testing.T) {
 	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
 		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,

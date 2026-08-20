@@ -341,6 +341,101 @@ func strictSchemaBranch(kind ActionKind, maxTextBytes int) map[string]any {
 	return branch
 }
 
+// DecodeModelAction parses the strict model-facing wire contract. It rejects
+// unknown, cross-kind, mistyped, and incomplete fields before any browser
+// preparation can observe the request.
+func DecodeModelAction(raw any, maxTextBytes int) (Action, error) {
+	args, ok := raw.(map[string]any)
+	if !ok {
+		return Action{}, ErrInvalid
+	}
+	kindValue, ok := args["kind"].(string)
+	kind := ActionKind(kindValue)
+	if !ok || !kind.Valid() {
+		return Action{}, ErrInvalid
+	}
+	branch := strictSchemaBranch(kind, maxTextBytes)
+	properties := branch["properties"].(map[string]any)
+	for _, name := range branch["required"].([]string) {
+		if _, present := args[name]; !present {
+			return Action{}, ErrInvalid
+		}
+	}
+	action := Action{Kind: kind}
+	for name, value := range args {
+		property, admitted := properties[name].(map[string]any)
+		if !admitted {
+			return Action{}, ErrInvalid
+		}
+		switch property["type"] {
+		case "string":
+			text, valid := value.(string)
+			if !valid {
+				return Action{}, ErrInvalid
+			}
+			assignModelActionString(&action, name, text)
+		case "boolean":
+			boolean, valid := value.(bool)
+			if !valid || name != "deliver" {
+				return Action{}, ErrInvalid
+			}
+			action.Deliver = boolean
+		case "integer":
+			amount, valid := decodeModelActionAmount(value)
+			if !valid || name != "amount" {
+				return Action{}, ErrInvalid
+			}
+			action.Amount = amount
+		default:
+			return Action{}, ErrInvalid
+		}
+	}
+	if action.Kind == ActionDialog {
+		_, action.PromptProvided = args["value"]
+	}
+	if err := action.Validate(maxTextBytes); err != nil {
+		return Action{}, ErrInvalid
+	}
+	return action, nil
+}
+
+func assignModelActionString(action *Action, name, value string) {
+	switch name {
+	case "kind":
+	case "url":
+		action.URL = value
+	case "ref":
+		action.Ref = value
+	case "source_ref":
+		action.SourceRef = value
+	case "destination_ref":
+		action.DestinationRef = value
+	case "dialog_id":
+		action.DialogID = value
+	case "target":
+		action.Target = value
+	case "value":
+		action.Value = value
+	case "key":
+		action.Key = value
+	case "direction":
+		action.Direction = value
+	case "decision":
+		action.Decision = value
+	case "artifact_ref":
+		action.ArtifactRef = value
+	}
+}
+
+func decodeModelActionAmount(value any) (int, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 0, false
+	}
+	amount, err := decodeActionAmount(encoded)
+	return amount, err == nil
+}
+
 type schemaField uint16
 
 const (
