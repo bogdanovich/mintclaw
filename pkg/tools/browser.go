@@ -1311,8 +1311,8 @@ func browserActionSchemas(maxTextBytes int, fileChooserAvailable, downloadAvaila
 		branch(browser.ActionDialog, map[string]any{
 			"dialog_id": map[string]any{"type": "string"},
 			"decision":  map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}},
-			"value":     text, "prompt_provided": map[string]any{"type": "boolean"},
-		}, "decision"),
+			"value":     text,
+		}, "dialog_id", "decision"),
 	}
 	if fileChooserAvailable {
 		schemas = append(schemas, branch(browser.ActionFileChooser, map[string]any{
@@ -1641,6 +1641,15 @@ func browserActionFromArgs(raw any) (browser.Action, error) {
 		return browser.Action{}, browser.ErrInvalid
 	}
 	action.Kind = browser.ActionKind(kind)
+	allowed := browserActionArgumentKeys(action.Kind)
+	if allowed == nil {
+		return browser.Action{}, browser.ErrInvalid
+	}
+	for key := range args {
+		if !allowed[key] {
+			return browser.Action{}, browser.ErrInvalid
+		}
+	}
 	action.URL, _ = args["url"].(string)
 	action.Ref, _ = args["ref"].(string)
 	action.SourceRef, _ = args["source_ref"].(string)
@@ -1662,6 +1671,38 @@ func browserActionFromArgs(raw any) (browser.Action, error) {
 	}
 	action.Amount = amount
 	return action, nil
+}
+
+func browserActionArgumentKeys(kind browser.ActionKind) map[string]bool {
+	keys := func(names ...string) map[string]bool {
+		allowed := map[string]bool{"kind": true}
+		for _, name := range names {
+			allowed[name] = true
+		}
+		return allowed
+	}
+	switch kind {
+	case browser.ActionNavigate:
+		return keys("url")
+	case browser.ActionClick, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover:
+		return keys("ref")
+	case browser.ActionFill, browser.ActionSelect:
+		return keys("ref", "value")
+	case browser.ActionDrag:
+		return keys("source_ref", "destination_ref")
+	case browser.ActionPress:
+		return keys("target", "key")
+	case browser.ActionScroll:
+		return keys("direction", "amount")
+	case browser.ActionDialog:
+		return keys("dialog_id", "decision", "value")
+	case browser.ActionFileChooser:
+		return keys("ref", "artifact_ref")
+	case browser.ActionDownload:
+		return keys("ref", "deliver")
+	default:
+		return nil
+	}
 }
 
 func browserInteger(value any) (int, bool) {

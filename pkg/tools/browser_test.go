@@ -980,6 +980,12 @@ func TestBrowserActSchemaUsesExclusiveTypedActionShapes(t *testing.T) {
 	if pressProperties["target"].(map[string]any)["const"] != "document" {
 		t.Fatalf("press target schema = %#v", pressProperties["target"])
 	}
+	dialog := browserActionSchemaBranch(action, browser.ActionDialog)
+	dialogProperties := dialog["properties"].(map[string]any)
+	if _, ok := dialogProperties["prompt_provided"]; ok ||
+		!slices.Contains(dialog["required"].([]string), "dialog_id") {
+		t.Fatalf("dialog authority schema = %#v", dialog)
+	}
 }
 
 func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
@@ -1660,6 +1666,26 @@ func TestBrowserActApprovalPreparationFailsWithSafeDenial(t *testing.T) {
 	}
 }
 
+func TestBrowserActRejectsCrossKindAndUnknownFieldsBeforePreparation(t *testing.T) {
+	for _, action := range []map[string]any{
+		{"kind": "scroll", "direction": "down", "amount": 1, "target": "document"},
+		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
+	} {
+		source := &fakeBrowserToolSource{available: true}
+		result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+			browserToolTestContext(),
+			map[string]any{
+				"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+				"snapshot_id": "snapshot_1", "snapshot_generation": 1, "action": action,
+			},
+		)
+		if result == nil || !result.IsError || source.prepareCalls != 0 ||
+			!strings.Contains(result.ContentForLLM(), `"code":"invalid_request"`) {
+			t.Fatalf("invalid action result = %#v; prepare calls = %d", result, source.prepareCalls)
+		}
+	}
+}
+
 func TestBrowserActApprovalStaleDenialUsesActionRecovery(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true, err: browser.ErrStale}
 	tool := NewBrowserActTool(browserToolTestConfig(), source)
@@ -1794,13 +1820,13 @@ func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T)
 		t.Fatalf("fill action = %#v, error = %v", fill, err)
 	}
 	prompt, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "decision": "accept", "value": "",
+		"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": "",
 	})
 	if err != nil || !prompt.PromptProvided || prompt.Value != "" {
 		t.Fatalf("prompt action = %#v, error = %v", prompt, err)
 	}
 	dismiss, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "decision": "dismiss",
+		"kind": "dialog", "dialog_id": "dialog_1", "decision": "dismiss",
 	})
 	if err != nil || dismiss.PromptProvided {
 		t.Fatalf("dismiss action = %#v, error = %v", dismiss, err)
