@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -940,8 +941,8 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	for _, candidate := range []string{"check", "uncheck", "hover", "drag", "file_chooser"} {
-		if browserActionSchemaBranch(action, browser.ActionKind(candidate)) == nil {
+	for _, candidate := range browseraction.Kinds() {
+		if browserActionSchemaBranch(action, candidate) == nil {
 			t.Fatalf("%s missing from browser_act schema: %#v", candidate, action)
 		}
 	}
@@ -977,7 +978,10 @@ func TestBrowserActSchemaUsesExclusiveTypedActionShapes(t *testing.T) {
 	}
 	press := browserActionSchemaBranch(action, browser.ActionPress)
 	pressProperties := press["properties"].(map[string]any)
-	if pressProperties["target"].(map[string]any)["const"] != "document" {
+	if target := pressProperties["target"].(map[string]any); !slices.Equal(
+		target["enum"].([]string),
+		[]string{"document"},
+	) {
 		t.Fatalf("press target schema = %#v", pressProperties["target"])
 	}
 	dialog := browserActionSchemaBranch(action, browser.ActionDialog)
@@ -1005,7 +1009,7 @@ func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 		}
 	}
 	action := properties["action"].(map[string]any)
-	if description, _ := action["description"].(string); !strings.Contains(description, "exactly one action shape") {
+	if description, _ := action["description"].(string); !strings.Contains(description, "do not add unrelated") {
 		t.Fatalf("action description = %q", description)
 	}
 }
@@ -1205,8 +1209,10 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	if branch := browserActionSchemaBranch(action, browser.ActionFileChooser); branch != nil {
-		t.Fatalf("unsupported file chooser advertised in schema: %#v", branch)
+	for _, kind := range []browser.ActionKind{browser.ActionFileChooser, browser.ActionDownload} {
+		if branch := browserActionSchemaBranch(action, kind); branch != nil {
+			t.Fatalf("unsupported transfer action advertised in schema: %#v", branch)
+		}
 	}
 }
 

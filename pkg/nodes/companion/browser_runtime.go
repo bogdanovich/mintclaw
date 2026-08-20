@@ -2,7 +2,6 @@ package companion
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,63 +219,15 @@ func (handler *browserCommandHandler) executeAct(
 	if err := json.Unmarshal(invocation.Input, &input); err != nil {
 		return nil, browserCommandFailure(err)
 	}
+	if err := nodes.ValidateBrowserActInput(input, handler.descriptorValue.BrowserProfiles); err != nil {
+		return nil, newCommandFailure(
+			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
+		)
+	}
 	value, err := browserEphemeralActionValue(input, invocation.EphemeralInput)
 	if err != nil {
 		return nil, newCommandFailure(
 			"COMMAND_DENIED", "browser action input is unavailable", nodes.ErrBrowserHostDenied,
-		)
-	}
-	if (input.Action.Kind != "navigate" && input.Action.Kind != "scroll" && input.Action.Kind != "click" &&
-		input.Action.Kind != "fill" && input.Action.Kind != "select" && input.Action.Kind != "press" &&
-		input.Action.Kind != "dialog" && input.Action.Kind != "check" && input.Action.Kind != "uncheck" &&
-		input.Action.Kind != "hover" && input.Action.Kind != "drag" && input.Action.Kind != "file_chooser") ||
-		(input.Action.Kind == "navigate" && input.Effect != "navigation") ||
-		(input.Action.Kind == "scroll" && input.Effect != "read") ||
-		(input.Action.Kind == "select" &&
-			(input.Effect != "local_edit" || input.ExpectedRole != "combobox" ||
-				input.ApprovalDigest != "")) ||
-		(input.Action.Kind == "fill" &&
-			(input.Effect != "local_edit" ||
-				!nodes.BrowserFillFieldAllowed(input.ExpectedRole, input.ExpectedName) ||
-				input.ApprovalDigest != "")) ||
-		(input.Action.Kind == "press" &&
-			(input.Effect != "unknown" || input.Action.Target != "document" ||
-				input.ExpectedRole != "" || input.ExpectedName != "" || !nodes.BrowserApprovalDigestMatches(input))) ||
-		(input.Action.Kind == "click" &&
-			(input.Effect != nodes.BrowserClickEffect(input.ExpectedRole) ||
-				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
-		(input.Action.Kind == "dialog" && !validCompanionDialogAction(input)) ||
-		((input.Action.Kind == "check" || input.Action.Kind == "uncheck") &&
-			(input.Effect != "local_edit" ||
-				!nodes.BrowserCheckRoleAllowed(string(input.Action.Kind), input.ExpectedRole) ||
-				input.ApprovalDigest != "")) ||
-		(input.Action.Kind == "hover" &&
-			(input.Effect != "read" || input.ExpectedRole == "" || input.ApprovalDigest != "")) ||
-		(input.Action.Kind == "drag" &&
-			(input.Effect != "unknown" || input.Action.SourceRef == "" || input.Action.DestinationRef == "" ||
-				input.Action.SourceRef == input.Action.DestinationRef || input.ExpectedRole == "" ||
-				len(input.ExpectedRole) > 128 || len(input.ExpectedName) > 4096 ||
-				input.DestinationExpectedRole == "" || len(input.DestinationExpectedRole) > 128 ||
-				len(input.DestinationExpectedName) > 4096 || !nodes.BrowserApprovalDigestMatches(input))) ||
-		(input.Action.Kind == "file_chooser" &&
-			(input.Effect != "local_edit" || input.Action.Ref == "" || input.Action.ArtifactRef == "" ||
-				input.ExpectedRole != "button" || len(input.ExpectedName) > 4096 || input.ApprovalDigest != "" ||
-				len(input.ArtifactSHA256) != sha256.Size*2 || input.ArtifactBytes < 1 ||
-				input.ArtifactBytes > nodes.MaxBrowserUploadBytes || input.ArtifactFilename == "" ||
-				len(input.ArtifactFilename) > 255 || input.ArtifactContentType == "" ||
-				len(input.ArtifactContentType) > 255)) ||
-		(input.Action.Kind != "drag" &&
-			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "")) ||
-		(input.Action.Kind != "file_chooser" &&
-			(input.Action.ArtifactRef != "" || input.ArtifactSHA256 != "" || input.ArtifactBytes != 0 ||
-				input.ArtifactFilename != "" || input.ArtifactContentType != "")) ||
-		(input.Action.Kind != "click" && input.Action.Kind != "fill" && input.Action.Kind != "select" &&
-			input.Action.Kind != "press" && input.Action.Kind != "dialog" && input.Action.Kind != "check" &&
-			input.Action.Kind != "uncheck" && input.Action.Kind != "hover" && input.Action.Kind != "drag" &&
-			input.Action.Kind != "file_chooser" &&
-			(input.ApprovalDigest != "" || input.ExpectedRole != "" || input.ExpectedName != "")) {
-		return nil, newCommandFailure(
-			"COMMAND_DENIED", "browser action is unavailable", nodes.ErrBrowserHostDenied,
 		)
 	}
 	input.Action.Value = value
@@ -342,28 +293,6 @@ func browserEphemeralActionValue(
 		return "", nodes.ErrCommandDenied
 	}
 	return ephemeral.Value, nil
-}
-
-func validCompanionDialogAction(input nodes.BrowserActInput) bool {
-	if input.Action.DialogID == "" ||
-		(input.Action.Decision != "accept" && input.Action.Decision != "dismiss") ||
-		(input.DialogType != "alert" && input.DialogType != "beforeunload" &&
-			input.DialogType != "confirm" && input.DialogType != "prompt") ||
-		input.DialogMessageBytes < 0 || input.DialogMessageBytes > nodes.MaxBrowserDialogMessageBytes ||
-		len(input.DialogMessageDigest) != sha256.Size*2 || input.ExpectedRole != "" || input.ExpectedName != "" {
-		return false
-	}
-	if input.Action.Decision == "dismiss" {
-		return input.Effect == "read" && !input.Action.PromptProvided && input.InputDigest == "" &&
-			input.InputBytes == 0 && input.ApprovalDigest == ""
-	}
-	if input.Effect != "external_commit" || !nodes.BrowserApprovalDigestMatches(input) {
-		return false
-	}
-	if input.Action.PromptProvided {
-		return input.DialogType == "prompt" && len(input.InputDigest) == sha256.Size*2 && input.InputBytes >= 0
-	}
-	return input.InputDigest == "" && input.InputBytes == 0
 }
 
 func browserStatusRequest(
