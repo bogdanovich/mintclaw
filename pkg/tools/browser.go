@@ -1650,6 +1650,21 @@ func browserActionFromArgs(raw any) (browser.Action, error) {
 			return browser.Action{}, browser.ErrInvalid
 		}
 	}
+	for _, key := range []string{
+		"url", "ref", "source_ref", "destination_ref", "dialog_id", "target", "value", "key", "direction",
+		"decision", "artifact_ref",
+	} {
+		if value, present := args[key]; present {
+			if _, valid := value.(string); !valid {
+				return browser.Action{}, browser.ErrInvalid
+			}
+		}
+	}
+	if value, present := args["deliver"]; present {
+		if _, valid := value.(bool); !valid {
+			return browser.Action{}, browser.ErrInvalid
+		}
+	}
 	action.URL, _ = args["url"].(string)
 	action.Ref, _ = args["ref"].(string)
 	action.SourceRef, _ = args["source_ref"].(string)

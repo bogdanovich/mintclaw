@@ -1666,10 +1666,13 @@ func TestBrowserActApprovalPreparationFailsWithSafeDenial(t *testing.T) {
 	}
 }
 
-func TestBrowserActRejectsCrossKindAndUnknownFieldsBeforePreparation(t *testing.T) {
+func TestBrowserActRejectsInvalidActionFieldsBeforePreparation(t *testing.T) {
 	for _, action := range []map[string]any{
 		{"kind": "scroll", "direction": "down", "amount": 1, "target": "document"},
 		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
+		{"kind": "scroll", "direction": false, "amount": 1},
+		{"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": false},
+		{"kind": "download", "ref": "download_1", "deliver": "true"},
 	} {
 		source := &fakeBrowserToolSource{available: true}
 		result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
