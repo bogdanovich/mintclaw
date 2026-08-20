@@ -145,6 +145,61 @@ func TestRunTurnAndDrainSteeringPendingDeliveryPublishesNothingAndDoesNotDrain(t
 	}
 }
 
+func TestRunTurnAndDrainSteeringPendingContinuationSuppressesAggregate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ToolFeedback.Enabled = false
+	pendingErr := fmt.Errorf("%w: coordinator closed", errFinalHandledDeliveryPending)
+	provider := &sequenceProvider{errors: []error{pendingErr}}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, provider)
+	t.Cleanup(func() { al.Close() })
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	initial := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		SessionKey: "session-pending-continuation",
+	}
+	target := &continuationTarget{
+		SessionKey: initial.SessionKey,
+		Channel:    initial.Channel,
+		ChatID:     initial.ChatID,
+		AgentID:    agent.ID,
+		Workspace:  agent.Workspace,
+	}
+	if err := al.steering.pushScopeWithSender(
+		newRuntimeSessionScope(target.Workspace, target.SessionKey),
+		providers.Message{Role: "user", Content: "queued continuation"},
+		"user-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	admission := al.runTurnAndDrainSteering(
+		t.Context(),
+		initial,
+		func() (string, error) { return "initial aggregate response", nil },
+		target,
+	)
+	if admission.permitsInboundAck() || !errors.Is(admission.err, errFinalHandledDeliveryPending) {
+		t.Fatalf("admission = %+v, want rejected pending continuation", admission)
+	}
+	if provider.callCount != 1 {
+		t.Fatalf("provider calls = %d, want 1 continuation", provider.callCount)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("pending continuation published aggregate output: %#v", outbound)
+	default:
+	}
+}
+
 // --- steeringQueue unit tests ---
 
 func TestSteeringQueue_PushDequeue_OneAtATime(t *testing.T) {

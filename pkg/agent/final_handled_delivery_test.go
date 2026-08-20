@@ -434,8 +434,13 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", Text: "hello",
 	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	tool := &fixedToolResultTool{name: "final_message", result: result}
+	prior := &fixedToolResultTool{
+		name:   "prior_non_idempotent",
+		result: toolshared.SilentResult("prior side effect committed"),
+	}
 	sibling := &fixedToolResultTool{name: "destructive_sibling", result: toolshared.SilentResult("executed")}
 	registry := tools.NewToolRegistry()
+	registry.Register(prior)
 	registry.Register(tool)
 	registry.Register(sibling)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
@@ -444,15 +449,22 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 		sessionKey: sessionKey, session: store,
 		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
+	priorCall := providers.ToolCall{ID: "call-prior", Name: prior.Name(), Arguments: map[string]any{}}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{ID: "call-sibling", Name: sibling.Name(), Arguments: map[string]any{}}
-	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall, siblingCall}}
+	intent := providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{priorCall, toolCall, siblingCall},
+	}
+	userMessage := providers.Message{Role: "user", Content: "run the three-call batch"}
+	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, userMessage); err != nil {
+		t.Fatal(err)
+	}
 	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
-	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
+	llm.normalizedToolCalls = []providers.ToolCall{priorCall, toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
 	settlement := &finalHandledSettlementDelivery{store: baseStore, sessionKey: sessionKey, delivered: true}
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
@@ -461,21 +473,44 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	if !errors.Is(outcome.JournalErr, mutationErr) {
 		t.Fatalf("journal error = %v, want %v", outcome.JournalErr, mutationErr)
 	}
-	if settlement.calls != 0 {
-		t.Fatalf("delivery calls = %d, want 0", settlement.calls)
+	if settlement.calls != 1 {
+		t.Fatalf("delivery calls = %d, want only the prior tool", settlement.calls)
+	}
+	if prior.executions != 1 {
+		t.Fatalf("prior executions = %d, want 1", prior.executions)
 	}
 	if sibling.executions != 0 {
 		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
 	}
+	canonical := baseStore.GetHistory(sessionKey)
 	for source, messages := range map[string][]providers.Message{
-		"canonical history": baseStore.GetHistory(sessionKey),
-		"execution context": exec.messages,
+		"canonical history": canonical,
 		"live turn state":   ts.liveTurnMessages,
 	} {
-		for _, message := range messages {
-			if message.Role == "tool" {
-				t.Fatalf("%s contains partial tool result: %#v", source, message)
+		priorResult := matchingToolResult(t, messages, priorCall.ID)
+		if !strings.Contains(priorResult.Content, "prior side effect committed") {
+			t.Fatalf("%s prior result = %#v", source, priorResult)
+		}
+		for _, missingID := range []string{toolCall.ID, siblingCall.ID} {
+			for _, message := range messages {
+				if message.Role == "tool" && message.ToolCallID == missingID {
+					t.Fatalf("%s contains partially reserved result: %#v", source, message)
+				}
 			}
+		}
+	}
+	for _, message := range exec.messages {
+		if message.Role == "tool" {
+			t.Fatalf("stopped execution context contains partial result: %#v", message)
+		}
+	}
+	sanitized := sanitizeHistoryForProvider(canonical)
+	_ = matchingToolResult(t, sanitized, priorCall.ID)
+	for _, missingID := range []string{toolCall.ID, siblingCall.ID} {
+		repaired := matchingToolResult(t, sanitized, missingID)
+		if repaired.ToolResultStatus != providers.ToolResultStatusUnresolved ||
+			!strings.Contains(repaired.Content, "do not assume success") {
+			t.Fatalf("repaired result for %s = %#v", missingID, repaired)
 		}
 	}
 }

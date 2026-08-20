@@ -163,6 +163,16 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 	steeringAggregate, continueErr := al.drainSteeringForAggregate(ctx, target)
 	continued := steeringAggregate.response
 	if continueErr != nil {
+		if isNonPublishableTurnError(continueErr) {
+			admission := rejectedFinalResponseAdmission(continueErr)
+			if settleErr := al.settleSteeringMessages(
+				admission,
+				steeringAggregate.messages,
+			); settleErr != nil {
+				return rejectedFinalResponseAdmission(settleErr)
+			}
+			return admission
+		}
 		if ctx.Err() == nil {
 			logger.WarnCF("agent", "Failed to continue queued steering",
 				map[string]any{

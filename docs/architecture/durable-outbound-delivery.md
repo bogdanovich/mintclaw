@@ -88,6 +88,14 @@ intent, the complete batch and unresolved barrier remain in place rather than
 recording a false success. This keeps strict-provider history valid across
 cancellation, hard-abort, and persistence-failure boundaries.
 
+If storage fails after an earlier call in the emitted batch was already
+journaled but before terminal reservation, provider-history sanitization keeps
+the real result and supplies conservative unresolved results for missing call
+IDs. Those provider-only repairs say that execution status is unknown and
+forbid blind side-effect retries. Invalid or empty call IDs remain
+unrepairable. This fallback prevents an incomplete durable batch from hiding a
+side effect that did complete.
+
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid
 payloads from becoming durable retry work.
