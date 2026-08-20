@@ -9,12 +9,13 @@ import (
 )
 
 type SpawnTool struct {
-	manager        *SubagentManager
-	spawner        SubTurnSpawner
-	defaultModel   string
-	maxTokens      int
-	temperature    float64
-	allowlistCheck func(targetAgentID string) bool
+	manager                    *SubagentManager
+	spawner                    SubTurnSpawner
+	defaultModel               string
+	maxTokens                  int
+	temperature                float64
+	allowlistCheck             func(targetAgentID string) bool
+	requiresObjectiveChecklist func(targetAgentID string) bool
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -106,6 +107,14 @@ func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
 }
 
+// SetObjectiveChecklistRequirement configures the target-aware preflight used
+// to keep browser-capable tasks in the parent turn when their verification
+// contract is missing. This lets the caller repair the tool call instead of
+// delivering a terminal failure from an already-started background task.
+func (t *SpawnTool) SetObjectiveChecklistRequirement(check func(targetAgentID string) bool) {
+	t.requiresObjectiveChecklist = check
+}
+
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	return t.execute(ctx, args, nil)
 }
@@ -153,6 +162,12 @@ func (t *SpawnTool) execute(
 		if !t.allowlistCheck(targetAgentID) {
 			return toolshared.ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", targetAgentID))
 		}
+	}
+	if t.requiresObjectiveChecklist != nil && t.requiresObjectiveChecklist(targetAgentID) && len(objectiveItems) == 0 {
+		return toolshared.ErrorResult(
+			"objective_items is required when spawning a browser-capable agent; " +
+				"retry spawn with every requested result or external action declared",
+		)
 	}
 
 	// Preferred path: route through SubagentManager so spawned tasks are visible

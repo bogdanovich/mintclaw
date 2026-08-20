@@ -18,11 +18,12 @@ import (
 // generic), delegate targets a named agent and runs the task using that
 // agent's own workspace, model, and tools.
 type DelegateTool struct {
-	spawner        SubTurnSpawner
-	allowlistCheck func(targetAgentID string) bool
-	selfAgentID    string
-	taskRegistry   *taskregistry.Registry
-	taskSeq        atomic.Int64
+	spawner                    SubTurnSpawner
+	allowlistCheck             func(targetAgentID string) bool
+	requiresObjectiveChecklist func(targetAgentID string) bool
+	selfAgentID                string
+	taskRegistry               *taskregistry.Registry
+	taskSeq                    atomic.Int64
 }
 
 func NewDelegateTool() *DelegateTool {
@@ -35,6 +36,10 @@ func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 
 func (t *DelegateTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
+}
+
+func (t *DelegateTool) SetObjectiveChecklistRequirement(check func(targetAgentID string) bool) {
+	t.requiresObjectiveChecklist = check
 }
 
 func (t *DelegateTool) SetSelfAgentID(id string) {
@@ -118,6 +123,12 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 
 	if t.allowlistCheck != nil && !t.allowlistCheck(agentID) {
 		return toolshared.ErrorResult(fmt.Sprintf("not allowed to delegate to agent %q", agentID))
+	}
+	if t.requiresObjectiveChecklist != nil && t.requiresObjectiveChecklist(agentID) && len(objectiveItems) == 0 {
+		return toolshared.ErrorResult(
+			"objective_items is required when delegating to a browser-capable agent; " +
+				"retry delegate with every requested result or external action declared",
+		)
 	}
 
 	if t.spawner == nil {
