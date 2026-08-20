@@ -596,7 +596,10 @@ func (descriptor CommandDescriptor) Capability() string {
 
 // Hash returns the canonical identity of one command contract.
 func (descriptor CommandDescriptor) Hash() (string, error) {
-	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).Hash()
+	if err := descriptor.Validate(); err != nil {
+		return "", err
+	}
+	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
 }
 
 type CapabilityCatalog struct {
@@ -610,6 +613,7 @@ func (catalog CapabilityCatalog) Validate() error {
 	seen := make(map[string]struct{}, len(catalog.Commands))
 	totalBytes := 0
 	var browserProfiles []BrowserProfileDescriptor
+	browserCommandCount := 0
 	for _, descriptor := range catalog.Commands {
 		totalBytes += len(descriptor.Name) + len(descriptor.InputSchema) + len(descriptor.OutputSchema)
 		if descriptor.ModelContract != nil {
@@ -645,6 +649,7 @@ func (catalog CapabilityCatalog) Validate() error {
 			return err
 		}
 		if IsBrowserCommand(descriptor.Name) {
+			browserCommandCount++
 			if browserProfiles == nil {
 				browserProfiles = descriptor.BrowserProfiles
 			} else if !reflect.DeepEqual(browserProfiles, descriptor.BrowserProfiles) {
@@ -658,6 +663,9 @@ func (catalog CapabilityCatalog) Validate() error {
 			return fmt.Errorf("%w: duplicate command %q", ErrInvalidCapability, descriptor.Name)
 		}
 		seen[descriptor.Name] = struct{}{}
+	}
+	if browserCommandCount != 0 && browserCommandCount != len(currentBrowserCommandSpecs) {
+		return fmt.Errorf("%w: browser catalog lacks the complete current command set", ErrInvalidCapability)
 	}
 	return nil
 }

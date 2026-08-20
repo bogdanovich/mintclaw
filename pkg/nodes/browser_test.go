@@ -65,6 +65,16 @@ func TestBrowserCatalogRequiresOneCurrentProfileSet(t *testing.T) {
 	}
 }
 
+func TestBrowserCatalogRequiresCompleteCurrentCommandSet(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors[:len(descriptors)-1]}).Validate(); err == nil {
+		t.Fatal("browser catalog accepted an incomplete current command set")
+	}
+}
+
 func TestBrowserCaptureCanonicalNumbersDecodeExactly(t *testing.T) {
 	var input BrowserCaptureInput
 	if err := json.Unmarshal([]byte(`{

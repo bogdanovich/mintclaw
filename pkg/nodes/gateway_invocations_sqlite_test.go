@@ -97,23 +97,7 @@ func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 	}
 	record := gatewayBrowserObserveRecord(t, time.Now(), "opaque_tombstone")
 	record.Descriptor.OutputSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
-	descriptorHash, err := (CapabilityCatalog{
-		Commands: []CommandDescriptor{record.Descriptor},
-	}).canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Plan.DescriptorHash = descriptorHash
-	record.Plan.CatalogHash = descriptorHash
-	record.Plan.PlanHash = ""
-	record.Plan.PlanHash, err = record.Plan.computeHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.ExpectedPlanHash = record.Plan.PlanHash
-	record.State = GatewayInvocationDispatched
-	record.DispatchedAt = record.CreatedAt + 1
-	record.UpdatedAt = record.DispatchedAt
+	bindOpaqueGatewayInvocationTombstone(t, &record)
 	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
 
 	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
@@ -124,6 +108,28 @@ func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 	retained, found, err := store.Lookup(gatewayTestPrincipal(record.Plan), record.Plan.InvocationID)
 	if err != nil || !found || retained.State != GatewayInvocationDispatched {
 		t.Fatalf("opaque tombstone = (%#v, %v, %v)", retained, found, err)
+	}
+}
+
+func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	record := gatewayBrowserObserveRecord(t, time.Now(), "oversized_opaque_tombstone")
+	record.Descriptor.ModelContract = &CommandModelContract{
+		Guidance: []string{strings.Repeat("x", MaxCatalogBytes)},
+	}
+	bindOpaqueGatewayInvocationTombstone(t, &record)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil ||
+		!strings.Contains(err.Error(), "opaque tombstone descriptor is too large") {
+		t.Fatalf("reopen with oversized opaque tombstone error = %v", err)
 	}
 }
 
@@ -161,10 +167,15 @@ func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	if err = os.WriteFile(legacyPath, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024)
+	backend, err := newGatewayInvocationSQLiteStore(
+		GatewayInvocationStorePath(workspace),
+		16*1024*1024,
+		func() time.Time { return clock },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := &GatewayInvocationStore{sqlite: backend}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
 	var count int
 	if err = store.sqlite.db.QueryRow("SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
@@ -240,6 +251,27 @@ func gatewayBrowserObserveRecord(
 		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
 		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
 	}
+}
+
+func bindOpaqueGatewayInvocationTombstone(t *testing.T, record *GatewayInvocationRecord) {
+	t.Helper()
+	descriptorHash, err := (CapabilityCatalog{
+		Commands: []CommandDescriptor{record.Descriptor},
+	}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Plan.DescriptorHash = descriptorHash
+	record.Plan.CatalogHash = descriptorHash
+	record.Plan.PlanHash = ""
+	record.Plan.PlanHash, err = record.Plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ExpectedPlanHash = record.Plan.PlanHash
+	record.State = GatewayInvocationDispatched
+	record.DispatchedAt = record.CreatedAt + 1
+	record.UpdatedAt = record.DispatchedAt
 }
 
 func writeGatewayInvocationSQLiteRecordForMigrationTest(

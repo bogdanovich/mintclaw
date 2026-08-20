@@ -67,6 +67,19 @@ const (
 	BrowserCommandSessionClose  = "browser.session.close.v1"
 )
 
+var currentBrowserCommandSpecs = [...]struct {
+	name string
+	risk Risk
+}{
+	{BrowserCommandSessionOpen, RiskWrite},
+	{BrowserCommandSessionStatus, RiskRead},
+	{BrowserCommandObserve, RiskRead},
+	{BrowserCommandAct, RiskWrite},
+	{BrowserCommandContexts, RiskWrite},
+	{BrowserCommandSessionClose, RiskWrite},
+	{BrowserCommandCapture, RiskRead},
+}
+
 type BrowserLimits struct {
 	Sessions        int `json:"sessions"`
 	Tabs            int `json:"tabs"`
@@ -1022,13 +1035,12 @@ func (profile BrowserProfileDescriptor) Validate() error {
 }
 
 func IsBrowserCommand(name string) bool {
-	switch name {
-	case BrowserCommandSessionOpen, BrowserCommandSessionStatus, BrowserCommandObserve,
-		BrowserCommandCapture, BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose:
-		return true
-	default:
-		return false
+	for _, command := range currentBrowserCommandSpecs {
+		if command.name == name {
+			return true
+		}
 	}
+	return false
 }
 
 // BrowserCommandDescriptors returns the internal typed capability catalog for
@@ -1040,20 +1052,8 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 	if err := validateBrowserProfiles(profiles); err != nil {
 		return nil, err
 	}
-	commands := []struct {
-		name string
-		risk Risk
-	}{
-		{BrowserCommandSessionOpen, RiskWrite},
-		{BrowserCommandSessionStatus, RiskRead},
-		{BrowserCommandObserve, RiskRead},
-		{BrowserCommandAct, RiskWrite},
-		{BrowserCommandContexts, RiskWrite},
-		{BrowserCommandSessionClose, RiskWrite},
-		{BrowserCommandCapture, RiskRead},
-	}
-	result := make([]CommandDescriptor, 0, len(commands))
-	for _, command := range commands {
+	result := make([]CommandDescriptor, 0, len(currentBrowserCommandSpecs))
+	for _, command := range currentBrowserCommandSpecs {
 		result = append(result, CommandDescriptor{
 			Name:            command.name,
 			InputSchema:     BrowserCommandInputSchema(command.name, profiles),

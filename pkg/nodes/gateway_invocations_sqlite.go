@@ -568,7 +568,11 @@ func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) e
 	if err := record.validateFields(true); err != nil {
 		return err
 	}
-	if len(record.Descriptor.InputSchema)+len(record.Descriptor.OutputSchema) > MaxCatalogBytes {
+	descriptorJSON, err := json.Marshal(record.Descriptor)
+	if err != nil {
+		return fmt.Errorf("%w: encode opaque tombstone descriptor", ErrInvalidInvocation)
+	}
+	if len(descriptorJSON) > MaxCatalogBytes {
 		return fmt.Errorf("%w: opaque tombstone descriptor is too large", ErrInvalidInvocation)
 	}
 	descriptorHash, err := (CapabilityCatalog{
