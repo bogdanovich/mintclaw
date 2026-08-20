@@ -17,6 +17,11 @@ type syncToolResultDelivery struct {
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error)
 }
 
+func requiresTerminalDeliverySettlement(ts *turnState, result *toolshared.ToolResult) bool {
+	return ts != nil && !ts.opts.SuppressToolUserDelivery &&
+		result != nil && result.Outbound != nil && isFinalHandledDelivery(result)
+}
+
 func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {
 	if al == nil {
 		return nil

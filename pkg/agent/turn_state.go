@@ -912,6 +912,26 @@ func (ts *turnState) recordPersistedMessagePair(
 	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMsg)
 }
 
+func (ts *turnState) replacePersistedToolMessagePair(
+	expectedLive providers.Message,
+	expectedDurable providers.Message,
+	replacementLive providers.Message,
+	replacementDurable providers.Message,
+) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for i := min(len(ts.persistedMessages), len(ts.liveTurnMessages)) - 1; i >= 0; i-- {
+		if !pendingToolResultMatches(ts.persistedMessages[i], expectedDurable) ||
+			!pendingToolResultMatches(ts.liveTurnMessages[i], expectedLive) {
+			continue
+		}
+		ts.persistedMessages[i] = replacementDurable
+		ts.liveTurnMessages[i] = replacementLive
+		return true
+	}
+	return false
+}
+
 func (ts *turnState) recordAcceptedSteeringMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()

@@ -793,12 +793,12 @@ func setConfirmedToolDeliveryText(result *toolshared.ToolResult, mediaCount int)
 	}
 	if mediaCount > 0 {
 		result.ForLLM = fmt.Sprintf(
-			"Message with %d media attachment(s) delivered to the user.",
+			"Message with %d media attachment(s) confirmed delivered to the user.",
 			mediaCount,
 		)
 		return
 	}
-	result.ForLLM = "Message delivered to the user."
+	result.ForLLM = "Message confirmed delivered to the user."
 }
 
 func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx *bus.InboundContext) {

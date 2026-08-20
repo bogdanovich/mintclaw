@@ -73,6 +73,13 @@ actionable tool error, while `ambiguous` explicitly forbids blind retry. If the
 owning context ends first, the tool reports only that delivery is pending and
 does not suppress a later assistant response.
 
+The tool journal uses the same terminal boundary. Before a `final_handled`
+outbound side effect starts, the turn persists one unresolved tool result. Once
+delivery settles, that exact entry is atomically replaced with the confirmed
+delivery receipt or the actionable transport failure. The provider cannot
+continue from a provisional "prepared" result, and a journal-finalization
+failure stops the turn instead of risking a duplicate side effect.
+
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid
 payloads from becoming durable retry work.
