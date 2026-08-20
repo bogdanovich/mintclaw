@@ -250,6 +250,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		TargetAgentID:      cfg.TargetAgentID,
 		DeliveryMode:       cfg.DeliveryMode,
 		TaskID:             cfg.TaskID,
+		ObjectiveItems:     append([]toolshared.ObjectiveSpec(nil), cfg.ObjectiveItems...),
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
