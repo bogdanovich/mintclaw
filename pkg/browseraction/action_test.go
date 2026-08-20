@@ -34,6 +34,8 @@ func TestActionValidate(t *testing.T) {
 		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionNavigate},
 		{Kind: ActionClick, Ref: "css:#submit"},
+		{Kind: ActionFill, Ref: "ref_fill"},
+		{Kind: ActionSelect, Ref: "ref_select"},
 		{Kind: ActionDialog, Decision: "dismiss"},
 		{Kind: ActionScroll, Direction: "down", Amount: MaxScrollAmount + 1},
 		{Kind: ActionDrag, SourceRef: "ref_same", DestinationRef: "ref_same"},
@@ -110,6 +112,12 @@ func TestCurrentVocabularyDrivesValidationAndSchema(t *testing.T) {
 		amount["maximum"] != MaxScrollAmount {
 		t.Fatalf("scroll amount schema = %#v", amount)
 	}
+	textActions := Schema([]ActionKind{ActionFill, ActionDialog}, 1024, false)
+	fillValue := strictSchemaTestBranch(t, textActions, ActionFill)["properties"].(map[string]any)["value"]
+	dialogValue := strictSchemaTestBranch(t, textActions, ActionDialog)["properties"].(map[string]any)["value"]
+	if fillValue.(map[string]any)["minLength"] != 1 || dialogValue.(map[string]any)["minLength"] != nil {
+		t.Fatalf("strict text action schemas = %#v", textActions)
+	}
 
 	tolerant := Schema([]ActionKind{ActionDialog}, 1024, true)
 	properties = tolerant["properties"].(map[string]any)
@@ -166,6 +174,8 @@ func TestDecodeModelActionRejectsInvalidWireFields(t *testing.T) {
 		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
 		{"kind": "scroll", "direction": false, "amount": 1},
 		{"kind": "scroll", "direction": "down", "amount": 1.5},
+		{"kind": "fill", "ref": "element_1", "value": ""},
+		{"kind": "select", "ref": "element_1", "value": ""},
 		{"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": false},
 		{"kind": "dialog", "decision": "dismiss"},
 		{"kind": "download", "ref": "download_1", "deliver": "true"},

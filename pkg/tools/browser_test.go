@@ -1677,6 +1677,8 @@ func TestBrowserActRejectsInvalidActionFieldsBeforePreparation(t *testing.T) {
 		{"kind": "scroll", "direction": "down", "amount": 1, "target": "document"},
 		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
 		{"kind": "scroll", "direction": false, "amount": 1},
+		{"kind": "fill", "ref": "element_1", "value": ""},
+		{"kind": "select", "ref": "element_1", "value": ""},
 		{"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": false},
 		{"kind": "download", "ref": "download_1", "deliver": "true"},
 	} {

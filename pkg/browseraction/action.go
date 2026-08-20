@@ -191,8 +191,9 @@ func (action *Action) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed drag action", ErrInvalid)
 		}
 	case ActionFill, ActionSelect:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
-			action.Direction != "" || action.Decision != "" || action.PromptProvided || action.Amount != 0 {
+		if !validIdentifier(action.Ref) || action.Value == "" || action.URL != "" || action.Target != "" || action.Key != "" ||
+			action.Direction != "" || action.Decision != "" || action.PromptProvided ||
+			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
 		}
 	case ActionPress:
@@ -326,6 +327,7 @@ func strictSchemaBranch(kind ActionKind, maxTextBytes int) map[string]any {
 		required = append(required, "ref")
 	case ActionFill, ActionSelect:
 		required = append(required, "ref", "value")
+		properties["value"].(map[string]any)["minLength"] = 1
 	case ActionPress:
 		required = append(required, "target", "key")
 	case ActionScroll:
