@@ -1221,40 +1221,12 @@ func (*BrowserActTool) Description() string {
 
 func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
-	actions := []string{
-		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "drag", "press", "scroll", "dialog",
-	}
 	downloadAvailable := false
+	fileChooserAvailable := false
 	if tool != nil && tool.runtime != nil {
 		limits = tool.runtime.config.Limits.Effective()
 		downloadAvailable = tool.runtime.source.DownloadAvailable()
-		if tool.runtime.fileChooserAvailable() {
-			actions = append(actions, string(browser.ActionFileChooser))
-		}
-	}
-	if downloadAvailable {
-		actions = append(actions, "download")
-	}
-	actionProperties := map[string]any{
-		"kind":            map[string]any{"type": "string", "enum": actions},
-		"url":             map[string]any{"type": "string"},
-		"ref":             map[string]any{"type": "string"},
-		"source_ref":      map[string]any{"type": "string"},
-		"destination_ref": map[string]any{"type": "string"},
-		"dialog_id":       map[string]any{"type": "string"},
-		"target":          map[string]any{"type": "string", "enum": []string{"document"}},
-		"value":           map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
-		"key": map[string]any{"type": "string", "enum": []string{
-			"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
-			"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
-		}},
-		"direction":    map[string]any{"type": "string", "enum": []string{"up", "down"}},
-		"amount":       map[string]any{"type": "integer"},
-		"decision":     map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}},
-		"artifact_ref": map[string]any{"type": "string"},
-	}
-	if downloadAvailable {
-		actionProperties["deliver"] = map[string]any{"type": "boolean"}
+		fileChooserAvailable = tool.runtime.fileChooserAvailable()
 	}
 	return map[string]any{
 		"type": "object",
@@ -1288,11 +1260,12 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"action": map[string]any{
-				"type":                 "object",
-				"description":          "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
-				"properties":           actionProperties,
-				"required":             []string{"kind"},
-				"additionalProperties": false,
+				"description": "Select exactly one action shape; fields from other action kinds are invalid.",
+				"oneOf": browserActionSchemas(
+					limits.TextInputBytes,
+					fileChooserAvailable,
+					downloadAvailable,
+				),
 			},
 		},
 		"required": []string{
@@ -1300,6 +1273,58 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		},
 		"additionalProperties": false,
 	}
+}
+
+func browserActionSchemas(maxTextBytes int, fileChooserAvailable, downloadAvailable bool) []any {
+	text := map[string]any{"type": "string", "maxLength": maxTextBytes}
+	ref := map[string]any{"type": "string"}
+	branch := func(kind browser.ActionKind, properties map[string]any, required ...string) map[string]any {
+		properties["kind"] = map[string]any{"type": "string", "const": string(kind)}
+		return map[string]any{
+			"type": "object", "properties": properties,
+			"required": append([]string{"kind"}, required...), "additionalProperties": false,
+		}
+	}
+	key := map[string]any{"type": "string", "enum": []string{
+		"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
+		"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
+	}}
+	schemas := []any{
+		branch(browser.ActionNavigate, map[string]any{"url": map[string]any{"type": "string"}}, "url"),
+		branch(browser.ActionClick, map[string]any{"ref": ref}, "ref"),
+		branch(browser.ActionFill, map[string]any{"ref": ref, "value": text}, "ref", "value"),
+		branch(browser.ActionSelect, map[string]any{"ref": ref, "value": text}, "ref", "value"),
+		branch(browser.ActionCheck, map[string]any{"ref": ref}, "ref"),
+		branch(browser.ActionUncheck, map[string]any{"ref": ref}, "ref"),
+		branch(browser.ActionHover, map[string]any{"ref": ref}, "ref"),
+		branch(browser.ActionDrag, map[string]any{"source_ref": ref, "destination_ref": ref},
+			"source_ref", "destination_ref"),
+		branch(browser.ActionPress, map[string]any{
+			"target": map[string]any{"type": "string", "const": "document"}, "key": key,
+		}, "target", "key"),
+		branch(browser.ActionScroll, map[string]any{
+			"direction": map[string]any{"type": "string", "enum": []string{"up", "down"}},
+			"amount": map[string]any{
+				"type": "integer", "minimum": 1, "maximum": browser.MaxScrollAmount,
+			},
+		}, "direction", "amount"),
+		branch(browser.ActionDialog, map[string]any{
+			"dialog_id": map[string]any{"type": "string"},
+			"decision":  map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}},
+			"value":     text, "prompt_provided": map[string]any{"type": "boolean"},
+		}, "decision"),
+	}
+	if fileChooserAvailable {
+		schemas = append(schemas, branch(browser.ActionFileChooser, map[string]any{
+			"ref": ref, "artifact_ref": map[string]any{"type": "string"},
+		}, "ref", "artifact_ref"))
+	}
+	if downloadAvailable {
+		schemas = append(schemas, branch(browser.ActionDownload, map[string]any{
+			"ref": ref, "deliver": map[string]any{"type": "boolean"},
+		}, "ref"))
+	}
+	return schemas
 }
 
 func (runtime *browserToolRuntime) fileChooserAvailable() bool {

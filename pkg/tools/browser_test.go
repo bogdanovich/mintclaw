@@ -915,15 +915,8 @@ func TestBrowserActSchemaDoesNotAdvertiseDeferredDownload(t *testing.T) {
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionDownload) {
-			t.Fatalf("deferred download action advertised in schema: %#v", kind["enum"])
-		}
-	}
-	if _, ok := actionProperties["deliver"]; ok {
-		t.Fatalf("download-only deliver field advertised in schema: %#v", actionProperties)
+	if branch := browserActionSchemaBranch(action, browser.ActionDownload); branch != nil {
+		t.Fatalf("deferred download action advertised in schema: %#v", branch)
 	}
 }
 
@@ -931,15 +924,11 @@ func TestBrowserActSchemaAdvertisesAdmittedDownload(t *testing.T) {
 	parameters := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true}).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	download := false
-	for _, candidate := range kind["enum"].([]string) {
-		download = download || candidate == string(browser.ActionDownload)
+	branch := browserActionSchemaBranch(action, browser.ActionDownload)
+	if branch == nil {
+		t.Fatalf("admitted download action missing from schema: %#v", action)
 	}
-	if !download {
-		t.Fatalf("admitted download action missing from schema: %#v", kind["enum"])
-	}
+	actionProperties := branch["properties"].(map[string]any)
 	if _, ok := actionProperties["deliver"]; !ok {
 		t.Fatalf("admitted download delivery field missing from schema: %#v", actionProperties)
 	}
@@ -951,16 +940,45 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	seen := make(map[string]bool)
-	for _, candidate := range kind["enum"].([]string) {
-		seen[candidate] = true
-	}
 	for _, candidate := range []string{"check", "uncheck", "hover", "drag", "file_chooser"} {
-		if !seen[candidate] {
-			t.Fatalf("%s missing from browser_act schema: %#v", candidate, seen)
+		if browserActionSchemaBranch(action, browser.ActionKind(candidate)) == nil {
+			t.Fatalf("%s missing from browser_act schema: %#v", candidate, action)
 		}
+	}
+}
+
+func browserActionSchemaBranch(action map[string]any, kind browser.ActionKind) map[string]any {
+	for _, candidate := range action["oneOf"].([]any) {
+		branch := candidate.(map[string]any)
+		properties := branch["properties"].(map[string]any)
+		kindSchema := properties["kind"].(map[string]any)
+		if kindSchema["const"] == string(kind) {
+			return branch
+		}
+	}
+	return nil
+}
+
+func TestBrowserActSchemaUsesExclusiveTypedActionShapes(t *testing.T) {
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Parameters()
+	properties := parameters["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+
+	scroll := browserActionSchemaBranch(action, browser.ActionScroll)
+	scrollProperties := scroll["properties"].(map[string]any)
+	if _, ok := scrollProperties["target"]; ok {
+		t.Fatalf("scroll schema advertises press-only target: %#v", scrollProperties)
+	}
+	amount := scrollProperties["amount"].(map[string]any)
+	if amount["minimum"] != 1 || amount["maximum"] != browser.MaxScrollAmount {
+		t.Fatalf("scroll amount schema = %#v", amount)
+	}
+	press := browserActionSchemaBranch(action, browser.ActionPress)
+	pressProperties := press["properties"].(map[string]any)
+	if pressProperties["target"].(map[string]any)["const"] != "document" {
+		t.Fatalf("press target schema = %#v", pressProperties["target"])
 	}
 }
 
@@ -981,7 +999,7 @@ func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 		}
 	}
 	action := properties["action"].(map[string]any)
-	if description, _ := action["description"].(string); !strings.Contains(description, "do not add unrelated") {
+	if description, _ := action["description"].(string); !strings.Contains(description, "exactly one action shape") {
 		t.Fatalf("action description = %q", description)
 	}
 }
@@ -1181,12 +1199,8 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionFileChooser) {
-			t.Fatalf("unsupported file chooser advertised in schema: %#v", kind["enum"])
-		}
+	if branch := browserActionSchemaBranch(action, browser.ActionFileChooser); branch != nil {
+		t.Fatalf("unsupported file chooser advertised in schema: %#v", branch)
 	}
 }
 
@@ -1199,10 +1213,8 @@ func TestBrowserActSchemaIncludesFileChooserForNodeTarget(t *testing.T) {
 	parameters := NewBrowserActTool(cfg, &fakeBrowserToolSource{available: true}).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	if !slices.Contains(kind["enum"].([]string), string(browser.ActionFileChooser)) {
-		t.Fatalf("node file chooser missing from schema: %#v", kind["enum"])
+	if browserActionSchemaBranch(action, browser.ActionFileChooser) == nil {
+		t.Fatalf("node file chooser missing from schema: %#v", action)
 	}
 }
 
