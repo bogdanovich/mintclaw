@@ -34,8 +34,6 @@ func TestActionValidate(t *testing.T) {
 		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionNavigate},
 		{Kind: ActionClick, Ref: "css:#submit"},
-		{Kind: ActionFill, Ref: "ref_fill"},
-		{Kind: ActionSelect, Ref: "ref_select"},
 		{Kind: ActionDialog, Decision: "dismiss"},
 		{Kind: ActionScroll, Direction: "down", Amount: MaxScrollAmount + 1},
 		{Kind: ActionDrag, SourceRef: "ref_same", DestinationRef: "ref_same"},

@@ -191,7 +191,7 @@ func (action *Action) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: malformed drag action", ErrInvalid)
 		}
 	case ActionFill, ActionSelect:
-		if !validIdentifier(action.Ref) || action.Value == "" || action.URL != "" || action.Target != "" || action.Key != "" ||
+		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
 			action.Direction != "" || action.Decision != "" || action.PromptProvided ||
 			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
@@ -394,6 +394,9 @@ func DecodeModelAction(raw any, maxTextBytes int) (Action, error) {
 	}
 	if action.Kind == ActionDialog {
 		_, action.PromptProvided = args["value"]
+	}
+	if (action.Kind == ActionFill || action.Kind == ActionSelect) && action.Value == "" {
+		return Action{}, ErrInvalid
 	}
 	if err := action.Validate(maxTextBytes); err != nil {
 		return Action{}, ErrInvalid
