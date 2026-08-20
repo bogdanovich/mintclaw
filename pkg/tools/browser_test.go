@@ -121,6 +121,30 @@ func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *test
 	}
 }
 
+func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjection(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(&BrowserActTool{})
+	secret := "durable-projection-secret"
+	projected, protected, err := registry.DurableArguments("browser_act", map[string]any{
+		"browser_session_id":  "session_1",
+		"tab_id":              "tab_1",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 1,
+		"action": map[string]any{
+			"kind": "fill", "ref": "ref_1", "value": secret, "unknown_sensitive_field": secret,
+		},
+	})
+	if err == nil {
+		t.Fatal("DurableArguments() error = nil, want malformed action rejection")
+	}
+	if projected != nil || protected {
+		t.Fatalf("DurableArguments() = %#v, protected %v; want no persistent projection", projected, protected)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("DurableArguments() leaked protected input in error: %v", err)
+	}
+}
+
 func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	observe := &BrowserObserveTool{}
 	contexts := &BrowserContextsTool{}

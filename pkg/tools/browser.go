@@ -1294,7 +1294,14 @@ const browserProtectedInputRedaction = "*"
 // DurableArguments removes protected fill and dialog-prompt text before assistant intent can be
 // persisted or reused. It deliberately leaves the current in-memory call
 // untouched so the broker can consume the value exactly once.
-func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
+func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	if tool != nil && tool.runtime != nil {
+		limits = tool.runtime.config.Limits.Effective()
+	}
+	if _, err := browseraction.DecodeModelAction(args["action"], limits.TextInputBytes); err != nil {
+		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
+	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return nil, err
