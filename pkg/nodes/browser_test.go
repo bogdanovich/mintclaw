@@ -299,6 +299,10 @@ func TestBrowserDialogCommandSchemaBindsProtectedPromptAndApproval(t *testing.T)
 	if err = validateDescriptorInvocationInput(act, dismiss); err != nil {
 		t.Fatalf("dialog dismissal rejected: %v", err)
 	}
+	dismiss["action"].(map[string]any)["dialog_id"] = ""
+	if err = validateDescriptorInvocationInput(act, dismiss); err == nil {
+		t.Fatal("dialog without authority was accepted")
+	}
 }
 
 func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {

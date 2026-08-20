@@ -158,7 +158,7 @@ func (action *Action) Validate(maxTextBytes int) error {
 	}
 	if (action.Kind != ActionDrag && (action.SourceRef != "" || action.DestinationRef != "")) ||
 		(action.Kind != ActionDialog && action.DialogID != "") ||
-		(action.Kind == ActionDialog && action.DialogID != "" && !validIdentifier(action.DialogID)) {
+		(action.Kind == ActionDialog && !validIdentifier(action.DialogID)) {
 		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
 	}
 	if (action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
