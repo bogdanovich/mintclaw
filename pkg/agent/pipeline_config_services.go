@@ -301,6 +301,10 @@ func (p *Pipeline) buildTurnMessages(
 	if p == nil {
 		return nil
 	}
+	if p.Context.TerminalTasks != nil {
+		history = append(append([]providers.Message(nil), history...),
+			p.Context.TerminalTasks.terminalTaskContextForTurn(ts)...)
+	}
 	var messages []providers.Message
 	if p.Config.PromptBuilder == nil {
 		messages = newConfigPipelinePromptBuilder(p.Cfg).

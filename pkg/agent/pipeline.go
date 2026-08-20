@@ -70,6 +70,7 @@ type PipelineContextServices struct {
 	ModelExecution       modelExecutionResolver
 	Steering             steeringDequeuer
 	MediaResolver        mediaResolver
+	TerminalTasks        terminalTaskContextProvider
 }
 
 type PipelineInteractionServices struct {
@@ -187,6 +188,10 @@ type pipelineContextRuntime interface {
 	Ingest(ctx context.Context, req *IngestRequest) error
 }
 
+type terminalTaskContextProvider interface {
+	terminalTaskContextForTurn(ts *turnState) []providers.Message
+}
+
 type backgroundCompactionScheduler interface {
 	scheduleBackgroundCompaction(
 		agent *AgentInstance,
@@ -251,7 +256,6 @@ type reasoningPublisher interface {
 
 type toolDeliveryManager interface {
 	deliverAsyncToolCompletion(req AsyncDeliveryRequest)
-	flushPendingAsyncTaskObservations(ctx context.Context, ts *turnState) error
 }
 
 type syncToolResultDeliveryManager interface {

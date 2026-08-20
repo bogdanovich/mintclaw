@@ -38,6 +38,7 @@ func NewPipeline(al *AgentLoop) *Pipeline {
 			ModelExecution:       al.modelExecutionManager(),
 			Steering:             al.steering,
 			MediaResolver:        al.mediaStore,
+			TerminalTasks:        al,
 		},
 		Interaction: PipelineInteractionServices{
 			Reasoning:        al.reasoningPublisher(),

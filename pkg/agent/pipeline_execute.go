@@ -1573,14 +1573,6 @@ func (r *toolLoopRunner) appendToolMessageWithDurableContext(
 	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, durableMsg)
 	if writeErr == nil {
 		r.ts.recordPersistedMessagePair(msg, durableMsg)
-		if r.p != nil && r.p.Interaction.ToolDelivery != nil {
-			if err := r.p.Interaction.ToolDelivery.flushPendingAsyncTaskObservations(ctx, r.ts); err != nil {
-				logger.WarnCF("agent", "Failed to flush pending async task observations", map[string]any{
-					"session_key": r.ts.sessionKey,
-					"error":       err.Error(),
-				})
-			}
-		}
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
 		r.p.ingestMessage(ctx, r.ts, durableMsg, writeErr)

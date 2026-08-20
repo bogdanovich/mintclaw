@@ -2,12 +2,9 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -15,7 +12,6 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
-	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -56,8 +52,6 @@ type asyncToolCompletionDelivery struct {
 	asyncTaskDeliveryAlreadyHandled func(workspace, taskID, completionID string) bool
 	recordAsyncTaskDeliveryDecision func(workspace string, decision AsyncDeliveryDecision, completionID, sourceTool string)
 	updateAsyncTaskDeliveryStatus   func(workspace, taskID string, status taskregistry.DeliveryStatus, completionID, errorSummary string)
-	recordCompletionObservation     func(context.Context, *turnState, string, *toolshared.ToolResult) error
-	flushPendingObservations        func(context.Context, *turnState) error
 }
 
 func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery {
@@ -73,8 +67,6 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		asyncTaskDeliveryAlreadyHandled: al.asyncTaskDeliveryAlreadyHandled,
 		recordAsyncTaskDeliveryDecision: al.recordAsyncTaskDeliveryDecision,
 		updateAsyncTaskDeliveryStatus:   al.updateAsyncTaskDeliveryStatus,
-		recordCompletionObservation:     al.recordAsyncTaskCompletionObservation,
-		flushPendingObservations:        al.flushPendingAsyncTaskObservations,
 	}
 }
 
@@ -98,14 +90,6 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 	ts = turnStateForAsyncUserDelivery(ts, delivery)
 	completionID := strings.TrimSpace(req.CompletionID)
-	if err := d.recordTerminalObservation(ts, completionID, result); err != nil {
-		logger.WarnCF("agent", "Failed to persist async task completion observation", map[string]any{
-			"tool":          asyncToolName,
-			"completion_id": completionID,
-			"task_id":       delivery.TaskID,
-			"error":         err.Error(),
-		})
-	}
 	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
 			map[string]any{
@@ -314,300 +298,6 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			"",
 		)
 	}
-}
-
-const asyncTaskObservationResultLimit = 2000
-
-var errAsyncTaskObservationToolBlockOpen = errors.New("async task observation would split an open tool-result block")
-
-func (al *AgentLoop) recordAsyncTaskCompletionObservation(
-	ctx context.Context,
-	ts *turnState,
-	completionID string,
-	result *toolshared.ToolResult,
-) error {
-	if ts == nil || ts.opts.NoHistory || result == nil {
-		return nil
-	}
-	taskID := strings.TrimSpace(result.AsyncTaskID)
-	if taskID == "" {
-		return nil
-	}
-	marker := asyncTaskObservationMarker(taskID, completionID)
-	state := asyncTaskObjectiveState(result)
-	content := strings.TrimSpace(result.ContentForLLM())
-	if content == "" {
-		content = strings.TrimSpace(toolResultUserText(result))
-	}
-	if cfg := al.GetConfig(); cfg != nil {
-		content = cfg.FilterSensitiveData(content)
-	}
-	observation := fmt.Sprintf(
-		"%s\ntask_id: %s\nstate: %s\nThis task is no longer running.\nResult:\n%s",
-		marker,
-		sanitizeAsyncTaskIdentifier(taskID, 128),
-		state,
-		content,
-	)
-	observation = truncateAsyncTaskObservation(observation, asyncTaskObservationResultLimit)
-	registry := al.taskRegistryForWorkspace(ts.workspace)
-	if registry != nil {
-		record, ok := registry.Get(taskID)
-		if ok {
-			if !record.HistoryPolicyKnown || record.HistoryDisabled {
-				return nil
-			}
-			if err := registry.Update(taskID, func(stored *taskregistry.Record) {
-				stored.PendingObservation = observation
-				stored.ObservationMarker = marker
-			}); err != nil {
-				return fmt.Errorf("persist pending async task observation: %w", err)
-			}
-			return al.flushPendingAsyncTaskObservation(ctx, ts, taskID)
-		}
-	}
-	ownerAgent, sessionKey, historyDisabled, err := al.asyncTaskObservationTarget(ts, taskID)
-	if err != nil {
-		return err
-	}
-	if historyDisabled {
-		return nil
-	}
-	if ownerAgent == nil || ownerAgent.Sessions == nil {
-		return fmt.Errorf("async task %q requester session store is unavailable", taskID)
-	}
-	if sessionKey == "" {
-		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
-	}
-	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
-		[]providers.Message,
-		bool,
-		error,
-	) {
-		return appendAsyncTaskCompletionObservation(history, marker, observation)
-	})
-	return err
-}
-
-func (al *AgentLoop) flushPendingAsyncTaskObservations(ctx context.Context, ts *turnState) error {
-	if ts == nil || ts.opts.NoHistory || ts.agent == nil {
-		return nil
-	}
-	registry := al.taskRegistryForWorkspace(ts.workspace)
-	if registry == nil {
-		return nil
-	}
-	var flushErrors []error
-	for _, record := range registry.List() {
-		if strings.TrimSpace(record.PendingObservation) == "" || record.OwnerKey != ts.agent.ID ||
-			record.RequesterSessionKey != ts.sessionKey {
-			continue
-		}
-		if err := al.flushPendingAsyncTaskObservation(ctx, ts, record.TaskID); err != nil {
-			flushErrors = append(flushErrors, err)
-		}
-	}
-	return errors.Join(flushErrors...)
-}
-
-func (al *AgentLoop) flushPendingAsyncTaskObservation(ctx context.Context, ts *turnState, taskID string) error {
-	registry := al.taskRegistryForWorkspace(ts.workspace)
-	if registry == nil {
-		return nil
-	}
-	record, ok := registry.Get(taskID)
-	if !ok || strings.TrimSpace(record.PendingObservation) == "" {
-		return nil
-	}
-	marker := record.ObservationMarker
-	observation := record.PendingObservation
-	ownerAgent, sessionKey, historyDisabled, err := al.asyncTaskObservationTarget(ts, taskID)
-	if err != nil {
-		return err
-	}
-	if historyDisabled {
-		return registry.Update(taskID, clearPendingAsyncTaskObservation)
-	}
-	if ownerAgent == nil || ownerAgent.Sessions == nil {
-		return fmt.Errorf("async task %q requester session store is unavailable", taskID)
-	}
-	if sessionKey == "" {
-		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
-	}
-	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
-		[]providers.Message,
-		bool,
-		error,
-	) {
-		return appendAsyncTaskCompletionObservation(history, marker, observation)
-	})
-	if errors.Is(err, errAsyncTaskObservationToolBlockOpen) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return registry.Update(taskID, func(stored *taskregistry.Record) {
-		if stored.ObservationMarker == marker {
-			clearPendingAsyncTaskObservation(stored)
-		}
-	})
-}
-
-func clearPendingAsyncTaskObservation(record *taskregistry.Record) {
-	record.PendingObservation = ""
-	record.ObservationMarker = ""
-}
-
-func appendAsyncTaskCompletionObservation(
-	history []providers.Message,
-	marker string,
-	observation string,
-) ([]providers.Message, bool, error) {
-	for _, message := range history {
-		if message.Role == "assistant" && strings.HasPrefix(message.Content, marker) {
-			return history, false, nil
-		}
-	}
-	if trailingToolResultBlockIncomplete(history) {
-		return history, false, errAsyncTaskObservationToolBlockOpen
-	}
-	return append(history, providers.Message{Role: "assistant", Content: observation}), true, nil
-}
-
-func trailingToolResultBlockIncomplete(history []providers.Message) bool {
-	index := len(history) - 1
-	for index >= 0 && history[index].Role == "tool" {
-		index--
-	}
-	if index < 0 || history[index].Role != "assistant" || len(history[index].ToolCalls) == 0 {
-		return false
-	}
-	expected := make(map[string]struct{}, len(history[index].ToolCalls))
-	for _, call := range history[index].ToolCalls {
-		callID := strings.TrimSpace(call.ID)
-		if callID == "" {
-			return true
-		}
-		expected[callID] = struct{}{}
-	}
-	for _, message := range history[index+1:] {
-		if message.Role == "tool" {
-			delete(expected, strings.TrimSpace(message.ToolCallID))
-		}
-	}
-	return len(expected) > 0
-}
-
-func (al *AgentLoop) asyncTaskObservationTarget(
-	ts *turnState,
-	taskID string,
-) (*AgentInstance, string, bool, error) {
-	if ts == nil {
-		return nil, "", false, nil
-	}
-	ownerAgent := ts.agent
-	sessionKey := strings.TrimSpace(ts.sessionKey)
-	registry := al.taskRegistryForWorkspace(ts.workspace)
-	if registry == nil {
-		return ownerAgent, sessionKey, false, nil
-	}
-	record, ok := registry.Get(taskID)
-	if !ok {
-		return ownerAgent, sessionKey, false, nil
-	}
-	// Records created before requester-history provenance was persisted cannot
-	// safely inherit the reconstructed turn's policy after an upgrade. Treat
-	// them as history-disabled instead of guessing that an absent bool means
-	// history was enabled.
-	if !record.HistoryPolicyKnown {
-		return nil, sessionKey, true, nil
-	}
-	if requesterSessionKey := strings.TrimSpace(record.RequesterSessionKey); requesterSessionKey != "" {
-		sessionKey = requesterSessionKey
-	}
-	ownerKey := strings.TrimSpace(record.OwnerKey)
-	if ownerKey == "" && strings.TrimSpace(record.RequesterSessionKey) != "" {
-		return nil, sessionKey, record.HistoryDisabled, fmt.Errorf(
-			"async task %q requester owner is missing", taskID,
-		)
-	}
-	if ownerKey != "" {
-		agent, found := al.GetRegistry().GetAgent(ownerKey)
-		if !found || agent == nil {
-			return nil, sessionKey, record.HistoryDisabled, fmt.Errorf(
-				"async task %q requester owner %q is unavailable", taskID, ownerKey,
-			)
-		}
-		ownerAgent = agent
-	}
-	return ownerAgent, sessionKey, record.HistoryDisabled, nil
-}
-
-func asyncTaskObservationMarker(taskID, completionID string) string {
-	digest := sha256.Sum256([]byte(taskID + "\x00" + completionID))
-	return fmt.Sprintf("[Background task completion: %x]", digest[:16])
-}
-
-func sanitizeAsyncTaskIdentifier(value string, limit int) string {
-	value = strings.Map(func(char rune) rune {
-		if unicode.IsControl(char) {
-			return ' '
-		}
-		return char
-	}, strings.TrimSpace(value))
-	value = strings.Join(strings.Fields(value), " ")
-	return truncateAsyncTaskObservation(value, limit)
-}
-
-func asyncTaskObjectiveState(result *toolshared.ToolResult) string {
-	if result == nil {
-		return "failed"
-	}
-	if result.IsError {
-		return "failed"
-	}
-	if result.Deliverable != nil && result.Deliverable.ObjectiveOutcome != nil {
-		return string(result.Deliverable.ObjectiveOutcome.Status)
-	}
-	if result.Completion != nil && result.Completion.ObjectiveOutcome != nil {
-		return string(result.Completion.ObjectiveOutcome.Status)
-	}
-	return "succeeded"
-}
-
-func truncateAsyncTaskObservation(value string, limit int) string {
-	chars := []rune(value)
-	if limit <= 0 || len(chars) <= limit {
-		return value
-	}
-	if limit == 1 {
-		return "…"
-	}
-	return string(chars[:limit-1]) + "…"
-}
-
-func (d *asyncToolCompletionDelivery) recordTerminalObservation(
-	ts *turnState,
-	completionID string,
-	result *toolshared.ToolResult,
-) error {
-	if d == nil || d.recordCompletionObservation == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return d.recordCompletionObservation(ctx, ts, completionID, result)
-}
-
-func (d *asyncToolCompletionDelivery) flushPendingAsyncTaskObservations(
-	ctx context.Context,
-	ts *turnState,
-) error {
-	if d == nil || d.flushPendingObservations == nil {
-		return nil
-	}
-	return d.flushPendingObservations(ctx, ts)
 }
 
 func turnStateForAsyncUserDelivery(
