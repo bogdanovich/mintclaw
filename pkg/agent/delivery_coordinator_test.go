@@ -10,6 +10,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -252,6 +253,12 @@ func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 	if rec.DeliveredAt == 0 {
 		t.Fatal("DeliveredAt was not set")
 	}
+	history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+	if len(history) != 1 || history[0].Role != "assistant" ||
+		!strings.Contains(history[0].Content, "[Background task completion: "+taskID+":completion-user-only]") ||
+		!strings.Contains(history[0].Content, "This task is no longer running.") {
+		t.Fatalf("completion observation = %#v", history)
+	}
 	events := al.taskRegistryForWorkspace(workspace).ListEvents(taskID)
 	assertTaskEventForTest(t, events, taskregistry.EventTaskDeliveryDecision, map[string]string{
 		"completion_id": "completion-user-only",
@@ -351,6 +358,92 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateUserDelivery(t *testing.T) {
 	})
 	al.deliverAsyncToolCompletion(req)
 	assertNoOutboundMessage(t, msgBus, "duplicate user delivery")
+	history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+	if len(history) != 1 {
+		t.Fatalf("completion observation count = %d, want 1", len(history))
+	}
+}
+
+func TestDeliverAsyncToolCompletion_RecordsBlockedObjectiveAsTerminal(t *testing.T) {
+	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	taskID := "coordinator-blocked-objective"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM:      "Task could not be completed: checklist missing",
+		ForUser:     "Task could not be completed: checklist missing",
+		AsyncTaskID: taskID,
+		Completion: &toolshared.CompletionResult{ObjectiveOutcome: &toolshared.ObjectiveOutcome{
+			Status:       toolshared.ObjectiveOutcomeBlocked,
+			MissingItems: []string{"checklist"},
+		}},
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState:    ts,
+		ToolName:     "spawn",
+		CompletionID: "blocked-completion",
+		Result:       result,
+		Decision:     decideAsyncToolResultDelivery(result),
+	})
+	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
+		return strings.Contains(msg.Content, "checklist missing")
+	})
+	history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+	if len(history) != 1 || !strings.Contains(history[0].Content, "state: blocked") ||
+		!strings.Contains(history[0].Content, "This task is no longer running.") {
+		t.Fatalf("blocked completion observation = %#v", history)
+	}
+}
+
+func TestAsyncTaskCompletionObservationIsVisibleToNextRequest(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace: workspace, ModelName: "test-model", MaxTokens: 4096,
+	}}}
+	provider := &recordingProvider{}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, provider)
+	agent := al.registry.GetDefaultAgent()
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:repeat-request")
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, workspace: workspace, channel: "telegram", chatID: "chat-1",
+		sessionKey: sessionKey,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey, InboundContext: &bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
+		}}},
+	}
+	taskID := "repeat-request-task"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM: "Task could not be completed: checklist missing", ForUser: "checklist missing", AsyncTaskID: taskID,
+		Completion: &toolshared.CompletionResult{ObjectiveOutcome: &toolshared.ObjectiveOutcome{
+			Status: toolshared.ObjectiveOutcomeBlocked,
+		}},
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState: ts, ToolName: "spawn", CompletionID: "repeat-completion", Result: result,
+	})
+	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
+		return msg.Content == "checklist missing"
+	})
+
+	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{Dispatch: DispatchRequest{
+		SessionKey: sessionKey, UserMessage: "Run the Craigslist check again.", InboundContext: &bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	}, DefaultResponse: "default", SendResponse: false}); err != nil {
+		t.Fatalf("next request failed: %v", err)
+	}
+	var prompt strings.Builder
+	for _, message := range provider.lastMessages {
+		prompt.WriteString(message.Content)
+		prompt.WriteByte('\n')
+	}
+	if !strings.Contains(prompt.String(), "state: blocked") ||
+		!strings.Contains(prompt.String(), "This task is no longer running.") ||
+		!strings.Contains(prompt.String(), "a terminal task does not satisfy a new request") {
+		t.Fatalf("next request prompt omitted terminal observation: %s", prompt.String())
+	}
 }
 
 func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *testing.T) {

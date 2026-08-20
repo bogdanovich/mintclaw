@@ -68,7 +68,10 @@ func turnProfileToolAllowed(profile config.EffectiveTurnProfile, name string) bo
 }
 
 func toolUseSystemPromptRule() string {
-	return "**ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it."
+	return "**ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, " +
+		"execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it. " +
+		"A historical spawn or delegate acknowledgement proves only that the task was accepted. Before claiming an older " +
+		"background task is still running, check its current state with task_status; a terminal task does not satisfy a new request."
 }
 
 func filterNamesByTurnProfile(names []string, allowed []string) []string {

@@ -12,6 +12,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -52,6 +53,7 @@ type asyncToolCompletionDelivery struct {
 	asyncTaskDeliveryAlreadyHandled func(workspace, taskID, completionID string) bool
 	recordAsyncTaskDeliveryDecision func(workspace string, decision AsyncDeliveryDecision, completionID, sourceTool string)
 	updateAsyncTaskDeliveryStatus   func(workspace, taskID string, status taskregistry.DeliveryStatus, completionID, errorSummary string)
+	recordCompletionObservation     func(context.Context, *turnState, string, *toolshared.ToolResult) error
 }
 
 func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery {
@@ -67,6 +69,7 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		asyncTaskDeliveryAlreadyHandled: al.asyncTaskDeliveryAlreadyHandled,
 		recordAsyncTaskDeliveryDecision: al.recordAsyncTaskDeliveryDecision,
 		updateAsyncTaskDeliveryStatus:   al.updateAsyncTaskDeliveryStatus,
+		recordCompletionObservation:     al.recordAsyncTaskCompletionObservation,
 	}
 }
 
@@ -98,6 +101,14 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 				"task_id":       delivery.TaskID,
 			})
 		return
+	}
+	if err := d.recordTerminalObservation(ts, completionID, result); err != nil {
+		logger.WarnCF("agent", "Failed to persist async task completion observation", map[string]any{
+			"tool":          asyncToolName,
+			"completion_id": completionID,
+			"task_id":       delivery.TaskID,
+			"error":         err.Error(),
+		})
 	}
 	d.recordDeliveryDecision(ts.workspace, delivery, completionID, asyncToolName)
 	if result.IsError {
@@ -298,6 +309,91 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			"",
 		)
 	}
+}
+
+const asyncTaskObservationResultLimit = 2000
+
+func (al *AgentLoop) recordAsyncTaskCompletionObservation(
+	ctx context.Context,
+	ts *turnState,
+	completionID string,
+	result *toolshared.ToolResult,
+) error {
+	if ts == nil || ts.agent == nil || ts.agent.Sessions == nil || result == nil {
+		return nil
+	}
+	taskID := strings.TrimSpace(result.AsyncTaskID)
+	if taskID == "" {
+		return nil
+	}
+	marker := fmt.Sprintf("[Background task completion: %s:%s]", taskID, strings.TrimSpace(completionID))
+	state := asyncTaskObjectiveState(result)
+	content := strings.TrimSpace(result.ContentForLLM())
+	if content == "" {
+		content = strings.TrimSpace(toolResultUserText(result))
+	}
+	content = truncateAsyncTaskObservation(content, asyncTaskObservationResultLimit)
+	observation := fmt.Sprintf(
+		"%s\ntask_id: %s\nstate: %s\nThis task is no longer running.\nResult:\n%s",
+		marker,
+		taskID,
+		state,
+		content,
+	)
+	sessionKey := strings.TrimSpace(ts.sessionKey)
+	if sessionKey == "" {
+		sessionKey = session.BuildMainSessionKey(ts.agent.ID)
+	}
+	_, err := ts.agent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+		[]providers.Message,
+		bool,
+		error,
+	) {
+		for _, message := range history {
+			if message.Role == "assistant" && strings.HasPrefix(message.Content, marker) {
+				return history, false, nil
+			}
+		}
+		return append(history, providers.Message{Role: "assistant", Content: observation}), true, nil
+	})
+	return err
+}
+
+func asyncTaskObjectiveState(result *toolshared.ToolResult) string {
+	if result == nil {
+		return "failed"
+	}
+	if result.IsError {
+		return "failed"
+	}
+	if result.Deliverable != nil && result.Deliverable.ObjectiveOutcome != nil {
+		return string(result.Deliverable.ObjectiveOutcome.Status)
+	}
+	if result.Completion != nil && result.Completion.ObjectiveOutcome != nil {
+		return string(result.Completion.ObjectiveOutcome.Status)
+	}
+	return "succeeded"
+}
+
+func truncateAsyncTaskObservation(value string, limit int) string {
+	chars := []rune(value)
+	if limit <= 0 || len(chars) <= limit {
+		return value
+	}
+	return string(chars[:limit]) + "…"
+}
+
+func (d *asyncToolCompletionDelivery) recordTerminalObservation(
+	ts *turnState,
+	completionID string,
+	result *toolshared.ToolResult,
+) error {
+	if d == nil || d.recordCompletionObservation == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.recordCompletionObservation(ctx, ts, completionID, result)
 }
 
 func turnStateForAsyncUserDelivery(

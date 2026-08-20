@@ -203,9 +203,18 @@ func (sm *SubagentManager) Spawn(
 	go sm.runTask(ctx, subagentTask, callback)
 
 	if label != "" {
-		return fmt.Sprintf("Spawned subagent '%s' for task: %s", label, task), nil
+		return fmt.Sprintf(
+			"Spawned subagent '%s' for task: %s (task_id: %s). This confirms acceptance only; use task_status to check whether it is still running.",
+			label,
+			task,
+			taskID,
+		), nil
 	}
-	return fmt.Sprintf("Spawned subagent for task: %s", task), nil
+	return fmt.Sprintf(
+		"Spawned subagent for task: %s (task_id: %s). This confirms acceptance only; use task_status to check whether it is still running.",
+		task,
+		taskID,
+	), nil
 }
 
 func objectiveItemsParameter() map[string]any {
@@ -401,7 +410,12 @@ After completing the task, provide a clear summary of what was done.`
 			Err:     err,
 		}
 	} else {
-		task.Status = "completed"
+		terminalStatus := terminalTaskStatusForResult(result)
+		if terminalStatus == taskregistry.StatusFailed {
+			task.Status = "failed"
+		} else {
+			task.Status = "completed"
+		}
 		result.WithAsyncTaskID(task.ID)
 		task.Result = result.ForLLM
 		sm.recordTaskResult(task, result)
@@ -575,7 +589,7 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 	deliverable := deliverablePayloadForTaskRegistry(result)
 	if err := sm.updateTask(
 		task,
-		taskregistry.StatusSucceeded,
+		terminalTaskStatusForResult(result),
 		delivery,
 		summary,
 		func(rec *taskregistry.Record) {
@@ -588,6 +602,19 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 			"error":   err.Error(),
 		})
 	}
+}
+
+func terminalTaskStatusForResult(result *toolshared.ToolResult) taskregistry.Status {
+	var outcome *taskregistry.ObjectiveOutcome
+	if result != nil {
+		if result.Deliverable != nil {
+			outcome = objectiveOutcomePayloadForTaskRegistry(result.Deliverable.ObjectiveOutcome)
+		}
+		if outcome == nil && result.Completion != nil {
+			outcome = objectiveOutcomePayloadForTaskRegistry(result.Completion.ObjectiveOutcome)
+		}
+	}
+	return taskregistry.TerminalStatusForObjectiveOutcome(outcome)
 }
 
 func completionPayloadForLegacyStorage(
