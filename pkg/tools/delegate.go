@@ -195,7 +195,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	}
 	t.recordDelegateTask(
 		ctx, taskID, agentID, task, deliveryMode,
-		taskregistry.StatusSucceeded,
+		terminalTaskStatusForResult(result),
 		delegateDeliveryStatus(result, deliveryMode),
 		result.ContentForLLM(),
 		completionPayloadForTaskRegistry(result),

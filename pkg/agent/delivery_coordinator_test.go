@@ -446,6 +446,118 @@ func TestAsyncTaskCompletionObservationIsVisibleToNextRequest(t *testing.T) {
 	}
 }
 
+func TestAsyncTaskCompletionObservationUsesRequesterAgentSession(t *testing.T) {
+	ownerWorkspace := t.TempDir()
+	childWorkspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true, Workspace: ownerWorkspace},
+		{ID: "browser", Workspace: childWorkspace},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	owner := al.registry.GetDefaultAgent()
+	child, ok := al.registry.GetAgent("browser")
+	if owner == nil || !ok {
+		t.Fatal("expected owner and browser agents")
+	}
+	taskID := "cross-agent-completion"
+	upsertAsyncTaskForTest(t, al, ownerWorkspace, taskID)
+	if err := al.taskRegistryForWorkspace(ownerWorkspace).Update(taskID, func(record *taskregistry.Record) {
+		record.OwnerKey = owner.ID
+		record.RequesterSessionKey = "owner-session"
+		record.AgentID = child.ID
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ts := &turnState{
+		agent: child, agentID: child.ID, workspace: ownerWorkspace, sessionKey: "child-session",
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: "child-session"}},
+	}
+	result := (&toolshared.ToolResult{
+		ForLLM: "browser finished", ForUser: "browser finished", AsyncTaskID: taskID,
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState: ts, ToolName: "spawn", CompletionID: "cross-agent-result", Result: result,
+	})
+
+	ownerHistory := owner.Sessions.GetHistory("owner-session")
+	if len(ownerHistory) != 1 || !strings.Contains(ownerHistory[0].Content, "browser finished") {
+		t.Fatalf("owner history = %#v", ownerHistory)
+	}
+	if childHistory := child.Sessions.GetHistory("child-session"); len(childHistory) != 0 {
+		t.Fatalf("child history = %#v, want empty", childHistory)
+	}
+}
+
+func TestAsyncTaskCompletionObservationFiltersSensitiveContent(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	al.cfg = &config.Config{
+		ModelList: config.SecureModelList{&config.ModelConfig{
+			ModelName: "secret-model",
+			APIKeys:   config.SecureStrings{config.NewSecureString("sk-secret-value-123")},
+		}},
+		Tools: config.ToolsConfig{FilterSensitiveData: true, FilterMinLength: 8},
+	}
+	if filtered := al.cfg.FilterSensitiveData("sk-secret-value-123"); filtered != "[FILTERED]" {
+		t.Fatalf("test config did not enable filtering: %q", filtered)
+	}
+	taskID := "filtered-completion"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM: "result has sk-secret-value-123", ForUser: "done", AsyncTaskID: taskID,
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState: ts, ToolName: "spawn", CompletionID: "filtered-result", Result: result,
+	})
+
+	history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+	if len(history) != 1 || strings.Contains(history[0].Content, "sk-secret-value-123") ||
+		!strings.Contains(history[0].Content, "[FILTERED]") {
+		t.Fatalf("filtered history = %#v", history)
+	}
+}
+
+func TestAsyncTaskCompletionObservationSkipsNoHistoryTurn(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	ts.opts.NoHistory = true
+	taskID := "stateless-completion"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM: "must stay stateless", ForUser: "done", AsyncTaskID: taskID,
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState: ts, ToolName: "spawn", CompletionID: "stateless-result", Result: result,
+	})
+	if history := ts.agent.Sessions.GetHistory(ts.sessionKey); len(history) != 0 {
+		t.Fatalf("stateless history = %#v, want empty", history)
+	}
+}
+
+func TestAsyncTaskCompletionObservationRetriesAfterDeliveryHandled(t *testing.T) {
+	attempts := 0
+	delivery := &asyncToolCompletionDelivery{
+		recordCompletionObservation: func(context.Context, *turnState, string, *toolshared.ToolResult) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("transient history failure")
+			}
+			return nil
+		},
+		asyncTaskDeliveryAlreadyHandled: func(string, string, string) bool { return true },
+	}
+	req := AsyncDeliveryRequest{
+		TurnState: &turnState{workspace: t.TempDir()}, ToolName: "spawn", CompletionID: "retry-result",
+		Result: (&toolshared.ToolResult{ForLLM: "done", AsyncTaskID: "retry-task"}).
+			WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly),
+	}
+	delivery.deliverAsyncToolCompletion(req)
+	delivery.deliverAsyncToolCompletion(req)
+	if attempts != 2 {
+		t.Fatalf("observation attempts = %d, want 2", attempts)
+	}
+}
+
 func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *testing.T) {
 	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "parent once")
 	taskID := "coordinator-duplicate-parent"

@@ -51,17 +51,19 @@ type SubTurnConfig struct {
 }
 
 type SubagentTask struct {
-	ID             string
-	Task           string
-	Label          string
-	AgentID        string
-	OriginChannel  string
-	OriginChatID   string
-	DeliveryMode   toolshared.AsyncDeliveryMode
-	Status         string
-	Result         string
-	Created        int64
-	ObjectiveItems []toolshared.ObjectiveSpec
+	ID                  string
+	Task                string
+	Label               string
+	AgentID             string
+	OwnerKey            string
+	RequesterSessionKey string
+	OriginChannel       string
+	OriginChatID        string
+	DeliveryMode        toolshared.AsyncDeliveryMode
+	Status              string
+	Result              string
+	Created             int64
+	ObjectiveItems      []toolshared.ObjectiveSpec
 }
 
 type SpawnSubTurnFunc func(
@@ -183,16 +185,18 @@ func (sm *SubagentManager) Spawn(
 		objectiveItems = objectiveSets[0]
 	}
 	subagentTask := &SubagentTask{
-		ID:             taskID,
-		Task:           task,
-		Label:          label,
-		AgentID:        agentID,
-		OriginChannel:  originChannel,
-		OriginChatID:   originChatID,
-		DeliveryMode:   deliveryMode,
-		Status:         "running",
-		Created:        time.Now().UnixMilli(),
-		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
+		ID:                  taskID,
+		Task:                task,
+		Label:               label,
+		AgentID:             agentID,
+		OwnerKey:            toolshared.ToolAgentID(ctx),
+		RequesterSessionKey: toolshared.ToolSessionKey(ctx),
+		OriginChannel:       originChannel,
+		OriginChatID:        originChatID,
+		DeliveryMode:        deliveryMode,
+		Status:              "running",
+		Created:             time.Now().UnixMilli(),
+		ObjectiveItems:      append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
 	}
 	if err := sm.createTask(subagentTask); err != nil {
 		return "", fmt.Errorf("persist spawned subagent: %w", err)
@@ -449,16 +453,18 @@ func subagentTaskFromRecord(rec taskregistry.Record) *SubagentTask {
 		status = "waiting_for_input"
 	}
 	return &SubagentTask{
-		ID:            rec.TaskID,
-		Task:          rec.Task,
-		Label:         rec.Label,
-		AgentID:       rec.AgentID,
-		OriginChannel: rec.Channel,
-		OriginChatID:  rec.ChatID,
-		DeliveryMode:  toolshared.AsyncDeliveryMode(rec.DeliveryMode),
-		Status:        status,
-		Result:        rec.TerminalSummary,
-		Created:       rec.CreatedAt,
+		ID:                  rec.TaskID,
+		Task:                rec.Task,
+		Label:               rec.Label,
+		AgentID:             rec.AgentID,
+		OwnerKey:            rec.OwnerKey,
+		RequesterSessionKey: rec.RequesterSessionKey,
+		OriginChannel:       rec.Channel,
+		OriginChatID:        rec.ChatID,
+		DeliveryMode:        toolshared.AsyncDeliveryMode(rec.DeliveryMode),
+		Status:              status,
+		Result:              rec.TerminalSummary,
+		Created:             rec.CreatedAt,
 	}
 }
 
@@ -500,6 +506,8 @@ func (sm *SubagentManager) updateTask(
 		stored.Channel = rec.Channel
 		stored.ChatID = rec.ChatID
 		stored.AgentID = rec.AgentID
+		stored.OwnerKey = rec.OwnerKey
+		stored.RequesterSessionKey = rec.RequesterSessionKey
 		stored.Label = rec.Label
 		stored.Task = rec.Task
 		stored.Status = rec.Status
@@ -524,21 +532,23 @@ func (sm *SubagentManager) taskRecord(
 ) taskregistry.Record {
 	now := time.Now().UnixMilli()
 	rec := taskregistry.Record{
-		TaskID:         task.ID,
-		Runtime:        taskregistry.RuntimeSubagent,
-		TaskKind:       "spawn",
-		Channel:        task.OriginChannel,
-		ChatID:         task.OriginChatID,
-		AgentID:        task.AgentID,
-		Label:          task.Label,
-		Task:           task.Task,
-		Status:         status,
-		DeliveryStatus: delivery,
-		NotifyPolicy:   taskregistry.NotifyDoneOnly,
-		DeliveryMode:   string(task.DeliveryMode),
-		CreatedAt:      task.Created,
-		StartedAt:      task.Created,
-		LastEventAt:    now,
+		TaskID:              task.ID,
+		Runtime:             taskregistry.RuntimeSubagent,
+		TaskKind:            "spawn",
+		Channel:             task.OriginChannel,
+		ChatID:              task.OriginChatID,
+		AgentID:             task.AgentID,
+		OwnerKey:            task.OwnerKey,
+		RequesterSessionKey: task.RequesterSessionKey,
+		Label:               task.Label,
+		Task:                task.Task,
+		Status:              status,
+		DeliveryStatus:      delivery,
+		NotifyPolicy:        taskregistry.NotifyDoneOnly,
+		DeliveryMode:        string(task.DeliveryMode),
+		CreatedAt:           task.Created,
+		StartedAt:           task.Created,
+		LastEventAt:         now,
 	}
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = now

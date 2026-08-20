@@ -93,6 +93,14 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 	ts = turnStateForAsyncUserDelivery(ts, delivery)
 	completionID := strings.TrimSpace(req.CompletionID)
+	if err := d.recordTerminalObservation(ts, completionID, result); err != nil {
+		logger.WarnCF("agent", "Failed to persist async task completion observation", map[string]any{
+			"tool":          asyncToolName,
+			"completion_id": completionID,
+			"task_id":       delivery.TaskID,
+			"error":         err.Error(),
+		})
+	}
 	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
 			map[string]any{
@@ -101,14 +109,6 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 				"task_id":       delivery.TaskID,
 			})
 		return
-	}
-	if err := d.recordTerminalObservation(ts, completionID, result); err != nil {
-		logger.WarnCF("agent", "Failed to persist async task completion observation", map[string]any{
-			"tool":          asyncToolName,
-			"completion_id": completionID,
-			"task_id":       delivery.TaskID,
-			"error":         err.Error(),
-		})
 	}
 	d.recordDeliveryDecision(ts.workspace, delivery, completionID, asyncToolName)
 	if result.IsError {
@@ -319,7 +319,7 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	completionID string,
 	result *toolshared.ToolResult,
 ) error {
-	if ts == nil || ts.agent == nil || ts.agent.Sessions == nil || result == nil {
+	if ts == nil || ts.opts.NoHistory || result == nil {
 		return nil
 	}
 	taskID := strings.TrimSpace(result.AsyncTaskID)
@@ -332,6 +332,9 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	if content == "" {
 		content = strings.TrimSpace(toolResultUserText(result))
 	}
+	if cfg := al.GetConfig(); cfg != nil {
+		content = cfg.FilterSensitiveData(content)
+	}
 	content = truncateAsyncTaskObservation(content, asyncTaskObservationResultLimit)
 	observation := fmt.Sprintf(
 		"%s\ntask_id: %s\nstate: %s\nThis task is no longer running.\nResult:\n%s",
@@ -340,11 +343,14 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 		state,
 		content,
 	)
-	sessionKey := strings.TrimSpace(ts.sessionKey)
-	if sessionKey == "" {
-		sessionKey = session.BuildMainSessionKey(ts.agent.ID)
+	ownerAgent, sessionKey := al.asyncTaskObservationTarget(ts, taskID)
+	if ownerAgent == nil || ownerAgent.Sessions == nil {
+		return nil
 	}
-	_, err := ts.agent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+	if sessionKey == "" {
+		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
+	}
+	_, err := ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
 		[]providers.Message,
 		bool,
 		error,
@@ -357,6 +363,31 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 		return append(history, providers.Message{Role: "assistant", Content: observation}), true, nil
 	})
 	return err
+}
+
+func (al *AgentLoop) asyncTaskObservationTarget(ts *turnState, taskID string) (*AgentInstance, string) {
+	if ts == nil {
+		return nil, ""
+	}
+	ownerAgent := ts.agent
+	sessionKey := strings.TrimSpace(ts.sessionKey)
+	registry := al.taskRegistryForWorkspace(ts.workspace)
+	if registry == nil {
+		return ownerAgent, sessionKey
+	}
+	record, ok := registry.Get(taskID)
+	if !ok {
+		return ownerAgent, sessionKey
+	}
+	if requesterSessionKey := strings.TrimSpace(record.RequesterSessionKey); requesterSessionKey != "" {
+		sessionKey = requesterSessionKey
+	}
+	if ownerKey := strings.TrimSpace(record.OwnerKey); ownerKey != "" {
+		if agent, found := al.GetRegistry().GetAgent(ownerKey); found {
+			ownerAgent = agent
+		}
+	}
+	return ownerAgent, sessionKey
 }
 
 func asyncTaskObjectiveState(result *toolshared.ToolResult) string {

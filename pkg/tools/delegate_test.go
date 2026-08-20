@@ -241,6 +241,34 @@ func TestDelegateTool_Execute_RecordsDeliverableFromCompletion(t *testing.T) {
 	}
 }
 
+func TestDelegateTool_Execute_RecordsBlockedObjectiveAsFailed(t *testing.T) {
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	spawner := &delegateMockSpawner{result: (&toolshared.ToolResult{
+		ForLLM: "browser objective blocked",
+		Completion: &toolshared.CompletionResult{ObjectiveOutcome: &toolshared.ObjectiveOutcome{
+			Status:       toolshared.ObjectiveOutcomeBlocked,
+			MissingItems: []string{"Craigslist verification"},
+		}},
+	})}
+	tool := NewDelegateTool()
+	tool.SetSpawner(spawner)
+	tool.SetTaskRegistry(registry)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"agent_id": "browser",
+		"task":     "verify Craigslist listings",
+	})
+	if result.IsError {
+		t.Fatalf("structured blocked result should still be delivered: %s", result.ForLLM)
+	}
+	records := registry.List()
+	if len(records) != 1 || records[0].Status != taskregistry.StatusFailed ||
+		records[0].Deliverable == nil || records[0].Deliverable.ObjectiveOutcome == nil ||
+		records[0].Deliverable.ObjectiveOutcome.Status != string(toolshared.ObjectiveOutcomeBlocked) {
+		t.Fatalf("delegate task record = %#v", records)
+	}
+}
+
 func TestDelegateTool_Execute_RecordsExplicitDeliverableReport(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	spawner := &delegateMockSpawner{
