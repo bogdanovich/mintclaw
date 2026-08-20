@@ -251,6 +251,7 @@ type reasoningPublisher interface {
 
 type toolDeliveryManager interface {
 	deliverAsyncToolCompletion(req AsyncDeliveryRequest)
+	flushPendingAsyncTaskObservations(ctx context.Context, ts *turnState) error
 }
 
 type syncToolResultDeliveryManager interface {

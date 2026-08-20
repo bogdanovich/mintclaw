@@ -56,12 +56,14 @@ func TestRegistryPersistsHistoryDisabledPolicy(t *testing.T) {
 	if err := registry.Upsert(Record{
 		TaskID: "stateless-task", Status: StatusRunning, DeliveryStatus: DeliveryPending,
 		HistoryPolicyKnown: true, HistoryDisabled: true,
+		PendingObservation: "terminal result", ObservationMarker: "marker-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	reloaded := NewRegistry(store)
 	record, ok := reloaded.Get("stateless-task")
-	if !ok || !record.HistoryPolicyKnown || !record.HistoryDisabled {
+	if !ok || !record.HistoryPolicyKnown || !record.HistoryDisabled ||
+		record.PendingObservation != "terminal result" || record.ObservationMarker != "marker-1" {
 		t.Fatalf("reloaded record = %#v", record)
 	}
 }

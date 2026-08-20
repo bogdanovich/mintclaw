@@ -189,6 +189,8 @@ type Record struct {
 	OwnerKey            string              `json:"owner_key,omitempty"`
 	HistoryPolicyKnown  bool                `json:"history_policy_known,omitempty"`
 	HistoryDisabled     bool                `json:"history_disabled,omitempty"`
+	PendingObservation  string              `json:"pending_observation,omitempty"`
+	ObservationMarker   string              `json:"observation_marker,omitempty"`
 	ScopeKind           string              `json:"scope_kind,omitempty"`
 	Channel             string              `json:"channel,omitempty"`
 	ChatID              string              `json:"chat_id,omitempty"`

@@ -57,6 +57,7 @@ type asyncToolCompletionDelivery struct {
 	recordAsyncTaskDeliveryDecision func(workspace string, decision AsyncDeliveryDecision, completionID, sourceTool string)
 	updateAsyncTaskDeliveryStatus   func(workspace, taskID string, status taskregistry.DeliveryStatus, completionID, errorSummary string)
 	recordCompletionObservation     func(context.Context, *turnState, string, *toolshared.ToolResult) error
+	flushPendingObservations        func(context.Context, *turnState) error
 }
 
 func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery {
@@ -73,6 +74,7 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		recordAsyncTaskDeliveryDecision: al.recordAsyncTaskDeliveryDecision,
 		updateAsyncTaskDeliveryStatus:   al.updateAsyncTaskDeliveryStatus,
 		recordCompletionObservation:     al.recordAsyncTaskCompletionObservation,
+		flushPendingObservations:        al.flushPendingAsyncTaskObservations,
 	}
 }
 
@@ -314,10 +316,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 }
 
-const (
-	asyncTaskObservationResultLimit   = 2000
-	asyncTaskObservationRetryInterval = 10 * time.Millisecond
-)
+const asyncTaskObservationResultLimit = 2000
 
 var errAsyncTaskObservationToolBlockOpen = errors.New("async task observation would split an open tool-result block")
 
@@ -351,6 +350,22 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 		content,
 	)
 	observation = truncateAsyncTaskObservation(observation, asyncTaskObservationResultLimit)
+	registry := al.taskRegistryForWorkspace(ts.workspace)
+	if registry != nil {
+		record, ok := registry.Get(taskID)
+		if ok {
+			if !record.HistoryPolicyKnown || record.HistoryDisabled {
+				return nil
+			}
+			if err := registry.Update(taskID, func(stored *taskregistry.Record) {
+				stored.PendingObservation = observation
+				stored.ObservationMarker = marker
+			}); err != nil {
+				return fmt.Errorf("persist pending async task observation: %w", err)
+			}
+			return al.flushPendingAsyncTaskObservation(ctx, ts, taskID)
+		}
+	}
 	ownerAgent, sessionKey, historyDisabled, err := al.asyncTaskObservationTarget(ts, taskID)
 	if err != nil {
 		return err
@@ -364,25 +379,84 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	if sessionKey == "" {
 		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
 	}
-	for {
-		_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
-			[]providers.Message,
-			bool,
-			error,
-		) {
-			return appendAsyncTaskCompletionObservation(history, marker, observation)
-		})
-		if !errors.Is(err, errAsyncTaskObservationToolBlockOpen) {
-			return err
+	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+		[]providers.Message,
+		bool,
+		error,
+	) {
+		return appendAsyncTaskCompletionObservation(history, marker, observation)
+	})
+	return err
+}
+
+func (al *AgentLoop) flushPendingAsyncTaskObservations(ctx context.Context, ts *turnState) error {
+	if ts == nil || ts.opts.NoHistory || ts.agent == nil {
+		return nil
+	}
+	registry := al.taskRegistryForWorkspace(ts.workspace)
+	if registry == nil {
+		return nil
+	}
+	var flushErrors []error
+	for _, record := range registry.List() {
+		if strings.TrimSpace(record.PendingObservation) == "" || record.OwnerKey != ts.agent.ID ||
+			record.RequesterSessionKey != ts.sessionKey {
+			continue
 		}
-		timer := time.NewTimer(asyncTaskObservationRetryInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("defer async task observation until tool block closes: %w", ctx.Err())
-		case <-timer.C:
+		if err := al.flushPendingAsyncTaskObservation(ctx, ts, record.TaskID); err != nil {
+			flushErrors = append(flushErrors, err)
 		}
 	}
+	return errors.Join(flushErrors...)
+}
+
+func (al *AgentLoop) flushPendingAsyncTaskObservation(ctx context.Context, ts *turnState, taskID string) error {
+	registry := al.taskRegistryForWorkspace(ts.workspace)
+	if registry == nil {
+		return nil
+	}
+	record, ok := registry.Get(taskID)
+	if !ok || strings.TrimSpace(record.PendingObservation) == "" {
+		return nil
+	}
+	marker := record.ObservationMarker
+	observation := record.PendingObservation
+	ownerAgent, sessionKey, historyDisabled, err := al.asyncTaskObservationTarget(ts, taskID)
+	if err != nil {
+		return err
+	}
+	if historyDisabled {
+		return registry.Update(taskID, clearPendingAsyncTaskObservation)
+	}
+	if ownerAgent == nil || ownerAgent.Sessions == nil {
+		return fmt.Errorf("async task %q requester session store is unavailable", taskID)
+	}
+	if sessionKey == "" {
+		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
+	}
+	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+		[]providers.Message,
+		bool,
+		error,
+	) {
+		return appendAsyncTaskCompletionObservation(history, marker, observation)
+	})
+	if errors.Is(err, errAsyncTaskObservationToolBlockOpen) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return registry.Update(taskID, func(stored *taskregistry.Record) {
+		if stored.ObservationMarker == marker {
+			clearPendingAsyncTaskObservation(stored)
+		}
+	})
+}
+
+func clearPendingAsyncTaskObservation(record *taskregistry.Record) {
+	record.PendingObservation = ""
+	record.ObservationMarker = ""
 }
 
 func appendAsyncTaskCompletionObservation(
@@ -524,6 +598,16 @@ func (d *asyncToolCompletionDelivery) recordTerminalObservation(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return d.recordCompletionObservation(ctx, ts, completionID, result)
+}
+
+func (d *asyncToolCompletionDelivery) flushPendingAsyncTaskObservations(
+	ctx context.Context,
+	ts *turnState,
+) error {
+	if d == nil || d.flushPendingObservations == nil {
+		return nil
+	}
+	return d.flushPendingObservations(ctx, ts)
 }
 
 func turnStateForAsyncUserDelivery(

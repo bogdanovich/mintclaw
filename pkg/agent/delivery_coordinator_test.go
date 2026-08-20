@@ -694,6 +694,56 @@ func TestAsyncTaskCompletionObservationWaitsForImmediateMultiToolResults(t *test
 	}
 }
 
+func TestAsyncTaskCompletionObservationFlushesAfterSlowSiblingAndExpiredDeliveryContext(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	taskID := "slow-sibling-task"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	if err := al.taskRegistryForWorkspace(workspace).Update(taskID, func(record *taskregistry.Record) {
+		record.OwnerKey = ts.agent.ID
+		record.RequesterSessionKey = ts.sessionKey
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.agent.Sessions.ReplaceTurnHistory(t.Context(), ts.sessionKey, []providers.Message{
+		{Role: "user", Content: "run both tools"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{
+			{ID: "spawn-call", Name: "spawn"},
+			{ID: "slow-call", Name: "slow_tool"},
+		}},
+		{Role: "tool", ToolCallID: "spawn-call", Content: "accepted"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deliveryCtx, cancel := context.WithCancel(t.Context())
+	result := (&toolshared.ToolResult{
+		ForLLM: "fast child completed", AsyncTaskID: taskID,
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	if err := al.recordAsyncTaskCompletionObservation(deliveryCtx, ts, "slow-sibling-completion", result); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	record, ok := al.taskRegistryForWorkspace(workspace).Get(taskID)
+	if !ok || record.PendingObservation == "" || record.ObservationMarker == "" {
+		t.Fatalf("pending observation was not durable: %+v", record)
+	}
+	if err := persistFullSessionMessage(t.Context(), ts.agent.Sessions, ts.sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "slow-call", Content: "slow result",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := al.flushPendingAsyncTaskObservations(t.Context(), ts); err != nil {
+		t.Fatal(err)
+	}
+	history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+	if len(history) != 5 || !strings.Contains(history[4].Content, "fast child completed") {
+		t.Fatalf("flushed history = %#v", history)
+	}
+	record, _ = al.taskRegistryForWorkspace(workspace).Get(taskID)
+	if record.PendingObservation != "" || record.ObservationMarker != "" {
+		t.Fatalf("pending observation was not cleared: %+v", record)
+	}
+}
+
 func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *testing.T) {
 	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "parent once")
 	taskID := "coordinator-duplicate-parent"
