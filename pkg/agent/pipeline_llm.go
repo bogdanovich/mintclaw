@@ -394,13 +394,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 				fullHistory := append(
 					append([]providers.Message(nil), trimmedHistory...),
 					protectedTurnTail...)
-				rebuilt := p.buildTurnMessages(
+				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
 					ts,
 					fullHistory,
 					exec.summary,
 					"",
 					nil,
 					contextualSkills,
+					len(protectedTurnTail),
 				)
 				activeTailCount := matchingTurnMessageTail(rebuilt, protectedTurnTail)
 				return resolveMediaRefs(

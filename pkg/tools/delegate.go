@@ -195,7 +195,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	}
 	t.recordDelegateTask(
 		ctx, taskID, agentID, task, deliveryMode,
-		taskregistry.StatusSucceeded,
+		terminalTaskStatusForResult(result),
 		delegateDeliveryStatus(result, deliveryMode),
 		result.ContentForLLM(),
 		completionPayloadForTaskRegistry(result),
@@ -231,6 +231,8 @@ func (t *DelegateTool) recordDelegateTask(
 		TaskKind:            "delegate",
 		RequesterSessionKey: toolshared.ToolSessionKey(ctx),
 		OwnerKey:            toolshared.ToolAgentID(ctx),
+		HistoryPolicyKnown:  true,
+		HistoryDisabled:     toolshared.ToolHistoryDisabled(ctx),
 		Channel:             toolshared.ToolChannel(ctx),
 		ChatID:              toolshared.ToolChatID(ctx),
 		TopicID:             toolshared.ToolTopicID(ctx),

@@ -1952,6 +1952,7 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
+	ctx = toolshared.WithToolHistoryDisabled(ctx, ts.opts.NoHistory)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, ts.opts.Dispatch.RouteSessionKey)
 	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
 }

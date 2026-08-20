@@ -3,8 +3,18 @@ package tools
 import (
 	"testing"
 
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+func TestTerminalTaskStatusForResultUsesObjectiveOutcome(t *testing.T) {
+	result := &toolshared.ToolResult{Completion: &toolshared.CompletionResult{
+		ObjectiveOutcome: &toolshared.ObjectiveOutcome{Status: toolshared.ObjectiveOutcomeBlocked},
+	}}
+	if got := terminalTaskStatusForResult(result); got != taskregistry.StatusFailed {
+		t.Fatalf("status = %q, want %q", got, taskregistry.StatusFailed)
+	}
+}
 
 func TestTaskRegistryPayloadPreservesVerifiedObjectiveOutcome(t *testing.T) {
 	result := toolshared.NewToolResult("partial result").WithCompletion(&toolshared.CompletionResult{

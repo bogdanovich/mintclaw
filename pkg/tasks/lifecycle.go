@@ -329,13 +329,16 @@ func (r *Registry) CompleteInteractionTaskResult(
 			rec.CleanupAfter = 0
 		}
 		summary := truncateInteractionField(content, 1000)
-		rec.Status = StatusSucceeded
+		rec.Status = TerminalStatusForObjectiveOutcome(objectiveOutcome)
 		rec.DeliveryStatus = delivery
 		rec.InteractionShortID = ""
 		rec.InteractionSummary = ""
 		rec.ProgressSummary = ""
 		rec.TerminalSummary = summary
 		rec.Error = ""
+		if rec.Status == StatusFailed {
+			rec.Error = summary
+		}
 		if strings.TrimSpace(content) != "" {
 			rec.Completion = &CompletionPayload{
 				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
@@ -352,6 +355,16 @@ func (r *Registry) CompleteInteractionTaskResult(
 		}
 		return true, nil
 	})
+}
+
+// TerminalStatusForObjectiveOutcome keeps the durable task state aligned with
+// the runtime-verified objective contract. A partial or blocked objective is a
+// completed execution, but it is not a successfully completed task.
+func TerminalStatusForObjectiveOutcome(outcome *ObjectiveOutcome) Status {
+	if outcome == nil || strings.TrimSpace(outcome.Status) == "" || outcome.Status == "succeeded" {
+		return StatusSucceeded
+	}
+	return StatusFailed
 }
 
 func (r *Registry) updateInteractionProjection(

@@ -79,6 +79,8 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = toolshared.WithToolSessionContext(ctx, "main", "requester-session", nil)
+	ctx = toolshared.WithToolHistoryDisabled(ctx, true)
 	args := map[string]any{
 		"task":     "Write a haiku about coding",
 		"label":    "haiku-task",
@@ -110,10 +112,20 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	if !strings.HasPrefix(taskID, "subagent-") {
 		t.Fatalf("task ID = %q, want subagent-*", taskID)
 	}
+	if !strings.Contains(result.ForLLM, taskID) ||
+		!strings.Contains(result.ForLLM, "acceptance only") ||
+		!strings.Contains(result.ForLLM, "task_status") {
+		t.Fatalf("spawn acknowledgement lacks durable status guidance: %q", result.ForLLM)
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		rec, ok := manager.taskRegistry.Get(taskID)
 		if ok && rec.Status == taskregistry.StatusSucceeded {
+			if rec.OwnerKey != "main" || rec.RequesterSessionKey != "requester-session" ||
+				!rec.HistoryPolicyKnown ||
+				!rec.HistoryDisabled {
+				t.Fatalf("task ownership = %+v", rec)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
