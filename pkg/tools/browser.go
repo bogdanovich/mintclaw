@@ -1226,7 +1226,8 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 	fileChooserAvailable, downloadAvailable := false, false
 	if tool != nil && tool.runtime != nil {
 		limits = tool.runtime.config.Limits.Effective()
-		downloadAvailable = tool.runtime.source.DownloadAvailable()
+		downloadAvailable = tool.runtime.source.ArtifactTransferAvailable() &&
+			tool.runtime.source.DownloadAvailable()
 		fileChooserAvailable = tool.runtime.fileChooserAvailable()
 	}
 	actions = slices.DeleteFunc(actions, func(action browseraction.ActionKind) bool {

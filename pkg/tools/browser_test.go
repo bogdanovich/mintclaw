@@ -1183,9 +1183,12 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 	actionProperties := action["properties"].(map[string]any)
 	kind := actionProperties["kind"].(map[string]any)
 	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionFileChooser) {
-			t.Fatalf("unsupported file chooser advertised in schema: %#v", kind["enum"])
+		if candidate == string(browser.ActionFileChooser) || candidate == string(browser.ActionDownload) {
+			t.Fatalf("unsupported transfer action advertised in schema: %#v", kind["enum"])
 		}
+	}
+	if _, ok := actionProperties["deliver"]; ok {
+		t.Fatalf("download delivery field advertised without transfer support: %#v", actionProperties)
 	}
 }
 

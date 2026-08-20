@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
@@ -256,11 +257,7 @@ func normalizeBrowserActions(actions *[]string) error {
 	}
 	seen := make(map[string]struct{}, len(*actions))
 	for _, action := range *actions {
-		if action != "check" && action != "click" && action != "dialog" && action != "drag" && action != "navigate" &&
-			action != "download" && action != "file_chooser" && action != "fill" && action != "hover" &&
-			action != "press" &&
-			action != "scroll" &&
-			action != "select" && action != "uncheck" {
+		if !browseraction.ActionKind(action).Valid() {
 			return errors.New("allowed_actions contains an unsupported action")
 		}
 		if _, duplicate := seen[action]; duplicate {
