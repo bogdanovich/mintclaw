@@ -67,6 +67,30 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	}
 }
 
+func TestDelegateTool_BrowserObjectivePreflightRejectsBeforeSpawning(t *testing.T) {
+	spawner := &delegateMockSpawner{}
+	tool := NewDelegateTool()
+	tool.SetSpawner(spawner)
+	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+		return targetAgentID == "browser"
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"agent_id": "browser",
+		"task":     "inspect two listings",
+	})
+
+	if result == nil || !result.IsError {
+		t.Fatalf("result = %#v, want error", result)
+	}
+	if !strings.Contains(result.ForLLM, "retry delegate") {
+		t.Fatalf("ForLLM = %q, want retry guidance", result.ForLLM)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("spawner calls = %#v, want none", spawner.calls)
+	}
+}
+
 func TestDelegateTool_Execute_Success(t *testing.T) {
 	spawner := &delegateMockSpawner{}
 	tool := NewDelegateTool()

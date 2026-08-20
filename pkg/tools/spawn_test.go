@@ -123,6 +123,38 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	}
 }
 
+func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T) {
+	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	tool := NewSpawnTool(manager)
+	spawner := &mockSpawner{done: make(chan struct{})}
+	tool.SetSpawner(spawner)
+	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+		return targetAgentID == "browser"
+	})
+
+	result := tool.ExecuteAsync(context.Background(), map[string]any{
+		"agent_id": "browser",
+		"task":     "inspect two listings",
+	}, func(context.Context, *toolshared.ToolResult) {
+		t.Error("callback must not run when browser objective preflight fails")
+	})
+
+	if result == nil || !result.IsError || result.Async {
+		t.Fatalf("result = %#v, want synchronous error", result)
+	}
+	if !strings.Contains(result.ForLLM, "retry spawn") {
+		t.Fatalf("ForLLM = %q, want retry guidance", result.ForLLM)
+	}
+	if tasks := manager.ListTaskCopies(); len(tasks) != 0 {
+		t.Fatalf("spawned tasks = %#v, want none", tasks)
+	}
+	select {
+	case <-spawner.done:
+		t.Fatal("browser child started without objective_items")
+	default:
+	}
+}
+
 func TestSpawnTool_Execute_NilManager(t *testing.T) {
 	tool := NewSpawnTool(nil)
 

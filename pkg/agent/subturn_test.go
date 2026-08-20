@@ -2608,6 +2608,83 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 	}
 }
 
+func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testing.T) {
+	const outcome = "inspected\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[]}` + objectiveOutcomeEnd
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: outcome, FinishReason: "stop"},
+		{Content: outcome, FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	betaAgent.Tools.Register(&outcomeBrowserApprovalTool{})
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-browser-objective-bridge",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alphaAgent,
+		opts: processOptions{Dispatch: DispatchRequest{
+			SessionKey: "parent-browser-objective-bridge",
+		}},
+	}
+	ctx := withTurnState(context.Background(), parent)
+	objectiveArgs := []any{map[string]any{"item": "inspect listings", "kind": "result"}}
+
+	t.Run("spawn", func(t *testing.T) {
+		manager := tools.NewSubagentManagerWithRegistry(
+			provider,
+			"test-model",
+			alphaAgent.Workspace,
+			taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.jsonl")),
+		)
+		spawnTool := tools.NewSpawnTool(manager)
+		spawnTool.SetSpawner(NewSubTurnSpawner(al))
+		completed := make(chan *toolshared.ToolResult, 1)
+		result := spawnTool.ExecuteAsync(ctx, map[string]any{
+			"agent_id":        "beta",
+			"task":            "inspect listings",
+			"objective_items": objectiveArgs,
+		}, func(_ context.Context, result *toolshared.ToolResult) {
+			completed <- result
+		})
+		if result == nil || !result.Async || result.IsError {
+			t.Fatalf("spawn result = %#v, want async acknowledgment", result)
+		}
+		select {
+		case child := <-completed:
+			assertSucceededObjectiveOutcome(t, child)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for browser spawn completion")
+		}
+	})
+
+	t.Run("delegate", func(t *testing.T) {
+		delegateTool := tools.NewDelegateTool()
+		delegateTool.SetSpawner(NewSubTurnSpawner(al))
+		result := delegateTool.Execute(ctx, map[string]any{
+			"agent_id":        "beta",
+			"task":            "inspect listings",
+			"objective_items": objectiveArgs,
+		})
+		assertSucceededObjectiveOutcome(t, result)
+	})
+}
+
+func assertSucceededObjectiveOutcome(t *testing.T, result *toolshared.ToolResult) {
+	t.Helper()
+	if result == nil || result.IsError || result.Completion == nil || result.Completion.ObjectiveOutcome == nil {
+		t.Fatalf("browser child result = %#v, want structured objective outcome", result)
+	}
+	if result.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
+		t.Fatalf("objective outcome = %#v, want succeeded", result.Completion.ObjectiveOutcome)
+	}
+}
+
 func TestSpawnSubTurn_TargetAgentIDRemovesNodeFileTools(t *testing.T) {
 	provider := &subturnToolCaptureProvider{}
 	al, cleanup := newMultiAgentLoop(t, provider)
