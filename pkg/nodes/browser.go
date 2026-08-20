@@ -33,7 +33,7 @@ const (
 
 	MaxBrowserProfiles           = 8
 	MaxBrowserActions            = 16
-	MaxBrowserScrollAmount       = 5
+	MaxBrowserScrollAmount       = browseraction.MaxScrollAmount
 	MaxBrowserSessions           = 1
 	MaxBrowserTabs               = 4
 	MaxBrowserSessionSeconds     = 60 * 60
@@ -531,13 +531,7 @@ func BrowserFillFieldAllowedWithPolicy(role, name string, sensitiveTerms []strin
 // BrowserPressKeyValid admits only document-scoped keys that cannot express
 // browser chrome, operating-system, or arbitrary modifier shortcuts.
 func BrowserPressKeyValid(key string) bool {
-	switch key {
-	case "Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-		"Home", "End", "PageUp", "PageDown", "Backspace", "Delete":
-		return true
-	default:
-		return false
-	}
+	return browseraction.ValidKey(key)
 }
 
 type BrowserHostFeatures struct {
@@ -967,9 +961,7 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
-		if action != "check" && action != "click" && action != "dialog" && action != "download" && action != "drag" &&
-			action != "file_chooser" && action != "fill" && action != "hover" && action != "navigate" && action != "press" &&
-			action != "scroll" && action != "select" && action != "uncheck" {
+		if !browseraction.ActionKind(action).Valid() {
 			return fmt.Errorf("%w: unsupported browser action", ErrInvalidCapability)
 		}
 		if _, duplicate := seen[action]; duplicate {
@@ -1045,6 +1037,133 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 	return result
 }
 
+// ValidateBrowserActInput validates the durable gateway-to-companion action
+// contract. Unknown JSON fields are intentionally absent from BrowserActInput
+// after decoding and therefore cannot affect execution. Action-independent
+// live authority remains the responsibility of the browser host.
+func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDescriptor) error {
+	profile, ok := browserProfileForRevision(profiles, input.ProfileRevision)
+	if !ok || !validInvocationIdentifier(input.SessionID) || !validInvocationIdentifier(input.TabID) ||
+		!validInvocationIdentifier(input.ActionInvocationID) || input.SnapshotGeneration == 0 ||
+		input.CurrentOrigin == "" || len(input.CurrentOrigin) > MaxBrowserURLBytes ||
+		!validSHA256Digest(input.PreparedActionHash) || !validSHA256Digest(input.BrowserPolicyRevision) ||
+		!slices.Contains(profile.Actions, string(input.Action.Kind)) ||
+		input.Action.Validate(MaxBrowserTextInputBytes) != nil || input.Action.Value != "" ||
+		len(input.ExpectedRole) > 128 || len(input.ExpectedName) > 4096 ||
+		len(input.DestinationExpectedRole) > 128 || len(input.DestinationExpectedName) > 4096 {
+		return invalidBrowserActInput()
+	}
+	kind := input.Action.Kind
+	if !browserActionUsesElementSemantics(kind) && (input.ExpectedRole != "" || input.ExpectedName != "") ||
+		kind != browseraction.ActionDrag &&
+			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "") ||
+		kind != browseraction.ActionDialog &&
+			(input.DialogType != "" || input.DialogMessageDigest != "" || input.DialogMessageBytes != 0) ||
+		kind != browseraction.ActionFileChooser &&
+			(input.ArtifactSHA256 != "" || input.ArtifactBytes != 0 || input.ArtifactFilename != "" ||
+				input.ArtifactContentType != "") ||
+		kind != browseraction.ActionFill && kind != browseraction.ActionSelect && kind != browseraction.ActionDialog &&
+			(input.InputDigest != "" || input.InputBytes != 0) {
+		return invalidBrowserActInput()
+	}
+	valid := false
+	switch kind {
+	case browseraction.ActionNavigate:
+		valid = input.Effect == "navigation" && input.ApprovalDigest == ""
+	case browseraction.ActionScroll:
+		valid = input.Effect == "read" && input.ApprovalDigest == ""
+	case browseraction.ActionClick:
+		valid = input.ExpectedRole != "" && input.Effect == BrowserClickEffect(input.ExpectedRole) &&
+			BrowserApprovalDigestMatches(input)
+	case browseraction.ActionFill:
+		valid = input.Effect == "local_edit" && BrowserFillFieldAllowed(input.ExpectedRole, input.ExpectedName) &&
+			validBrowserProtectedInput(input, false) && input.ApprovalDigest == ""
+	case browseraction.ActionSelect:
+		valid = input.Effect == "local_edit" && input.ExpectedRole == "combobox" &&
+			validBrowserProtectedInput(input, false) && input.ApprovalDigest == ""
+	case browseraction.ActionPress:
+		valid = input.Effect == "unknown" && BrowserApprovalDigestMatches(input)
+	case browseraction.ActionDialog:
+		valid = validBrowserDialogActInput(input)
+	case browseraction.ActionCheck, browseraction.ActionUncheck:
+		valid = input.Effect == "local_edit" &&
+			BrowserCheckRoleAllowed(string(kind), input.ExpectedRole) && input.ApprovalDigest == ""
+	case browseraction.ActionHover:
+		valid = input.Effect == "read" && input.ExpectedRole != "" && input.ApprovalDigest == ""
+	case browseraction.ActionDrag:
+		valid = input.Effect == "unknown" && input.ExpectedRole != "" && input.DestinationExpectedRole != "" &&
+			BrowserApprovalDigestMatches(input)
+	case browseraction.ActionFileChooser:
+		valid = input.Effect == "local_edit" && input.ExpectedRole == "button" &&
+			validSHA256Digest(input.ArtifactSHA256) && input.ArtifactBytes > 0 &&
+			input.ArtifactBytes <= int64(profile.Limits.UploadBytes) && input.ArtifactFilename != "" &&
+			len(input.ArtifactFilename) <= 255 && input.ArtifactContentType != "" &&
+			len(input.ArtifactContentType) <= 255 && input.ApprovalDigest == ""
+	case browseraction.ActionDownload:
+		valid = input.Effect == "download" && BrowserApprovalDigestMatches(input)
+	}
+	if !valid {
+		return invalidBrowserActInput()
+	}
+	return nil
+}
+
+func browserProfileForRevision(
+	profiles []BrowserProfileDescriptor,
+	revision string,
+) (BrowserProfileDescriptor, bool) {
+	for _, profile := range profiles {
+		if profile.Revision == revision {
+			return profile, true
+		}
+	}
+	return BrowserProfileDescriptor{}, false
+}
+
+func browserActionUsesElementSemantics(kind browseraction.ActionKind) bool {
+	switch kind {
+	case browseraction.ActionClick, browseraction.ActionFill, browseraction.ActionSelect, browseraction.ActionCheck,
+		browseraction.ActionUncheck, browseraction.ActionHover, browseraction.ActionDrag,
+		browseraction.ActionFileChooser:
+		return true
+	default:
+		return false
+	}
+}
+
+func validBrowserProtectedInput(input BrowserActInput, allowEmpty bool) bool {
+	minimum := 1
+	if allowEmpty {
+		minimum = 0
+	}
+	return validSHA256Digest(input.InputDigest) && input.InputBytes >= minimum &&
+		input.InputBytes <= MaxBrowserTextInputBytes
+}
+
+func validBrowserDialogActInput(input BrowserActInput) bool {
+	if (input.DialogType != "alert" && input.DialogType != "beforeunload" &&
+		input.DialogType != "confirm" && input.DialogType != "prompt") ||
+		!validSHA256Digest(input.DialogMessageDigest) || input.DialogMessageBytes < 0 ||
+		input.DialogMessageBytes > MaxBrowserDialogMessageBytes {
+		return false
+	}
+	if input.Action.Decision == "dismiss" {
+		return input.Effect == "read" && !input.Action.PromptProvided && input.InputDigest == "" &&
+			input.InputBytes == 0 && input.ApprovalDigest == ""
+	}
+	if input.Effect != "external_commit" || !BrowserApprovalDigestMatches(input) {
+		return false
+	}
+	if input.Action.PromptProvided {
+		return input.DialogType == "prompt" && validBrowserProtectedInput(input, true)
+	}
+	return input.InputDigest == "" && input.InputBytes == 0
+}
+
+func invalidBrowserActInput() error {
+	return fmt.Errorf("%w: malformed browser action input", ErrInvalidInvocation)
+}
+
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
 	return browserCommandInputSchema(command, profiles)
 }
@@ -1054,7 +1173,6 @@ func browserCommandInputSchema(
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
-	actionBranches := make([]any, 0, len(profiles))
 	profileRevisions := make([]string, 0, len(profiles))
 	allActions := make(map[string]struct{})
 	for _, profile := range profiles {
@@ -1072,218 +1190,6 @@ func browserCommandInputSchema(
 		})
 		for _, action := range profile.Actions {
 			allActions[action] = struct{}{}
-		}
-		for _, action := range profile.Actions {
-			effect := "navigation"
-			switch action {
-			case "dialog":
-				effect = "external_commit"
-			case "download":
-				effect = "download"
-			case "check", "file_chooser", "fill", "select", "uncheck":
-				effect = "local_edit"
-			case "hover":
-				effect = "read"
-			case "drag":
-				effect = "unknown"
-			case "press":
-				effect = "unknown"
-			case "scroll":
-				effect = "read"
-			case "click":
-				effect = "unknown"
-			}
-			required := []string{"profile_revision", "action", "effect"}
-			if action == "download" || action == "click" || action == "drag" || action == "press" {
-				required = append(required, "approval_digest")
-			}
-			properties := map[string]any{
-				"profile_revision": map[string]any{"const": profile.Revision},
-				"action":           browserActionSchema([]string{action}),
-				"effect":           map[string]any{"const": effect},
-			}
-			if action == "click" || action == "fill" || action == "select" || action == "check" ||
-				action == "uncheck" || action == "hover" || action == "drag" || action == "file_chooser" {
-				required = append(required, "expected_role")
-				properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
-				properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
-			}
-			if action == "drag" {
-				required = append(required, "destination_expected_role")
-				properties["destination_expected_role"] = map[string]any{
-					"type": "string", "minLength": 1, "maxLength": 128,
-				}
-				properties["destination_expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
-			}
-			if action == "fill" || action == "select" {
-				required = append(required, "input_digest", "input_bytes")
-				if action == "select" {
-					properties["expected_role"] = map[string]any{"const": "combobox"}
-				} else {
-					properties["expected_role"] = map[string]any{"enum": []string{"searchbox", "textbox"}}
-				}
-				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
-				properties["input_bytes"] = map[string]any{
-					"type": "integer", "minimum": 1, "maximum": MaxBrowserTextInputBytes,
-				}
-			}
-			if action == "file_chooser" {
-				required = append(required,
-					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
-				)
-				properties["expected_role"] = map[string]any{"const": "button"}
-				properties["artifact_sha256"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
-				properties["artifact_bytes"] = map[string]any{
-					"type": "integer", "minimum": 1, "maximum": profile.Limits.UploadBytes,
-				}
-				properties["artifact_filename"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 255}
-				properties["artifact_content_type"] = map[string]any{
-					"type": "string", "minLength": 1, "maxLength": 255,
-				}
-			}
-			if action == "check" || action == "uncheck" {
-				properties["expected_role"] = map[string]any{"enum": []string{"checkbox", "radio", "switch"}}
-				if action == "uncheck" {
-					properties["expected_role"] = map[string]any{"enum": []string{"checkbox", "switch"}}
-				}
-			}
-			if action == "dialog" {
-				required = append(required, "dialog_type", "dialog_message_digest", "dialog_message_bytes")
-				properties["effect"] = map[string]any{"enum": []string{"read", "external_commit"}}
-				properties["dialog_type"] = map[string]any{
-					"enum": []string{"alert", "beforeunload", "confirm", "prompt"},
-				}
-				properties["dialog_message_digest"] = map[string]any{
-					"type": "string", "pattern": "^[a-f0-9]{64}$",
-				}
-				properties["dialog_message_bytes"] = map[string]any{
-					"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
-				}
-				properties["input_digest"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
-				properties["input_bytes"] = map[string]any{
-					"type": "integer", "minimum": 0, "maximum": MaxBrowserTextInputBytes,
-				}
-			}
-			if action == "click" {
-				properties["effect"] = map[string]any{"enum": []string{"external_commit", "unknown"}}
-			}
-			branch := map[string]any{
-				"required":   required,
-				"properties": properties,
-			}
-			if action == "fill" || action == "select" {
-				branch["not"] = map[string]any{"required": []string{"approval_digest"}}
-			}
-			if action == "check" || action == "uncheck" || action == "hover" || action == "file_chooser" {
-				branch["not"] = map[string]any{"anyOf": []any{
-					map[string]any{"required": []string{"approval_digest"}},
-					map[string]any{"required": []string{"input_digest"}},
-					map[string]any{"required": []string{"input_bytes"}},
-				}}
-			}
-			if action == "press" {
-				branch["not"] = map[string]any{"anyOf": []any{
-					map[string]any{"required": []string{"expected_role"}},
-					map[string]any{"required": []string{"expected_name"}},
-					map[string]any{"required": []string{"input_digest"}},
-					map[string]any{"required": []string{"input_bytes"}},
-				}}
-			}
-			if action == "click" {
-				branch["oneOf"] = []any{
-					map[string]any{"properties": map[string]any{
-						"expected_role": map[string]any{"const": "button"},
-						"effect":        map[string]any{"const": "external_commit"},
-					}},
-					map[string]any{"properties": map[string]any{
-						"expected_role": map[string]any{"not": map[string]any{"const": "button"}},
-						"effect":        map[string]any{"const": "unknown"},
-					}},
-				}
-			}
-			if action == "dialog" {
-				decisionConstraint := []any{
-					map[string]any{
-						"required": []string{"approval_digest"},
-						"properties": map[string]any{
-							"action": map[string]any{"properties": map[string]any{
-								"decision": map[string]any{"const": "accept"},
-							}},
-							"effect": map[string]any{"const": "external_commit"},
-						},
-					},
-					map[string]any{
-						"properties": map[string]any{
-							"action": map[string]any{"properties": map[string]any{
-								"decision":        map[string]any{"const": "dismiss"},
-								"prompt_provided": map[string]any{"const": false},
-							}},
-							"effect": map[string]any{"const": "read"},
-						},
-						"not": map[string]any{"anyOf": []any{
-							map[string]any{"required": []string{"approval_digest"}},
-							map[string]any{"required": []string{"input_digest"}},
-							map[string]any{"required": []string{"input_bytes"}},
-						}},
-					},
-				}
-				promptConstraint := []any{
-					map[string]any{
-						"required": []string{"input_digest"},
-						"properties": map[string]any{
-							"action": map[string]any{
-								"required": []string{"prompt_provided"},
-								"properties": map[string]any{
-									"prompt_provided": map[string]any{"const": true},
-								},
-							},
-							"dialog_type": map[string]any{"const": "prompt"},
-						},
-					},
-					map[string]any{
-						"properties": map[string]any{
-							"action": map[string]any{"properties": map[string]any{
-								"prompt_provided": map[string]any{"const": false},
-							}},
-						},
-						"not": map[string]any{"anyOf": []any{
-							map[string]any{"required": []string{"input_digest"}},
-							map[string]any{"required": []string{"input_bytes"}},
-						}},
-					},
-				}
-				branch["allOf"] = []any{
-					map[string]any{"oneOf": decisionConstraint},
-					map[string]any{"oneOf": promptConstraint},
-				}
-			}
-			forbiddenFields := []string{
-				"destination_expected_role", "destination_expected_name",
-				"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
-			}
-			switch action {
-			case "drag":
-				forbiddenFields = []string{
-					"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
-					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
-				}
-			case "file_chooser":
-				forbiddenFields = []string{
-					"destination_expected_role", "destination_expected_name", "dialog_type",
-					"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
-				}
-			}
-			forbidden := make([]any, 0, len(forbiddenFields))
-			for _, field := range forbiddenFields {
-				forbidden = append(forbidden, map[string]any{"required": []string{field}})
-			}
-			constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
-			if existing, ok := branch["allOf"].([]any); ok {
-				branch["allOf"] = append(existing, constraint)
-			} else {
-				branch["allOf"] = []any{constraint}
-			}
-			actionBranches = append(actionBranches, branch)
 		}
 	}
 	actions := make([]string, 0, len(allActions))
@@ -1344,97 +1250,50 @@ func browserCommandInputSchema(
 			},
 		}}
 	case BrowserCommandAct:
-		actEffects := []string{"read", "navigation", "download"}
-		if _, hasClick := allActions["click"]; hasClick {
-			actEffects = append(actEffects, "external_commit", "unknown")
-		}
-		if _, hasPress := allActions["press"]; hasPress && !slices.Contains(actEffects, "unknown") {
-			actEffects = append(actEffects, "unknown")
-		}
-		if _, hasDrag := allActions["drag"]; hasDrag && !slices.Contains(actEffects, "unknown") {
-			actEffects = append(actEffects, "unknown")
-		}
-		if _, hasDialog := allActions["dialog"]; hasDialog && !slices.Contains(actEffects, "external_commit") {
-			actEffects = append(actEffects, "external_commit")
-		}
-		if _, hasFill := allActions["fill"]; hasFill {
-			actEffects = append(actEffects, "local_edit")
-		}
-		if _, hasCheck := allActions["check"]; hasCheck && !slices.Contains(actEffects, "local_edit") {
-			actEffects = append(actEffects, "local_edit")
-		}
-		if _, hasFileChooser := allActions["file_chooser"]; hasFileChooser &&
-			!slices.Contains(actEffects, "local_edit") {
-			actEffects = append(actEffects, "local_edit")
-		}
-		if _, hasUncheck := allActions["uncheck"]; hasUncheck && !slices.Contains(actEffects, "local_edit") {
-			actEffects = append(actEffects, "local_edit")
-		}
-		if _, hasSelect := allActions["select"]; hasSelect && !slices.Contains(actEffects, "local_edit") {
-			actEffects = append(actEffects, "local_edit")
-		}
 		add("session_id", identifier)
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("action_invocation_id", identifier)
-		add("action", browserActionSchema(actions))
-		add("effect", map[string]any{"enum": actEffects})
+		actionKinds := make([]browseraction.ActionKind, len(actions))
+		for index, action := range actions {
+			actionKinds[index] = browseraction.ActionKind(action)
+		}
+		add("action", browseraction.Schema(actionKinds, MaxBrowserTextInputBytes, true))
+		add("effect", map[string]any{
+			"enum": []string{"download", "external_commit", "local_edit", "navigation", "read", "unknown"},
+		})
 		add("current_origin", map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		})
 		add("prepared_action_hash", digest)
 		add("browser_policy_revision", digest)
-		add("profile_revision", identifier)
-		_, hasClick := allActions["click"]
-		_, hasFill := allActions["fill"]
-		_, hasSelect := allActions["select"]
-		_, hasDialog := allActions["dialog"]
-		_, hasCheck := allActions["check"]
-		_, hasUncheck := allActions["uncheck"]
-		_, hasHover := allActions["hover"]
-		_, hasDrag := allActions["drag"]
-		_, hasFileChooser := allActions["file_chooser"]
-		if hasClick || hasFill || hasSelect || hasCheck || hasUncheck || hasHover || hasDrag || hasFileChooser {
-			properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
-			properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		add("profile_revision", map[string]any{"enum": profileRevisions})
+		properties["expected_role"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+		properties["expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		properties["destination_expected_role"] = map[string]any{
+			"type": "string", "minLength": 1, "maxLength": 128,
 		}
-		if hasDrag {
-			properties["destination_expected_role"] = map[string]any{
-				"type": "string", "minLength": 1, "maxLength": 128,
-			}
-			properties["destination_expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		properties["destination_expected_name"] = map[string]any{"type": "string", "maxLength": 4096}
+		properties["dialog_type"] = map[string]any{
+			"enum": []string{"alert", "beforeunload", "confirm", "prompt"},
 		}
-		if hasFill || hasSelect || hasDialog {
-			properties["input_digest"] = digest
-			minimumInputBytes := 1
-			if hasDialog {
-				minimumInputBytes = 0
-			}
-			properties["input_bytes"] = map[string]any{
-				"type": "integer", "minimum": minimumInputBytes, "maximum": MaxBrowserTextInputBytes,
-			}
+		properties["dialog_message_digest"] = digest
+		properties["dialog_message_bytes"] = map[string]any{
+			"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
 		}
-		if hasDialog {
-			properties["dialog_type"] = map[string]any{
-				"enum": []string{"alert", "beforeunload", "confirm", "prompt"},
-			}
-			properties["dialog_message_digest"] = digest
-			properties["dialog_message_bytes"] = map[string]any{
-				"type": "integer", "minimum": 0, "maximum": MaxBrowserDialogMessageBytes,
-			}
+		properties["input_digest"] = digest
+		properties["input_bytes"] = map[string]any{
+			"type": "integer", "minimum": 0, "maximum": MaxBrowserTextInputBytes,
 		}
-		if hasFileChooser {
-			properties["artifact_sha256"] = digest
-			properties["artifact_bytes"] = map[string]any{
-				"type": "integer", "minimum": 1, "maximum": MaxBrowserUploadBytes,
-			}
-			properties["artifact_filename"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 255}
-			properties["artifact_content_type"] = map[string]any{
-				"type": "string", "minLength": 1, "maxLength": 255,
-			}
+		properties["artifact_sha256"] = digest
+		properties["artifact_bytes"] = map[string]any{
+			"type": "integer", "minimum": 0, "maximum": MaxBrowserUploadBytes,
+		}
+		properties["artifact_filename"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 255}
+		properties["artifact_content_type"] = map[string]any{
+			"type": "string", "minLength": 1, "maxLength": 255,
 		}
 		properties["approval_digest"] = digest
-		profileConstraint = map[string]any{"oneOf": actionBranches}
 	case BrowserCommandContexts:
 		add("session_id", identifier)
 		add("profile_revision", map[string]any{"enum": profileRevisions})
@@ -1478,7 +1337,7 @@ func browserCommandInputSchema(
 		return json.RawMessage("false")
 	}
 	schema := map[string]any{
-		"type": "object", "additionalProperties": false,
+		"type": "object", "additionalProperties": command == BrowserCommandAct,
 		"required": required, "properties": properties,
 	}
 	if profileConstraint != nil {
@@ -1697,125 +1556,6 @@ func browserLimitsSchema(maximum BrowserLimits) map[string]any {
 	}
 }
 
-func browserActionSchema(actions []string) map[string]any {
-	branches := make([]any, 0, len(actions))
-	for _, action := range actions {
-		switch action {
-		case "navigate":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "url"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": "navigate"},
-					"url":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes},
-				},
-			})
-		case "download":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": "download"},
-					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "scroll":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "direction", "amount"},
-				"properties": map[string]any{
-					"kind":      map[string]any{"const": "scroll"},
-					"direction": map[string]any{"enum": []string{"up", "down"}},
-					"amount": map[string]any{
-						"type": "integer", "minimum": 1, "maximum": MaxBrowserScrollAmount,
-					},
-				},
-			})
-		case "click":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": "click"},
-					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "check", "uncheck", "hover":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": action},
-					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "drag":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "source_ref", "destination_ref"},
-				"properties": map[string]any{
-					"kind":            map[string]any{"const": "drag"},
-					"source_ref":      map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-					"destination_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "dialog":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "dialog_id", "decision"},
-				"properties": map[string]any{
-					"kind":            map[string]any{"const": "dialog"},
-					"dialog_id":       map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-					"decision":        map[string]any{"enum": []string{"accept", "dismiss"}},
-					"prompt_provided": map[string]any{"type": "boolean"},
-				},
-			})
-		case "file_chooser":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref", "artifact_ref"},
-				"properties": map[string]any{
-					"kind":         map[string]any{"const": "file_chooser"},
-					"ref":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-					"artifact_ref": map[string]any{"type": "string", "minLength": 1, "maxLength": 512},
-				},
-			})
-		case "select":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": "select"},
-					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "fill":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "ref"},
-				"properties": map[string]any{
-					"kind": map[string]any{"const": "fill"},
-					"ref":  map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
-				},
-			})
-		case "press":
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"required": []string{"kind", "target", "key"},
-				"properties": map[string]any{
-					"kind":   map[string]any{"const": "press"},
-					"target": map[string]any{"const": "document"},
-					"key": map[string]any{"enum": []string{
-						"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
-						"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
-					}},
-				},
-			})
-		}
-	}
-	return map[string]any{"oneOf": branches}
-}
-
 func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -1929,48 +1669,20 @@ func browserProtectedResultReceiptSchema(properties map[string]any) map[string]a
 	}
 }
 
-func validateBrowserInvocationInput(command string, input map[string]any) error {
-	switch command {
+func validateBrowserInvocationInput(descriptor CommandDescriptor, input map[string]any) error {
+	switch descriptor.Name {
 	case BrowserCommandSessionOpen:
 		return validateBrowserSessionOpenLimits(input)
 	case BrowserCommandAct:
-		action, ok := input["action"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("%w: malformed browser action", ErrInvalidInvocation)
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			return invalidBrowserActInput()
 		}
-		if action["kind"] == "navigate" {
-			if err := validateBrowserStringBytes(action, "url", MaxBrowserURLBytes, true); err != nil {
-				return err
-			}
-			return validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true)
+		var value BrowserActInput
+		if err = json.Unmarshal(encoded, &value); err != nil {
+			return invalidBrowserActInput()
 		}
-		if action["kind"] == "click" || action["kind"] == "drag" {
-			if err := validateBrowserStringBytes(input, "current_origin", MaxBrowserURLBytes, true); err != nil {
-				return err
-			}
-			if err := validateBrowserStringBytes(input, "expected_role", 128, true); err != nil {
-				return err
-			}
-			if err := validateBrowserStringBytes(input, "expected_name", 4096, false); err != nil {
-				return err
-			}
-			if action["kind"] == "drag" {
-				if err := validateBrowserStringBytes(action, "source_ref", MaxIDLength, true); err != nil {
-					return err
-				}
-				if err := validateBrowserStringBytes(action, "destination_ref", MaxIDLength, true); err != nil {
-					return err
-				}
-				if action["source_ref"] == action["destination_ref"] {
-					return fmt.Errorf("%w: browser drag references must be distinct", ErrInvalidInvocation)
-				}
-				if err := validateBrowserStringBytes(input, "destination_expected_role", 128, true); err != nil {
-					return err
-				}
-				return validateBrowserStringBytes(input, "destination_expected_name", 4096, false)
-			}
-			return nil
-		}
+		return ValidateBrowserActInput(value, descriptor.BrowserProfiles)
 	}
 	return nil
 }

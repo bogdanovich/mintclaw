@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -1221,41 +1222,19 @@ func (*BrowserActTool) Description() string {
 
 func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
-	actions := []string{
-		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "drag", "press", "scroll", "dialog",
-	}
-	downloadAvailable := false
+	actions := browseraction.Kinds()
+	fileChooserAvailable, downloadAvailable := false, false
 	if tool != nil && tool.runtime != nil {
 		limits = tool.runtime.config.Limits.Effective()
 		downloadAvailable = tool.runtime.source.DownloadAvailable()
-		if tool.runtime.fileChooserAvailable() {
-			actions = append(actions, string(browser.ActionFileChooser))
-		}
+		fileChooserAvailable = tool.runtime.fileChooserAvailable()
 	}
-	if downloadAvailable {
-		actions = append(actions, "download")
-	}
-	actionProperties := map[string]any{
-		"kind":            map[string]any{"type": "string", "enum": actions},
-		"url":             map[string]any{"type": "string"},
-		"ref":             map[string]any{"type": "string"},
-		"source_ref":      map[string]any{"type": "string"},
-		"destination_ref": map[string]any{"type": "string"},
-		"dialog_id":       map[string]any{"type": "string"},
-		"target":          map[string]any{"type": "string", "enum": []string{"document"}},
-		"value":           map[string]any{"type": "string", "maxLength": limits.TextInputBytes},
-		"key": map[string]any{"type": "string", "enum": []string{
-			"Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown",
-			"ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete",
-		}},
-		"direction":    map[string]any{"type": "string", "enum": []string{"up", "down"}},
-		"amount":       map[string]any{"type": "integer"},
-		"decision":     map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}},
-		"artifact_ref": map[string]any{"type": "string"},
-	}
-	if downloadAvailable {
-		actionProperties["deliver"] = map[string]any{"type": "boolean"}
-	}
+	actions = slices.DeleteFunc(actions, func(action browseraction.ActionKind) bool {
+		return action == browseraction.ActionFileChooser && !fileChooserAvailable ||
+			action == browseraction.ActionDownload && !downloadAvailable
+	})
+	actionSchema := browseraction.Schema(actions, limits.TextInputBytes, false)
+	actionSchema["description"] = "Use only fields belonging to the selected action kind; do not add unrelated action fields."
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -1287,13 +1266,7 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
-			"action": map[string]any{
-				"type":                 "object",
-				"description":          "Use only fields belonging to the selected action kind; do not add unrelated action fields.",
-				"properties":           actionProperties,
-				"required":             []string{"kind"},
-				"additionalProperties": false,
-			},
+			"action": actionSchema,
 		},
 		"required": []string{
 			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "action",

@@ -387,12 +387,7 @@ func TestRuntimeExecutesOnlyExactlyAttestedTypedBrowserClick(t *testing.T) {
 				t.Fatal(err)
 			}
 			test.mutate(&candidate)
-			raw, marshalErr := json.Marshal(candidate)
-			if marshalErr != nil {
-				t.Fatal(marshalErr)
-			}
-			plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
-			if _, invokeErr := runtime.Invoke(t.Context(), plan); invokeErr == nil {
+			if validationErr := nodes.ValidateBrowserActInput(candidate, host.profiles); validationErr == nil {
 				t.Fatal("unattested click was accepted")
 			}
 		})
@@ -497,16 +492,10 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	deniedHost.profiles[0].DryRun = false
 	deniedHost.profiles[0].AllowApprovedActions = true
 	deniedHost.profiles[0].Actions = []string{"navigate", "press", "select"}
-	deniedRuntime := newBrowserRuntimeFixture(t, deniedHost)
 	denied := pressInput
 	denied.ActionInvocationID = "browser_press_denied"
 	denied.ApprovalDigest = strings.Repeat("f", 64)
-	raw, err := json.Marshal(denied)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := testRuntimePlan(t, deniedRuntime, nodes.BrowserCommandAct, raw)
-	if _, err = deniedRuntime.Invoke(t.Context(), plan); err == nil {
+	if err = nodes.ValidateBrowserActInput(denied, deniedHost.profiles); err == nil {
 		t.Fatal("unattested press was accepted")
 	}
 	if deniedHost.pressed != 0 {
@@ -570,6 +559,12 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			candidate := test.input
 			candidate.ActionInvocationID = "browser_fill_denied_" + strings.ReplaceAll(test.name, " ", "_")
+			if test.name == "sensitive field" {
+				if validationErr := nodes.ValidateBrowserActInput(candidate, host.profiles); validationErr == nil {
+					t.Fatal("sensitive protected fill was accepted")
+				}
+				return
+			}
 			candidateRaw, marshalErr := json.Marshal(candidate)
 			if marshalErr != nil {
 				t.Fatal(marshalErr)

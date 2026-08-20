@@ -605,7 +605,7 @@ func validateDescriptorInvocationInput(descriptor CommandDescriptor, input map[s
 		return err
 	}
 	if IsBrowserCommand(descriptor.Name) {
-		return validateBrowserInvocationInput(descriptor.Name, input)
+		return validateBrowserInvocationInput(descriptor, input)
 	}
 	return nil
 }
