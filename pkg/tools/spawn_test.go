@@ -80,6 +80,7 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = toolshared.WithToolSessionContext(ctx, "main", "requester-session", nil)
+	ctx = toolshared.WithToolHistoryDisabled(ctx, true)
 	args := map[string]any{
 		"task":     "Write a haiku about coding",
 		"label":    "haiku-task",
@@ -120,7 +121,8 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	for {
 		rec, ok := manager.taskRegistry.Get(taskID)
 		if ok && rec.Status == taskregistry.StatusSucceeded {
-			if rec.OwnerKey != "main" || rec.RequesterSessionKey != "requester-session" {
+			if rec.OwnerKey != "main" || rec.RequesterSessionKey != "requester-session" ||
+				!rec.HistoryDisabled {
 				t.Fatalf("task ownership = %+v", rec)
 			}
 			break

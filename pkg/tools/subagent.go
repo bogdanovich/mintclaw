@@ -57,6 +57,7 @@ type SubagentTask struct {
 	AgentID             string
 	OwnerKey            string
 	RequesterSessionKey string
+	HistoryDisabled     bool
 	OriginChannel       string
 	OriginChatID        string
 	DeliveryMode        toolshared.AsyncDeliveryMode
@@ -191,6 +192,7 @@ func (sm *SubagentManager) Spawn(
 		AgentID:             agentID,
 		OwnerKey:            toolshared.ToolAgentID(ctx),
 		RequesterSessionKey: toolshared.ToolSessionKey(ctx),
+		HistoryDisabled:     toolshared.ToolHistoryDisabled(ctx),
 		OriginChannel:       originChannel,
 		OriginChatID:        originChatID,
 		DeliveryMode:        deliveryMode,
@@ -459,6 +461,7 @@ func subagentTaskFromRecord(rec taskregistry.Record) *SubagentTask {
 		AgentID:             rec.AgentID,
 		OwnerKey:            rec.OwnerKey,
 		RequesterSessionKey: rec.RequesterSessionKey,
+		HistoryDisabled:     rec.HistoryDisabled,
 		OriginChannel:       rec.Channel,
 		OriginChatID:        rec.ChatID,
 		DeliveryMode:        toolshared.AsyncDeliveryMode(rec.DeliveryMode),
@@ -508,6 +511,7 @@ func (sm *SubagentManager) updateTask(
 		stored.AgentID = rec.AgentID
 		stored.OwnerKey = rec.OwnerKey
 		stored.RequesterSessionKey = rec.RequesterSessionKey
+		stored.HistoryDisabled = rec.HistoryDisabled
 		stored.Label = rec.Label
 		stored.Task = rec.Task
 		stored.Status = rec.Status
@@ -540,6 +544,7 @@ func (sm *SubagentManager) taskRecord(
 		AgentID:             task.AgentID,
 		OwnerKey:            task.OwnerKey,
 		RequesterSessionKey: task.RequesterSessionKey,
+		HistoryDisabled:     task.HistoryDisabled,
 		Label:               task.Label,
 		Task:                task.Task,
 		Status:              status,

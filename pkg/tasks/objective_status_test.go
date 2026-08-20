@@ -1,6 +1,9 @@
 package tasks
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestTerminalStatusForObjectiveOutcome(t *testing.T) {
 	tests := []struct {
@@ -44,5 +47,21 @@ func TestCompleteInteractionTaskResultPreservesBlockedStatus(t *testing.T) {
 		record.Completion == nil || record.Completion.ObjectiveOutcome == nil ||
 		record.Completion.ObjectiveOutcome.Status != "blocked" {
 		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestRegistryPersistsHistoryDisabledPolicy(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "task_registry.json")
+	registry := NewRegistry(store)
+	if err := registry.Upsert(Record{
+		TaskID: "stateless-task", Status: StatusRunning, DeliveryStatus: DeliveryPending,
+		HistoryDisabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistry(store)
+	record, ok := reloaded.Get("stateless-task")
+	if !ok || !record.HistoryDisabled {
+		t.Fatalf("reloaded record = %#v", record)
 	}
 }

@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -326,7 +328,7 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	if taskID == "" {
 		return nil
 	}
-	marker := fmt.Sprintf("[Background task completion: %s:%s]", taskID, strings.TrimSpace(completionID))
+	marker := asyncTaskObservationMarker(taskID, completionID)
 	state := asyncTaskObjectiveState(result)
 	content := strings.TrimSpace(result.ContentForLLM())
 	if content == "" {
@@ -335,22 +337,28 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	if cfg := al.GetConfig(); cfg != nil {
 		content = cfg.FilterSensitiveData(content)
 	}
-	content = truncateAsyncTaskObservation(content, asyncTaskObservationResultLimit)
 	observation := fmt.Sprintf(
 		"%s\ntask_id: %s\nstate: %s\nThis task is no longer running.\nResult:\n%s",
 		marker,
-		taskID,
+		sanitizeAsyncTaskIdentifier(taskID, 128),
 		state,
 		content,
 	)
-	ownerAgent, sessionKey := al.asyncTaskObservationTarget(ts, taskID)
-	if ownerAgent == nil || ownerAgent.Sessions == nil {
+	observation = truncateAsyncTaskObservation(observation, asyncTaskObservationResultLimit)
+	ownerAgent, sessionKey, historyDisabled, err := al.asyncTaskObservationTarget(ts, taskID)
+	if err != nil {
+		return err
+	}
+	if historyDisabled {
 		return nil
+	}
+	if ownerAgent == nil || ownerAgent.Sessions == nil {
+		return fmt.Errorf("async task %q requester session store is unavailable", taskID)
 	}
 	if sessionKey == "" {
 		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
 	}
-	_, err := ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
 		[]providers.Message,
 		bool,
 		error,
@@ -365,29 +373,58 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	return err
 }
 
-func (al *AgentLoop) asyncTaskObservationTarget(ts *turnState, taskID string) (*AgentInstance, string) {
+func (al *AgentLoop) asyncTaskObservationTarget(
+	ts *turnState,
+	taskID string,
+) (*AgentInstance, string, bool, error) {
 	if ts == nil {
-		return nil, ""
+		return nil, "", false, nil
 	}
 	ownerAgent := ts.agent
 	sessionKey := strings.TrimSpace(ts.sessionKey)
 	registry := al.taskRegistryForWorkspace(ts.workspace)
 	if registry == nil {
-		return ownerAgent, sessionKey
+		return ownerAgent, sessionKey, false, nil
 	}
 	record, ok := registry.Get(taskID)
 	if !ok {
-		return ownerAgent, sessionKey
+		return ownerAgent, sessionKey, false, nil
 	}
 	if requesterSessionKey := strings.TrimSpace(record.RequesterSessionKey); requesterSessionKey != "" {
 		sessionKey = requesterSessionKey
 	}
-	if ownerKey := strings.TrimSpace(record.OwnerKey); ownerKey != "" {
-		if agent, found := al.GetRegistry().GetAgent(ownerKey); found {
-			ownerAgent = agent
-		}
+	ownerKey := strings.TrimSpace(record.OwnerKey)
+	if ownerKey == "" && strings.TrimSpace(record.RequesterSessionKey) != "" {
+		return nil, sessionKey, record.HistoryDisabled, fmt.Errorf(
+			"async task %q requester owner is missing", taskID,
+		)
 	}
-	return ownerAgent, sessionKey
+	if ownerKey != "" {
+		agent, found := al.GetRegistry().GetAgent(ownerKey)
+		if !found || agent == nil {
+			return nil, sessionKey, record.HistoryDisabled, fmt.Errorf(
+				"async task %q requester owner %q is unavailable", taskID, ownerKey,
+			)
+		}
+		ownerAgent = agent
+	}
+	return ownerAgent, sessionKey, record.HistoryDisabled, nil
+}
+
+func asyncTaskObservationMarker(taskID, completionID string) string {
+	digest := sha256.Sum256([]byte(taskID + "\x00" + completionID))
+	return fmt.Sprintf("[Background task completion: %x]", digest[:16])
+}
+
+func sanitizeAsyncTaskIdentifier(value string, limit int) string {
+	value = strings.Map(func(char rune) rune {
+		if unicode.IsControl(char) {
+			return ' '
+		}
+		return char
+	}, strings.TrimSpace(value))
+	value = strings.Join(strings.Fields(value), " ")
+	return truncateAsyncTaskObservation(value, limit)
 }
 
 func asyncTaskObjectiveState(result *toolshared.ToolResult) string {
@@ -411,7 +448,10 @@ func truncateAsyncTaskObservation(value string, limit int) string {
 	if limit <= 0 || len(chars) <= limit {
 		return value
 	}
-	return string(chars[:limit]) + "…"
+	if limit == 1 {
+		return "…"
+	}
+	return string(chars[:limit-1]) + "…"
 }
 
 func (d *asyncToolCompletionDelivery) recordTerminalObservation(
