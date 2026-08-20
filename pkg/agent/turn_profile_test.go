@@ -731,6 +731,41 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackWhenToolsVisible(t *testing.
 	}
 }
 
+func TestTurnProfile_SystemPromptOffKeepsToolFallbackWithBackgroundTaskSafety(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				TurnProfile: config.TurnProfileConfig{
+					Enabled:      true,
+					SystemPrompt: config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
+					Skills:       config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
+					Tools: config.TurnProfileBlock{
+						Mode:  config.TurnProfileModeCustom,
+						Allow: []string{"echo_text"},
+					},
+				},
+			},
+		},
+	}
+	provider := &turnProfileCaptureProvider{}
+	al := newTurnProfileAgentLoop(t, cfg, provider)
+	al.RegisterTool(&echoTextTool{})
+
+	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+		SessionKey:      "agent:default:test-tool-fallback-with-background-task-safety",
+		UserMessage:     "hello",
+		DefaultResponse: defaultResponse,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+	got := provider.messages[0].Content
+	if !strings.Contains(got, toolUseSystemPromptRule()) ||
+		!strings.Contains(got, "treat the state as unknown, not running") {
+		t.Fatalf("system prompt omitted tool fallback or background-task safety: %q", got)
+	}
+}
+
 func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.T) {
 	workspace := t.TempDir()
 	writeTurnProfileSkill(
