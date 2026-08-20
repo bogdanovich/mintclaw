@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (r *Registry) Create(rec Record) error {
@@ -280,7 +281,6 @@ func (r *Registry) FinishInteraction(
 			rec.LastCompletionID = ""
 			rec.DeliveryError = ""
 			rec.TerminalSummary = ""
-			rec.Completion = nil
 			rec.Deliverable = nil
 		}
 		rec.InteractionShortID = ""
@@ -304,7 +304,7 @@ func (r *Registry) CompleteInteractionTask(
 // its runtime-verified objective outcome across restart and delivery recovery.
 func (r *Registry) CompleteInteractionTaskResult(
 	taskID, interactionID, content string,
-	objectiveOutcome *ObjectiveOutcome,
+	objectiveOutcome *taskresult.Outcome,
 	delivery DeliveryStatus,
 ) error {
 	interactionID = strings.TrimSpace(interactionID)
@@ -340,15 +340,13 @@ func (r *Registry) CompleteInteractionTaskResult(
 			rec.Error = summary
 		}
 		if strings.TrimSpace(content) != "" {
-			rec.Completion = &CompletionPayload{
-				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
-			}
-			rec.Deliverable = &DeliverablePayload{
-				Text: content, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
+			rec.Deliverable = &taskresult.Deliverable{
+				Text: content, ObjectiveOutcome: taskresult.CloneOutcome(objectiveOutcome),
 			}
 		} else if objectiveOutcome != nil {
-			rec.Completion = &CompletionPayload{ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome)}
-			rec.Deliverable = &DeliverablePayload{ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome)}
+			rec.Deliverable = &taskresult.Deliverable{
+				ObjectiveOutcome: taskresult.CloneOutcome(objectiveOutcome),
+			}
 		}
 		if delivery == DeliveryDelivered || delivery == DeliveryNotApplicable {
 			rec.DeliveredAt = time.Now().UnixMilli()
@@ -360,8 +358,9 @@ func (r *Registry) CompleteInteractionTaskResult(
 // TerminalStatusForObjectiveOutcome keeps the durable task state aligned with
 // the runtime-verified objective contract. A partial or blocked objective is a
 // completed execution, but it is not a successfully completed task.
-func TerminalStatusForObjectiveOutcome(outcome *ObjectiveOutcome) Status {
-	if outcome == nil || strings.TrimSpace(outcome.Status) == "" || outcome.Status == "succeeded" {
+func TerminalStatusForObjectiveOutcome(outcome *taskresult.Outcome) Status {
+	if outcome == nil || strings.TrimSpace(string(outcome.Status)) == "" ||
+		outcome.Status == taskresult.OutcomeSucceeded {
 		return StatusSucceeded
 	}
 	return StatusFailed

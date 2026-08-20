@@ -6,7 +6,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
@@ -29,7 +29,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 			llmModelName:     "fallback-model",
 			defaultModelName: "primary-model",
 		},
-		completionMedia:        []toolshared.CompletionMedia{{Ref: "media://result"}},
+		deliverableArtifacts:   []taskresult.Artifact{{Ref: "media://result"}},
 		sawAdditionalUserInput: true,
 	}
 	llm := &LLMIterationState{
@@ -65,10 +65,10 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 		t.Fatalf("delivery = %+v", finalization.delivery)
 	}
 
-	exec.completionMedia[0].Ref = "media://mutated"
+	exec.deliverableArtifacts[0].Ref = "media://mutated"
 	ts.followUps[0].Content = "mutated"
-	if finalization.completionMedia[0].Ref != "media://result" {
-		t.Fatalf("completion media changed after capture: %+v", finalization.completionMedia)
+	if finalization.deliverableArtifacts[0].Ref != "media://result" {
+		t.Fatalf("deliverable artifacts changed after capture: %+v", finalization.deliverableArtifacts)
 	}
 	if finalization.followUps[0].Content != "follow up" {
 		t.Fatalf("follow ups changed after capture: %+v", finalization.followUps)

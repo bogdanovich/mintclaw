@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -142,7 +143,6 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		taskregistry.DeliveryPending,
 		"",
 		nil,
-		nil,
 	)
 	stopHeartbeat := startTaskRegistryHeartbeat(ctx, t.taskRegistry, taskID, "delegate child turn is still running")
 	defer stopHeartbeat()
@@ -168,7 +168,6 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 			taskregistry.DeliveryPending,
 			msg,
 			nil,
-			nil,
 		)
 		return toolshared.ErrorResult(fmt.Sprintf("delegation to agent %q failed: %v", agentID, err)).WithError(err)
 	}
@@ -179,7 +178,6 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 			taskregistry.StatusFailed,
 			taskregistry.DeliveryPending,
 			msg,
-			nil,
 			nil,
 		)
 		return toolshared.ErrorResult(fmt.Sprintf("delegation to agent %q returned no result", agentID))
@@ -198,8 +196,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		terminalTaskStatusForResult(result),
 		delegateDeliveryStatus(result, deliveryMode),
 		result.ContentForLLM(),
-		completionPayloadForTaskRegistry(result),
-		deliverablePayloadForTaskRegistry(result),
+		taskDeliverable(result),
 	)
 
 	return result
@@ -217,13 +214,11 @@ func (t *DelegateTool) recordDelegateTask(
 	status taskregistry.Status,
 	delivery taskregistry.DeliveryStatus,
 	summary string,
-	completion *taskregistry.CompletionPayload,
-	deliverable *taskregistry.DeliverablePayload,
+	deliverable *taskresult.Deliverable,
 ) {
 	if t == nil || t.taskRegistry == nil || taskID == "" {
 		return
 	}
-	completion = completionPayloadForLegacyStorage(completion, deliverable)
 	now := time.Now().UnixMilli()
 	rec := taskregistry.Record{
 		TaskID:              taskID,
@@ -245,7 +240,6 @@ func (t *DelegateTool) recordDelegateTask(
 		DeliveryMode:        string(deliveryMode),
 		LastEventAt:         now,
 		TerminalSummary:     summary,
-		Completion:          completion,
 		Deliverable:         deliverable,
 	}
 	if status == taskregistry.StatusRunning {

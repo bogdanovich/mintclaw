@@ -27,6 +27,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	"github.com/bogdanovich/mintclaw/pkg/tools/shellguard"
@@ -619,7 +620,9 @@ func (t *ExecTool) commandOutputResult(output string, isError bool, resultErr er
 	if pruneErr != nil {
 		result.ForLLM += fmt.Sprintf("\n[Older command output artifacts could not be fully pruned: %v]", pruneErr)
 	}
-	result.ArtifactTags = []string{tag}
+	result.Deliverable = &taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
+		Ref: "file:" + path, LocalPath: path, Kind: "file", Filename: filepath.Base(path), ContentType: "text/plain",
+	}}}
 	return result
 }
 

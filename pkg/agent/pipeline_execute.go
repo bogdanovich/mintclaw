@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -244,40 +245,63 @@ func shouldQueueAsyncToolResultForParent(result *toolshared.ToolResult) bool {
 	return decideAsyncToolResultDelivery(result).QueueParent
 }
 
-func recordCompletionMedia(exec *turnExecution, store mediaResolver, refs []string) {
-	if exec == nil || len(refs) == 0 {
+func recordDeliverableArtifacts(exec *turnExecution, artifacts []taskresult.Artifact) {
+	if exec == nil || len(artifacts) == 0 {
 		return
 	}
-	seen := make(map[string]struct{}, len(exec.completionMedia)+len(refs))
-	for _, item := range exec.completionMedia {
-		seen[item.Ref] = struct{}{}
+	exec.deliverableArtifacts = mergeDeliverableArtifacts(exec.deliverableArtifacts, artifacts)
+}
+
+func attachMediaArtifacts(result *toolshared.ToolResult, store mediaResolver) {
+	if result == nil || len(result.Media) == 0 {
+		return
 	}
-	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
+	if result.Deliverable == nil {
+		result.Deliverable = &taskresult.Deliverable{}
+	}
+	result.Deliverable.Artifacts = mergeDeliverableArtifacts(
+		result.Deliverable.Artifacts,
+		buildMediaArtifacts(store, result.Media),
+	)
+}
+
+func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []taskresult.Artifact {
+	out := append([]taskresult.Artifact(nil), existing...)
+	byRef := make(map[string]int, len(out))
+	for index, artifact := range out {
+		if ref := strings.TrimSpace(artifact.Ref); ref != "" {
+			byRef[ref] = index
+		}
+	}
+	for _, artifact := range additional {
+		ref := strings.TrimSpace(artifact.Ref)
 		if ref == "" {
 			continue
 		}
-		if _, ok := seen[ref]; ok {
+		if index, exists := byRef[ref]; exists {
+			mergeArtifactHints(&out[index], artifact)
 			continue
 		}
-		exec.completionMedia = append(exec.completionMedia, buildCompletionMedia(store, ref))
-		seen[ref] = struct{}{}
+		byRef[ref] = len(out)
+		out = append(out, artifact)
 	}
+	return out
 }
 
-func buildCompletionMedia(store mediaResolver, ref string) toolshared.CompletionMedia {
-	item := toolshared.CompletionMedia{Ref: ref}
-	if store == nil {
-		return item
+func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact) {
+	if target.LocalPath == "" {
+		target.LocalPath = source.LocalPath
 	}
-	_, meta, err := store.ResolveWithMeta(ref)
-	if err != nil {
-		return item
+	if target.Kind == "" || target.Kind == "media" {
+		target.Kind = source.Kind
 	}
-	item.Filename = meta.Filename
-	item.ContentType = meta.ContentType
-	item.Type = inferMediaType(meta.Filename, meta.ContentType)
-	return item
+	if target.Filename == "" {
+		target.Filename = source.Filename
+	}
+	if target.ContentType == "" {
+		target.ContentType = source.ContentType
+	}
+	target.Delivered = target.Delivered || source.Delivered
 }
 
 type toolLoopRunner struct {
@@ -517,9 +541,11 @@ func (runner *toolLoopRunner) admitToolCall(
 				var toolResultMedia []string
 				if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
-					if !hookResult.ImmediateDelivery {
-						recordCompletionMedia(exec, p.Context.MediaResolver, hookResult.Media)
-						hookResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, hookResult.Media)
+				}
+				if !hookResult.ResponseHandled && !hookResult.ImmediateDelivery {
+					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
+					if hookResult.Deliverable != nil {
+						recordDeliverableArtifacts(exec, hookResult.Deliverable.Artifacts)
 					}
 				}
 				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
@@ -1279,9 +1305,11 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
-	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
-		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
-		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
+	if !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
+		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
+		if toolResult.Deliverable != nil {
+			recordDeliverableArtifacts(exec, toolResult.Deliverable.Artifacts)
+		}
 	}
 	protectedResult := call.protectedResult
 	var contentForLLM string

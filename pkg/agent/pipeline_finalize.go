@@ -7,6 +7,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -39,18 +40,18 @@ type finalizationDelivery struct {
 // FinalizationContext is the terminal snapshot consumed by Finalize. It keeps
 // iteration-owned state out of the finalization phase.
 type FinalizationContext struct {
-	content          string
-	status           TurnEndStatus
-	disposition      finalResponseDisposition
-	modelName        string
-	defaultModelName string
-	usage            finalizationUsage
-	completionMedia  []toolshared.CompletionMedia
-	writeAudit       []toolshared.WriteAuditEntry
-	followUps        []bus.InboundMessage
-	historyMessage   *providers.Message
-	stream           finalizationStream
-	delivery         finalizationDelivery
+	content              string
+	status               TurnEndStatus
+	disposition          finalResponseDisposition
+	modelName            string
+	defaultModelName     string
+	usage                finalizationUsage
+	deliverableArtifacts []taskresult.Artifact
+	writeAudit           []toolshared.WriteAuditEntry
+	followUps            []bus.InboundMessage
+	historyMessage       *providers.Message
+	stream               finalizationStream
+	delivery             finalizationDelivery
 }
 
 func newFinalizationContext(
@@ -88,10 +89,10 @@ func newFinalizationContext(
 			outputTokens: outputTokens,
 			totalTokens:  totalTokens,
 		},
-		completionMedia: append([]toolshared.CompletionMedia(nil), exec.completionMedia...),
-		writeAudit:      append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
-		followUps:       append([]bus.InboundMessage(nil), ts.followUps...),
-		historyMessage:  historyMessage,
+		deliverableArtifacts: append([]taskresult.Artifact(nil), exec.deliverableArtifacts...),
+		writeAudit:           append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
+		followUps:            append([]bus.InboundMessage(nil), ts.followUps...),
+		historyMessage:       historyMessage,
 		stream: finalizationStream{
 			publisher: llm.streamingPublisher,
 			fallback:  llm.streamingFallback,
@@ -179,7 +180,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		usageInputTokens:       f.usage.inputTokens,
 		usageOutputTokens:      f.usage.outputTokens,
 		usageTotalTokens:       f.usage.totalTokens,
-		completionMedia:        append([]toolshared.CompletionMedia(nil), f.completionMedia...),
+		deliverableArtifacts:   append([]taskresult.Artifact(nil), f.deliverableArtifacts...),
 		writeAudit:             append([]toolshared.WriteAuditEntry(nil), f.writeAudit...),
 		status:                 f.status,
 		followUps:              append([]bus.InboundMessage(nil), f.followUps...),

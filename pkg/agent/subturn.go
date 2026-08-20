@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -626,10 +627,7 @@ func spawnSubTurn(
 		outcome := blockedObjectiveOutcome("a valid declared objective checklist is required before browser execution")
 		projection := objectiveOutcomeUserContent("", outcome)
 		return (&toolshared.ToolResult{ForLLM: projection, ForUser: projection}).
-			WithCompletion(&toolshared.CompletionResult{
-				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
-			}).
-			WithDeliverable(&toolshared.DeliverableResult{
+			WithDeliverable(&taskresult.Deliverable{
 				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
 			}), nil
 	}
@@ -839,7 +837,7 @@ func spawnSubTurn(
 		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
 		parentContent := turnRes.finalContent
 		if turnRes.objectiveOutcome != nil &&
-			turnRes.objectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
+			turnRes.objectiveOutcome.Status != taskresult.OutcomeSucceeded {
 			parentContent = userContent
 		}
 		result = &toolshared.ToolResult{
@@ -847,15 +845,15 @@ func spawnSubTurn(
 			ForUser: userContent,
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
-		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||
+		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.deliverableArtifacts) > 0 ||
 			turnRes.objectiveOutcome != nil {
-			result.WithCompletion(&toolshared.CompletionResult{
-				Text: parentContent, Media: append(
-					[]toolshared.CompletionMedia(nil), turnRes.completionMedia...,
+			result.WithDeliverable(&taskresult.Deliverable{
+				Text: parentContent, Artifacts: append(
+					[]taskresult.Artifact(nil), turnRes.deliverableArtifacts...,
 				),
 				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
 			})
-			result.Media = append(result.Media, completionMediaRefs(turnRes.completionMedia)...)
+			result.Media = append(result.Media, artifactRefs(turnRes.deliverableArtifacts)...)
 		}
 		if !cfg.Async {
 			switch deliveryMode {
@@ -890,7 +888,7 @@ func durableTaskSessionKey(ownerWorkspace, taskID string) string {
 	return "task:" + hex.EncodeToString(sum[:8]) + ":" + strings.TrimSpace(taskID)
 }
 
-func completionMediaRefs(items []toolshared.CompletionMedia) []string {
+func artifactRefs(items []taskresult.Artifact) []string {
 	refs := make([]string, 0, len(items))
 	for _, item := range items {
 		ref := strings.TrimSpace(item.Ref)

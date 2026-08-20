@@ -9,6 +9,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
@@ -28,7 +29,7 @@ func TestTerminalTaskContextForTurnFiltersAndBoundsAuthoritativeRecords(t *testi
 			Runtime: taskregistry.RuntimeSubagent, Status: taskregistry.StatusFailed,
 			OwnerKey: ts.agent.ID, RequesterSessionKey: ts.sessionKey,
 			HistoryPolicyKnown: true, TerminalSummary: "result has sk-secret-value-123",
-			Deliverable: &taskregistry.DeliverablePayload{ObjectiveOutcome: &taskregistry.ObjectiveOutcome{
+			Deliverable: &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
 				Status: "blocked",
 			}},
 			EndedAt: int64(index + 1),
@@ -138,7 +139,7 @@ func TestTerminalTaskContextIsVisibleToSameSessionRepeatRequest(t *testing.T) {
 		TaskID: "repeat-request-task", Runtime: taskregistry.RuntimeDelegate,
 		Status: taskregistry.StatusFailed, TerminalSummary: "Task could not be completed: checklist missing",
 		OwnerKey: agent.ID, RequesterSessionKey: sessionKey, HistoryPolicyKnown: true,
-		Deliverable: &taskregistry.DeliverablePayload{ObjectiveOutcome: &taskregistry.ObjectiveOutcome{
+		Deliverable: &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
 			Status: "blocked",
 		}},
 		EndedAt: time.Now().UnixMilli(),

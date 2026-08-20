@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -22,12 +23,12 @@ type reportedObjectiveOutcome struct {
 	MissingItems   []string                `json:"missing_items"`
 }
 
-func objectiveOutcomeUserContent(content string, outcome *toolshared.ObjectiveOutcome) string {
-	if outcome == nil || outcome.Status == toolshared.ObjectiveOutcomeSucceeded {
+func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) string {
+	if outcome == nil || outcome.Status == taskresult.OutcomeSucceeded {
 		return content
 	}
 	var lines []string
-	if outcome.Status == toolshared.ObjectiveOutcomePartial {
+	if outcome.Status == taskresult.OutcomePartial {
 		lines = append(lines, "Task completed partially.")
 	} else {
 		lines = append(lines, "Task could not be completed.")
@@ -102,7 +103,7 @@ func extractObjectiveOutcome(
 	audits []toolshared.WriteAuditEntry,
 	required bool,
 	checklists ...[]runtimeObjectiveItem,
-) (string, *toolshared.ObjectiveOutcome) {
+) (string, *taskresult.Outcome) {
 	var checklist []runtimeObjectiveItem
 	if len(checklists) > 0 {
 		checklist = checklists[0]
@@ -133,15 +134,15 @@ func validateObjectiveOutcome(
 	reported reportedObjectiveOutcome,
 	audits []toolshared.WriteAuditEntry,
 	checklist []runtimeObjectiveItem,
-) *toolshared.ObjectiveOutcome {
+) *taskresult.Outcome {
 	switch strings.TrimSpace(reported.Status) {
-	case string(toolshared.ObjectiveOutcomeSucceeded),
-		string(toolshared.ObjectiveOutcomePartial),
-		string(toolshared.ObjectiveOutcomeBlocked):
+	case string(taskresult.OutcomeSucceeded),
+		string(taskresult.OutcomePartial),
+		string(taskresult.OutcomeBlocked):
 	default:
 		return blockedObjectiveOutcome("objective outcome status was invalid")
 	}
-	receipts := make(map[string]toolshared.ObjectiveReceipt)
+	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
 		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
 			strings.TrimSpace(audit.Metadata["effect"]) != "external_commit" {
@@ -151,12 +152,12 @@ func validateObjectiveOutcome(
 		if id == "" {
 			continue
 		}
-		receipts[id] = toolshared.ObjectiveReceipt{
+		receipts[id] = taskresult.Receipt{
 			ID: id, Kind: audit.Kind, Target: audit.Target, Action: audit.Action,
 			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
 		}
 	}
-	outcome := &toolshared.ObjectiveOutcome{}
+	outcome := &taskresult.Outcome{}
 	expected := make(map[string]runtimeObjectiveItem, len(checklist))
 	for _, item := range checklist {
 		expected[item.ID] = item
@@ -205,7 +206,7 @@ func validateObjectiveOutcome(
 			continue
 		}
 		partitioned[id] = struct{}{}
-		item := toolshared.ObjectiveItem{Item: spec.Item, Kind: spec.Kind}
+		item := taskresult.Item{Item: spec.Item, Kind: spec.Kind}
 		if item.Kind == "result" && len(reportedItem.ReceiptIDs) > 0 {
 			appendMissing(item.Item + " (read-only result unexpectedly included an external-action receipt)")
 			continue
@@ -246,33 +247,33 @@ func validateObjectiveOutcome(
 	}
 	switch {
 	case len(outcome.MissingItems) == 0 && len(outcome.CompletedItems) > 0:
-		outcome.Status = toolshared.ObjectiveOutcomeSucceeded
+		outcome.Status = taskresult.OutcomeSucceeded
 	case len(outcome.CompletedItems) > 0:
-		outcome.Status = toolshared.ObjectiveOutcomePartial
+		outcome.Status = taskresult.OutcomePartial
 	default:
-		outcome.Status = toolshared.ObjectiveOutcomeBlocked
+		outcome.Status = taskresult.OutcomeBlocked
 		if len(outcome.MissingItems) == 0 {
 			appendMissing("no objective items were completed")
 		}
 	}
 	switch strings.TrimSpace(reported.Status) {
-	case string(toolshared.ObjectiveOutcomeBlocked):
-		outcome.Status = toolshared.ObjectiveOutcomeBlocked
+	case string(taskresult.OutcomeBlocked):
+		outcome.Status = taskresult.OutcomeBlocked
 		if len(outcome.MissingItems) == 0 {
 			appendMissing("producer reported the objective as blocked")
 		}
-	case string(toolshared.ObjectiveOutcomePartial):
-		if outcome.Status == toolshared.ObjectiveOutcomeSucceeded {
-			outcome.Status = toolshared.ObjectiveOutcomePartial
+	case string(taskresult.OutcomePartial):
+		if outcome.Status == taskresult.OutcomeSucceeded {
+			outcome.Status = taskresult.OutcomePartial
 			appendMissing("producer reported the objective as partial")
 		}
 	}
 	return outcome
 }
 
-func blockedObjectiveOutcome(reason string) *toolshared.ObjectiveOutcome {
-	return &toolshared.ObjectiveOutcome{
-		Status: toolshared.ObjectiveOutcomeBlocked, MissingItems: []string{reason},
+func blockedObjectiveOutcome(reason string) *taskresult.Outcome {
+	return &taskresult.Outcome{
+		Status: taskresult.OutcomeBlocked, MissingItems: []string{reason},
 	}
 }
 
@@ -296,20 +297,6 @@ func copyObjectiveMetadata(input map[string]string) map[string]string {
 	return out
 }
 
-func cloneObjectiveOutcome(input *toolshared.ObjectiveOutcome) *toolshared.ObjectiveOutcome {
-	if input == nil {
-		return nil
-	}
-	out := &toolshared.ObjectiveOutcome{
-		Status: input.Status, MissingItems: append([]string(nil), input.MissingItems...),
-	}
-	for _, item := range input.CompletedItems {
-		cloned := toolshared.ObjectiveItem{Item: item.Item, Kind: item.Kind}
-		for _, receipt := range item.Receipts {
-			receipt.Metadata = copyObjectiveMetadata(receipt.Metadata)
-			cloned.Receipts = append(cloned.Receipts, receipt)
-		}
-		out.CompletedItems = append(out.CompletedItems, cloned)
-	}
-	return out
+func cloneObjectiveOutcome(input *taskresult.Outcome) *taskresult.Outcome {
+	return taskresult.CloneOutcome(input)
 }

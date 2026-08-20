@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -124,7 +125,7 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 	task.Created = created.CreatedAt + int64(time.Hour/time.Millisecond)
 	if err := registry.Update(task.ID, func(record *taskregistry.Record) {
 		record.InteractionID = "interaction-1"
-		record.Completion = &taskregistry.CompletionPayload{Text: "existing"}
+		record.Deliverable = &taskresult.Deliverable{Text: "existing"}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +144,8 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 		completed.Status != taskregistry.StatusSucceeded ||
 		completed.TerminalSummary != "done" ||
 		completed.InteractionID != "interaction-1" ||
-		completed.Completion == nil ||
-		completed.Completion.Text != "existing" {
+		completed.Deliverable == nil ||
+		completed.Deliverable.Text != "existing" {
 		t.Fatalf("updated durable task = %#v, created = %#v", completed, created)
 	}
 }
@@ -164,7 +165,7 @@ func TestSubagentResultPersistsTerminalStateAndPayloadTogether(t *testing.T) {
 
 	manager.recordTaskResult(task, &toolshared.ToolResult{
 		ForLLM: "done",
-		Deliverable: &toolshared.DeliverableResult{
+		Deliverable: &taskresult.Deliverable{
 			Text: "structured result",
 		},
 	})

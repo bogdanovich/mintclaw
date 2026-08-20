@@ -36,7 +36,7 @@ func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
 	if strings.TrimSpace(toolResultUserText(result)) == "" {
 		return false
 	}
-	return !result.Silent || result.Completion != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
+	return !result.Silent || result.Deliverable != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
 }
 
 func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {

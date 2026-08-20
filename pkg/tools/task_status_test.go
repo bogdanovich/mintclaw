@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -30,9 +31,9 @@ func TestTaskStatusTool_ListsVisibleRecords(t *testing.T) {
 		CreatedAt:      now,
 		StartedAt:      now,
 		EndedAt:        now,
-		Deliverable: &taskregistry.DeliverablePayload{
+		Deliverable: &taskresult.Deliverable{
 			Text: "video downloaded",
-			Artifacts: []taskregistry.DeliverableItem{{
+			Artifacts: []taskresult.Artifact{{
 				Ref:  "media://video",
 				Kind: "video",
 			}},
@@ -198,7 +199,7 @@ func TestTaskStatusTool_TaskIDIncludesCompleteDeliverable(t *testing.T) {
 		TaskKind:       "spawn",
 		Status:         taskregistry.StatusSucceeded,
 		DeliveryStatus: taskregistry.DeliveryNotApplicable,
-		Deliverable:    &taskregistry.DeliverablePayload{Text: fullText},
+		Deliverable:    &taskresult.Deliverable{Text: fullText},
 	}); err != nil {
 		t.Fatalf("Upsert(subagent) error = %v", err)
 	}

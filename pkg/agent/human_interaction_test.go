@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -1389,9 +1390,9 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only interaction must wait for user delivery settlement")
 	}
 	traceScope := runtimeevents.NewTraceScope(workspace, "resume-turn")
-	objectiveOutcome := &toolshared.ObjectiveOutcome{
-		Status:         toolshared.ObjectiveOutcomePartial,
-		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published", Kind: "external_action"}},
+	objectiveOutcome := &taskresult.Outcome{
+		Status:         taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{{Item: "Yakima published", Kind: "external_action"}},
 		MissingItems:   []string{"Vissani not published"},
 	}
 	projection := objectiveOutcomeUserContent("Both items were published.", objectiveOutcome)
@@ -1419,8 +1420,8 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only task completion was not queued")
 	}
 	task, _ := tasks.Get("subagent-user")
-	if task.TerminalSummary != projection || task.Completion == nil || task.Completion.Text != projection ||
-		task.Deliverable == nil || task.Deliverable.Text != projection || strings.Contains(task.TerminalSummary, "Both items") {
+	if task.TerminalSummary != projection || task.Deliverable == nil || task.Deliverable.Text != projection ||
+		strings.Contains(task.TerminalSummary, "Both items") {
 		t.Fatalf("task retained optimistic resume projection: %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
@@ -5905,7 +5906,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 			task, _ := tasks.Get(taskID)
 			if task.Status != taskregistry.StatusCancelled ||
 				task.DeliveryStatus != taskregistry.DeliveryNotApplicable ||
-				task.Completion != nil || task.Deliverable != nil ||
+				task.Deliverable != nil ||
 				task.LastCompletionID != "" || task.TerminalSummary != "" {
 				t.Fatalf("canceled task projection = %#v", task)
 			}

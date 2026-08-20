@@ -435,10 +435,7 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 	decision.TaskID = result.AsyncTaskID
 	decision.ContentLen = len(content)
 	decision.ForUserLen = len(toolResultUserText(result))
-	decision.MediaCount = len(result.Media)
-	if result.Completion != nil {
-		decision.MediaCount += len(result.Completion.Media)
-	}
+	decision.MediaCount = len(toolResultMediaRefs(result))
 	decision.IsError = result.IsError
 
 	if decision.DeliveryMode != toolshared.AsyncDeliveryParentOnly {

@@ -8,6 +8,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 const (
@@ -85,28 +86,14 @@ type ToolResult struct {
 	// When non-empty, the agent will publish these as OutboundMediaMessage.
 	Media []string `json:"media,omitempty"`
 
-	// Completion carries a structured child-run result for parent agents.
-	// It is populated by sub-turns/delegation/spawn handoffs so the parent can
-	// see both text and media refs without scraping prose.
-	// Deprecated for new consumers: use Deliverable for produced outputs and
-	// keep Completion only as a legacy child-run handoff adapter.
-	Completion *CompletionResult `json:"completion,omitempty"`
-
 	// Deliverable describes the actual artifact/result produced by the tool,
-	// independent from LLM context or user-facing phrasing. Use this for durable
-	// task state and follow-up ownership; Completion is kept as the legacy
-	// child-run handoff shape and is mirrored into Deliverable when possible.
-	Deliverable *DeliverableResult `json:"deliverable,omitempty"`
+	// independent from LLM context or user-facing phrasing.
+	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
 
 	// Messages holds the ephemeral session history after execution.
 	// Only populated by SubTurn executions; used by evaluator_optimizer
 	// to carry stateful worker context across evaluation iterations.
 	Messages []providers.Message `json:"-"`
-
-	// ArtifactTags exposes local artifact paths back to the LLM in a structured
-	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
-	// reusable local artifact but did not deliver it to the user yet.
-	ArtifactTags []string `json:"artifact_tags,omitempty"`
 
 	// ResponseHandled indicates that this tool execution already satisfied the
 	// user's request at the channel/output level, so the agent loop can stop
@@ -198,112 +185,12 @@ type WriteAuditEntry struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// CompletionResult is the structured handoff payload used when one agent run
-// completes work for another. It intentionally describes data/artifacts only;
-// the caller still owns any user-facing delivery decision.
-type CompletionResult struct {
-	Text             string            `json:"text,omitempty"`
-	Media            []CompletionMedia `json:"media,omitempty"`
-	ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
-}
-
-// CompletionMedia describes a media artifact in a child completion handoff.
-// Ref is the stable media:// reference used by the runtime to resolve bytes;
-// the remaining fields are hints for delivery policy and UI mapping.
-type CompletionMedia struct {
-	Ref         string `json:"ref"`
-	Type        string `json:"type,omitempty"`
-	Filename    string `json:"filename,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-}
-
-// DeliverableResult is the generic output ownership payload for tools and
-// child runs. It represents what was produced, not how it should be worded to
-// the LLM or user.
-type DeliverableResult struct {
-	Text             string             `json:"text,omitempty"`
-	Artifacts        []DeliverableItem  `json:"artifacts,omitempty"`
-	Metadata         map[string]string  `json:"metadata,omitempty"`
-	Report           *DeliverableReport `json:"report,omitempty"`
-	ObjectiveOutcome *ObjectiveOutcome  `json:"objective_outcome,omitempty"`
-}
-
-type ObjectiveOutcomeStatus string
-
-const (
-	ObjectiveOutcomeSucceeded ObjectiveOutcomeStatus = "succeeded"
-	ObjectiveOutcomePartial   ObjectiveOutcomeStatus = "partial"
-	ObjectiveOutcomeBlocked   ObjectiveOutcomeStatus = "blocked"
-)
-
-type ObjectiveOutcome struct {
-	Status         ObjectiveOutcomeStatus `json:"status"`
-	CompletedItems []ObjectiveItem        `json:"completed_items,omitempty"`
-	MissingItems   []string               `json:"missing_items,omitempty"`
-}
-
 // ObjectiveSpec is a caller-declared objective that the runtime binds to a
 // stable checklist ID before a browser-capable child runs. It verifies the
 // declared contract; it does not infer omitted intent from free-form text.
 type ObjectiveSpec struct {
 	Item string `json:"item"`
 	Kind string `json:"kind"`
-}
-
-type ObjectiveItem struct {
-	Item     string             `json:"item"`
-	Kind     string             `json:"kind,omitempty"`
-	Receipts []ObjectiveReceipt `json:"receipts,omitempty"`
-}
-
-type ObjectiveReceipt struct {
-	ID       string            `json:"id"`
-	Kind     string            `json:"kind,omitempty"`
-	Target   string            `json:"target,omitempty"`
-	Action   string            `json:"action,omitempty"`
-	Tool     string            `json:"tool,omitempty"`
-	Summary  string            `json:"summary,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-}
-
-// DeliverableItem describes a concrete produced artifact. Ref may be a
-// media:// ref, file path tag, external URL, or other stable runtime reference.
-type DeliverableItem struct {
-	Ref         string `json:"ref"`
-	Kind        string `json:"kind,omitempty"`
-	Filename    string `json:"filename,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	Delivered   bool   `json:"delivered,omitempty"`
-}
-
-// DeliverableReport is the tool-level versioned report contract for durable
-// outputs. Task registries may store it directly; chat/terminal text should be
-// rendered from this structured report rather than parsed back into state.
-type DeliverableReport struct {
-	SchemaVersion string             `json:"schema_version,omitempty"`
-	ReportID      string             `json:"report_id,omitempty"`
-	ContentHash   string             `json:"content_hash,omitempty"`
-	GeneratedAt   int64              `json:"generated_at,omitempty"`
-	Summary       string             `json:"summary,omitempty"`
-	Claims        []ReportClaim      `json:"claims,omitempty"`
-	FieldDeltas   []ReportFieldDelta `json:"field_deltas,omitempty"`
-	Provenance    map[string]string  `json:"provenance,omitempty"`
-	Metadata      map[string]string  `json:"metadata,omitempty"`
-	Extra         map[string]any     `json:"extra,omitempty"`
-}
-
-type ReportClaim struct {
-	Kind       string            `json:"kind"`
-	Text       string            `json:"text"`
-	Confidence string            `json:"confidence,omitempty"`
-	SourceRefs []string          `json:"source_refs,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
-}
-
-type ReportFieldDelta struct {
-	Field string `json:"field"`
-	From  string `json:"from,omitempty"`
-	To    string `json:"to,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the
@@ -324,20 +211,49 @@ func (tr *ToolResult) ContentForLLM() string {
 			content += "\n" + HandledToolLLMNote
 		}
 	}
-	if len(tr.ArtifactTags) > 0 {
-		artifactNote := "Local artifact paths: " + strings.Join(tr.ArtifactTags, " ") + "\n" + ArtifactPathsLLMNote
+	if artifactTags := deliverableArtifactTags(tr.Deliverable); len(artifactTags) > 0 {
+		artifactNote := "Local artifact paths: " + strings.Join(artifactTags, " ") + "\n" + ArtifactPathsLLMNote
 		if content == "" {
 			content = artifactNote
 		} else if !strings.Contains(content, artifactNote) {
 			content += "\n" + artifactNote
 		}
 	}
-	content = appendUniqueLLMNote(content, tr.completionNoteForLLM())
 	content = appendUniqueLLMNote(content, tr.deliverableNoteForLLM())
 	if content != "" {
 		return content
 	}
 	return ""
+}
+
+func deliverableArtifactTags(deliverable *taskresult.Deliverable) []string {
+	if deliverable == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(deliverable.Artifacts))
+	tags := make([]string, 0, len(deliverable.Artifacts))
+	for _, artifact := range deliverable.Artifacts {
+		path := strings.TrimSpace(artifact.LocalPath)
+		if path == "" && strings.HasPrefix(artifact.Ref, "file:") {
+			path = strings.TrimSpace(strings.TrimPrefix(artifact.Ref, "file:"))
+		}
+		if path == "" {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(artifact.Kind))
+		switch kind {
+		case "image", "audio", "video":
+		default:
+			kind = "file"
+		}
+		tag := "[" + kind + ":" + path + "]"
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func appendUniqueLLMNote(content, note string) string {
@@ -353,44 +269,11 @@ func appendUniqueLLMNote(content, note string) string {
 	return content
 }
 
-func (tr *ToolResult) completionNoteForLLM() string {
-	if tr == nil || tr.Completion == nil {
-		return ""
-	}
-	type completionForLLM struct {
-		Text             string            `json:"text,omitempty"`
-		Media            []CompletionMedia `json:"media,omitempty"`
-		ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
-	}
-	payload := completionForLLM{
-		Text:             strings.TrimSpace(tr.Completion.Text),
-		Media:            append([]CompletionMedia(nil), tr.Completion.Media...),
-		ObjectiveOutcome: tr.Completion.ObjectiveOutcome,
-	}
-	if payload.Text == "" && len(payload.Media) == 0 && payload.ObjectiveOutcome == nil {
-		return ""
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return "Structured child completion: " + string(data)
-}
-
 func (tr *ToolResult) deliverableNoteForLLM() string {
 	if tr == nil || tr.Deliverable == nil {
 		return ""
 	}
-	if tr.Completion != nil {
-		// Completion already renders a child-handoff note. The mirrored
-		// deliverable is still available to registries, but adding both notes
-		// would duplicate the same payload in model context.
-		return ""
-	}
-	payload := tr.effectiveDeliverable()
-	if payload == nil {
-		return ""
-	}
+	payload := tr.Deliverable
 	if strings.TrimSpace(payload.Text) == "" &&
 		len(payload.Artifacts) == 0 &&
 		len(payload.Metadata) == 0 &&
@@ -449,34 +332,6 @@ func (tr *ToolResult) WithFileWriteAudit(path, action, toolName string) *ToolRes
 		Tool:    toolName,
 		Success: true,
 	})
-}
-
-func (tr *ToolResult) effectiveDeliverable() *DeliverableResult {
-	if tr == nil {
-		return nil
-	}
-	if tr.Deliverable != nil {
-		return tr.Deliverable
-	}
-	if tr.Completion == nil {
-		return nil
-	}
-	deliverable := &DeliverableResult{
-		Text: tr.Completion.Text, ObjectiveOutcome: tr.Completion.ObjectiveOutcome,
-	}
-	for _, item := range tr.Completion.Media {
-		deliverable.Artifacts = append(deliverable.Artifacts, DeliverableItem{
-			Ref:         item.Ref,
-			Kind:        item.Type,
-			Filename:    item.Filename,
-			ContentType: item.ContentType,
-		})
-	}
-	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 &&
-		deliverable.ObjectiveOutcome == nil {
-		return nil
-	}
-	return deliverable
 }
 
 // NewToolResult creates a basic ToolResult with content for the LLM.
@@ -579,9 +434,9 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 		Media:  mediaRefs,
 	}
 	if len(mediaRefs) > 0 {
-		result.Deliverable = &DeliverableResult{}
+		result.Deliverable = &taskresult.Deliverable{}
 		for _, ref := range mediaRefs {
-			result.Deliverable.Artifacts = append(result.Deliverable.Artifacts, DeliverableItem{
+			result.Deliverable.Artifacts = append(result.Deliverable.Artifacts, taskresult.Artifact{
 				Ref:  ref,
 				Kind: "media",
 			})
@@ -665,17 +520,8 @@ func (tr *ToolResult) WithAsyncTaskID(taskID string) *ToolResult {
 	return tr
 }
 
-// WithCompletion attaches a structured completion payload to this result.
-func (tr *ToolResult) WithCompletion(completion *CompletionResult) *ToolResult {
-	tr.Completion = completion
-	if tr.Deliverable == nil && completion != nil {
-		tr.Deliverable = tr.effectiveDeliverable()
-	}
-	return tr
-}
-
 // WithDeliverable attaches a generic durable output payload to this result.
-func (tr *ToolResult) WithDeliverable(deliverable *DeliverableResult) *ToolResult {
+func (tr *ToolResult) WithDeliverable(deliverable *taskresult.Deliverable) *ToolResult {
 	tr.Deliverable = deliverable
 	return tr
 }

@@ -856,15 +856,10 @@ func TestMCPTool_Execute_LargeBase64TextArtifactPreservesRawPayload(t *testing.T
 	if result.ForLLM == largeBase64OmittedMessage {
 		t.Fatalf("expected artifact note instead of sanitized base64 placeholder")
 	}
-	if len(result.ArtifactTags) != 1 {
-		t.Fatalf("expected 1 artifact tag, got %d", len(result.ArtifactTags))
+	if result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %#v", result.Deliverable)
 	}
-	tag := result.ArtifactTags[0]
-	const prefix = "[file:"
-	if !strings.HasPrefix(tag, prefix) || !strings.HasSuffix(tag, "]") {
-		t.Fatalf("expected file artifact tag, got %q", tag)
-	}
-	path := strings.TrimSuffix(strings.TrimPrefix(tag, prefix), "]")
+	path := result.Deliverable.Artifacts[0].LocalPath
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("expected artifact file to be readable: %v", err)
@@ -900,15 +895,10 @@ func TestMCPTool_Execute_LargeTextStoredAsArtifact(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "saved as a local artifact") {
 		t.Fatalf("expected artifact note, got %q", result.ForLLM)
 	}
-	if len(result.ArtifactTags) != 1 {
-		t.Fatalf("expected 1 artifact tag, got %d", len(result.ArtifactTags))
+	if result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %#v", result.Deliverable)
 	}
-	tag := result.ArtifactTags[0]
-	const prefix = "[file:"
-	if !strings.HasPrefix(tag, prefix) || !strings.HasSuffix(tag, "]") {
-		t.Fatalf("expected file artifact tag, got %q", tag)
-	}
-	path := strings.TrimSuffix(strings.TrimPrefix(tag, prefix), "]")
+	path := result.Deliverable.Artifacts[0].LocalPath
 	if !strings.HasPrefix(path, workspace) {
 		t.Fatalf("expected artifact inside workspace, got %q", path)
 	}
@@ -969,7 +959,7 @@ func TestMCPTool_Execute_CustomInlineTextThreshold(t *testing.T) {
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if len(result.ArtifactTags) != 1 {
+	if result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 {
 		t.Fatalf("expected custom threshold to persist artifact, got %+v", result)
 	}
 	if strings.Contains(result.ForLLM, "small custom threshold text") {
@@ -1006,8 +996,8 @@ func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T)
 	if !strings.Contains(result.ForLLM, "artifact persistence failed") {
 		t.Fatalf("expected persistence failure note, got %q", result.ForLLM)
 	}
-	if len(result.ArtifactTags) != 0 {
-		t.Fatalf("expected no artifact tags on persistence failure, got %+v", result.ArtifactTags)
+	if result.Deliverable != nil && len(result.Deliverable.Artifacts) != 0 {
+		t.Fatalf("expected no artifacts on persistence failure, got %+v", result.Deliverable.Artifacts)
 	}
 }
 
@@ -1033,7 +1023,8 @@ func TestMCPTool_Execute_LargeTextRegistrationFailureDeletesArtifact(t *testing.
 	mcpTool.SetMediaStore(store)
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if !strings.Contains(result.ForLLM, "artifact persistence failed") || len(result.ArtifactTags) != 0 {
+	if !strings.Contains(result.ForLLM, "artifact persistence failed") ||
+		(result.Deliverable != nil && len(result.Deliverable.Artifacts) != 0) {
 		t.Fatalf("Execute() result = %+v, want bounded registration failure", result)
 	}
 	if store.path == "" {
@@ -1064,7 +1055,8 @@ func TestMCPTool_Execute_LargeTextWithoutMediaStoreLeavesNoArtifact(t *testing.T
 	mcpTool.SetWorkspace(workspace)
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if !strings.Contains(result.ForLLM, "artifact persistence failed") || len(result.ArtifactTags) != 0 {
+	if !strings.Contains(result.ForLLM, "artifact persistence failed") ||
+		(result.Deliverable != nil && len(result.Deliverable.Artifacts) != 0) {
 		t.Fatalf("Execute() result = %+v, want bounded unavailable-store failure", result)
 	}
 	entries, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "mcp"))
@@ -1093,8 +1085,8 @@ func TestMCPTool_Execute_WhitespaceWorkspaceDisablesArtifactPersistence(t *testi
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if len(result.ArtifactTags) != 0 {
-		t.Fatalf("expected no artifact tags for whitespace workspace, got %+v", result.ArtifactTags)
+	if result.Deliverable != nil && len(result.Deliverable.Artifacts) != 0 {
+		t.Fatalf("expected no artifacts for whitespace workspace, got %+v", result.Deliverable.Artifacts)
 	}
 	if !strings.Contains(result.ForLLM, "This is a large MCP text payload") {
 		t.Fatalf("expected large text to remain inline when workspace is blank, got %q", result.ForLLM)

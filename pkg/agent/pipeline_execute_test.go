@@ -741,7 +741,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		if commitCalls != 0 || got.Outbound == nil || got.Outbound.Recovery == nil ||
 			len(got.Outbound.Media) != 1 ||
 			got.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
-			len(got.ArtifactTags) != 0 || len(journaled) != 2 || journaled[1].Role != "tool" {
+			got.Deliverable != nil || len(journaled) != 2 || journaled[1].Role != "tool" {
 			t.Fatalf(
 				"delivery result = %#v; commit calls = %d; journaled = %#v",
 				got, commitCalls, journaled,
@@ -902,8 +902,8 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 					delivery.syncCalls,
 				)
 			}
-			if len(exec.completionMedia) != 1 || exec.completionMedia[0].Ref != "media://suppressed-result" {
-				t.Fatalf("completion media = %+v, want suppressed result", exec.completionMedia)
+			if len(exec.deliverableArtifacts) != 1 || exec.deliverableArtifacts[0].Ref != "media://suppressed-result" {
+				t.Fatalf("deliverable artifacts = %+v, want suppressed result", exec.deliverableArtifacts)
 			}
 			history := store.GetHistory(ts.sessionKey)
 			if len(history) != 2 || len(history[1].Media) != 1 ||

@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -339,7 +340,7 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		UsageTotalTokens:  result.usageTotalTokens,
 	}.ApplyToContext(&outboundCtx)
 
-	if len(result.completionMedia) > 0 {
+	if len(result.deliverableArtifacts) > 0 {
 		ts := &turnState{
 			agent:      agent,
 			agentID:    agent.ID,
@@ -385,11 +386,11 @@ func (al *AgentLoop) deliverFinalTurnMedia(
 		ForUser:         result.finalContent,
 		Silent:          true,
 		ResponseHandled: true,
-	}).WithCompletion(&toolshared.CompletionResult{
-		Text:  result.finalContent,
-		Media: append([]toolshared.CompletionMedia(nil), result.completionMedia...),
+	}).WithDeliverable(&taskresult.Deliverable{
+		Text:      result.finalContent,
+		Artifacts: append([]taskresult.Artifact(nil), result.deliverableArtifacts...),
 	})
-	mediaRefs := completionMediaRefs(result.completionMedia)
+	mediaRefs := artifactRefs(result.deliverableArtifacts)
 	mediaResult.Media = append(mediaResult.Media, mediaRefs...)
 	_, outcome, err := al.deliverToolResultToUser(ctx, ts, mediaResult, "final_turn")
 	return outcome, err
@@ -503,7 +504,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	mediaRefs := toolResultMediaRefs(result)
 	text := toolResultUserText(result)
 	if len(mediaRefs) > 0 {
-		parts := al.mediaPartsFromRefs(mediaRefs, result.Completion, text)
+		parts := al.mediaPartsFromRefs(mediaRefs, toolResultArtifacts(result), text)
 		outboundMedia := bus.OutboundMediaMessage{
 			Channel: ts.channel,
 			ChatID:  ts.chatID,
@@ -573,7 +574,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if strings.TrimSpace(text) == "" {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if result.Silent && result.Completion == nil && result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
+	if result.Silent && result.Deliverable == nil && result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
 		return nil, toolResultDeliveryNone, nil
 	}
 	if al.bus == nil {
@@ -616,7 +617,7 @@ func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
 		ChatID:           ts.chatID,
 		ReplyToMessageID: ts.opts.Dispatch.ReplyToMessageID(),
 		Text:             text,
-		Media:            al.mediaPartsFromRefs(mediaRefs, result.Completion, text),
+		Media:            al.mediaPartsFromRefs(mediaRefs, toolResultArtifacts(result), text),
 	}
 }
 
@@ -937,9 +938,6 @@ func toolResultUserText(result *toolshared.ToolResult) string {
 	if text := strings.TrimSpace(result.ForUser); text != "" {
 		return result.ForUser
 	}
-	if result.Completion != nil {
-		return result.Completion.Text
-	}
 	if result.Deliverable != nil {
 		return result.Deliverable.Text
 	}
@@ -966,26 +964,33 @@ func toolResultMediaRefs(result *toolshared.ToolResult) []string {
 	for _, ref := range result.Media {
 		appendRef(ref)
 	}
-	if result.Completion != nil {
-		for _, item := range result.Completion.Media {
-			appendRef(item.Ref)
+	if result.Deliverable != nil {
+		for _, item := range result.Deliverable.Artifacts {
+			if strings.HasPrefix(strings.TrimSpace(item.Ref), "media://") {
+				appendRef(item.Ref)
+			}
 		}
 	}
 	return refs
 }
 
+func toolResultArtifacts(result *toolshared.ToolResult) []taskresult.Artifact {
+	if result == nil || result.Deliverable == nil {
+		return nil
+	}
+	return result.Deliverable.Artifacts
+}
+
 func (al *AgentLoop) mediaPartsFromRefs(
 	refs []string,
-	completion *toolshared.CompletionResult,
+	artifacts []taskresult.Artifact,
 	caption string,
 ) []bus.MediaPart {
-	hints := make(map[string]toolshared.CompletionMedia)
-	if completion != nil {
-		for _, item := range completion.Media {
-			ref := strings.TrimSpace(item.Ref)
-			if ref != "" {
-				hints[ref] = item
-			}
+	hints := make(map[string]taskresult.Artifact)
+	for _, item := range artifacts {
+		ref := strings.TrimSpace(item.Ref)
+		if ref != "" {
+			hints[ref] = item
 		}
 	}
 
@@ -993,7 +998,7 @@ func (al *AgentLoop) mediaPartsFromRefs(
 	for i, ref := range refs {
 		part := bus.MediaPart{Ref: ref}
 		if item, ok := hints[ref]; ok {
-			part.Type = item.Type
+			part.Type = item.Kind
 			part.Filename = item.Filename
 			part.ContentType = item.ContentType
 		}

@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
@@ -1341,20 +1342,20 @@ func TestHookManager_BeforeTool_RespondAction(t *testing.T) {
 func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	original := &toolshared.ToolResult{
 		ForLLM: "review finished",
-		Deliverable: &toolshared.DeliverableResult{
-			Report: &toolshared.DeliverableReport{
+		Deliverable: &taskresult.Deliverable{
+			Report: &taskresult.Report{
 				SchemaVersion: "deliverable_report.v1",
 				ReportID:      "review-1",
 				ContentHash:   "abc123",
 				Summary:       "No high-confidence issues found",
-				Claims: []toolshared.ReportClaim{{
+				Claims: []taskresult.Claim{{
 					Kind:       "negative_evidence",
 					Text:       "No correctness issues found",
 					Confidence: "high",
 					SourceRefs: []string{"diff"},
 					Metadata:   map[string]string{"path": "pkg/review.go"},
 				}},
-				FieldDeltas: []toolshared.ReportFieldDelta{{
+				FieldDeltas: []taskresult.FieldDelta{{
 					Field: "review_status",
 					To:    "clean",
 				}},
