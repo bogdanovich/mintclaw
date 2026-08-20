@@ -80,7 +80,9 @@ delivery receipt or the actionable transport failure. The provider cannot
 continue from a provisional "prepared" result, and a journal-finalization
 failure stops the turn instead of risking a duplicate side effect.
 If terminal receipt waiting is canceled, the unresolved barrier remains in
-place and the turn stops rather than recording a false success.
+place and the turn stops rather than recording a false success. Any remaining
+calls in the same emitted tool batch receive non-executed results so strict
+provider history keeps the complete batch and its unresolved barrier.
 
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid

@@ -532,6 +532,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					settlement, aborted, err := runner.settleTerminalDelivery(
 						ctx,
 						tc.ID,
+						i,
 						toolName,
 						hookResult,
 						loopArguments,
@@ -1272,6 +1273,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		settlement, aborted, err := runner.settleTerminalDelivery(
 			ctx,
 			toolCallID,
+			i,
 			toolName,
 			toolResult,
 			loopArguments,
@@ -1739,6 +1741,7 @@ type terminalDeliverySettlement struct {
 func (r *toolLoopRunner) settleTerminalDelivery(
 	ctx context.Context,
 	toolCallID string,
+	toolCallIndex int,
 	toolName string,
 	result *toolshared.ToolResult,
 	loopArguments map[string]any,
@@ -1753,6 +1756,12 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
+		r.appendSkippedToolMessages(
+			toolCallIndex+1,
+			"prior outbound delivery is awaiting terminal confirmation",
+			"Skipped because a prior outbound delivery is still awaiting terminal confirmation.",
+		)
+		r.exec.messages = r.messages
 		if r.journalErr == nil {
 			r.journalErr = settledResult.Err
 		}

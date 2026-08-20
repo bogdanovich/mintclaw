@@ -264,8 +264,13 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 		[]string{"media://legacy-final-handled"},
 	).WithResponseHandled()
 	tool := &fixedToolResultTool{name: "send_file", result: result}
+	sibling := &fixedToolResultTool{
+		name:   "destructive_sibling",
+		result: toolshared.SilentResult("sibling executed"),
+	}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
+	registry.Register(sibling)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-pending-receipt",
@@ -273,13 +278,20 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{ID: "call-send-file", Name: tool.Name(), Arguments: map[string]any{}}
-	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+	siblingCall := providers.ToolCall{
+		ID: "call-destructive-sibling", Name: sibling.Name(), Arguments: map[string]any{},
+	}
+	userMessage := providers.Message{Role: "user", Content: "send the file, then mutate external state"}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall, siblingCall}}
+	if err := store.AppendTurnMessage(t.Context(), sessionKey, userMessage); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
-	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
 	settlement := &finalHandledSettlementDelivery{
 		store: store, sessionKey: sessionKey, pending: true,
@@ -293,8 +305,12 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	if settlement.calls != 1 || !settlement.pendingSeen {
 		t.Fatalf("settlement calls = %d, pending seen = %t", settlement.calls, settlement.pendingSeen)
 	}
+	if sibling.executions != 0 {
+		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
+	}
 	for source, messages := range map[string][]providers.Message{
 		"canonical history": store.GetHistory(sessionKey),
+		"execution context": exec.messages,
 		"live turn state":   ts.liveTurnMessages,
 	} {
 		message := matchingToolResult(t, messages, toolCall.ID)
@@ -302,6 +318,16 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 			message.ToolResultStatus != providers.ToolResultStatusUnresolved {
 			t.Fatalf("%s barrier = %#v", source, message)
 		}
+		skipped := matchingToolResult(t, messages, siblingCall.ID)
+		if !strings.Contains(skipped.Content, "awaiting terminal confirmation") {
+			t.Fatalf("%s skipped sibling = %#v", source, skipped)
+		}
+	}
+	sanitized := sanitizeHistoryForProvider(store.GetHistory(sessionKey))
+	barrier := matchingToolResult(t, sanitized, toolCall.ID)
+	if barrier.ToolResultStatus != providers.ToolResultStatusUnresolved ||
+		barrier.Content != finalHandledDeliveryPendingContent {
+		t.Fatalf("sanitized barrier = %#v", barrier)
 	}
 }
 
