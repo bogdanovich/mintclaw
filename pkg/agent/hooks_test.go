@@ -1360,9 +1360,6 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 					To:    "clean",
 				}},
 				Provenance: map[string]string{"producer": "reviewer"},
-				Extra: map[string]any{
-					"nested": map[string]any{"key": "value"},
-				},
 			},
 		},
 	}
@@ -1374,7 +1371,6 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	original.Deliverable.Report.Claims[0].Metadata["path"] = "mutated"
 	original.Deliverable.Report.FieldDeltas[0].To = "mutated"
 	original.Deliverable.Report.Provenance["producer"] = "mutated"
-	original.Deliverable.Report.Extra["nested"].(map[string]any)["key"] = "mutated"
 
 	report := cloned.Deliverable.Report
 	if report == nil {
@@ -1397,10 +1393,6 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	}
 	if report.Provenance["producer"] != "reviewer" {
 		t.Fatalf("cloned provenance aliased: %+v", report.Provenance)
-	}
-	nested := report.Extra["nested"].(map[string]any)
-	if nested["key"] != "value" {
-		t.Fatalf("cloned extra aliased: %+v", report.Extra)
 	}
 }
 

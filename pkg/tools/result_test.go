@@ -256,8 +256,8 @@ func TestMediaResultCreatesDeliverable(t *testing.T) {
 	if len(result.Deliverable.Artifacts) != 2 {
 		t.Fatalf("artifact count = %d, want 2", len(result.Deliverable.Artifacts))
 	}
-	if result.Deliverable.Artifacts[0].Kind != "media" {
-		t.Fatalf("artifact kind = %q, want media", result.Deliverable.Artifacts[0].Kind)
+	if result.Deliverable.Artifacts[0].Kind != "" {
+		t.Fatalf("artifact kind = %q, want inference at the delivery edge", result.Deliverable.Artifacts[0].Kind)
 	}
 }
 

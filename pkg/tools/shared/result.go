@@ -437,8 +437,7 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 		result.Deliverable = &taskresult.Deliverable{}
 		for _, ref := range mediaRefs {
 			result.Deliverable.Artifacts = append(result.Deliverable.Artifacts, taskresult.Artifact{
-				Ref:  ref,
-				Kind: "media",
+				Ref: ref,
 			})
 		}
 	}

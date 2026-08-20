@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -160,33 +159,4 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
-}
-
-func canonicalizeRecordExtra(record *Record) error {
-	if record == nil || record.Deliverable == nil || record.Deliverable.Report == nil {
-		return nil
-	}
-	extra, err := canonicalAnyMap(record.Deliverable.Report.Extra)
-	if err != nil {
-		return err
-	}
-	record.Deliverable.Report.Extra = extra
-	return nil
-}
-
-func canonicalAnyMap(in map[string]any) (map[string]any, error) {
-	if len(in) == 0 {
-		return nil, nil
-	}
-	data, err := json.Marshal(in)
-	if err != nil {
-		return nil, err
-	}
-	var out map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }

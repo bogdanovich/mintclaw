@@ -2710,6 +2710,9 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 			len(telegramChannel.sentMedia[0].Parts),
 		)
 	}
+	if got := telegramChannel.sentMedia[0].Parts[0].Type; got != "image" {
+		t.Fatalf("sent media type = %q, want image inferred from MediaStore metadata", got)
+	}
 
 	select {
 	case extra := <-msgBus.OutboundMediaChan():

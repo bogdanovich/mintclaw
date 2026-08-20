@@ -45,6 +45,11 @@ func TestDeliverableAcceptsAdditiveFields(t *testing.T) {
 		"text":"done",
 		"future_top_level":true,
 		"artifacts":[{"ref":"media://proof","future_artifact":"hint"}],
+		"report":{
+			"schema_version":"deliverable_report.v1",
+			"report_id":"report-1",
+			"future_report_field":{"hint":"value"}
+		},
 		"objective_outcome":{
 			"status":"succeeded",
 			"future_outcome":42,
@@ -60,6 +65,7 @@ func TestDeliverableAcceptsAdditiveFields(t *testing.T) {
 		t.Fatalf("additive fields should be tolerated: %v", err)
 	}
 	if got.Text != "done" || len(got.Artifacts) != 1 ||
+		got.Report == nil || got.Report.ReportID != "report-1" ||
 		got.ObjectiveOutcome == nil || got.ObjectiveOutcome.Status != OutcomeSucceeded ||
 		len(got.ObjectiveOutcome.CompletedItems) != 1 ||
 		got.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv-1" {
@@ -72,7 +78,6 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 		Metadata: map[string]string{"producer": "browser"},
 		Report: &Report{
 			Claims: []Claim{{SourceRefs: []string{"source"}, Metadata: map[string]string{"key": "value"}}},
-			Extra:  map[string]any{"nested": map[string]any{"key": "value"}},
 		},
 		ObjectiveOutcome: &Outcome{CompletedItems: []Item{{
 			Receipts: []Receipt{{Metadata: map[string]string{"effect": "external_commit"}}},
@@ -83,13 +88,11 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 	cloned.Metadata["producer"] = "mutated"
 	cloned.Report.Claims[0].SourceRefs[0] = "mutated"
 	cloned.Report.Claims[0].Metadata["key"] = "mutated"
-	cloned.Report.Extra["nested"].(map[string]any)["key"] = "mutated"
 	cloned.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] = "mutated"
 
 	if original.Metadata["producer"] != "browser" ||
 		original.Report.Claims[0].SourceRefs[0] != "source" ||
 		original.Report.Claims[0].Metadata["key"] != "value" ||
-		original.Report.Extra["nested"].(map[string]any)["key"] != "value" ||
 		original.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] != "external_commit" {
 		t.Fatalf("clone aliased original state: %#v", original)
 	}

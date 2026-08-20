@@ -69,7 +69,6 @@ type Report struct {
 	FieldDeltas   []FieldDelta      `json:"field_deltas,omitempty"`
 	Provenance    map[string]string `json:"provenance,omitempty"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
-	Extra         map[string]any    `json:"extra,omitempty"`
 }
 
 type Claim struct {
@@ -148,7 +147,6 @@ func CloneReport(input *Report) *Report {
 		FieldDeltas:   append([]FieldDelta(nil), input.FieldDeltas...),
 		Provenance:    cloneStringMap(input.Provenance),
 		Metadata:      cloneStringMap(input.Metadata),
-		Extra:         cloneAnyMap(input.Extra),
 	}
 	for _, claim := range input.Claims {
 		out.Claims = append(out.Claims, Claim{
@@ -171,34 +169,4 @@ func cloneStringMap(input map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
-}
-
-func cloneAnyMap(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(input))
-	for key, value := range input {
-		out[key] = cloneAnyValue(value)
-	}
-	return out
-}
-
-func cloneAnyValue(input any) any {
-	switch value := input.(type) {
-	case map[string]any:
-		return cloneAnyMap(value)
-	case []any:
-		out := make([]any, len(value))
-		for index, item := range value {
-			out[index] = cloneAnyValue(item)
-		}
-		return out
-	case map[string]string:
-		return cloneStringMap(value)
-	case []string:
-		return append([]string(nil), value...)
-	default:
-		return value
-	}
 }

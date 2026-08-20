@@ -28,9 +28,6 @@ func (r *Registry) storeNewGeneration(rec Record, rejectExisting bool) error {
 		return nil
 	}
 	rec = cloneTaskRecord(rec)
-	if err := canonicalizeRecordExtra(&rec); err != nil {
-		return fmt.Errorf("canonicalize task %q report extra: %w", rec.TaskID, err)
-	}
 	now := time.Now().UnixMilli()
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = now
@@ -99,10 +96,6 @@ func (r *Registry) Update(taskID string, mutate func(*Record)) error {
 	before := cloneTaskRecord(rec)
 	rec = cloneTaskRecord(rec)
 	mutate(&rec)
-	if err := canonicalizeRecordExtra(&rec); err != nil {
-		r.mu.Unlock()
-		return fmt.Errorf("canonicalize task %q report extra: %w", taskID, err)
-	}
 	rec.GenerationID = before.GenerationID
 	rec.LastEventSeq = before.LastEventSeq
 	now := time.Now().UnixMilli()

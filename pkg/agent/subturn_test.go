@@ -2988,6 +2988,20 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 	}
 }
 
+func TestMediaArtifactRefsExcludeNonMediaDeliverables(t *testing.T) {
+	items := []taskresult.Artifact{
+		{Ref: "media://image", Kind: "image"},
+		{Ref: "file:/tmp/report.txt", LocalPath: "/tmp/report.txt", Kind: "file"},
+		{Ref: "https://example.com/report", Kind: "link"},
+	}
+
+	got := mediaArtifactRefs(items)
+	want := []string{"media://image"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("media artifact refs = %#v, want %#v", got, want)
+	}
+}
+
 // TestConcurrencySemaphore_Timeout verifies that spawning sub-turns times out
 // when all concurrency slots are occupied for too long.
 // Note: This test uses a shorter timeout by temporarily modifying the constant.

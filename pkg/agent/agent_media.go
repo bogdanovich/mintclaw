@@ -242,7 +242,7 @@ func buildMediaArtifacts(store mediaResolver, refs []string) []taskresult.Artifa
 
 	artifacts := make([]taskresult.Artifact, 0, len(refs))
 	for _, ref := range refs {
-		artifact := taskresult.Artifact{Ref: ref, Kind: "media"}
+		artifact := taskresult.Artifact{Ref: ref}
 		if store == nil {
 			artifacts = append(artifacts, artifact)
 			continue

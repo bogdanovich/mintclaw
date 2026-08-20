@@ -390,7 +390,7 @@ func (al *AgentLoop) deliverFinalTurnMedia(
 		Text:      result.finalContent,
 		Artifacts: append([]taskresult.Artifact(nil), result.deliverableArtifacts...),
 	})
-	mediaRefs := artifactRefs(result.deliverableArtifacts)
+	mediaRefs := mediaArtifactRefs(result.deliverableArtifacts)
 	mediaResult.Media = append(mediaResult.Media, mediaRefs...)
 	_, outcome, err := al.deliverToolResultToUser(ctx, ts, mediaResult, "final_turn")
 	return outcome, err
@@ -1010,10 +1010,10 @@ func (al *AgentLoop) mediaPartsFromRefs(
 				if part.ContentType == "" {
 					part.ContentType = meta.ContentType
 				}
-				if part.Type == "" {
-					part.Type = inferMediaType(meta.Filename, meta.ContentType)
-				}
 			}
+		}
+		if part.Type == "" {
+			part.Type = inferMediaType(part.Filename, part.ContentType)
 		}
 		if i == 0 {
 			part.Caption = caption

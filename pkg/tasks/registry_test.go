@@ -863,9 +863,6 @@ func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 			To:    "clean",
 		}},
 		Provenance: map[string]string{"producer": "reviewer"},
-		Extra: map[string]any{
-			"nested": map[string]any{"key": "value"},
-		},
 	}
 	if err := registry.Upsert(Record{
 		TaskID: "delegate-1",
@@ -883,7 +880,6 @@ func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 	report.Claims[0].Metadata["path"] = "mutated"
 	report.FieldDeltas[0].To = "mutated"
 	report.Provenance["producer"] = "mutated"
-	report.Extra["nested"].(map[string]any)["key"] = "mutated"
 
 	rec, ok := registry.Get("delegate-1")
 	if !ok {
@@ -907,10 +903,6 @@ func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 	}
 	if storedReport.FieldDeltas[0].To != "clean" {
 		t.Fatalf("field deltas aliased: %+v", storedReport.FieldDeltas)
-	}
-	nested := storedReport.Extra["nested"].(map[string]any)
-	if nested["key"] != "value" {
-		t.Fatalf("extra map aliased: %+v", storedReport.Extra)
 	}
 }
 

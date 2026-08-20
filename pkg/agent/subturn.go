@@ -853,7 +853,7 @@ func spawnSubTurn(
 				),
 				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
 			})
-			result.Media = append(result.Media, artifactRefs(turnRes.deliverableArtifacts)...)
+			result.Media = append(result.Media, mediaArtifactRefs(turnRes.deliverableArtifacts)...)
 		}
 		if !cfg.Async {
 			switch deliveryMode {
@@ -888,11 +888,11 @@ func durableTaskSessionKey(ownerWorkspace, taskID string) string {
 	return "task:" + hex.EncodeToString(sum[:8]) + ":" + strings.TrimSpace(taskID)
 }
 
-func artifactRefs(items []taskresult.Artifact) []string {
+func mediaArtifactRefs(items []taskresult.Artifact) []string {
 	refs := make([]string, 0, len(items))
 	for _, item := range items {
 		ref := strings.TrimSpace(item.Ref)
-		if ref != "" {
+		if strings.HasPrefix(ref, "media://") {
 			refs = append(refs, ref)
 		}
 	}
