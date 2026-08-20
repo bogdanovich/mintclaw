@@ -231,6 +231,7 @@ func (t *DelegateTool) recordDelegateTask(
 		TaskKind:            "delegate",
 		RequesterSessionKey: toolshared.ToolSessionKey(ctx),
 		OwnerKey:            toolshared.ToolAgentID(ctx),
+		HistoryPolicyKnown:  true,
 		HistoryDisabled:     toolshared.ToolHistoryDisabled(ctx),
 		Channel:             toolshared.ToolChannel(ctx),
 		ChatID:              toolshared.ToolChatID(ctx),

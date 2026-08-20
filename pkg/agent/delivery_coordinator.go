@@ -390,6 +390,13 @@ func (al *AgentLoop) asyncTaskObservationTarget(
 	if !ok {
 		return ownerAgent, sessionKey, false, nil
 	}
+	// Records created before requester-history provenance was persisted cannot
+	// safely inherit the reconstructed turn's policy after an upgrade. Treat
+	// them as history-disabled instead of guessing that an absent bool means
+	// history was enabled.
+	if !record.HistoryPolicyKnown {
+		return nil, sessionKey, true, nil
+	}
 	if requesterSessionKey := strings.TrimSpace(record.RequesterSessionKey); requesterSessionKey != "" {
 		sessionKey = requesterSessionKey
 	}

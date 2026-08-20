@@ -192,6 +192,9 @@ func TestDelegateTool_Execute_RecordsTaskRegistry(t *testing.T) {
 	if rec.RequesterSessionKey != "session-1" || rec.OwnerKey != "main" {
 		t.Fatalf("unexpected owner fields: %+v", rec)
 	}
+	if !rec.HistoryPolicyKnown {
+		t.Fatalf("history policy provenance was not persisted: %+v", rec)
+	}
 	if rec.Deliverable != nil {
 		t.Fatalf("unexpected deliverable for plain result: %+v", rec.Deliverable)
 	}

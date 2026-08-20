@@ -555,6 +555,29 @@ func TestAsyncTaskCompletionObservationUsesDurableNoHistoryPolicy(t *testing.T) 
 	}
 }
 
+func TestAsyncTaskCompletionObservationSkipsLegacyRecordWithoutHistoryPolicy(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	taskID := "legacy-completion"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	if err := al.taskRegistryForWorkspace(workspace).Update(taskID, func(record *taskregistry.Record) {
+		record.HistoryPolicyKnown = false
+		record.HistoryDisabled = false
+		record.OwnerKey = ""
+		record.RequesterSessionKey = ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := (&toolshared.ToolResult{
+		ForLLM: "legacy result must not enter history", AsyncTaskID: taskID,
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	if err := al.recordAsyncTaskCompletionObservation(t.Context(), ts, "legacy-result", result); err != nil {
+		t.Fatal(err)
+	}
+	if history := ts.agent.Sessions.GetHistory(ts.sessionKey); len(history) != 0 {
+		t.Fatalf("legacy fallback history = %#v, want empty", history)
+	}
+}
+
 func TestAsyncTaskCompletionObservationFailsClosedForMissingOwner(t *testing.T) {
 	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
 	taskID := "missing-owner-completion"

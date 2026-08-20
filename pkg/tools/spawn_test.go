@@ -122,6 +122,7 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 		rec, ok := manager.taskRegistry.Get(taskID)
 		if ok && rec.Status == taskregistry.StatusSucceeded {
 			if rec.OwnerKey != "main" || rec.RequesterSessionKey != "requester-session" ||
+				!rec.HistoryPolicyKnown ||
 				!rec.HistoryDisabled {
 				t.Fatalf("task ownership = %+v", rec)
 			}
