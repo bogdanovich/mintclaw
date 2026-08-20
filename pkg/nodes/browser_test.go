@@ -46,6 +46,25 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	}
 }
 
+func TestBrowserCatalogRequiresOneCurrentProfileSet(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors[0].BrowserProfiles[0].Limits.SnapshotRefs--
+	descriptors[0].InputSchema = BrowserCommandInputSchema(
+		descriptors[0].Name,
+		descriptors[0].BrowserProfiles,
+	)
+	descriptors[0].OutputSchema = BrowserCommandOutputSchema(
+		descriptors[0].Name,
+		descriptors[0].BrowserProfiles,
+	)
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("browser catalog accepted command-specific profile authority")
+	}
+}
+
 func TestBrowserCaptureCanonicalNumbersDecodeExactly(t *testing.T) {
 	var input BrowserCaptureInput
 	if err := json.Unmarshal([]byte(`{
@@ -557,106 +576,25 @@ func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
 	}
 }
 
-func TestBrowserDescriptorAcceptsExactPreScrollCatalogDuringRollingUpgrade(t *testing.T) {
+func TestBrowserDescriptorAcceptsCurrentCapabilitySubset(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate"}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := range descriptors {
-		descriptors[index].InputSchema = legacyBrowserCommandInputSchema(
-			descriptors[index].Name,
-			descriptors[index].BrowserProfiles,
-		)
-	}
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
-		t.Fatalf("pre-scroll catalog rejected during rolling upgrade: %v", err)
+		t.Fatalf("current capability subset rejected: %v", err)
 	}
-
-	for index := range descriptors {
-		if descriptors[index].Name == BrowserCommandAct {
-			descriptors[index].BrowserProfiles[0].Actions = []string{"navigate", "scroll"}
-			break
-		}
+	act := descriptors[3]
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "navigate", "url": "https://example.com"}
+	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+		t.Fatalf("advertised navigation rejected: %v", err)
 	}
-	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
-		t.Fatal("pre-scroll action schema accepted scroll authority")
-	}
-
-	profile.Actions = []string{"click", "download", "navigate"}
-	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range descriptors {
-		if descriptors[index].Name == BrowserCommandAct {
-			descriptors[index].InputSchema = legacyBrowserCommandInputSchema(
-				descriptors[index].Name,
-				descriptors[index].BrowserProfiles,
-			)
-			break
-		}
-	}
-	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
-		t.Fatal("pre-click action schema accepted click authority")
-	}
-}
-
-func TestBrowserDescriptorAcceptsExactPreApprovedActionCatalogDuringRollingUpgrade(t *testing.T) {
-	profile := browserProfileDescriptorFixture()
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range descriptors {
-		if descriptors[index].Name == BrowserCommandSessionOpen {
-			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
-				descriptors[index].Name,
-				descriptors[index].BrowserProfiles,
-			)
-		}
-	}
-	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
-		t.Fatalf("pre-approved-action catalog rejected during rolling upgrade: %v", err)
-	}
-
-	approved := browserProfileDescriptorFixture()
-	approved.DryRun = false
-	approved.AllowApprovedActions = true
-	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{approved})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range descriptors {
-		if descriptors[index].Name == BrowserCommandSessionOpen {
-			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
-				descriptors[index].Name,
-				descriptors[index].BrowserProfiles,
-			)
-		}
-	}
-	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
-		t.Fatal("legacy dry-run schema granted approved-action authority")
-	}
-
-	dryRunClick := browserProfileDescriptorFixture()
-	dryRunClick.Actions = []string{"click", "download", "navigate"}
-	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{dryRunClick})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range descriptors {
-		if descriptors[index].Name == BrowserCommandSessionOpen {
-			descriptors[index].InputSchema = legacyDryRunBrowserCommandInputSchema(
-				descriptors[index].Name,
-				descriptors[index].BrowserProfiles,
-			)
-			break
-		}
-	}
-	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
-		t.Fatal("legacy session-open schema accepted click authority")
+	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 1}
+	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+		t.Fatal("unadvertised scroll capability accepted")
 	}
 }
 

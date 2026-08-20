@@ -136,18 +136,6 @@ func (store *FileStore) load() error {
 		len(document.Sessions)+len(document.PreparedActions)+len(document.Invocations) > store.maxRecords {
 		return fmt.Errorf("%w: invalid browser state document", ErrInvalid)
 	}
-	previousPrepared := make(map[string]PreparedAction, len(document.PreparedActions))
-	for id, prepared := range document.PreparedActions {
-		previousPrepared[id] = prepared
-	}
-	previousInvocations := make(map[string]Invocation, len(document.Invocations))
-	for id, invocation := range document.Invocations {
-		previousInvocations[id] = invocation
-	}
-	migrated, err := migrateLegacyPreparedDialogs(&document)
-	if err != nil {
-		return err
-	}
 	for id, prepared := range document.PreparedActions {
 		if id != prepared.ID || prepared.Validate(config.BrowserMaxTextInputBytes) != nil {
 			return fmt.Errorf("%w: invalid persisted prepared browser action", ErrInvalid)
@@ -182,65 +170,7 @@ func (store *FileStore) load() error {
 	}
 	store.prepared = document.PreparedActions
 	store.invocations = document.Invocations
-	if migrated {
-		previousSessions := make(map[string]Session, len(document.Sessions))
-		for id, session := range document.Sessions {
-			previousSessions[id] = cloneSession(session)
-		}
-		if err = store.persistLocked(previousSessions, previousPrepared, previousInvocations); err != nil {
-			return fmt.Errorf("persist migrated browser dialog authority: %w", err)
-		}
-	}
 	return nil
-}
-
-func migrateLegacyPreparedDialogs(document *fileStoreDocument) (bool, error) {
-	migrated := false
-	for id, prepared := range document.PreparedActions {
-		if prepared.Action.Kind != ActionDialog || prepared.DialogMessageDigest != "" {
-			continue
-		}
-		if !validDialogType(prepared.DialogType) || prepared.DialogMessageBytes != 0 ||
-			len(prepared.LegacyDialogMessage) > MaxDialogMessageBytes {
-			return false, fmt.Errorf("%w: malformed legacy prepared dialog", ErrInvalid)
-		}
-		oldHash, err := hashPreparedAction(prepared)
-		if err != nil || oldHash != prepared.ActionHash {
-			return false, fmt.Errorf("%w: invalid legacy prepared dialog hash", ErrInvalid)
-		}
-		for invocationID, invocation := range document.Invocations {
-			if invocation.PreparedActionID != id {
-				continue
-			}
-			if invocation.ActionHash != prepared.ActionHash {
-				return false, fmt.Errorf("%w: invalid legacy dialog invocation hash", ErrInvalid)
-			}
-			invocation.ActionHash = ""
-			document.Invocations[invocationID] = invocation
-		}
-		prepared.Action.DialogID = stableDialogRef(
-			prepared.SnapshotID,
-			prepared.DialogType,
-			prepared.LegacyDialogMessage,
-		)
-		prepared.DialogMessageDigest = dialogMessageDigest(prepared.DialogType, prepared.LegacyDialogMessage)
-		prepared.DialogMessageBytes = len(prepared.LegacyDialogMessage)
-		prepared.LegacyDialogMessage = ""
-		prepared.ActionHash = ""
-		prepared.ActionHash, err = hashPreparedAction(prepared)
-		if err != nil {
-			return false, err
-		}
-		document.PreparedActions[id] = prepared
-		for invocationID, invocation := range document.Invocations {
-			if invocation.PreparedActionID == id {
-				invocation.ActionHash = prepared.ActionHash
-				document.Invocations[invocationID] = invocation
-			}
-		}
-		migrated = true
-	}
-	return migrated, nil
 }
 
 func rejectDuplicateJSONMembers(raw []byte) error {

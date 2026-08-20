@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -449,24 +450,7 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
-	inputMatches := err == nil && bytes.Equal(actualInput, expectedInput)
-	if !inputMatches && descriptor.Name == BrowserCommandSessionOpen &&
-		browserProfilesUseLegacyDryRunMode(descriptor.BrowserProfiles) {
-		legacyInput, legacyErr := canonicalJSON(legacyDryRunBrowserCommandInputSchema(
-			descriptor.Name,
-			descriptor.BrowserProfiles,
-		))
-		inputMatches = legacyErr == nil && bytes.Equal(actualInput, legacyInput)
-	}
-	if !inputMatches && descriptor.Name == BrowserCommandAct &&
-		browserProfilesUseOnlyLegacyActions(descriptor.BrowserProfiles) {
-		legacyInput, legacyErr := canonicalJSON(legacyBrowserCommandInputSchema(
-			descriptor.Name,
-			descriptor.BrowserProfiles,
-		))
-		inputMatches = legacyErr == nil && bytes.Equal(actualInput, legacyInput)
-	}
-	if !inputMatches {
+	if err != nil || !bytes.Equal(actualInput, expectedInput) {
 		return fmt.Errorf("%w: browser input schema does not match typed contract", ErrInvalidCapability)
 	}
 	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(
@@ -481,32 +465,6 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 	}
 	return nil
-}
-
-func browserProfilesUseOnlyLegacyActions(profiles []BrowserProfileDescriptor) bool {
-	for _, profile := range profiles {
-		for _, action := range profile.Actions {
-			if action == "click" || action == "dialog" || action == "press" ||
-				action == "scroll" || action == "select" {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func browserProfilesUseLegacyDryRunMode(profiles []BrowserProfileDescriptor) bool {
-	for _, profile := range profiles {
-		if !profile.DryRun || profile.AllowApprovedActions {
-			return false
-		}
-		for _, action := range profile.Actions {
-			if action == "click" || action == "press" || action == "select" {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (descriptor CommandDescriptor) validateUpdateProfiles() error {
@@ -651,6 +609,7 @@ func (catalog CapabilityCatalog) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(catalog.Commands))
 	totalBytes := 0
+	var browserProfiles []BrowserProfileDescriptor
 	for _, descriptor := range catalog.Commands {
 		totalBytes += len(descriptor.Name) + len(descriptor.InputSchema) + len(descriptor.OutputSchema)
 		if descriptor.ModelContract != nil {
@@ -685,6 +644,16 @@ func (catalog CapabilityCatalog) Validate() error {
 		if err := descriptor.Validate(); err != nil {
 			return err
 		}
+		if IsBrowserCommand(descriptor.Name) {
+			if browserProfiles == nil {
+				browserProfiles = descriptor.BrowserProfiles
+			} else if !reflect.DeepEqual(browserProfiles, descriptor.BrowserProfiles) {
+				return fmt.Errorf(
+					"%w: browser commands disagree on the current profile set",
+					ErrInvalidCapability,
+				)
+			}
+		}
 		if _, exists := seen[descriptor.Name]; exists {
 			return fmt.Errorf("%w: duplicate command %q", ErrInvalidCapability, descriptor.Name)
 		}
@@ -701,8 +670,9 @@ func (catalog CapabilityCatalog) Hash() (string, error) {
 	return catalog.canonicalHash()
 }
 
-// canonicalHash hashes an already-validated catalog. Registry migrations use
-// it only after applying their own exact compatibility validation.
+// canonicalHash hashes catalog bytes without validating command semantics.
+// Callers must establish their appropriate invariants first; opaque dispatched
+// tombstones use it only to verify the identity stored in their signed plan.
 func (catalog CapabilityCatalog) canonicalHash() (string, error) {
 	commands := append([]CommandDescriptor(nil), catalog.Commands...)
 	if commands == nil {

@@ -638,7 +638,6 @@ type PreparedAction struct {
 	DestinationElementName     string `json:"destination_element_name,omitempty"`
 	DestinationElementPosition uint32 `json:"destination_element_position,omitempty"`
 	DialogType                 string `json:"dialog_type,omitempty"`
-	LegacyDialogMessage        string `json:"dialog_message,omitempty"`
 	DialogMessageDigest        string `json:"dialog_message_digest,omitempty"`
 	DialogMessageBytes         int    `json:"dialog_message_bytes,omitempty"`
 	Effect                     Effect `json:"effect"`
@@ -680,9 +679,6 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.ContextGeneration,
 	) {
 		return fmt.Errorf("%w: malformed prepared action context", ErrInvalid)
-	}
-	if prepared.LegacyDialogMessage != "" {
-		return fmt.Errorf("%w: legacy prepared dialog message was not migrated", ErrInvalid)
 	}
 	if prepared.Action.Kind != ActionDialog && (prepared.DialogType != "" ||
 		prepared.DialogMessageDigest != "" || prepared.DialogMessageBytes != 0) {
