@@ -77,7 +77,7 @@ func TestTerminalTaskContextForTurnFiltersAndBoundsAuthoritativeRecords(t *testi
 	}
 }
 
-func TestTerminalTaskContextDoesNotMutateOrSplitIncompleteToolHistory(t *testing.T) {
+func TestTerminalTaskContextDoesNotMutateOrSplitRepairedToolHistory(t *testing.T) {
 	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
 	if err := al.taskRegistryForWorkspace(workspace).Upsert(taskregistry.Record{
 		TaskID: "completed-browser-task", Runtime: taskregistry.RuntimeSubagent,
@@ -96,12 +96,25 @@ func TestTerminalTaskContextDoesNotMutateOrSplitIncompleteToolHistory(t *testing
 	}
 	messages := NewPipeline(al).buildTurnMessages(ts, history, "", "run it again", nil, nil)
 	var prompt strings.Builder
-	for _, message := range messages {
+	toolBatchStart := -1
+	for i, message := range messages {
 		prompt.WriteString(message.Content)
 		prompt.WriteByte('\n')
-		if len(message.ToolCalls) != 0 || message.ToolCallID != "" {
-			t.Fatalf("incomplete canonical tool block leaked into provider prompt: %#v", messages)
+		if len(message.ToolCalls) == 2 {
+			toolBatchStart = i
 		}
+	}
+	if toolBatchStart < 0 || toolBatchStart+2 >= len(messages) {
+		t.Fatalf("repaired tool block missing from provider prompt: %#v", messages)
+	}
+	realResult := messages[toolBatchStart+1]
+	repairedResult := messages[toolBatchStart+2]
+	if realResult.Role != "tool" || realResult.ToolCallID != "spawn-call" ||
+		realResult.Content != "accepted" || repairedResult.Role != "tool" ||
+		repairedResult.ToolCallID != "slow-call" ||
+		repairedResult.ToolResultStatus != providers.ToolResultStatusUnresolved ||
+		!strings.Contains(repairedResult.Content, "do not assume success") {
+		t.Fatalf("provider repair split or changed the tool block: %#v", messages)
 	}
 	if !strings.Contains(prompt.String(), "browser checklist was blocked") ||
 		!strings.Contains(prompt.String(), "This task is no longer running") {
