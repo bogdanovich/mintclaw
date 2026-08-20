@@ -17,6 +17,13 @@ const (
 	maxTerminalTaskIDRunes       = 128
 )
 
+func backgroundTaskStatusSafetyRule() string {
+	return "A historical spawn or delegate acknowledgement proves only that the task was accepted. " +
+		"Never treat it as proof that work is still active. Check task_status when that tool is available; " +
+		"when it is unavailable or the task record is absent, treat the state as unknown, not running. " +
+		"A terminal task does not satisfy a new request."
+}
+
 func (al *AgentLoop) terminalTaskContextForTurn(ts *turnState) []providers.Message {
 	if al == nil || ts == nil || ts.opts.NoHistory || ts.agent == nil {
 		return nil

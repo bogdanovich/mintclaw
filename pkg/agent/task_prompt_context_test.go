@@ -145,9 +145,50 @@ func TestTerminalTaskContextIsVisibleToSameSessionRepeatRequest(t *testing.T) {
 		prompt.WriteString(message.Content)
 		prompt.WriteByte('\n')
 	}
-	if !strings.Contains(prompt.String(), "state: blocked") ||
-		!strings.Contains(prompt.String(), "This task is no longer running") ||
-		!strings.Contains(prompt.String(), "a terminal task does not satisfy a new request") {
+	promptText := prompt.String()
+	if !strings.Contains(promptText, "state: blocked") ||
+		!strings.Contains(promptText, "This task is no longer running") ||
+		!strings.Contains(strings.ToLower(promptText), "a terminal task does not satisfy a new request") {
 		t.Fatalf("repeat request prompt omitted authoritative terminal state: %s", prompt.String())
+	}
+}
+
+func TestBackgroundTaskSafetySurvivesSuppressedToolUsePrompt(t *testing.T) {
+	cb := NewContextBuilder(t.TempDir())
+	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
+		CurrentMessage: "check again", SuppressToolUseRule: true, BackgroundTaskSafety: true,
+	})
+	var prompt strings.Builder
+	for _, message := range messages {
+		prompt.WriteString(message.Content)
+		prompt.WriteByte('\n')
+	}
+	if !strings.Contains(prompt.String(), "treat the state as unknown, not running") ||
+		strings.Contains(prompt.String(), "ALWAYS use tools") {
+		t.Fatalf("independent background-task safety rule missing: %s", prompt.String())
+	}
+}
+
+func TestTerminalTaskContextDoesNotChangeAdjacentMediaClassification(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	ts.opts.Dispatch.InboundContext = &bus.InboundContext{ChatType: "direct"}
+	if err := al.taskRegistryForWorkspace(workspace).Upsert(taskregistry.Record{
+		TaskID: "terminal-before-media", Runtime: taskregistry.RuntimeSubagent,
+		Status: taskregistry.StatusSucceeded, TerminalSummary: "previous work finished",
+		OwnerKey: ts.agent.ID, RequesterSessionKey: ts.sessionKey, HistoryPolicyKnown: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Now().Add(-time.Minute)
+	history := []providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &createdAt}}
+	messages := NewPipeline(al).buildTurnMessages(
+		ts, history, "", "[media only]", []string{"media://image-1"}, nil,
+	)
+	last := messages[len(messages)-1]
+	if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {
+		t.Fatalf("terminal context changed media follow-up classification: %q", last.Content)
+	}
+	if !messagesContainContent(messages, "previous work finished") {
+		t.Fatalf("terminal task context missing: %#v", messages)
 	}
 }

@@ -301,10 +301,6 @@ func (p *Pipeline) buildTurnMessages(
 	if p == nil {
 		return nil
 	}
-	if p.Context.TerminalTasks != nil {
-		history = append(append([]providers.Message(nil), history...),
-			p.Context.TerminalTasks.terminalTaskContextForTurn(ts)...)
-	}
 	var messages []providers.Message
 	if p.Config.PromptBuilder == nil {
 		messages = newConfigPipelinePromptBuilder(p.Cfg).
@@ -318,6 +314,17 @@ func (p *Pipeline) buildTurnMessages(
 			media,
 			activeSkills,
 		)
+	}
+	if p.Context.TerminalTasks != nil {
+		terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)
+		if len(terminalContext) > 0 {
+			currentTurnStart := promptCurrentTurnStart(messages, currentMessage, media)
+			withTerminalContext := make([]providers.Message, 0, len(messages)+len(terminalContext))
+			withTerminalContext = append(withTerminalContext, messages[:currentTurnStart]...)
+			withTerminalContext = append(withTerminalContext, terminalContext...)
+			withTerminalContext = append(withTerminalContext, messages[currentTurnStart:]...)
+			messages = withTerminalContext
+		}
 	}
 	return projectNodeFileMediaAttachments(messages, ts, media, p.Context.MediaResolver)
 }

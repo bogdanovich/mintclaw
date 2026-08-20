@@ -1115,6 +1115,18 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)
+	if req.BackgroundTaskSafety {
+		promptParts = append(promptParts, PromptPart{
+			ID:      "runtime.background_task_safety",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "runtime:background_task_safety"},
+			Title:   "background task status safety",
+			Content: backgroundTaskStatusSafetyRule(),
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		})
+	}
 	personalPrompt := cb.promptProfile != RuntimePromptProfileCoding
 	if !req.SuppressDefaultSystemPrompt && personalPrompt && !req.SuppressSkillContext {
 		activeSkills := append([]string(nil), req.ActiveSkills...)
