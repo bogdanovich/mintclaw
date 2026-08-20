@@ -10,6 +10,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -657,6 +658,39 @@ func TestAsyncTaskCompletionObservationRetriesAfterDeliveryHandled(t *testing.T)
 	delivery.deliverAsyncToolCompletion(req)
 	if attempts != 2 {
 		t.Fatalf("observation attempts = %d, want 2", attempts)
+	}
+}
+
+func TestAsyncTaskCompletionObservationWaitsForImmediateMultiToolResults(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "run both tools"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{
+			{ID: "spawn-call", Name: "spawn"},
+			{ID: "sibling-call", Name: "read_file"},
+		}},
+	}
+	marker := asyncTaskObservationMarker("fast-task", "fast-completion")
+	observation := marker + "\nstate: succeeded"
+	deferred, changed, err := appendAsyncTaskCompletionObservation(history, marker, observation)
+	if !errors.Is(err, errAsyncTaskObservationToolBlockOpen) || changed || len(deferred) != len(history) {
+		t.Fatalf("open block mutation = (%d, %v, %v), want unchanged deferred history", len(deferred), changed, err)
+	}
+	history = append(history,
+		providers.Message{Role: "tool", ToolCallID: "spawn-call", Content: "accepted"},
+		providers.Message{Role: "tool", ToolCallID: "sibling-call", Content: "read"},
+	)
+	completed, changed, err := appendAsyncTaskCompletionObservation(history, marker, observation)
+	if err != nil || !changed || len(completed) != len(history)+1 {
+		t.Fatalf("closed block mutation = (%d, %v, %v)", len(completed), changed, err)
+	}
+	sanitized := sanitizeHistoryForProvider(completed)
+	if len(sanitized) != len(completed) {
+		t.Fatalf("provider sanitizer dropped multi-tool history: got %#v", sanitized)
+	}
+	if sanitized[1].Role != "assistant" || len(sanitized[1].ToolCalls) != 2 ||
+		sanitized[2].ToolCallID != "spawn-call" || sanitized[3].ToolCallID != "sibling-call" ||
+		!strings.HasPrefix(sanitized[4].Content, marker) {
+		t.Fatalf("multi-tool block order = %#v", sanitized)
 	}
 }
 

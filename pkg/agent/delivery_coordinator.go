@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -313,7 +314,12 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 }
 
-const asyncTaskObservationResultLimit = 2000
+const (
+	asyncTaskObservationResultLimit   = 2000
+	asyncTaskObservationRetryInterval = 10 * time.Millisecond
+)
+
+var errAsyncTaskObservationToolBlockOpen = errors.New("async task observation would split an open tool-result block")
 
 func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	ctx context.Context,
@@ -358,19 +364,65 @@ func (al *AgentLoop) recordAsyncTaskCompletionObservation(
 	if sessionKey == "" {
 		sessionKey = session.BuildMainSessionKey(ownerAgent.ID)
 	}
-	_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
-		[]providers.Message,
-		bool,
-		error,
-	) {
-		for _, message := range history {
-			if message.Role == "assistant" && strings.HasPrefix(message.Content, marker) {
-				return history, false, nil
-			}
+	for {
+		_, err = ownerAgent.Sessions.MutateTurnHistory(ctx, sessionKey, func(history []providers.Message) (
+			[]providers.Message,
+			bool,
+			error,
+		) {
+			return appendAsyncTaskCompletionObservation(history, marker, observation)
+		})
+		if !errors.Is(err, errAsyncTaskObservationToolBlockOpen) {
+			return err
 		}
-		return append(history, providers.Message{Role: "assistant", Content: observation}), true, nil
-	})
-	return err
+		timer := time.NewTimer(asyncTaskObservationRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("defer async task observation until tool block closes: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func appendAsyncTaskCompletionObservation(
+	history []providers.Message,
+	marker string,
+	observation string,
+) ([]providers.Message, bool, error) {
+	for _, message := range history {
+		if message.Role == "assistant" && strings.HasPrefix(message.Content, marker) {
+			return history, false, nil
+		}
+	}
+	if trailingToolResultBlockIncomplete(history) {
+		return history, false, errAsyncTaskObservationToolBlockOpen
+	}
+	return append(history, providers.Message{Role: "assistant", Content: observation}), true, nil
+}
+
+func trailingToolResultBlockIncomplete(history []providers.Message) bool {
+	index := len(history) - 1
+	for index >= 0 && history[index].Role == "tool" {
+		index--
+	}
+	if index < 0 || history[index].Role != "assistant" || len(history[index].ToolCalls) == 0 {
+		return false
+	}
+	expected := make(map[string]struct{}, len(history[index].ToolCalls))
+	for _, call := range history[index].ToolCalls {
+		callID := strings.TrimSpace(call.ID)
+		if callID == "" {
+			return true
+		}
+		expected[callID] = struct{}{}
+	}
+	for _, message := range history[index+1:] {
+		if message.Role == "tool" {
+			delete(expected, strings.TrimSpace(message.ToolCallID))
+		}
+	}
+	return len(expected) > 0
 }
 
 func (al *AgentLoop) asyncTaskObservationTarget(
