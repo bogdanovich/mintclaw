@@ -255,6 +255,36 @@ func TestSanitizeHistoryForProvider_DropsAssistantWithEmptyToolCallID(t *testing
 	assertRoles(t, result, "user", "assistant")
 }
 
+func TestSanitizeHistoryForProvider_DropsAssistantWithWhitespaceToolCallID(t *testing.T) {
+	history := []providers.Message{
+		msg("user", "do something"),
+		assistantWithTools(" \t "),
+		toolResult(" \t "),
+		msg("assistant", "done"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
+	}
+	assertRoles(t, result, "user", "assistant")
+}
+
+func TestSanitizeHistoryForProvider_DropsAssistantWithDuplicateToolCallIDs(t *testing.T) {
+	history := []providers.Message{
+		msg("user", "do two things"),
+		assistantWithTools("duplicate", "duplicate"),
+		toolResult("duplicate"),
+		msg("assistant", "done"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
+	}
+	assertRoles(t, result, "user", "assistant")
+}
+
 func roles(msgs []providers.Message) []string {
 	r := make([]string, len(msgs))
 	for i, m := range msgs {

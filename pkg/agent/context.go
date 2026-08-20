@@ -1368,12 +1368,19 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			expected := make(map[string]struct{}, len(msg.ToolCalls))
-			invalidToolCallID := false
+			seenCallIDs := make(map[string]struct{}, len(msg.ToolCalls))
+			invalidToolCallIDs := false
 			for _, tc := range msg.ToolCalls {
-				if tc.ID == "" {
-					invalidToolCallID = true
+				callID := strings.TrimSpace(tc.ID)
+				if callID == "" {
+					invalidToolCallIDs = true
 					continue
 				}
+				if _, duplicate := seenCallIDs[callID]; duplicate {
+					invalidToolCallIDs = true
+					continue
+				}
+				seenCallIDs[callID] = struct{}{}
 				expected[tc.ID] = struct{}{}
 			}
 
@@ -1411,14 +1418,12 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 				resultsByCallID[next.ToolCallID] = next
 			}
 
-			if invalidToolCallID {
+			if invalidToolCallIDs {
 				logger.DebugCF(
 					"agent",
-					"Dropping assistant message with empty tool_call_id",
+					"Dropping assistant message with invalid tool_call_ids",
 					map[string]any{},
 				)
-			}
-			if invalidToolCallID {
 				i = j - 1
 				continue
 			}
