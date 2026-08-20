@@ -189,6 +189,29 @@ func TestDiagnosticBrowserMalformedOrConflictingArgumentsAreRedacted(t *testing.
 	}
 }
 
+func TestDiagnosticBrowserUsesCurrentActionVocabulary(t *testing.T) {
+	for _, test := range []struct {
+		kind      string
+		sensitive bool
+	}{
+		{kind: "check"},
+		{kind: "file_chooser"},
+		{kind: "fill", sensitive: true},
+		{kind: "upload", sensitive: true},
+	} {
+		call := providers.ToolCall{
+			ID:   "call-" + test.kind,
+			Name: "browser_act",
+			Arguments: map[string]any{
+				"action": map[string]any{"kind": test.kind},
+			},
+		}
+		if got := diagnosticBrowserFillCall(call); got != test.sensitive {
+			t.Fatalf("diagnosticBrowserFillCall(%q) = %v, want %v", test.kind, got, test.sensitive)
+		}
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

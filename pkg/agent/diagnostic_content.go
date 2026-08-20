@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -215,14 +216,11 @@ func diagnosticBrowserFillCall(call providers.ToolCall) bool {
 	if _, valueBearing := action["value"]; valueBearing {
 		return true
 	}
-	switch kind {
-	case "navigate", "click", "select", "press", "scroll", "dialog", "upload", "download":
-		return false
-	case "fill":
-		return true
-	default:
+	actionKind := browseraction.ActionKind(kind)
+	if !actionKind.Valid() {
 		return true
 	}
+	return actionKind == browseraction.ActionFill
 }
 
 func diagnosticLLMResponseContent(

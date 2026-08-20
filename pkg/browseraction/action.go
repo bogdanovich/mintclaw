@@ -38,14 +38,53 @@ const (
 	ActionDownload    ActionKind = "download"
 )
 
-func (kind ActionKind) Valid() bool {
-	switch kind {
-	case ActionNavigate, ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll, ActionDialog,
-		ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser, ActionDownload:
-		return true
-	default:
-		return false
+var (
+	currentKinds = [...]ActionKind{
+		ActionNavigate,
+		ActionClick,
+		ActionFill,
+		ActionSelect,
+		ActionPress,
+		ActionScroll,
+		ActionDialog,
+		ActionCheck,
+		ActionUncheck,
+		ActionHover,
+		ActionDrag,
+		ActionFileChooser,
+		ActionDownload,
 	}
+	currentKeys = [...]string{
+		"Enter",
+		"Space",
+		"Escape",
+		"Tab",
+		"Shift+Tab",
+		"ArrowUp",
+		"ArrowDown",
+		"ArrowLeft",
+		"ArrowRight",
+		"Home",
+		"End",
+		"PageUp",
+		"PageDown",
+		"Backspace",
+		"Delete",
+	}
+)
+
+// Kinds returns the complete current action vocabulary in protocol order.
+func Kinds() []ActionKind {
+	return append([]ActionKind(nil), currentKinds[:]...)
+}
+
+func (kind ActionKind) Valid() bool {
+	for _, current := range currentKinds {
+		if kind == current {
+			return true
+		}
+	}
+	return false
 }
 
 type Action struct {
@@ -119,7 +158,7 @@ func (action *Action) Validate(maxTextBytes int) error {
 	}
 	if (action.Kind != ActionDrag && (action.SourceRef != "" || action.DestinationRef != "")) ||
 		(action.Kind != ActionDialog && action.DialogID != "") ||
-		(action.Kind == ActionDialog && action.DialogID != "" && !validIdentifier(action.DialogID)) {
+		(action.Kind == ActionDialog && !validIdentifier(action.DialogID)) {
 		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
 	}
 	if (action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
@@ -198,12 +237,116 @@ func validIdentifier(value string) bool {
 	return len(value) <= MaxIdentifierBytes && identifierRegexp.MatchString(value)
 }
 
+// Keys returns the complete current document-scoped key vocabulary.
+func Keys() []string {
+	return append([]string(nil), currentKeys[:]...)
+}
+
 func ValidKey(key string) bool {
-	switch key {
-	case "Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-		"Home", "End", "PageUp", "PageDown", "Backspace", "Delete":
-		return true
-	default:
-		return false
+	for _, current := range currentKeys {
+		if key == current {
+			return true
+		}
 	}
+	return false
+}
+
+// Schema projects the current action vocabulary into JSON Schema. Strict
+// callers expose only model-authored fields; tolerant transport callers also
+// admit additive fields and the derived prompt-presence bit.
+func Schema(kinds []ActionKind, maxTextBytes int, allowUnknownFields bool) map[string]any {
+	properties := map[string]any{
+		"kind": map[string]any{"type": "string", "enum": actionKindStrings(kinds)},
+	}
+	fields := schemaFields(kinds)
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIdentifierBytes}
+	if fields&schemaURL != 0 {
+		properties["url"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxURLBytes}
+	}
+	if fields&schemaRef != 0 {
+		properties["ref"] = identifier
+	}
+	if fields&schemaDragRefs != 0 {
+		properties["source_ref"] = identifier
+		properties["destination_ref"] = identifier
+	}
+	if fields&schemaDialog != 0 {
+		properties["dialog_id"] = identifier
+		properties["decision"] = map[string]any{"type": "string", "enum": []string{"accept", "dismiss"}}
+		if allowUnknownFields {
+			properties["prompt_provided"] = map[string]any{"type": "boolean"}
+		}
+	}
+	if fields&schemaTargetKey != 0 {
+		properties["target"] = map[string]any{"type": "string", "enum": []string{"document"}}
+		properties["key"] = map[string]any{"type": "string", "enum": Keys()}
+	}
+	if fields&schemaValue != 0 {
+		properties["value"] = map[string]any{"type": "string", "maxLength": maxTextBytes}
+	}
+	if fields&schemaScroll != 0 {
+		properties["direction"] = map[string]any{"type": "string", "enum": []string{"up", "down"}}
+		properties["amount"] = map[string]any{"type": "integer", "minimum": 1, "maximum": MaxScrollAmount}
+	}
+	if fields&schemaArtifact != 0 {
+		properties["artifact_ref"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 512}
+	}
+	if fields&schemaDeliver != 0 {
+		properties["deliver"] = map[string]any{"type": "boolean"}
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"required":             []string{"kind"},
+		"additionalProperties": allowUnknownFields,
+	}
+}
+
+type schemaField uint16
+
+const (
+	schemaURL schemaField = 1 << iota
+	schemaRef
+	schemaDragRefs
+	schemaDialog
+	schemaTargetKey
+	schemaValue
+	schemaScroll
+	schemaArtifact
+	schemaDeliver
+)
+
+func schemaFields(kinds []ActionKind) schemaField {
+	var fields schemaField
+	for _, kind := range kinds {
+		switch kind {
+		case ActionNavigate:
+			fields |= schemaURL
+		case ActionClick, ActionCheck, ActionUncheck, ActionHover:
+			fields |= schemaRef
+		case ActionFill, ActionSelect:
+			fields |= schemaRef | schemaValue
+		case ActionPress:
+			fields |= schemaTargetKey
+		case ActionScroll:
+			fields |= schemaScroll
+		case ActionDialog:
+			fields |= schemaDialog | schemaValue
+		case ActionDrag:
+			fields |= schemaDragRefs
+		case ActionFileChooser:
+			fields |= schemaRef | schemaArtifact
+		case ActionDownload:
+			fields |= schemaRef | schemaDeliver
+		}
+	}
+	return fields
+}
+
+func actionKindStrings(kinds []ActionKind) []string {
+	values := make([]string, len(kinds))
+	for index, kind := range kinds {
+		values[index] = string(kind)
+	}
+	return values
 }

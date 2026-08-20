@@ -299,6 +299,10 @@ func TestBrowserDialogCommandSchemaBindsProtectedPromptAndApproval(t *testing.T)
 	if err = validateDescriptorInvocationInput(act, dismiss); err != nil {
 		t.Fatalf("dialog dismissal rejected: %v", err)
 	}
+	dismiss["action"].(map[string]any)["dialog_id"] = ""
+	if err = validateDescriptorInvocationInput(act, dismiss); err == nil {
+		t.Fatal("dialog without authority was accepted")
+	}
 }
 
 func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {
@@ -381,7 +385,7 @@ func TestBrowserDragCommandSchemaBindsBothSemanticTargetsAndApproval(t *testing.
 	input["expected_name"] = "Todo"
 	input["destination_expected_role"] = "list"
 	input["destination_expected_name"] = "Done"
-	input["approval_digest"] = strings.Repeat("d", 64)
+	bindBrowserApprovalDigest(t, input)
 	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("drag input rejected: %v", err)
 	}
@@ -474,7 +478,7 @@ func TestBrowserPayloadsDecodeCanonicalSnapshotGenerationsExactly(t *testing.T) 
 	}
 }
 
-func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
+func TestBrowserActContractBindsActionsToProfileRevision(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate"}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
@@ -491,26 +495,56 @@ func TestBrowserActSchemaBindsActionsToProfileRevision(t *testing.T) {
 		"profile_revision":        "managed-v1",
 	}
 	base["action"] = map[string]any{"kind": "navigate", "url": "https://example.com"}
-	if err = validateInvocationInput(act.InputSchema, base); err != nil {
+	if err = validateDescriptorInvocationInput(act, base); err != nil {
 		t.Fatalf("navigate input rejected: %v", err)
 	}
 	base["action"] = map[string]any{"kind": "download", "ref": "ref_1"}
-	if err = validateInvocationInput(act.InputSchema, base); err == nil {
-		t.Fatal("act schema accepted an action absent from profile authority")
+	if err = validateDescriptorInvocationInput(act, base); err == nil {
+		t.Fatal("act contract accepted an action absent from profile authority")
 	}
 	base["action"] = map[string]any{"kind": "navigate", "url": "https://example.com"}
 	base["effect"] = "download"
-	if err = validateInvocationInput(act.InputSchema, base); err == nil {
-		t.Fatal("act schema accepted an effect that did not match the action")
+	if err = validateDescriptorInvocationInput(act, base); err == nil {
+		t.Fatal("act contract accepted an effect that did not match the action")
 	}
 	base["effect"] = "navigation"
-	base["method"] = "Runtime.evaluate"
-	if err = validateInvocationInput(act.InputSchema, base); err == nil {
-		t.Fatal("act schema accepted an extra raw driver field")
+	base["future_metadata"] = true
+	base["action"].(map[string]any)["future_option"] = "ignored"
+	if err = validateDescriptorInvocationInput(act, base); err != nil {
+		t.Fatalf("act contract rejected additive fields: %v", err)
+	}
+	base["action"].(map[string]any)["value"] = "raw driver input"
+	if err = validateDescriptorInvocationInput(act, base); err == nil {
+		t.Fatal("act contract accepted a known field outside navigate semantics")
 	}
 }
 
-func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
+func TestBrowserActContractStaysCompactAcrossProfiles(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Actions = []string{
+		"check", "click", "dialog", "download", "drag", "file_chooser", "fill",
+		"hover", "navigate", "press", "scroll", "select", "uncheck",
+	}
+	oneProfile := BrowserCommandInputSchema(BrowserCommandAct, []BrowserProfileDescriptor{profile})
+	second := profile
+	second.Alias = "managed-secondary"
+	second.Revision = "managed-v2"
+	twoProfiles := BrowserCommandInputSchema(BrowserCommandAct, []BrowserProfileDescriptor{profile, second})
+
+	if len(oneProfile) > 5*1024 {
+		t.Fatalf("one-profile browser action schema is %d bytes, want at most 5 KiB", len(oneProfile))
+	}
+	if growth := len(twoProfiles) - len(oneProfile); growth > 128 {
+		t.Fatalf("second equivalent profile grew browser action schema by %d bytes", growth)
+	}
+	for _, combinator := range [][]byte{[]byte(`"oneOf"`), []byte(`"allOf"`)} {
+		if bytes.Contains(oneProfile, combinator) {
+			t.Fatalf("browser action schema retained profile/action cross-product %s", combinator)
+		}
+	}
+}
+
+func TestBrowserActContractAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"navigate", "scroll"}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
@@ -520,11 +554,11 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	input := browserActInputFixture()
 	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 5}
 	input["effect"] = "read"
-	if err = validateInvocationInput(descriptors[3].InputSchema, input); err != nil {
+	if err = validateDescriptorInvocationInput(descriptors[3], input); err != nil {
 		t.Fatalf("bounded scroll input rejected: %v", err)
 	}
 	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 6}
-	if err = validateInvocationInput(descriptors[3].InputSchema, input); err == nil {
+	if err = validateDescriptorInvocationInput(descriptors[3], input); err == nil {
 		t.Fatal("scroll amount above the bound was accepted")
 	}
 	var decoded browser.Action
@@ -540,7 +574,7 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	}
 }
 
-func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
+func TestBrowserActContractBindsTypedPressAndSelect(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.DryRun = false
 	profile.AllowApprovedActions = true
@@ -554,22 +588,22 @@ func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
 	press := browserActInputFixture()
 	press["action"] = map[string]any{"kind": "press", "target": "document", "key": "Tab"}
 	press["effect"] = "unknown"
-	press["approval_digest"] = strings.Repeat("c", 64)
-	if err = validateInvocationInput(act.InputSchema, press); err != nil {
+	bindBrowserApprovalDigest(t, press)
+	if err = validateDescriptorInvocationInput(act, press); err != nil {
 		t.Fatalf("typed press input rejected: %v", err)
 	}
 	press["action"].(map[string]any)["key"] = "Control+L"
-	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+	if err = validateDescriptorInvocationInput(act, press); err == nil {
 		t.Fatal("press schema accepted a privileged browser-chrome shortcut")
 	}
 	press["action"].(map[string]any)["key"] = "Tab"
 	press["expected_role"] = "button"
-	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+	if err = validateDescriptorInvocationInput(act, press); err == nil {
 		t.Fatal("document press schema accepted an element semantic binding")
 	}
 	delete(press, "expected_role")
 	delete(press, "approval_digest")
-	if err = validateInvocationInput(act.InputSchema, press); err == nil {
+	if err = validateDescriptorInvocationInput(act, press); err == nil {
 		t.Fatal("press schema accepted missing approval attestation")
 	}
 
@@ -580,16 +614,16 @@ func TestBrowserActSchemaBindsTypedPressAndSelect(t *testing.T) {
 	selection["expected_name"] = "State"
 	selection["input_digest"] = BrowserInputDigest("CA")
 	selection["input_bytes"] = 2
-	if err = validateInvocationInput(act.InputSchema, selection); err != nil {
+	if err = validateDescriptorInvocationInput(act, selection); err != nil {
 		t.Fatalf("typed select input rejected: %v", err)
 	}
 	selection["expected_role"] = "textbox"
-	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+	if err = validateDescriptorInvocationInput(act, selection); err == nil {
 		t.Fatal("select schema accepted a non-combobox semantic role")
 	}
 	selection["expected_role"] = "combobox"
 	selection["approval_digest"] = strings.Repeat("d", 64)
-	if err = validateInvocationInput(act.InputSchema, selection); err == nil {
+	if err = validateDescriptorInvocationInput(act, selection); err == nil {
 		t.Fatal("select schema accepted an unrelated approval attestation")
 	}
 }
@@ -607,16 +641,16 @@ func TestBrowserDescriptorAcceptsCurrentCapabilitySubset(t *testing.T) {
 	act := descriptors[3]
 	input := browserActInputFixture()
 	input["action"] = map[string]any{"kind": "navigate", "url": "https://example.com"}
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("advertised navigation rejected: %v", err)
 	}
 	input["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 1}
-	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("unadvertised scroll capability accepted")
 	}
 }
 
-func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
+func TestBrowserActContractRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
 	})
@@ -626,17 +660,17 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	act := descriptors[3]
 	input := browserActInputFixture()
 	input["action"] = map[string]any{"kind": "navigate", "url": "https://example.com"}
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("unapproved navigation input rejected: %v", err)
 	}
 
 	input["action"] = map[string]any{"kind": "download", "ref": "ref_1"}
 	input["effect"] = "download"
-	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("download input without approval_digest was accepted")
 	}
-	input["approval_digest"] = strings.Repeat("c", 64)
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("approved download input rejected: %v", err)
 	}
 
@@ -652,24 +686,26 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	input["effect"] = "external_commit"
 	input["expected_role"] = "button"
 	input["expected_name"] = "Save"
-	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("click input without approval_digest was accepted")
 	}
-	input["approval_digest"] = strings.Repeat("d", 64)
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("approved button click rejected: %v", err)
 	}
 	delete(input, "expected_name")
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("approved unnamed button click rejected: %v", err)
 	}
 	input["expected_name"] = "Save"
 	input["effect"] = "unknown"
-	if err = validateInvocationInput(act.InputSchema, input); err == nil {
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("button click with lowered effect was accepted")
 	}
 	input["expected_role"] = "link"
-	if err = validateInvocationInput(act.InputSchema, input); err != nil {
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("unknown-effect link click rejected: %v", err)
 	}
 }
@@ -811,12 +847,12 @@ func TestBrowserSemanticValidationUsesUTF8ByteCeilings(t *testing.T) {
 	}
 	input := browserActInputFixture()
 	input["action"] = map[string]any{
-		"kind": "navigate", "url": strings.Repeat("🙂", MaxBrowserURLBytes/4),
+		"kind": "navigate", "url": strings.Repeat("🙂", browser.MaxURLBytes/4),
 	}
 	if err = validateDescriptorInvocationInput(descriptors[3], input); err != nil {
 		t.Fatalf("navigate input at UTF-8 byte ceiling rejected: %v", err)
 	}
-	input["action"].(map[string]any)["url"] = strings.Repeat("🙂", MaxBrowserURLBytes/4+1)
+	input["action"].(map[string]any)["url"] = strings.Repeat("🙂", browser.MaxURLBytes/4+1)
 	if err = validateDescriptorInvocationInput(descriptors[3], input); err == nil {
 		t.Fatal("navigate input above UTF-8 byte ceiling was accepted")
 	}
@@ -1025,6 +1061,23 @@ func browserActInputFixture() map[string]any {
 		"browser_policy_revision": strings.Repeat("b", 64),
 		"profile_revision":        "managed-v1",
 	}
+}
+
+func bindBrowserApprovalDigest(t *testing.T, input map[string]any) {
+	t.Helper()
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action BrowserActInput
+	if err = json.Unmarshal(encoded, &action); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := BrowserApprovalDigest(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input["approval_digest"] = digest
 }
 
 func browserSessionOpenInputFixture(limits BrowserLimits) map[string]any {

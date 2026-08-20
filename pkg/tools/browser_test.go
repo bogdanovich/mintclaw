@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -953,14 +954,12 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	action := properties["action"].(map[string]any)
 	actionProperties := action["properties"].(map[string]any)
 	kind := actionProperties["kind"].(map[string]any)
-	seen := make(map[string]bool)
-	for _, candidate := range kind["enum"].([]string) {
-		seen[candidate] = true
+	want := make([]string, 0, len(browseraction.Kinds()))
+	for _, candidate := range browseraction.Kinds() {
+		want = append(want, string(candidate))
 	}
-	for _, candidate := range []string{"check", "uncheck", "hover", "drag", "file_chooser"} {
-		if !seen[candidate] {
-			t.Fatalf("%s missing from browser_act schema: %#v", candidate, seen)
-		}
+	if got := kind["enum"].([]string); !slices.Equal(got, want) {
+		t.Fatalf("browser_act actions = %#v, want current vocabulary %#v", got, want)
 	}
 }
 
@@ -1184,9 +1183,12 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 	actionProperties := action["properties"].(map[string]any)
 	kind := actionProperties["kind"].(map[string]any)
 	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionFileChooser) {
-			t.Fatalf("unsupported file chooser advertised in schema: %#v", kind["enum"])
+		if candidate == string(browser.ActionFileChooser) || candidate == string(browser.ActionDownload) {
+			t.Fatalf("unsupported transfer action advertised in schema: %#v", kind["enum"])
 		}
+	}
+	if _, ok := actionProperties["deliver"]; ok {
+		t.Fatalf("download delivery field advertised without transfer support: %#v", actionProperties)
 	}
 }
 

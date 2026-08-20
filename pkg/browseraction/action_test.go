@@ -34,6 +34,7 @@ func TestActionValidate(t *testing.T) {
 		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionNavigate},
 		{Kind: ActionClick, Ref: "css:#submit"},
+		{Kind: ActionDialog, Decision: "dismiss"},
 		{Kind: ActionScroll, Direction: "down", Amount: MaxScrollAmount + 1},
 		{Kind: ActionDrag, SourceRef: "ref_same", DestinationRef: "ref_same"},
 		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "/tmp/private"},
@@ -65,5 +66,50 @@ func TestActionUnmarshalJSONAllowsAdditiveFields(t *testing.T) {
 		ErrInvalid,
 	) {
 		t.Fatalf("json.Unmarshal(fractional amount) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestCurrentVocabularyDrivesValidationAndSchema(t *testing.T) {
+	t.Parallel()
+
+	kinds := Kinds()
+	seen := make(map[ActionKind]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if !kind.Valid() {
+			t.Fatalf("Kinds() returned invalid action %q", kind)
+		}
+		if _, duplicate := seen[kind]; duplicate {
+			t.Fatalf("Kinds() returned duplicate action %q", kind)
+		}
+		seen[kind] = struct{}{}
+	}
+	if ActionKind("upload").Valid() {
+		t.Fatal("removed upload action remains valid")
+	}
+	kinds[0] = "mutated"
+	if Kinds()[0] == "mutated" {
+		t.Fatal("Kinds() exposed mutable protocol state")
+	}
+
+	strict := Schema([]ActionKind{ActionNavigate, ActionScroll}, 1024, false)
+	properties := strict["properties"].(map[string]any)
+	for _, field := range []string{"kind", "url", "direction", "amount"} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("strict schema omitted %q: %#v", field, properties)
+		}
+	}
+	for _, field := range []string{"ref", "value", "prompt_provided", "deliver"} {
+		if _, ok := properties[field]; ok {
+			t.Fatalf("strict schema exposed unrelated field %q: %#v", field, properties)
+		}
+	}
+	if strict["additionalProperties"] != false {
+		t.Fatalf("strict schema allows additive fields: %#v", strict)
+	}
+
+	tolerant := Schema([]ActionKind{ActionDialog}, 1024, true)
+	properties = tolerant["properties"].(map[string]any)
+	if tolerant["additionalProperties"] != true || properties["prompt_provided"] == nil {
+		t.Fatalf("transport schema is not additively tolerant: %#v", tolerant)
 	}
 }
