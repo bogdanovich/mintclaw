@@ -110,12 +110,15 @@ func newBlockingMediaChannel() *blockingMediaChannel {
 }
 
 type recordingChannelManager struct {
-	dismissed         []string
-	dismissedSessions []string
-	dismissedScopes   [][]runtimeevents.TraceScope
-	dismissedTargets  []bus.OutboundMessage
-	pausedTargets     []bus.OutboundMessage
-	sentMedia         []bus.OutboundMediaMessage
+	dismissed          []string
+	dismissedSessions  []string
+	dismissedScopes    [][]runtimeevents.TraceScope
+	dismissedTargets   []bus.OutboundMessage
+	pausedTargets      []bus.OutboundMessage
+	sentMessages       []bus.OutboundMessage
+	sentMedia          []bus.OutboundMediaMessage
+	definiteTextSends  int
+	definiteMediaSends int
 }
 
 type definitelyRejectedChannelManager struct {
@@ -140,6 +143,7 @@ func (m *recordingChannelManager) GetEnabledChannels() []string {
 func (m *recordingChannelManager) InvokeTypingStop(channel, chatID string) {}
 
 func (m *recordingChannelManager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
+	m.sentMessages = append(m.sentMessages, msg)
 	return nil
 }
 
@@ -154,13 +158,24 @@ func (m *recordingChannelManager) SendMessageDefiniteRetryOnly(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 ) error {
-	return m.SendMessage(ctx, msg)
+	m.definiteTextSends++
+	m.sentMessages = append(m.sentMessages, msg)
+	return nil
 }
 
 func (m *recordingChannelManager) SendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 ) error {
+	m.sentMedia = append(m.sentMedia, msg)
+	return nil
+}
+
+func (m *recordingChannelManager) SendMediaDefiniteRetryOnly(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) error {
+	m.definiteMediaSends++
 	m.sentMedia = append(m.sentMedia, msg)
 	return nil
 }
@@ -3257,7 +3272,7 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	result := toolshared.UserResult("handled response").WithResponseHandled()
 	if _, outcome, err := al.deliverToolResultToUser(
 		t.Context(), ts, result, "delegate",
-	); err != nil || outcome != toolResultDeliveryQueued {
+	); err != nil || outcome != toolResultDeliveryDirect {
 		t.Fatalf("handled delivery = (%v, %v)", outcome, err)
 	}
 	waitForSentMessages(t, channel, 1)

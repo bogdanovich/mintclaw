@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -15,6 +16,27 @@ type syncToolResultDelivery struct {
 		result *toolshared.ToolResult,
 		toolName string,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error)
+}
+
+func requiresTerminalDeliverySettlement(ts *turnState, result *toolshared.ToolResult) bool {
+	return ts != nil && !ts.opts.SuppressToolUserDelivery &&
+		isFinalHandledDelivery(result) && hasToolResultDeliveryPayload(result)
+}
+
+func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.Outbound != nil {
+		return strings.TrimSpace(result.Outbound.Text) != "" || len(result.Outbound.Media) > 0
+	}
+	if len(toolResultMediaRefs(result)) > 0 {
+		return true
+	}
+	if strings.TrimSpace(toolResultUserText(result)) == "" {
+		return false
+	}
+	return !result.Silent || result.Completion != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
 }
 
 func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {

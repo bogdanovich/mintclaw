@@ -197,6 +197,10 @@ func (p *Pipeline) runTurnLoop(
 		case ControlToolLoop:
 			// Execute tools via Pipeline
 			toolOutcome := p.ExecuteTools(ctx, turnCtx, ts, exec, llm)
+			if toolOutcome.TurnErr != nil {
+				turnStatus = TurnEndStatusError
+				return turnResult{}, turnStatus, toolOutcome.TurnErr
+			}
 			if toolOutcome.JournalErr != nil {
 				turnStatus = TurnEndStatusError
 				return turnResult{}, turnStatus, toolOutcome.JournalErr

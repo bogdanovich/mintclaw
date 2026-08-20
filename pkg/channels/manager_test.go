@@ -7015,6 +7015,36 @@ func TestSendMessageDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
 	}
 }
 
+func TestSendMediaDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
+	m := newTestManager()
+	callCount := 0
+	ch := &mockMediaChannel{sendMediaFn: func(
+		context.Context,
+		bus.OutboundMediaMessage,
+	) ([]string, error) {
+		callCount++
+		if callCount == 1 {
+			return nil, fmt.Errorf("timeout after acceptance is unknown: %w", ErrTemporary)
+		}
+		return []string{"media-1"}, nil
+	}}
+	m.lifecycle.storeChannel("test", ch)
+	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
+
+	err := m.SendMediaDefiniteRetryOnly(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
+		Channel: "test", ChatID: "123", Parts: []bus.MediaPart{{Type: "video", Ref: "media://one"}},
+	}))
+	if err == nil {
+		t.Fatal("ambiguous media delivery unexpectedly succeeded after retry")
+	}
+	if DeliveryDefinitelyNotSent(err) {
+		t.Fatalf("temporary media failure was classified as definitely not sent: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("SendMedia calls = %d, want 1 after ambiguous failure", callCount)
+	}
+}
+
 func TestSendMessagePreservesAmbiguityBeforeDefiniteRejection(t *testing.T) {
 	m := newTestManager()
 	callCount := 0

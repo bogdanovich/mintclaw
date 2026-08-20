@@ -103,6 +103,7 @@ type ToolLoopOutcome struct {
 	FinalContent           string
 	AbortCause             TurnAbortCause
 	SuspendedInteractionID string
+	TurnErr                error
 	JournalErr             error
 }
 
@@ -906,10 +907,43 @@ func (ts *turnState) recordPersistedMessagePair(
 	liveMsg providers.Message,
 	durableMsg providers.Message,
 ) {
+	ts.recordPersistedMessagePairs(
+		[]providers.Message{liveMsg},
+		[]providers.Message{durableMsg},
+	)
+}
+
+func (ts *turnState) recordPersistedMessagePairs(
+	liveMessages []providers.Message,
+	durableMessages []providers.Message,
+) {
+	if len(liveMessages) != len(durableMessages) {
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.persistedMessages = append(ts.persistedMessages, durableMsg)
-	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMsg)
+	ts.persistedMessages = append(ts.persistedMessages, durableMessages...)
+	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMessages...)
+}
+
+func (ts *turnState) replacePersistedToolMessagePair(
+	expectedLive providers.Message,
+	expectedDurable providers.Message,
+	replacementLive providers.Message,
+	replacementDurable providers.Message,
+) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for i := min(len(ts.persistedMessages), len(ts.liveTurnMessages)) - 1; i >= 0; i-- {
+		if !pendingToolResultMatches(ts.persistedMessages[i], expectedDurable) ||
+			!pendingToolResultMatches(ts.liveTurnMessages[i], expectedLive) {
+			continue
+		}
+		ts.persistedMessages[i] = replacementDurable
+		ts.liveTurnMessages[i] = replacementLive
+		return true
+	}
+	return false
 }
 
 func (ts *turnState) recordAcceptedSteeringMessage(msg providers.Message) {
