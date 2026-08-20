@@ -61,8 +61,12 @@ func TestSettleFinalHandledDeliveryPreservesAmbiguousSafety(t *testing.T) {
 	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	err := settleFinalHandledDelivery(context.Background(), receipt, result, 0)
-	if err == nil || !strings.Contains(err.Error(), "must not be retried blindly") {
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
+		!strings.Contains(err.Error(), "must not be retried blindly") {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
+	}
+	if !isNonPublishableTurnError(err) {
+		t.Fatalf("ambiguous delivery error must stop user-visible continuation")
 	}
 }
 

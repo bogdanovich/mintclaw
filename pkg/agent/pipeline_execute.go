@@ -528,6 +528,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				var contentForLLM string
 				var durableContent string
 				terminalBatch := false
+				var terminalTurnErr error
 				loopDecision := loopguard.Decision{}
 				if requiresTerminalDeliverySettlement(ts, hookResult) {
 					settlement, aborted, err := runner.settleTerminalDelivery(
@@ -553,6 +554,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					durableContent = settlement.durableContent
 					loopDecision = settlement.loopDecision
 					terminalBatch = settlement.completesToolBatch
+					terminalTurnErr = settlement.turnErr
 					runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 				} else {
 					contentForLLM = p.filterToolContentForLLM(hookResult.ContentForLLM())
@@ -589,6 +591,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				}
 
 				shouldSendForUser := !hookResult.ResponseHandled &&
+					terminalTurnErr == nil &&
 					!ts.opts.SuppressToolUserDelivery &&
 					!hookResult.Silent &&
 					hookResult.ForUser != "" &&
@@ -631,6 +634,13 @@ func (runner *toolLoopRunner) admitToolCall(
 					errorSummary,
 					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 				)
+				if terminalTurnErr != nil {
+					exec.messages = runner.messages
+					return stopToolBatch(ToolLoopOutcome{
+						Control: ToolControlBreak,
+						TurnErr: terminalTurnErr,
+					})
+				}
 
 				if loopDecision.Action == loopguard.ActionHalt {
 					if !terminalBatch {
@@ -1277,6 +1287,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	var contentForLLM string
 	var durableContent string
 	terminalBatch := false
+	var terminalTurnErr error
 	loopDecision := loopguard.Decision{}
 	if requiresTerminalDeliverySettlement(ts, toolResult) {
 		settlement, aborted, err := runner.settleTerminalDelivery(
@@ -1302,6 +1313,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		durableContent = settlement.durableContent
 		loopDecision = settlement.loopDecision
 		terminalBatch = settlement.completesToolBatch
+		terminalTurnErr = settlement.turnErr
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
 		toolResultMsg := buildToolResultJournalMessage(
@@ -1345,6 +1357,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	}
 
 	shouldSendForUser := !toolResult.ResponseHandled &&
+		terminalTurnErr == nil &&
 		!ts.opts.SuppressToolUserDelivery &&
 		!toolResult.Silent &&
 		toolResult.ForUser != "" &&
@@ -1387,6 +1400,13 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		errorSummary,
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
+	if terminalTurnErr != nil {
+		exec.messages = runner.messages
+		return stopToolBatch(ToolLoopOutcome{
+			Control: ToolControlBreak,
+			TurnErr: terminalTurnErr,
+		})
+	}
 
 	if toolResult.IsError {
 		errSummary := toolErrorSummary(toolResult)
@@ -1753,6 +1773,7 @@ type terminalDeliverySettlement struct {
 	loopDecision       loopguard.Decision
 	attachments        []providers.Attachment
 	completesToolBatch bool
+	turnErr            error
 }
 
 func (r *toolLoopRunner) settleTerminalDelivery(
@@ -1777,8 +1798,13 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
+		r.transferPendingSteeringOwnership()
 		r.journalErr = settledResult.Err
 		return terminalDeliverySettlement{}, false, settledResult.Err
+	}
+	turnErr := error(nil)
+	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryAmbiguous) {
+		turnErr = settledResult.Err
 	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
@@ -1811,6 +1837,9 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		settledMsg,
 		settledDurableMsg,
 	)
+	if err == nil && !aborted && turnErr != nil {
+		r.transferPendingSteeringOwnership()
+	}
 	r.exec.messages = r.messages
 	return terminalDeliverySettlement{
 		result:             settledResult,
@@ -1819,7 +1848,23 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		loopDecision:       decision,
 		attachments:        attachments,
 		completesToolBatch: true,
+		turnErr:            turnErr,
 	}, aborted, err
+}
+
+func (r *toolLoopRunner) transferPendingSteeringOwnership() {
+	if r == nil || r.exec == nil || r.ts == nil || len(r.exec.pendingMessages) == 0 {
+		return
+	}
+	remaining := r.exec.pendingMessages[:0]
+	for _, msg := range r.exec.pendingMessages {
+		if !r.exec.shouldTrackTurnOwnedSteering(msg) {
+			remaining = append(remaining, msg)
+			continue
+		}
+		r.ts.recordAcceptedSteeringMessage(msg)
+	}
+	r.exec.pendingMessages = remaining
 }
 
 func (r *toolLoopRunner) commitPendingToolBatch(

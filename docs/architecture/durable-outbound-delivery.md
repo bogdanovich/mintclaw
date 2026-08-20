@@ -88,13 +88,22 @@ intent, the complete batch and unresolved barrier remain in place rather than
 recording a false success. This keeps strict-provider history valid across
 cancellation, hard-abort, and persistence-failure boundaries.
 
+An `ambiguous` receipt is durably settled as an actionable terminal tool error,
+but also returns a non-publishable turn outcome. The current turn must not make
+another provider call, render another response, or drain steering after remote
+acceptance becomes uncertain. A pending receipt uses the same stop boundary
+while retaining its unresolved journal barrier. Steering already dequeued at
+either boundary transfers to the normal inbound release/requeue owner so it is
+not stranded or acknowledged as completed work.
+
 If storage fails after an earlier call in the emitted batch was already
 journaled but before terminal reservation, provider-history sanitization keeps
 the real result and supplies conservative unresolved results for missing call
 IDs. Those provider-only repairs say that execution status is unknown and
 forbid blind side-effect retries. Invalid or empty call IDs remain
-unrepairable. This fallback prevents an incomplete durable batch from hiding a
-side effect that did complete.
+unrepairable, as do duplicate IDs whose results cannot be assigned uniquely.
+This fallback prevents an incomplete durable batch from hiding a side effect
+that did complete.
 
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid

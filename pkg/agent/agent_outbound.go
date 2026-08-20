@@ -65,10 +65,15 @@ const (
 	toolResultDeliveryQueued
 )
 
-var errFinalHandledDeliveryPending = errors.New("final-handled delivery confirmation is still pending")
+var (
+	errFinalHandledDeliveryPending   = errors.New("final-handled delivery confirmation is still pending")
+	errFinalHandledDeliveryAmbiguous = errors.New("final-handled delivery outcome is ambiguous")
+)
 
 func isNonPublishableTurnError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, errFinalHandledDeliveryPending)
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, errFinalHandledDeliveryPending) ||
+		errors.Is(err, errFinalHandledDeliveryAmbiguous)
 }
 
 func (al *AgentLoop) maybePublishErrorWithScopes(
@@ -817,7 +822,8 @@ func settleFinalHandledDelivery(
 		)
 	case outbox.StatusAmbiguous:
 		return fmt.Errorf(
-			"delivery %s has an ambiguous outcome and must not be retried blindly: %s",
+			"%w: delivery %s must not be retried blindly: %s",
+			errFinalHandledDeliveryAmbiguous,
 			intent.ID,
 			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
 		)

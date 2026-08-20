@@ -23,6 +23,7 @@ type finalHandledSettlementDelivery struct {
 	sessionKey  string
 	delivered   bool
 	pending     bool
+	ambiguous   bool
 	calls       int
 	pendingSeen bool
 	cancel      context.CancelFunc
@@ -59,6 +60,10 @@ func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
 	if d.delivered {
 		result.ForLLM = "Message confirmed delivered to the user."
 		return nil, result
+	}
+	if d.ambiguous {
+		err := fmt.Errorf("%w: acceptance unknown", errFinalHandledDeliveryAmbiguous)
+		return nil, wrapToolDeliveryError(result, "delivery outcome is ambiguous", err)
 	}
 	err := &channels.MediaConstraintError{
 		Channel: "telegram",
@@ -313,7 +318,15 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	settlement := &finalHandledSettlementDelivery{
 		store: store, sessionKey: sessionKey, pending: true, cancel: cancel,
 	}
-	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
+	steering := providers.Message{
+		Role: "user", Content: "use the corrected caption", InboundSpoolID: "steer-pending-1",
+	}
+	pipeline := &Pipeline{
+		Context: PipelineContextServices{
+			Steering: &oneShotLoopGuardSteering{messages: []providers.Message{steering}},
+		},
+		Interaction: PipelineInteractionServices{SyncToolDelivery: settlement},
+	}
 
 	outcome := pipeline.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
 	if !errors.Is(outcome.JournalErr, errFinalHandledDeliveryPending) {
@@ -324,6 +337,13 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	}
 	if sibling.executions != 0 {
 		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
+	}
+	if len(exec.pendingMessages) != 0 {
+		t.Fatalf("pending steering was not transferred: %#v", exec.pendingMessages)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 1 || accepted[0].InboundSpoolID != steering.InboundSpoolID {
+		t.Fatalf("accepted steering = %#v, want transferred message", accepted)
 	}
 	for source, messages := range map[string][]providers.Message{
 		"canonical history": store.GetHistory(sessionKey),
@@ -345,6 +365,57 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	if barrier.ToolResultStatus != providers.ToolResultStatusUnresolved ||
 		barrier.Content != finalHandledDeliveryPendingContent {
 		t.Fatalf("sanitized barrier = %#v", barrier)
+	}
+}
+
+func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
+	const sessionKey = "final-handled-ambiguous-receipt"
+	store := session.NewSessionManager("")
+	result := (&toolshared.ToolResult{
+		ForLLM: "Message prepared for delivery",
+		Silent: true,
+	}).WithOutboundDelivery(toolshared.OutboundDelivery{
+		Channel: "telegram",
+		ChatID:  "chat-1",
+		Text:    "hello",
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	tool := &fixedToolResultTool{name: "send_message", result: result}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-ambiguous-receipt",
+		sessionKey: sessionKey, session: store,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+	}
+	toolCall := providers.ToolCall{
+		ID: "call-ambiguous-message", Name: tool.Name(), Arguments: map[string]any{},
+	}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
+		t.Fatal(err)
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+	llm.assistantToolCallsPersisted = true
+	settlement := &finalHandledSettlementDelivery{
+		store: store, sessionKey: sessionKey, ambiguous: true,
+	}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if !errors.Is(outcome.TurnErr, errFinalHandledDeliveryAmbiguous) {
+		t.Fatalf("turn error = %v, want ambiguous delivery", outcome.TurnErr)
+	}
+	if outcome.JournalErr != nil || outcome.Control != ToolControlBreak {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	canonical := matchingToolResult(t, store.GetHistory(sessionKey), toolCall.ID)
+	if canonical.ToolResultStatus != providers.ToolResultStatusError ||
+		!strings.Contains(canonical.Content, "ambiguous") ||
+		strings.Contains(canonical.Content, finalHandledDeliveryPendingContent) {
+		t.Fatalf("canonical ambiguous result = %#v", canonical)
 	}
 }
 

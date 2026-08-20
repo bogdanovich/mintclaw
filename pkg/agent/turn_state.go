@@ -103,6 +103,7 @@ type ToolLoopOutcome struct {
 	FinalContent           string
 	AbortCause             TurnAbortCause
 	SuspendedInteractionID string
+	TurnErr                error
 	JournalErr             error
 }
 
