@@ -419,6 +419,79 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	}
 }
 
+func TestReceiptlessLegacyFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
+	manager := &recordingChannelManager{}
+	al := &AgentLoop{channelManager: manager}
+	agent := &AgentInstance{ID: "main"}
+	ts := &turnState{
+		agent:      agent,
+		channel:    "telegram",
+		chatID:     "chat-1",
+		sessionKey: "receiptless-legacy-text",
+		opts: processOptions{Dispatch: DispatchRequest{
+			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
+		}},
+	}
+	result := toolshared.UserResult("hello").WithResponseHandled()
+
+	_, outcome, err := al.deliverToolResultToUser(
+		withOutboundTransaction(t.Context(), "receiptless-legacy-text"),
+		ts,
+		result,
+		"legacy_send",
+	)
+	if err != nil {
+		t.Fatalf("deliverToolResultToUser() error = %v", err)
+	}
+	if outcome != toolResultDeliveryDirect || manager.definiteTextSends != 1 ||
+		len(manager.sentMessages) != 1 {
+		t.Fatalf("outcome = %v, manager = %#v", outcome, manager)
+	}
+	if result.Outbound == nil || !result.ResponseHandled ||
+		!strings.Contains(result.ForLLM, "confirmed delivered") {
+		t.Fatalf("settled result = %#v", result)
+	}
+}
+
+func TestImmediateContinueKeepsNormalSynchronousRetryPolicy(t *testing.T) {
+	for _, media := range []bool{false, true} {
+		t.Run(fmt.Sprintf("media_%t", media), func(t *testing.T) {
+			manager := &recordingChannelManager{}
+			al := &AgentLoop{channelManager: manager}
+			ts := &turnState{
+				agent:      &AgentInstance{ID: "main"},
+				channel:    "telegram",
+				chatID:     "chat-1",
+				sessionKey: "immediate-continue",
+			}
+			outbound := toolshared.OutboundDelivery{
+				Channel: "telegram", ChatID: "chat-1", Text: "progress",
+			}
+			if media {
+				outbound.Text = ""
+				outbound.Media = []bus.MediaPart{{Type: "image", Ref: "media://progress"}}
+			}
+			result := (&toolshared.ToolResult{Silent: true}).
+				WithOutboundDelivery(outbound).
+				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+
+			_, outcome, err := al.deliverToolResultToUser(t.Context(), ts, result, "progress")
+			if err != nil || outcome != toolResultDeliveryDirect {
+				t.Fatalf("outcome = %v, error = %v", outcome, err)
+			}
+			if manager.definiteTextSends != 0 || manager.definiteMediaSends != 0 {
+				t.Fatalf("immediate delivery used final-only retry policy: %#v", manager)
+			}
+			if media && len(manager.sentMedia) != 1 {
+				t.Fatalf("sent media = %#v", manager.sentMedia)
+			}
+			if !media && len(manager.sentMessages) != 1 {
+				t.Fatalf("sent messages = %#v", manager.sentMessages)
+			}
+		})
+	}
+}
+
 func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	const sessionKey = "final-handled-hard-abort"
 	store := session.NewSessionManager("")

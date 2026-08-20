@@ -603,12 +603,12 @@ func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
 	if al == nil || ts == nil || result == nil || result.Outbound != nil || !isFinalHandledDelivery(result) {
 		return
 	}
-	if !supportsDurableDeliveryReceipts(al.channelManager) {
-		return
-	}
 	mediaRefs := toolResultMediaRefs(result)
 	text := toolResultUserText(result)
 	if len(mediaRefs) == 0 && strings.TrimSpace(text) == "" {
+		return
+	}
+	if len(mediaRefs) > 0 && !supportsDurableDeliveryReceipts(al.channelManager) {
 		return
 	}
 	result.Outbound = &toolshared.OutboundDelivery{
@@ -666,9 +666,16 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			return nil, toolResultDeliveryNone, err
 		}
 		outboundMedia.TraceSettlement = traceSettlement
-		if !hasOutboundTransaction(ctx) && al.channelManager != nil && channel != "" &&
+		syncWithoutReceipt := isFinalHandledDelivery(result) &&
+			!supportsDurableDeliveryReceipts(al.channelManager)
+		if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
+			al.channelManager != nil && channel != "" &&
 			!constants.IsInternalChannel(channel) {
-			if err := al.channelManager.SendMediaDefiniteRetryOnly(ctx, outboundMedia); err != nil {
+			sendMedia := al.channelManager.SendMedia
+			if isFinalHandledDelivery(result) {
+				sendMedia = al.channelManager.SendMediaDefiniteRetryOnly
+			}
+			if err := sendMedia(ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver explicit tool media",
 					map[string]any{
 						"agent_id": agentID,
@@ -677,6 +684,10 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 						"chat_id":  chatID,
 						"error":    err.Error(),
 					})
+				return nil, toolResultDeliveryNone,
+					classifySynchronousFinalHandledDeliveryError(result, err)
+			}
+			if err := commitToolResultOutbound(ctx, result); err != nil {
 				return nil, toolResultDeliveryNone,
 					classifySynchronousFinalHandledDeliveryError(result, err)
 			}
@@ -732,9 +743,20 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		return nil, toolResultDeliveryNone, err
 	}
 	outboundMessage.TraceSettlement = traceSettlement
-	if !hasOutboundTransaction(ctx) && al.channelManager != nil && channel != "" &&
+	syncWithoutReceipt := isFinalHandledDelivery(result) &&
+		!supportsDurableDeliveryReceipts(al.channelManager)
+	if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
+		al.channelManager != nil && channel != "" &&
 		!constants.IsInternalChannel(channel) {
-		if err := al.channelManager.SendMessageDefiniteRetryOnly(ctx, outboundMessage); err != nil {
+		sendMessage := al.channelManager.SendMessage
+		if isFinalHandledDelivery(result) {
+			sendMessage = al.channelManager.SendMessageDefiniteRetryOnly
+		}
+		if err := sendMessage(ctx, outboundMessage); err != nil {
+			return nil, toolResultDeliveryNone,
+				classifySynchronousFinalHandledDeliveryError(result, err)
+		}
+		if err := commitToolResultOutbound(ctx, result); err != nil {
 			return nil, toolResultDeliveryNone,
 				classifySynchronousFinalHandledDeliveryError(result, err)
 		}

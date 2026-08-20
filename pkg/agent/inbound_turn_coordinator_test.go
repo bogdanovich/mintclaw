@@ -974,7 +974,7 @@ func TestInboundTurnCoordinatorSettlesHandledNoOutputIndependently(t *testing.T)
 			agent.Tools.Register(&handledUserTool{})
 			trackingBus := &finalResponseAdmissionTestBus{
 				MessageBus:     al.bus.(*bus.MessageBus),
-				publishResults: []error{nil, rejection},
+				publishResults: []error{rejection},
 			}
 			al.bus = trackingBus
 			store := media.NewFileMediaStore()
