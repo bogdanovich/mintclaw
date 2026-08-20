@@ -1040,26 +1040,19 @@ func TestGatewayLocalDiagnosticsHideDragFromDryRunAndMixedProfiles(t *testing.T)
 	}
 }
 
-func TestGatewayBrowserRegistryRejectsMismatchedCommandProfile(t *testing.T) {
+func TestGatewayBrowserCatalogRejectsMismatchedCommandProfile(t *testing.T) {
 	_, runtime, _ := browserNodeTestRuntime(t)
-	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+	_, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
 		catalog.Commands[0].BrowserProfiles[0].Limits.SnapshotRefs--
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
-		Aliases:         []nodes.Alias{"ab-local-test"},
-		AllowedCommands: registration.AllowedCommands,
-		At:              registration.ApprovedAt + 1,
-	}); !errors.Is(err, nodes.ErrInvalidCapability) {
-		t.Fatalf("approve mismatched profile catalog error = %v", err)
+	if !errors.Is(err, nodes.ErrInvalidCapability) {
+		t.Fatalf("mutate mismatched profile catalog error = %v", err)
 	}
 }
 
-func TestGatewayBrowserRegistryRejectsMixedActionModesAcrossCommands(t *testing.T) {
+func TestGatewayBrowserCatalogRejectsMixedActionModesAcrossCommands(t *testing.T) {
 	_, runtime, _ := browserNodeTestRuntime(t)
-	registration, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+	_, err := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
 		for index := range catalog.Commands {
 			if catalog.Commands[index].Name != nodes.BrowserCommandAct {
 				continue
@@ -1068,15 +1061,8 @@ func TestGatewayBrowserRegistryRejectsMixedActionModesAcrossCommands(t *testing.
 			catalog.Commands[index].BrowserProfiles[0].AllowApprovedActions = true
 		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
-		Aliases:         []nodes.Alias{"ab-local-test"},
-		AllowedCommands: registration.AllowedCommands,
-		At:              registration.ApprovedAt + 1,
-	}); !errors.Is(err, nodes.ErrInvalidCapability) {
-		t.Fatalf("approve mixed-mode catalog error = %v", err)
+	if !errors.Is(err, nodes.ErrInvalidCapability) {
+		t.Fatalf("mutate mixed-mode catalog error = %v", err)
 	}
 }
 

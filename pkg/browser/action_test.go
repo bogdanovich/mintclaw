@@ -2409,23 +2409,22 @@ func TestBrokerRejectsChangedDialogBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
+func TestFileStoreRejectsLegacyDialogMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "browser.json")
 	store, err := NewFileStore(path, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	broker, worker, session := openActionTestBroker(t, store)
-	message := "Legacy dialog message canary"
 	worker.observation = driverObservationFixture()
-	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: message}
+	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: "Current dialog"}
 	owner := testOwner()
 	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
 	if err != nil || observation.PendingDialog == nil {
 		t.Fatalf("Observe() = %#v, %v", observation, err)
 	}
 	preparation, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
-		Owner: owner, RequestID: "request_legacy_dialog", SessionID: session.ID, TabID: session.TabID,
+		Owner: owner, RequestID: "request_current_dialog", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: Action{
 			Kind: ActionDialog, DialogID: observation.PendingDialog.ID, Decision: "dismiss",
@@ -2439,27 +2438,19 @@ func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var document fileStoreDocument
+	var document map[string]any
 	if err = json.Unmarshal(raw, &document); err != nil {
 		t.Fatal(err)
 	}
-	legacy := document.PreparedActions[preparation.Action.ID]
-	legacy.Action.DialogID = ""
-	legacy.LegacyDialogMessage = message
-	legacy.DialogMessageDigest = ""
-	legacy.DialogMessageBytes = 0
-	legacy.ActionHash = ""
-	legacy.ActionHash, err = hashPreparedAction(legacy)
-	if err != nil {
-		t.Fatal(err)
+	preparedActions, ok := document["prepared_actions"].(map[string]any)
+	if !ok {
+		t.Fatalf("prepared_actions = %#v", document["prepared_actions"])
 	}
-	document.PreparedActions[legacy.ID] = legacy
-	for id, invocation := range document.Invocations {
-		if invocation.PreparedActionID == legacy.ID {
-			invocation.ActionHash = legacy.ActionHash
-			document.Invocations[id] = invocation
-		}
+	prepared, ok := preparedActions[preparation.Action.ID].(map[string]any)
+	if !ok {
+		t.Fatalf("prepared action = %#v", preparedActions[preparation.Action.ID])
 	}
+	prepared["dialog_message"] = "obsolete plaintext"
 	raw, err = json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -2468,20 +2459,8 @@ func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := NewFileStore(path, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	migrated, err := reopened.GetPreparedAction(context.Background(), legacy.ID)
-	if err != nil || migrated.Action.DialogID == "" || migrated.LegacyDialogMessage != "" ||
-		!validDigest(migrated.DialogMessageDigest) || migrated.DialogMessageBytes != len(message) ||
-		migrated.Validate(config.BrowserMaxTextInputBytes) != nil {
-		t.Fatalf("migrated dialog = %#v, %v", migrated, err)
-	}
-	raw, err = os.ReadFile(path)
-	if err != nil || bytes.Contains(raw, []byte(message)) || bytes.Contains(raw, []byte(`"dialog_message"`)) {
-		t.Fatalf("migrated store retained legacy message: %s, %v", raw, err)
+	if _, err = NewFileStore(path, 0, 0); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("NewFileStore() error = %v, want unknown-field rejection", err)
 	}
 }
 

@@ -35,6 +35,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser Functional Parity Phase 5 deployment evidence](browser-functional-parity-phase5-evidence.md):
   merged ordinary-interaction slices, live gateway and companion file-chooser
   proof, specialist-boundary restoration, cleanup, health, and rollback.
+- [Browser current-contract cutover](browser-current-contract-cutover.md):
+  pre-deployment state audit, current browser authority evidence, opaque
+  no-replay tombstone boundary, rollout, and rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and fail-closed downgrade export.

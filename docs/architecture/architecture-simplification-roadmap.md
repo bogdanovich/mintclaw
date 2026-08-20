@@ -271,12 +271,15 @@ Scope:
 - delete stored-schema epoch enumeration and exact comparison against
   historical generated JSON;
 - remove legacy prepared-dialog fields and lazy migration;
-- retain one current browser capability model and a protocol-major boundary;
-- normalize an older additive companion advertisement into the current
-  capability set without reconstructing its historical schema;
+- retain one current browser capability schema under the existing protocol
+  range;
+- allow a companion to advertise a smaller current action set without
+  reconstructing a historical schema;
 - make startup reject obsolete persisted browser authority or prepared-action
-  state; and
-- document the one-time deployed-state cutover.
+  state;
+- preserve old dispatched no-replay evidence only as bounded opaque tombstones;
+  and
+- document the deployed-state cutover and evidence.
 
 Likely owners:
 
@@ -290,8 +293,8 @@ Tests:
 - the current schema round-trips;
 - an older or missing persisted authority version fails closed with an
   actionable error;
-- a companion from the immediately previous compatible release can advertise
-  its smaller action set and continue serving those actions;
+- a compatible companion can advertise its smaller current action set and
+  continue serving those actions;
 - current approvals and protected values retain their security properties; and
 - no test constructs an old schema as accepted input.
 
@@ -301,7 +304,8 @@ Exit criteria:
 - adding a browser action does not require editing historical schemas; and
 - the deployed system contains only current browser authority records before
   rollout, while connected companions may expose the bounded compatible action
-  subset.
+  subset; old dispatched tombstones remain opaque until retention removes
+  them.
 
 ### B2 — Establish one browser action protocol
 

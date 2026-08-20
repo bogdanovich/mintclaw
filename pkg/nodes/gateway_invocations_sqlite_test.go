@@ -1,7 +1,6 @@
 package nodes
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -56,127 +55,7 @@ func TestGatewayInvocationSQLiteMigratesLegacySnapshotAndRejectsDowngrade(t *tes
 	}
 }
 
-func TestGatewayInvocationSQLiteDropsPreReceiptBrowserAuthority(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	browserRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "prepared")
-	dispatchedRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "dispatched")
-	dispatchedRecord.State = GatewayInvocationDispatched
-	dispatchedRecord.DispatchedAt = dispatchedRecord.CreatedAt + 1
-	dispatchedRecord.UpdatedAt = dispatchedRecord.DispatchedAt
-	currentPlan := gatewayTestPlan(t, "inv_current_after_receipts", "idem_current_after_receipts", time.Now())
-	if _, _, err = store.Prepare(
-		"vpn",
-		"call-current-after-receipts",
-		currentPlan,
-		gatewayTestDescriptor(),
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, browserRecord)
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, dispatchedRecord)
-
-	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
-	if err != nil {
-		t.Fatalf("reopen pre-receipt browser invocation store: %v", err)
-	}
-	defer closeGatewayInvocationSQLiteTestStore(t, store)()
-	if _, found, lookupErr := store.Lookup(
-		gatewayTestPrincipal(browserRecord.Plan),
-		browserRecord.Plan.InvocationID,
-	); lookupErr != nil || found {
-		t.Fatalf("legacy browser authority = (found %v, error %v)", found, lookupErr)
-	}
-	retained, found, lookupErr := store.Lookup(
-		gatewayTestPrincipal(dispatchedRecord.Plan),
-		dispatchedRecord.Plan.InvocationID,
-	)
-	if lookupErr != nil || !found || retained.State != GatewayInvocationDispatched {
-		t.Fatalf("legacy dispatched tombstone = (%#v, %v, %v)", retained, found, lookupErr)
-	}
-	retained, requested, cancelErr := store.RequestCancellation(
-		gatewayTestPrincipal(dispatchedRecord.Plan),
-		dispatchedRecord.Plan.InvocationID,
-	)
-	if cancelErr != nil || !requested || retained.Cancellation == nil {
-		t.Fatalf("legacy dispatched cancellation = (%#v, %v, %v)", retained, requested, cancelErr)
-	}
-	currentDescriptor := cloneCommandDescriptor(dispatchedRecord.Descriptor)
-	currentDescriptor.OutputSchema = BrowserCommandOutputSchema(
-		currentDescriptor.Name,
-		currentDescriptor.BrowserProfiles,
-	)
-	retryRequest := dispatchedRecord.Plan.InvocationRequest
-	retryRequest.InvocationID = "inv_browser_receipt_migration_retry"
-	retryRequest.IdempotencyKey = "idem_browser_receipt_migration_retry"
-	retryPlan, err := PrepareExecutionPlan(
-		retryRequest,
-		currentDescriptor,
-		"browser",
-		"browser-policy-v1",
-		time.Now(),
-		time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = store.PrepareOwned(
-		gatewayTestPrincipal(retryPlan),
-		dispatchedRecord.Target,
-		dispatchedRecord.ToolCallID,
-		retryPlan,
-		currentDescriptor,
-	); !errors.Is(err, ErrGatewayInvocationConflict) {
-		t.Fatalf("retry over legacy dispatched tombstone error = %v", err)
-	}
-	if _, found, lookupErr := store.Lookup(
-		gatewayTestPrincipal(currentPlan),
-		currentPlan.InvocationID,
-	); lookupErr != nil || !found {
-		t.Fatalf("current authority = (found %v, error %v)", found, lookupErr)
-	}
-}
-
-func TestGatewayInvocationSQLiteDropsPreReceiptBrowserAuthorityFromJSONSnapshot(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	record := gatewayLegacyBrowserObserveRecord(t, time.Now(), "snapshot")
-	data, err := json.Marshal(gatewayInvocationDocument{
-		Version: gatewayInvocationStoreVersion,
-		Records: map[string]GatewayInvocationRecord{record.Plan.InvocationID: record},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(legacyPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewGatewayInvocationSQLiteStore(
-		GatewayInvocationStorePath(workspace),
-		16*1024*1024,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeGatewayInvocationSQLiteTestStore(t, store)()
-	if _, found, lookupErr := store.Lookup(
-		gatewayTestPrincipal(record.Plan),
-		record.Plan.InvocationID,
-	); lookupErr != nil || found {
-		t.Fatalf("legacy snapshot authority = (found %v, error %v)", found, lookupErr)
-	}
-}
-
-func TestGatewayInvocationSQLiteRejectsUnknownBrowserSchemaDuringReceiptMigration(t *testing.T) {
+func TestGatewayInvocationSQLiteRejectsNonCurrentBrowserSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
 	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
 	if err != nil {
@@ -185,7 +64,7 @@ func TestGatewayInvocationSQLiteRejectsUnknownBrowserSchemaDuringReceiptMigratio
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	record := gatewayLegacyBrowserObserveRecord(t, time.Now(), "unknown")
+	record := gatewayBrowserObserveRecord(t, time.Now(), "unknown")
 	record.Descriptor.OutputSchema = json.RawMessage(`{"type":"array"}`)
 	descriptorHash, err := (CapabilityCatalog{
 		Commands: []CommandDescriptor{record.Descriptor},
@@ -203,287 +82,79 @@ func TestGatewayInvocationSQLiteRejectsUnknownBrowserSchemaDuringReceiptMigratio
 	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
 
 	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
-		t.Fatal("unknown browser output schema was migrated")
+		t.Fatal("non-current browser output schema was accepted")
 	}
 }
 
-func TestGatewayInvocationReceiptMigrationRejectsHistoricallyImpossibleBrowserInput(t *testing.T) {
-	profile := browserProfileDescriptorFixture()
-	profile.DryRun = false
-	profile.AllowApprovedActions = true
-	profile.Actions = []string{"click", "download", "drag", "fill", "navigate", "press", "scroll", "select"}
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var descriptor CommandDescriptor
-	for _, candidate := range descriptors {
-		if candidate.Name == BrowserCommandAct {
-			descriptor = candidate
-			break
-		}
-	}
-	if descriptor.Name == "" {
-		t.Fatal("browser act descriptor is missing")
-	}
-	inputValue := browserActInputFixture()
-	inputValue["action"] = map[string]any{"kind": "navigate", "url": "https://example.com/"}
-	input, err := json.Marshal(inputValue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := invocationRequest(input)
-	request.InvocationID = "inv_browser_impossible_legacy_input"
-	request.IdempotencyKey = "idem_browser_impossible_legacy_input"
-	request.Command = descriptor.Name
-	request.Input = input
-	preparedAt := time.Now()
-	plan, err := PrepareExecutionPlan(
-		request, descriptor, "browser", "browser-policy-v1", preparedAt, time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor.InputSchema = legacyPreDragBrowserCommandInputSchema(
-		descriptor.Name, descriptor.BrowserProfiles,
-	)
-	descriptorHash, err := (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.DescriptorHash = descriptorHash
-	plan.CatalogHash = descriptorHash
-	plan.PlanHash = ""
-	plan.PlanHash, err = plan.computeHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := preparedAt.UnixNano()
-	record := GatewayInvocationRecord{
-		Target: "companion", ToolCallID: "call-browser-impossible-legacy-input",
-		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
-		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
-	}
-	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
-	if legacy || !errors.Is(err, ErrInvalidCapability) {
-		t.Fatalf("migration result = (legacy %v, error %v)", legacy, err)
-	}
-}
-
-func TestGatewayInvocationReceiptMigrationRejectsValidatorAcceptedLegacyCurrentHybrid(t *testing.T) {
-	profile := browserProfileDescriptorFixture()
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var descriptor CommandDescriptor
-	for _, candidate := range descriptors {
-		if candidate.Name == BrowserCommandAct {
-			descriptor = candidate
-			break
-		}
-	}
-	if descriptor.Name == "" {
-		t.Fatal("browser act descriptor is missing")
-	}
-	inputValue := browserActInputFixture()
-	inputValue["action"] = map[string]any{"kind": "navigate", "url": "https://example.com/"}
-	input, err := json.Marshal(inputValue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := invocationRequest(input)
-	request.InvocationID = "inv_browser_validator_legacy_current"
-	request.IdempotencyKey = "idem_browser_validator_legacy_current"
-	request.Command = descriptor.Name
-	request.Input = input
-	preparedAt := time.Now()
-	plan, err := PrepareExecutionPlan(
-		request, descriptor, "browser", "browser-policy-v1", preparedAt, time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor.InputSchema = legacyBrowserCommandInputSchema(
-		descriptor.Name, descriptor.BrowserProfiles,
-	)
-	descriptorHash, err := (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.DescriptorHash = descriptorHash
-	plan.CatalogHash = descriptorHash
-	plan.PlanHash = ""
-	plan.PlanHash, err = plan.computeHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := preparedAt.UnixNano()
-	record := GatewayInvocationRecord{
-		Target: "companion", ToolCallID: "call-browser-validator-legacy-current",
-		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
-		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
-	}
-	if err = record.validate(); err != nil {
-		t.Fatalf("validator-accepted hybrid did not reach the migration classifier: %v", err)
-	}
-	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
-	if legacy || !errors.Is(err, ErrInvalidCapability) {
-		t.Fatalf("migration result = (legacy %v, error %v)", legacy, err)
-	}
-}
-
-func TestGatewayInvocationReceiptMigrationRejectsCrossEpochBrowserSchemas(t *testing.T) {
-	profile := browserProfileDescriptorFixture()
-	profile.DryRun = false
-	profile.AllowApprovedActions = true
-	profile.Actions = []string{"click", "download", "fill", "navigate", "press", "scroll", "select"}
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var descriptor CommandDescriptor
-	for _, candidate := range descriptors {
-		if candidate.Name == BrowserCommandAct {
-			descriptor = candidate
-			break
-		}
-	}
-	if descriptor.Name == "" {
-		t.Fatal("browser act descriptor is missing")
-	}
-	inputValue := browserActInputFixture()
-	inputValue["action"] = map[string]any{"kind": "navigate", "url": "https://example.com/"}
-	input, err := json.Marshal(inputValue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := invocationRequest(input)
-	request.InvocationID = "inv_browser_cross_epoch"
-	request.IdempotencyKey = "idem_browser_cross_epoch"
-	request.Command = descriptor.Name
-	request.Input = input
-	preparedAt := time.Now()
-	plan, err := PrepareExecutionPlan(
-		request, descriptor, "browser", "browser-policy-v1", preparedAt, time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor.InputSchema = legacyPreFileChooserBrowserCommandInputSchema(
-		descriptor.Name, descriptor.BrowserProfiles,
-	)
-	descriptor.OutputSchema = legacyPreDialogBrowserCommandOutputSchema(
-		descriptor.Name, descriptor.BrowserProfiles,
-	)
-	descriptorHash, err := (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.DescriptorHash = descriptorHash
-	plan.CatalogHash = descriptorHash
-	plan.PlanHash = ""
-	plan.PlanHash, err = plan.computeHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := preparedAt.UnixNano()
-	record := GatewayInvocationRecord{
-		Target: "companion", ToolCallID: "call-browser-cross-epoch",
-		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
-		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
-	}
-	legacy, err := validateGatewayInvocationRecordForReceiptMigration(record)
-	if legacy || !errors.Is(err, ErrInvalidCapability) {
-		t.Fatalf("migration result = (legacy %v, error %v)", legacy, err)
-	}
-}
-
-func TestGatewayInvocationSQLiteReceiptMigrationRollsBackOnSnapshotMismatch(t *testing.T) {
-	workspace := t.TempDir()
-	path := GatewayInvocationStorePath(workspace)
+func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
 	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
 	if err != nil {
-		t.Fatal(err)
-	}
-	databasePlan := gatewayTestPlan(
-		t,
-		"inv_receipt_migration_database",
-		"idem_receipt_migration_database",
-		time.Now(),
-	)
-	if _, _, err = store.Prepare(
-		"vpn",
-		"call-receipt-migration-database",
-		databasePlan,
-		gatewayTestDescriptor(),
-	); err != nil {
 		t.Fatal(err)
 	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	legacyRecord := gatewayLegacyBrowserObserveRecord(t, time.Now(), "rollback")
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, legacyRecord)
+	record := gatewayBrowserObserveRecord(t, time.Now(), "opaque_tombstone")
+	record.Descriptor.OutputSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
+	bindOpaqueGatewayInvocationTombstone(t, &record)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
 
-	snapshotPlan := gatewayTestPlan(
-		t,
-		"inv_receipt_migration_snapshot",
-		"idem_receipt_migration_snapshot",
-		time.Now(),
-	)
-	now := time.Now().UnixNano()
-	snapshotRecord := GatewayInvocationRecord{
-		Target: "vpn", ToolCallID: "call-receipt-migration-snapshot",
-		Plan: snapshotPlan, Descriptor: gatewayTestDescriptor(),
-		ExpectedPlanHash: snapshotPlan.PlanHash, State: GatewayInvocationPrepared,
-		CreatedAt: now, UpdatedAt: now,
+	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatalf("reopen with opaque tombstone: %v", err)
 	}
-	snapshot, err := json.Marshal(gatewayInvocationDocument{
-		Version: gatewayInvocationStoreVersion,
-		Records: map[string]GatewayInvocationRecord{
-			snapshotPlan.InvocationID: snapshotRecord,
-		},
-	})
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+	retained, found, err := store.Lookup(gatewayTestPrincipal(record.Plan), record.Plan.InvocationID)
+	if err != nil || !found || retained.State != GatewayInvocationDispatched {
+		t.Fatalf("opaque tombstone = (%#v, %v, %v)", retained, found, err)
+	}
+}
+
+func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(GatewayInvocationLegacyStorePath(workspace), snapshot, 0o600); err != nil {
+	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	record := gatewayBrowserObserveRecord(t, time.Now(), "oversized_opaque_tombstone")
+	record.Descriptor.ModelContract = &CommandModelContract{
+		Guidance: []string{strings.Repeat("x", MaxCatalogBytes)},
+	}
+	bindOpaqueGatewayInvocationTombstone(t, &record)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil ||
+		!strings.Contains(err.Error(), "opaque tombstone descriptor is too large") {
+		t.Fatalf("reopen with oversized opaque tombstone error = %v", err)
+	}
+}
+
+func TestGatewayInvocationSQLiteRejectsOpaqueNonBrowserDispatchedTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	preparedAt := time.Now()
+	plan := gatewayTestPlan(t, "inv_non_browser_opaque", "idem_non_browser_opaque", preparedAt)
+	record := GatewayInvocationRecord{
+		Target: "vpn", ToolCallID: "call-non-browser-opaque",
+		Plan: plan, Descriptor: gatewayTestDescriptor(), ExpectedPlanHash: plan.PlanHash,
+		State: GatewayInvocationPrepared, CreatedAt: preparedAt.UnixNano(), UpdatedAt: preparedAt.UnixNano(),
+	}
+	record.Descriptor.ModelContract = &CommandModelContract{}
+	bindOpaqueGatewayInvocationTombstone(t, &record)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+
 	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
-		t.Fatal("snapshot mismatch was accepted")
-	}
-
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if closeErr := database.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	}()
-	var count int
-	if err = database.QueryRow("SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 2 {
-		t.Fatalf("records after rolled-back migration = %d, want 2", count)
-	}
-	var retainedJSON []byte
-	if err = database.QueryRow(
-		"SELECT record_json FROM gateway_invocations WHERE invocation_id = ?",
-		legacyRecord.Plan.InvocationID,
-	).Scan(&retainedJSON); err != nil {
-		t.Fatal(err)
-	}
-	wantJSON, err := json.Marshal(legacyRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(retainedJSON, wantJSON) {
-		t.Fatal("legacy prepared row changed after rolled-back migration")
+		t.Fatal("opaque non-browser dispatched tombstone was accepted")
 	}
 }
 
@@ -521,10 +192,15 @@ func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	if err = os.WriteFile(legacyPath, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024)
+	backend, err := newGatewayInvocationSQLiteStore(
+		GatewayInvocationStorePath(workspace),
+		16*1024*1024,
+		func() time.Time { return clock },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := &GatewayInvocationStore{sqlite: backend}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
 	var count int
 	if err = store.sqlite.db.QueryRow("SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
@@ -535,7 +211,7 @@ func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	}
 }
 
-func gatewayLegacyBrowserObserveRecord(
+func gatewayBrowserObserveRecord(
 	t *testing.T,
 	preparedAt time.Time,
 	suffix string,
@@ -581,14 +257,6 @@ func gatewayLegacyBrowserObserveRecord(
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor.OutputSchema = legacyBrowserPageResultOutputSchema(
-		descriptor.Name,
-		descriptor.BrowserProfiles,
-	)
-	if strings.Contains(string(descriptor.OutputSchema), "pending_dialog") ||
-		strings.Contains(string(descriptor.OutputSchema), "protected_result") {
-		t.Fatal("pre-receipt/pre-dialog invocation schema contains a later field")
-	}
 	descriptorHash, err := (CapabilityCatalog{
 		Commands: []CommandDescriptor{descriptor},
 	}).canonicalHash()
@@ -608,6 +276,27 @@ func gatewayLegacyBrowserObserveRecord(
 		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
 		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
 	}
+}
+
+func bindOpaqueGatewayInvocationTombstone(t *testing.T, record *GatewayInvocationRecord) {
+	t.Helper()
+	descriptorHash, err := (CapabilityCatalog{
+		Commands: []CommandDescriptor{record.Descriptor},
+	}).canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Plan.DescriptorHash = descriptorHash
+	record.Plan.CatalogHash = descriptorHash
+	record.Plan.PlanHash = ""
+	record.Plan.PlanHash, err = record.Plan.computeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ExpectedPlanHash = record.Plan.PlanHash
+	record.State = GatewayInvocationDispatched
+	record.DispatchedAt = record.CreatedAt + 1
+	record.UpdatedAt = record.DispatchedAt
 }
 
 func writeGatewayInvocationSQLiteRecordForMigrationTest(
