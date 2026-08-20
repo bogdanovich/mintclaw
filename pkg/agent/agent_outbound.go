@@ -65,6 +65,8 @@ const (
 	toolResultDeliveryQueued
 )
 
+var errFinalHandledDeliveryPending = errors.New("final-handled delivery confirmation is still pending")
+
 func (al *AgentLoop) maybePublishErrorWithScopes(
 	ctx context.Context,
 	workspace, agentID string,
@@ -483,6 +485,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
+	al.normalizeLegacyFinalHandledOutbound(ts, result)
 
 	if result.Outbound != nil {
 		return al.deliverExplicitToolOutbound(ctx, ts, result, toolName, traceScopes, traceSettlement)
@@ -579,6 +582,30 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			"content_len": len(text),
 		})
 	return nil, toolResultDeliveryQueued, nil
+}
+
+func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
+	ts *turnState,
+	result *toolshared.ToolResult,
+) {
+	if al == nil || ts == nil || result == nil || result.Outbound != nil || !isFinalHandledDelivery(result) {
+		return
+	}
+	if !supportsDurableDeliveryReceipts(al.channelManager) {
+		return
+	}
+	mediaRefs := toolResultMediaRefs(result)
+	text := toolResultUserText(result)
+	if len(mediaRefs) == 0 && strings.TrimSpace(text) == "" {
+		return
+	}
+	result.Outbound = &toolshared.OutboundDelivery{
+		Channel:          ts.channel,
+		ChatID:           ts.chatID,
+		ReplyToMessageID: ts.opts.Dispatch.ReplyToMessageID(),
+		Text:             text,
+		Media:            al.mediaPartsFromRefs(mediaRefs, result.Completion, text),
+	}
 }
 
 func (al *AgentLoop) deliverExplicitToolOutbound(
@@ -758,7 +785,7 @@ func settleFinalHandledDelivery(
 		}
 		result.ResponseHandled = false
 		result.ForLLM = "Message was queued, but delivery confirmation is still pending. Do not claim it was sent."
-		return nil
+		return fmt.Errorf("%w: %w", errFinalHandledDeliveryPending, err)
 	}
 	switch intent.Status {
 	case outbox.StatusDelivered:
@@ -783,7 +810,12 @@ func settleFinalHandledDelivery(
 			"Message was queued as delivery %s, but delivery confirmation is still pending. Do not claim it was sent.",
 			intent.ID,
 		)
-		return nil
+		return fmt.Errorf(
+			"%w: delivery %s has status %s",
+			errFinalHandledDeliveryPending,
+			intent.ID,
+			intent.Status,
+		)
 	}
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,6 +63,22 @@ func TestSettleFinalHandledDeliveryPreservesAmbiguousSafety(t *testing.T) {
 	err := settleFinalHandledDelivery(context.Background(), receipt, result, 0)
 	if err == nil || !strings.Contains(err.Error(), "must not be retried blindly") {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
+	}
+}
+
+func TestSettleFinalHandledDeliveryCancellationRemainsPending(t *testing.T) {
+	receipt, _, _ := testOutboundReceipt(t)
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := settleFinalHandledDelivery(ctx, receipt, result, 1)
+	if !errors.Is(err, errFinalHandledDeliveryPending) {
+		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
 	}
 }
 

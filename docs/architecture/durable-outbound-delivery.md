@@ -79,6 +79,8 @@ delivery settles, that exact entry is atomically replaced with the confirmed
 delivery receipt or the actionable transport failure. The provider cannot
 continue from a provisional "prepared" result, and a journal-finalization
 failure stops the turn instead of risking a duplicate side effect.
+If terminal receipt waiting is canceled, the unresolved barrier remains in
+place and the turn stops rather than recording a false success.
 
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid

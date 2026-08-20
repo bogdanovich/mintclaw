@@ -1752,6 +1752,12 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	}
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
+	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
+		if r.journalErr == nil {
+			r.journalErr = settledResult.Err
+		}
+		return terminalDeliverySettlement{}, false, settledResult.Err
+	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
 		r.ts,

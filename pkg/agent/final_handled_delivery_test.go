@@ -22,6 +22,7 @@ type finalHandledSettlementDelivery struct {
 	store       session.SessionStore
 	sessionKey  string
 	delivered   bool
+	pending     bool
 	calls       int
 	pendingSeen bool
 }
@@ -39,6 +40,11 @@ func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
 		d.pendingSeen = pending.Role == "tool" &&
 			pending.Content == finalHandledDeliveryPendingContent &&
 			pending.ToolResultStatus == providers.ToolResultStatusUnresolved
+	}
+	if d.pending {
+		err := fmt.Errorf("%w: context canceled", errFinalHandledDeliveryPending)
+		result.ResponseHandled = false
+		return nil, wrapToolDeliveryError(result, "delivery confirmation pending", err)
 	}
 	if d.delivered {
 		result.ForLLM = "Message confirmed delivered to the user."
@@ -129,115 +135,172 @@ func (*finalHandledRequestProvider) GetDefaultModel() string {
 
 func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 	for _, hook := range []bool{false, true} {
-		for _, delivered := range []bool{false, true} {
-			name := fmt.Sprintf("hook_%t/delivered_%t", hook, delivered)
-			t.Run(name, func(t *testing.T) {
-				const sessionKey = "final-handled-settlement"
-				store := session.NewSessionManager("")
-				result := (&toolshared.ToolResult{
-					ForLLM: "Message prepared for delivery to telegram:chat-1",
-					Silent: true,
-				}).WithOutboundDelivery(toolshared.OutboundDelivery{
-					Channel: "telegram",
-					ChatID:  "chat-1",
-					Text:    "hello",
-				}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
-				result.WriteAudit = []toolshared.WriteAuditEntry{{
-					Target:  "outbound:telegram:chat-1",
-					Action:  "send",
-					Success: true,
-				}}
-				tool := &fixedToolResultTool{name: "final_message", result: result}
-				registry := tools.NewToolRegistry()
-				registry.Register(tool)
-				agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
-				ts := &turnState{
-					agent:      agent,
-					agentID:    agent.ID,
-					turnID:     "turn-final-handled",
-					sessionKey: sessionKey,
-					session:    store,
-					opts: processOptions{
-						SendResponse: true,
-						Dispatch:     DispatchRequest{SessionKey: sessionKey},
-					},
-				}
-				toolCall := providers.ToolCall{
-					ID:        "call-final-message",
-					Name:      tool.Name(),
-					Arguments: map[string]any{},
-				}
-				intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
-				if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
-					t.Fatal(err)
-				}
-				exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
-				llm := newLLMIterationState(1)
-				llm.normalizedToolCalls = []providers.ToolCall{toolCall}
-				llm.assistantToolCallsPersisted = true
-				settlement := &finalHandledSettlementDelivery{
-					store:      store,
-					sessionKey: sessionKey,
-					delivered:  delivered,
-				}
-				ingest := &recordingCanonicalIngest{}
-				pipeline := &Pipeline{
-					Context: PipelineContextServices{Runtime: ingest},
-					Interaction: PipelineInteractionServices{
-						SyncToolDelivery: settlement,
-					},
-				}
-				if hook {
-					pipeline.Interaction.Hooks = &toolResultRespondHook{result: result}
-				}
-
-				outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-				if outcome.JournalErr != nil {
-					t.Fatalf("ExecuteTools() journal error = %v", outcome.JournalErr)
-				}
-				if settlement.calls != 1 || !settlement.pendingSeen {
-					t.Fatalf(
-						"settlement calls = %d, pending seen = %t",
-						settlement.calls,
-						settlement.pendingSeen,
-					)
-				}
-				if hook && tool.executions != 0 {
-					t.Fatalf("hook-response tool executions = %d, want 0", tool.executions)
-				}
-
-				historyResult := matchingToolResult(t, store.GetHistory(sessionKey), toolCall.ID)
-				liveResult := matchingToolResult(t, exec.messages, toolCall.ID)
-				if historyResult.Content != liveResult.Content ||
-					historyResult.ToolResultStatus != liveResult.ToolResultStatus {
-					t.Fatalf("canonical/live result mismatch: %#v / %#v", historyResult, liveResult)
-				}
-				if strings.Contains(historyResult.Content, finalHandledDeliveryPendingContent) ||
-					strings.Contains(strings.ToLower(historyResult.Content), "prepared for delivery") {
-					t.Fatalf("canonical result retained pre-settlement content: %q", historyResult.Content)
-				}
-				if delivered {
-					if historyResult.ToolResultStatus != providers.ToolResultStatusSuccess ||
-						!strings.Contains(historyResult.Content, "confirmed delivered") {
-						t.Fatalf("delivered canonical result = %#v", historyResult)
+		for _, legacy := range []bool{false, true} {
+			for _, delivered := range []bool{false, true} {
+				name := fmt.Sprintf("hook_%t/legacy_%t/delivered_%t", hook, legacy, delivered)
+				t.Run(name, func(t *testing.T) {
+					const sessionKey = "final-handled-settlement"
+					store := session.NewSessionManager("")
+					result := &toolshared.ToolResult{
+						ForLLM: "Message prepared for delivery to telegram:chat-1",
+						Silent: true,
 					}
-				} else {
-					if historyResult.ToolResultStatus != providers.ToolResultStatusError ||
-						!strings.Contains(historyResult.Content, "132186801 bytes") ||
-						!strings.Contains(historyResult.Content, "reduce or transcode") ||
-						strings.Contains(historyResult.Content, toolshared.HandledToolLLMNote) {
-						t.Fatalf("failed canonical result = %#v", historyResult)
+					if legacy {
+						result.Media = []string{"media://legacy-final-handled"}
+						result.WithResponseHandled()
+					} else {
+						result.WithOutboundDelivery(toolshared.OutboundDelivery{
+							Channel: "telegram",
+							ChatID:  "chat-1",
+							Text:    "hello",
+						}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 					}
-				}
-				if len(exec.writeAudit) != 1 || exec.writeAudit[0].Action != "send" {
-					t.Fatalf("write audit = %#v", exec.writeAudit)
-				}
-				ingestedResult := matchingToolResult(t, ingest.messages, toolCall.ID)
-				if ingestedResult.Content != historyResult.Content ||
-					ingestedResult.ToolResultStatus != historyResult.ToolResultStatus {
-					t.Fatalf("ingested/canonical tool result mismatch: %#v / %#v", ingestedResult, historyResult)
-				}
-			})
+					result.WriteAudit = []toolshared.WriteAuditEntry{{
+						Target:  "outbound:telegram:chat-1",
+						Action:  "send",
+						Success: true,
+					}}
+					tool := &fixedToolResultTool{name: "final_message", result: result}
+					registry := tools.NewToolRegistry()
+					registry.Register(tool)
+					agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+					ts := &turnState{
+						agent:      agent,
+						agentID:    agent.ID,
+						turnID:     "turn-final-handled",
+						sessionKey: sessionKey,
+						session:    store,
+						opts: processOptions{
+							SendResponse: true,
+							Dispatch:     DispatchRequest{SessionKey: sessionKey},
+						},
+					}
+					toolCall := providers.ToolCall{
+						ID:        "call-final-message",
+						Name:      tool.Name(),
+						Arguments: map[string]any{},
+					}
+					intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+					if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
+						t.Fatal(err)
+					}
+					exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+					llm := newLLMIterationState(1)
+					llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+					llm.assistantToolCallsPersisted = true
+					settlement := &finalHandledSettlementDelivery{
+						store:      store,
+						sessionKey: sessionKey,
+						delivered:  delivered,
+					}
+					ingest := &recordingCanonicalIngest{}
+					pipeline := &Pipeline{
+						Context: PipelineContextServices{Runtime: ingest},
+						Interaction: PipelineInteractionServices{
+							SyncToolDelivery: settlement,
+						},
+					}
+					if hook {
+						pipeline.Interaction.Hooks = &toolResultRespondHook{result: result}
+					}
+
+					outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+					if outcome.JournalErr != nil {
+						t.Fatalf("ExecuteTools() journal error = %v", outcome.JournalErr)
+					}
+					if settlement.calls != 1 || !settlement.pendingSeen {
+						t.Fatalf(
+							"settlement calls = %d, pending seen = %t",
+							settlement.calls,
+							settlement.pendingSeen,
+						)
+					}
+					if hook && tool.executions != 0 {
+						t.Fatalf("hook-response tool executions = %d, want 0", tool.executions)
+					}
+
+					historyResult := matchingToolResult(t, store.GetHistory(sessionKey), toolCall.ID)
+					liveResult := matchingToolResult(t, exec.messages, toolCall.ID)
+					if historyResult.Content != liveResult.Content ||
+						historyResult.ToolResultStatus != liveResult.ToolResultStatus {
+						t.Fatalf("canonical/live result mismatch: %#v / %#v", historyResult, liveResult)
+					}
+					if strings.Contains(historyResult.Content, finalHandledDeliveryPendingContent) ||
+						strings.Contains(strings.ToLower(historyResult.Content), "prepared for delivery") {
+						t.Fatalf("canonical result retained pre-settlement content: %q", historyResult.Content)
+					}
+					if delivered {
+						if historyResult.ToolResultStatus != providers.ToolResultStatusSuccess ||
+							!strings.Contains(historyResult.Content, "confirmed delivered") {
+							t.Fatalf("delivered canonical result = %#v", historyResult)
+						}
+					} else {
+						if historyResult.ToolResultStatus != providers.ToolResultStatusError ||
+							!strings.Contains(historyResult.Content, "132186801 bytes") ||
+							!strings.Contains(historyResult.Content, "reduce or transcode") ||
+							strings.Contains(historyResult.Content, toolshared.HandledToolLLMNote) {
+							t.Fatalf("failed canonical result = %#v", historyResult)
+						}
+					}
+					if len(exec.writeAudit) != 1 || exec.writeAudit[0].Action != "send" {
+						t.Fatalf("write audit = %#v", exec.writeAudit)
+					}
+					ingestedResult := matchingToolResult(t, ingest.messages, toolCall.ID)
+					if ingestedResult.Content != historyResult.Content ||
+						ingestedResult.ToolResultStatus != historyResult.ToolResultStatus {
+						t.Fatalf("ingested/canonical tool result mismatch: %#v / %#v", ingestedResult, historyResult)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T) {
+	const sessionKey = "final-handled-pending-receipt"
+	store := session.NewSessionManager("")
+	result := toolshared.MediaResult(
+		"File prepared for delivery",
+		[]string{"media://legacy-final-handled"},
+	).WithResponseHandled()
+	tool := &fixedToolResultTool{name: "send_file", result: result}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-pending-receipt",
+		sessionKey: sessionKey, session: store,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+	}
+	toolCall := providers.ToolCall{ID: "call-send-file", Name: tool.Name(), Arguments: map[string]any{}}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
+		t.Fatal(err)
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+	llm.assistantToolCallsPersisted = true
+	settlement := &finalHandledSettlementDelivery{
+		store: store, sessionKey: sessionKey, pending: true,
+	}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if !errors.Is(outcome.JournalErr, errFinalHandledDeliveryPending) {
+		t.Fatalf("journal error = %v, want pending delivery", outcome.JournalErr)
+	}
+	if settlement.calls != 1 || !settlement.pendingSeen {
+		t.Fatalf("settlement calls = %d, pending seen = %t", settlement.calls, settlement.pendingSeen)
+	}
+	for source, messages := range map[string][]providers.Message{
+		"canonical history": store.GetHistory(sessionKey),
+		"live turn state":   ts.liveTurnMessages,
+	} {
+		message := matchingToolResult(t, messages, toolCall.ID)
+		if message.Content != finalHandledDeliveryPendingContent ||
+			message.ToolResultStatus != providers.ToolResultStatusUnresolved {
+			t.Fatalf("%s barrier = %#v", source, message)
 		}
 	}
 }
@@ -395,7 +458,7 @@ func TestRunAgentLoopFinalHandledPreflightFailureReachesNextProviderAndHistory(t
 	}
 }
 
-func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistory(t *testing.T) {
+func TestRunAgentLoopLegacyFinalHandledConfirmedSettlementReachesNextProviderAndHistory(t *testing.T) {
 	const (
 		sessionKey = "final-handled-confirmed-settlement"
 		toolCallID = "call-confirmed-message"
@@ -421,14 +484,8 @@ func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistor
 	}
 	al.SetOutboundOutbox(coordinator)
 	agent := al.registry.GetDefaultAgent()
-	result := (&toolshared.ToolResult{
-		ForLLM: "Message prepared for delivery to telegram:chat-1",
-		Silent: true,
-	}).WithOutboundDelivery(toolshared.OutboundDelivery{
-		Channel: "telegram",
-		ChatID:  "chat-1",
-		Text:    "hello",
-	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	result := toolshared.UserResult("hello").WithResponseHandled()
+	result.ForLLM = "Message prepared for delivery to telegram:chat-1"
 	agent.Tools.Register(&fixedToolResultTool{name: "send_confirmed_message", result: result})
 	agent.Tools.Register(&fixedToolResultTool{
 		name: "followup_context",
