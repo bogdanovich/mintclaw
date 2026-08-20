@@ -79,10 +79,14 @@ delivery settles, that exact entry is atomically replaced with the confirmed
 delivery receipt or the actionable transport failure. The provider cannot
 continue from a provisional "prepared" result, and a journal-finalization
 failure stops the turn instead of risking a duplicate side effect.
-If terminal receipt waiting is canceled, the unresolved barrier remains in
-place and the turn stops rather than recording a false success. Any remaining
-calls in the same emitted tool batch receive non-executed results so strict
-provider history keeps the complete batch and its unresolved barrier.
+The unresolved barrier and non-executed results for every remaining call in the
+same emitted tool batch are reserved by one atomic history mutation before the
+outbound side effect starts. Terminal settlement ends that emitted batch; a
+later model turn may reissue a skipped call if it is still needed. If terminal
+receipt waiting is canceled or otherwise ends without a definite terminal
+intent, the complete batch and unresolved barrier remain in place rather than
+recording a false success. This keeps strict-provider history valid across
+cancellation, hard-abort, and persistence-failure boundaries.
 
 Channel-owned deterministic media constraints run before outbox admission.
 This keeps transport policy out of generic tools and prevents known-invalid

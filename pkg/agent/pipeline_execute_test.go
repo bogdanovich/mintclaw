@@ -297,6 +297,14 @@ func (s *toolResultFailingJournal) AppendTurnMessage(
 	return s.SessionStore.AppendTurnMessage(ctx, sessionKey, msg)
 }
 
+func (s *toolResultFailingJournal) MutateTurnHistory(
+	context.Context,
+	string,
+	func([]providers.Message) ([]providers.Message, bool, error),
+) (bool, error) {
+	return false, s.err
+}
+
 type fakeToolSuspensionManager struct {
 	requests     []ToolSuspensionRequest
 	consumptions []ToolApprovalConsumptionRequest

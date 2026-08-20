@@ -906,10 +906,23 @@ func (ts *turnState) recordPersistedMessagePair(
 	liveMsg providers.Message,
 	durableMsg providers.Message,
 ) {
+	ts.recordPersistedMessagePairs(
+		[]providers.Message{liveMsg},
+		[]providers.Message{durableMsg},
+	)
+}
+
+func (ts *turnState) recordPersistedMessagePairs(
+	liveMessages []providers.Message,
+	durableMessages []providers.Message,
+) {
+	if len(liveMessages) != len(durableMessages) {
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.persistedMessages = append(ts.persistedMessages, durableMsg)
-	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMsg)
+	ts.persistedMessages = append(ts.persistedMessages, durableMessages...)
+	ts.liveTurnMessages = append(ts.liveTurnMessages, liveMessages...)
 }
 
 func (ts *turnState) replacePersistedToolMessagePair(

@@ -26,6 +26,7 @@ type finalHandledSettlementDelivery struct {
 	calls       int
 	pendingSeen bool
 	cancel      context.CancelFunc
+	hardAbort   func()
 }
 
 func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
@@ -36,11 +37,16 @@ func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
 ) ([]providers.Attachment, *toolshared.ToolResult) {
 	d.calls++
 	history := d.store.GetHistory(d.sessionKey)
-	if len(history) > 0 {
-		pending := history[len(history)-1]
-		d.pendingSeen = pending.Role == "tool" &&
+	for _, pending := range history {
+		if pending.Role == "tool" &&
 			pending.Content == finalHandledDeliveryPendingContent &&
-			pending.ToolResultStatus == providers.ToolResultStatusUnresolved
+			pending.ToolResultStatus == providers.ToolResultStatusUnresolved {
+			d.pendingSeen = true
+			break
+		}
+	}
+	if d.hardAbort != nil {
+		d.hardAbort()
 	}
 	if d.pending {
 		if d.cancel != nil {
@@ -87,15 +93,21 @@ func (r *recordingCanonicalIngest) Ingest(_ context.Context, req *IngestRequest)
 
 type mutateFailingSessionStore struct {
 	session.SessionStore
-	err error
+	err    error
+	failAt int
+	calls  int
 }
 
 func (s *mutateFailingSessionStore) MutateTurnHistory(
-	context.Context,
-	string,
-	func([]providers.Message) ([]providers.Message, bool, error),
+	ctx context.Context,
+	sessionKey string,
+	mutate func([]providers.Message) ([]providers.Message, bool, error),
 ) (bool, error) {
-	return false, s.err
+	s.calls++
+	if s.failAt == 0 || s.calls == s.failAt {
+		return false, s.err
+	}
+	return s.SessionStore.MutateTurnHistory(ctx, sessionKey, mutate)
 }
 
 type finalHandledReceiptManager struct {
@@ -324,7 +336,7 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 			t.Fatalf("%s barrier = %#v", source, message)
 		}
 		skipped := matchingToolResult(t, messages, siblingCall.ID)
-		if !strings.Contains(skipped.Content, "awaiting terminal confirmation") {
+		if !strings.Contains(skipped.Content, "final-handled outbound boundary") {
 			t.Fatalf("%s skipped sibling = %#v", source, skipped)
 		}
 	}
@@ -336,11 +348,143 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	}
 }
 
+func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
+	const sessionKey = "final-handled-hard-abort"
+	store := session.NewSessionManager("")
+	result := (&toolshared.ToolResult{
+		ForLLM: "Message prepared for delivery to telegram:chat-1",
+		Silent: true,
+	}).WithOutboundDelivery(toolshared.OutboundDelivery{
+		Channel: "telegram",
+		ChatID:  "chat-1",
+		Text:    "hello",
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	tool := &fixedToolResultTool{name: "final_message", result: result}
+	sibling := &fixedToolResultTool{
+		name:   "destructive_sibling",
+		result: toolshared.SilentResult("sibling executed"),
+	}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	registry.Register(sibling)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-hard-abort",
+		sessionKey: sessionKey, session: store,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+	}
+	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
+	siblingCall := providers.ToolCall{
+		ID: "call-destructive-sibling", Name: sibling.Name(), Arguments: map[string]any{},
+	}
+	userMessage := providers.Message{Role: "user", Content: "send the message, then mutate external state"}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall, siblingCall}}
+	if err := store.AppendTurnMessage(t.Context(), sessionKey, userMessage); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
+		t.Fatal(err)
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
+	llm.assistantToolCallsPersisted = true
+	settlement := &finalHandledSettlementDelivery{
+		store: store, sessionKey: sessionKey, delivered: true,
+		hardAbort: func() { _ = ts.requestHardAbort() },
+	}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if outcome.AbortCause != TurnAbortHard {
+		t.Fatalf("abort cause = %v, want hard abort", outcome.AbortCause)
+	}
+	if sibling.executions != 0 {
+		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
+	}
+	for source, messages := range map[string][]providers.Message{
+		"canonical history": store.GetHistory(sessionKey),
+		"execution context": exec.messages,
+		"live turn state":   ts.liveTurnMessages,
+	} {
+		settled := matchingToolResult(t, messages, toolCall.ID)
+		if settled.ToolResultStatus != providers.ToolResultStatusSuccess ||
+			!strings.Contains(settled.Content, "confirmed delivered") {
+			t.Fatalf("%s settlement = %#v", source, settled)
+		}
+		skipped := matchingToolResult(t, messages, siblingCall.ID)
+		if !strings.Contains(skipped.Content, "final-handled outbound boundary") {
+			t.Fatalf("%s skipped sibling = %#v", source, skipped)
+		}
+	}
+	sanitized := sanitizeHistoryForProvider(store.GetHistory(sessionKey))
+	_ = matchingToolResult(t, sanitized, toolCall.ID)
+	_ = matchingToolResult(t, sanitized, siblingCall.ID)
+}
+
+func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
+	const sessionKey = "final-handled-reservation-failure"
+	baseStore := session.NewSessionManager("")
+	mutationErr := errors.New("reserve terminal delivery batch")
+	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 1}
+	result := (&toolshared.ToolResult{
+		ForLLM: "Message prepared for delivery to telegram:chat-1",
+		Silent: true,
+	}).WithOutboundDelivery(toolshared.OutboundDelivery{
+		Channel: "telegram", ChatID: "chat-1", Text: "hello",
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	tool := &fixedToolResultTool{name: "final_message", result: result}
+	sibling := &fixedToolResultTool{name: "destructive_sibling", result: toolshared.SilentResult("executed")}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	registry.Register(sibling)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-reservation-failure",
+		sessionKey: sessionKey, session: store,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+	}
+	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
+	siblingCall := providers.ToolCall{ID: "call-sibling", Name: sibling.Name(), Arguments: map[string]any{}}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall, siblingCall}}
+	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
+		t.Fatal(err)
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
+	llm.assistantToolCallsPersisted = true
+	settlement := &finalHandledSettlementDelivery{store: baseStore, sessionKey: sessionKey, delivered: true}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if !errors.Is(outcome.JournalErr, mutationErr) {
+		t.Fatalf("journal error = %v, want %v", outcome.JournalErr, mutationErr)
+	}
+	if settlement.calls != 0 {
+		t.Fatalf("delivery calls = %d, want 0", settlement.calls)
+	}
+	if sibling.executions != 0 {
+		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
+	}
+	for source, messages := range map[string][]providers.Message{
+		"canonical history": baseStore.GetHistory(sessionKey),
+		"execution context": exec.messages,
+		"live turn state":   ts.liveTurnMessages,
+	} {
+		for _, message := range messages {
+			if message.Role == "tool" {
+				t.Fatalf("%s contains partial tool result: %#v", source, message)
+			}
+		}
+	}
+}
+
 func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *testing.T) {
 	const sessionKey = "final-handled-finalization-failure"
 	baseStore := session.NewSessionManager("")
 	mutationErr := errors.New("replace settled tool result")
-	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr}
+	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 2}
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery to telegram:chat-1",
 		Silent: true,
@@ -411,7 +555,7 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 			t.Fatalf("%s failed-finalization barrier = %#v", source, barrier)
 		}
 		skipped := matchingToolResult(t, messages, siblingCall.ID)
-		if !strings.Contains(skipped.Content, "could not be durably finalized") {
+		if !strings.Contains(skipped.Content, "final-handled outbound boundary") {
 			t.Fatalf("%s skipped sibling = %#v", source, skipped)
 		}
 	}

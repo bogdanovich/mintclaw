@@ -527,6 +527,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				protectedResult := ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
 				var contentForLLM string
 				var durableContent string
+				terminalBatch := false
 				loopDecision := loopguard.Decision{}
 				if requiresTerminalDeliverySettlement(ts, hookResult) {
 					settlement, aborted, err := runner.settleTerminalDelivery(
@@ -551,6 +552,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					contentForLLM = settlement.contentForLLM
 					durableContent = settlement.durableContent
 					loopDecision = settlement.loopDecision
+					terminalBatch = settlement.completesToolBatch
 					runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 				} else {
 					contentForLLM = p.filterToolContentForLLM(hookResult.ContentForLLM())
@@ -631,15 +633,21 @@ func (runner *toolLoopRunner) admitToolCall(
 				)
 
 				if loopDecision.Action == loopguard.ActionHalt {
-					runner.appendSkippedToolMessages(
-						i+1,
-						"tool loop emergency halt",
-						"Skipped because tool-loop protection stopped the current turn.",
-					)
+					if !terminalBatch {
+						runner.appendSkippedToolMessages(
+							i+1,
+							"tool loop emergency halt",
+							"Skipped because tool-loop protection stopped the current turn.",
+						)
+					}
 					exec.messages = runner.messages
 					return stopToolBatch(ToolLoopOutcome{
 						Control: ToolControlHalt, FinalContent: loopDecision.Message,
 					})
+				}
+				if terminalBatch {
+					exec.messages = runner.messages
+					return stopToolBatch(runner.completeToolBatch(ctx))
 				}
 
 				runner.captureAfterToolSteering(true)
@@ -1268,6 +1276,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	protectedResult := call.protectedResult
 	var contentForLLM string
 	var durableContent string
+	terminalBatch := false
 	loopDecision := loopguard.Decision{}
 	if requiresTerminalDeliverySettlement(ts, toolResult) {
 		settlement, aborted, err := runner.settleTerminalDelivery(
@@ -1292,6 +1301,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		contentForLLM = settlement.contentForLLM
 		durableContent = settlement.durableContent
 		loopDecision = settlement.loopDecision
+		terminalBatch = settlement.completesToolBatch
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
 		toolResultMsg := buildToolResultJournalMessage(
@@ -1421,15 +1431,21 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		}
 	}
 	if loopDecision.Action == loopguard.ActionHalt {
-		runner.appendSkippedToolMessages(
-			i+1,
-			"tool loop emergency halt",
-			"Skipped because tool-loop protection stopped the current turn.",
-		)
+		if !terminalBatch {
+			runner.appendSkippedToolMessages(
+				i+1,
+				"tool loop emergency halt",
+				"Skipped because tool-loop protection stopped the current turn.",
+			)
+		}
 		exec.messages = runner.messages
 		return stopToolBatch(ToolLoopOutcome{
 			Control: ToolControlHalt, FinalContent: loopDecision.Message,
 		})
+	}
+	if terminalBatch {
+		exec.messages = runner.messages
+		return stopToolBatch(runner.completeToolBatch(ctx))
 	}
 
 	runner.captureAfterToolSteering(false)
@@ -1731,11 +1747,12 @@ func pendingToolResultMatches(candidate providers.Message, pending providers.Mes
 }
 
 type terminalDeliverySettlement struct {
-	result         *toolshared.ToolResult
-	contentForLLM  string
-	durableContent string
-	loopDecision   loopguard.Decision
-	attachments    []providers.Attachment
+	result             *toolshared.ToolResult
+	contentForLLM      string
+	durableContent     string
+	loopDecision       loopguard.Decision
+	attachments        []providers.Attachment
+	completesToolBatch bool
 }
 
 func (r *toolLoopRunner) settleTerminalDelivery(
@@ -1749,21 +1766,19 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	protectedResult bool,
 ) (terminalDeliverySettlement, bool, error) {
 	pendingMsg, pendingDurableMsg := pendingFinalHandledToolResultMessages(toolCallID, protectedResult)
-	aborted, err := r.commitPendingToolResult(pendingMsg, pendingDurableMsg)
+	aborted, err := r.commitPendingToolBatch(
+		pendingMsg,
+		pendingDurableMsg,
+		toolCallIndex+1,
+	)
 	if err != nil || aborted {
 		return terminalDeliverySettlement{}, aborted, err
 	}
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
-		completionErr := r.completeTerminalDeliveryToolBatch(
-			toolCallIndex+1,
-			"prior outbound delivery is awaiting terminal confirmation",
-			"Skipped because a prior outbound delivery is still awaiting terminal confirmation.",
-		)
-		settlementErr := errors.Join(settledResult.Err, completionErr)
-		r.journalErr = settlementErr
-		return terminalDeliverySettlement{}, false, settlementErr
+		r.journalErr = settledResult.Err
+		return terminalDeliverySettlement{}, false, settledResult.Err
 	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
@@ -1796,38 +1811,62 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		settledMsg,
 		settledDurableMsg,
 	)
-	if err != nil {
-		completionErr := r.completeTerminalDeliveryToolBatch(
-			toolCallIndex+1,
-			"prior outbound delivery could not be durably finalized",
-			"Skipped because a prior outbound delivery could not be durably finalized.",
-		)
-		err = errors.Join(err, completionErr)
-		if completionErr != nil {
-			r.journalErr = err
-		}
-	}
+	r.exec.messages = r.messages
 	return terminalDeliverySettlement{
-		result:         settledResult,
-		contentForLLM:  content,
-		durableContent: durableContent,
-		loopDecision:   decision,
-		attachments:    attachments,
+		result:             settledResult,
+		contentForLLM:      content,
+		durableContent:     durableContent,
+		loopDecision:       decision,
+		attachments:        attachments,
+		completesToolBatch: true,
 	}, aborted, err
 }
 
-func (r *toolLoopRunner) completeTerminalDeliveryToolBatch(
-	start int,
-	reason string,
-	content string,
-) error {
+func (r *toolLoopRunner) commitPendingToolBatch(
+	pendingMsg providers.Message,
+	pendingDurableMsg providers.Message,
+	siblingStart int,
+) (bool, error) {
 	ctx := r.turnCtx
 	if ctx == nil {
 		ctx = context.Background()
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
-	for i := start; i < len(r.toolCalls); i++ {
+	liveMessages := []providers.Message{pendingMsg}
+	durableMessages := []providers.Message{pendingDurableMsg}
+	for i := siblingStart; i < len(r.toolCalls); i++ {
+		toolCall := r.toolCalls[i]
+		skipped := providers.Message{
+			Role:       "tool",
+			Content:    "Skipped at the final-handled outbound boundary. Reissue this call if it is still needed.",
+			ToolCallID: toolCall.ID,
+		}
+		liveMessages = append(liveMessages, skipped)
+		durableMessages = append(durableMessages, skipped)
+	}
+	if r.ts != nil && !r.ts.opts.NoHistory {
+		_, err := r.ts.agent.Sessions.MutateTurnHistory(
+			ctx,
+			r.ts.sessionKey,
+			func(current []providers.Message) ([]providers.Message, bool, error) {
+				return append(current, durableMessages...), true, nil
+			},
+		)
+		if err != nil {
+			if r.journalErr == nil {
+				r.journalErr = err
+			}
+			return false, err
+		}
+		r.ts.recordPersistedMessagePairs(liveMessages, durableMessages)
+	}
+	r.messages = append(r.messages, liveMessages...)
+	r.exec.messages = r.messages
+	if len(liveMessages) > 1 {
+		r.llm.toolResponseDisposition = toolResponseNeedsModel
+	}
+	for i := siblingStart; i < len(r.toolCalls); i++ {
 		toolCall := r.toolCalls[i]
 		r.p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
@@ -1835,20 +1874,11 @@ func (r *toolLoopRunner) completeTerminalDeliveryToolBatch(
 			ToolExecSkippedPayload{
 				ToolCallID: toolCall.ID,
 				Tool:       toolCall.Name,
-				Reason:     reason,
+				Reason:     "final-handled outbound terminal boundary",
 			},
 		)
-		if err := r.appendToolMessageWithContext(ctx, providers.Message{
-			Role:       "tool",
-			Content:    content,
-			ToolCallID: toolCall.ID,
-		}, toolMessagePersistOnly); err != nil {
-			r.exec.messages = r.messages
-			return fmt.Errorf("persist skipped tool %s during delivery settlement: %w", toolCall.Name, err)
-		}
 	}
-	r.exec.messages = r.messages
-	return nil
+	return r.ts.hardAbortRequested(), nil
 }
 
 func (r *toolLoopRunner) commitExecutedToolResult(
@@ -1871,24 +1901,6 @@ func (r *toolLoopRunner) commitExecutedToolResult(
 	}
 	if r.ts != nil && !r.ts.opts.NoHistory && r.p != nil {
 		r.p.ingestMessage(r.turnCtx, r.ts, durableMsg, nil)
-	}
-	return r.ts.hardAbortRequested(), nil
-}
-
-func (r *toolLoopRunner) commitPendingToolResult(
-	msg providers.Message,
-	durableMsg providers.Message,
-) (bool, error) {
-	ctx := r.turnCtx
-	if ctx == nil {
-		ctx = context.Background()
-	} else {
-		ctx = context.WithoutCancel(ctx)
-	}
-	if err := r.appendToolMessageWithDurableContext(
-		ctx, msg, durableMsg, toolMessagePersistOnly,
-	); err != nil {
-		return false, err
 	}
 	return r.ts.hardAbortRequested(), nil
 }

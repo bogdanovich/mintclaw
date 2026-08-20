@@ -780,9 +780,6 @@ func settleFinalHandledDelivery(
 ) error {
 	intent, err := receipt.awaitTerminal(ctx)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("wait for durable delivery receipt: %w", err)
-		}
 		result.ResponseHandled = false
 		result.ForLLM = "Message was queued, but delivery confirmation is still pending. Do not claim it was sent."
 		return fmt.Errorf("%w: %w", errFinalHandledDeliveryPending, err)

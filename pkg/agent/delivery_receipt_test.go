@@ -82,6 +82,23 @@ func TestSettleFinalHandledDeliveryCancellationRemainsPending(t *testing.T) {
 	}
 }
 
+func TestSettleFinalHandledDeliveryWaitErrorRemainsPending(t *testing.T) {
+	receipt, coordinator, _ := testOutboundReceipt(t)
+	if err := coordinator.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+
+	err := settleFinalHandledDelivery(t.Context(), receipt, result, 1)
+	if !errors.Is(err, errFinalHandledDeliveryPending) {
+		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
+	}
+	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+		!strings.Contains(result.ForLLM, "Do not claim") {
+		t.Fatalf("pending result = %+v", result)
+	}
+}
+
 func testOutboundReceipt(t *testing.T) (outboundPublication, *outbox.Coordinator, string) {
 	t.Helper()
 	coordinator, err := outbox.OpenCoordinator(t.TempDir())
