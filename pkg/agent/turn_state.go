@@ -119,9 +119,8 @@ type turnResult struct {
 	usageInputTokens       int
 	usageOutputTokens      int
 	usageTotalTokens       int
-	deliverableArtifacts   []taskresult.Artifact
+	deliverable            *taskresult.Deliverable
 	writeAudit             []toolshared.WriteAuditEntry
-	objectiveOutcome       *taskresult.Outcome
 	status                 TurnEndStatus
 	followUps              []bus.InboundMessage
 	preferNewOutboundReply bool
@@ -160,7 +159,7 @@ type turnExecution struct {
 	summary         string
 
 	// Turn output
-	deliverableArtifacts   []taskresult.Artifact
+	deliverable            *taskresult.Deliverable
 	actionLog              []TurnActionRecord
 	writeAudit             []toolshared.WriteAuditEntry
 	finalRenderToolCalls   map[string]finalRenderToolCallState

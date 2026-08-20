@@ -902,8 +902,9 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 					delivery.syncCalls,
 				)
 			}
-			if len(exec.deliverableArtifacts) != 1 || exec.deliverableArtifacts[0].Ref != "media://suppressed-result" {
-				t.Fatalf("deliverable artifacts = %+v, want suppressed result", exec.deliverableArtifacts)
+			if exec.deliverable == nil || len(exec.deliverable.Artifacts) != 1 ||
+				exec.deliverable.Artifacts[0].Ref != "media://suppressed-result" {
+				t.Fatalf("deliverable = %+v, want suppressed result", exec.deliverable)
 			}
 			history := store.GetHistory(ts.sessionKey)
 			if len(history) != 2 || len(history[1].Media) != 1 ||

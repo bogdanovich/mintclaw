@@ -2995,12 +2995,14 @@ func TestDeliverFinalTurnResult_SendsDeliverableArtifactsWithFinalTextCaption(t 
 			SendResponse: true,
 		}, turnResult{
 			finalContent: finalText,
-			deliverableArtifacts: []taskresult.Artifact{{
-				Ref:         ref,
-				Kind:        "video",
-				Filename:    "reel.mp4",
-				ContentType: "video/mp4",
-			}},
+			deliverable: &taskresult.Deliverable{
+				Artifacts: []taskresult.Artifact{{
+					Ref:         ref,
+					Kind:        "video",
+					Filename:    "reel.mp4",
+					ContentType: "video/mp4",
+				}},
+			},
 		})
 
 	if len(telegramChannel.sentMedia) != 1 {

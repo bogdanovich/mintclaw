@@ -290,14 +290,18 @@ func (r *Registry) CompleteInteractionTask(
 	taskID, interactionID, content string,
 	delivery DeliveryStatus,
 ) error {
-	return r.CompleteInteractionTaskResult(taskID, interactionID, content, nil, delivery)
+	var deliverable *taskresult.Deliverable
+	if strings.TrimSpace(content) != "" {
+		deliverable = &taskresult.Deliverable{Text: content}
+	}
+	return r.CompleteInteractionTaskResult(taskID, interactionID, content, deliverable, delivery)
 }
 
 // CompleteInteractionTaskResult terminalizes a suspended task and preserves
-// its runtime-verified objective outcome across restart and delivery recovery.
+// its canonical deliverable across restart and delivery recovery.
 func (r *Registry) CompleteInteractionTaskResult(
-	taskID, interactionID, content string,
-	objectiveOutcome *taskresult.Outcome,
+	taskID, interactionID, summary string,
+	deliverable *taskresult.Deliverable,
 	delivery DeliveryStatus,
 ) error {
 	interactionID = strings.TrimSpace(interactionID)
@@ -321,26 +325,22 @@ func (r *Registry) CompleteInteractionTaskResult(
 			rec.EndedAt = 0
 			rec.CleanupAfter = 0
 		}
-		summary := truncateInteractionField(content, 1000)
+		terminalSummary := truncateInteractionField(summary, 1000)
+		var objectiveOutcome *taskresult.Outcome
+		if deliverable != nil {
+			objectiveOutcome = deliverable.ObjectiveOutcome
+		}
 		rec.Status = TerminalStatusForObjectiveOutcome(objectiveOutcome)
 		rec.DeliveryStatus = delivery
 		rec.InteractionShortID = ""
 		rec.InteractionSummary = ""
 		rec.ProgressSummary = ""
-		rec.TerminalSummary = summary
+		rec.TerminalSummary = terminalSummary
 		rec.Error = ""
 		if rec.Status == StatusFailed {
-			rec.Error = summary
+			rec.Error = terminalSummary
 		}
-		if strings.TrimSpace(content) != "" {
-			rec.Deliverable = &taskresult.Deliverable{
-				Text: content, ObjectiveOutcome: taskresult.CloneOutcome(objectiveOutcome),
-			}
-		} else if objectiveOutcome != nil {
-			rec.Deliverable = &taskresult.Deliverable{
-				ObjectiveOutcome: taskresult.CloneOutcome(objectiveOutcome),
-			}
-		}
+		rec.Deliverable = taskresult.CloneDeliverable(deliverable)
 		if delivery == DeliveryDelivered || delivery == DeliveryNotApplicable {
 			rec.DeliveredAt = time.Now().UnixMilli()
 		}

@@ -1122,8 +1122,21 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	inbound := bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
+	resumedDeliverable := &taskresult.Deliverable{
+		Text: "tool-owned child result",
+		Artifacts: []taskresult.Artifact{{
+			Ref:       "file:/tmp/report.txt",
+			LocalPath: "/tmp/report.txt",
+			Kind:      "file",
+		}},
+		Metadata: map[string]string{"producer": "resumed-tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "resume-report",
+		},
+	}
 	if err := al.deliverTaskInteractionFinal(
-		t.Context(), registry, workspace, record, inbound, "raw child final", nil, nil,
+		t.Context(), registry, workspace, record, inbound, "raw child final", resumedDeliverable, nil,
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -1143,6 +1156,12 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	if task.Status != taskregistry.StatusSucceeded ||
 		task.DeliveryStatus != taskregistry.DeliverySessionQueued {
 		t.Fatalf("parent-only task = %#v", task)
+	}
+	if task.Deliverable == nil || task.Deliverable.Text != "tool-owned child result" ||
+		len(task.Deliverable.Artifacts) != 1 || task.Deliverable.Artifacts[0].Ref != "file:/tmp/report.txt" ||
+		task.Deliverable.Metadata["producer"] != "resumed-tool" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "resume-report" {
+		t.Fatalf("parent-only task lost resumed deliverable: %#v", task.Deliverable)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.Status != interactions.StatusResolved ||
@@ -1399,7 +1418,9 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 	if err := al.deliverTaskInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		"Both items were published.", objectiveOutcome, []runtimeevents.TraceScope{traceScope},
+		"Both items were published.",
+		&taskresult.Deliverable{ObjectiveOutcome: objectiveOutcome},
+		[]runtimeevents.TraceScope{traceScope},
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}

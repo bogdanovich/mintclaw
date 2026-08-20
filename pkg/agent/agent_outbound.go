@@ -340,7 +340,7 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		UsageTotalTokens:  result.usageTotalTokens,
 	}.ApplyToContext(&outboundCtx)
 
-	if len(result.deliverableArtifacts) > 0 {
+	if result.deliverable != nil && len(mediaArtifactRefs(result.deliverable.Artifacts)) > 0 {
 		ts := &turnState{
 			agent:      agent,
 			agentID:    agent.ID,
@@ -386,11 +386,8 @@ func (al *AgentLoop) deliverFinalTurnMedia(
 		ForUser:         result.finalContent,
 		Silent:          true,
 		ResponseHandled: true,
-	}).WithDeliverable(&taskresult.Deliverable{
-		Text:      result.finalContent,
-		Artifacts: append([]taskresult.Artifact(nil), result.deliverableArtifacts...),
-	})
-	mediaRefs := mediaArtifactRefs(result.deliverableArtifacts)
+	}).WithDeliverable(taskresult.CloneDeliverable(result.deliverable))
+	mediaRefs := mediaArtifactRefs(result.deliverable.Artifacts)
 	mediaResult.Media = append(mediaResult.Media, mediaRefs...)
 	_, outcome, err := al.deliverToolResultToUser(ctx, ts, mediaResult, "final_turn")
 	return outcome, err

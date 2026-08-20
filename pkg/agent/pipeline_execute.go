@@ -245,11 +245,40 @@ func shouldQueueAsyncToolResultForParent(result *toolshared.ToolResult) bool {
 	return decideAsyncToolResultDelivery(result).QueueParent
 }
 
-func recordDeliverableArtifacts(exec *turnExecution, artifacts []taskresult.Artifact) {
-	if exec == nil || len(artifacts) == 0 {
+func recordDeliverable(exec *turnExecution, deliverable *taskresult.Deliverable) {
+	if exec == nil || deliverable == nil {
 		return
 	}
-	exec.deliverableArtifacts = mergeDeliverableArtifacts(exec.deliverableArtifacts, artifacts)
+	exec.deliverable = mergeDeliverables(exec.deliverable, deliverable)
+}
+
+func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult.Deliverable {
+	if additional == nil {
+		return taskresult.CloneDeliverable(existing)
+	}
+	if existing == nil {
+		return taskresult.CloneDeliverable(additional)
+	}
+	out := taskresult.CloneDeliverable(existing)
+	if strings.TrimSpace(additional.Text) != "" {
+		out.Text = additional.Text
+	}
+	out.Artifacts = mergeDeliverableArtifacts(out.Artifacts, additional.Artifacts)
+	if len(additional.Metadata) > 0 {
+		if out.Metadata == nil {
+			out.Metadata = make(map[string]string, len(additional.Metadata))
+		}
+		for key, value := range additional.Metadata {
+			out.Metadata[key] = value
+		}
+	}
+	if additional.Report != nil {
+		out.Report = taskresult.CloneReport(additional.Report)
+	}
+	if additional.ObjectiveOutcome != nil {
+		out.ObjectiveOutcome = taskresult.CloneOutcome(additional.ObjectiveOutcome)
+	}
+	return out
 }
 
 func attachMediaArtifacts(result *toolshared.ToolResult, store mediaResolver) {
@@ -545,7 +574,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				if !hookResult.ResponseHandled && !hookResult.ImmediateDelivery {
 					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
 					if hookResult.Deliverable != nil {
-						recordDeliverableArtifacts(exec, hookResult.Deliverable.Artifacts)
+						recordDeliverable(exec, hookResult.Deliverable)
 					}
 				}
 				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
@@ -1308,7 +1337,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	if !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
 		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
 		if toolResult.Deliverable != nil {
-			recordDeliverableArtifacts(exec, toolResult.Deliverable.Artifacts)
+			recordDeliverable(exec, toolResult.Deliverable)
 		}
 	}
 	protectedResult := call.protectedResult

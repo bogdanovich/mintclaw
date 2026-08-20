@@ -29,7 +29,16 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 			llmModelName:     "fallback-model",
 			defaultModelName: "primary-model",
 		},
-		deliverableArtifacts:   []taskresult.Artifact{{Ref: "media://result"}},
+		deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned result",
+			Artifacts: []taskresult.Artifact{{Ref: "media://result"}},
+			Metadata:  map[string]string{"producer": "test-tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+				Metadata:      map[string]string{"format": "summary"},
+			},
+		},
 		sawAdditionalUserInput: true,
 	}
 	llm := &LLMIterationState{
@@ -65,10 +74,16 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 		t.Fatalf("delivery = %+v", finalization.delivery)
 	}
 
-	exec.deliverableArtifacts[0].Ref = "media://mutated"
+	exec.deliverable.Text = "mutated"
+	exec.deliverable.Artifacts[0].Ref = "media://mutated"
+	exec.deliverable.Metadata["producer"] = "mutated"
+	exec.deliverable.Report.Metadata["format"] = "mutated"
 	ts.followUps[0].Content = "mutated"
-	if finalization.deliverableArtifacts[0].Ref != "media://result" {
-		t.Fatalf("deliverable artifacts changed after capture: %+v", finalization.deliverableArtifacts)
+	if finalization.deliverable == nil || finalization.deliverable.Text != "tool-owned result" ||
+		finalization.deliverable.Artifacts[0].Ref != "media://result" ||
+		finalization.deliverable.Metadata["producer"] != "test-tool" ||
+		finalization.deliverable.Report.Metadata["format"] != "summary" {
+		t.Fatalf("deliverable changed after capture: %+v", finalization.deliverable)
 	}
 	if finalization.followUps[0].Content != "follow up" {
 		t.Fatalf("follow ups changed after capture: %+v", finalization.followUps)
@@ -103,6 +118,39 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 	}
 	if result.modelName != "active-model" || result.defaultModelName != "default-model" {
 		t.Fatalf("result models = (%q, %q)", result.modelName, result.defaultModelName)
+	}
+}
+
+func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
+	finalization := FinalizationContext{
+		deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned result",
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/result.txt", Kind: "file"}},
+			Metadata:  map[string]string{"producer": "test-tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+				Provenance:    map[string]string{"source": "tool"},
+			},
+			ObjectiveOutcome: &taskresult.Outcome{
+				Status:       taskresult.OutcomePartial,
+				MissingItems: []string{"verification"},
+			},
+		},
+	}
+
+	result := finalization.result(false)
+	finalization.deliverable.Artifacts[0].Ref = "mutated"
+	finalization.deliverable.Metadata["producer"] = "mutated"
+	finalization.deliverable.Report.Provenance["source"] = "mutated"
+	finalization.deliverable.ObjectiveOutcome.MissingItems[0] = "mutated"
+
+	if result.deliverable == nil || result.deliverable.Text != "tool-owned result" ||
+		result.deliverable.Artifacts[0].Ref != "file:/tmp/result.txt" ||
+		result.deliverable.Metadata["producer"] != "test-tool" ||
+		result.deliverable.Report.Provenance["source"] != "tool" ||
+		result.deliverable.ObjectiveOutcome.MissingItems[0] != "verification" {
+		t.Fatalf("result deliverable was not detached: %+v", result.deliverable)
 	}
 }
 

@@ -2416,7 +2416,15 @@ func (m *subturnMediaTool) Execute(ctx context.Context, args map[string]any) *to
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
-	return toolshared.MediaResult("Created media artifact.", []string{ref})
+	result := toolshared.MediaResult("Created media artifact.", []string{ref})
+	result.Deliverable.Text = "Tool-owned deliverable"
+	result.Deliverable.Metadata = map[string]string{"producer": "subturn_media_tool"}
+	result.Deliverable.Report = &taskresult.Report{
+		SchemaVersion: taskresult.ReportSchemaV1,
+		ReportID:      "subturn-report",
+		Summary:       "Structured subturn output",
+	}
+	return result
 }
 
 type subturnToolThenFinalProvider struct {
@@ -2959,8 +2967,12 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 	if result == nil || result.Deliverable == nil {
 		t.Fatalf("expected structured deliverable, got %+v", result)
 	}
-	if result.Deliverable.Text != "Final child text" {
-		t.Fatalf("deliverable text = %q, want Final child text", result.Deliverable.Text)
+	if result.Deliverable.Text != "Tool-owned deliverable" {
+		t.Fatalf("deliverable text = %q, want tool-owned text", result.Deliverable.Text)
+	}
+	if result.Deliverable.Metadata["producer"] != "subturn_media_tool" ||
+		result.Deliverable.Report == nil || result.Deliverable.Report.ReportID != "subturn-report" {
+		t.Fatalf("structured deliverable fields were lost: %+v", result.Deliverable)
 	}
 	if len(result.Deliverable.Artifacts) != 1 {
 		t.Fatalf("artifact count = %d, want 1; result=%+v", len(result.Deliverable.Artifacts), result)

@@ -1617,7 +1617,8 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		)
 		al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 		_, finalizeErr := al.finalizeResumedInteraction(
-			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent, objectiveOutcome, nil,
+			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent,
+			terminalTurnDeliverable(nil, cleanContent, objectiveOutcome), nil,
 			interactionBoundaryPrecomputedFinal,
 		)
 		return finalizeErr
@@ -1692,7 +1693,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		resuming,
 		inbound,
 		finalContent,
-		objectiveOutcome,
+		terminalTurnDeliverable(resumedTurn.deliverable, finalContent, objectiveOutcome),
 		traceScopes,
 		interactionBoundaryModelFinal,
 	)
@@ -1744,7 +1745,7 @@ func (al *AgentLoop) finalizeResumedInteraction(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *taskresult.Outcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 	boundary string,
 ) (interactionFinalizationDisposition, error) {
@@ -1758,13 +1759,35 @@ func (al *AgentLoop) finalizeResumedInteraction(
 		return interactionFinalizationCanceled, nil
 	case interactions.StatusResuming:
 		return interactionFinalizationDelivered, al.deliverInteractionFinal(
-			ctx, registry, interactionWorkspace, current, inbound, content, objectiveOutcome, traceScopes,
+			ctx, registry, interactionWorkspace, current, inbound, content, deliverable, traceScopes,
 		)
 	default:
 		return interactionFinalizationDelivered, fmt.Errorf(
 			"cannot finalize interaction from status %q", current.Status,
 		)
 	}
+}
+
+func terminalTurnDeliverable(
+	base *taskresult.Deliverable,
+	content string,
+	objectiveOutcome *taskresult.Outcome,
+) *taskresult.Deliverable {
+	deliverable := taskresult.CloneDeliverable(base)
+	if deliverable == nil {
+		deliverable = &taskresult.Deliverable{}
+	}
+	if strings.TrimSpace(deliverable.Text) == "" {
+		deliverable.Text = content
+	}
+	if objectiveOutcome != nil {
+		deliverable.ObjectiveOutcome = taskresult.CloneOutcome(objectiveOutcome)
+	}
+	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 &&
+		len(deliverable.Metadata) == 0 && deliverable.Report == nil && deliverable.ObjectiveOutcome == nil {
+		return nil
+	}
+	return deliverable
 }
 
 func extractResumedObjectiveOutcome(
@@ -1988,7 +2011,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *taskresult.Outcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
@@ -2000,7 +2023,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	}.ApplyToContext(&inbound)
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
-			ctx, registry, interactionWorkspace, record, inbound, content, objectiveOutcome, traceScopes,
+			ctx, registry, interactionWorkspace, record, inbound, content, deliverable, traceScopes,
 		)
 	}
 	if strings.TrimSpace(content) == "" && record.Kind == interactions.KindQuestion &&
@@ -2127,7 +2150,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *taskresult.Outcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	taskRegistry := al.taskRegistryForWorkspace(workspace)
@@ -2143,10 +2166,15 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if stateErr != nil {
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
+	var objectiveOutcome *taskresult.Outcome
+	if deliverable != nil {
+		objectiveOutcome = deliverable.ObjectiveOutcome
+	}
 	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
+	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
 	if err := taskRegistry.CompleteInteractionTaskResult(
-		taskID, record.ID, projection, objectiveOutcome, taskregistry.DeliveryPending,
+		taskID, record.ID, projection, terminalDeliverable, taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
@@ -2190,10 +2218,8 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}).
 		WithAsyncTaskID(taskID).
 		WithAsyncDelivery(mode)
-	if strings.TrimSpace(projection) != "" || objectiveOutcome != nil {
-		result.WithDeliverable(&taskresult.Deliverable{
-			Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
-		})
+	if terminalDeliverable != nil {
+		result.WithDeliverable(taskresult.CloneDeliverable(terminalDeliverable))
 	}
 	agent := al.interactionContinuationAgent(record, nil)
 	turnState := &turnState{

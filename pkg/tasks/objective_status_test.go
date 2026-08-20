@@ -39,7 +39,12 @@ func TestCompleteInteractionTaskResultPreservesBlockedStatus(t *testing.T) {
 		"blocked-browser-task",
 		"approval-1",
 		"Task could not be completed",
-		&taskresult.Outcome{Status: "blocked", MissingItems: []string{"browser verification"}},
+		&taskresult.Deliverable{
+			Text: "Task could not be completed",
+			ObjectiveOutcome: &taskresult.Outcome{
+				Status: "blocked", MissingItems: []string{"browser verification"},
+			},
+		},
 		DeliveryDelivered,
 	); err != nil {
 		t.Fatal(err)

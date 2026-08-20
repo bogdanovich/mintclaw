@@ -804,8 +804,9 @@ func spawnSubTurn(
 	// 8. Execute sub-turn via the real agent loop.
 	pipeline := NewPipeline(al)
 	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
+	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
-		turnRes.finalContent, turnRes.objectiveOutcome = extractObjectiveOutcome(
+		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(
 			turnRes.finalContent,
 			turnRes.writeAudit,
 			requireObjectiveOutcome,
@@ -834,10 +835,9 @@ func spawnSubTurn(
 	} else if turnRes.status == TurnEndStatusSuspended {
 		result = &toolshared.ToolResult{TaskSuspended: true}
 	} else {
-		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
+		userContent := objectiveOutcomeUserContent(turnRes.finalContent, objectiveOutcome)
 		parentContent := turnRes.finalContent
-		if turnRes.objectiveOutcome != nil &&
-			turnRes.objectiveOutcome.Status != taskresult.OutcomeSucceeded {
+		if objectiveOutcome != nil && objectiveOutcome.Status != taskresult.OutcomeSucceeded {
 			parentContent = userContent
 		}
 		result = &toolshared.ToolResult{
@@ -845,15 +845,19 @@ func spawnSubTurn(
 			ForUser: userContent,
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
-		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.deliverableArtifacts) > 0 ||
-			turnRes.objectiveOutcome != nil {
-			result.WithDeliverable(&taskresult.Deliverable{
-				Text: parentContent, Artifacts: append(
-					[]taskresult.Artifact(nil), turnRes.deliverableArtifacts...,
-				),
-				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
-			})
-			result.Media = append(result.Media, mediaArtifactRefs(turnRes.deliverableArtifacts)...)
+		if strings.TrimSpace(turnRes.finalContent) != "" || turnRes.deliverable != nil || objectiveOutcome != nil {
+			deliverable := taskresult.CloneDeliverable(turnRes.deliverable)
+			if deliverable == nil {
+				deliverable = &taskresult.Deliverable{}
+			}
+			if strings.TrimSpace(deliverable.Text) == "" {
+				deliverable.Text = parentContent
+			}
+			if objectiveOutcome != nil {
+				deliverable.ObjectiveOutcome = cloneObjectiveOutcome(objectiveOutcome)
+			}
+			result.WithDeliverable(deliverable)
+			result.Media = append(result.Media, mediaArtifactRefs(deliverable.Artifacts)...)
 		}
 		if !cfg.Async {
 			switch deliveryMode {
