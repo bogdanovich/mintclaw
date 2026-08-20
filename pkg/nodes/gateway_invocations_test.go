@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -100,76 +99,6 @@ func TestGatewayInvocationRecordDescriptorValidationCache(t *testing.T) {
 	}
 	if got := len(cache[first.Plan.DescriptorHash]); got != 1 {
 		t.Fatalf("cached descriptor count after rejection = %d, want 1", got)
-	}
-}
-
-func TestGatewayInvocationStoreReloadsLegacyDryRunScrollBrowserRecord(t *testing.T) {
-	profile := browserProfileDescriptorFixture()
-	profile.Actions = []string{"navigate", "scroll"}
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor := descriptors[0]
-	if descriptor.Name != BrowserCommandSessionOpen {
-		t.Fatalf("first browser descriptor = %q", descriptor.Name)
-	}
-	descriptor.InputSchema = legacyDryRunBrowserCommandInputSchema(
-		descriptor.Name,
-		descriptor.BrowserProfiles,
-	)
-	input, err := json.Marshal(BrowserSessionOpenInput{
-		SessionID: "browser_session_legacy_scroll", Profile: profile.Alias,
-		ProfileRevision: profile.Revision, BrowserPolicyRevision: strings.Repeat("a", 64),
-		DryRun: true, Limits: profile.Limits,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalogHash, err := invocationCatalog(descriptor).Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := invocationRequest(input)
-	request.InvocationID = "browser_legacy_scroll"
-	request.IdempotencyKey = "browser_legacy_scroll_idem"
-	request.CatalogHash = catalogHash
-	request.Command = descriptor.Name
-	request.Input = input
-	plan, err := PrepareExecutionPlan(
-		request,
-		descriptor,
-		"browser",
-		"browser-policy-v1",
-		time.Now(),
-		time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "state", "node_invocations.json")
-	store, err := NewGatewayInvocationStore(path, 8, 1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = store.Prepare("ab_local_test", "browser-open-call", plan, descriptor); err != nil {
-		t.Fatal(err)
-	}
-	if _, transitioned, dispatchErr := store.MarkDispatched(
-		gatewayTestOwner("ab_local_test", "browser-open-call", plan),
-		plan.InvocationID,
-		plan.PlanHash,
-	); dispatchErr != nil || !transitioned {
-		t.Fatalf("dispatch legacy browser invocation = (%v, %v)", transitioned, dispatchErr)
-	}
-
-	reloaded, err := NewGatewayInvocationStore(path, 8, 1024*1024)
-	if err != nil {
-		t.Fatalf("reload legacy dry-run scroll record: %v", err)
-	}
-	record, found, err := reloaded.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
-	if err != nil || !found || record.State != GatewayInvocationDispatched {
-		t.Fatalf("reloaded legacy browser record = (%#v, %v, %v)", record, found, err)
 	}
 }
 

@@ -132,6 +132,7 @@ type PreparedActionStager interface {
 type WorkerPreparedAction struct {
 	InvocationID string
 	Prepared     PreparedAction
+	Action       Action
 	DriverAction DriverAction
 }
 

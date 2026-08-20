@@ -17,13 +17,7 @@ type BrowserCommandHost interface {
 	Open(context.Context, nodes.BrowserHostOpenRequest) (nodes.BrowserSessionResult, error)
 	Status(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
-	Navigate(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Click(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Fill(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Select(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Press(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Scroll(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Dialog(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
+	Act(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
 }
 
@@ -33,14 +27,6 @@ type browserContextCommandHost interface {
 
 type browserCaptureCommandHost interface {
 	Capture(context.Context, nodes.BrowserHostCaptureRequest) (nodes.BrowserOutputDescriptor, error)
-}
-
-type browserOrdinaryInteractionCommandHost interface {
-	Check(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Uncheck(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Hover(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	Drag(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
-	FileChooser(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 }
 
 type browserCommandHandler struct {
@@ -261,7 +247,8 @@ func (handler *browserCommandHandler) executeAct(
 				input.ExpectedRole == "" || !nodes.BrowserApprovalDigestMatches(input))) ||
 		(input.Action.Kind == "dialog" && !validCompanionDialogAction(input)) ||
 		((input.Action.Kind == "check" || input.Action.Kind == "uncheck") &&
-			(input.Effect != "local_edit" || !nodes.BrowserCheckRoleAllowed(input.Action.Kind, input.ExpectedRole) ||
+			(input.Effect != "local_edit" ||
+				!nodes.BrowserCheckRoleAllowed(string(input.Action.Kind), input.ExpectedRole) ||
 				input.ApprovalDigest != "")) ||
 		(input.Action.Kind == "hover" &&
 			(input.Effect != "read" || input.ExpectedRole == "" || input.ApprovalDigest != "")) ||
@@ -312,40 +299,7 @@ func (handler *browserCommandHandler) executeAct(
 		ApprovalDigest: input.ApprovalDigest,
 		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
-	var observation nodes.BrowserObservationResult
-	switch input.Action.Kind {
-	case "scroll":
-		observation, err = handler.host.Scroll(ctx, request)
-	case "click":
-		observation, err = handler.host.Click(ctx, request)
-	case "fill":
-		observation, err = handler.host.Fill(ctx, request)
-	case "select":
-		observation, err = handler.host.Select(ctx, request)
-	case "press":
-		observation, err = handler.host.Press(ctx, request)
-	case "dialog":
-		observation, err = handler.host.Dialog(ctx, request)
-	case "check", "uncheck", "hover", "drag", "file_chooser":
-		ordinary, ok := handler.host.(browserOrdinaryInteractionCommandHost)
-		if !ok {
-			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
-		}
-		switch input.Action.Kind {
-		case "check":
-			observation, err = ordinary.Check(ctx, request)
-		case "uncheck":
-			observation, err = ordinary.Uncheck(ctx, request)
-		case "drag":
-			observation, err = ordinary.Drag(ctx, request)
-		case "file_chooser":
-			observation, err = ordinary.FileChooser(ctx, request)
-		default:
-			observation, err = ordinary.Hover(ctx, request)
-		}
-	default:
-		observation, err = handler.host.Navigate(ctx, request)
-	}
+	observation, err := handler.host.Act(ctx, request)
 	if err != nil {
 		if errors.Is(err, nodes.ErrBrowserHostLost) {
 			return nil, fmt.Errorf("%w: browser action outcome is unknown", ErrInvocationOutcomeUnknown)

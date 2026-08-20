@@ -2409,23 +2409,22 @@ func TestBrokerRejectsChangedDialogBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
+func TestFileStoreRejectsLegacyDialogMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "browser.json")
 	store, err := NewFileStore(path, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	broker, worker, session := openActionTestBroker(t, store)
-	message := "Legacy dialog message canary"
 	worker.observation = driverObservationFixture()
-	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: message}
+	worker.observation.PendingDialog = &DialogObservation{Type: "confirm", Message: "Current dialog"}
 	owner := testOwner()
 	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
 	if err != nil || observation.PendingDialog == nil {
 		t.Fatalf("Observe() = %#v, %v", observation, err)
 	}
 	preparation, err := broker.PrepareAction(context.Background(), PrepareActionRequest{
-		Owner: owner, RequestID: "request_legacy_dialog", SessionID: session.ID, TabID: session.TabID,
+		Owner: owner, RequestID: "request_current_dialog", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: Action{
 			Kind: ActionDialog, DialogID: observation.PendingDialog.ID, Decision: "dismiss",
@@ -2439,27 +2438,19 @@ func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var document fileStoreDocument
+	var document map[string]any
 	if err = json.Unmarshal(raw, &document); err != nil {
 		t.Fatal(err)
 	}
-	legacy := document.PreparedActions[preparation.Action.ID]
-	legacy.Action.DialogID = ""
-	legacy.LegacyDialogMessage = message
-	legacy.DialogMessageDigest = ""
-	legacy.DialogMessageBytes = 0
-	legacy.ActionHash = ""
-	legacy.ActionHash, err = hashPreparedAction(legacy)
-	if err != nil {
-		t.Fatal(err)
+	preparedActions, ok := document["prepared_actions"].(map[string]any)
+	if !ok {
+		t.Fatalf("prepared_actions = %#v", document["prepared_actions"])
 	}
-	document.PreparedActions[legacy.ID] = legacy
-	for id, invocation := range document.Invocations {
-		if invocation.PreparedActionID == legacy.ID {
-			invocation.ActionHash = legacy.ActionHash
-			document.Invocations[id] = invocation
-		}
+	prepared, ok := preparedActions[preparation.Action.ID].(map[string]any)
+	if !ok {
+		t.Fatalf("prepared action = %#v", preparedActions[preparation.Action.ID])
 	}
+	prepared["dialog_message"] = "obsolete plaintext"
 	raw, err = json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -2468,20 +2459,8 @@ func TestFileStoreMigratesLegacyDialogMessageToDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := NewFileStore(path, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	migrated, err := reopened.GetPreparedAction(context.Background(), legacy.ID)
-	if err != nil || migrated.Action.DialogID == "" || migrated.LegacyDialogMessage != "" ||
-		!validDigest(migrated.DialogMessageDigest) || migrated.DialogMessageBytes != len(message) ||
-		migrated.Validate(config.BrowserMaxTextInputBytes) != nil {
-		t.Fatalf("migrated dialog = %#v, %v", migrated, err)
-	}
-	raw, err = os.ReadFile(path)
-	if err != nil || bytes.Contains(raw, []byte(message)) || bytes.Contains(raw, []byte(`"dialog_message"`)) {
-		t.Fatalf("migrated store retained legacy message: %s, %v", raw, err)
+	if _, err = NewFileStore(path, 0, 0); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("NewFileStore() error = %v, want unknown-field rejection", err)
 	}
 }
 
@@ -2745,6 +2724,85 @@ func assertNetworkQuarantine(
 	if getErr != nil || stored.State != SessionLost || stored.SafeFailure != "network_denied" ||
 		worker.closed != 1 {
 		t.Fatalf("network quarantine = %+v, %v; worker = %+v", stored, getErr, worker)
+	}
+}
+
+func TestWorkerActionForPreparedUsesCanonicalAction(t *testing.T) {
+	tests := []struct {
+		name     string
+		prepared Action
+		driver   DriverAction
+		want     Action
+	}{
+		{name: "navigate", prepared: Action{Kind: ActionNavigate}, driver: DriverAction{
+			Kind: DriverNavigate, URL: "https://example.com/",
+		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/"}},
+		{name: "click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
+			Kind: DriverClick, Target: "host_ref_click",
+		}, want: Action{Kind: ActionClick, Ref: "host_ref_click"}},
+		{name: "fill", prepared: Action{Kind: ActionFill}, driver: DriverAction{
+			Kind: DriverFill, Target: "host_ref_fill", Value: "private",
+		}, want: Action{Kind: ActionFill, Ref: "host_ref_fill"}},
+		{name: "select", prepared: Action{Kind: ActionSelect}, driver: DriverAction{
+			Kind: DriverSelect, Target: "host_ref_select", Value: "private",
+		}, want: Action{Kind: ActionSelect, Ref: "host_ref_select"}},
+		{name: "check", prepared: Action{Kind: ActionCheck}, driver: DriverAction{
+			Kind: DriverCheck, Target: "host_ref_check",
+		}, want: Action{Kind: ActionCheck, Ref: "host_ref_check"}},
+		{name: "uncheck", prepared: Action{Kind: ActionUncheck}, driver: DriverAction{
+			Kind: DriverUncheck, Target: "host_ref_uncheck",
+		}, want: Action{Kind: ActionUncheck, Ref: "host_ref_uncheck"}},
+		{name: "hover", prepared: Action{Kind: ActionHover}, driver: DriverAction{
+			Kind: DriverHover, Target: "host_ref_hover",
+		}, want: Action{Kind: ActionHover, Ref: "host_ref_hover"}},
+		{name: "download", prepared: Action{Kind: ActionDownload, Deliver: true}, driver: DriverAction{
+			Kind: DriverDownloadAction, Target: "host_ref_download",
+		}, want: Action{Kind: ActionDownload, Ref: "host_ref_download", Deliver: true}},
+		{name: "press", prepared: Action{Kind: ActionPress, Target: "document"}, driver: DriverAction{
+			Kind: DriverPress, Key: "Enter",
+		}, want: Action{Kind: ActionPress, Target: "document", Key: "Enter"}},
+		{name: "scroll", prepared: Action{Kind: ActionScroll}, driver: DriverAction{
+			Kind: DriverScroll, Direction: "down", Amount: 2,
+		}, want: Action{Kind: ActionScroll, Direction: "down", Amount: 2}},
+		{name: "dialog", prepared: Action{
+			Kind: ActionDialog, DialogID: "dialog_1", Decision: "accept",
+		}, driver: DriverAction{
+			Kind: DriverDialog, PromptProvided: true,
+		}, want: Action{
+			Kind: ActionDialog, DialogID: "dialog_1", Decision: "accept", PromptProvided: true,
+		}},
+		{name: "drag", prepared: Action{Kind: ActionDrag}, driver: DriverAction{
+			Kind: DriverDrag, Target: "host_ref_source", DestinationTarget: "host_ref_destination",
+		}, want: Action{
+			Kind: ActionDrag, SourceRef: "host_ref_source", DestinationRef: "host_ref_destination",
+		}},
+		{name: "file chooser", prepared: Action{
+			Kind: ActionFileChooser, ArtifactRef: "transfer-artifact://artifact_1",
+		}, driver: DriverAction{
+			Kind: DriverUpload, Target: "host_ref_file",
+		}, want: Action{
+			Kind: ActionFileChooser, Ref: "host_ref_file", ArtifactRef: "transfer-artifact://artifact_1",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := workerActionForPrepared(test.prepared, test.driver)
+			if err != nil || got != test.want {
+				t.Fatalf("worker action = %#v, %v; want %#v", got, err, test.want)
+			}
+			request := WorkerPreparedAction{
+				Prepared: PreparedAction{Action: test.prepared}, Action: got, DriverAction: test.driver,
+			}
+			if err = request.Validate(1024); err != nil {
+				t.Fatalf("WorkerPreparedAction.Validate() error = %v", err)
+			}
+		})
+	}
+	if _, err := workerActionForPrepared(
+		Action{Kind: ActionNavigate},
+		DriverAction{Kind: DriverClick},
+	); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mismatched worker action error = %v", err)
 	}
 }
 

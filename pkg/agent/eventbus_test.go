@@ -890,12 +890,13 @@ func upsertAsyncTaskForTest(t *testing.T, al *AgentLoop, workspace, taskID strin
 		t.Fatal("expected task registry")
 	}
 	if err := registry.Upsert(taskregistry.Record{
-		TaskID:         taskID,
-		Runtime:        taskregistry.RuntimeSubagent,
-		TaskKind:       "spawn",
-		Task:           "async test task",
-		Status:         taskregistry.StatusRunning,
-		DeliveryStatus: taskregistry.DeliveryPending,
+		TaskID:             taskID,
+		Runtime:            taskregistry.RuntimeSubagent,
+		TaskKind:           "spawn",
+		Task:               "async test task",
+		Status:             taskregistry.StatusRunning,
+		DeliveryStatus:     taskregistry.DeliveryPending,
+		HistoryPolicyKnown: true,
 	}); err != nil {
 		t.Fatalf("upsert task: %v", err)
 	}

@@ -79,6 +79,8 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = toolshared.WithToolSessionContext(ctx, "main", "requester-session", nil)
+	ctx = toolshared.WithToolHistoryDisabled(ctx, true)
 	args := map[string]any{
 		"task":     "Write a haiku about coding",
 		"label":    "haiku-task",
@@ -110,16 +112,58 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	if !strings.HasPrefix(taskID, "subagent-") {
 		t.Fatalf("task ID = %q, want subagent-*", taskID)
 	}
+	if !strings.Contains(result.ForLLM, taskID) ||
+		!strings.Contains(result.ForLLM, "acceptance only") ||
+		!strings.Contains(result.ForLLM, "task_status") {
+		t.Fatalf("spawn acknowledgement lacks durable status guidance: %q", result.ForLLM)
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		rec, ok := manager.taskRegistry.Get(taskID)
 		if ok && rec.Status == taskregistry.StatusSucceeded {
+			if rec.OwnerKey != "main" || rec.RequesterSessionKey != "requester-session" ||
+				!rec.HistoryPolicyKnown ||
+				!rec.HistoryDisabled {
+				t.Fatalf("task ownership = %+v", rec)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("task registry never observed succeeded result for %q", taskID)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T) {
+	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	tool := NewSpawnTool(manager)
+	spawner := &mockSpawner{done: make(chan struct{})}
+	tool.SetSpawner(spawner)
+	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+		return targetAgentID == "browser"
+	})
+
+	result := tool.ExecuteAsync(context.Background(), map[string]any{
+		"agent_id": "browser",
+		"task":     "inspect two listings",
+	}, func(context.Context, *toolshared.ToolResult) {
+		t.Error("callback must not run when browser objective preflight fails")
+	})
+
+	if result == nil || !result.IsError || result.Async {
+		t.Fatalf("result = %#v, want synchronous error", result)
+	}
+	if !strings.Contains(result.ForLLM, "retry spawn") {
+		t.Fatalf("ForLLM = %q, want retry guidance", result.ForLLM)
+	}
+	if tasks := manager.ListTaskCopies(); len(tasks) != 0 {
+		t.Fatalf("spawned tasks = %#v, want none", tasks)
+	}
+	select {
+	case <-spawner.done:
+		t.Fatal("browser child started without objective_items")
+	default:
 	}
 }
 

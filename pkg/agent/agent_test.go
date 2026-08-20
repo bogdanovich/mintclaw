@@ -27,6 +27,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
@@ -10579,11 +10580,22 @@ func TestProcessMessage_ContextOverflowRecoveryPreservesMediaBoundary(t *testing
 
 	provider := &overflowProvider{}
 	al.registry = NewAgentRegistry(al.cfg, provider)
+	agent := al.GetRegistry().GetDefaultAgent()
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:overflow-media-boundary")
+	if err := al.taskRegistryForWorkspace(agent.Workspace).Upsert(taskregistry.Record{
+		TaskID: "overflow-media-terminal-task", Runtime: taskregistry.RuntimeDelegate,
+		Status: taskregistry.StatusFailed, TerminalSummary: "previous media task blocked",
+		OwnerKey: agent.ID, RequesterSessionKey: sessionKey, HistoryPolicyKnown: true,
+		EndedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	message := testInboundMessage(bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "overflow-media-boundary",
-		Content: "[image]",
-		Media:   []string{currentRef},
+		Channel:    "test",
+		ChatID:     "overflow-media-boundary",
+		SessionKey: sessionKey,
+		Content:    "[image]",
+		Media:      []string{currentRef},
 	})
 	al.contextManager = &staticContextManager{response: &AssembleResponse{History: []providers.Message{
 		{Role: "user", Content: "[image]", Media: []string{historicalRef}},
@@ -10614,6 +10626,11 @@ func TestProcessMessage_ContextOverflowRecoveryPreservesMediaBoundary(t *testing
 	if currentMessage == nil || len(currentMessage.Media) != 1 ||
 		!strings.HasPrefix(currentMessage.Media[0], "data:image/png;base64,") {
 		t.Fatalf("current image was not preserved across the retry: %#v", currentMessage)
+	}
+	terminalIndex := messageContentIndex(provider.lastMessages, "previous media task blocked")
+	currentIndex := messageMediaIndex(provider.lastMessages, "data:image/png;base64,")
+	if terminalIndex < 0 || currentIndex < 0 || terminalIndex >= currentIndex {
+		t.Fatalf("terminal task context crossed the protected media boundary: %#v", provider.lastMessages)
 	}
 }
 
@@ -10729,11 +10746,22 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	provider := &protectedToolOverflowProvider{canary: canary}
 	al.registry = NewAgentRegistry(al.cfg, provider)
 	al.RegisterTool(&protectedResultProjectionTool{})
+	agent := al.GetRegistry().GetDefaultAgent()
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:protected-overflow")
+	if err := al.taskRegistryForWorkspace(agent.Workspace).Upsert(taskregistry.Record{
+		TaskID: "overflow-tool-terminal-task", Runtime: taskregistry.RuntimeSubagent,
+		Status: taskregistry.StatusFailed, TerminalSummary: "previous tool task blocked",
+		OwnerKey: agent.ID, RequesterSessionKey: sessionKey, HistoryPolicyKnown: true,
+		EndedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "protected-overflow",
-		Content: "fill and verify protected input",
+		Channel:    "test",
+		ChatID:     "protected-overflow",
+		SessionKey: sessionKey,
+		Content:    "fill and verify protected input",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -10750,6 +10778,31 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	if !strings.Contains(retryResult, canary) {
 		t.Fatalf("overflow retry lost live protected observation: %#v", provider.retryMessages)
 	}
+	terminalIndex := messageContentIndex(provider.retryMessages, "previous tool task blocked")
+	activeTurnIndex := messageContentIndex(provider.retryMessages, "fill and verify protected input")
+	if terminalIndex < 0 || activeTurnIndex < 0 || terminalIndex >= activeTurnIndex {
+		t.Fatalf("terminal task context crossed the protected tool boundary: %#v", provider.retryMessages)
+	}
+}
+
+func messageContentIndex(messages []providers.Message, content string) int {
+	for i, message := range messages {
+		if strings.Contains(message.Content, content) {
+			return i
+		}
+	}
+	return -1
+}
+
+func messageMediaIndex(messages []providers.Message, prefix string) int {
+	for i, message := range messages {
+		for _, mediaRef := range message.Media {
+			if strings.HasPrefix(mediaRef, prefix) {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func messageContentPresent(messages []providers.Message, content string) bool {

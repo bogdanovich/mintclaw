@@ -187,6 +187,8 @@ type Record struct {
 	ParentTaskID        string              `json:"parent_task_id,omitempty"`
 	RequesterSessionKey string              `json:"requester_session_key,omitempty"`
 	OwnerKey            string              `json:"owner_key,omitempty"`
+	HistoryPolicyKnown  bool                `json:"history_policy_known,omitempty"`
+	HistoryDisabled     bool                `json:"history_disabled,omitempty"`
 	ScopeKind           string              `json:"scope_kind,omitempty"`
 	Channel             string              `json:"channel,omitempty"`
 	ChatID              string              `json:"chat_id,omitempty"`

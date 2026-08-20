@@ -517,110 +517,19 @@ func (*nodeBrowserWorker) Execute(context.Context, browser.DriverAction) error {
 }
 
 func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind) bool {
-	switch kind {
-	case browser.ActionNavigate:
-		return slices.Contains(worker.actions, "navigate")
-	case browser.ActionClick:
-		return slices.Contains(worker.actions, "click")
-	case browser.ActionFill:
-		return slices.Contains(worker.actions, "fill")
-	case browser.ActionSelect:
-		return slices.Contains(worker.actions, "select")
-	case browser.ActionPress:
-		return slices.Contains(worker.actions, "press")
-	case browser.ActionScroll:
-		return slices.Contains(worker.actions, "scroll")
-	case browser.ActionDialog:
-		return slices.Contains(worker.actions, "dialog")
-	case browser.ActionCheck:
-		return slices.Contains(worker.actions, "check")
-	case browser.ActionUncheck:
-		return slices.Contains(worker.actions, "uncheck")
-	case browser.ActionHover:
-		return slices.Contains(worker.actions, "hover")
-	case browser.ActionDrag:
-		return slices.Contains(worker.actions, "drag")
-	case browser.ActionFileChooser:
-		return slices.Contains(worker.actions, "file_chooser")
-	default:
-		return false
-	}
+	return kind.Valid() && kind != browser.ActionDownload && slices.Contains(worker.actions, string(kind))
 }
 
 func (worker *nodeBrowserWorker) ExecutePrepared(
 	ctx context.Context,
 	request browser.WorkerPreparedAction,
 ) error {
-	var action nodes.BrowserAction
-	var effect string
-	switch {
-	case request.Prepared.Action.Kind == browser.ActionNavigate &&
-		request.DriverAction.Kind == browser.DriverNavigate && slices.Contains(worker.actions, "navigate"):
-		action = nodes.BrowserAction{Kind: "navigate", URL: request.DriverAction.URL}
-		effect = "navigation"
-	case request.Prepared.Action.Kind == browser.ActionScroll &&
-		request.DriverAction.Kind == browser.DriverScroll && slices.Contains(worker.actions, "scroll"):
-		action = nodes.BrowserAction{
-			Kind: "scroll", Direction: request.DriverAction.Direction, Amount: request.DriverAction.Amount,
-		}
-		effect = "read"
-	case request.Prepared.Action.Kind == browser.ActionClick &&
-		request.DriverAction.Kind == browser.DriverClick && slices.Contains(worker.actions, "click"):
-		action = nodes.BrowserAction{Kind: "click", Ref: request.DriverAction.Target}
-		effect = string(request.Prepared.Effect)
-	case request.Prepared.Action.Kind == browser.ActionSelect &&
-		request.DriverAction.Kind == browser.DriverSelect && slices.Contains(worker.actions, "select"):
-		action = nodes.BrowserAction{
-			Kind: "select", Ref: request.DriverAction.Target,
-		}
-		effect = "local_edit"
-	case request.Prepared.Action.Kind == browser.ActionFill &&
-		request.DriverAction.Kind == browser.DriverFill && slices.Contains(worker.actions, "fill"):
-		action = nodes.BrowserAction{Kind: "fill", Ref: request.DriverAction.Target}
-		effect = "local_edit"
-	case request.Prepared.Action.Kind == browser.ActionPress &&
-		request.DriverAction.Kind == browser.DriverPress && slices.Contains(worker.actions, "press"):
-		action = nodes.BrowserAction{
-			Kind: "press", Target: request.Prepared.Action.Target, Key: request.DriverAction.Key,
-		}
-		effect = "unknown"
-	case request.Prepared.Action.Kind == browser.ActionDialog &&
-		request.DriverAction.Kind == browser.DriverDialog && slices.Contains(worker.actions, "dialog"):
-		action = nodes.BrowserAction{
-			Kind: "dialog", DialogID: request.Prepared.Action.DialogID,
-			Decision:       request.Prepared.Action.Decision,
-			PromptProvided: request.DriverAction.PromptProvided,
-		}
-		effect = string(request.Prepared.Effect)
-	case request.Prepared.Action.Kind == browser.ActionCheck &&
-		request.DriverAction.Kind == browser.DriverCheck && slices.Contains(worker.actions, "check"):
-		action = nodes.BrowserAction{Kind: "check", Ref: request.DriverAction.Target}
-		effect = "local_edit"
-	case request.Prepared.Action.Kind == browser.ActionUncheck &&
-		request.DriverAction.Kind == browser.DriverUncheck && slices.Contains(worker.actions, "uncheck"):
-		action = nodes.BrowserAction{Kind: "uncheck", Ref: request.DriverAction.Target}
-		effect = "local_edit"
-	case request.Prepared.Action.Kind == browser.ActionHover &&
-		request.DriverAction.Kind == browser.DriverHover && slices.Contains(worker.actions, "hover"):
-		action = nodes.BrowserAction{Kind: "hover", Ref: request.DriverAction.Target}
-		effect = "read"
-	case request.Prepared.Action.Kind == browser.ActionDrag &&
-		request.DriverAction.Kind == browser.DriverDrag && slices.Contains(worker.actions, "drag"):
-		action = nodes.BrowserAction{
-			Kind: "drag", SourceRef: request.DriverAction.Target,
-			DestinationRef: request.DriverAction.DestinationTarget,
-		}
-		effect = "unknown"
-	case request.Prepared.Action.Kind == browser.ActionFileChooser &&
-		request.DriverAction.Kind == browser.DriverUpload && slices.Contains(worker.actions, "file_chooser"):
-		action = nodes.BrowserAction{
-			Kind: "file_chooser", Ref: request.DriverAction.Target,
-			ArtifactRef: request.Prepared.Action.ArtifactRef,
-		}
-		effect = "local_edit"
-	default:
+	if request.Validate(nodes.MaxBrowserTextInputBytes) != nil ||
+		!worker.SupportsPreparedAction(request.Action.Kind) {
 		return browser.ErrDenied
 	}
+	action := request.Action
+	effect := string(request.Prepared.Effect)
 	worker.mu.Lock()
 	generation := worker.snapshotGeneration
 	worker.mu.Unlock()
@@ -729,8 +638,8 @@ func (worker *nodeBrowserWorker) StagePreparedAction(
 	ctx context.Context,
 	request browser.WorkerPreparedAction,
 ) error {
-	if request.Prepared.Action.Kind != browser.ActionFileChooser ||
-		request.DriverAction.Kind != browser.DriverUpload || !worker.SupportsPreparedAction(request.Prepared.Action.Kind) {
+	if request.Validate(nodes.MaxBrowserTextInputBytes) != nil || request.Action.Kind != browser.ActionFileChooser ||
+		!worker.SupportsPreparedAction(request.Action.Kind) {
 		return browser.ErrDenied
 	}
 	return worker.stageBrowserArtifact(ctx, request)

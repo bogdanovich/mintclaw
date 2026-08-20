@@ -296,10 +296,10 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 		t.Fatalf("initial Observe() = %#v, %v", initial, err)
 	}
 
-	navigated, err := host.Navigate(t.Context(), BrowserHostNavigateRequest{
+	navigated, err := host.Act(t.Context(), BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_action_1",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Action:             browserworker.Action{Kind: browserworker.ActionNavigate, URL: "https://example.com/"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
@@ -316,20 +316,20 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	}
 	replayed := browserHostNavigateFixture()
 	replayed.SnapshotGeneration = 2
-	if _, err = host.Navigate(t.Context(), replayed); !errors.Is(err, ErrBrowserHostStale) ||
+	if _, err = host.Act(t.Context(), replayed); !errors.Is(err, ErrBrowserHostStale) ||
 		len(worker.actions) != 1 {
 		t.Fatalf("replayed successful Navigate() error = %v, actions = %d", err, len(worker.actions))
 	}
 	replayed.PreparedActionHash = strings.Repeat("c", 64)
-	if _, err = host.Navigate(t.Context(), replayed); !errors.Is(err, ErrBrowserHostDenied) ||
+	if _, err = host.Act(t.Context(), replayed); !errors.Is(err, ErrBrowserHostDenied) ||
 		len(worker.actions) != 1 {
 		t.Fatalf("rebound Navigate() error = %v, actions = %d", err, len(worker.actions))
 	}
 
-	_, err = host.Navigate(t.Context(), BrowserHostNavigateRequest{
+	_, err = host.Act(t.Context(), BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_action_2",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/stale"},
+		Action:             browserworker.Action{Kind: browserworker.ActionNavigate, URL: "https://example.com/stale"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("c", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
@@ -423,10 +423,10 @@ func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := host.Scroll(t.Context(), BrowserHostNavigateRequest{
+	result, err := host.Act(t.Context(), BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_scroll_1",
-		Action:             nodes.BrowserAction{Kind: "scroll", Direction: "down", Amount: 2},
+		Action:             browserworker.Action{Kind: browserworker.ActionScroll, Direction: "down", Amount: 2},
 		Effect:             "read", CurrentOrigin: "about:blank",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
@@ -443,7 +443,7 @@ func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
 }
 
 func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
-	newFixture := func(t *testing.T, dryRun bool) (*BrowserHost, *fakeBrowserHostWorker, BrowserHostNavigateRequest) {
+	newFixture := func(t *testing.T, dryRun bool) (*BrowserHost, *fakeBrowserHostWorker, BrowserHostActRequest) {
 		t.Helper()
 		element := browserworker.DriverElement{Target: "driver_ref_1", Role: "button", Name: "Save"}
 		observation := browserworker.DriverObservation{
@@ -480,10 +480,10 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 			strings.Contains(initial.Snapshot, "driver_ref_1") {
 			t.Fatalf("initial safe observation = %#v, %v", initial, err)
 		}
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_click_1",
-			Action:             nodes.BrowserAction{Kind: "click", Ref: initial.Elements[0].Ref},
+			Action:             browserworker.Action{Kind: browserworker.ActionClick, Ref: initial.Elements[0].Ref},
 			Effect:             "external_commit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
@@ -498,7 +498,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		host, worker, request := newFixture(t, false)
-		result, err := host.Click(t.Context(), request)
+		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
 			t.Fatalf("Click() = %#v, %v", result, err)
 		}
@@ -517,7 +517,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 			t.Fatalf("Click() semantic drift error = %v, want stale", err)
 		}
 		if len(worker.actions) != 0 {
@@ -531,7 +531,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 			worker.observations[1].Elements,
 			browserworker.DriverElement{Target: "driver_ref_1", Role: "button", Name: "Save"},
 		)
-		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 			t.Fatalf("Click() duplicate target error = %v, want stale", err)
 		}
 		if len(worker.actions) != 0 {
@@ -542,7 +542,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 	t.Run("digest mismatch", func(t *testing.T) {
 		host, worker, request := newFixture(t, false)
 		request.ApprovalDigest = strings.Repeat("f", 64)
-		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Click() digest mismatch error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 {
@@ -552,7 +552,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 
 	t.Run("dry run", func(t *testing.T) {
 		host, worker, request := newFixture(t, true)
-		if _, err := host.Click(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Click() dry-run error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 {
@@ -603,10 +603,10 @@ func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
 		t.Fatalf("initial dialog = %#v, %v", initial, err)
 	}
 	secret := "dialog-prompt-canary"
-	request := BrowserHostNavigateRequest{
+	request := BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_dialog_1",
-		Action: nodes.BrowserAction{
+		Action: browserworker.Action{
 			Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept",
 			Value: secret, PromptProvided: true,
 		},
@@ -621,7 +621,7 @@ func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := host.Dialog(t.Context(), request)
+	result, err := host.Act(t.Context(), request)
 	if err != nil || result.SnapshotGeneration != 2 || result.PendingDialog != nil {
 		t.Fatalf("Dialog() = %#v, %v", result, err)
 	}
@@ -664,10 +664,10 @@ func TestBrowserHostRejectsReplacedDialogBeforeDispatch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request := BrowserHostNavigateRequest{
+	request := BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_dialog_replaced",
-		Action: nodes.BrowserAction{
+		Action: browserworker.Action{
 			Kind: "dialog", DialogID: "dialog_authority_1", Decision: "dismiss",
 		},
 		Effect: "read", CurrentOrigin: "https://example.com",
@@ -677,7 +677,7 @@ func TestBrowserHostRejectsReplacedDialogBeforeDispatch(t *testing.T) {
 		DialogMessageBytes:  len("First"),
 		RoutedSessionID:     "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	}
-	if _, err = host.Dialog(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("Dialog(replaced) error = %v, want stale", err)
 	}
 	if len(worker.actions) != 0 {
@@ -734,16 +734,18 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	t.Run("select semantic option", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_select_1", Role: "combobox", Name: "State"}
 		host, worker, initial := newFixture(t, element)
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_select_1",
-			Action:             nodes.BrowserAction{Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA"},
-			Effect:             "local_edit", CurrentOrigin: "https://example.com",
+			Action: browserworker.Action{
+				Kind: browserworker.ActionSelect, Ref: initial.Elements[0].Ref, Value: "CA",
+			},
+			Effect: "local_edit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
 			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 		}
-		result, err := host.Select(t.Context(), request)
+		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
 			t.Fatalf("Select() = %#v, %v", result, err)
 		}
@@ -769,25 +771,18 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				Name:   "Control",
 			}
 			host, worker, initial := newFixture(t, element)
-			request := BrowserHostNavigateRequest{
+			request := BrowserHostActRequest{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 				ActionInvocationID: "browser_" + test.kind + "_1",
-				Action:             nodes.BrowserAction{Kind: test.kind, Ref: initial.Elements[0].Ref},
-				Effect:             test.effect, CurrentOrigin: "https://example.com",
+				Action: browserworker.Action{
+					Kind: browserworker.ActionKind(test.kind), Ref: initial.Elements[0].Ref,
+				},
+				Effect: test.effect, CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: "Control",
 				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 			}
-			var result BrowserHostObservation
-			var err error
-			switch test.kind {
-			case "check":
-				result, err = host.Check(t.Context(), request)
-			case "uncheck":
-				result, err = host.Uncheck(t.Context(), request)
-			default:
-				result, err = host.Hover(t.Context(), request)
-			}
+			result, err := host.Act(t.Context(), request)
 			if err != nil || result.SnapshotGeneration != 2 {
 				t.Fatalf("%s = %#v, %v", test.kind, result, err)
 			}
@@ -801,16 +796,16 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	t.Run("deny radio uncheck", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_radio_1", Role: "radio", Name: "Primary"}
 		host, worker, initial := newFixture(t, element)
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_uncheck_radio_1",
-			Action:             nodes.BrowserAction{Kind: "uncheck", Ref: initial.Elements[0].Ref},
+			Action:             browserworker.Action{Kind: browserworker.ActionUncheck, Ref: initial.Elements[0].Ref},
 			Effect:             "local_edit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "radio", ExpectedName: "Primary",
 			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 		}
-		if _, err := host.Uncheck(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Uncheck(radio) error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 {
@@ -821,10 +816,10 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	t.Run("fill ordinary text", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_1",
-			Action: nodes.BrowserAction{
+			Action: browserworker.Action{
 				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada",
 			},
 			Effect: "local_edit", CurrentOrigin: "https://example.com",
@@ -832,7 +827,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
 			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 		}
-		result, err := host.Fill(t.Context(), request)
+		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
 			t.Fatalf("Fill() = %#v, %v", result, err)
 		}
@@ -850,16 +845,28 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		host.sessions["browser_session_1"].limits.TextInputBytes = 2
-		request := BrowserHostNavigateRequest{
-			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		request := BrowserHostActRequest{
+			SessionID:          "browser_session_1",
+			TabID:              "tab_primary",
+			SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_over_profile_limit",
-			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
-			Effect:             "local_edit", CurrentOrigin: "https://example.com",
-			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			Action: browserworker.Action{
+				Kind:  browserworker.ActionFill,
+				Ref:   initial.Elements[0].Ref,
+				Value: "Ada",
+			},
+			Effect:                "local_edit",
+			CurrentOrigin:         "https://example.com",
+			PreparedActionHash:    strings.Repeat("b", 64),
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision:       "managed-v1",
+			ExpectedRole:          "textbox",
+			ExpectedName:          "Display name",
+			RoutedSessionID:       "routed_session_1",
+			AgentID:               "browser",
+			ActorID:               "telegram:owner",
 		}
-		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(over profile limit) error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 || worker.authorizeFillCalls != 0 {
@@ -875,16 +882,28 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		host.sessions["browser_session_1"].profile.SensitiveFields = []string{"display name"}
-		request := BrowserHostNavigateRequest{
-			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		request := BrowserHostActRequest{
+			SessionID:          "browser_session_1",
+			TabID:              "tab_primary",
+			SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_configured_sensitive",
-			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
-			Effect:             "local_edit", CurrentOrigin: "https://example.com",
-			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			Action: browserworker.Action{
+				Kind:  browserworker.ActionFill,
+				Ref:   initial.Elements[0].Ref,
+				Value: "Ada",
+			},
+			Effect:                "local_edit",
+			CurrentOrigin:         "https://example.com",
+			PreparedActionHash:    strings.Repeat("b", 64),
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision:       "managed-v1",
+			ExpectedRole:          "textbox",
+			ExpectedName:          "Display name",
+			RoutedSessionID:       "routed_session_1",
+			AgentID:               "browser",
+			ActorID:               "telegram:owner",
 		}
-		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(configured sensitive) error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 || worker.authorizeFillCalls != 0 {
@@ -900,16 +919,28 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		worker.authorizeFillErr = browserworker.ErrDenied
-		request := BrowserHostNavigateRequest{
-			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		request := BrowserHostActRequest{
+			SessionID:          "browser_session_1",
+			TabID:              "tab_primary",
+			SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_private_denied",
-			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
-			Effect:             "local_edit", CurrentOrigin: "https://example.com",
-			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			Action: browserworker.Action{
+				Kind:  browserworker.ActionFill,
+				Ref:   initial.Elements[0].Ref,
+				Value: "Ada",
+			},
+			Effect:                "local_edit",
+			CurrentOrigin:         "https://example.com",
+			PreparedActionHash:    strings.Repeat("b", 64),
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision:       "managed-v1",
+			ExpectedRole:          "textbox",
+			ExpectedName:          "Display name",
+			RoutedSessionID:       "routed_session_1",
+			AgentID:               "browser",
+			ActorID:               "telegram:owner",
 		}
-		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(private denial) error = %v, want denied", err)
 		}
 		session := host.sessions["browser_session_1"]
@@ -924,16 +955,28 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		worker.executeErr = browserworker.ErrDenied
-		request := BrowserHostNavigateRequest{
-			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		request := BrowserHostActRequest{
+			SessionID:          "browser_session_1",
+			TabID:              "tab_primary",
+			SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_final_denied",
-			Action:             nodes.BrowserAction{Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada"},
-			Effect:             "local_edit", CurrentOrigin: "https://example.com",
-			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			Action: browserworker.Action{
+				Kind:  browserworker.ActionFill,
+				Ref:   initial.Elements[0].Ref,
+				Value: "Ada",
+			},
+			Effect:                "local_edit",
+			CurrentOrigin:         "https://example.com",
+			PreparedActionHash:    strings.Repeat("b", 64),
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision:       "managed-v1",
+			ExpectedRole:          "textbox",
+			ExpectedName:          "Display name",
+			RoutedSessionID:       "routed_session_1",
+			AgentID:               "browser",
+			ActorID:               "telegram:owner",
 		}
-		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(final denial) error = %v, want denied", err)
 		}
 		session := host.sessions["browser_session_1"]
@@ -946,10 +989,10 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 	t.Run("deny sensitive fill before dispatch", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Password"}
 		host, worker, initial := newFixture(t, element)
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_fill_sensitive_1",
-			Action: nodes.BrowserAction{
+			Action: browserworker.Action{
 				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "secret",
 			},
 			Effect: "local_edit", CurrentOrigin: "https://example.com",
@@ -957,7 +1000,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Password",
 			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 		}
-		if _, err := host.Fill(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(sensitive) error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 {
@@ -967,10 +1010,10 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 
 	t.Run("press document", func(t *testing.T) {
 		host, worker, _ := newFixture(t, browserworker.DriverElement{})
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_press_1",
-			Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Enter"},
+			Action:             browserworker.Action{Kind: browserworker.ActionPress, Target: "document", Key: "Enter"},
 			Effect:             "unknown", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
@@ -981,7 +1024,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := host.Press(t.Context(), request)
+		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
 			t.Fatalf("Press() = %#v, %v", result, err)
 		}
@@ -995,17 +1038,19 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 
 	t.Run("privileged shortcut denied", func(t *testing.T) {
 		host, worker, _ := newFixture(t, browserworker.DriverElement{})
-		request := BrowserHostNavigateRequest{
+		request := BrowserHostActRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_press_denied",
-			Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Control+L"},
-			Effect:             "unknown", CurrentOrigin: "https://example.com",
+			Action: browserworker.Action{
+				Kind: browserworker.ActionPress, Target: "document", Key: "Control+L",
+			},
+			Effect: "unknown", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
 			AgentID: "browser", ActorID: "telegram:owner",
 		}
 		request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
-		if _, err := host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Press(Control+L) error = %v, want denied", err)
 		}
 		if len(worker.actions) != 0 {
@@ -1023,7 +1068,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				worker.navigationIdentities = []string{
 					"navigation_1", "navigation_1", "navigation_2", "navigation_2",
 				}
-				request := BrowserHostNavigateRequest{
+				request := BrowserHostActRequest{
 					SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 					ActionInvocationID: "browser_replaced_" + action,
 					Effect:             "local_edit", CurrentOrigin: "https://example.com",
@@ -1032,14 +1077,16 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 					RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 				}
 				if action == "select" {
-					request.Action = nodes.BrowserAction{
+					request.Action = browserworker.Action{
 						Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
 					}
-					if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 						t.Fatalf("Select(%s) error = %v, want stale", transition, err)
 					}
 				} else {
-					request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+					request.Action = browserworker.Action{
+						Kind: browserworker.ActionPress, Target: "document", Key: "Tab",
+					}
 					request.Effect = "unknown"
 					request.ExpectedRole, request.ExpectedName = "", ""
 					var err error
@@ -1047,7 +1094,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+					if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 						t.Fatalf("Press(%s) error = %v, want stale", transition, err)
 					}
 				}
@@ -1068,7 +1115,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			worker.beforeBoundDispatch = func() {
 				worker.dispatchNavigationID = "navigation_2"
 			}
-			request := BrowserHostNavigateRequest{
+			request := BrowserHostActRequest{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 				ActionInvocationID: "browser_dispatch_race_" + action,
 				Effect:             "local_edit", CurrentOrigin: "https://example.com",
@@ -1077,14 +1124,16 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 			}
 			if action == "select" {
-				request.Action = nodes.BrowserAction{
+				request.Action = browserworker.Action{
 					Kind: "select", Ref: initial.Elements[0].Ref, Value: "CA",
 				}
-				if _, err := host.Select(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+				if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 					t.Fatalf("Select(dispatch navigation) error = %v, want stale", err)
 				}
 			} else {
-				request.Action = nodes.BrowserAction{Kind: "press", Target: "document", Key: "Tab"}
+				request.Action = browserworker.Action{
+					Kind: browserworker.ActionPress, Target: "document", Key: "Tab",
+				}
 				request.Effect = "unknown"
 				request.ExpectedRole, request.ExpectedName = "", ""
 				var err error
@@ -1092,7 +1141,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = host.Press(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+				if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 					t.Fatalf("Press(dispatch navigation) error = %v, want stale", err)
 				}
 			}
@@ -1139,10 +1188,10 @@ func TestBrowserHostExecutesApprovedDragWithFreshSourceAndDestination(t *testing
 	if err != nil || len(initial.Elements) != 2 {
 		t.Fatalf("Observe() = %#v, %v", initial, err)
 	}
-	request := BrowserHostNavigateRequest{
+	request := BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_drag_1",
-		Action: nodes.BrowserAction{
+		Action: browserworker.Action{
 			Kind: "drag", SourceRef: initial.Elements[0].Ref, DestinationRef: initial.Elements[1].Ref,
 		},
 		Effect: "unknown", CurrentOrigin: "https://example.com",
@@ -1155,7 +1204,7 @@ func TestBrowserHostExecutesApprovedDragWithFreshSourceAndDestination(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := host.Drag(t.Context(), request)
+	result, err := host.Act(t.Context(), request)
 	want := browserworker.DriverAction{
 		Kind: browserworker.DriverDrag, Target: source.Target, Element: source.Name,
 		DestinationTarget: destination.Target, DestinationElement: destination.Name,
@@ -1225,7 +1274,7 @@ func TestBrowserHostBindsEveryCommandToRoutedSession(t *testing.T) {
 	}
 	navigate := browserHostNavigateFixture()
 	navigate.RoutedSessionID = "routed_session_2"
-	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostDenied) {
+	if _, err := host.Act(t.Context(), navigate); !errors.Is(err, ErrBrowserHostDenied) {
 		t.Fatalf("cross-session Navigate() error = %v", err)
 	}
 	if _, err := host.Close(t.Context(), status); !errors.Is(err, ErrBrowserHostDenied) {
@@ -1338,7 +1387,7 @@ func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
 	host.now = func() time.Time { return time.Unix(102, 0).UTC() }
 	navigateRequest := browserHostNavigateFixture()
 	navigateRequest.SnapshotGeneration = 1
-	if _, err = host.Navigate(t.Context(), navigateRequest); err != nil {
+	if _, err = host.Act(t.Context(), navigateRequest); err != nil {
 		t.Fatal(err)
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
@@ -1367,7 +1416,7 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 	}
 	request := browserHostNavigateFixture()
 	request.SnapshotGeneration = 1
-	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("ambiguous Navigate() error = %v", err)
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
@@ -1378,7 +1427,7 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 		status.Recovery != "close" {
 		t.Fatalf("quarantined Status() = %#v, %v", status, err)
 	}
-	if _, err = host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) ||
+	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) ||
 		len(worker.actions) != 1 {
 		t.Fatalf("replayed Navigate() error = %v, actions = %d", err, len(worker.actions))
 	}
@@ -1405,7 +1454,7 @@ func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
 	}
 	request := browserHostNavigateFixture()
 	request.SnapshotGeneration = 1
-	if _, err := host.Navigate(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+	if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("changed-origin Navigate() error = %v", err)
 	}
 	if len(worker.actions) != 0 {
@@ -1436,7 +1485,7 @@ func TestBrowserHostQuarantinesWhenPostActionObserveFails(t *testing.T) {
 	}
 	navigate := browserHostNavigateFixture()
 	navigate.SnapshotGeneration = 1
-	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Act(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("Navigate() with ambiguous observation error = %v", err)
 	}
 	if len(worker.actions) != 1 || worker.observeCalls != 2 {
@@ -1467,7 +1516,7 @@ func TestBrowserHostAppliesAdmittedActionDeadline(t *testing.T) {
 	navigate := browserHostNavigateFixture()
 	navigate.SnapshotGeneration = 1
 	started := time.Now()
-	if _, err := host.Navigate(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
+	if _, err := host.Act(t.Context(), navigate); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("deadline Navigate() error = %v", err)
 	}
 	elapsed := time.Since(started)
@@ -1839,7 +1888,7 @@ func TestBrowserHostContextListPreservesEquivalentObservationAuthority(t *testin
 	}
 	navigate := browserHostNavigateFixture()
 	navigate.SnapshotGeneration = 1
-	result, err := host.Navigate(t.Context(), navigate)
+	result, err := host.Act(t.Context(), navigate)
 	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
 		t.Fatalf("Navigate() = %#v, %v; actions = %#v", result, err, worker.actions)
 	}
@@ -1914,11 +1963,11 @@ func browserHostOpenFixture() BrowserHostOpenRequest {
 	}
 }
 
-func browserHostNavigateFixture() BrowserHostNavigateRequest {
-	return BrowserHostNavigateRequest{
+func browserHostNavigateFixture() BrowserHostActRequest {
+	return BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 0,
 		ActionInvocationID: "browser_action_1",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Action:             browserworker.Action{Kind: browserworker.ActionNavigate, URL: "https://example.com/"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",

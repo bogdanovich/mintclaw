@@ -22,6 +22,7 @@ func TestOrdinaryInteractionActionContracts(t *testing.T) {
 	}
 
 	invalid := []Action{
+		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionDialog, DialogID: "not an identifier", Decision: "dismiss"},
 		{Kind: ActionDialog, DialogID: "dialog_" + strings.Repeat("x", MaxIdentifierBytes), Decision: "dismiss"},
 		{Kind: ActionCheck, Ref: "ref_check", SourceRef: "ref_source"},

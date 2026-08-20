@@ -492,6 +492,13 @@ func registerSharedTools(
 				spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
 					return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 				})
+				spawnTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+					if targetAgentID == "" {
+						targetAgentID = currentAgentID
+					}
+					target, ok := registry.GetAgent(targetAgentID)
+					return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
+				})
 
 				registerToolIfAllowed(agent, spawnTool)
 
@@ -523,6 +530,10 @@ func registerSharedTools(
 			delegateTool.SetSelfAgentID(currentAgentID)
 			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			})
+			delegateTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+				target, ok := registry.GetAgent(targetAgentID)
+				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
 			})
 			registerToolIfAllowed(agent, delegateTool)
 		}

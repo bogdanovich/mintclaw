@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
@@ -66,6 +67,19 @@ const (
 	BrowserCommandContexts      = "browser.contexts.v1"
 	BrowserCommandSessionClose  = "browser.session.close.v1"
 )
+
+var currentBrowserCommandSpecs = [...]struct {
+	name string
+	risk Risk
+}{
+	{BrowserCommandSessionOpen, RiskWrite},
+	{BrowserCommandSessionStatus, RiskRead},
+	{BrowserCommandObserve, RiskRead},
+	{BrowserCommandAct, RiskWrite},
+	{BrowserCommandContexts, RiskWrite},
+	{BrowserCommandSessionClose, RiskWrite},
+	{BrowserCommandCapture, RiskRead},
+}
 
 type BrowserLimits struct {
 	Sessions        int `json:"sessions"`
@@ -313,86 +327,31 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type BrowserAction struct {
-	Kind           string `json:"kind"`
-	URL            string `json:"url,omitempty"`
-	Ref            string `json:"ref,omitempty"`
-	SourceRef      string `json:"source_ref,omitempty"`
-	DestinationRef string `json:"destination_ref,omitempty"`
-	DialogID       string `json:"dialog_id,omitempty"`
-	Target         string `json:"target,omitempty"`
-	Value          string `json:"value,omitempty"`
-	Key            string `json:"key,omitempty"`
-	Direction      string `json:"direction,omitempty"`
-	Amount         int    `json:"amount,omitempty"`
-	Decision       string `json:"decision,omitempty"`
-	PromptProvided bool   `json:"prompt_provided,omitempty"`
-	ArtifactRef    string `json:"artifact_ref,omitempty"`
-}
-
-func (action *BrowserAction) UnmarshalJSON(data []byte) error {
-	var value struct {
-		Kind           string          `json:"kind"`
-		URL            string          `json:"url,omitempty"`
-		Ref            string          `json:"ref,omitempty"`
-		SourceRef      string          `json:"source_ref,omitempty"`
-		DestinationRef string          `json:"destination_ref,omitempty"`
-		DialogID       string          `json:"dialog_id,omitempty"`
-		Target         string          `json:"target,omitempty"`
-		Value          string          `json:"value,omitempty"`
-		Key            string          `json:"key,omitempty"`
-		Direction      string          `json:"direction,omitempty"`
-		Amount         json.RawMessage `json:"amount,omitempty"`
-		Decision       string          `json:"decision,omitempty"`
-		PromptProvided bool            `json:"prompt_provided,omitempty"`
-		ArtifactRef    string          `json:"artifact_ref,omitempty"`
-	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	amount, err := decodeCanonicalBrowserGeneration(value.Amount)
-	if err != nil || amount > MaxBrowserScrollAmount {
-		return fmt.Errorf(
-			"%w: browser scroll amount must be an integer from 1 to %d",
-			ErrInvalidCapability,
-			MaxBrowserScrollAmount,
-		)
-	}
-	*action = BrowserAction{
-		Kind: value.Kind, URL: value.URL, Ref: value.Ref, SourceRef: value.SourceRef,
-		DestinationRef: value.DestinationRef, DialogID: value.DialogID, Target: value.Target,
-		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
-		Decision: value.Decision, PromptProvided: value.PromptProvided,
-		ArtifactRef: value.ArtifactRef,
-	}
-	return nil
-}
-
 type BrowserActInput struct {
-	SessionID               string        `json:"session_id"`
-	TabID                   string        `json:"tab_id"`
-	SnapshotGeneration      uint64        `json:"snapshot_generation"`
-	ActionInvocationID      string        `json:"action_invocation_id"`
-	Action                  BrowserAction `json:"action"`
-	Effect                  string        `json:"effect"`
-	CurrentOrigin           string        `json:"current_origin"`
-	PreparedActionHash      string        `json:"prepared_action_hash"`
-	BrowserPolicyRevision   string        `json:"browser_policy_revision"`
-	ProfileRevision         string        `json:"profile_revision"`
-	ExpectedRole            string        `json:"expected_role,omitempty"`
-	ExpectedName            string        `json:"expected_name,omitempty"`
-	DestinationExpectedRole string        `json:"destination_expected_role,omitempty"`
-	DestinationExpectedName string        `json:"destination_expected_name,omitempty"`
-	DialogType              string        `json:"dialog_type,omitempty"`
-	DialogMessageDigest     string        `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes      int           `json:"dialog_message_bytes,omitempty"`
-	InputDigest             string        `json:"input_digest,omitempty"`
-	InputBytes              int           `json:"input_bytes,omitempty"`
-	ArtifactSHA256          string        `json:"artifact_sha256,omitempty"`
-	ArtifactBytes           int64         `json:"artifact_bytes,omitempty"`
-	ArtifactFilename        string        `json:"artifact_filename,omitempty"`
-	ArtifactContentType     string        `json:"artifact_content_type,omitempty"`
-	ApprovalDigest          string        `json:"approval_digest,omitempty"`
+	SessionID               string               `json:"session_id"`
+	TabID                   string               `json:"tab_id"`
+	SnapshotGeneration      uint64               `json:"snapshot_generation"`
+	ActionInvocationID      string               `json:"action_invocation_id"`
+	Action                  browseraction.Action `json:"action"`
+	Effect                  string               `json:"effect"`
+	CurrentOrigin           string               `json:"current_origin"`
+	PreparedActionHash      string               `json:"prepared_action_hash"`
+	BrowserPolicyRevision   string               `json:"browser_policy_revision"`
+	ProfileRevision         string               `json:"profile_revision"`
+	ExpectedRole            string               `json:"expected_role,omitempty"`
+	ExpectedName            string               `json:"expected_name,omitempty"`
+	DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
+	DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
+	DialogType              string               `json:"dialog_type,omitempty"`
+	DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes      int                  `json:"dialog_message_bytes,omitempty"`
+	InputDigest             string               `json:"input_digest,omitempty"`
+	InputBytes              int                  `json:"input_bytes,omitempty"`
+	ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
+	ArtifactBytes           int64                `json:"artifact_bytes,omitempty"`
+	ArtifactFilename        string               `json:"artifact_filename,omitempty"`
+	ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
+	ApprovalDigest          string               `json:"approval_digest,omitempty"`
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -411,30 +370,30 @@ func (input BrowserActInput) MarshalJSON() ([]byte, error) {
 
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	var value struct {
-		SessionID               string          `json:"session_id"`
-		TabID                   string          `json:"tab_id"`
-		SnapshotGeneration      json.RawMessage `json:"snapshot_generation"`
-		ActionInvocationID      string          `json:"action_invocation_id"`
-		Action                  BrowserAction   `json:"action"`
-		Effect                  string          `json:"effect"`
-		CurrentOrigin           string          `json:"current_origin"`
-		PreparedActionHash      string          `json:"prepared_action_hash"`
-		BrowserPolicyRevision   string          `json:"browser_policy_revision"`
-		ProfileRevision         string          `json:"profile_revision"`
-		ExpectedRole            string          `json:"expected_role,omitempty"`
-		ExpectedName            string          `json:"expected_name,omitempty"`
-		DestinationExpectedRole string          `json:"destination_expected_role,omitempty"`
-		DestinationExpectedName string          `json:"destination_expected_name,omitempty"`
-		DialogType              string          `json:"dialog_type,omitempty"`
-		DialogMessageDigest     string          `json:"dialog_message_digest,omitempty"`
-		DialogMessageBytes      json.RawMessage `json:"dialog_message_bytes,omitempty"`
-		InputDigest             string          `json:"input_digest,omitempty"`
-		InputBytes              json.RawMessage `json:"input_bytes,omitempty"`
-		ArtifactSHA256          string          `json:"artifact_sha256,omitempty"`
-		ArtifactBytes           json.RawMessage `json:"artifact_bytes,omitempty"`
-		ArtifactFilename        string          `json:"artifact_filename,omitempty"`
-		ArtifactContentType     string          `json:"artifact_content_type,omitempty"`
-		ApprovalDigest          string          `json:"approval_digest,omitempty"`
+		SessionID               string               `json:"session_id"`
+		TabID                   string               `json:"tab_id"`
+		SnapshotGeneration      json.RawMessage      `json:"snapshot_generation"`
+		ActionInvocationID      string               `json:"action_invocation_id"`
+		Action                  browseraction.Action `json:"action"`
+		Effect                  string               `json:"effect"`
+		CurrentOrigin           string               `json:"current_origin"`
+		PreparedActionHash      string               `json:"prepared_action_hash"`
+		BrowserPolicyRevision   string               `json:"browser_policy_revision"`
+		ProfileRevision         string               `json:"profile_revision"`
+		ExpectedRole            string               `json:"expected_role,omitempty"`
+		ExpectedName            string               `json:"expected_name,omitempty"`
+		DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
+		DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
+		DialogType              string               `json:"dialog_type,omitempty"`
+		DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
+		DialogMessageBytes      json.RawMessage      `json:"dialog_message_bytes,omitempty"`
+		InputDigest             string               `json:"input_digest,omitempty"`
+		InputBytes              json.RawMessage      `json:"input_bytes,omitempty"`
+		ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
+		ArtifactBytes           json.RawMessage      `json:"artifact_bytes,omitempty"`
+		ArtifactFilename        string               `json:"artifact_filename,omitempty"`
+		ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
+		ApprovalDigest          string               `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -956,7 +915,7 @@ type BrowserHostActRequest struct {
 	TabID                   string
 	SnapshotGeneration      uint64
 	ActionInvocationID      string
-	Action                  BrowserAction
+	Action                  browseraction.Action
 	Effect                  string
 	CurrentOrigin           string
 	PreparedActionHash      string
@@ -1022,13 +981,12 @@ func (profile BrowserProfileDescriptor) Validate() error {
 }
 
 func IsBrowserCommand(name string) bool {
-	switch name {
-	case BrowserCommandSessionOpen, BrowserCommandSessionStatus, BrowserCommandObserve,
-		BrowserCommandCapture, BrowserCommandAct, BrowserCommandContexts, BrowserCommandSessionClose:
-		return true
-	default:
-		return false
+	for _, command := range currentBrowserCommandSpecs {
+		if command.name == name {
+			return true
+		}
 	}
+	return false
 }
 
 // BrowserCommandDescriptors returns the internal typed capability catalog for
@@ -1040,20 +998,8 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 	if err := validateBrowserProfiles(profiles); err != nil {
 		return nil, err
 	}
-	commands := []struct {
-		name string
-		risk Risk
-	}{
-		{BrowserCommandSessionOpen, RiskWrite},
-		{BrowserCommandSessionStatus, RiskRead},
-		{BrowserCommandObserve, RiskRead},
-		{BrowserCommandAct, RiskWrite},
-		{BrowserCommandContexts, RiskWrite},
-		{BrowserCommandSessionClose, RiskWrite},
-		{BrowserCommandCapture, RiskRead},
-	}
-	result := make([]CommandDescriptor, 0, len(commands))
-	for _, command := range commands {
+	result := make([]CommandDescriptor, 0, len(currentBrowserCommandSpecs))
+	for _, command := range currentBrowserCommandSpecs {
 		result = append(result, CommandDescriptor{
 			Name:            command.name,
 			InputSchema:     BrowserCommandInputSchema(command.name, profiles),
@@ -1100,55 +1046,12 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, false, false)
-}
-
-// legacyBrowserCommandInputSchema returns the exact browser input contract
-// emitted before scroll was admitted. It is used only while validating a
-// persisted companion catalog during a rolling upgrade; fresh discovery is
-// always generated through BrowserCommandInputSchema.
-func legacyBrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"navigation", "download"}, true, false, false)
-}
-
-// legacyDryRunBrowserCommandInputSchema returns the exact session-open input
-// contract emitted immediately before approved-action mode was admitted. It
-// is accepted only for persisted catalogs whose profiles retain the legacy
-// dry-run-only authority; fresh discovery always emits the current schema.
-func legacyDryRunBrowserCommandInputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, true, false, false)
-}
-
-// legacyPreFileChooserBrowserCommandInputSchema returns the exact browser
-// input contract emitted before file chooser authority was introduced. It is
-// used only to recognize durable catalogs during a fail-closed upgrade.
-func legacyPreFileChooserBrowserCommandInputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, true, false)
-}
-
-// legacyPreDragBrowserCommandInputSchema returns the exact browser input
-// contract emitted before drag-specific field exclusions were introduced. It
-// is used only to recognize durable catalogs during a fail-closed upgrade.
-func legacyPreDragBrowserCommandInputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, []string{"read", "navigation", "download"}, false, true, true)
+	return browserCommandInputSchema(command, profiles)
 }
 
 func browserCommandInputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
-	actEffects []string,
-	legacyDryRunOpen bool,
-	legacyPreFileChooser bool,
-	legacyPreDrag bool,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	actionBranches := make([]any, 0, len(profiles))
@@ -1162,10 +1065,8 @@ func browserCommandInputSchema(
 			"profile_revision": map[string]any{"const": profile.Revision},
 			"limits":           browserLimitsSchema(profile.Limits),
 		}
-		if !legacyDryRunOpen {
-			profileRequired = append(profileRequired, "dry_run")
-			profileProperties["dry_run"] = map[string]any{"const": profile.DryRun}
-		}
+		profileRequired = append(profileRequired, "dry_run")
+		profileProperties["dry_run"] = map[string]any{"const": profile.DryRun}
 		profileBranches = append(profileBranches, map[string]any{
 			"required": profileRequired, "properties": profileProperties,
 		})
@@ -1356,39 +1257,31 @@ func browserCommandInputSchema(
 					map[string]any{"oneOf": promptConstraint},
 				}
 			}
-			if !legacyPreDrag {
-				forbiddenFields := []string{"destination_expected_role", "destination_expected_name"}
-				if !legacyPreFileChooser {
-					forbiddenFields = append(forbiddenFields,
-						"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
-					)
+			forbiddenFields := []string{
+				"destination_expected_role", "destination_expected_name",
+				"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
+			}
+			switch action {
+			case "drag":
+				forbiddenFields = []string{
+					"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
+					"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
 				}
-				switch action {
-				case "drag":
-					forbiddenFields = []string{
-						"dialog_type", "dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
-					}
-					if !legacyPreFileChooser {
-						forbiddenFields = append(forbiddenFields,
-							"artifact_sha256", "artifact_bytes", "artifact_filename", "artifact_content_type",
-						)
-					}
-				case "file_chooser":
-					forbiddenFields = []string{
-						"destination_expected_role", "destination_expected_name", "dialog_type",
-						"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
-					}
+			case "file_chooser":
+				forbiddenFields = []string{
+					"destination_expected_role", "destination_expected_name", "dialog_type",
+					"dialog_message_digest", "dialog_message_bytes", "input_digest", "input_bytes",
 				}
-				forbidden := make([]any, 0, len(forbiddenFields))
-				for _, field := range forbiddenFields {
-					forbidden = append(forbidden, map[string]any{"required": []string{field}})
-				}
-				constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
-				if existing, ok := branch["allOf"].([]any); ok {
-					branch["allOf"] = append(existing, constraint)
-				} else {
-					branch["allOf"] = []any{constraint}
-				}
+			}
+			forbidden := make([]any, 0, len(forbiddenFields))
+			for _, field := range forbiddenFields {
+				forbidden = append(forbidden, map[string]any{"required": []string{field}})
+			}
+			constraint := map[string]any{"not": map[string]any{"anyOf": forbidden}}
+			if existing, ok := branch["allOf"].([]any); ok {
+				branch["allOf"] = append(existing, constraint)
+			} else {
+				branch["allOf"] = []any{constraint}
 			}
 			actionBranches = append(actionBranches, branch)
 		}
@@ -1414,11 +1307,7 @@ func browserCommandInputSchema(
 		add("profile_revision", identifier)
 		profileConstraint = map[string]any{"oneOf": profileBranches}
 		add("browser_policy_revision", digest)
-		if legacyDryRunOpen {
-			add("dry_run", map[string]any{"const": true})
-		} else {
-			add("dry_run", map[string]any{"type": "boolean"})
-		}
+		add("dry_run", map[string]any{"type": "boolean"})
 		add("limits", browserLimitsSchema(BrowserLimits{}.Effective()))
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		add("session_id", identifier)
@@ -1455,6 +1344,7 @@ func browserCommandInputSchema(
 			},
 		}}
 	case BrowserCommandAct:
+		actEffects := []string{"read", "navigation", "download"}
 		if _, hasClick := allActions["click"]; hasClick {
 			actEffects = append(actEffects, "external_commit", "unknown")
 		}
@@ -1712,120 +1602,6 @@ func browserContextCommandResultSchemaWithObservation(
 	}
 }
 
-// legacyPreDialogBrowserCommandOutputSchema returns the exact output contract
-// emitted before pending dialog observation was introduced. It is retained
-// only to recognize durable catalogs during a fail-closed upgrade.
-func legacyPreDialogBrowserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	if len(profiles) == 0 {
-		return json.RawMessage("false")
-	}
-	limits := strictestBrowserLimits(profiles)
-	observation := legacyPreDialogBrowserObservationSchema(limits)
-	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
-	safeReason := map[string]any{"type": "string", "maxLength": 128}
-	switch command {
-	case BrowserCommandObserve:
-		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(observation),
-			browserProtectedResultReceiptSchema(nil),
-		}})
-	case BrowserCommandAct:
-		return mustJSON(map[string]any{
-			"type": "object", "additionalProperties": false,
-			"required": []string{"action_invocation_id", "state"},
-			"properties": map[string]any{
-				"action_invocation_id": identifier,
-				"state": map[string]any{
-					"enum": []string{"accepted", "succeeded", "failed", "unknown"},
-				},
-				"reason":      safeReason,
-				"observation": rawSchema(observation),
-				"artifact":    browserArtifactSchema(limits.DownloadBytes),
-			},
-		})
-	case BrowserCommandContexts:
-		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchemaWithObservation(limits, observation),
-			browserProtectedResultReceiptSchema(map[string]any{
-				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
-			}),
-		}})
-	default:
-		return json.RawMessage("false")
-	}
-}
-
-// legacyBrowserPageResultOutputSchema is the exact observe/context result
-// contract advertised before protected recovery receipts and pending dialog
-// observations were introduced. It exists only for fail-closed registry
-// migration; live catalogs must advertise BrowserCommandOutputSchema and renew
-// approval against its new catalog hash.
-func legacyBrowserPageResultOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	if len(profiles) == 0 {
-		return json.RawMessage("false")
-	}
-	limits := strictestBrowserLimits(profiles)
-	observation := legacyPreDialogBrowserObservationSchema(limits)
-	switch command {
-	case BrowserCommandObserve:
-		return observation
-	case BrowserCommandContexts:
-		return mustJSON(browserContextCommandResultSchemaWithObservation(limits, observation))
-	default:
-		return json.RawMessage("false")
-	}
-}
-
-// legacyBrowserSessionOpenOutputSchema is the exact session-open result
-// contract advertised before browser context discovery was introduced. It is
-// retained only to recognize durable registry records during a fail-closed
-// upgrade; live catalogs must always advertise BrowserCommandOutputSchema.
-func legacyBrowserSessionOpenOutputSchema(profiles []BrowserProfileDescriptor) json.RawMessage {
-	if len(profiles) == 0 {
-		return json.RawMessage("false")
-	}
-	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
-	state := map[string]any{
-		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
-	}
-	return mustJSON(map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required": []string{
-			"session_id",
-			"state",
-			"tab_id",
-			"controller",
-			"features",
-			"expires_at",
-			"idle_expires_at",
-		},
-		"properties": map[string]any{
-			"session_id": identifier, "state": state, "tab_id": identifier,
-			"controller": map[string]any{"const": "agent"},
-			"features": map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"required":             []string{"observe", "navigate", "screenshot", "download"},
-				"properties": map[string]any{
-					"observe":    map[string]any{"type": "boolean"},
-					"navigate":   map[string]any{"type": "boolean"},
-					"screenshot": map[string]any{"type": "boolean"},
-					"download":   map[string]any{"type": "boolean"},
-				},
-			},
-			"expires_at":      map[string]any{"type": "integer", "minimum": 1},
-			"idle_expires_at": map[string]any{"type": "integer", "minimum": 1},
-		},
-	})
-}
-
 func browserContextCatalogSchema() map[string]any {
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	generation := map[string]any{"type": "integer", "minimum": 1}
@@ -2041,25 +1817,10 @@ func browserActionSchema(actions []string) map[string]any {
 }
 
 func browserObservationSchema(limits BrowserLimits) json.RawMessage {
-	return browserObservationSchemaVersion(limits, true, true)
-}
-
-func legacyPreDialogBrowserObservationSchema(limits BrowserLimits) json.RawMessage {
-	return browserObservationSchemaVersion(limits, false, false)
-}
-
-func legacyPreCaptureBrowserObservationSchema(limits BrowserLimits) json.RawMessage {
-	return browserObservationSchemaVersion(limits, true, false)
-}
-
-func browserObservationSchemaVersion(
-	limits BrowserLimits,
-	includePendingDialog bool,
-	includeDocumentID bool,
-) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
+		"document_id":         map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
 		"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 		"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
@@ -2079,12 +1840,7 @@ func browserObservationSchemaVersion(
 			},
 		},
 		"screenshot": browserArtifactSchema(limits.ScreenshotBytes),
-	}
-	if includeDocumentID {
-		properties["document_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
-	}
-	if includePendingDialog {
-		properties["pending_dialog"] = map[string]any{
+		"pending_dialog": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"required": []string{"type", "message"},
 			"properties": map[string]any{
@@ -2093,7 +1849,7 @@ func browserObservationSchemaVersion(
 					"type": "string", "maxLength": MaxBrowserDialogMessageBytes,
 				},
 			},
-		}
+		},
 	}
 	return mustJSON(map[string]any{
 		"type":                 "object",
@@ -2110,49 +1866,6 @@ func browserObservationSchemaVersion(
 		},
 		"properties": properties,
 	})
-}
-
-// legacyPreCaptureBrowserCommandOutputSchema is the exact six-command output
-// contract emitted immediately before private document authority and the
-// capture command were added. Persisted catalogs are recognized only so their
-// prior approval can be suspended during the fail-closed upgrade.
-func legacyPreCaptureBrowserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	if len(profiles) == 0 {
-		return json.RawMessage("false")
-	}
-	limits := strictestBrowserLimits(profiles)
-	observation := legacyPreCaptureBrowserObservationSchema(limits)
-	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
-	safeReason := map[string]any{"type": "string", "maxLength": 128}
-	switch command {
-	case BrowserCommandObserve:
-		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(observation), browserProtectedResultReceiptSchema(nil),
-		}})
-	case BrowserCommandAct:
-		return mustJSON(map[string]any{
-			"type": "object", "additionalProperties": false,
-			"required": []string{"action_invocation_id", "state"},
-			"properties": map[string]any{
-				"action_invocation_id": identifier,
-				"state":                map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
-				"reason":               safeReason, "observation": rawSchema(observation),
-				"artifact": browserArtifactSchema(limits.DownloadBytes),
-			},
-		})
-	case BrowserCommandContexts:
-		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchemaWithObservation(limits, observation),
-			browserProtectedResultReceiptSchema(map[string]any{
-				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
-			}),
-		}})
-	default:
-		return BrowserCommandOutputSchema(command, profiles)
-	}
 }
 
 func browserOutputDescriptorSchema(maximumBytes int) map[string]any {

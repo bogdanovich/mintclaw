@@ -131,6 +131,7 @@ type PromptBuildRequest struct {
 	AllowedSkills               []string
 	AllowedTools                []string
 	ToolUseFallback             bool
+	BackgroundTaskSafety        bool
 	CodingContext               CodingPromptContext
 }
 

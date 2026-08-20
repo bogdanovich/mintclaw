@@ -89,6 +89,7 @@ var (
 	ctxKeyApprovalResume      = &toolCtxKey{"approvalResume"}
 	ctxKeyApprovalBypass      = &toolCtxKey{"approvalBypass"}
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
+	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -143,6 +144,11 @@ func WithToolSessionContext(
 	ctx = context.WithValue(ctx, ctxKeySessionKey, sessionKey)
 	ctx = context.WithValue(ctx, ctxKeySessionScope, session.CloneScope(scope))
 	return ctx
+}
+
+// WithToolHistoryDisabled carries the originating turn's durable history policy.
+func WithToolHistoryDisabled(ctx context.Context, disabled bool) context.Context {
+	return context.WithValue(ctx, ctxKeyHistoryDisabled, disabled)
 }
 
 // WithToolRouteSessionKey carries the canonical routed conversation key used
@@ -296,6 +302,12 @@ func ToolSessionKey(ctx context.Context) string {
 		return ""
 	}
 	return v
+}
+
+// ToolHistoryDisabled reports whether the originating turn forbids history writes.
+func ToolHistoryDisabled(ctx context.Context) bool {
+	disabled, _ := ctx.Value(ctxKeyHistoryDisabled).(bool)
+	return disabled
 }
 
 // ToolCallID extracts the active provider tool-call identity from ctx.

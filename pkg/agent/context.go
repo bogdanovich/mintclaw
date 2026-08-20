@@ -1207,7 +1207,25 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		}
 	}
 
-	if len(stringParts) == 0 && req.ToolUseFallback {
+	hasOrdinarySystemContent := len(stringParts) > 0
+	if req.BackgroundTaskSafety {
+		backgroundTaskSafetyPart := PromptPart{
+			ID:      "runtime.background_task_safety",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "runtime:background_task_safety"},
+			Title:   "background task status safety",
+			Content: backgroundTaskStatusSafetyRule(),
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		}
+		stringParts = append(stringParts, backgroundTaskSafetyPart.Content)
+		contentBlocks = append(
+			contentBlocks,
+			promptContentBlock(backgroundTaskSafetyPart, cacheControlForPromptPart(backgroundTaskSafetyPart)),
+		)
+	}
+	if !hasOrdinarySystemContent && req.ToolUseFallback {
 		fallbackPart := PromptPart{
 			ID:      "kernel.tool_use_fallback",
 			Layer:   PromptLayerKernel,

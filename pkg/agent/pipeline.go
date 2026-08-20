@@ -70,6 +70,7 @@ type PipelineContextServices struct {
 	ModelExecution       modelExecutionResolver
 	Steering             steeringDequeuer
 	MediaResolver        mediaResolver
+	TerminalTasks        terminalTaskContextProvider
 }
 
 type PipelineInteractionServices struct {
@@ -185,6 +186,10 @@ type pipelineContextRuntime interface {
 	Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error)
 	Compact(ctx context.Context, req *CompactRequest) error
 	Ingest(ctx context.Context, req *IngestRequest) error
+}
+
+type terminalTaskContextProvider interface {
+	terminalTaskContextForTurn(ts *turnState) []providers.Message
 }
 
 type backgroundCompactionScheduler interface {
