@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -120,6 +121,35 @@ func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
 	if result.ResponseHandled || !strings.Contains(result.ForLLM, "state is uncertain") ||
 		!strings.Contains(result.ForLLM, "Do not claim") {
 		t.Fatalf("pending result = %+v", result)
+	}
+}
+
+func TestClassifySynchronousFinalHandledDeliveryError(t *testing.T) {
+	newResult := func() *toolshared.ToolResult {
+		return (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+			toolshared.DeliveryFinalHandled,
+		)
+	}
+
+	ambiguous := newResult()
+	err := classifySynchronousFinalHandledDeliveryError(
+		ambiguous,
+		errors.New("transport response was lost"),
+	)
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) || ambiguous.ResponseHandled ||
+		!strings.Contains(ambiguous.ForLLM, "Do not claim delivery") {
+		t.Fatalf("ambiguous classification = %v, result = %#v", err, ambiguous)
+	}
+
+	definiteCause := errors.New("preflight rejected payload")
+	definite := newResult()
+	err = classifySynchronousFinalHandledDeliveryError(
+		definite,
+		channels.DefiniteNotSentDeliveryError(definiteCause),
+	)
+	if !errors.Is(err, definiteCause) || errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
+		!definite.ResponseHandled {
+		t.Fatalf("definite classification = %v, result = %#v", err, definite)
 	}
 }
 

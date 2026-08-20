@@ -1785,9 +1785,14 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	loopArguments map[string]any,
 	semantics loopguard.Semantics,
 	protectedResult bool,
-) (terminalDeliverySettlement, bool, error) {
+) (settlement terminalDeliverySettlement, aborted bool, err error) {
+	defer func() {
+		if err != nil || aborted || settlement.turnErr != nil {
+			r.transferPendingSteeringOwnership()
+		}
+	}()
 	pendingMsg, pendingDurableMsg := pendingFinalHandledToolResultMessages(toolCallID, protectedResult)
-	aborted, err := r.commitPendingToolBatch(
+	aborted, err = r.commitPendingToolBatch(
 		pendingMsg,
 		pendingDurableMsg,
 		toolCallIndex+1,
@@ -1798,7 +1803,6 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
-		r.transferPendingSteeringOwnership()
 		r.journalErr = settledResult.Err
 		return terminalDeliverySettlement{}, false, settledResult.Err
 	}
@@ -1837,9 +1841,6 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		settledMsg,
 		settledDurableMsg,
 	)
-	if err == nil && !aborted && turnErr != nil {
-		r.transferPendingSteeringOwnership()
-	}
 	r.exec.messages = r.messages
 	return terminalDeliverySettlement{
 		result:             settledResult,

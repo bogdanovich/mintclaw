@@ -164,6 +164,13 @@ func (m *recordingChannelManager) SendMedia(
 	return nil
 }
 
+func (m *recordingChannelManager) SendMediaDefiniteRetryOnly(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) error {
+	return m.SendMedia(ctx, msg)
+}
+
 func (m *recordingChannelManager) SendMediaProvisional(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,

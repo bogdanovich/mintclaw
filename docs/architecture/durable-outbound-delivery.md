@@ -96,6 +96,13 @@ while retaining its unresolved journal barrier. Steering already dequeued at
 either boundary transfers to the normal inbound release/requeue owner so it is
 not stranded or acknowledged as completed work.
 
+When a final-handled tool must use synchronous channel delivery without a
+durable receipt, text and media retry only failures proven to occur before
+remote acceptance. Every other failure is treated as ambiguous, journaled as
+an actionable result, and propagated through the same non-publishable turn
+boundary. This conservative fallback prevents a lost transport response from
+causing a duplicate send.
+
 If storage fails after an earlier call in the emitted batch was already
 journaled but before terminal reservation, provider-history sanitization keeps
 the real result and supplies conservative unresolved results for missing call

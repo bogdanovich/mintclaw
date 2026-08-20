@@ -146,7 +146,19 @@ func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) e
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome, true)
+}
+
+// SendMediaDefiniteRetryOnly retries only channel rejections known to occur
+// before remote acceptance.
+func (m *Manager) SendMediaDefiniteRetryOnly(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) error {
+	if err := m.PreflightMedia(ctx, msg); err != nil {
+		return newDeliveryError(err, false)
+	}
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome, false)
 }
 
 // SendMediaProvisional suppresses a definitely-not-sent failure outcome so the
@@ -156,7 +168,7 @@ func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMedi
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly)
+	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly, true)
 }
 
 // PreflightMedia applies deterministic channel-owned media constraints before
@@ -182,6 +194,7 @@ func (r *DeliveryRuntime) sendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
+	retryAmbiguous bool,
 ) error {
 	m := r.host
 	var err error
@@ -215,7 +228,7 @@ func (r *DeliveryRuntime) sendMedia(
 		)
 	}
 
-	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, true)
+	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, retryAmbiguous)
 	if !result.Delivered() {
 		return newDeliveryError(result.Err, result.MayHaveDelivered())
 	}
