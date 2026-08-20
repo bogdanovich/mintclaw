@@ -6,27 +6,55 @@ Audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
 ## Decision
 
-MintClaw supports one current internal contract at a time.
+MintClaw has one canonical internal implementation and a deliberately small
+wire-compatibility budget.
 
-The deployed gateway, CLI, coding frontend, companions, and other first-party
-clients are upgraded together. Runtime backward compatibility between MintClaw
-versions is therefore not a product requirement. New work must not add legacy
-readers, dual writes, deprecated aliases, compatibility fallbacks, historical
-schema reconstruction, or no-op flags for older MintClaw clients.
+First-party wire protocols should evolve additively when that is natural. A
+gateway on the current release must normally interoperate with companions from
+the immediately previous release. Older combinations may continue to work when
+the protocol change was purely additive, but they are not guaranteed or tested.
+An explicitly named rollout may temporarily support two previous releases; it
+must include the removal release and may not become an open-ended support tail.
 
-An incompatible release uses a coordinated cutover:
+Compatibility must come from the shape of the canonical protocol, not copies
+of historical implementations. New optional fields, stable field identities,
+unknown-field tolerance at non-authority-bearing envelopes, and advertised
+capability intersection are allowed. Historical schema reconstruction,
+version-by-version execution switches, dual writes, deprecated aliases,
+fallback engines, and no-op flags are not.
+
+Breaking changes are allowed. They increment an explicit protocol major or
+minimum-supported version and reject older peers clearly. Once all deployed
+components have been upgraded, any temporary boundary adapter is deleted.
+
+Persisted server state and configuration use one current format. An
+incompatible storage release uses a coordinated cutover:
 
 1. inspect and back up the deployed configuration and durable state;
 2. stop all MintClaw processes that share those contracts;
 3. convert or deliberately discard obsolete state outside the steady-state
    runtime;
-4. install the same current revision on the server and every first-party
-   client; and
+4. install mutually compatible revisions on the server and first-party
+   clients; and
 5. restart and verify the current contract.
 
-The product may retain a version or schema fingerprint to reject a mismatched
-client or persisted document. It must not use that marker to select an older
+The product may retain a protocol major, minimum supported version, capability
+set, or current storage fingerprint. Those markers select current features or
+reject an incompatible peer or document; they must not select a historical
 runtime implementation.
+
+These rules follow the useful evolution properties of Protobuf, gRPC, and
+Thrift without requiring MintClaw to adopt another RPC stack. The existing
+transport can keep its current framing while applying the same discipline:
+
+- add optional fields instead of renaming or changing field meaning;
+- never reuse a removed field identity for a different meaning;
+- ignore unknown informational envelope fields;
+- keep authority-bearing action payloads strict for the action version the
+  peer advertised;
+- advertise supported actions and features rather than inferring them from a
+  historical full schema; and
+- use a major boundary for breaking semantic or security changes.
 
 This decision does not remove independent product integrations merely because
 they contain the word `compatible`. OpenAI-compatible model APIs, OneBot, OS
@@ -49,8 +77,8 @@ properties:
 - accepted work remains durable across restart;
 - tool effects are never blindly replayed after an uncertain outcome;
 - coding and channel runtimes remain separate authority profiles; and
-- all first-party processes fail clearly when they do not implement the one
-  current contract.
+- first-party peers negotiate the bounded current protocol and fail clearly
+  when their protocol majors do not overlap.
 
 The target is not fewer files by itself. The target is one owner and one
 representation for each protocol, lifecycle, and durable fact.
@@ -84,18 +112,30 @@ The implementation baseline also contains:
 - a coding frontend with distributed-client synchronization machinery even
   though its current producer and TUI consumer are in one process.
 
-## Current-Only Contract Rules
+## Canonical Contract And Bounded Compatibility Rules
 
 Every implementation packet in this roadmap follows these rules.
 
-### Runtime inputs
+### Wire protocols
 
-- Accept only the current MintClaw config, protocol, and persisted record
-  shape.
-- Reject a missing, older, or newer internal version with an actionable error.
+- Keep one canonical protocol model in production code.
+- Guarantee the current and immediately previous first-party release when
+  their protocol majors overlap.
+- Prefer additive optional fields and capability negotiation; do not add a
+  branch for every release that omitted the field.
+- Send an action or feature only when the peer advertises it.
+- Ignore unknown informational envelope fields, but strictly validate the
+  known authority-bearing payload for the advertised action.
+- Reject a non-overlapping protocol major with an actionable upgrade error.
+- Do not infer capabilities from an old generated schema or accept both an old
+  and new field name.
+
+### Runtime configuration and persisted inputs
+
+- Accept only the current MintClaw config and persisted record shape.
+- Reject a missing, older, or newer storage version with an actionable error.
 - Do not infer omitted fields for compatibility. A default is allowed only
   when it is the documented current semantic default.
-- Do not accept both an old and new field name.
 
 ### Persistence
 
@@ -119,11 +159,26 @@ Every implementation packet in this roadmap follows these rules.
 - An exact current-version rejection check is allowed; a fallback execution
   path is not.
 
+### Compatibility budget and deletion cadence
+
+- The guaranteed rolling window is current plus one previous release.
+- Supporting two previous releases requires a named rollout owner and deletion
+  release in the implementing PR.
+- Additive compatibility that requires no old implementation may continue
+  naturally beyond the guarantee.
+- A temporary adapter lives only at one process boundary, is covered by a
+  removal test or tracking item, and is deleted as soon as the fleet is
+  upgraded.
+- Every release that changes an internal wire protocol audits expired adapters
+  and old capability aliases.
+
 ### Deployment
 
-- Dependent first-party binaries are upgraded as a set.
-- A deploy is blocked when any registered first-party peer advertises a
-  different current protocol fingerprint.
+- Dependent first-party binaries are normally upgraded as a set, but the
+  current gateway may roll while immediately previous companions remain
+  online.
+- A deploy is blocked when a registered peer has no overlapping protocol major
+  or requires an authority-bearing capability whose current semantics differ.
 - Rollback restores the matching binary and its backed-up state as a unit. It
   does not require the new binary to understand the old state.
 
@@ -199,13 +254,13 @@ another compatibility layer.
 Scope:
 
 - publish this roadmap;
-- make the current-only contract policy explicit; and
+- make the canonical-contract and bounded-compatibility policy explicit; and
 - record the coding frontend decision in plain language.
 
 Exit criteria:
 
 - the architecture index links this roadmap;
-- later PRs can cite one unambiguous no-compatibility decision; and
+- later PRs can cite one compatibility budget and deletion policy; and
 - no runtime behavior changes.
 
 ### B1 — Delete historical browser persistence compatibility
@@ -216,9 +271,11 @@ Scope:
 - delete stored-schema epoch enumeration and exact comparison against
   historical generated JSON;
 - remove legacy prepared-dialog fields and lazy migration;
-- retain only the current browser capability schema and fingerprint;
-- make startup reject obsolete browser capability or prepared-action state;
-  and
+- retain one current browser capability model and a protocol-major boundary;
+- normalize an older additive companion advertisement into the current
+  capability set without reconstructing its historical schema;
+- make startup reject obsolete persisted browser authority or prepared-action
+  state; and
 - document the one-time deployed-state cutover.
 
 Likely owners:
@@ -231,7 +288,10 @@ Likely owners:
 Tests:
 
 - the current schema round-trips;
-- an older or missing schema version fails closed with an actionable error;
+- an older or missing persisted authority version fails closed with an
+  actionable error;
+- a companion from the immediately previous compatible release can advertise
+  its smaller action set and continue serving those actions;
 - current approvals and protected values retain their security properties; and
 - no test constructs an old schema as accepted input.
 
@@ -239,8 +299,9 @@ Exit criteria:
 
 - `rg` finds no legacy browser schema generator, epoch, or migration;
 - adding a browser action does not require editing historical schemas; and
-- the deployed system contains only current browser capability records before
-  rollout.
+- the deployed system contains only current browser authority records before
+  rollout, while connected companions may expose the bounded compatible action
+  subset.
 
 ### B2 — Establish one browser action protocol
 
@@ -248,7 +309,7 @@ Depends on: B1
 
 Scope:
 
-- create one dependency-light current action envelope used by browser, nodes,
+- create one dependency-light canonical action envelope used by browser, nodes,
   gateway, and companion code;
 - replace repeated validation and capability switches with one action
   descriptor table or typed per-action implementation;
@@ -263,7 +324,7 @@ Tests:
 - every action has validation, schema, approval, effect, and host dispatch
   coverage;
 - the descriptor set and emitted tool schema cannot drift;
-- unknown actions fail closed at every trust boundary; and
+- unknown or unadvertised actions fail closed at every trust boundary; and
 - local and companion placements execute the same contract tests.
 
 Exit criteria:
@@ -519,7 +580,8 @@ Scope:
 Exit criteria:
 
 - the zero-legacy audit below passes;
-- no production branch selects behavior based on an older MintClaw contract;
+- no production branch selects a historical implementation based on the peer's
+  release; bounded feature subsets come from current capability negotiation;
   and
 - current third-party integrations are explicitly named and do not depend on
   internal compatibility shims.
@@ -550,7 +612,8 @@ Each surviving match must be one of:
 
 No surviving match may:
 
-- parse or execute an older MintClaw contract;
+- parse historical persisted state or select a historical runtime
+  implementation; bounded wire peers may omit current optional fields;
 - translate old state during normal startup;
 - write both old and new representations;
 - silently infer current meaning from an obsolete field;
@@ -598,7 +661,8 @@ and lifecycle requirements.
 
 The roadmap is complete when:
 
-- every first-party component implements one current internal contract;
+- every first-party component implements the canonical internal contract and
+  bounded wire peers interoperate through additive fields and capabilities;
 - browser actions and capabilities have one definition and no historical
   schema machinery;
 - tasks have one result model, one registry, one child runner, and one status
