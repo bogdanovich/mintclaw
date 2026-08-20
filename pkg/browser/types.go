@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -21,13 +22,13 @@ func OpaqueAgentID(agentID string) string {
 
 const (
 	initialBlankOrigin    = "about:blank"
-	MaxIdentifierBytes    = 128
+	MaxIdentifierBytes    = browseraction.MaxIdentifierBytes
 	MaxSafeFailureBytes   = 256
 	MaxTerminalBytes      = 320 * 1024
-	MaxURLBytes           = 2048
+	MaxURLBytes           = browseraction.MaxURLBytes
 	MaxElementNameBytes   = 512
 	MaxDialogMessageBytes = 2048
-	MaxScrollAmount       = 5
+	MaxScrollAmount       = browseraction.MaxScrollAmount
 )
 
 var (
@@ -36,7 +37,7 @@ var (
 	ErrDenied               = errors.New("browser authority denied")
 	ErrDriverIncompatible   = errors.New("browser driver is incompatible")
 	ErrDriverRejected       = errors.New("browser driver rejected the operation")
-	ErrInvalid              = errors.New("invalid browser state")
+	ErrInvalid              = browseraction.ErrInvalid
 	ErrNotFound             = errors.New("browser state not found")
 	ErrApprovalRequired     = errors.New("browser action requires approval")
 	ErrNoProgress           = errors.New("browser action is not making progress")
@@ -302,179 +303,28 @@ func (effect Effect) Valid() bool {
 	}
 }
 
-type ActionKind string
+type ActionKind = browseraction.ActionKind
 
 const (
-	ActionNavigate    ActionKind = "navigate"
-	ActionClick       ActionKind = "click"
-	ActionFill        ActionKind = "fill"
-	ActionSelect      ActionKind = "select"
-	ActionPress       ActionKind = "press"
-	ActionScroll      ActionKind = "scroll"
-	ActionDialog      ActionKind = "dialog"
-	ActionCheck       ActionKind = "check"
-	ActionUncheck     ActionKind = "uncheck"
-	ActionHover       ActionKind = "hover"
-	ActionDrag        ActionKind = "drag"
-	ActionFileChooser ActionKind = "file_chooser"
-	ActionUpload      ActionKind = "upload"
-	ActionDownload    ActionKind = "download"
+	ActionNavigate    = browseraction.ActionNavigate
+	ActionClick       = browseraction.ActionClick
+	ActionFill        = browseraction.ActionFill
+	ActionSelect      = browseraction.ActionSelect
+	ActionPress       = browseraction.ActionPress
+	ActionScroll      = browseraction.ActionScroll
+	ActionDialog      = browseraction.ActionDialog
+	ActionCheck       = browseraction.ActionCheck
+	ActionUncheck     = browseraction.ActionUncheck
+	ActionHover       = browseraction.ActionHover
+	ActionDrag        = browseraction.ActionDrag
+	ActionFileChooser = browseraction.ActionFileChooser
+	ActionDownload    = browseraction.ActionDownload
 )
 
-func (kind ActionKind) Valid() bool {
-	switch kind {
-	case ActionNavigate, ActionClick, ActionFill, ActionSelect, ActionPress, ActionScroll, ActionDialog,
-		ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionFileChooser, ActionUpload, ActionDownload:
-		return true
-	default:
-		return false
-	}
-}
-
-type Action struct {
-	Kind           ActionKind `json:"kind"`
-	URL            string     `json:"url,omitempty"`
-	Ref            string     `json:"ref,omitempty"`
-	SourceRef      string     `json:"source_ref,omitempty"`
-	DestinationRef string     `json:"destination_ref,omitempty"`
-	DialogID       string     `json:"dialog_id,omitempty"`
-	Target         string     `json:"target,omitempty"`
-	Value          string     `json:"value,omitempty"`
-	Key            string     `json:"key,omitempty"`
-	Direction      string     `json:"direction,omitempty"`
-	Amount         int        `json:"amount,omitempty"`
-	Decision       string     `json:"decision,omitempty"`
-	PromptProvided bool       `json:"prompt_provided,omitempty"`
-	ArtifactRef    string     `json:"artifact_ref,omitempty"`
-	Deliver        bool       `json:"deliver,omitempty"`
-}
-
-func (action Action) Validate(maxTextBytes int) error {
-	if !action.Kind.Valid() || len(action.URL) > MaxURLBytes || len(action.Value) > maxTextBytes {
-		return fmt.Errorf("%w: malformed browser action", ErrInvalid)
-	}
-	if (action.Kind != ActionDrag && (action.SourceRef != "" || action.DestinationRef != "")) ||
-		(action.Kind != ActionDialog && action.DialogID != "") ||
-		(action.Kind == ActionDialog && action.DialogID != "" && !validIdentifier(action.DialogID)) {
-		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
-	}
-	if (action.Kind != ActionUpload && action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
-		(action.Kind != ActionDownload && action.Deliver) {
-		return fmt.Errorf("%w: malformed browser artifact action", ErrInvalid)
-	}
-	switch action.Kind {
-	case ActionNavigate:
-		if action.URL == "" || action.Ref != "" || action.Target != "" || action.Value != "" || action.Key != "" ||
-			action.Direction != "" ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			action.Amount != 0 {
-			return fmt.Errorf("%w: malformed navigate action", ErrInvalid)
-		}
-	case ActionClick:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Value != "" ||
-			action.Key != "" ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			action.Direction != "" ||
-			action.Amount != 0 {
-			return fmt.Errorf("%w: malformed click action", ErrInvalid)
-		}
-	case ActionCheck, ActionUncheck, ActionHover:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Value != "" ||
-			action.Key != "" || action.Direction != "" || action.Decision != "" || action.PromptProvided ||
-			action.Amount != 0 || action.SourceRef != "" || action.DestinationRef != "" || action.DialogID != "" {
-			return fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
-		}
-	case ActionDrag:
-		if !validIdentifier(action.SourceRef) || !validIdentifier(action.DestinationRef) ||
-			action.SourceRef == action.DestinationRef || action.Ref != "" || action.URL != "" || action.Target != "" ||
-			action.Value != "" || action.Key != "" || action.Direction != "" || action.Decision != "" ||
-			action.PromptProvided || action.Amount != 0 || action.DialogID != "" {
-			return fmt.Errorf("%w: malformed drag action", ErrInvalid)
-		}
-	case ActionFill:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
-			action.Direction != "" ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			action.Amount != 0 {
-			return fmt.Errorf("%w: malformed fill action", ErrInvalid)
-		}
-	case ActionSelect:
-		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
-			action.Direction != "" ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			action.Amount != 0 {
-			return fmt.Errorf("%w: malformed select action", ErrInvalid)
-		}
-	case ActionPress:
-		if action.URL != "" || action.Ref != "" || action.Target != "document" || action.Value != "" ||
-			!validBrowserKey(action.Key) ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			action.Direction != "" ||
-			action.Amount != 0 {
-			return fmt.Errorf("%w: malformed press action", ErrInvalid)
-		}
-	case ActionScroll:
-		if action.URL != "" || action.Ref != "" || action.Target != "" || action.Value != "" || action.Key != "" ||
-			action.Decision != "" ||
-			action.PromptProvided ||
-			(action.Direction != "up" && action.Direction != "down") ||
-			action.Amount < 1 ||
-			action.Amount > MaxScrollAmount {
-			return fmt.Errorf("%w: malformed scroll action", ErrInvalid)
-		}
-	case ActionDialog:
-		if action.URL != "" || action.Ref != "" || action.Target != "" || action.Key != "" || action.Direction != "" ||
-			action.Amount != 0 ||
-			(action.Decision != "accept" && action.Decision != "dismiss") ||
-			(action.Decision == "dismiss" && (action.Value != "" || action.PromptProvided)) ||
-			(!action.PromptProvided && action.Value != "") {
-			return fmt.Errorf("%w: malformed dialog action", ErrInvalid)
-		}
-	case ActionFileChooser:
-		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
-			len(action.ArtifactRef) > 512 || action.URL != "" || action.Target != "" || action.Value != "" ||
-			action.Key != "" || action.Direction != "" || action.Amount != 0 || action.Decision != "" ||
-			action.PromptProvided || action.Deliver || action.SourceRef != "" || action.DestinationRef != "" ||
-			action.DialogID != "" {
-			return fmt.Errorf("%w: malformed file chooser action", ErrInvalid)
-		}
-	case ActionUpload:
-		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
-			len(action.ArtifactRef) > 512 ||
-			action.URL != "" || action.Target != "" || action.Value != "" || action.Key != "" || action.Direction != "" ||
-			action.Amount != 0 || action.Decision != "" || action.PromptProvided || action.Deliver {
-			return fmt.Errorf("%w: malformed upload action", ErrInvalid)
-		}
-	case ActionDownload:
-		if !validIdentifier(action.Ref) ||
-			action.ArtifactRef != "" ||
-			action.URL != "" ||
-			action.Target != "" ||
-			action.Value != "" ||
-			action.Key != "" ||
-			action.Direction != "" ||
-			action.Amount != 0 ||
-			action.Decision != "" ||
-			action.PromptProvided {
-			return fmt.Errorf("%w: malformed download action", ErrInvalid)
-		}
-	}
-	return nil
-}
+type Action = browseraction.Action
 
 func validBrowserKey(key string) bool {
-	switch key {
-	case "Enter", "Space", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-		"Home", "End", "PageUp", "PageDown", "Backspace", "Delete":
-		return true
-	default:
-		return false
-	}
+	return browseraction.ValidKey(key)
 }
 
 type Owner struct {
@@ -769,7 +619,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			!validDigest(prepared.InputDigest) || prepared.InputBytes < 0 || prepared.InputBytes > maxTextBytes {
 			return fmt.Errorf("%w: malformed prepared dialog input", ErrInvalid)
 		}
-	case ActionFileChooser, ActionUpload:
+	case ActionFileChooser:
 		if prepared.DestinationOrigin != "" || prepared.ElementRole != "button" ||
 			prepared.Effect != EffectLocalEdit || !validDigest(prepared.ArtifactSHA256) ||
 			prepared.ArtifactBytes < 1 || prepared.ArtifactBytes > int64(config.BrowserMaxUploadBytes) ||

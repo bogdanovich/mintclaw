@@ -1,0 +1,69 @@
+package browseraction
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
+
+func TestActionValidate(t *testing.T) {
+	t.Parallel()
+
+	valid := []Action{
+		{Kind: ActionNavigate, URL: "https://example.com"},
+		{Kind: ActionClick, Ref: "ref_click"},
+		{Kind: ActionFill, Ref: "ref_fill", Value: "hello"},
+		{Kind: ActionSelect, Ref: "ref_select", Value: "one"},
+		{Kind: ActionPress, Target: "document", Key: "Enter"},
+		{Kind: ActionScroll, Direction: "down", Amount: MaxScrollAmount},
+		{Kind: ActionDialog, DialogID: "dialog_1", Decision: "dismiss"},
+		{Kind: ActionCheck, Ref: "ref_check"},
+		{Kind: ActionUncheck, Ref: "ref_uncheck"},
+		{Kind: ActionHover, Ref: "ref_hover"},
+		{Kind: ActionDrag, SourceRef: "ref_source", DestinationRef: "ref_destination"},
+		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
+		{Kind: ActionDownload, Ref: "ref_download", Deliver: true},
+	}
+	for _, action := range valid {
+		if err := action.Validate(1024); err != nil {
+			t.Fatalf("Action.Validate(%+v) error = %v", action, err)
+		}
+	}
+
+	invalid := []Action{
+		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
+		{Kind: ActionNavigate},
+		{Kind: ActionClick, Ref: "css:#submit"},
+		{Kind: ActionScroll, Direction: "down", Amount: MaxScrollAmount + 1},
+		{Kind: ActionDrag, SourceRef: "ref_same", DestinationRef: "ref_same"},
+		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "/tmp/private"},
+		{Kind: ActionDownload, Ref: "ref_download", ArtifactRef: "transfer-artifact://artifact_1"},
+	}
+	for _, action := range invalid {
+		if err := action.Validate(1024); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Action.Validate(%+v) error = %v, want ErrInvalid", action, err)
+		}
+	}
+}
+
+func TestActionUnmarshalJSONAllowsAdditiveFields(t *testing.T) {
+	t.Parallel()
+
+	var action Action
+	err := json.Unmarshal(
+		[]byte(`{"kind":"scroll","direction":"up","amount":1e0,"future_option":true}`),
+		&action,
+	)
+	if err != nil || action != (Action{Kind: ActionScroll, Direction: "up", Amount: 1}) {
+		t.Fatalf("json.Unmarshal() action = %+v, error = %v", action, err)
+	}
+	if err = json.Unmarshal(
+		[]byte(`{"kind":"scroll","direction":"up","amount":1.5}`),
+		&action,
+	); !errors.Is(
+		err,
+		ErrInvalid,
+	) {
+		t.Fatalf("json.Unmarshal(fractional amount) error = %v, want ErrInvalid", err)
+	}
+}

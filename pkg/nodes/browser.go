@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
@@ -326,86 +327,31 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type BrowserAction struct {
-	Kind           string `json:"kind"`
-	URL            string `json:"url,omitempty"`
-	Ref            string `json:"ref,omitempty"`
-	SourceRef      string `json:"source_ref,omitempty"`
-	DestinationRef string `json:"destination_ref,omitempty"`
-	DialogID       string `json:"dialog_id,omitempty"`
-	Target         string `json:"target,omitempty"`
-	Value          string `json:"value,omitempty"`
-	Key            string `json:"key,omitempty"`
-	Direction      string `json:"direction,omitempty"`
-	Amount         int    `json:"amount,omitempty"`
-	Decision       string `json:"decision,omitempty"`
-	PromptProvided bool   `json:"prompt_provided,omitempty"`
-	ArtifactRef    string `json:"artifact_ref,omitempty"`
-}
-
-func (action *BrowserAction) UnmarshalJSON(data []byte) error {
-	var value struct {
-		Kind           string          `json:"kind"`
-		URL            string          `json:"url,omitempty"`
-		Ref            string          `json:"ref,omitempty"`
-		SourceRef      string          `json:"source_ref,omitempty"`
-		DestinationRef string          `json:"destination_ref,omitempty"`
-		DialogID       string          `json:"dialog_id,omitempty"`
-		Target         string          `json:"target,omitempty"`
-		Value          string          `json:"value,omitempty"`
-		Key            string          `json:"key,omitempty"`
-		Direction      string          `json:"direction,omitempty"`
-		Amount         json.RawMessage `json:"amount,omitempty"`
-		Decision       string          `json:"decision,omitempty"`
-		PromptProvided bool            `json:"prompt_provided,omitempty"`
-		ArtifactRef    string          `json:"artifact_ref,omitempty"`
-	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	amount, err := decodeCanonicalBrowserGeneration(value.Amount)
-	if err != nil || amount > MaxBrowserScrollAmount {
-		return fmt.Errorf(
-			"%w: browser scroll amount must be an integer from 1 to %d",
-			ErrInvalidCapability,
-			MaxBrowserScrollAmount,
-		)
-	}
-	*action = BrowserAction{
-		Kind: value.Kind, URL: value.URL, Ref: value.Ref, SourceRef: value.SourceRef,
-		DestinationRef: value.DestinationRef, DialogID: value.DialogID, Target: value.Target,
-		Value: value.Value, Key: value.Key, Direction: value.Direction, Amount: int(amount),
-		Decision: value.Decision, PromptProvided: value.PromptProvided,
-		ArtifactRef: value.ArtifactRef,
-	}
-	return nil
-}
-
 type BrowserActInput struct {
-	SessionID               string        `json:"session_id"`
-	TabID                   string        `json:"tab_id"`
-	SnapshotGeneration      uint64        `json:"snapshot_generation"`
-	ActionInvocationID      string        `json:"action_invocation_id"`
-	Action                  BrowserAction `json:"action"`
-	Effect                  string        `json:"effect"`
-	CurrentOrigin           string        `json:"current_origin"`
-	PreparedActionHash      string        `json:"prepared_action_hash"`
-	BrowserPolicyRevision   string        `json:"browser_policy_revision"`
-	ProfileRevision         string        `json:"profile_revision"`
-	ExpectedRole            string        `json:"expected_role,omitempty"`
-	ExpectedName            string        `json:"expected_name,omitempty"`
-	DestinationExpectedRole string        `json:"destination_expected_role,omitempty"`
-	DestinationExpectedName string        `json:"destination_expected_name,omitempty"`
-	DialogType              string        `json:"dialog_type,omitempty"`
-	DialogMessageDigest     string        `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes      int           `json:"dialog_message_bytes,omitempty"`
-	InputDigest             string        `json:"input_digest,omitempty"`
-	InputBytes              int           `json:"input_bytes,omitempty"`
-	ArtifactSHA256          string        `json:"artifact_sha256,omitempty"`
-	ArtifactBytes           int64         `json:"artifact_bytes,omitempty"`
-	ArtifactFilename        string        `json:"artifact_filename,omitempty"`
-	ArtifactContentType     string        `json:"artifact_content_type,omitempty"`
-	ApprovalDigest          string        `json:"approval_digest,omitempty"`
+	SessionID               string               `json:"session_id"`
+	TabID                   string               `json:"tab_id"`
+	SnapshotGeneration      uint64               `json:"snapshot_generation"`
+	ActionInvocationID      string               `json:"action_invocation_id"`
+	Action                  browseraction.Action `json:"action"`
+	Effect                  string               `json:"effect"`
+	CurrentOrigin           string               `json:"current_origin"`
+	PreparedActionHash      string               `json:"prepared_action_hash"`
+	BrowserPolicyRevision   string               `json:"browser_policy_revision"`
+	ProfileRevision         string               `json:"profile_revision"`
+	ExpectedRole            string               `json:"expected_role,omitempty"`
+	ExpectedName            string               `json:"expected_name,omitempty"`
+	DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
+	DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
+	DialogType              string               `json:"dialog_type,omitempty"`
+	DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes      int                  `json:"dialog_message_bytes,omitempty"`
+	InputDigest             string               `json:"input_digest,omitempty"`
+	InputBytes              int                  `json:"input_bytes,omitempty"`
+	ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
+	ArtifactBytes           int64                `json:"artifact_bytes,omitempty"`
+	ArtifactFilename        string               `json:"artifact_filename,omitempty"`
+	ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
+	ApprovalDigest          string               `json:"approval_digest,omitempty"`
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -424,30 +370,30 @@ func (input BrowserActInput) MarshalJSON() ([]byte, error) {
 
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	var value struct {
-		SessionID               string          `json:"session_id"`
-		TabID                   string          `json:"tab_id"`
-		SnapshotGeneration      json.RawMessage `json:"snapshot_generation"`
-		ActionInvocationID      string          `json:"action_invocation_id"`
-		Action                  BrowserAction   `json:"action"`
-		Effect                  string          `json:"effect"`
-		CurrentOrigin           string          `json:"current_origin"`
-		PreparedActionHash      string          `json:"prepared_action_hash"`
-		BrowserPolicyRevision   string          `json:"browser_policy_revision"`
-		ProfileRevision         string          `json:"profile_revision"`
-		ExpectedRole            string          `json:"expected_role,omitempty"`
-		ExpectedName            string          `json:"expected_name,omitempty"`
-		DestinationExpectedRole string          `json:"destination_expected_role,omitempty"`
-		DestinationExpectedName string          `json:"destination_expected_name,omitempty"`
-		DialogType              string          `json:"dialog_type,omitempty"`
-		DialogMessageDigest     string          `json:"dialog_message_digest,omitempty"`
-		DialogMessageBytes      json.RawMessage `json:"dialog_message_bytes,omitempty"`
-		InputDigest             string          `json:"input_digest,omitempty"`
-		InputBytes              json.RawMessage `json:"input_bytes,omitempty"`
-		ArtifactSHA256          string          `json:"artifact_sha256,omitempty"`
-		ArtifactBytes           json.RawMessage `json:"artifact_bytes,omitempty"`
-		ArtifactFilename        string          `json:"artifact_filename,omitempty"`
-		ArtifactContentType     string          `json:"artifact_content_type,omitempty"`
-		ApprovalDigest          string          `json:"approval_digest,omitempty"`
+		SessionID               string               `json:"session_id"`
+		TabID                   string               `json:"tab_id"`
+		SnapshotGeneration      json.RawMessage      `json:"snapshot_generation"`
+		ActionInvocationID      string               `json:"action_invocation_id"`
+		Action                  browseraction.Action `json:"action"`
+		Effect                  string               `json:"effect"`
+		CurrentOrigin           string               `json:"current_origin"`
+		PreparedActionHash      string               `json:"prepared_action_hash"`
+		BrowserPolicyRevision   string               `json:"browser_policy_revision"`
+		ProfileRevision         string               `json:"profile_revision"`
+		ExpectedRole            string               `json:"expected_role,omitempty"`
+		ExpectedName            string               `json:"expected_name,omitempty"`
+		DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
+		DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
+		DialogType              string               `json:"dialog_type,omitempty"`
+		DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
+		DialogMessageBytes      json.RawMessage      `json:"dialog_message_bytes,omitempty"`
+		InputDigest             string               `json:"input_digest,omitempty"`
+		InputBytes              json.RawMessage      `json:"input_bytes,omitempty"`
+		ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
+		ArtifactBytes           json.RawMessage      `json:"artifact_bytes,omitempty"`
+		ArtifactFilename        string               `json:"artifact_filename,omitempty"`
+		ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
+		ApprovalDigest          string               `json:"approval_digest,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -969,7 +915,7 @@ type BrowserHostActRequest struct {
 	TabID                   string
 	SnapshotGeneration      uint64
 	ActionInvocationID      string
-	Action                  BrowserAction
+	Action                  browseraction.Action
 	Effect                  string
 	CurrentOrigin           string
 	PreparedActionHash      string

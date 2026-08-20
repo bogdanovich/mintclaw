@@ -76,10 +76,10 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 		t.Fatalf("commit responses = %#v", responses)
 	}
 
-	request := BrowserHostNavigateRequest{
+	request := BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_file_chooser_1",
-		Action: nodes.BrowserAction{
+		Action: browserworker.Action{
 			Kind: "file_chooser", Ref: observed.Elements[0].Ref,
 			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1",
 		},
@@ -90,7 +90,7 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 		ArtifactFilename: "photo.jpg", ArtifactContentType: "image/jpeg",
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	}
-	result, err := host.FileChooser(t.Context(), request)
+	result, err := host.Act(t.Context(), request)
 	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
 		t.Fatalf("FileChooser() = %#v, %v; actions = %#v", result, err, worker.actions)
 	}
@@ -105,7 +105,7 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 	request.ActionInvocationID = "browser_file_chooser_2"
 	request.PreparedActionHash = strings.Repeat("c", 64)
 	request.SnapshotGeneration = 2
-	if _, err = host.FileChooser(t.Context(), request); err == nil || len(worker.actions) != 1 {
+	if _, err = host.Act(t.Context(), request); err == nil || len(worker.actions) != 1 {
 		t.Fatalf("reused artifact error = %v; actions = %#v", err, worker.actions)
 	}
 }
@@ -832,10 +832,10 @@ func TestBrowserArtifactFileChooserRejectsNavigationBeforeUpload(t *testing.T) {
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	path := stageCommittedBrowserArtifact(t, host, t.Context(), prepare, content)
-	request := BrowserHostNavigateRequest{
+	request := BrowserHostActRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_file_chooser_navigation",
-		Action: nodes.BrowserAction{
+		Action: browserworker.Action{
 			Kind: "file_chooser", Ref: observed.Elements[0].Ref,
 			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_navigation",
 		},
@@ -846,7 +846,7 @@ func TestBrowserArtifactFileChooserRejectsNavigationBeforeUpload(t *testing.T) {
 		ArtifactFilename: "navigation.txt", ArtifactContentType: "text/plain",
 		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
 	}
-	if _, err = host.FileChooser(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) ||
+	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) ||
 		len(worker.actions) != 0 {
 		t.Fatalf("FileChooser(navigation race) error = %v; actions = %#v", err, worker.actions)
 	}

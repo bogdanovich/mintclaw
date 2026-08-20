@@ -501,8 +501,12 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 	if err != nil {
 		return Invocation{}, err
 	}
+	workerAction, err := workerActionForPrepared(prepared.Action, driverAction)
+	if err != nil {
+		return Invocation{}, err
+	}
 	workerPreparedAction := WorkerPreparedAction{
-		InvocationID: invocationID, Prepared: prepared, DriverAction: driverAction,
+		InvocationID: invocationID, Prepared: prepared, Action: workerAction, DriverAction: driverAction,
 	}
 	preparedWorker, preparedDispatch := worker.(PreparedActionWorker)
 	preparedDispatch = preparedDispatch && preparedWorker.SupportsPreparedAction(prepared.Action.Kind)
@@ -688,7 +692,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.DestinationOrigin = destination
 		prepared.Effect = EffectNavigation
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionUpload, ActionDownload:
+		ActionFileChooser, ActionDownload:
 		element, ok := slot.refs[request.Action.Ref]
 		if !ok {
 			return PreparedAction{}, ErrStale
@@ -716,7 +720,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.Effect = EffectLocalEdit
 		case ActionHover:
 			prepared.Effect = EffectRead
-		case ActionFileChooser, ActionUpload:
+		case ActionFileChooser:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
 				!validDigest(request.Upload.SHA256) || request.Upload.Path == "" || request.Upload.Filename == "" ||
@@ -1286,7 +1290,7 @@ func (broker *Broker) driverActionForPrepared(
 	case ActionNavigate:
 		return DriverAction{Kind: DriverNavigate, URL: prepared.Action.URL}, nil
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionUpload, ActionDownload:
+		ActionFileChooser, ActionDownload:
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
@@ -1311,7 +1315,7 @@ func (broker *Broker) driverActionForPrepared(
 			kind = DriverUncheck
 		case ActionHover:
 			kind = DriverHover
-		case ActionFileChooser, ActionUpload:
+		case ActionFileChooser:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]
 			if !exists || binding.Ref != prepared.Action.ArtifactRef || binding.SHA256 != prepared.ArtifactSHA256 ||
@@ -1373,7 +1377,67 @@ func (broker *Broker) rememberUpload(slot *workerSlot, prepared PreparedAction, 
 }
 
 func artifactInputAction(kind ActionKind) bool {
-	return kind == ActionFileChooser || kind == ActionUpload
+	return kind == ActionFileChooser
+}
+
+func workerActionForPrepared(prepared Action, driver DriverAction) (Action, error) {
+	action := Action{Kind: prepared.Kind}
+	switch prepared.Kind {
+	case ActionNavigate:
+		if driver.Kind != DriverNavigate {
+			return Action{}, ErrInvalid
+		}
+		action.URL = driver.URL
+	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionDownload:
+		expected := map[ActionKind]DriverActionKind{
+			ActionClick: DriverClick, ActionFill: DriverFill, ActionSelect: DriverSelect,
+			ActionCheck: DriverCheck, ActionUncheck: DriverUncheck, ActionHover: DriverHover,
+			ActionDownload: DriverDownloadAction,
+		}[prepared.Kind]
+		if driver.Kind != expected {
+			return Action{}, ErrInvalid
+		}
+		action.Ref = driver.Target
+		action.Deliver = prepared.Deliver
+	case ActionPress:
+		if driver.Kind != DriverPress {
+			return Action{}, ErrInvalid
+		}
+		action.Target, action.Key = prepared.Target, driver.Key
+	case ActionScroll:
+		if driver.Kind != DriverScroll {
+			return Action{}, ErrInvalid
+		}
+		action.Direction, action.Amount = driver.Direction, driver.Amount
+	case ActionDialog:
+		if driver.Kind != DriverDialog {
+			return Action{}, ErrInvalid
+		}
+		action.DialogID = prepared.DialogID
+		action.Decision = prepared.Decision
+		action.PromptProvided = driver.PromptProvided
+	case ActionDrag:
+		if driver.Kind != DriverDrag {
+			return Action{}, ErrInvalid
+		}
+		action.SourceRef, action.DestinationRef = driver.Target, driver.DestinationTarget
+	case ActionFileChooser:
+		if driver.Kind != DriverUpload {
+			return Action{}, ErrInvalid
+		}
+		action.Ref, action.ArtifactRef = driver.Target, prepared.ArtifactRef
+	default:
+		return Action{}, ErrInvalid
+	}
+	return action, nil
+}
+
+func (request WorkerPreparedAction) Validate(maxTextBytes int) error {
+	expected, err := workerActionForPrepared(request.Prepared.Action, request.DriverAction)
+	if err != nil || request.Action != expected || request.Action.Validate(maxTextBytes) != nil {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func (broker *Broker) bindActionInput(action Action) (Action, string, int, error) {
