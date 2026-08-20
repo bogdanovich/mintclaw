@@ -469,6 +469,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 			}
 			if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
 				InvocationID: "invocation_navigate",
+				Action:       browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
 				Prepared: browser.PreparedAction{
 					Action: browser.Action{Kind: browser.ActionNavigate},
 					Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
@@ -745,7 +746,7 @@ func TestGatewayBrowserWorkerRoutesTypedCheckUncheckAndHover(t *testing.T) {
 			inputs := append([]nodes.BrowserActInput(nil), handler.actInputs...)
 			handler.mu.Unlock()
 			input := inputs[len(inputs)-1]
-			if input.Action.Kind != test.kind || input.Action.Ref != "host_ref_1" ||
+			if input.Action.Kind != browser.ActionKind(test.kind) || input.Action.Ref != "host_ref_1" ||
 				input.ExpectedRole != test.role || input.ExpectedName != "Control" || input.Effect != test.effect ||
 				input.ApprovalDigest != "" || input.InputDigest != "" || input.InputBytes != 0 {
 				t.Fatalf("typed %s input = %#v", test.kind, input)

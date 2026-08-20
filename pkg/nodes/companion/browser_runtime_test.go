@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -23,8 +24,8 @@ type fakeBrowserCommandHost struct {
 	pressed          int
 	scrolled         int
 	dialogs          int
-	dialogAction     nodes.BrowserAction
-	ordinaryActions  []nodes.BrowserAction
+	dialogAction     browser.Action
+	ordinaryActions  []browser.Action
 	ordinaryRequests []nodes.BrowserHostActRequest
 	contextCalls     int
 	contextError     error
@@ -78,86 +79,48 @@ func (host *fakeBrowserCommandHost) Observe(
 	return result, nil
 }
 
-func (host *fakeBrowserCommandHost) Navigate(
+func (host *fakeBrowserCommandHost) Act(
 	_ context.Context,
 	request nodes.BrowserHostActRequest,
 ) (nodes.BrowserObservationResult, error) {
-	host.navigated++
+	switch request.Action.Kind {
+	case browser.ActionNavigate:
+		host.navigated++
+	case browser.ActionScroll:
+		host.scrolled++
+	case browser.ActionDialog:
+		host.dialogs++
+		host.dialogAction = request.Action
+	case browser.ActionClick:
+		host.clicked++
+	case browser.ActionSelect:
+		host.selected++
+	case browser.ActionFill:
+		host.filled++
+	case browser.ActionPress:
+		host.pressed++
+	default:
+		host.ordinaryActions = append(host.ordinaryActions, request.Action)
+		host.ordinaryRequests = append(host.ordinaryRequests, request)
+	}
 	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	if host.navigateError != nil {
+	if request.Action.Kind == browser.ActionNavigate && host.navigateError != nil {
 		return nodes.BrowserObservationResult{}, host.navigateError
 	}
 	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
-	result.Snapshot = host.navigateSnapshot
-	if host.invalidAction {
+	switch request.Action.Kind {
+	case browser.ActionNavigate:
+		result.Snapshot = host.navigateSnapshot
+	case browser.ActionSelect:
+		if host.selectSnapshot != "" {
+			result.Snapshot = host.selectSnapshot
+		}
+	case browser.ActionFill:
+		result.Snapshot = host.fillSnapshot
+	}
+	if request.Action.Kind == browser.ActionNavigate && host.invalidAction {
 		result.SnapshotGeneration = 0
 	}
-	return result, nil
-}
-
-func (host *fakeBrowserCommandHost) Scroll(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.scrolled++
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
-	return result, host.navigateError
-}
-
-func (host *fakeBrowserCommandHost) Dialog(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.dialogs++
-	host.dialogAction = request.Action
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
-	return result, host.navigateError
-}
-
-func (host *fakeBrowserCommandHost) Check(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	return host.ordinaryAction(request)
-}
-
-func (host *fakeBrowserCommandHost) Uncheck(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	return host.ordinaryAction(request)
-}
-
-func (host *fakeBrowserCommandHost) Hover(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	return host.ordinaryAction(request)
-}
-
-func (host *fakeBrowserCommandHost) Drag(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	return host.ordinaryAction(request)
-}
-
-func (host *fakeBrowserCommandHost) FileChooser(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	return host.ordinaryAction(request)
-}
-
-func (host *fakeBrowserCommandHost) ordinaryAction(
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.ordinaryActions = append(host.ordinaryActions, request.Action)
-	host.ordinaryRequests = append(host.ordinaryRequests, request)
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
 	return result, host.navigateError
 }
 
@@ -168,7 +131,7 @@ func TestRuntimeExecutesTypedFileChooser(t *testing.T) {
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_file_chooser_1",
-		Action: nodes.BrowserAction{
+		Action: browser.Action{
 			Kind: "file_chooser", Ref: "semantic_ref_1",
 			ArtifactRef: nodes.TransferArtifactRefPrefix + "artifact_1",
 		},
@@ -193,51 +156,6 @@ func TestRuntimeExecutesTypedFileChooser(t *testing.T) {
 		request.ArtifactContentType != input.ArtifactContentType {
 		t.Fatalf("file chooser request = %#v", request)
 	}
-}
-
-func (host *fakeBrowserCommandHost) Click(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.clicked++
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
-	return result, host.navigateError
-}
-
-func (host *fakeBrowserCommandHost) Select(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.selected++
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1)
-	if host.selectSnapshot != "" {
-		result.Snapshot = host.selectSnapshot
-	}
-	return result, host.navigateError
-}
-
-func (host *fakeBrowserCommandHost) Fill(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.filled++
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	result := browserRuntimeObservation(
-		request.SessionID, request.TabID, request.SnapshotGeneration+1,
-	)
-	result.Snapshot = host.fillSnapshot
-	return result, host.navigateError
-}
-
-func (host *fakeBrowserCommandHost) Press(
-	_ context.Context,
-	request nodes.BrowserHostActRequest,
-) (nodes.BrowserObservationResult, error) {
-	host.pressed++
-	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
-	return browserRuntimeObservation(request.SessionID, request.TabID, request.SnapshotGeneration+1), host.navigateError
 }
 
 func (host *fakeBrowserCommandHost) Close(
@@ -329,7 +247,7 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 	invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_action_1",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
@@ -417,7 +335,7 @@ func TestRuntimeExecutesTypedBrowserScroll(t *testing.T) {
 	invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_scroll_1",
-		Action:             nodes.BrowserAction{Kind: "scroll", Direction: "down", Amount: 2},
+		Action:             browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 2},
 		Effect:             "read", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("c", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
@@ -436,7 +354,7 @@ func TestRuntimeExecutesOnlyExactlyAttestedTypedBrowserClick(t *testing.T) {
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_click_1",
-		Action:             nodes.BrowserAction{Kind: "click", Ref: "host_ref_1"},
+		Action:             browser.Action{Kind: browser.ActionClick, Ref: "host_ref_1"},
 		Effect:             "external_commit", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
@@ -494,7 +412,7 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	selectInput := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_select_1",
-		Action:             nodes.BrowserAction{Kind: "select", Ref: "host_ref_1"},
+		Action:             browser.Action{Kind: browser.ActionSelect, Ref: "host_ref_1"},
 		Effect:             "local_edit", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
@@ -561,7 +479,7 @@ func TestRuntimeExecutesTypedSelectAndApprovedDocumentPress(t *testing.T) {
 	pressInput := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
 		ActionInvocationID: "browser_press_1",
-		Action:             nodes.BrowserAction{Kind: "press", Target: "document", Key: "Enter"},
+		Action:             browser.Action{Kind: browser.ActionPress, Target: "document", Key: "Enter"},
 		Effect:             "unknown", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1",
@@ -607,7 +525,7 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_fill_1",
-		Action:             nodes.BrowserAction{Kind: "fill", Ref: "host_ref_1"},
+		Action:             browser.Action{Kind: browser.ActionFill, Ref: "host_ref_1"},
 		Effect:             "local_edit", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
@@ -687,7 +605,7 @@ func TestRuntimeExecutesProtectedDialogPromptWithoutDurablePlaintext(t *testing.
 		input := nodes.BrowserActInput{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 			ActionInvocationID: "browser_dialog_" + fmt.Sprintf("%d", len(secret)),
-			Action: nodes.BrowserAction{
+			Action: browser.Action{
 				Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept", PromptProvided: true,
 			},
 			Effect: "external_commit", CurrentOrigin: "https://example.com",
@@ -746,7 +664,7 @@ func TestRuntimeExecutesTypedCheckUncheckAndHover(t *testing.T) {
 			input := nodes.BrowserActInput{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 				ActionInvocationID: "browser_" + test.kind + "_1",
-				Action:             nodes.BrowserAction{Kind: test.kind, Ref: "semantic_ref_1"},
+				Action:             browser.Action{Kind: browser.ActionKind(test.kind), Ref: "semantic_ref_1"},
 				Effect:             test.effect, CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: "Control",
@@ -773,7 +691,7 @@ func TestRuntimeExecutesApprovedTypedDrag(t *testing.T) {
 	input := nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_drag_1",
-		Action: nodes.BrowserAction{
+		Action: browser.Action{
 			Kind: "drag", SourceRef: "semantic_ref_1", DestinationRef: "semantic_ref_2",
 		},
 		Effect: "unknown", CurrentOrigin: "https://example.com",
@@ -828,7 +746,7 @@ func TestRuntimeStoresBrowserActionReceiptWithoutFreshObservation(t *testing.T) 
 	input, err := json.Marshal(nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_navigate_receipt_1",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
@@ -894,7 +812,7 @@ func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *test
 			input, err := json.Marshal(nodes.BrowserActInput{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 				ActionInvocationID: "browser_action_1",
-				Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+				Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
 				Effect:             "navigation", CurrentOrigin: "about:blank",
 				PreparedActionHash:    strings.Repeat("b", 64),
 				BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",

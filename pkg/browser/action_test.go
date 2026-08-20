@@ -2727,6 +2727,85 @@ func assertNetworkQuarantine(
 	}
 }
 
+func TestWorkerActionForPreparedUsesCanonicalAction(t *testing.T) {
+	tests := []struct {
+		name     string
+		prepared Action
+		driver   DriverAction
+		want     Action
+	}{
+		{name: "navigate", prepared: Action{Kind: ActionNavigate}, driver: DriverAction{
+			Kind: DriverNavigate, URL: "https://example.com/",
+		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/"}},
+		{name: "click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
+			Kind: DriverClick, Target: "host_ref_click",
+		}, want: Action{Kind: ActionClick, Ref: "host_ref_click"}},
+		{name: "fill", prepared: Action{Kind: ActionFill}, driver: DriverAction{
+			Kind: DriverFill, Target: "host_ref_fill", Value: "private",
+		}, want: Action{Kind: ActionFill, Ref: "host_ref_fill"}},
+		{name: "select", prepared: Action{Kind: ActionSelect}, driver: DriverAction{
+			Kind: DriverSelect, Target: "host_ref_select", Value: "private",
+		}, want: Action{Kind: ActionSelect, Ref: "host_ref_select"}},
+		{name: "check", prepared: Action{Kind: ActionCheck}, driver: DriverAction{
+			Kind: DriverCheck, Target: "host_ref_check",
+		}, want: Action{Kind: ActionCheck, Ref: "host_ref_check"}},
+		{name: "uncheck", prepared: Action{Kind: ActionUncheck}, driver: DriverAction{
+			Kind: DriverUncheck, Target: "host_ref_uncheck",
+		}, want: Action{Kind: ActionUncheck, Ref: "host_ref_uncheck"}},
+		{name: "hover", prepared: Action{Kind: ActionHover}, driver: DriverAction{
+			Kind: DriverHover, Target: "host_ref_hover",
+		}, want: Action{Kind: ActionHover, Ref: "host_ref_hover"}},
+		{name: "download", prepared: Action{Kind: ActionDownload, Deliver: true}, driver: DriverAction{
+			Kind: DriverDownloadAction, Target: "host_ref_download",
+		}, want: Action{Kind: ActionDownload, Ref: "host_ref_download", Deliver: true}},
+		{name: "press", prepared: Action{Kind: ActionPress, Target: "document"}, driver: DriverAction{
+			Kind: DriverPress, Key: "Enter",
+		}, want: Action{Kind: ActionPress, Target: "document", Key: "Enter"}},
+		{name: "scroll", prepared: Action{Kind: ActionScroll}, driver: DriverAction{
+			Kind: DriverScroll, Direction: "down", Amount: 2,
+		}, want: Action{Kind: ActionScroll, Direction: "down", Amount: 2}},
+		{name: "dialog", prepared: Action{
+			Kind: ActionDialog, DialogID: "dialog_1", Decision: "accept",
+		}, driver: DriverAction{
+			Kind: DriverDialog, PromptProvided: true,
+		}, want: Action{
+			Kind: ActionDialog, DialogID: "dialog_1", Decision: "accept", PromptProvided: true,
+		}},
+		{name: "drag", prepared: Action{Kind: ActionDrag}, driver: DriverAction{
+			Kind: DriverDrag, Target: "host_ref_source", DestinationTarget: "host_ref_destination",
+		}, want: Action{
+			Kind: ActionDrag, SourceRef: "host_ref_source", DestinationRef: "host_ref_destination",
+		}},
+		{name: "file chooser", prepared: Action{
+			Kind: ActionFileChooser, ArtifactRef: "transfer-artifact://artifact_1",
+		}, driver: DriverAction{
+			Kind: DriverUpload, Target: "host_ref_file",
+		}, want: Action{
+			Kind: ActionFileChooser, Ref: "host_ref_file", ArtifactRef: "transfer-artifact://artifact_1",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := workerActionForPrepared(test.prepared, test.driver)
+			if err != nil || got != test.want {
+				t.Fatalf("worker action = %#v, %v; want %#v", got, err, test.want)
+			}
+			request := WorkerPreparedAction{
+				Prepared: PreparedAction{Action: test.prepared}, Action: got, DriverAction: test.driver,
+			}
+			if err = request.Validate(1024); err != nil {
+				t.Fatalf("WorkerPreparedAction.Validate() error = %v", err)
+			}
+		})
+	}
+	if _, err := workerActionForPrepared(
+		Action{Kind: ActionNavigate},
+		DriverAction{Kind: DriverClick},
+	); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mismatched worker action error = %v", err)
+	}
+}
+
 func driverObservationFixture(elements ...DriverElement) DriverObservation {
 	lines := make([]string, 0, len(elements))
 	for _, element := range elements {

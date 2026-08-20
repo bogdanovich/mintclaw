@@ -334,15 +334,11 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		artifactTransferAvailable := tool.runtime.source.ArtifactTransferAvailable()
 		if !artifactTransferAvailable {
 			actions = slices.DeleteFunc(actions, func(action browser.ActionKind) bool {
-				return action == browser.ActionFileChooser || action == browser.ActionUpload ||
-					action == browser.ActionDownload
+				return action == browser.ActionFileChooser || action == browser.ActionDownload
 			})
 		}
 		uploadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Upload
 		downloadAvailable := uploadAvailable && diagnostics.Download
-		if uploadAvailable && !slices.Contains(actions, browser.ActionUpload) {
-			actions = append(actions, browser.ActionUpload)
-		}
 		if uploadAvailable && !slices.Contains(actions, browser.ActionFileChooser) {
 			actions = append(actions, browser.ActionFileChooser)
 		}
@@ -1227,7 +1223,6 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 	limits := config.BrowserLimitsConfig{}.Effective()
 	actions := []string{
 		"navigate", "click", "fill", "select", "check", "uncheck", "hover", "drag", "press", "scroll", "dialog",
-		"upload",
 	}
 	downloadAvailable := false
 	if tool != nil && tool.runtime != nil {
@@ -1581,7 +1576,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
 	}
-	if (action.Kind == browser.ActionFileChooser || action.Kind == browser.ActionUpload) &&
+	if action.Kind == browser.ActionFileChooser &&
 		!tool.runtime.source.ArtifactTransferAvailable() {
 		return browser.Preparation{}, browser.ErrDriverIncompatible
 	}

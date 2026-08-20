@@ -40,16 +40,16 @@ var (
 )
 
 type (
-	BrowserHostFeatures        = nodes.BrowserHostFeatures
-	BrowserHostSession         = nodes.BrowserSessionResult
-	BrowserHostOpenRequest     = nodes.BrowserHostOpenRequest
-	BrowserHostStatusRequest   = nodes.BrowserHostStatusRequest
-	BrowserHostObserveRequest  = nodes.BrowserHostObserveRequest
-	BrowserHostCaptureRequest  = nodes.BrowserHostCaptureRequest
-	BrowserHostNavigateRequest = nodes.BrowserHostActRequest
-	BrowserHostElement         = nodes.BrowserElement
-	BrowserHostObservation     = nodes.BrowserObservationResult
-	BrowserHostCloseRequest    = nodes.BrowserHostStatusRequest
+	BrowserHostFeatures       = nodes.BrowserHostFeatures
+	BrowserHostSession        = nodes.BrowserSessionResult
+	BrowserHostOpenRequest    = nodes.BrowserHostOpenRequest
+	BrowserHostStatusRequest  = nodes.BrowserHostStatusRequest
+	BrowserHostObserveRequest = nodes.BrowserHostObserveRequest
+	BrowserHostCaptureRequest = nodes.BrowserHostCaptureRequest
+	BrowserHostActRequest     = nodes.BrowserHostActRequest
+	BrowserHostElement        = nodes.BrowserElement
+	BrowserHostObservation    = nodes.BrowserObservationResult
+	BrowserHostCloseRequest   = nodes.BrowserHostStatusRequest
 )
 
 type browserHostFactory interface {
@@ -572,9 +572,46 @@ func (host *BrowserHost) Capture(
 	return host.RegisterOutput(descriptor, content)
 }
 
-func (host *BrowserHost) Navigate(
+func (host *BrowserHost) Act(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
+) (BrowserHostObservation, error) {
+	if request.Action.Validate(nodes.MaxBrowserTextInputBytes) != nil {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	switch request.Action.Kind {
+	case browserworker.ActionNavigate:
+		return host.navigate(ctx, request)
+	case browserworker.ActionClick:
+		return host.click(ctx, request)
+	case browserworker.ActionFill:
+		return host.fill(ctx, request)
+	case browserworker.ActionSelect:
+		return host.selectOption(ctx, request)
+	case browserworker.ActionPress:
+		return host.press(ctx, request)
+	case browserworker.ActionScroll:
+		return host.scroll(ctx, request)
+	case browserworker.ActionDialog:
+		return host.dialog(ctx, request)
+	case browserworker.ActionCheck:
+		return host.checkState(ctx, request, browserworker.ActionCheck, browserworker.DriverCheck)
+	case browserworker.ActionUncheck:
+		return host.checkState(ctx, request, browserworker.ActionUncheck, browserworker.DriverUncheck)
+	case browserworker.ActionHover:
+		return host.hover(ctx, request)
+	case browserworker.ActionDrag:
+		return host.drag(ctx, request)
+	case browserworker.ActionFileChooser:
+		return host.fileChooser(ctx, request)
+	default:
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+}
+
+func (host *BrowserHost) navigate(
+	ctx context.Context,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -591,9 +628,9 @@ func (host *BrowserHost) Navigate(
 	})
 }
 
-func (host *BrowserHost) Click(
+func (host *BrowserHost) click(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -612,9 +649,9 @@ func (host *BrowserHost) Click(
 	})
 }
 
-func (host *BrowserHost) Select(
+func (host *BrowserHost) selectOption(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -633,24 +670,10 @@ func (host *BrowserHost) Select(
 	})
 }
 
-func (host *BrowserHost) Check(
-	ctx context.Context,
-	request BrowserHostNavigateRequest,
-) (BrowserHostObservation, error) {
-	return host.checkState(ctx, request, "check", browserworker.DriverCheck)
-}
-
-func (host *BrowserHost) Uncheck(
-	ctx context.Context,
-	request BrowserHostNavigateRequest,
-) (BrowserHostObservation, error) {
-	return host.checkState(ctx, request, "uncheck", browserworker.DriverUncheck)
-}
-
 func (host *BrowserHost) checkState(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
-	action string,
+	request BrowserHostActRequest,
+	action browserworker.ActionKind,
 	driverKind browserworker.DriverActionKind,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
@@ -659,17 +682,17 @@ func (host *BrowserHost) checkState(
 		request.Action.Kind != action || !browserHostIdentifier(request.Action.Ref) ||
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
 		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
-		!nodes.BrowserCheckRoleAllowed(action, request.ExpectedRole) || len(request.ExpectedName) > 4096 ||
+		!nodes.BrowserCheckRoleAllowed(string(action), request.ExpectedRole) || len(request.ExpectedName) > 4096 ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		request.ApprovalDigest != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	return host.executeAction(ctx, request, action, browserworker.DriverAction{Kind: driverKind})
+	return host.executeAction(ctx, request, string(action), browserworker.DriverAction{Kind: driverKind})
 }
 
-func (host *BrowserHost) Hover(
+func (host *BrowserHost) hover(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -685,9 +708,9 @@ func (host *BrowserHost) Hover(
 	return host.executeAction(ctx, request, "hover", browserworker.DriverAction{Kind: browserworker.DriverHover})
 }
 
-func (host *BrowserHost) Drag(
+func (host *BrowserHost) drag(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -707,9 +730,9 @@ func (host *BrowserHost) Drag(
 	return host.executeAction(ctx, request, "drag", browserworker.DriverAction{Kind: browserworker.DriverDrag})
 }
 
-func (host *BrowserHost) FileChooser(
+func (host *BrowserHost) fileChooser(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) || !browserHostDigest(request.PreparedActionHash) ||
 		!browserHostDigest(request.BrowserPolicyRevision) || request.Effect != "local_edit" ||
@@ -738,9 +761,9 @@ func (host *BrowserHost) FileChooser(
 	})
 }
 
-func (host *BrowserHost) Fill(
+func (host *BrowserHost) fill(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -759,9 +782,9 @@ func (host *BrowserHost) Fill(
 	})
 }
 
-func (host *BrowserHost) Press(
+func (host *BrowserHost) press(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -779,9 +802,9 @@ func (host *BrowserHost) Press(
 	})
 }
 
-func (host *BrowserHost) Scroll(
+func (host *BrowserHost) scroll(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -800,9 +823,9 @@ func (host *BrowserHost) Scroll(
 	})
 }
 
-func (host *BrowserHost) Dialog(
+func (host *BrowserHost) dialog(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 ) (BrowserHostObservation, error) {
 	if !browserHostIdentifier(request.ActionInvocationID) ||
 		!browserHostDigest(request.PreparedActionHash) ||
@@ -947,7 +970,7 @@ func (host *BrowserHost) Contexts(
 
 func (host *BrowserHost) executeAction(
 	ctx context.Context,
-	request BrowserHostNavigateRequest,
+	request BrowserHostActRequest,
 	action string,
 	driverAction browserworker.DriverAction,
 ) (BrowserHostObservation, error) {
@@ -1224,7 +1247,7 @@ func stableBrowserHostNavigationIdentity(
 	return after, nil
 }
 
-func browserHostActInput(request BrowserHostNavigateRequest) nodes.BrowserActInput {
+func browserHostActInput(request BrowserHostActRequest) nodes.BrowserActInput {
 	action := request.Action
 	action.Value = ""
 	return nodes.BrowserActInput{

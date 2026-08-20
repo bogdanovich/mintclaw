@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 )
 
 func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
@@ -251,7 +253,7 @@ func TestBrowserDialogCommandSchemaBindsProtectedPromptAndApproval(t *testing.T)
 		input := BrowserActInput{
 			SessionID: "session_1", TabID: "tab_1", SnapshotGeneration: 1,
 			ActionInvocationID: "action_dialog_" + strings.Repeat("x", len(secret)%2),
-			Action: BrowserAction{
+			Action: browser.Action{
 				Kind: "dialog", DialogID: "dialog_authority_1", Decision: "accept", PromptProvided: true,
 			},
 			Effect: "external_commit", CurrentOrigin: "https://example.com",
@@ -307,7 +309,7 @@ func TestBrowserActInputMarshalPreservesOnlyDialogZeroByteCount(t *testing.T) {
 		{kind: "dialog", want: true},
 		{kind: "navigate", want: false},
 	} {
-		raw, err := json.Marshal(BrowserActInput{Action: BrowserAction{Kind: test.kind}})
+		raw, err := json.Marshal(BrowserActInput{Action: browser.Action{Kind: browser.ActionKind(test.kind)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -525,10 +527,16 @@ func TestBrowserActSchemaAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) {
 	if err = validateInvocationInput(descriptors[3].InputSchema, input); err == nil {
 		t.Fatal("scroll amount above the bound was accepted")
 	}
-	var decoded BrowserAction
-	if err = json.Unmarshal([]byte(`{"kind":"scroll","direction":"up","amount":1e0}`), &decoded); err != nil ||
+	var decoded browser.Action
+	if err = json.Unmarshal(
+		[]byte(`{"kind":"scroll","direction":"up","amount":1e0,"future_option":true}`),
+		&decoded,
+	); err != nil ||
 		decoded.Amount != 1 {
 		t.Fatalf("canonical scroll action = %#v, %v", decoded, err)
+	}
+	if err = json.Unmarshal([]byte(`{"kind":"scroll","direction":"up","amount":1.5}`), &decoded); err == nil {
+		t.Fatal("fractional scroll amount was accepted")
 	}
 }
 
@@ -669,7 +677,7 @@ func TestBrowserActSchemaRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 func TestBrowserApprovalDigestBindsClickInput(t *testing.T) {
 	input := BrowserActInput{
 		SessionID: "session_1", TabID: "tab_1", SnapshotGeneration: 7,
-		ActionInvocationID: "invocation_1", Action: BrowserAction{Kind: "click", Ref: "host_ref_1"},
+		ActionInvocationID: "invocation_1", Action: browser.Action{Kind: browser.ActionClick, Ref: "host_ref_1"},
 		Effect: "external_commit", CurrentOrigin: "https://example.com",
 		PreparedActionHash: strings.Repeat("a", 64), BrowserPolicyRevision: strings.Repeat("b", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",

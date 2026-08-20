@@ -91,7 +91,7 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	upload, err := source.resolveBrowserUpload(ctx, browser.PrepareActionRequest{
 		RequestID: "request_upload", SessionID: capture.SessionID, TabID: capture.TabID,
 		SnapshotID: capture.SnapshotID, SnapshotGeneration: capture.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+		Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 	})
 	if err != nil || upload.Ref != artifact.Ref || upload.SHA256 != artifact.SHA256 ||
 		upload.Size != artifact.Size || upload.Filename != browserScreenshotFilename ||
@@ -106,22 +106,22 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 		"session": {
 			RequestID: "wrong_session", SessionID: "session_2", TabID: capture.TabID,
 			SnapshotID: capture.SnapshotID, SnapshotGeneration: capture.SnapshotGeneration,
-			Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+			Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 		},
 		"tab": {
 			RequestID: "wrong_tab", SessionID: capture.SessionID, TabID: "tab_other",
 			SnapshotID: capture.SnapshotID, SnapshotGeneration: capture.SnapshotGeneration,
-			Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+			Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 		},
 		"snapshot": {
 			RequestID: "wrong_snapshot", SessionID: capture.SessionID, TabID: capture.TabID,
 			SnapshotID: "snapshot_other", SnapshotGeneration: capture.SnapshotGeneration,
-			Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+			Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 		},
 		"generation": {
 			RequestID: "wrong_generation", SessionID: capture.SessionID, TabID: capture.TabID,
 			SnapshotID: capture.SnapshotID, SnapshotGeneration: capture.SnapshotGeneration + 1,
-			Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+			Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 		},
 	} {
 		t.Run("upload rejects wrong "+name, func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	validUploadRequest := browser.PrepareActionRequest{
 		RequestID: "wrong_authority", SessionID: capture.SessionID, TabID: capture.TabID,
 		SnapshotID: capture.SnapshotID, SnapshotGeneration: capture.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+		Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 	}
 	wrongActor := toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
 		SenderID: "sender-2", ActorID: "actor-2",
@@ -284,7 +284,7 @@ func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	otherRoute := toolshared.WithToolRouteSessionKey(ctx, "route-2")
 	if _, err = source.resolveBrowserUpload(otherRoute, browser.PrepareActionRequest{
 		RequestID: "request_wrong_route", SessionID: session.ID,
-		Action: browser.Action{Kind: browser.ActionUpload, ArtifactRef: artifact.Ref},
+		Action: browser.Action{Kind: browser.ActionFileChooser, ArtifactRef: artifact.Ref},
 	}); !errors.Is(err, browser.ErrDenied) {
 		t.Fatalf("cross-route upload error = %v", err)
 	}

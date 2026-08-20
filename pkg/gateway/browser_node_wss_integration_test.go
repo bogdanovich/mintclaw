@@ -1147,7 +1147,7 @@ func prepareWSSBrowserRestartPlan(
 	input, err := json.Marshal(nodes.BrowserActInput{
 		SessionID: "browser_restart_session", TabID: "tab_primary", SnapshotGeneration: 1,
 		ActionInvocationID: "browser_restart_action",
-		Action:             nodes.BrowserAction{Kind: "navigate", URL: "https://example.com/"},
+		Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("a", 64),
 		BrowserPolicyRevision: strings.Repeat("b", 64), ProfileRevision: "managed-v1",
@@ -1561,6 +1561,40 @@ func (host *wssBrowserHost) Scroll(
 	}, url), nil
 }
 
+func (host *wssBrowserHost) Act(
+	ctx context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserObservationResult, error) {
+	switch request.Action.Kind {
+	case browser.ActionNavigate:
+		return host.Navigate(ctx, request)
+	case browser.ActionClick:
+		return host.Click(ctx, request)
+	case browser.ActionFill:
+		return host.Fill(ctx, request)
+	case browser.ActionSelect:
+		return host.Select(ctx, request)
+	case browser.ActionPress:
+		return host.Press(ctx, request)
+	case browser.ActionScroll:
+		return host.Scroll(ctx, request)
+	case browser.ActionDialog:
+		return host.Dialog(ctx, request)
+	case browser.ActionCheck:
+		return host.Check(ctx, request)
+	case browser.ActionUncheck:
+		return host.Uncheck(ctx, request)
+	case browser.ActionHover:
+		return host.Hover(ctx, request)
+	case browser.ActionDrag:
+		return host.Drag(ctx, request)
+	case browser.ActionFileChooser:
+		return host.FileChooser(ctx, request)
+	default:
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+}
+
 func (host *wssBrowserHost) Check(
 	_ context.Context,
 	request nodes.BrowserHostActRequest,
@@ -1664,7 +1698,7 @@ func (host *wssBrowserHost) ordinaryInteraction(
 	if !found {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
 	}
-	if request.Action.Kind != action || request.Action.Ref != ref || request.ExpectedRole != role ||
+	if request.Action.Kind != browser.ActionKind(action) || request.Action.Ref != ref || request.ExpectedRole != role ||
 		request.ExpectedName != name || request.Effect != effect || request.ApprovalDigest != "" ||
 		request.InputDigest != "" || request.InputBytes != 0 {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
