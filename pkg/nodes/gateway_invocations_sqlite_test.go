@@ -133,6 +133,31 @@ func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *tes
 	}
 }
 
+func TestGatewayInvocationSQLiteRejectsOpaqueNonBrowserDispatchedTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	preparedAt := time.Now()
+	plan := gatewayTestPlan(t, "inv_non_browser_opaque", "idem_non_browser_opaque", preparedAt)
+	record := GatewayInvocationRecord{
+		Target: "vpn", ToolCallID: "call-non-browser-opaque",
+		Plan: plan, Descriptor: gatewayTestDescriptor(), ExpectedPlanHash: plan.PlanHash,
+		State: GatewayInvocationPrepared, CreatedAt: preparedAt.UnixNano(), UpdatedAt: preparedAt.UnixNano(),
+	}
+	record.Descriptor.ModelContract = &CommandModelContract{}
+	bindOpaqueGatewayInvocationTombstone(t, &record)
+	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+
+	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+		t.Fatal("opaque non-browser dispatched tombstone was accepted")
+	}
+}
+
 func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
 	workspace := t.TempDir()
 	legacyPath := GatewayInvocationLegacyStorePath(workspace)

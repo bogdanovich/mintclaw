@@ -562,7 +562,7 @@ func (store *gatewayInvocationSQLiteStore) verifyIntegrity(ctx context.Context) 
 func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) error {
 	if err := record.validate(); err == nil {
 		return nil
-	} else if record.State != GatewayInvocationDispatched {
+	} else if record.State != GatewayInvocationDispatched || !IsBrowserCommand(record.Descriptor.Name) {
 		return err
 	}
 	if err := record.validateFields(true); err != nil {
