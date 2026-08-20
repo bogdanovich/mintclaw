@@ -1756,16 +1756,14 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 
 	attachments, settledResult := r.p.applySyncToolResultDelivery(ctx, r.ts, result, toolName)
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryPending) {
-		r.appendSkippedToolMessages(
+		completionErr := r.completeTerminalDeliveryToolBatch(
 			toolCallIndex+1,
 			"prior outbound delivery is awaiting terminal confirmation",
 			"Skipped because a prior outbound delivery is still awaiting terminal confirmation.",
 		)
-		r.exec.messages = r.messages
-		if r.journalErr == nil {
-			r.journalErr = settledResult.Err
-		}
-		return terminalDeliverySettlement{}, false, settledResult.Err
+		settlementErr := errors.Join(settledResult.Err, completionErr)
+		r.journalErr = settlementErr
+		return terminalDeliverySettlement{}, false, settlementErr
 	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
@@ -1798,6 +1796,17 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		settledMsg,
 		settledDurableMsg,
 	)
+	if err != nil {
+		completionErr := r.completeTerminalDeliveryToolBatch(
+			toolCallIndex+1,
+			"prior outbound delivery could not be durably finalized",
+			"Skipped because a prior outbound delivery could not be durably finalized.",
+		)
+		err = errors.Join(err, completionErr)
+		if completionErr != nil {
+			r.journalErr = err
+		}
+	}
 	return terminalDeliverySettlement{
 		result:         settledResult,
 		contentForLLM:  content,
@@ -1805,6 +1814,41 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		loopDecision:   decision,
 		attachments:    attachments,
 	}, aborted, err
+}
+
+func (r *toolLoopRunner) completeTerminalDeliveryToolBatch(
+	start int,
+	reason string,
+	content string,
+) error {
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	for i := start; i < len(r.toolCalls); i++ {
+		toolCall := r.toolCalls[i]
+		r.p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			r.ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{
+				ToolCallID: toolCall.ID,
+				Tool:       toolCall.Name,
+				Reason:     reason,
+			},
+		)
+		if err := r.appendToolMessageWithContext(ctx, providers.Message{
+			Role:       "tool",
+			Content:    content,
+			ToolCallID: toolCall.ID,
+		}, toolMessagePersistOnly); err != nil {
+			r.exec.messages = r.messages
+			return fmt.Errorf("persist skipped tool %s during delivery settlement: %w", toolCall.Name, err)
+		}
+	}
+	r.exec.messages = r.messages
+	return nil
 }
 
 func (r *toolLoopRunner) commitExecutedToolResult(

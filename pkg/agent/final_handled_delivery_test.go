@@ -25,6 +25,7 @@ type finalHandledSettlementDelivery struct {
 	pending     bool
 	calls       int
 	pendingSeen bool
+	cancel      context.CancelFunc
 }
 
 func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
@@ -42,6 +43,9 @@ func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
 			pending.ToolResultStatus == providers.ToolResultStatusUnresolved
 	}
 	if d.pending {
+		if d.cancel != nil {
+			d.cancel()
+		}
 		err := fmt.Errorf("%w: context canceled", errFinalHandledDeliveryPending)
 		result.ResponseHandled = false
 		return nil, wrapToolDeliveryError(result, "delivery confirmation pending", err)
@@ -293,12 +297,13 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
+	turnCtx, cancel := context.WithCancel(t.Context())
 	settlement := &finalHandledSettlementDelivery{
-		store: store, sessionKey: sessionKey, pending: true,
+		store: store, sessionKey: sessionKey, pending: true, cancel: cancel,
 	}
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
 
-	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	outcome := pipeline.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
 	if !errors.Is(outcome.JournalErr, errFinalHandledDeliveryPending) {
 		t.Fatalf("journal error = %v, want pending delivery", outcome.JournalErr)
 	}
@@ -345,8 +350,13 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 		Text:    "hello",
 	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	tool := &fixedToolResultTool{name: "final_message", result: result}
+	sibling := &fixedToolResultTool{
+		name:   "destructive_sibling",
+		result: toolshared.SilentResult("sibling executed"),
+	}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
+	registry.Register(sibling)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-finalization-failure",
@@ -354,13 +364,20 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
-	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+	siblingCall := providers.ToolCall{
+		ID: "call-destructive-sibling", Name: sibling.Name(), Arguments: map[string]any{},
+	}
+	userMessage := providers.Message{Role: "user", Content: "send the message, then mutate external state"}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall, siblingCall}}
+	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, userMessage); err != nil {
+		t.Fatal(err)
+	}
 	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
-	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
 	settlement := &finalHandledSettlementDelivery{
 		store: baseStore, sessionKey: sessionKey, delivered: true,
@@ -380,10 +397,29 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 	if settlement.calls != 1 || !settlement.pendingSeen {
 		t.Fatalf("settlement calls = %d, pending seen = %t", settlement.calls, settlement.pendingSeen)
 	}
-	historyResult := matchingToolResult(t, baseStore.GetHistory(sessionKey), toolCall.ID)
-	if historyResult.Content != finalHandledDeliveryPendingContent ||
-		historyResult.ToolResultStatus != providers.ToolResultStatusUnresolved {
-		t.Fatalf("failed-finalization barrier = %#v", historyResult)
+	if sibling.executions != 0 {
+		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
+	}
+	for source, messages := range map[string][]providers.Message{
+		"canonical history": baseStore.GetHistory(sessionKey),
+		"execution context": exec.messages,
+		"live turn state":   ts.liveTurnMessages,
+	} {
+		barrier := matchingToolResult(t, messages, toolCall.ID)
+		if barrier.Content != finalHandledDeliveryPendingContent ||
+			barrier.ToolResultStatus != providers.ToolResultStatusUnresolved {
+			t.Fatalf("%s failed-finalization barrier = %#v", source, barrier)
+		}
+		skipped := matchingToolResult(t, messages, siblingCall.ID)
+		if !strings.Contains(skipped.Content, "could not be durably finalized") {
+			t.Fatalf("%s skipped sibling = %#v", source, skipped)
+		}
+	}
+	sanitized := sanitizeHistoryForProvider(baseStore.GetHistory(sessionKey))
+	barrier := matchingToolResult(t, sanitized, toolCall.ID)
+	if barrier.ToolResultStatus != providers.ToolResultStatusUnresolved ||
+		barrier.Content != finalHandledDeliveryPendingContent {
+		t.Fatalf("sanitized barrier = %#v", barrier)
 	}
 	if len(ingest.messages) != 0 {
 		t.Fatalf("unfinalized pending result was ingested: %#v", ingest.messages)
