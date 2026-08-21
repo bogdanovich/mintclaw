@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -19,6 +20,7 @@ type interactionContinuationExecutor struct {
 	validateTool func() error
 	onAbort      func()
 	approval     *ToolApprovalGrant
+	origin       *bus.InboundContext
 	abortOnce    sync.Once
 }
 
@@ -52,7 +54,9 @@ func (e *interactionContinuationExecutor) execute(
 	}
 
 	if e != nil && e.approvedTool != nil {
-		outcome, llm := pipeline.executeJournaledToolCall(turnCtx, ts, exec, *e.approvedTool)
+		outcome, llm := pipeline.executeJournaledToolCall(
+			turnCtx, ts, exec, *e.approvedTool, e.origin,
+		)
 		if e.afterTool != nil {
 			if afterErr := e.afterTool(exec.writeAudit); afterErr != nil {
 				return turnResult{}, TurnEndStatusError, afterErr
@@ -112,15 +116,20 @@ func repairJournaledToolPair(
 	}
 
 	providerOriginIndex := -1
+	providerResultIndex := -1
 	for index, message := range exec.messages {
-		if !messageContainsToolCall(message, toolCallID) {
-			continue
+		if messageContainsToolCall(message, toolCallID) {
+			providerOriginIndex = index
 		}
-		if providerOriginIndex >= 0 {
-			return fmt.Errorf("provider context contains duplicate tool call %q", toolCallID)
+		if message.Role == "tool" && message.ToolCallID == toolCallID {
+			providerResultIndex = index
 		}
-		providerOriginIndex = index
 	}
+	if providerResultIndex < 0 {
+		return fmt.Errorf("provider context is missing live tool result %q", toolCallID)
+	}
+	liveResult := providerPromptMessageForTurn(exec.messages[providerResultIndex])
+
 	if providerOriginIndex < 0 {
 		repaired := make([]providers.Message, 0, len(exec.messages)+resultIndex-originIndex)
 		for _, message := range exec.messages {
@@ -129,7 +138,11 @@ func repairJournaledToolPair(
 			}
 		}
 		for _, message := range history[originIndex : resultIndex+1] {
-			repaired = append(repaired, providerPromptMessageForTurn(message))
+			if message.Role == "tool" && message.ToolCallID == toolCallID {
+				repaired = append(repaired, liveResult)
+			} else {
+				repaired = append(repaired, providerPromptMessageForTurn(message))
+			}
 		}
 		exec.messages = repaired
 		return nil
@@ -137,12 +150,12 @@ func repairJournaledToolPair(
 
 	repaired := make([]providers.Message, 0, len(exec.messages))
 	for index, message := range exec.messages {
-		if message.Role == "tool" && message.ToolCallID == toolCallID {
+		if index > providerOriginIndex && message.Role == "tool" && message.ToolCallID == toolCallID {
 			continue
 		}
 		repaired = append(repaired, message)
 		if index == providerOriginIndex {
-			repaired = append(repaired, providerPromptMessageForTurn(history[resultIndex]))
+			repaired = append(repaired, liveResult)
 		}
 	}
 	exec.messages = repaired
@@ -166,7 +179,11 @@ func (p *Pipeline) executeJournaledToolCall(
 	ts *turnState,
 	exec *turnExecution,
 	toolCall providers.ToolCall,
+	origin *bus.InboundContext,
 ) (ToolLoopOutcome, *LLMIterationState) {
+	restoreIdentity := overrideApprovedToolExecutionIdentity(ts, origin)
+	defer restoreIdentity()
+
 	llm := newLLMIterationState(1)
 	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall}}
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
@@ -177,4 +194,24 @@ func (p *Pipeline) executeJournaledToolCall(
 	p.pauseToolFeedbackForTurn(pauseCtx, ts)
 	pauseCancel()
 	return outcome, llm
+}
+
+func overrideApprovedToolExecutionIdentity(
+	ts *turnState,
+	origin *bus.InboundContext,
+) func() {
+	if ts == nil || origin == nil {
+		return func() {}
+	}
+	previousChannel := ts.channel
+	previousChatID := ts.chatID
+	previousInbound := ts.opts.Dispatch.InboundContext
+	ts.channel = origin.Channel
+	ts.chatID = origin.ChatID
+	ts.opts.Dispatch.InboundContext = cloneInboundContext(origin)
+	return func() {
+		ts.channel = previousChannel
+		ts.chatID = previousChatID
+		ts.opts.Dispatch.InboundContext = previousInbound
+	}
 }

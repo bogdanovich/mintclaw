@@ -1848,6 +1848,7 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 			OriginExecutionID:  record.Origin.ExecutionID,
 			OriginArgumentHash: record.Origin.ArgumentHash,
 		},
+		origin: originalInbound,
 		onAbort: func() {
 			al.cleanupInteractionOriginTools(ctx, agent, record)
 		},

@@ -1,29 +1,35 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestRepairJournaledToolPair(t *testing.T) {
 	call := providers.ToolCall{ID: "call-approved", Name: "protected"}
 	origin := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{call}}
-	result := providers.Message{
+	durableResult := providers.Message{
 		Role:             "tool",
 		ToolCallID:       call.ID,
-		Content:          "completed",
+		Content:          "protected result",
 		ToolResultStatus: providers.ToolResultStatusSuccess,
 	}
-	history := []providers.Message{origin, result}
+	liveResult := durableResult
+	liveResult.Content = "full live result"
+	history := []providers.Message{origin, durableResult}
 
 	for _, test := range []struct {
-		name     string
-		messages []providers.Message
+		name      string
+		history   []providers.Message
+		messages  []providers.Message
+		wantPairs int
 	}{
 		{
-			name: "replace unresolved result",
+			name: "replace unresolved result while preserving live content", history: history, wantPairs: 1,
 			messages: []providers.Message{
 				{Role: "system", Content: "system"},
 				origin,
@@ -33,20 +39,43 @@ func TestRepairJournaledToolPair(t *testing.T) {
 					Content:          "unresolved",
 					ToolResultStatus: providers.ToolResultStatusUnresolved,
 				},
-				result,
+				liveResult,
 			},
 		},
 		{
-			name: "restore pair without context history",
+			name: "restore pair without context history", history: history, wantPairs: 1,
 			messages: []providers.Message{
 				{Role: "system", Content: "system"},
-				result,
+				liveResult,
+			},
+		},
+		{
+			name: "scope reused IDs to latest tool block", wantPairs: 2,
+			history: []providers.Message{
+				origin,
+				{Role: "tool", ToolCallID: call.ID, Content: "older result"},
+				{Role: "user", Content: "next turn"},
+				origin,
+				durableResult,
+			},
+			messages: []providers.Message{
+				origin,
+				{Role: "tool", ToolCallID: call.ID, Content: "older result"},
+				{Role: "user", Content: "next turn"},
+				origin,
+				{
+					Role:             "tool",
+					ToolCallID:       call.ID,
+					Content:          "unresolved",
+					ToolResultStatus: providers.ToolResultStatusUnresolved,
+				},
+				liveResult,
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			exec := &turnExecution{messages: append([]providers.Message(nil), test.messages...)}
-			if err := repairJournaledToolPair(exec, history, call.ID); err != nil {
+			if err := repairJournaledToolPair(exec, test.history, call.ID); err != nil {
 				t.Fatal(err)
 			}
 
@@ -58,16 +87,57 @@ func TestRepairJournaledToolPair(t *testing.T) {
 				}
 				if message.Role == "tool" && message.ToolCallID == call.ID {
 					resultCount++
-					if message.Content != result.Content ||
-						message.ToolResultStatus != providers.ToolResultStatusSuccess {
+					if resultCount == test.wantPairs && (message.Content != liveResult.Content ||
+						message.ToolResultStatus != providers.ToolResultStatusSuccess) {
 						t.Fatalf("tool result = %#v", message)
 					}
 				}
 			}
-			if callCount != 1 || resultCount != 1 {
+			if callCount != test.wantPairs || resultCount != test.wantPairs {
 				t.Fatalf("provider tool pair counts = call:%d result:%d", callCount, resultCount)
 			}
 		})
+	}
+}
+
+func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
+	resumeInbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "approval-chat", MessageID: "approval-response",
+		ReplyToMessageID: "approval-reply",
+	}
+	origin := &bus.InboundContext{
+		Channel: "discord", ChatID: "origin-chat", MessageID: "origin-message",
+		ReplyToMessageID: "origin-reply",
+	}
+	ts := &turnState{
+		agent: &AgentInstance{ID: "main"}, channel: resumeInbound.Channel, chatID: resumeInbound.ChatID,
+		workspace: "workspace", sessionKey: "session",
+		opts: processOptions{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
+	}
+
+	restore := overrideApprovedToolExecutionIdentity(ts, origin)
+	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), origin)
+	restore()
+	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), resumeInbound)
+}
+
+func assertToolIdentity(t *testing.T, ctx context.Context, want *bus.InboundContext) {
+	t.Helper()
+	if toolshared.ToolChannel(ctx) != want.Channel ||
+		toolshared.ToolChatID(ctx) != want.ChatID ||
+		toolshared.ToolMessageID(ctx) != want.MessageID ||
+		toolshared.ToolReplyToMessageID(ctx) != want.ReplyToMessageID {
+		t.Fatalf(
+			"tool identity = %q/%q/%q/%q, want %q/%q/%q/%q",
+			toolshared.ToolChannel(ctx),
+			toolshared.ToolChatID(ctx),
+			toolshared.ToolMessageID(ctx),
+			toolshared.ToolReplyToMessageID(ctx),
+			want.Channel,
+			want.ChatID,
+			want.MessageID,
+			want.ReplyToMessageID,
+		)
 	}
 }
 
