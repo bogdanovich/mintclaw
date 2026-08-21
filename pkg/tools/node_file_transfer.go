@@ -1602,11 +1602,12 @@ func (runtime *nodeFileTransferToolRuntime) result(
 	}
 	if !claimed {
 		result.DeliveryState = "already_claimed"
-		return nodeJSONResult(result).WithResponseHandled()
+		return nodeJSONResult(result).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	}
 	result.DeliveryState = "claimed"
 	data, _ := json.Marshal(result)
-	return toolshared.MediaResult(string(data), []string{mediaRef}).WithResponseHandled()
+	return toolshared.MediaResult(string(data), []string{mediaRef}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 func validateRetainedJobArtifactDownload(

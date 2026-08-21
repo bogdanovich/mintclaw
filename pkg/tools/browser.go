@@ -532,7 +532,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	}
 	result := tool.runtime.result(browserSessionResult(session))
 	if operation == "handoff" && result != nil && !result.IsError {
-		result.Suspension = &interactions.SuspensionRequest{
+		result.Control.Suspension = &interactions.SuspensionRequest{
 			Kind: interactions.KindQuestion,
 			Questions: []interactions.Question{{
 				ID: "release_browser", Header: "Browser control",
@@ -541,7 +541,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			PromptSummary: "Browser automation is paused for exclusive local human control.",
 			Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
 		}
-		result.SuspensionResolution = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
+		result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
 			if outcome == interactions.OutcomeAnswered {
 				_, resolutionErr := tool.runtime.source.ReleaseHandoff(resolutionCtx, owner, session.ID)
 				if resolutionErr == nil {
@@ -681,10 +681,13 @@ func (tool *BrowserContextsTool) Execute(
 	}
 	if preparation.RequiresApproval &&
 		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
-		return &toolshared.ToolResult{Silent: true, Suspension: &interactions.SuspensionRequest{
-			Kind: interactions.KindApproval, PromptSummary: browserContextApprovalSummary(preparation),
-			Timeout: time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
-		}}
+		return &toolshared.ToolResult{
+			Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+				Kind: interactions.KindApproval, PromptSummary: browserContextApprovalSummary(preparation),
+				Timeout: time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+			}},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		}
 	}
 	var approval *browser.ApprovalBinding
 	if preparation.RequiresApproval {
@@ -1065,7 +1068,7 @@ func (tool *BrowserObserveTool) screenshotResult(
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
-	}).WithImmediateDelivery()
+	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 }
 
 func (*BrowserCaptureTool) Name() string { return "browser_capture" }
@@ -1207,7 +1210,7 @@ func (tool *BrowserCaptureTool) result(
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
-	}).WithImmediateDelivery()
+	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 }
 
 func (*BrowserActTool) Name() string { return "browser_act" }
@@ -1396,11 +1399,14 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	if preparation.RequiresApproval &&
 		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
-		return &toolshared.ToolResult{Silent: true, Suspension: &interactions.SuspensionRequest{
-			Kind:          interactions.KindApproval,
-			PromptSummary: browserApprovalSummary(preparation),
-			Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
-		}}
+		return &toolshared.ToolResult{
+			Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+				Kind:          interactions.KindApproval,
+				PromptSummary: browserApprovalSummary(preparation),
+				Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+			}},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		}
 	}
 	var approval *browser.ApprovalBinding
 	if preparation.RequiresApproval {
@@ -1483,7 +1489,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimDownloadDelivery(commitCtx, delivery)
-	}).WithImmediateDelivery()
+	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 }
 
 func attachBrowserExternalCommitAudit(

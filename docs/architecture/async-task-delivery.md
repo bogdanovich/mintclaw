@@ -17,7 +17,7 @@ The runtime now has three distinct delivery paths, and each has a clear owner:
    - Owner: the sync tool loop in `pipeline_execute.go`
    - Scope: normal tool execution and hook-respond tool results
    - Source of truth:
-     - `ToolResult.ResponseHandled`
+     - `ToolResult.Delivery.Intent`
      - explicit delivery outcome (`none`, `direct`, `queued`)
    - Current invariant:
      - `direct` delivery may terminate the turn as fully handled
@@ -50,16 +50,22 @@ path. The current state is intentionally incremental:
 - async completion policy is centrally coordinated
 - sync tool and final-turn delivery now share more helper logic and explicit
   delivery outcomes
-- legacy parallel policy branches are being removed step by step instead of via
-  one large rewrite
+- remaining parallel policy branches are removed in focused changes
 
 ## Deliverables
 
-`ToolResult` separates three output channels:
+`ToolResult` keeps produced output separate from runtime directives:
 
 - `ForLLM`: context for the model.
 - `ForUser`: text that may be sent directly to the user.
 - `Deliverable`: the actual produced result/artifacts.
+- `Control`: async and human-suspension ownership; never produced output.
+- `Delivery`: the one delivery intent, async routing mode, and prepared
+  outbound transaction.
+
+Delivery intent is a single enum. `final_handled`, `immediate_continue`, and
+`silent` cannot coexist as independent flags. Changing control or delivery
+does not rewrite `ForLLM`, `ForUser`, or `Deliverable`.
 
 `taskresult.Deliverable` is the ownership payload for durable task state. It
 describes what was produced through canonical text, artifacts, metadata,
@@ -84,7 +90,7 @@ Current contract summary:
 The task registry has two layers:
 
 - `Record`: the current-state projection for status tools, board views, and
-  existing integrations.
+  integrations.
 - `TaskEvent`: the append-only canonical event stream for lifecycle and
   delivery transitions.
 
@@ -136,8 +142,8 @@ delivery outcome without reading service logs or inferring behavior from chat
 wording.
 
 The event stream is persisted in the same `state/task_registry.json` snapshot
-as `tasks`. `Record` remains the compatibility API and is still what most tools
-read. New consumers that care about auditability, idempotency, or recovery
+as `tasks`. `Record` remains the current projection API and is still what most
+tools read. Consumers that care about auditability, idempotency, or recovery
 should prefer events and treat records as a projection.
 
 ### Retention and Snapshot Bounds
@@ -159,7 +165,7 @@ Current source-of-truth rule:
 
 - audit/debug/recovery
   - prefer `TaskEvent`
-- task status, board views, tool/UI compatibility
+- task status, board views, and tool/UI projections
   - prefer normalized `Record`
 - user-facing prose
   - never treat chat text as canonical lifecycle state

@@ -137,7 +137,7 @@ func TestFilesystemTool_WriteFile_Success(t *testing.T) {
 	}
 
 	// WriteFile returns SilentResult
-	if !result.Silent {
+	if !result.Delivery.IsSilent() {
 		t.Errorf("Expected Silent=true for WriteFile, got false")
 	}
 

@@ -382,11 +382,10 @@ func (al *AgentLoop) deliverFinalTurnMedia(
 	result turnResult,
 ) (toolResultDeliveryOutcome, error) {
 	mediaResult := (&toolshared.ToolResult{
-		ForLLM:          "Final turn output delivered as media.",
-		ForUser:         result.finalContent,
-		Silent:          true,
-		ResponseHandled: true,
-	}).WithDeliverable(taskresult.CloneDeliverable(result.deliverable))
+		ForLLM:  "Final turn output delivered as media.",
+		ForUser: result.finalContent,
+	}).WithDeliverable(taskresult.CloneDeliverable(result.deliverable)).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	mediaRefs := mediaArtifactRefs(result.deliverable.Artifacts)
 	mediaResult.Media = append(mediaResult.Media, mediaRefs...)
 	_, outcome, err := al.deliverToolResultToUser(ctx, ts, mediaResult, "final_turn")
@@ -486,15 +485,15 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
-	traceSettlement := len(traceScopes) > 0 && !result.ImmediateDelivery
-	if result.ImmediateDelivery && len(traceScopes) == 0 {
+	traceSettlement := len(traceScopes) > 0 && !result.Delivery.IsImmediate()
+	if result.Delivery.IsImmediate() && len(traceScopes) == 0 {
 		traceScopes = []runtimeevents.TraceScope{
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
-	al.normalizeLegacyFinalHandledOutbound(ts, result)
+	al.ensureFinalHandledOutbound(ts, result)
 
-	if result.Outbound != nil {
+	if result.Delivery.Outbound != nil {
 		return al.deliverExplicitToolOutbound(ctx, ts, result, toolName, traceScopes, traceSettlement)
 	}
 
@@ -554,7 +553,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			return buildProviderAttachments(al.mediaStore, mediaRefs), toolResultDeliveryDirect, nil
 		}
 		if al.bus != nil {
-			if result.ResponseHandled {
+			if result.Delivery.IsFinalHandled() {
 				// Queued implicit media is not the final turn output: sync delivery
 				// gives ownership back to the model when no direct media route exists.
 				bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.
@@ -571,7 +570,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			if err != nil {
 				return nil, toolResultDeliveryNone, err
 			}
-			if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+			if result.Delivery.IsImmediate() && supportsDurableDeliveryReceipts(al.channelManager) {
 				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
 					return nil, toolResultDeliveryNone, err
 				}
@@ -585,7 +584,8 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if strings.TrimSpace(text) == "" {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if result.Silent && result.Deliverable == nil && result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
+	if result.Delivery.Intent == toolshared.DeliverySilent && result.Deliverable == nil &&
+		result.Delivery.AsyncMode != toolshared.AsyncDeliveryUserOnly {
 		return nil, toolResultDeliveryNone, nil
 	}
 	if al.bus == nil {
@@ -608,7 +608,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if err != nil {
 		return nil, toolResultDeliveryNone, err
 	}
-	if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+	if result.Delivery.IsImmediate() && supportsDurableDeliveryReceipts(al.channelManager) {
 		if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
 			return nil, toolResultDeliveryNone, err
 		}
@@ -622,11 +622,11 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	return nil, toolResultDeliveryQueued, nil
 }
 
-func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
+func (al *AgentLoop) ensureFinalHandledOutbound(
 	ts *turnState,
 	result *toolshared.ToolResult,
 ) {
-	if al == nil || ts == nil || result == nil || result.Outbound != nil || !isFinalHandledDelivery(result) {
+	if al == nil || ts == nil || result == nil || result.Delivery.Outbound != nil || !isFinalHandledDelivery(result) {
 		return
 	}
 	mediaRefs := toolResultMediaRefs(result)
@@ -637,7 +637,7 @@ func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
 	if len(mediaRefs) > 0 && !supportsDurableDeliveryReceipts(al.channelManager) {
 		return
 	}
-	result.Outbound = &toolshared.OutboundDelivery{
+	result.Delivery.Outbound = &toolshared.OutboundDelivery{
 		Channel:          ts.channel,
 		ChatID:           ts.chatID,
 		ReplyToMessageID: ts.opts.Dispatch.ReplyToMessageID(),
@@ -654,11 +654,11 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 	traceScopes []runtimeevents.TraceScope,
 	traceSettlement bool,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
-	out := result.Outbound
+	out := result.Delivery.Outbound
 	if out == nil {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if result.CommitOutbound != nil && !hasOutboundTransaction(ctx) {
+	if result.Delivery.Commit != nil && !hasOutboundTransaction(ctx) {
 		return nil, toolResultDeliveryNone, errors.New(
 			"durable outbound transaction is required for recoverable tool delivery",
 		)
@@ -733,7 +733,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 					classifyFinalHandledPublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
-			if result.ImmediateDelivery && receiptsSupported {
+			if result.Delivery.IsImmediate() && receiptsSupported {
 				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
 					return nil, toolResultDeliveryNone, err
 				}
@@ -808,7 +808,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				classifyFinalHandledPublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
-		if result.ImmediateDelivery && receiptsSupported {
+		if result.Delivery.IsImmediate() && receiptsSupported {
 			if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
 				return nil, toolResultDeliveryNone, err
 			}
@@ -840,7 +840,7 @@ func classifySynchronousFinalHandledDeliveryError(
 	if err == nil || !isFinalHandledDelivery(result) || channels.DeliveryDefinitelyNotSent(err) {
 		return err
 	}
-	result.ResponseHandled = false
+	result.Delivery.Intent = toolshared.DeliveryDefault
 	result.ForLLM = "Synchronous delivery may have reached the remote channel. " +
 		"Do not claim delivery or retry the outbound side effect without confirmation."
 	return fmt.Errorf("%w: %w", errFinalHandledDeliveryAmbiguous, err)
@@ -854,7 +854,7 @@ func classifyFinalHandledPublicationError(
 	if err == nil || !receipt.published || !isFinalHandledDelivery(result) {
 		return err
 	}
-	result.ResponseHandled = false
+	result.Delivery.Intent = toolshared.DeliveryDefault
 	result.ForLLM = "Message publication was accepted, but durable delivery state is uncertain. " +
 		"Do not claim delivery or retry the outbound side effect."
 	return fmt.Errorf("%w: published before durable commit failed: %w", errFinalHandledDeliveryPending, err)
@@ -866,13 +866,7 @@ func supportsDurableDeliveryReceipts(manager agentinterfaces.ChannelManager) boo
 }
 
 func isFinalHandledDelivery(result *toolshared.ToolResult) bool {
-	if result == nil {
-		return false
-	}
-	if result.DeliveryIntent != toolshared.DeliveryDefault {
-		return result.DeliveryIntent == toolshared.DeliveryFinalHandled
-	}
-	return result.ResponseHandled && !result.ImmediateDelivery
+	return result != nil && result.Delivery.IsFinalHandled()
 }
 
 func settleImmediateDelivery(
@@ -913,7 +907,7 @@ func settleFinalHandledDelivery(
 ) error {
 	intent, err := receipt.awaitTerminal(ctx)
 	if err != nil {
-		result.ResponseHandled = false
+		result.Delivery.Intent = toolshared.DeliveryDefault
 		result.ForLLM = "Message was queued, but delivery confirmation is still pending. Do not claim it was sent."
 		return fmt.Errorf("%w: %w", errFinalHandledDeliveryPending, err)
 	}
@@ -936,7 +930,7 @@ func settleFinalHandledDelivery(
 			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
 		)
 	default:
-		result.ResponseHandled = false
+		result.Delivery.Intent = toolshared.DeliveryDefault
 		result.ForLLM = fmt.Sprintf(
 			"Message was queued as delivery %s, but delivery confirmation is still pending. Do not claim it was sent.",
 			intent.ID,
@@ -969,20 +963,11 @@ func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx 
 		return
 	}
 	kind := ""
-	if result.DeliveryIntent != toolshared.DeliveryDefault {
-		switch result.DeliveryIntent {
-		case toolshared.DeliveryFinalHandled:
-			kind = bus.OutboundKindFinal
-		case toolshared.DeliveryImmediateContinue:
-			kind = bus.OutboundKindInterim
-		}
-	} else {
-		switch {
-		case result.ImmediateDelivery:
-			kind = bus.OutboundKindInterim
-		case result.ResponseHandled:
-			kind = bus.OutboundKindFinal
-		}
+	switch result.Delivery.Intent {
+	case toolshared.DeliveryFinalHandled:
+		kind = bus.OutboundKindFinal
+	case toolshared.DeliveryImmediateContinue:
+		kind = bus.OutboundKindInterim
 	}
 	if kind != "" {
 		bus.OutboundMetadata{OutboundKind: kind}.ApplyToContext(outboundCtx)

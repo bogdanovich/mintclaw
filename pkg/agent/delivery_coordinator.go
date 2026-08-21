@@ -107,7 +107,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		}
 		delivered := false
 		deliveryErr := ""
-		if content != "" && !result.Silent {
+		if content != "" && result.Delivery.Intent != toolshared.DeliverySilent {
 			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer outCancel()
 			msg, err := outboundMessageForTraceSettlement(ts, content, req.TraceScopes)
@@ -165,7 +165,8 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 				})
 		} else if outcome == toolResultDeliveryQueued {
 			userDelivered = true
-		} else if outcome == toolResultDeliveryNone && strings.TrimSpace(result.ForUser) != "" && !result.Silent {
+		} else if outcome == toolResultDeliveryNone && strings.TrimSpace(result.ForUser) != "" &&
+			result.Delivery.Intent != toolshared.DeliverySilent {
 			msg, err := outboundMessageForTraceSettlement(ts, result.ForUser, req.TraceScopes)
 			if err != nil {
 				userDeliveryErr = err.Error()
@@ -432,7 +433,7 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 	}
 
 	content := result.ContentForLLM()
-	decision.TaskID = result.AsyncTaskID
+	decision.TaskID = result.Control.TaskID
 	decision.ContentLen = len(content)
 	decision.ForUserLen = len(toolResultUserText(result))
 	decision.MediaCount = len(toolResultMediaRefs(result))
@@ -441,7 +442,8 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 	if decision.DeliveryMode != toolshared.AsyncDeliveryParentOnly {
 		hasUserPayload := decision.ForUserLen > 0 || decision.MediaCount > 0
 		decision.PublishToUser = hasUserPayload &&
-			(!result.Silent || decision.DeliveryMode == toolshared.AsyncDeliveryUserOnly)
+			(result.Delivery.Intent != toolshared.DeliverySilent ||
+				decision.DeliveryMode == toolshared.AsyncDeliveryUserOnly)
 	}
 	if decision.DeliveryMode != toolshared.AsyncDeliveryUserOnly {
 		decision.QueueParent = content != ""
@@ -452,10 +454,10 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 }
 
 func effectiveAsyncToolResultDelivery(result *toolshared.ToolResult) toolshared.AsyncDeliveryMode {
-	if result == nil || result.AsyncDelivery == "" {
+	if result == nil || result.Delivery.AsyncMode == "" {
 		return toolshared.AsyncDeliveryUserAndParent
 	}
-	return result.AsyncDelivery
+	return result.Delivery.AsyncMode
 }
 
 func asyncDeliveryModeFromToolArgs(toolName string, args map[string]any) (toolshared.AsyncDeliveryMode, error) {

@@ -210,7 +210,8 @@ func TestMockLLMScenario_QueuedMediaFallbackContinuesToFinalAnswer(t *testing.T)
 
 	stub := llmscenario.NewStubTool(
 		toolName,
-		toolshared.MediaResult("queued media payload", []string{ref}).WithResponseHandled(),
+		toolshared.MediaResult("queued media payload", []string{ref}).
+			WithDeliveryIntent(toolshared.DeliveryFinalHandled),
 	)
 	agent.Tools.Register(stub)
 
@@ -294,7 +295,8 @@ func TestMockLLMScenario_DirectMediaDeliverySkipsFollowUpLLM(t *testing.T) {
 
 	stub := llmscenario.NewStubTool(
 		toolName,
-		toolshared.MediaResult("direct media payload", []string{ref}).WithResponseHandled(),
+		toolshared.MediaResult("direct media payload", []string{ref}).
+			WithDeliveryIntent(toolshared.DeliveryFinalHandled),
 	)
 	agent.Tools.Register(stub)
 

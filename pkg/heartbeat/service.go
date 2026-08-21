@@ -232,7 +232,7 @@ func (hs *HeartbeatService) executeHeartbeatFor(stopChan <-chan struct{}) {
 		return
 	}
 
-	if result.Async {
+	if result.Control.Async {
 		hs.logInfof("Async task started: %s", result.ForLLM)
 		logger.InfoCF("heartbeat", "Async heartbeat task started",
 			map[string]any{
@@ -241,8 +241,7 @@ func (hs *HeartbeatService) executeHeartbeatFor(stopChan <-chan struct{}) {
 		return
 	}
 
-	// Check if silent
-	if result.Silent {
+	if result.Delivery.SuppressesImplicitUserOutput() {
 		hs.logInfof("Heartbeat OK - silent")
 		return
 	}

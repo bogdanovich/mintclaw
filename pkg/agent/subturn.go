@@ -833,7 +833,7 @@ func spawnSubTurn(
 			ForLLM: fmt.Sprintf("SubTurn failed: %v", turnErr),
 		}
 	} else if turnRes.status == TurnEndStatusSuspended {
-		result = &toolshared.ToolResult{TaskSuspended: true}
+		result = &toolshared.ToolResult{Control: toolshared.ToolControl{TaskSuspended: true}}
 	} else {
 		userContent := objectiveOutcomeUserContent(turnRes.finalContent, objectiveOutcome)
 		parentContent := turnRes.finalContent
@@ -864,12 +864,10 @@ func spawnSubTurn(
 			case toolshared.AsyncDeliveryParentOnly:
 				result.ForUser = ""
 			case toolshared.AsyncDeliveryUserOnly:
-				result.Silent = true
-				result.ResponseHandled = true
+				result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 			case toolshared.AsyncDeliveryUserAndParent:
 				if hasOutboundTransaction(childCtx) {
-					result.ImmediateDelivery = true
-					result.Silent = true
+					result.WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 				}
 			}
 		}

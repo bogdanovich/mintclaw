@@ -540,11 +540,11 @@ func TestDelegateTool_Execute_UserOnlyMarksHandled(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
-	if !result.ResponseHandled {
-		t.Fatal("expected delegate user_only result to be marked ResponseHandled")
+	if !result.Delivery.IsFinalHandled() {
+		t.Fatal("expected delegate user_only result to own final delivery")
 	}
-	if !result.Silent {
-		t.Fatal("expected delegate user_only result to be silent in parent")
+	if !result.Delivery.SuppressesImplicitUserOutput() {
+		t.Fatal("expected delegate user_only result to suppress implicit parent delivery")
 	}
 	if spawner.lastCfg.DeliveryMode != toolshared.AsyncDeliveryUserOnly {
 		t.Fatalf("DeliveryMode = %q, want %q", spawner.lastCfg.DeliveryMode, toolshared.AsyncDeliveryUserOnly)

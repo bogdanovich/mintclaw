@@ -616,7 +616,7 @@ func TestBrowserContextsCloseSuspendsAndUsesExactPreparedApproval(t *testing.T) 
 		approval["action_hash"] != invocation.ActionHash {
 		t.Fatalf("ApprovalArguments() = %#v, %v", approval, err)
 	}
-	if suspended := tool.Execute(browserToolTestContext(), args); suspended.Suspension == nil {
+	if suspended := tool.Execute(browserToolTestContext(), args); suspended.Control.Suspension == nil {
 		t.Fatalf("close did not suspend: %#v", suspended)
 	}
 	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
@@ -810,12 +810,14 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	handoff := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
 	})
-	if handoff == nil || handoff.IsError || handoff.Suspension == nil || handoff.SuspensionResolution == nil ||
-		handoff.Suspension.Kind != interactions.KindQuestion || len(handoff.Suspension.Questions) != 1 ||
+	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
+		handoff.Control.ResolveSuspension == nil ||
+		handoff.Control.Suspension.Kind != interactions.KindQuestion ||
+		len(handoff.Control.Suspension.Questions) != 1 ||
 		strings.Contains(strings.ToLower(handoff.ContentForLLM()), "token") {
 		t.Fatalf("handoff result = %#v", handoff)
 	}
-	if err := interactions.ValidateSuspensionRequest(*handoff.Suspension); err != nil {
+	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
 	}
 	var handoffView browserSessionView
@@ -823,13 +825,13 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if handoffView.Controller != browser.ControllerHuman || handoffView.ControllerExpiresAt != 200 {
 		t.Fatalf("handoff view = %#v", handoffView)
 	}
-	if err := handoff.SuspensionResolution(t.Context(), interactions.OutcomeAnswered); err != nil {
+	if err := handoff.Control.ResolveSuspension(t.Context(), interactions.OutcomeAnswered); err != nil {
 		t.Fatalf("handoff resolution error = %v", err)
 	}
 	resume := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "resume", "browser_session_id": "browser_session_1",
 	})
-	if resume == nil || resume.IsError || resume.Suspension != nil {
+	if resume == nil || resume.IsError || resume.Control.Suspension != nil {
 		t.Fatalf("resume result = %#v", resume)
 	}
 }
@@ -1421,10 +1423,10 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 	if observation.Artifact == nil || observation.Artifact.Ref != "transfer-artifact://opaque" ||
 		observation.Artifact.SnapshotID != "snapshot_1" ||
 		observation.Artifact.MediaRef != "" || !slices.Equal(result.Media, []string{"media://opaque"}) ||
-		result.Outbound == nil ||
-		len(result.Outbound.Media) != 1 || result.Outbound.Media[0].Ref != "media://opaque" ||
-		result.Outbound.Recovery == nil || result.Outbound.Recovery.ArtifactRef != "transfer-artifact://opaque" ||
-		!result.ImmediateDelivery || result.CommitOutbound == nil ||
+		result.Delivery.Outbound == nil ||
+		len(result.Delivery.Outbound.Media) != 1 || result.Delivery.Outbound.Media[0].Ref != "media://opaque" ||
+		result.Delivery.Outbound.Recovery == nil || result.Delivery.Outbound.Recovery.ArtifactRef != "transfer-artifact://opaque" ||
+		!result.Delivery.IsImmediate() || result.Delivery.Commit == nil ||
 		source.screenshotRequest.SnapshotID != "snapshot_1" || source.screenshotRequest.RequestID == "" ||
 		strings.Contains(result.ForLLM, "delivery_state") ||
 		strings.Contains(result.ForLLM, "media://opaque") ||
@@ -1436,7 +1438,7 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 			source.screenshotRequest,
 		)
 	}
-	if err := result.CommitOutbound(browserToolTestContext()); err != nil ||
+	if err := result.Delivery.Commit(browserToolTestContext()); err != nil ||
 		source.deliveryRequest.Ref != "transfer-artifact://opaque" ||
 		source.deliveryRequest.RequestID != source.screenshotRequest.RequestID ||
 		source.deliveryRequest.Recovery == source.screenshot.Recovery ||
@@ -1452,7 +1454,7 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 		map[string]any{"browser_session_id": "browser_session_1", "screenshot": true},
 	)
 	var replay browserObservationView
-	if duplicate.IsError || duplicate.Outbound == nil || duplicate.CommitOutbound == nil ||
+	if duplicate.IsError || duplicate.Delivery.Outbound == nil || duplicate.Delivery.Commit == nil ||
 		!slices.Equal(duplicate.Media, []string{"media://opaque"}) ||
 		source.observeCalls != 0 || source.contextObserveCalls != 1 ||
 		json.Unmarshal([]byte(duplicate.ForLLM), &replay) != nil ||
@@ -1460,7 +1462,7 @@ func TestBrowserObserveCapturesAndDeliversOpaqueScreenshotArtifact(t *testing.T)
 		replay.Artifact.SnapshotID != observation.Artifact.SnapshotID {
 		t.Fatalf("duplicate screenshot result = %#v", duplicate)
 	}
-	if err := duplicate.CommitOutbound(browserToolTestContext()); err != nil {
+	if err := duplicate.Delivery.Commit(browserToolTestContext()); err != nil {
 		t.Fatalf("recovery commit outbound error = %v", err)
 	}
 }
@@ -1492,8 +1494,8 @@ func TestBrowserCaptureUsesExactFreshElementAuthorityAndReturnsArtifactOnly(t *t
 	var view browserCaptureView
 	if result == nil || result.IsError || json.Unmarshal([]byte(result.ForLLM), &view) != nil ||
 		view.Artifact.Ref != source.screenshot.Ref || strings.Contains(result.ForLLM, `"snapshot":`) ||
-		result.Outbound == nil || len(result.Outbound.Media) != 1 ||
-		!slices.Equal(result.Media, []string{"media://element"}) || !result.ImmediateDelivery {
+		result.Delivery.Outbound == nil || len(result.Delivery.Outbound.Media) != 1 ||
+		!slices.Equal(result.Media, []string{"media://element"}) || !result.Delivery.IsImmediate() {
 		t.Fatalf("browser capture result = %#v; view = %#v", result, view)
 	}
 	request := source.screenshotRequest
@@ -1543,8 +1545,8 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		t.Fatalf("approval = %#v, error = %v", approval, err)
 	}
 	suspended := tool.Execute(browserToolTestContext(), args)
-	if suspended == nil || suspended.Suspension == nil || source.executeCalls != 0 ||
-		!strings.Contains(suspended.Suspension.PromptSummary, "external_commit") {
+	if suspended == nil || suspended.Control.Suspension == nil || source.executeCalls != 0 ||
+		!strings.Contains(suspended.Control.Suspension.PromptSummary, "external_commit") {
 		t.Fatalf("suspended result = %#v; execute calls = %d", suspended, source.executeCalls)
 	}
 	resumeCtx := toolshared.WithToolApprovalContinuation(browserToolTestContext(), true)
@@ -1624,12 +1626,12 @@ func TestBrowserActDeliversRetainedDownloadWithRecovery(t *testing.T) {
 		"snapshot_id": "snapshot_1", "snapshot_generation": 2,
 		"action": map[string]any{"kind": "download", "ref": "ref_download", "deliver": true},
 	})
-	if result == nil || result.IsError || result.Outbound == nil || len(result.Outbound.Media) != 1 ||
-		result.Outbound.Media[0].Ref != "media://download" || result.Outbound.Recovery == nil ||
-		result.Outbound.Recovery.Kind != bus.OutboundRecoveryBrowserDownload {
+	if result == nil || result.IsError || result.Delivery.Outbound == nil || len(result.Delivery.Outbound.Media) != 1 ||
+		result.Delivery.Outbound.Media[0].Ref != "media://download" || result.Delivery.Outbound.Recovery == nil ||
+		result.Delivery.Outbound.Recovery.Kind != bus.OutboundRecoveryBrowserDownload {
 		t.Fatalf("download result = %#v", result)
 	}
-	if err := result.CommitOutbound(browserToolTestContext()); err != nil ||
+	if err := result.Delivery.Commit(browserToolTestContext()); err != nil ||
 		source.downloadDelivery.Ref != "transfer-artifact://download" ||
 		source.downloadDelivery.RequestID != "request_download" {
 		t.Fatalf("download commit = %#v, %v", source.downloadDelivery, err)

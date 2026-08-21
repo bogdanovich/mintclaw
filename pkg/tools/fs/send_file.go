@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 // SendFileTool allows the LLM to send a local file (image, document, etc.)
@@ -142,7 +143,8 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to register media: %v", err))
 	}
 
-	return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{ref}).WithResponseHandled()
+	return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{ref}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 // detectMediaType determines the MIME type of a file.

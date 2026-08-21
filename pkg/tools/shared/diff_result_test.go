@@ -12,7 +12,7 @@ func TestDiffResult_UserVisibleUnifiedDiff(t *testing.T) {
 	if result == nil {
 		t.Fatal("DiffResult() returned nil")
 	}
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Fatal("expected DiffResult to be user-visible")
 	}
 	if result.IsError {
@@ -113,7 +113,7 @@ func TestDiffResult_SkipsPreviewForLargeFiles(t *testing.T) {
 
 	result := DiffResult("big.txt", before, after)
 
-	if !result.Silent {
+	if !result.Delivery.IsSilent() {
 		t.Fatal("expected large diff previews to be skipped silently")
 	}
 	if result.ForUser != "" {
@@ -129,7 +129,7 @@ func TestDiffResult_TruncatesLargeUserPreview(t *testing.T) {
 
 	result := DiffResult("preview.txt", []byte("before\n"), after)
 
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Fatal("expected preview to remain user-visible below the input caps")
 	}
 	if !strings.Contains(result.ForUser, diffPreviewTruncatedNote) {

@@ -55,7 +55,7 @@ func (d *finalHandledSettlementDelivery) applySyncToolResultDelivery(
 			d.cancel()
 		}
 		err := fmt.Errorf("%w: context canceled", errFinalHandledDeliveryPending)
-		result.ResponseHandled = false
+		result.Delivery.Intent = toolshared.DeliveryDefault
 		return nil, wrapToolDeliveryError(result, "delivery confirmation pending", err)
 	}
 	if d.delivered {
@@ -157,19 +157,18 @@ func (*finalHandledRequestProvider) GetDefaultModel() string {
 
 func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 	for _, hook := range []bool{false, true} {
-		for _, legacy := range []bool{false, true} {
+		for _, implicit := range []bool{false, true} {
 			for _, delivered := range []bool{false, true} {
-				name := fmt.Sprintf("hook_%t/legacy_%t/delivered_%t", hook, legacy, delivered)
+				name := fmt.Sprintf("hook_%t/implicit_%t/delivered_%t", hook, implicit, delivered)
 				t.Run(name, func(t *testing.T) {
 					const sessionKey = "final-handled-settlement"
 					store := session.NewSessionManager("")
 					result := &toolshared.ToolResult{
 						ForLLM: "Message prepared for delivery to telegram:chat-1",
-						Silent: true,
 					}
-					if legacy {
+					if implicit {
 						result.Media = []string{"media://canonical-handled"}
-						result.WithResponseHandled()
+						result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 					} else {
 						result.WithOutboundDelivery(toolshared.OutboundDelivery{
 							Channel: "telegram",
@@ -307,8 +306,8 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	store := session.NewSessionManager("")
 	result := toolshared.MediaResult(
 		"File prepared for delivery",
-		[]string{"media://legacy-final-handled"},
-	).WithResponseHandled()
+		[]string{"media://implicit-final-handled"},
+	).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	tool := &fixedToolResultTool{name: "send_file", result: result}
 	sibling := &fixedToolResultTool{
 		name:   "destructive_sibling",
@@ -398,7 +397,6 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	store := session.NewSessionManager("")
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery",
-		Silent: true,
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
 		Channel: "telegram",
 		ChatID:  "chat-1",
@@ -444,7 +442,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	}
 }
 
-func TestReceiptlessLegacyFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
+func TestReceiptlessFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
 	manager := &recordingChannelManager{}
 	al := &AgentLoop{channelManager: manager}
 	agent := &AgentInstance{ID: "main"}
@@ -452,18 +450,18 @@ func TestReceiptlessLegacyFinalHandledTextUsesSynchronousConfirmation(t *testing
 		agent:      agent,
 		channel:    "telegram",
 		chatID:     "chat-1",
-		sessionKey: "receiptless-legacy-text",
+		sessionKey: "receiptless-text",
 		opts: processOptions{Dispatch: DispatchRequest{
 			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
 		}},
 	}
-	result := toolshared.UserResult("hello").WithResponseHandled()
+	result := toolshared.UserResult("hello").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	_, outcome, err := al.deliverToolResultToUser(
-		withOutboundTransaction(t.Context(), "receiptless-legacy-text"),
+		withOutboundTransaction(t.Context(), "receiptless-text"),
 		ts,
 		result,
-		"legacy_send",
+		"implicit_send",
 	)
 	if err != nil {
 		t.Fatalf("deliverToolResultToUser() error = %v", err)
@@ -472,7 +470,7 @@ func TestReceiptlessLegacyFinalHandledTextUsesSynchronousConfirmation(t *testing
 		len(manager.sentMessages) != 1 {
 		t.Fatalf("outcome = %v, manager = %#v", outcome, manager)
 	}
-	if result.Outbound == nil || !result.ResponseHandled ||
+	if result.Delivery.Outbound == nil || !result.Delivery.IsFinalHandled() ||
 		!strings.Contains(result.ForLLM, "confirmed delivered") {
 		t.Fatalf("settled result = %#v", result)
 	}
@@ -496,7 +494,7 @@ func TestImmediateContinueKeepsNormalSynchronousRetryPolicy(t *testing.T) {
 				outbound.Text = ""
 				outbound.Media = []bus.MediaPart{{Type: "image", Ref: "media://progress"}}
 			}
-			result := (&toolshared.ToolResult{Silent: true}).
+			result := (&toolshared.ToolResult{}).
 				WithOutboundDelivery(outbound).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 
@@ -522,7 +520,6 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	store := session.NewSessionManager("")
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery to telegram:chat-1",
-		Silent: true,
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
 		Channel: "telegram",
 		ChatID:  "chat-1",
@@ -598,7 +595,6 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 1}
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery to telegram:chat-1",
-		Silent: true,
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
 		Channel: "telegram", ChatID: "chat-1", Text: "hello",
 	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
@@ -691,7 +687,6 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 2}
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery to telegram:chat-1",
-		Silent: true,
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
 		Channel: "telegram",
 		ChatID:  "chat-1",
@@ -818,7 +813,6 @@ func TestRunAgentLoopFinalHandledPreflightFailureReachesNextProviderAndHistory(t
 	agent := al.registry.GetDefaultAgent()
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message with 1 media attachment(s) prepared for delivery to telegram:chat-1",
-		Silent: true,
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
 		Channel: "telegram",
 		ChatID:  "chat-1",
@@ -868,7 +862,7 @@ func TestRunAgentLoopFinalHandledPreflightFailureReachesNextProviderAndHistory(t
 	}
 }
 
-func TestRunAgentLoopLegacyFinalHandledConfirmedSettlementReachesNextProviderAndHistory(t *testing.T) {
+func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistory(t *testing.T) {
 	const (
 		sessionKey = "final-handled-confirmed-settlement"
 		toolCallID = "call-confirmed-message"
@@ -894,15 +888,12 @@ func TestRunAgentLoopLegacyFinalHandledConfirmedSettlementReachesNextProviderAnd
 	}
 	al.SetOutboundOutbox(coordinator)
 	agent := al.registry.GetDefaultAgent()
-	result := toolshared.UserResult("hello").WithResponseHandled()
+	result := toolshared.UserResult("hello").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	result.ForLLM = "Message prepared for delivery to telegram:chat-1"
 	agent.Tools.Register(&fixedToolResultTool{name: "send_confirmed_message", result: result})
 	agent.Tools.Register(&fixedToolResultTool{
-		name: "followup_context",
-		result: &toolshared.ToolResult{
-			ForLLM: "continue to the model",
-			Silent: true,
-		},
+		name:   "followup_context",
+		result: toolshared.SilentResult("continue to the model"),
 	})
 
 	type runResult struct {

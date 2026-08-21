@@ -19,7 +19,7 @@ import (
 // through a chat channel.
 //
 // This is intentionally different from SendFileTool:
-//   - SendFileTool  → MediaResult + WithResponseHandled() → sends file to user, ends turn
+//   - SendFileTool  → MediaResult + final delivery intent → sends file to user, ends turn
 //   - LoadImageTool → plain ToolResult with media:// in ForLLM  → LLM sees the image next turn
 type LoadImageTool struct {
 	workspace   string

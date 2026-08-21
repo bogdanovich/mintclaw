@@ -261,7 +261,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
 		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-1", Critical: true,
 	})
-	if err != nil || result == nil || !result.TaskSuspended {
+	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
 	}
 	rec, _ := tasks.Get("subagent-1")
@@ -431,7 +431,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-approval", Critical: true,
 		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "production action", Kind: "external_action"}},
 	})
-	if err != nil || result == nil || !result.TaskSuspended {
+	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
 	}
 	task, _ := tasks.Get("subagent-approval")
@@ -504,7 +504,7 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	}
 	userText := toolResultUserText(result)
 	if strings.Contains(userText, "Both items") || !strings.Contains(userText, "Yakima published") ||
-		!strings.Contains(userText, "Vissani not published") || !result.ResponseHandled {
+		!strings.Contains(userText, "Vissani not published") || !result.Delivery.IsFinalHandled() {
 		t.Fatalf("user-only verified result = %#v, user text = %q", result, userText)
 	}
 	if strings.Contains(result.ForLLM, "Both items") || result.Deliverable == nil ||
@@ -634,7 +634,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		TargetAgentID: beta.ID, Model: beta.Model, SystemPrompt: "run protected action",
 		TaskID: taskID, Critical: true,
 	})
-	if err != nil || result == nil || !result.TaskSuspended {
+	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
 	}
 	task, _ := tasks.Get(taskID)
@@ -2658,7 +2658,7 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 		}, func(_ context.Context, result *toolshared.ToolResult) {
 			completed <- result
 		})
-		if result == nil || !result.Async || result.IsError {
+		if result == nil || !result.Control.Async || result.IsError {
 			t.Fatalf("spawn result = %#v, want async acknowledgment", result)
 		}
 		select {

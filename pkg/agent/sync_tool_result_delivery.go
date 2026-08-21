@@ -28,8 +28,8 @@ func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
 	if result == nil {
 		return false
 	}
-	if result.Outbound != nil {
-		return strings.TrimSpace(result.Outbound.Text) != "" || len(result.Outbound.Media) > 0
+	if result.Delivery.Outbound != nil {
+		return strings.TrimSpace(result.Delivery.Outbound.Text) != "" || len(result.Delivery.Outbound.Media) > 0
 	}
 	if len(toolResultMediaRefs(result)) > 0 {
 		return true
@@ -37,7 +37,8 @@ func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
 	if strings.TrimSpace(toolResultUserText(result)) == "" {
 		return false
 	}
-	return !result.Silent || result.Deliverable != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
+	return result.Delivery.Intent != toolshared.DeliverySilent || result.Deliverable != nil ||
+		result.Delivery.AsyncMode == toolshared.AsyncDeliveryUserOnly
 }
 
 func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {
@@ -52,8 +53,7 @@ func normalizeToolResultForSyncDelivery(ts *turnState, result *toolshared.ToolRe
 		return toolshared.ErrorResult("nil tool result")
 	}
 	if ts != nil && ts.opts.SuppressToolUserDelivery {
-		result.ResponseHandled = false
-		result.ImmediateDelivery = false
+		result.Delivery.Intent = toolshared.DeliverySilent
 	}
 	return result
 }
@@ -66,7 +66,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 ) ([]providers.Attachment, *toolshared.ToolResult) {
 	result = normalizeToolResultForSyncDelivery(ts, result)
 
-	if !ts.opts.SuppressToolUserDelivery && result.ImmediateDelivery {
+	if !ts.opts.SuppressToolUserDelivery && result.Delivery.IsImmediate() {
 		if len(deliveredToolResultMediaRefs(result)) > 0 && !hasOutboundTransaction(ctx) {
 			err := fmt.Errorf("durable outbound transaction is required for immediate media delivery")
 			return nil, wrapToolDeliveryError(result, err.Error(), err)
@@ -83,7 +83,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		}
 	}
 
-	if !ts.opts.SuppressToolUserDelivery && result.ResponseHandled {
+	if !ts.opts.SuppressToolUserDelivery && result.Delivery.IsFinalHandled() {
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
@@ -95,7 +95,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
 		}
 		if outcome != toolResultDeliveryDirect && len(toolResultMediaRefs(result)) > 0 {
-			result.ResponseHandled = false
+			result.Delivery.Intent = toolshared.DeliveryDefault
 		}
 		if outcome == toolResultDeliveryDirect {
 			return attachments, result
@@ -106,20 +106,20 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 }
 
 func confirmToolResultOutbound(result *toolshared.ToolResult) {
-	if result == nil || result.ConfirmOutbound == nil {
+	if result == nil || result.Delivery.Confirm == nil {
 		return
 	}
-	confirm := result.ConfirmOutbound
-	result.ConfirmOutbound = nil
+	confirm := result.Delivery.Confirm
+	result.Delivery.Confirm = nil
 	confirm()
 }
 
 func commitToolResultOutbound(ctx context.Context, result *toolshared.ToolResult) error {
-	if result == nil || result.CommitOutbound == nil {
+	if result == nil || result.Delivery.Commit == nil {
 		return nil
 	}
-	commit := result.CommitOutbound
-	result.CommitOutbound = nil
+	commit := result.Delivery.Commit
+	result.Delivery.Commit = nil
 	return commit(ctx)
 }
 

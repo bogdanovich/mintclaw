@@ -7,7 +7,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
@@ -30,14 +29,12 @@ const (
 	DeliveryDefault           DeliveryIntent = ""
 	DeliveryImmediateContinue DeliveryIntent = "immediate_continue"
 	DeliveryFinalHandled      DeliveryIntent = "final_handled"
-	DeliveryFinalWithFollowup DeliveryIntent = "final_with_followup"
-	DeliveryParentOnly        DeliveryIntent = "parent_only"
 	DeliverySilent            DeliveryIntent = "silent"
 )
 
-// ToolResult represents the structured return value from tool execution.
-// It provides clear semantics for different types of results and supports
-// async operations, user-facing messages, and error handling.
+// ToolResult is the stable output produced by a tool. Runtime control and
+// delivery directives are grouped separately so output cannot acquire
+// contradictory execution or routing flags.
 type ToolResult struct {
 	// ForLLM is the content sent to the LLM for context.
 	// Required for all results.
@@ -45,38 +42,11 @@ type ToolResult struct {
 
 	// ForUser is the content sent directly to the user.
 	// If empty, no user message is sent.
-	// Silent=true overrides this field.
 	ForUser string `json:"for_user,omitempty"`
-
-	// Silent suppresses sending any message to the user.
-	// When true, ForUser is ignored even if set.
-	Silent bool `json:"silent"`
 
 	// IsError indicates whether the tool execution failed.
 	// When true, the result should be treated as an error.
 	IsError bool `json:"is_error"`
-
-	// Async indicates whether the tool is running asynchronously.
-	// When true, the tool will complete later and notify via callback.
-	Async bool `json:"async"`
-
-	// AsyncDelivery controls how the final async result should be routed when
-	// the background work completes.
-	//
-	// Empty means "use runtime default behavior".
-	// Supported values:
-	//   - user_only
-	//   - parent_only
-	//   - user_and_parent
-	AsyncDelivery AsyncDeliveryMode `json:"async_delivery,omitempty"`
-
-	// AsyncTaskID links an async result back to a durable task registry record
-	// when the tool runtime has one, for example "subagent-42".
-	AsyncTaskID string `json:"async_task_id,omitempty"`
-
-	// TaskSuspended tells a durable task owner not to publish completion while
-	// the child turn is owned by a pending human interaction.
-	TaskSuspended bool `json:"-"`
 
 	// Err is the underlying error (not JSON serialized).
 	// Used for internal error handling and logging.
@@ -90,40 +60,6 @@ type ToolResult struct {
 	// independent from LLM context or user-facing phrasing.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
 
-	// Messages holds the ephemeral session history after execution.
-	// Only populated by SubTurn executions; used by evaluator_optimizer
-	// to carry stateful worker context across evaluation iterations.
-	Messages []providers.Message `json:"-"`
-
-	// ResponseHandled indicates that this tool execution already satisfied the
-	// user's request at the channel/output level, so the agent loop can stop
-	// without a follow-up assistant response.
-	ResponseHandled bool `json:"response_handled,omitempty"`
-
-	// ImmediateDelivery asks the agent loop to deliver this tool result to the
-	// user immediately while still continuing the turn. This is the pipeline
-	// equivalent of the message tool's direct-send behavior for tools that
-	// produce MediaStore refs or other ToolResult outputs.
-	ImmediateDelivery bool `json:"immediate_delivery,omitempty"`
-
-	// DeliveryIntent is the canonical output ownership policy for this tool
-	// result. Legacy ResponseHandled/ImmediateDelivery fields remain as
-	// compatibility projections for older tools and callers.
-	DeliveryIntent DeliveryIntent `json:"delivery_intent,omitempty"`
-
-	// Outbound carries a fully resolved chat output for the runtime delivery
-	// coordinator. Tools should prefer this over sending directly.
-	Outbound *OutboundDelivery `json:"outbound,omitempty"`
-
-	// CommitOutbound durably records that the prepared outbound attempt is
-	// being scheduled. It runs only after the tool result is journaled and
-	// immediately before synchronous delivery. It is never model-visible.
-	CommitOutbound func(context.Context) error `json:"-"`
-
-	// ConfirmOutbound records local bookkeeping that is only valid after the
-	// channel has confirmed remote acceptance. It is never model-visible.
-	ConfirmOutbound func() `json:"-"`
-
 	// WriteAudit records verified write-side effects performed by this tool.
 	// Agents should use this as the source of truth for claims like "saved",
 	// "updated", or "created"; prose in ForLLM/ForUser is only descriptive.
@@ -133,16 +69,68 @@ type ToolResult struct {
 	// model-visible nor persisted in canonical tool-result history.
 	Observation *ToolObservation `json:"-"`
 
+	Control  ToolControl  `json:"control,omitzero"`
+	Delivery ToolDelivery `json:"delivery,omitzero"`
+}
+
+// ToolControl carries runtime execution directives. It is not produced output
+// and must not be interpreted by presentation or delivery code.
+type ToolControl struct {
+	// Async means the tool will complete later through its callback.
+	Async bool `json:"async,omitempty"`
+
+	// TaskID links an asynchronous completion to its durable task record.
+	TaskID string `json:"task_id,omitempty"`
+
+	// TaskSuspended prevents a durable task owner from publishing completion
+	// while a pending human interaction owns the child turn.
+	TaskSuspended bool `json:"-"`
+
 	// Suspension asks the runtime to durably pause this tool call for human
-	// input. It is control-plane state, not model-visible tool output. The
-	// runtime must enrich it with trusted route and origin data before use.
+	// input. The runtime enriches it with trusted route and origin data.
 	Suspension *interactions.SuspensionRequest `json:"-"`
 
-	// SuspensionResolution performs a bounded domain transition when the
-	// durable interaction is answered, times out, is canceled, or fails. It is
-	// process-local; authoritative domain state must recover safely after a
-	// restart without it.
-	SuspensionResolution func(context.Context, interactions.Outcome) error `json:"-"`
+	// ResolveSuspension performs the bounded domain transition after the
+	// interaction is answered, times out, is canceled, or fails.
+	ResolveSuspension func(context.Context, interactions.Outcome) error `json:"-"`
+}
+
+// ToolDelivery is the single routing directive consumed by delivery code.
+// Intent replaces the former overlapping silent/handled/immediate flags.
+type ToolDelivery struct {
+	Intent DeliveryIntent `json:"intent,omitempty"`
+
+	// AsyncMode controls where an asynchronous completion is routed. Empty
+	// means the runtime default.
+	AsyncMode AsyncDeliveryMode `json:"async_mode,omitempty"`
+
+	// Outbound is a fully resolved chat output for the delivery coordinator.
+	Outbound *OutboundDelivery `json:"outbound,omitempty"`
+
+	// Commit durably records that the prepared outbound attempt is being
+	// scheduled after journaling and immediately before synchronous delivery.
+	Commit func(context.Context) error `json:"-"`
+
+	// Confirm records bookkeeping valid only after remote acceptance.
+	Confirm func() `json:"-"`
+}
+
+func (delivery ToolDelivery) IsFinalHandled() bool {
+	return delivery.Intent == DeliveryFinalHandled
+}
+
+func (delivery ToolDelivery) IsImmediate() bool {
+	return delivery.Intent == DeliveryImmediateContinue
+}
+
+func (delivery ToolDelivery) IsSilent() bool {
+	return delivery.Intent == DeliverySilent
+}
+
+// SuppressesImplicitUserOutput reports whether delivery has explicit ownership
+// of user routing. The ordinary ForUser path runs only for the default intent.
+func (delivery ToolDelivery) SuppressesImplicitUserOutput() bool {
+	return delivery.Intent != DeliveryDefault
 }
 
 // ToolObservation is a bounded structured observation produced by a tool.
@@ -203,7 +191,7 @@ func (tr *ToolResult) ContentForLLM() string {
 	if content == "" && tr.Err != nil {
 		content = tr.Err.Error()
 	}
-	if tr.ResponseHandled {
+	if tr.Delivery.IsFinalHandled() {
 		if content == "" {
 			return HandledToolLLMNote
 		}
@@ -359,10 +347,9 @@ func NewToolResult(forLLM string) *ToolResult {
 //	result := SilentResult("Config file saved")
 func SilentResult(forLLM string) *ToolResult {
 	return &ToolResult{
-		ForLLM:  forLLM,
-		Silent:  true,
-		IsError: false,
-		Async:   false,
+		ForLLM:   forLLM,
+		IsError:  false,
+		Delivery: ToolDelivery{Intent: DeliverySilent},
 	}
 }
 
@@ -380,9 +367,8 @@ func SilentResult(forLLM string) *ToolResult {
 func AsyncResult(forLLM string) *ToolResult {
 	return &ToolResult{
 		ForLLM:  forLLM,
-		Silent:  false,
 		IsError: false,
-		Async:   true,
+		Control: ToolControl{Async: true},
 	}
 }
 
@@ -395,9 +381,7 @@ func AsyncResult(forLLM string) *ToolResult {
 func ErrorResult(message string) *ToolResult {
 	return &ToolResult{
 		ForLLM:  message,
-		Silent:  false,
 		IsError: true,
-		Async:   false,
 	}
 }
 
@@ -416,9 +400,7 @@ func UserResult(content string) *ToolResult {
 	return &ToolResult{
 		ForLLM:  content,
 		ForUser: content,
-		Silent:  false,
 		IsError: false,
-		Async:   false,
 	}
 }
 
@@ -444,17 +426,6 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 	return result
 }
 
-// MarshalJSON implements custom JSON serialization.
-// The Err field is excluded from JSON output via the json:"-" tag.
-func (tr *ToolResult) MarshalJSON() ([]byte, error) {
-	type Alias ToolResult
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(tr),
-	})
-}
-
 // WithError sets the Err field and returns the result for chaining.
 // This preserves the error for logging while keeping it out of JSON.
 //
@@ -466,56 +437,30 @@ func (tr *ToolResult) WithError(err error) *ToolResult {
 	return tr
 }
 
-// WithResponseHandled marks the tool result as already delivered to the user.
-func (tr *ToolResult) WithResponseHandled() *ToolResult {
-	tr.ResponseHandled = true
-	tr.DeliveryIntent = DeliveryFinalHandled
-	return tr
-}
-
-// WithImmediateDelivery asks the agent loop to publish this result to the user
-// immediately without treating the whole turn as answered.
-func (tr *ToolResult) WithImmediateDelivery() *ToolResult {
-	tr.ImmediateDelivery = true
-	tr.DeliveryIntent = DeliveryImmediateContinue
-	tr.Silent = true
-	return tr
-}
-
 func (tr *ToolResult) WithDeliveryIntent(intent DeliveryIntent) *ToolResult {
-	tr.DeliveryIntent = intent
-	switch intent {
-	case DeliveryImmediateContinue:
-		tr.ImmediateDelivery = true
-		tr.ResponseHandled = false
-		tr.Silent = true
-	case DeliveryFinalHandled:
-		tr.ResponseHandled = true
-	case DeliverySilent, DeliveryParentOnly:
-		tr.Silent = true
-	}
+	tr.Delivery.Intent = intent
 	return tr
 }
 
 func (tr *ToolResult) WithOutboundDelivery(outbound OutboundDelivery) *ToolResult {
-	tr.Outbound = &outbound
+	tr.Delivery.Outbound = &outbound
 	return tr
 }
 
 func (tr *ToolResult) WithOutboundCommit(commit func(context.Context) error) *ToolResult {
-	tr.CommitOutbound = commit
+	tr.Delivery.Commit = commit
 	return tr
 }
 
 // WithAsyncDelivery sets the async delivery policy for this tool result.
 func (tr *ToolResult) WithAsyncDelivery(mode AsyncDeliveryMode) *ToolResult {
-	tr.AsyncDelivery = mode
+	tr.Delivery.AsyncMode = mode
 	return tr
 }
 
-// WithAsyncTaskID links this result to a durable async task registry record.
-func (tr *ToolResult) WithAsyncTaskID(taskID string) *ToolResult {
-	tr.AsyncTaskID = strings.TrimSpace(taskID)
+// WithTaskID links this result to a durable task registry record.
+func (tr *ToolResult) WithTaskID(taskID string) *ToolResult {
+	tr.Control.TaskID = strings.TrimSpace(taskID)
 	return tr
 }
 

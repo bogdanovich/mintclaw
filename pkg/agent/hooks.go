@@ -1016,22 +1016,18 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 		}
 	}
 	cloned.Observation = cloneToolObservation(result.Observation)
-	if result.Outbound != nil {
-		cloned.Outbound = &toolshared.OutboundDelivery{
-			Channel: result.Outbound.Channel, ChatID: result.Outbound.ChatID,
-			ReplyToMessageID: result.Outbound.ReplyToMessageID, Text: result.Outbound.Text,
-			Media: append([]bus.MediaPart(nil), result.Outbound.Media...),
+	if result.Delivery.Outbound != nil {
+		cloned.Delivery.Outbound = &toolshared.OutboundDelivery{
+			Channel: result.Delivery.Outbound.Channel, ChatID: result.Delivery.Outbound.ChatID,
+			ReplyToMessageID: result.Delivery.Outbound.ReplyToMessageID, Text: result.Delivery.Outbound.Text,
+			Media: append([]bus.MediaPart(nil), result.Delivery.Outbound.Media...),
 		}
-		if result.Outbound.Recovery != nil {
-			recovery := *result.Outbound.Recovery
-			cloned.Outbound.Recovery = &recovery
+		if result.Delivery.Outbound.Recovery != nil {
+			recovery := *result.Delivery.Outbound.Recovery
+			cloned.Delivery.Outbound.Recovery = &recovery
 		}
 	}
 	cloned.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
-	if len(result.Messages) > 0 {
-		cloned.Messages = make([]providers.Message, len(result.Messages))
-		copy(cloned.Messages, result.Messages)
-	}
 	return &cloned
 }
 

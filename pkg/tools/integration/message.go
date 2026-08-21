@@ -18,12 +18,6 @@ import (
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 )
 
-type SendCallbackWithContext func(
-	ctx context.Context,
-	channel, chatID, content, replyToMessageID string,
-	mediaParts []bus.MediaPart,
-) error
-
 type messageMediaArg struct {
 	Path     string
 	Type     string
@@ -37,7 +31,6 @@ type sentTarget struct {
 }
 
 type MessageTool struct {
-	sendCallback      SendCallbackWithContext
 	workspace         string
 	restrict          bool
 	maxFileSize       int
@@ -186,10 +179,6 @@ func (t *MessageTool) HasSentTo(sessionKey, channel, chatID string) bool {
 	return false
 }
 
-func (t *MessageTool) SetSendCallback(callback SendCallbackWithContext) {
-	t.sendCallback = callback
-}
-
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	content, _ := args["content"].(string)
 	content = strings.TrimSpace(content)
@@ -237,7 +226,6 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	result := (&ToolResult{
 		ForLLM: status,
-		Silent: true,
 	}).WithOutboundDelivery(OutboundDelivery{
 		Channel:          channel,
 		ChatID:           chatID,
@@ -246,7 +234,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		Media:            parts,
 	})
 	sessionKey := ToolSessionKey(ctx)
-	result.ConfirmOutbound = func() {
+	result.Delivery.Confirm = func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.sentTargets[sessionKey] = append(

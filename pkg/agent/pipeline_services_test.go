@@ -69,7 +69,7 @@ func TestPipelineInterimMessageDeliveryDoesNotDismissToolFeedback(t *testing.T) 
 		ToolFeedback:     feedback,
 		SyncToolDelivery: delivery,
 	}}
-	result := toolshared.UserResult("checking services").WithImmediateDelivery()
+	result := toolshared.UserResult("checking services").WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 
 	_, got := pipeline.applySyncToolResultDelivery(
 		context.Background(),

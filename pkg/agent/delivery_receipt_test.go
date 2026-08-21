@@ -21,15 +21,15 @@ func TestSettleFinalHandledDeliveryConfirmsDeliveredReceipt(t *testing.T) {
 		t.Fatalf("MarkDelivered() error = %v", err)
 	}
 	confirmed := false
-	result := (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(
 		toolshared.DeliveryFinalHandled,
 	)
-	result.ConfirmOutbound = func() { confirmed = true }
+	result.Delivery.Confirm = func() { confirmed = true }
 
 	if err := settleFinalHandledDelivery(context.Background(), receipt, result, 1); err != nil {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
 	}
-	if !confirmed || !result.ResponseHandled || !strings.Contains(result.ForLLM, "delivered") {
+	if !confirmed || !result.Delivery.IsFinalHandled() || !strings.Contains(result.ForLLM, "delivered") {
 		t.Fatalf("settled result = %+v, confirmed = %v", result, confirmed)
 	}
 }
@@ -81,7 +81,7 @@ func TestSettleFinalHandledDeliveryCancellationRemainsPending(t *testing.T) {
 	if !errors.Is(err, errFinalHandledDeliveryPending) {
 		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
 	}
-	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+	if result.Delivery.IsFinalHandled() || !strings.Contains(result.ForLLM, "still pending") ||
 		!strings.Contains(result.ForLLM, "Do not claim") {
 		t.Fatalf("pending result = %+v", result)
 	}
@@ -98,7 +98,7 @@ func TestSettleFinalHandledDeliveryWaitErrorRemainsPending(t *testing.T) {
 	if !errors.Is(err, errFinalHandledDeliveryPending) {
 		t.Fatalf("settleFinalHandledDelivery() error = %v, want pending sentinel", err)
 	}
-	if result.ResponseHandled || !strings.Contains(result.ForLLM, "still pending") ||
+	if result.Delivery.IsFinalHandled() || !strings.Contains(result.ForLLM, "still pending") ||
 		!strings.Contains(result.ForLLM, "Do not claim") {
 		t.Fatalf("pending result = %+v", result)
 	}
@@ -106,7 +106,7 @@ func TestSettleFinalHandledDeliveryWaitErrorRemainsPending(t *testing.T) {
 
 func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
 	commitErr := errors.New("commit durable admission")
-	result := (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(
 		toolshared.DeliveryFinalHandled,
 	)
 
@@ -118,7 +118,7 @@ func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
 	if !errors.Is(err, errFinalHandledDeliveryPending) || !errors.Is(err, commitErr) {
 		t.Fatalf("classification error = %v, want pending and commit causes", err)
 	}
-	if result.ResponseHandled || !strings.Contains(result.ForLLM, "state is uncertain") ||
+	if result.Delivery.IsFinalHandled() || !strings.Contains(result.ForLLM, "state is uncertain") ||
 		!strings.Contains(result.ForLLM, "Do not claim") {
 		t.Fatalf("pending result = %+v", result)
 	}
@@ -126,7 +126,7 @@ func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
 
 func TestClassifySynchronousFinalHandledDeliveryError(t *testing.T) {
 	newResult := func() *toolshared.ToolResult {
-		return (&toolshared.ToolResult{ResponseHandled: true}).WithDeliveryIntent(
+		return (&toolshared.ToolResult{}).WithDeliveryIntent(
 			toolshared.DeliveryFinalHandled,
 		)
 	}
@@ -136,7 +136,7 @@ func TestClassifySynchronousFinalHandledDeliveryError(t *testing.T) {
 		ambiguous,
 		errors.New("transport response was lost"),
 	)
-	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) || ambiguous.ResponseHandled ||
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) || ambiguous.Delivery.IsFinalHandled() ||
 		!strings.Contains(ambiguous.ForLLM, "Do not claim delivery") {
 		t.Fatalf("ambiguous classification = %v, result = %#v", err, ambiguous)
 	}
@@ -148,7 +148,7 @@ func TestClassifySynchronousFinalHandledDeliveryError(t *testing.T) {
 		channels.DefiniteNotSentDeliveryError(definiteCause),
 	)
 	if !errors.Is(err, definiteCause) || errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
-		!definite.ResponseHandled {
+		!definite.Delivery.IsFinalHandled() {
 		t.Fatalf("definite classification = %v, result = %#v", err, definite)
 	}
 }

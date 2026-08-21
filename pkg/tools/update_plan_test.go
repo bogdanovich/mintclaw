@@ -45,7 +45,7 @@ func TestUpdatePlanToolExecute(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute returned error: %s", result.ForLLM)
 	}
-	if !result.Silent {
+	if !result.Delivery.IsSilent() {
 		t.Fatal("update_plan should be silent")
 	}
 

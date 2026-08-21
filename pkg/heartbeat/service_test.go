@@ -26,9 +26,8 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	asyncResult := &toolshared.ToolResult{
 		ForLLM:  "Background task started",
 		ForUser: "Task started in background",
-		Silent:  false,
 		IsError: false,
-		Async:   true,
+		Control: toolshared.ToolControl{Async: true},
 	}
 
 	hs.SetHandler(func(prompt, channel, chatID string) *toolshared.ToolResult {
@@ -63,20 +62,17 @@ func TestExecuteHeartbeat_ResultLogging(t *testing.T) {
 			result: &toolshared.ToolResult{
 				ForLLM:  "Heartbeat failed: connection error",
 				ForUser: "",
-				Silent:  false,
 				IsError: true,
-				Async:   false,
 			},
 			wantLog: "error message",
 		},
 		{
 			name: "silent result",
 			result: &toolshared.ToolResult{
-				ForLLM:  "Heartbeat completed successfully",
-				ForUser: "",
-				Silent:  true,
-				IsError: false,
-				Async:   false,
+				ForLLM:   "Heartbeat completed successfully",
+				ForUser:  "",
+				IsError:  false,
+				Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 			},
 			wantLog: "completion message",
 		},
@@ -147,7 +143,7 @@ func TestHeartbeatServiceStopAndDrainWaitsForActiveHandler(t *testing.T) {
 	hs.SetHandler(func(string, string, string) *toolshared.ToolResult {
 		close(started)
 		<-release
-		return &toolshared.ToolResult{Silent: true}
+		return toolshared.SilentResult("")
 	})
 	if err := hs.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
