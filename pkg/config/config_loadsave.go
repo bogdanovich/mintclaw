@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -50,26 +49,6 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 		return nil, err
 	}
 
-	var versionInfo struct {
-		Version int `json:"version"`
-	}
-	if e := json.Unmarshal(data, &versionInfo); e != nil {
-		e = wrapJSONError(data, e, "config.json")
-		logger.ErrorCF(
-			"config",
-			formatDiagnosticLogMessage("Malformed config file", e),
-			map[string]any{"path": path},
-		)
-		return nil, e
-	}
-	if versionInfo.Version != CurrentVersion {
-		return nil, fmt.Errorf(
-			"unsupported config version: %d; current version is %d",
-			versionInfo.Version,
-			CurrentVersion,
-		)
-	}
-
 	cfg, err := loadConfig(data)
 	if err != nil {
 		logger.ErrorCF(
@@ -97,16 +76,39 @@ func loadConfig(data []byte) (*Config, error) {
 	// Go's JSON decoder reuses existing slice elements. Decode once into an
 	// empty value so user-supplied model entries cannot inherit default fields.
 	var provided Config
-	if err := decodeJSONWithDiagnostics(data, &provided, "config.json"); err != nil {
+	if err := decodeCurrentConfig(data, &provided, "config.json"); err != nil {
 		return nil, err
 	}
 	if len(provided.ModelList) > 0 {
 		cfg.ModelList = nil
 	}
-	if err := decodeJSONWithDiagnostics(data, cfg, "config.json"); err != nil {
+	if err := decodeCurrentConfig(data, cfg, "config.json"); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// DecodeCurrentConfig decodes a configuration document using the same strict
+// schema rules as the file loader.
+func DecodeCurrentConfig(data []byte, target *Config) error {
+	return decodeCurrentConfig(data, target, "config")
+}
+
+func decodeCurrentConfig(data []byte, target *Config, label string) error {
+	if target == nil {
+		return errors.New("config decode target must not be nil")
+	}
+	if err := decodeJSONWithDiagnostics(data, target, label); err != nil {
+		return err
+	}
+	if target.Version != CurrentVersion {
+		return fmt.Errorf(
+			"unsupported config version: %d; current version is %d",
+			target.Version,
+			CurrentVersion,
+		)
+	}
+	return nil
 }
 
 func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {

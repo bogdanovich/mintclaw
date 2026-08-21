@@ -2573,6 +2573,7 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 
 	// Pre-encrypt one key so we have a genuine enc:// value to put in the config.
 	if err := SaveConfig(cfgPath, &Config{
+		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{ModelName: "pre", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
 		},

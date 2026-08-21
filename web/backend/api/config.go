@@ -83,8 +83,8 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg config.Config
-	if err = json.Unmarshal(normalizedBody, &cfg); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	if err = config.DecodeCurrentConfig(normalizedBody, &cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
 		return
 	}
 	cfg.Session.ApplyDmScope()
@@ -242,7 +242,7 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 		return nil, fmt.Errorf("serialize merged config: %w", err)
 	}
 	var updated config.Config
-	if err = json.Unmarshal(merged, &updated); err != nil {
+	if err = config.DecodeCurrentConfig(merged, &updated); err != nil {
 		return nil, &configPatchRequestError{err: fmt.Errorf("decode merged config: %w", err)}
 	}
 	updated.Session.ApplyDmScope()

@@ -489,10 +489,9 @@ func TestRepositoriesSharingSecurityDocumentUseOneLease(t *testing.T) {
 	assertNoConfigTransactionArtifacts(t, firstPath)
 }
 
-func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
+func TestRepositorySnapshotMatchesCommittedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	candidate := DefaultConfig()
-	candidate.Version = CurrentVersion - 1
 	candidate.ModelList = append(candidate.ModelList, &ModelConfig{
 		ModelName: "virtual",
 		Model:     "virtual",
@@ -506,9 +505,6 @@ func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
 	if snapshot.Config == candidate {
 		t.Fatal("Save() returned the unnormalized input pointer")
 	}
-	if snapshot.Config.Version != CurrentVersion {
-		t.Fatalf("snapshot version = %d, want %d", snapshot.Config.Version, CurrentVersion)
-	}
 	for _, model := range snapshot.Config.ModelList {
 		if model != nil && model.isVirtual {
 			t.Fatal("snapshot retained a virtual model")
@@ -521,6 +517,35 @@ func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
 	if reloaded.Revision != snapshot.Revision || reloaded.Config.Version != snapshot.Config.Version {
 		t.Fatalf("reloaded snapshot = revision %q, version %d; saved = %q, %d",
 			reloaded.Revision, reloaded.Config.Version, snapshot.Revision, snapshot.Config.Version)
+	}
+}
+
+func TestRepositorySaveRejectsNonCurrentVersionWithoutWriting(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+	}{
+		{name: "missing", version: 0},
+		{name: "previous", version: CurrentVersion - 1},
+		{name: "future", version: CurrentVersion + 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			candidate := DefaultConfig()
+			candidate.Version = test.version
+
+			_, err := NewRepository(path).Save(candidate)
+			if err == nil || !strings.Contains(err.Error(), "unsupported config version") {
+				t.Fatalf("Save() error = %v, want version rejection", err)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("config file after rejected save: %v", err)
+			}
+			if _, err := os.Stat(securityPath(path)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("security file after rejected save: %v", err)
+			}
+		})
 	}
 }
 

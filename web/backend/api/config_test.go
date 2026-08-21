@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +197,156 @@ func TestHandleUpdateConfig_RequiresRevision(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	snapshot, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	currentBody, err := json.Marshal(snapshot.Config)
+	if err != nil {
+		t.Fatalf("Marshal(config) error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		mutate    func(map[string]any)
+		wantError string
+	}{
+		{
+			name: "future_version",
+			mutate: func(payload map[string]any) {
+				payload["version"] = config.CurrentVersion + 1
+			},
+			wantError: "unsupported config version",
+		},
+		{
+			name: "removed_field",
+			mutate: func(payload map[string]any) {
+				payload["bindings"] = []any{}
+			},
+			wantError: "unknown field(s): bindings",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var payload map[string]any
+			if err := json.Unmarshal(currentBody, &payload); err != nil {
+				t.Fatalf("Unmarshal(config) error = %v", err)
+			}
+			test.mutate(payload)
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+			assertRejectedConfigWritePreservesDocuments(
+				t,
+				configPath,
+				http.MethodPut,
+				body,
+				test.wantError,
+			)
+		})
+	}
+}
+
+func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	tests := []struct {
+		name      string
+		body      string
+		wantError string
+	}{
+		{
+			name:      "future_version",
+			body:      fmt.Sprintf(`{"version":%d}`, config.CurrentVersion+1),
+			wantError: "unsupported config version",
+		},
+		{
+			name:      "removed_field",
+			body:      `{"bindings":[]}`,
+			wantError: "unknown field(s): bindings",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertRejectedConfigWritePreservesDocuments(
+				t,
+				configPath,
+				http.MethodPatch,
+				[]byte(test.body),
+				test.wantError,
+			)
+		})
+	}
+}
+
+func assertRejectedConfigWritePreservesDocuments(
+	t *testing.T,
+	configPath string,
+	method string,
+	body []byte,
+	wantError string,
+) {
+	t.Helper()
+
+	securityPath := filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile)
+	publicBefore, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	securityBefore, err := os.ReadFile(securityPath)
+	if err != nil {
+		t.Fatalf("ReadFile(security) error = %v", err)
+	}
+	repository := config.NewRepository(configPath)
+	snapshotBefore, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly(before) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(method, "/api/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if method == http.MethodPut {
+		req.Header.Set("If-Match", configRevisionETag(snapshotBefore.Revision))
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), wantError) {
+		t.Fatalf("body = %q, want error containing %q", rec.Body.String(), wantError)
+	}
+
+	publicAfter, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config after rejection) error = %v", err)
+	}
+	securityAfter, err := os.ReadFile(securityPath)
+	if err != nil {
+		t.Fatalf("ReadFile(security after rejection) error = %v", err)
+	}
+	if !bytes.Equal(publicBefore, publicAfter) || !bytes.Equal(securityBefore, securityAfter) {
+		t.Fatal("rejected config write modified durable config documents")
+	}
+	snapshotAfter, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly(after) error = %v", err)
+	}
+	if snapshotAfter.Revision != snapshotBefore.Revision {
+		t.Fatalf("revision after rejection = %q, want %q", snapshotAfter.Revision, snapshotBefore.Revision)
+	}
+}
+
 func TestHandleUpdateConfig_RejectsStaleRevisionWithoutLosingNewerWrite(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -349,6 +501,7 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{
+		"version": 3,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace"
@@ -358,7 +511,7 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 			{
 				"model_name": "custom-default",
 				"model": "openai/gpt-4o",
-				"api_key": "sk-default"
+				"api_keys": ["sk-default"]
 			}
 		]
 	}`))

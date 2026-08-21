@@ -284,8 +284,12 @@ type configDocuments struct {
 
 func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
 	copyCfg := *cfg
-	if copyCfg.Version < CurrentVersion {
-		copyCfg.Version = CurrentVersion
+	if copyCfg.Version != CurrentVersion {
+		return configDocuments{}, fmt.Errorf(
+			"unsupported config version: %d; current version is %d",
+			copyCfg.Version,
+			CurrentVersion,
+		)
 	}
 	copyCfg.Channels = make(ChannelsConfig, len(cfg.Channels))
 	for name, channel := range cfg.Channels {
