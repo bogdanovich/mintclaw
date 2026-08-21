@@ -29,7 +29,7 @@ The heartbeat system periodically checks `<workspace>/HEARTBEAT.md` for schedule
 | **Independent context** | Subagent has its own context, no session history                            |
 | **Delivery mode**       | Completion can be delivered to the user, the parent agent, or both          |
 | **Non-blocking**        | After spawning, heartbeat continues to next task                            |
-| **Status**              | Use `task_status` for durable status; `spawn_status` is a spawn-only view   |
+| **Status**              | Use `task_status` for all durable task status                              |
 
 #### How Subagent Communication Works
 
@@ -49,7 +49,7 @@ Respond HEARTBEAT_OK      Delivery coordinator routes result
 
 The subagent has access to its configured tools, but completion delivery is owned by the async task delivery path. A terminal background task usually uses user delivery. A compositional task can route the completion back to the parent so the parent can synthesize the final user-facing answer. See [Async Task Delivery](../architecture/async-task-delivery.md) for the registry and delivery model.
 
-Use `task_status` and `spawn_status` to inspect durable child-task execution.
+Use `task_status` to inspect durable child-task execution.
 
 **Configuration:**
 

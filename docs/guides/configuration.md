@@ -1012,7 +1012,7 @@ For long-running tasks (web search, API calls), use the `spawn` tool to create a
 | **Independent context** | Subagent has its own context, no session history                            |
 | **Delivery mode**       | Completion can be delivered to the user, the parent agent, or both          |
 | **Non-blocking**        | After spawning, heartbeat continues to next task                            |
-| **Status**              | Use `task_status` for durable status; `spawn_status` is a spawn-only view   |
+| **Status**              | Use `task_status` for all durable task status                              |
 
 #### How Subagent Communication Works
 

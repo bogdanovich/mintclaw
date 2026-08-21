@@ -15,7 +15,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
-	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -45,100 +44,33 @@ type SubTurnConfig struct {
 	ObjectiveItems     []toolshared.ObjectiveSpec
 }
 
-type SubagentTask struct {
-	ID                  string
-	Task                string
-	Label               string
-	AgentID             string
-	OwnerKey            string
-	RequesterSessionKey string
-	HistoryPolicyKnown  bool
-	HistoryDisabled     bool
-	OriginChannel       string
-	OriginChatID        string
-	DeliveryMode        toolshared.AsyncDeliveryMode
-	Status              string
-	Result              string
-	Created             int64
-	ObjectiveItems      []toolshared.ObjectiveSpec
-}
-
-type SpawnSubTurnFunc func(
-	ctx context.Context,
-	taskID string,
-	task, label, agentID string,
-	objectiveItems []toolshared.ObjectiveSpec,
-	tools *ToolRegistry,
-	maxTokens int,
-	temperature float64,
-	hasMaxTokens, hasTemperature bool,
-) (*toolshared.ToolResult, error)
-
 type SubagentManager struct {
-	tasks          map[string]*SubagentTask
 	mu             sync.RWMutex
-	provider       providers.LLMProvider
 	defaultModel   string
-	workspace      string
-	tools          *ToolRegistry
-	maxIterations  int
 	maxTokens      int
 	temperature    float64
 	hasMaxTokens   bool
 	hasTemperature bool
-	spawner        SpawnSubTurnFunc
+	spawner        SubTurnSpawner
 	taskRegistry   *taskregistry.Registry
-
-	// mediaResolver resolves media:// refs in tool-loop messages before
-	// each LLM call in the legacy RunToolLoop fallback path.
-	// This lets subagents reuse the same media handling behavior as the
-	// main agent loop without importing pkg/agent and creating a cycle.
-	mediaResolver func([]providers.Message) []providers.Message
-	loopDetection loopguard.Config
 }
 
 // NewSubagentManagerWithRegistry requires the canonical task registry shared
 // by every manager that owns the same workspace.
 func NewSubagentManagerWithRegistry(
-	provider providers.LLMProvider,
-	defaultModel, workspace string,
+	defaultModel string,
 	registry *taskregistry.Registry,
 ) *SubagentManager {
-	manager := &SubagentManager{
-		tasks:         make(map[string]*SubagentTask),
-		provider:      provider,
-		defaultModel:  defaultModel,
-		workspace:     workspace,
-		tools:         NewToolRegistry(),
-		maxIterations: 10,
-		loopDetection: loopguard.DefaultConfig(),
-		taskRegistry:  registry,
+	return &SubagentManager{
+		defaultModel: defaultModel,
+		taskRegistry: registry,
 	}
-	manager.restoreTasksFromRegistry()
-	return manager
 }
 
-func (sm *SubagentManager) SetLoopDetection(config loopguard.Config) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.loopDetection = config.Normalized()
-}
-
-func (sm *SubagentManager) SetSpawner(spawner SpawnSubTurnFunc) {
+func (sm *SubagentManager) SetSpawner(spawner SubTurnSpawner) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.spawner = spawner
-}
-
-// SetMediaResolver injects a message preprocessor that resolves media:// refs
-// into LLM-ready content before each tool-loop iteration.
-// This is only used by the legacy RunToolLoop fallback path.
-func (sm *SubagentManager) SetMediaResolver(
-	resolver func([]providers.Message) []providers.Message,
-) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.mediaResolver = resolver
 }
 
 // SetLLMOptions sets max tokens and temperature for subagent LLM calls.
@@ -151,21 +83,6 @@ func (sm *SubagentManager) SetLLMOptions(maxTokens int, temperature float64) {
 	sm.hasTemperature = true
 }
 
-// SetTools sets the tool registry for subagent execution.
-// If not set, subagent will have access to the provided tools.
-func (sm *SubagentManager) SetTools(tools *ToolRegistry) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.tools = tools
-}
-
-// RegisterTool registers a tool for subagent execution.
-func (sm *SubagentManager) RegisterTool(tool toolshared.Tool) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.tools.Register(tool)
-}
-
 func (sm *SubagentManager) Spawn(
 	ctx context.Context,
 	task, label, agentID, originChannel, originChatID string,
@@ -173,37 +90,49 @@ func (sm *SubagentManager) Spawn(
 	callback toolshared.AsyncCallback,
 	objectiveSets ...[]toolshared.ObjectiveSpec,
 ) (string, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	if sm == nil || sm.taskRegistry == nil {
+		return "", errors.New("subagent task registry is unavailable")
+	}
+	sm.mu.RLock()
+	runnerAvailable := sm.spawner != nil
+	sm.mu.RUnlock()
+	if !runnerAvailable {
+		return "", errors.New("subagent child runner is unavailable")
+	}
 
 	taskID := "subagent-" + uuid.NewString()
 	var objectiveItems []toolshared.ObjectiveSpec
 	if len(objectiveSets) > 0 {
 		objectiveItems = objectiveSets[0]
 	}
-	subagentTask := &SubagentTask{
-		ID:                  taskID,
-		Task:                task,
-		Label:               label,
+	now := time.Now().UnixMilli()
+	record := taskregistry.Record{
+		TaskID:              taskID,
+		Runtime:             taskregistry.RuntimeSubagent,
+		TaskKind:            "spawn",
+		Channel:             originChannel,
+		ChatID:              originChatID,
 		AgentID:             agentID,
 		OwnerKey:            toolshared.ToolAgentID(ctx),
 		RequesterSessionKey: toolshared.ToolSessionKey(ctx),
 		HistoryPolicyKnown:  true,
 		HistoryDisabled:     toolshared.ToolHistoryDisabled(ctx),
-		OriginChannel:       originChannel,
-		OriginChatID:        originChatID,
-		DeliveryMode:        deliveryMode,
-		Status:              "running",
-		Created:             time.Now().UnixMilli(),
-		ObjectiveItems:      append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
+		Label:               label,
+		Task:                task,
+		Status:              taskregistry.StatusRunning,
+		DeliveryStatus:      taskregistry.DeliveryPending,
+		NotifyPolicy:        taskregistry.NotifyDoneOnly,
+		DeliveryMode:        string(deliveryMode),
+		CreatedAt:           now,
+		StartedAt:           now,
+		LastEventAt:         now,
 	}
-	if err := sm.createTask(subagentTask); err != nil {
+	if err := sm.taskRegistry.Create(record); err != nil {
 		return "", fmt.Errorf("persist spawned subagent: %w", err)
 	}
-	sm.tasks[taskID] = subagentTask
 
 	// Start task in background with context cancellation support
-	go sm.runTask(ctx, subagentTask, callback)
+	go sm.runTask(ctx, record, objectiveItems, callback)
 
 	if label != "" {
 		return fmt.Sprintf(
@@ -265,331 +194,151 @@ func parseObjectiveItems(raw any) ([]toolshared.ObjectiveSpec, error) {
 
 func (sm *SubagentManager) runTask(
 	ctx context.Context,
-	task *SubagentTask,
+	task taskregistry.Record,
+	objectiveItems []toolshared.ObjectiveSpec,
 	callback toolshared.AsyncCallback,
 ) {
-	task.Status = "running"
-	// TODO(eventbus): once subagents are modeled as child turns inside
-	// pkg/agent, emit SubTurnEnd and SubTurnResultDelivered from the parent
-	// AgentLoop instead of this legacy manager.
-
 	// Check if context is already canceled before starting
 	select {
 	case <-ctx.Done():
-		sm.mu.Lock()
-		task.Status = "canceled"
-		task.Result = "Task canceled before execution"
-		sm.mu.Unlock()
 		sm.recordTaskOrLog(
-			task,
+			task.TaskID,
 			taskregistry.StatusCancelled,
 			taskregistry.DeliveryNotApplicable,
-			task.Result,
+			"Task canceled before execution",
 		)
 		return
 	default:
 	}
 
-	sm.mu.RLock()
-	spawner := sm.spawner
-	tools := sm.tools
-	maxIter := sm.maxIterations
-	maxTokens := sm.maxTokens
-	temperature := sm.temperature
-	hasMaxTokens := sm.hasMaxTokens
-	hasTemperature := sm.hasTemperature
-	mediaResolver := sm.mediaResolver
-	loopDetection := sm.loopDetection
-	sm.mu.RUnlock()
-
-	var result *toolshared.ToolResult
-	var err error
-	stopHeartbeat := startTaskRegistryHeartbeat(ctx, sm.taskRegistry, task.ID, "spawned subagent is still running")
+	stopHeartbeat := startTaskRegistryHeartbeat(
+		ctx,
+		sm.taskRegistry,
+		task.TaskID,
+		"spawned subagent is still running",
+	)
 	defer stopHeartbeat()
 
-	if spawner != nil {
-		result, err = spawner(
-			ctx,
-			task.ID,
-			task.Task,
-			task.Label,
-			task.AgentID,
-			task.ObjectiveItems,
-			tools,
-			maxTokens,
-			temperature,
-			hasMaxTokens,
-			hasTemperature,
-		)
-	} else {
-		// Fallback to legacy RunToolLoop
-		systemPrompt := `You are a subagent. Complete the given task independently and report the result.
-You have access to tools - use them as needed to complete your task.
-After completing the task, provide a clear summary of what was done.`
-
-		messages := []providers.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: task.Task},
-		}
-
-		var llmOptions map[string]any
-		if hasMaxTokens || hasTemperature {
-			llmOptions = map[string]any{}
-			if hasMaxTokens {
-				llmOptions["max_tokens"] = maxTokens
-			}
-			if hasTemperature {
-				llmOptions["temperature"] = temperature
-			}
-		}
-
-		var loopResult *ToolLoopResult
-		loopResult, err = RunToolLoop(ctx, ToolLoopConfig{
-			Provider:      sm.provider,
-			Model:         sm.defaultModel,
-			Tools:         tools,
-			MaxIterations: maxIter,
-			LLMOptions:    llmOptions,
-			MediaResolver: mediaResolver,
-			LoopDetection: loopDetection,
-		}, messages, task.OriginChannel, task.OriginChatID)
-
-		if err == nil {
-			result = &toolshared.ToolResult{
-				ForLLM: fmt.Sprintf(
-					"Subagent '%s' completed (iterations: %d): %s",
-					task.Label,
-					loopResult.Iterations,
-					loopResult.Content,
-				),
-				ForUser: loopResult.Content,
-				Silent:  false,
-				IsError: false,
-				Async:   false,
-			}
-		}
+	result, err := sm.spawnSubTurn(ctx, SubTurnConfig{
+		TaskID:         task.TaskID,
+		TargetAgentID:  task.AgentID,
+		SystemPrompt:   buildSpawnSystemPrompt(task.Task, task.Label),
+		Critical:       true,
+		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
+	})
+	if result == nil && err == nil {
+		err = errors.New("subagent child runner returned no result")
 	}
 	if result != nil && result.TaskSuspended {
 		return
 	}
 
-	sm.mu.Lock()
-	defer func() {
-		sm.mu.Unlock()
-		// Call callback if provided and result is set
-		if callback != nil && result != nil {
-			result.WithAsyncTaskID(task.ID)
-			callback(ctx, result)
-		}
-	}()
-
 	if err != nil {
-		task.Status = "failed"
-		task.Result = fmt.Sprintf("Error: %v", err)
+		status := taskregistry.StatusFailed
+		summary := fmt.Sprintf("Error: %v", err)
 		// Only report cancellation when cancellation is the actual cause.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			task.Status = "canceled"
-			task.Result = "Task canceled during execution"
-			sm.recordTaskOrLog(
-				task,
-				taskregistry.StatusCancelled,
-				taskregistry.DeliveryPending,
-				task.Result,
-			)
-		} else {
-			sm.recordTaskOrLog(
-				task,
-				taskregistry.StatusFailed,
-				taskregistry.DeliveryPending,
-				task.Result,
-			)
+			status = taskregistry.StatusCancelled
+			summary = "Task canceled during execution"
 		}
+		sm.recordTaskOrLog(task.TaskID, status, taskregistry.DeliveryPending, summary)
 		result = &toolshared.ToolResult{
-			ForLLM:  task.Result,
-			ForUser: task.Result,
+			ForLLM:  summary,
+			ForUser: summary,
 			Silent:  false,
 			IsError: true,
 			Async:   false,
 			Err:     err,
 		}
 	} else {
-		terminalStatus := terminalTaskStatusForResult(result)
-		if terminalStatus == taskregistry.StatusFailed {
-			task.Status = "failed"
-		} else {
-			task.Status = "completed"
-		}
-		result.WithAsyncTaskID(task.ID)
-		task.Result = result.ForLLM
-		sm.recordTaskResult(task, result)
+		sm.recordTaskResult(task.TaskID, result)
+	}
+	if result != nil {
+		result.WithAsyncTaskID(task.TaskID)
+	}
+	if callback != nil && result != nil {
+		callback(ctx, result)
 	}
 }
 
-func (sm *SubagentManager) restoreTasksFromRegistry() {
-	if sm == nil || sm.taskRegistry == nil {
-		return
+func (sm *SubagentManager) spawnSubTurn(
+	ctx context.Context,
+	cfg SubTurnConfig,
+) (*toolshared.ToolResult, error) {
+	if sm == nil {
+		return nil, errors.New("subagent child runner is unavailable")
 	}
-	for _, rec := range sm.taskRegistry.List() {
-		if rec.Runtime != taskregistry.RuntimeSubagent {
-			continue
-		}
-		sm.tasks[rec.TaskID] = subagentTaskFromRecord(rec)
+	sm.mu.RLock()
+	spawner := sm.spawner
+	defaultModel := sm.defaultModel
+	maxTokens := sm.maxTokens
+	temperature := sm.temperature
+	hasMaxTokens := sm.hasMaxTokens
+	hasTemperature := sm.hasTemperature
+	sm.mu.RUnlock()
+	if spawner == nil {
+		return nil, errors.New("subagent child runner is unavailable")
 	}
-}
-
-func subagentTaskFromRecord(rec taskregistry.Record) *SubagentTask {
-	status := "running"
-	switch rec.Status {
-	case taskregistry.StatusSucceeded:
-		status = "completed"
-	case taskregistry.StatusFailed:
-		status = "failed"
-	case taskregistry.StatusCancelled, taskregistry.StatusTimedOut:
-		status = "canceled"
-	case taskregistry.StatusRunning, taskregistry.StatusQueued:
-		status = "running"
-	case taskregistry.StatusWaitingForInput:
-		status = "waiting_for_input"
+	if cfg.Model == "" {
+		cfg.Model = defaultModel
 	}
-	return &SubagentTask{
-		ID:                  rec.TaskID,
-		Task:                rec.Task,
-		Label:               rec.Label,
-		AgentID:             rec.AgentID,
-		OwnerKey:            rec.OwnerKey,
-		RequesterSessionKey: rec.RequesterSessionKey,
-		HistoryPolicyKnown:  rec.HistoryPolicyKnown,
-		HistoryDisabled:     rec.HistoryDisabled,
-		OriginChannel:       rec.Channel,
-		OriginChatID:        rec.ChatID,
-		DeliveryMode:        toolshared.AsyncDeliveryMode(rec.DeliveryMode),
-		Status:              status,
-		Result:              rec.TerminalSummary,
-		Created:             rec.CreatedAt,
+	if cfg.MaxTokens == 0 && hasMaxTokens {
+		cfg.MaxTokens = maxTokens
 	}
-}
-
-func (sm *SubagentManager) createTask(task *SubagentTask) error {
-	if sm == nil || sm.taskRegistry == nil || task == nil {
-		return errors.New("subagent task registry is unavailable")
+	if cfg.Temperature == 0 && hasTemperature {
+		cfg.Temperature = temperature
 	}
-	return sm.taskRegistry.Create(sm.taskRecord(
-		task,
-		taskregistry.StatusRunning,
-		taskregistry.DeliveryPending,
-		"",
-	))
-}
-
-func (sm *SubagentManager) recordTask(
-	task *SubagentTask,
-	status taskregistry.Status,
-	delivery taskregistry.DeliveryStatus,
-	summary string,
-) error {
-	return sm.updateTask(task, status, delivery, summary, nil)
+	return spawner.SpawnSubTurn(ctx, cfg)
 }
 
 func (sm *SubagentManager) updateTask(
-	task *SubagentTask,
+	taskID string,
 	status taskregistry.Status,
 	delivery taskregistry.DeliveryStatus,
 	summary string,
 	mutate func(*taskregistry.Record),
 ) error {
-	if sm == nil || sm.taskRegistry == nil || task == nil {
+	if sm == nil || sm.taskRegistry == nil {
 		return errors.New("subagent task registry is unavailable")
 	}
-	rec := sm.taskRecord(task, status, delivery, summary)
-	return sm.taskRegistry.Update(task.ID, func(stored *taskregistry.Record) {
-		stored.Runtime = rec.Runtime
-		stored.TaskKind = rec.TaskKind
-		stored.Channel = rec.Channel
-		stored.ChatID = rec.ChatID
-		stored.AgentID = rec.AgentID
-		stored.OwnerKey = rec.OwnerKey
-		stored.RequesterSessionKey = rec.RequesterSessionKey
-		stored.HistoryPolicyKnown = rec.HistoryPolicyKnown
-		stored.HistoryDisabled = rec.HistoryDisabled
-		stored.Label = rec.Label
-		stored.Task = rec.Task
-		stored.Status = rec.Status
-		stored.DeliveryStatus = rec.DeliveryStatus
-		stored.NotifyPolicy = rec.NotifyPolicy
-		stored.DeliveryMode = rec.DeliveryMode
-		stored.EndedAt = rec.EndedAt
-		stored.LastEventAt = rec.LastEventAt
-		stored.Error = rec.Error
-		stored.TerminalSummary = rec.TerminalSummary
+	return sm.taskRegistry.Update(taskID, func(stored *taskregistry.Record) {
+		now := time.Now().UnixMilli()
+		stored.Status = status
+		stored.DeliveryStatus = delivery
+		stored.LastEventAt = now
+		if status == taskregistry.StatusSucceeded || status == taskregistry.StatusFailed ||
+			status == taskregistry.StatusCancelled || status == taskregistry.StatusTimedOut {
+			stored.EndedAt = now
+			stored.TerminalSummary = summary
+		}
+		if status == taskregistry.StatusFailed {
+			stored.Error = summary
+		} else {
+			stored.Error = ""
+		}
 		if mutate != nil {
 			mutate(stored)
 		}
 	})
 }
 
-func (sm *SubagentManager) taskRecord(
-	task *SubagentTask,
-	status taskregistry.Status,
-	delivery taskregistry.DeliveryStatus,
-	summary string,
-) taskregistry.Record {
-	now := time.Now().UnixMilli()
-	rec := taskregistry.Record{
-		TaskID:              task.ID,
-		Runtime:             taskregistry.RuntimeSubagent,
-		TaskKind:            "spawn",
-		Channel:             task.OriginChannel,
-		ChatID:              task.OriginChatID,
-		AgentID:             task.AgentID,
-		OwnerKey:            task.OwnerKey,
-		RequesterSessionKey: task.RequesterSessionKey,
-		HistoryPolicyKnown:  task.HistoryPolicyKnown,
-		HistoryDisabled:     task.HistoryDisabled,
-		Label:               task.Label,
-		Task:                task.Task,
-		Status:              status,
-		DeliveryStatus:      delivery,
-		NotifyPolicy:        taskregistry.NotifyDoneOnly,
-		DeliveryMode:        string(task.DeliveryMode),
-		CreatedAt:           task.Created,
-		StartedAt:           task.Created,
-		LastEventAt:         now,
-	}
-	if rec.CreatedAt == 0 {
-		rec.CreatedAt = now
-	}
-	if rec.StartedAt == 0 {
-		rec.StartedAt = rec.CreatedAt
-	}
-	if status == taskregistry.StatusSucceeded || status == taskregistry.StatusFailed ||
-		status == taskregistry.StatusCancelled ||
-		status == taskregistry.StatusTimedOut {
-		rec.EndedAt = now
-		rec.TerminalSummary = summary
-	}
-	if status == taskregistry.StatusFailed {
-		rec.Error = summary
-	}
-	return rec
-}
-
 func (sm *SubagentManager) recordTaskOrLog(
-	task *SubagentTask,
+	taskID string,
 	status taskregistry.Status,
 	delivery taskregistry.DeliveryStatus,
 	summary string,
 ) {
-	if err := sm.recordTask(task, status, delivery, summary); err != nil {
+	if err := sm.updateTask(taskID, status, delivery, summary, nil); err != nil {
 		logger.WarnCF("subagent", "Failed to persist subagent task state", map[string]any{
-			"task_id": task.ID,
+			"task_id": taskID,
 			"status":  status,
 			"error":   err.Error(),
 		})
 	}
 }
 
-func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshared.ToolResult) {
-	if sm == nil || sm.taskRegistry == nil || task == nil {
+func (sm *SubagentManager) recordTaskResult(taskID string, result *toolshared.ToolResult) {
+	if sm == nil || sm.taskRegistry == nil {
 		return
 	}
 	summary := ""
@@ -602,7 +351,7 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 	}
 	deliverable := taskDeliverable(result)
 	if err := sm.updateTask(
-		task,
+		taskID,
 		terminalTaskStatusForResult(result),
 		delivery,
 		summary,
@@ -611,7 +360,7 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 		},
 	); err != nil {
 		logger.WarnCF("subagent", "Failed to persist subagent task result", map[string]any{
-			"task_id": task.ID,
+			"task_id": taskID,
 			"error":   err.Error(),
 		})
 	}
@@ -636,72 +385,14 @@ func taskDeliverable(result *toolshared.ToolResult) *taskresult.Deliverable {
 	return deliverable
 }
 
-func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	task, ok := sm.tasks[taskID]
-	return task, ok
-}
-
-// GetTaskCopy returns a copy of the task with the given ID, taken under the
-// read lock, so the caller receives a consistent snapshot with no data race.
-func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	task, ok := sm.tasks[taskID]
-	if !ok {
-		return SubagentTask{}, false
-	}
-	return *task, true
-}
-
-func (sm *SubagentManager) ListTasks() []*SubagentTask {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	tasks := make([]*SubagentTask, 0, len(sm.tasks))
-	for _, task := range sm.tasks {
-		tasks = append(tasks, task)
-	}
-	return tasks
-}
-
-// ListTaskCopies returns value copies of all tasks, taken under the read lock,
-// so callers receive consistent snapshots with no data race.
-func (sm *SubagentManager) ListTaskCopies() []SubagentTask {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	copies := make([]SubagentTask, 0, len(sm.tasks))
-	for _, task := range sm.tasks {
-		copies = append(copies, *task)
-	}
-	return copies
-}
-
 // SubagentTool executes a subagent task synchronously and returns the result.
 // It directly calls SubTurnSpawner with Async=false for synchronous execution.
 type SubagentTool struct {
-	spawner      SubTurnSpawner
-	defaultModel string
-	maxTokens    int
-	temperature  float64
+	manager *SubagentManager
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
-	if manager == nil {
-		return &SubagentTool{}
-	}
-	return &SubagentTool{
-		defaultModel: manager.defaultModel,
-		maxTokens:    manager.maxTokens,
-		temperature:  manager.temperature,
-	}
-}
-
-// SetSpawner sets the SubTurnSpawner for direct sub-turn execution.
-func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
-	t.spawner = spawner
+	return &SubagentTool{manager: manager}
 }
 
 func (t *SubagentTool) Name() string {
@@ -763,14 +454,10 @@ Task: %s`,
 		)
 	}
 
-	// Use spawner if available (direct SpawnSubTurn call)
-	if t.spawner != nil {
-		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:          t.defaultModel,
+	if t.manager != nil {
+		result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
 			Tools:          nil, // Will inherit from parent via context
 			SystemPrompt:   systemPrompt,
-			MaxTokens:      t.maxTokens,
-			Temperature:    t.temperature,
 			Async:          false, // Synchronous execution
 			ObjectiveItems: objectiveItems,
 		})

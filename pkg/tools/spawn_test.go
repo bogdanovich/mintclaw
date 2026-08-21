@@ -37,8 +37,7 @@ func (m *mockSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*too
 }
 
 func TestSpawnTool_Execute_EmptyTask(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 
 	ctx := context.Background()
@@ -71,11 +70,10 @@ func TestSpawnTool_Execute_EmptyTask(t *testing.T) {
 }
 
 func TestSpawnTool_Execute_ValidTask(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	tool.SetSpawner(spawner)
+	manager.SetSpawner(spawner)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,11 +102,11 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	if !spawner.lastConfig.Critical {
 		t.Error("SpawnTool should mark background subturns as critical")
 	}
-	tasks := manager.ListTaskCopies()
+	tasks := manager.taskRegistry.List()
 	if len(tasks) != 1 {
-		t.Fatalf("ListTaskCopies count = %d, want 1", len(tasks))
+		t.Fatalf("task registry count = %d, want 1", len(tasks))
 	}
-	taskID := tasks[0].ID
+	taskID := tasks[0].TaskID
 	if !strings.HasPrefix(taskID, "subagent-") {
 		t.Fatalf("task ID = %q, want subagent-*", taskID)
 	}
@@ -136,10 +134,10 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 }
 
 func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T) {
-	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	tool.SetSpawner(spawner)
+	manager.SetSpawner(spawner)
 	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
 		return targetAgentID == "browser"
 	})
@@ -157,7 +155,7 @@ func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T
 	if !strings.Contains(result.ForLLM, "retry spawn") {
 		t.Fatalf("ForLLM = %q, want retry guidance", result.ForLLM)
 	}
-	if tasks := manager.ListTaskCopies(); len(tasks) != 0 {
+	if tasks := manager.taskRegistry.List(); len(tasks) != 0 {
 		t.Fatalf("spawned tasks = %#v, want none", tasks)
 	}
 	select {
@@ -182,13 +180,23 @@ func TestSpawnTool_Execute_NilManager(t *testing.T) {
 	}
 }
 
-func TestSpawnTool_SpawnStatusSeesSpawnedTask(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+func TestSpawnTool_Execute_RequiresChildRunner(t *testing.T) {
+	manager := NewSubagentManager("test-model", t.TempDir())
+	result := NewSpawnTool(manager).Execute(context.Background(), map[string]any{"task": "test task"})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "child runner is unavailable") {
+		t.Fatalf("spawn without child runner = %#v", result)
+	}
+	if records := manager.taskRegistry.List(); len(records) != 0 {
+		t.Fatalf("unavailable child runner admitted tasks: %#v", records)
+	}
+}
+
+func TestSpawnTool_TaskStatusSeesSpawnedTask(t *testing.T) {
+	manager := NewSubagentManager("test-model", t.TempDir())
 	spawnTool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	spawnTool.SetSpawner(spawner)
-	statusTool := NewSpawnStatusTool(manager)
+	manager.SetSpawner(spawner)
+	statusTool := NewTaskStatusTool(manager.taskRegistry)
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	args := map[string]any{
@@ -215,16 +223,16 @@ func TestSpawnTool_SpawnStatusSeesSpawnedTask(t *testing.T) {
 			t.Fatal("status result should not be nil")
 		}
 		if status.IsError {
-			t.Fatalf("spawn_status returned error: %s", status.ForLLM)
+			t.Fatalf("task_status returned error: %s", status.ForLLM)
 		}
 		if strings.Contains(status.ForLLM, "subagent-") {
-			if !strings.Contains(status.ForLLM, "haiku-task") {
-				t.Fatalf("expected label in status output, got: %s", status.ForLLM)
+			if !strings.Contains(status.ForLLM, "Write a haiku about coding") {
+				t.Fatalf("expected task in status output, got: %s", status.ForLLM)
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("spawn_status never observed spawned task; last output: %s", status.ForLLM)
+			t.Fatalf("task_status never observed spawned task; last output: %s", status.ForLLM)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -232,8 +240,8 @@ func TestSpawnTool_SpawnStatusSeesSpawnedTask(t *testing.T) {
 	<-spawner.done
 	deadline = time.Now().Add(2 * time.Second)
 	for {
-		tasks := manager.ListTaskCopies()
-		if len(tasks) == 1 && tasks[0].Status == "completed" {
+		tasks := manager.taskRegistry.List()
+		if len(tasks) == 1 && tasks[0].Status == taskregistry.StatusSucceeded {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -244,11 +252,10 @@ func TestSpawnTool_SpawnStatusSeesSpawnedTask(t *testing.T) {
 }
 
 func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	tool.SetSpawner(spawner)
+	manager.SetSpawner(spawner)
 
 	done := make(chan *toolshared.ToolResult, 1)
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -278,10 +285,10 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 }
 
 func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
-	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	tool.SetSpawner(spawner)
+	manager.SetSpawner(spawner)
 	completed := make(chan struct{})
 
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -308,11 +315,10 @@ func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
 }
 
 func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	tool.SetSpawner(spawner)
+	manager.SetSpawner(spawner)
 
 	done := make(chan *toolshared.ToolResult, 1)
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -340,8 +346,7 @@ func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
 }
 
 func TestSpawnTool_Execute_InvalidDeliveryMode(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSpawnTool(manager)
 
 	tests := []map[string]any{

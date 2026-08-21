@@ -61,57 +61,23 @@ path. The current state is intentionally incremental:
 - `ForUser`: text that may be sent directly to the user.
 - `Deliverable`: the actual produced result/artifacts.
 
-`Deliverable` is the ownership payload for durable task state. It should describe
-what was produced, for example a downloaded media ref, a generated file path, or
-extracted text. It must not depend on the wording of the final chat response.
+`taskresult.Deliverable` is the ownership payload for durable task state. It
+describes what was produced through canonical text, artifacts, metadata,
+objective outcome, and an optional versioned report. It must not depend on the
+wording of the final chat response.
 
-Durable `DeliverablePayload` also carries an optional versioned
-`DeliverableReport`. When a producer only provides the legacy deliverable
-projection, the task registry derives a minimal report with schema version,
-stable content hash, report id, summary, fact claim, metadata, and provenance.
-New producers may provide a richer report directly. New consumers that need a
-machine contract should prefer `deliverable.report`; `text`, `artifacts`, and
-`metadata` remain the compatibility projection.
-
-Tool results can now carry the same report shape on `DeliverableResult`.
-Delegate and spawn persist explicit tool reports into task registry records.
-When no report is supplied, the registry still derives the minimal projection.
-
-Legacy child-run `Completion` remains supported and is mirrored into
-`Deliverable` when possible.
-
-New status/API consumers should treat `Deliverable` as the source of truth for
-produced text and artifacts. `Completion` is a legacy child-run handoff payload
-and should not be extended with new artifact semantics.
+Tools, child turns, delegated tasks, interactions, task records, and status
+views carry this exact type. They do not reconstruct task state from prose or
+translate through a second completion payload.
 
 Current contract summary:
 
 - `deliverable`
   - durable ownership payload
   - source of truth for produced text/artifacts in registry/status/board views
-- `completion`
-  - compatibility adapter for older child-run handoff paths
-  - may still be persisted/read, but should not gain new semantics
 - final chat wording
   - a projection for users
   - must not be parsed by runtimes as task state
-
-Migration status:
-
-- Done: hide `Completion` from user-facing status/board output when `Deliverable` is present.
-- Done: new delegate/spawn registry writes store `Deliverable` as the durable payload and keep `Completion` only when no deliverable is available.
-- Done: task registry projects legacy deliverables into `DeliverableReport`
-  automatically when producers do not supply one.
-- Done: delegate/spawn task registry mapping preserves explicit
-  `DeliverableResult.Report` payloads from tool producers.
-
-Migration TODO:
-
-- Keep reading legacy `Completion` only as an adapter for old records.
-- Teach important producers to supply richer `DeliverableReport` payloads with
-  claims, negative evidence, field deltas, and provenance directly.
-- Remove `Completion` from public API/storage after all producers and persisted
-  records have migrated.
 
 ## Typed Task Events
 
@@ -223,12 +189,9 @@ Active delegate/spawn runs periodically heartbeat the task registry by updating
 therefore means the active run has not reported liveness recently, not merely
 that it started a long time ago.
 
-`spawn_status` is kept as a compatibility/debug view for tasks started specifically by the `spawn` tool. It is backed by the same durable registry but intentionally remains spawn-only.
-
-Status tool rule of thumb:
-
-- use `task_status` for the durable cross-runtime view
-- use `spawn_status` only for spawn-specific debugging or backward compatibility
+`task_status` is the sole runtime status tool. It reads the canonical registry
+for spawn, delegate, cron, and other task runtimes; no spawn-only projection is
+maintained.
 
 ## Legacy System Messages
 

@@ -875,8 +875,6 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.SearchFiles.Enabled
 	case "spawn":
 		return t.Spawn.Enabled
-	case "spawn_status":
-		return t.SpawnStatus.Enabled
 	case "spi":
 		return t.SPI.Enabled
 	case "subagent":

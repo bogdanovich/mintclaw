@@ -5,71 +5,29 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-// MockLLMProvider is a test implementation of LLMProvider
-type MockLLMProvider struct {
-	lastOptions map[string]any
-}
-
-func (m *MockLLMProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	options map[string]any,
-) (*providers.LLMResponse, error) {
-	m.lastOptions = options
-	// Find the last user message to generate a response
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return &providers.LLMResponse{
-				Content: "Task completed: " + messages[i].Content,
-			}, nil
-		}
-	}
-	return &providers.LLMResponse{Content: "No task provided"}, nil
-}
-
-func (m *MockLLMProvider) GetDefaultModel() string {
-	return "test-model"
-}
-
-func (m *MockLLMProvider) SupportsTools() bool {
-	return false
-}
-
-func (m *MockLLMProvider) GetContextWindow() int {
-	return 4096
-}
-
-func TestSubagentManager_SetLLMOptions_AppliesToRunToolLoop(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+func TestSubagentManager_SetLLMOptions_AppliesToChildRunner(t *testing.T) {
+	manager := NewSubagentManager("test-model", t.TempDir())
 	manager.SetLLMOptions(2048, 0.6)
+	spawner := &mockSpawner{}
+	manager.SetSpawner(spawner)
 
-	// Verify options are set on manager
-	if manager.maxTokens != 2048 {
-		t.Errorf("manager.maxTokens = %d, want 2048", manager.maxTokens)
+	result := NewSubagentTool(manager).Execute(context.Background(), map[string]any{"task": "inspect"})
+	if result == nil || result.IsError {
+		t.Fatalf("subagent result = %#v", result)
 	}
-	if manager.temperature != 0.6 {
-		t.Errorf("manager.temperature = %f, want 0.6", manager.temperature)
-	}
-	if !manager.hasMaxTokens {
-		t.Error("manager.hasMaxTokens should be true")
-	}
-	if !manager.hasTemperature {
-		t.Error("manager.hasTemperature should be true")
+	if spawner.lastConfig.Model != "test-model" || spawner.lastConfig.MaxTokens != 2048 ||
+		spawner.lastConfig.Temperature != 0.6 {
+		t.Fatalf("child runner config = %#v", spawner.lastConfig)
 	}
 }
 
 // TestSubagentTool_Name verifies tool name
 func TestSubagentTool_Name(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
 
 	if tool.Name() != "subagent" {
@@ -79,8 +37,7 @@ func TestSubagentTool_Name(t *testing.T) {
 
 // TestSubagentTool_Description verifies tool description
 func TestSubagentTool_Description(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
 
 	desc := tool.Description()
@@ -94,8 +51,7 @@ func TestSubagentTool_Description(t *testing.T) {
 
 // TestSubagentTool_Parameters verifies tool parameters schema
 func TestSubagentTool_Parameters(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
 
 	params := tool.Parameters()
@@ -144,10 +100,9 @@ func TestSubagentTool_Parameters(t *testing.T) {
 
 // TestSubagentTool_Execute_Success tests successful execution
 func TestSubagentTool_Execute_Success(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
-	tool.SetSpawner(&mockSpawner{})
+	manager.SetSpawner(&mockSpawner{})
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-123")
 	args := map[string]any{
@@ -198,15 +153,14 @@ func TestSubagentTool_Execute_Success(t *testing.T) {
 }
 
 func TestSubagentToolPreservesStructuredSpawnResult(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
 	want := (&toolshared.ToolResult{ForLLM: "verified", ForUser: "verified"}).
 		WithWriteAudit(toolshared.WriteAuditEntry{Target: "https://example.com", Success: true}).
 		WithDeliverable(&taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
 			Status: taskresult.OutcomePartial, MissingItems: []string{"second item"},
 		}})
-	tool.SetSpawner(&delegateMockSpawner{result: want})
+	manager.SetSpawner(&delegateMockSpawner{result: want})
 
 	got := tool.Execute(context.Background(), map[string]any{"task": "publish items"})
 	if got != want || len(got.WriteAudit) != 1 || got.Deliverable == nil ||
@@ -218,10 +172,9 @@ func TestSubagentToolPreservesStructuredSpawnResult(t *testing.T) {
 
 // TestSubagentTool_Execute_NoLabel tests execution without label
 func TestSubagentTool_Execute_NoLabel(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
-	tool.SetSpawner(&mockSpawner{})
+	manager.SetSpawner(&mockSpawner{})
 
 	ctx := context.Background()
 	args := map[string]any{
@@ -242,8 +195,7 @@ func TestSubagentTool_Execute_NoLabel(t *testing.T) {
 
 // TestSubagentTool_Execute_MissingTask tests error handling for missing task
 func TestSubagentTool_Execute_MissingTask(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
 
 	ctx := context.Background()
@@ -290,12 +242,19 @@ func TestSubagentTool_Execute_NilManager(t *testing.T) {
 	}
 }
 
+func TestSubagentTool_Execute_RequiresChildRunner(t *testing.T) {
+	manager := NewSubagentManager("test-model", t.TempDir())
+	result := NewSubagentTool(manager).Execute(context.Background(), map[string]any{"task": "test task"})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "child runner is unavailable") {
+		t.Fatalf("subagent without child runner = %#v", result)
+	}
+}
+
 // TestSubagentTool_Execute_ContextPassing verifies context is properly used
 func TestSubagentTool_Execute_ContextPassing(t *testing.T) {
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
-	tool.SetSpawner(&mockSpawner{})
+	manager.SetSpawner(&mockSpawner{})
 
 	channel := "test-channel"
 	chatID := "test-chat"
@@ -318,10 +277,9 @@ func TestSubagentTool_Execute_ContextPassing(t *testing.T) {
 // TestSubagentTool_ForUserTruncation verifies long content is truncated for user
 func TestSubagentTool_ForUserTruncation(t *testing.T) {
 	// Create a mock provider that returns very long content
-	provider := &MockLLMProvider{}
-	manager := NewSubagentManager(provider, "test-model", t.TempDir())
+	manager := NewSubagentManager("test-model", t.TempDir())
 	tool := NewSubagentTool(manager)
-	tool.SetSpawner(&mockSpawner{})
+	manager.SetSpawner(&mockSpawner{})
 
 	ctx := context.Background()
 
