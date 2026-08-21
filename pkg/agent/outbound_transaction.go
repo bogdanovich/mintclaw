@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,8 +20,11 @@ type outboundTransaction struct {
 	sourceID string
 	ordinal  atomic.Int64
 
-	mu  sync.Mutex
-	err error
+	mu           sync.Mutex
+	err          error
+	bindDelivery func(string) error
+	validate     func(string) error
+	publications []outboundPublication
 }
 
 type outboundTransactionKey struct{}
@@ -58,11 +62,22 @@ func (p outboundPublication) awaitTerminal(ctx context.Context) (outbox.Intent, 
 }
 
 func withOutboundTransaction(ctx context.Context, sourceID string) context.Context {
+	return withBoundOutboundTransaction(ctx, sourceID, nil, nil)
+}
+
+func withBoundOutboundTransaction(
+	ctx context.Context,
+	sourceID string,
+	bindDelivery func(string) error,
+	validate func(string) error,
+) context.Context {
 	sourceID = strings.TrimSpace(sourceID)
 	if ctx == nil || sourceID == "" {
 		return ctx
 	}
-	ctx = context.WithValue(ctx, outboundTransactionKey{}, &outboundTransaction{sourceID: sourceID})
+	ctx = context.WithValue(ctx, outboundTransactionKey{}, &outboundTransaction{
+		sourceID: sourceID, bindDelivery: bindDelivery, validate: validate,
+	})
 	return toolshared.WithToolRecoverableOutbound(ctx, true)
 }
 
@@ -119,6 +134,91 @@ func (t *outboundTransaction) failure() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.err
+}
+
+func (t *outboundTransaction) bind(deliveryID string) error {
+	if t == nil || t.bindDelivery == nil {
+		return nil
+	}
+	if err := t.bindDelivery(deliveryID); err != nil {
+		t.fail(err)
+		return err
+	}
+	return nil
+}
+
+func (t *outboundTransaction) validatePublication(deliveryID string) error {
+	if t == nil || t.validate == nil {
+		return nil
+	}
+	if err := t.validate(deliveryID); err != nil {
+		t.fail(err)
+		return err
+	}
+	return nil
+}
+
+func (t *outboundTransaction) record(publication outboundPublication) {
+	if t == nil || publication.coordinator == nil || strings.TrimSpace(publication.deliveryID) == "" {
+		return
+	}
+	t.mu.Lock()
+	for _, existing := range t.publications {
+		if existing.deliveryID == publication.deliveryID {
+			t.mu.Unlock()
+			return
+		}
+	}
+	t.publications = append(t.publications, publication)
+	t.mu.Unlock()
+}
+
+func (t *outboundTransaction) publicationSnapshot() []outboundPublication {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]outboundPublication(nil), t.publications...)
+}
+
+func (t *outboundTransaction) awaitDelivered(ctx context.Context) error {
+	var deliveryErr error
+	for _, publication := range t.publicationSnapshot() {
+		intent, err := publication.awaitTerminal(ctx)
+		if err != nil {
+			deliveryErr = errors.Join(deliveryErr, err)
+			continue
+		}
+		switch intent.Status {
+		case outbox.StatusDelivered:
+		case outbox.StatusDefinitelyFailed:
+			deliveryErr = errors.Join(deliveryErr, fmt.Errorf(
+				"delivery %s definitely failed before remote acceptance: %s",
+				intent.ID,
+				firstNonEmptyString(intent.LastError, "channel rejected the message"),
+			))
+		case outbox.StatusAmbiguous:
+			deliveryErr = errors.Join(deliveryErr, fmt.Errorf(
+				"delivery %s has ambiguous remote acceptance: %s",
+				intent.ID,
+				firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
+			))
+		case outbox.StatusAbandoned:
+			deliveryErr = errors.Join(deliveryErr, fmt.Errorf(
+				"delivery %s was abandoned: %s",
+				intent.ID,
+				firstNonEmptyString(intent.LastError, "the owning operation ended"),
+			))
+		default:
+			deliveryErr = errors.Join(deliveryErr, fmt.Errorf(
+				"delivery %s has non-terminal status %s",
+				intent.ID,
+				intent.Status,
+			))
+		}
+	}
+	return errors.Join(t.failure(), deliveryErr)
 }
 
 func transactionAdmission(ctx context.Context, admission finalResponseAdmission) finalResponseAdmission {
@@ -180,9 +280,18 @@ func (al *AgentLoop) admitDurableMessage(
 		transaction.fail(err)
 		return result, err
 	}
+	identity := transaction.nextIdentity(outbox.KindMessage, msg.Channel, msg.ChatID, msg.SessionKey)
+	deliveryID, err := outbox.DeliveryID(identity)
+	if err != nil {
+		transaction.fail(err)
+		return result, err
+	}
+	if err = transaction.bind(deliveryID); err != nil {
+		return result, err
+	}
 	admission, err := coordinator.AdmitMessage(
 		workspace,
-		transaction.nextIdentity(outbox.KindMessage, msg.Channel, msg.ChatID, msg.SessionKey),
+		identity,
 		msg,
 	)
 	if err != nil {
@@ -223,9 +332,18 @@ func (al *AgentLoop) admitDurableMedia(
 		transaction.fail(err)
 		return result, err
 	}
+	identity := transaction.nextIdentity(outbox.KindMedia, msg.Channel, msg.ChatID, msg.SessionKey)
+	deliveryID, err := outbox.DeliveryID(identity)
+	if err != nil {
+		transaction.fail(err)
+		return result, err
+	}
+	if err = transaction.bind(deliveryID); err != nil {
+		return result, err
+	}
 	admission, err := coordinator.AdmitMedia(
 		workspace,
-		transaction.nextIdentity(outbox.KindMedia, msg.Channel, msg.ChatID, msg.SessionKey),
+		identity,
 		msg,
 	)
 	if err != nil {
@@ -300,6 +418,9 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 		coordinator: admission.coordinator,
 		admission:   admission.admission,
 	}
+	if transaction := outboundTransactionFromContext(ctx); transaction != nil {
+		transaction.record(receipt)
+	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
 			if err = commit(ctx); err != nil {
@@ -317,6 +438,14 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
 		return receipt, err
+	}
+	if transaction := outboundTransactionFromContext(ctx); transaction != nil {
+		if err = transaction.validatePublication(receipt.deliveryID); err != nil {
+			if admission.durable {
+				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
+			}
+			return receipt, err
+		}
 	}
 	if commit != nil {
 		if err = commit(ctx); err != nil {
@@ -381,6 +510,9 @@ func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
 		coordinator: admission.coordinator,
 		admission:   admission.admission,
 	}
+	if transaction := outboundTransactionFromContext(ctx); transaction != nil {
+		transaction.record(receipt)
+	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
 			if err = commit(ctx); err != nil {
@@ -398,6 +530,14 @@ func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
 			err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 		}
 		return receipt, err
+	}
+	if transaction := outboundTransactionFromContext(ctx); transaction != nil {
+		if err = transaction.validatePublication(receipt.deliveryID); err != nil {
+			if admission.durable {
+				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
+			}
+			return receipt, err
+		}
 	}
 	if commit != nil {
 		if err = commit(ctx); err != nil {

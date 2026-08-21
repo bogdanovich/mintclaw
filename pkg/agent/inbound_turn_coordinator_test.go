@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -360,6 +361,120 @@ func TestOutboundTransactionPersistsBeforePublishAndSuppressesSameProcessReplay(
 	select {
 	case duplicate := <-msgBus.OutboundChan():
 		t.Fatalf("same-process replay published duplicate: %+v", duplicate)
+	default:
+	}
+}
+
+func TestBoundOutboundTransactionBindsIdentityBeforeIntentCreation(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	root := t.TempDir()
+	installTestOutboundCoordinator(t, al, root)
+	coordinator := al.outboundCoordinator()
+	agent := al.registry.GetDefaultAgent()
+	var boundID string
+	ctx := withBoundOutboundTransaction(
+		t.Context(),
+		"interaction:bind-before-create:final",
+		func(deliveryID string) error {
+			boundID = deliveryID
+			if _, err := coordinator.Get(deliveryID); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("intent existed before binding: %v", err)
+			}
+			return nil
+		},
+		nil,
+	)
+	published, err := al.publishTransactionMessage(ctx, agent.Workspace, bus.OutboundMessage{
+		Channel: "telegram", ChatID: "chat-1", SessionKey: "session-1", Content: "bound final",
+	})
+	if err != nil || !published || boundID == "" {
+		t.Fatalf("publication = (%t, %v), bound ID = %q", published, err, boundID)
+	}
+	intent, err := coordinator.Get(boundID)
+	if err != nil || intent.Status != outbox.StatusPending {
+		t.Fatalf("intent after binding = (%+v, %v)", intent, err)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.DeliveryID != boundID {
+			t.Fatalf("outbound delivery ID = %q, want %q", outbound.DeliveryID, boundID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bound final was not published")
+	}
+}
+
+func TestBoundOutboundTransactionDoesNotCreateIntentWhenBindingFails(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	root := t.TempDir()
+	installTestOutboundCoordinator(t, al, root)
+	coordinator := al.outboundCoordinator()
+	agent := al.registry.GetDefaultAgent()
+	bindErr := errors.New("persist interaction binding")
+	var boundID string
+	ctx := withBoundOutboundTransaction(
+		t.Context(),
+		"interaction:binding-failure:final",
+		func(deliveryID string) error {
+			boundID = deliveryID
+			return bindErr
+		},
+		nil,
+	)
+	published, err := al.publishTransactionMessage(ctx, agent.Workspace, bus.OutboundMessage{
+		Channel: "telegram", ChatID: "chat-1", SessionKey: "session-1", Content: "must not publish",
+	})
+	if published || !errors.Is(err, bindErr) || boundID == "" {
+		t.Fatalf("publication = (%t, %v), bound ID = %q", published, err, boundID)
+	}
+	if _, err = coordinator.Get(boundID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("intent created after failed binding: %v", err)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("failed binding published outbound: %+v", outbound)
+	default:
+	}
+}
+
+func TestBoundOutboundTransactionAbandonsStaleIntentBeforePublication(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	root := t.TempDir()
+	installTestOutboundCoordinator(t, al, root)
+	coordinator := al.outboundCoordinator()
+	agent := al.registry.GetDefaultAgent()
+	staleErr := errors.New("interaction final is stale")
+	var deliveryID string
+	ctx := withBoundOutboundTransaction(
+		t.Context(),
+		"interaction:stale-final:final",
+		func(id string) error {
+			deliveryID = id
+			return nil
+		},
+		func(id string) error {
+			if _, err := coordinator.Abandon(id, outbox.Outcome{Error: staleErr.Error()}); err != nil {
+				return err
+			}
+			return staleErr
+		},
+	)
+	published, err := al.publishTransactionMessage(ctx, agent.Workspace, bus.OutboundMessage{
+		Channel: "telegram", ChatID: "chat-1", SessionKey: "session-1", Content: "stale final",
+	})
+	if published || !errors.Is(err, staleErr) {
+		t.Fatalf("publication = (%t, %v), want stale rejection", published, err)
+	}
+	intent, err := coordinator.Get(deliveryID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("stale intent = (%+v, %v)", intent, err)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("stale intent reached bus: %+v", outbound)
 	default:
 	}
 }

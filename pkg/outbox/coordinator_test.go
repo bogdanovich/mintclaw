@@ -940,6 +940,50 @@ func TestCoordinatorReleaseAllowsCanonicalRedispatch(t *testing.T) {
 	}
 }
 
+func TestCoordinatorInspectionTracksActiveDeliveryOwnership(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	identity := testIdentity()
+	first, err := coordinator.AdmitMessage("/agents/main", identity, bus.OutboundMessage{Content: "first"})
+	if err != nil || !first.Dispatch {
+		t.Fatalf("AdmitMessage(first) = %+v, %v", first, err)
+	}
+	inspection, err := coordinator.Inspect(first.Intent.ID)
+	if err != nil || !inspection.Active || inspection.Intent.Status != StatusPending {
+		t.Fatalf("active pending inspection = %+v, %v", inspection, err)
+	}
+	if err = coordinator.ReleaseAdmission(first.Lease); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err = coordinator.Inspect(first.Intent.ID)
+	if err != nil || inspection.Active || inspection.Intent.Status != StatusPending {
+		t.Fatalf("released pending inspection = %+v, %v", inspection, err)
+	}
+
+	second, err := coordinator.AdmitMessage("/agents/main", identity, bus.OutboundMessage{Content: "second"})
+	if err != nil || !second.Dispatch {
+		t.Fatalf("AdmitMessage(second) = %+v, %v", second, err)
+	}
+	commitTestAdmission(t, coordinator, second.Lease)
+	inspection, err = coordinator.Inspect(first.Intent.ID)
+	if err != nil || !inspection.Active || inspection.Intent.Status != StatusPending {
+		t.Fatalf("published inspection = %+v, %v", inspection, err)
+	}
+	if err = coordinator.BeginAttempt(first.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(first.Intent.ID, Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err = coordinator.Inspect(first.Intent.ID)
+	if err != nil || inspection.Active || inspection.Intent.Status != StatusDelivered {
+		t.Fatalf("delivered inspection = %+v, %v", inspection, err)
+	}
+}
+
 func TestCoordinatorRejectsSecondLiveOwnerForInstanceRoot(t *testing.T) {
 	instanceRoot := t.TempDir()
 	type result struct {

@@ -12,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
-	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -43,7 +42,7 @@ const (
 	interactionBoundaryCancelAfterLoad  = "cancel_after_load"
 	interactionBoundaryPrecomputedFinal = "precomputed_final"
 	interactionBoundaryModelFinal       = "model_final"
-	interactionBoundaryFinalPrepared    = "final_delivery_prepared"
+	interactionBoundaryFinalReady       = "final_ready"
 	interactionBoundaryTaskCompleted    = "task_completion_persisted"
 	interactionBoundaryResumeFlightRead = "resume_flight_read"
 )
@@ -262,10 +261,7 @@ func (al *AgentLoop) beginInteractionCancellationFence(
 }
 
 func interactionFinalizationStarted(record interactions.Record) bool {
-	return record.FinalDelivered ||
-		record.FinalDeliveryState == interactions.DeliveryStateSending ||
-		record.FinalDeliveryState == interactions.DeliveryStateDelivered ||
-		record.FinalDeliveryState == interactions.DeliveryStateAmbiguous
+	return len(record.FinalDeliveryIDs) > 0
 }
 
 func (al *AgentLoop) abortInteractionContinuation(
@@ -2030,7 +2026,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
 		content = "Response recorded."
 	}
-	if record.FinalDelivered || strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(content) == "" {
 		updated, err := registry.Resolve(record.ID, record.Revision)
 		if err == nil {
 			al.dismissInteractionToolFeedback(ctx, updated, inbound, traceScopes)
@@ -2044,18 +2040,11 @@ func (al *AgentLoop) deliverInteractionFinal(
 		MessageKind:  bus.OutboundMessageKindFinalReply,
 		OutboundKind: bus.OutboundKindFinal,
 	}.ApplyToContext(&inbound)
-	if al.channelManager == nil {
-		_, _ = registry.RecordFinalDeliveryAttempt(
-			record.ID, record.Revision, false, "channel manager unavailable",
-		)
-		return fmt.Errorf("channel manager unavailable")
+	if !supportsDurableDeliveryReceipts(al.channelManager) {
+		return fmt.Errorf("durable channel delivery receipts are unavailable")
 	}
-	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
-	if stateErr != nil {
-		return fmt.Errorf("begin final interaction delivery: %w", stateErr)
-	}
-	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
-	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
+	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
 	if inbound.Raw == nil {
 		inbound.Raw = make(map[string]string)
 	}
@@ -2072,41 +2061,24 @@ func (al *AgentLoop) deliverInteractionFinal(
 		return err
 	}
 	message.TraceSettlement = len(message.TraceScopes) > 0
-	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
-	if stateErr != nil {
-		return fmt.Errorf("start final interaction delivery: %w", stateErr)
+	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, interactionWorkspace, record)
+	if _, err := al.publishTransactionMessage(deliveryCtx, interactionWorkspace, message); err != nil {
+		return err
 	}
-	deliveryErr := al.sendInteractionMessage(ctx, message)
-	updated, stateErr := registry.CompleteFinalDelivery(
-		started.ID,
-		started.Revision,
-		deliveryErr == nil,
-		deliveryErr != nil && !channels.DeliveryDefinitelyNotSent(deliveryErr),
-		errString(deliveryErr),
-	)
-	if stateErr != nil {
-		return fmt.Errorf("record final interaction delivery: %w", stateErr)
+	if err := outboundTransactionFromContext(deliveryCtx).awaitDelivered(deliveryCtx); err != nil {
+		return err
 	}
-	if deliveryErr != nil {
-		return deliveryErr
+	current, found := registry.Get(record.ID)
+	if !found {
+		return interactions.ErrNotFound
 	}
-	resolved, err := registry.Resolve(updated.ID, updated.Revision)
+	resolved, err := registry.Resolve(current.ID, current.Revision)
 	if err == nil {
 		al.completeInteractionTask(
 			interactionWorkspace, resolved, content, taskregistry.DeliveryDelivered,
 		)
 	}
 	return err
-}
-
-func prepareInteractionFinalDelivery(
-	registry *interactions.Registry,
-	record interactions.Record,
-) (interactions.Record, error) {
-	if record.FinalDeliveryState == interactions.DeliveryStateNotSent {
-		return record, nil
-	}
-	return registry.BeginFinalDelivery(record.ID, record.Revision)
 }
 
 func interactionResponseReplyTarget(record interactions.Record, inbound bus.InboundContext) string {
@@ -2158,13 +2130,12 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if taskRegistry == nil || taskID == "" {
 		return fmt.Errorf("owning task registry is unavailable")
 	}
+	if !supportsDurableDeliveryReceipts(al.channelManager) {
+		return fmt.Errorf("durable channel delivery receipts are unavailable")
+	}
 	task, ok := taskRegistry.Get(taskID)
 	if !ok {
 		return fmt.Errorf("owning task %q is unavailable", taskID)
-	}
-	prepared, stateErr := prepareInteractionFinalDelivery(registry, record)
-	if stateErr != nil {
-		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
 	var objectiveOutcome *taskresult.Outcome
 	if deliverable != nil {
@@ -2172,14 +2143,14 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
 	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
-	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
 	if err := taskRegistry.CompleteInteractionTaskResult(
 		taskID, record.ID, projection, terminalDeliverable, taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryTaskCompleted)
-	al.dismissInteractionToolFeedback(ctx, prepared, inbound, traceScopes)
+	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
 	mode := toolshared.AsyncDeliveryMode(strings.TrimSpace(task.DeliveryMode))
 	switch mode {
 	case toolshared.AsyncDeliveryParentOnly, toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryUserAndParent:
@@ -2192,24 +2163,11 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 			OutboundKind: bus.OutboundKindFinal,
 		}.ApplyToContext(&inbound)
 	}
-	started, stateErr := registry.StartFinalDelivery(prepared.ID, prepared.Revision)
-	if stateErr != nil {
-		return fmt.Errorf("start task interaction delivery: %w", stateErr)
-	}
+	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, workspace, record)
 	if mode == toolshared.AsyncDeliveryParentOnly &&
 		(record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion) &&
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
-		if err := al.deliverInteractionControlsRemoved(ctx, record, inbound); err != nil {
-			_, recordErr := registry.CompleteFinalDelivery(
-				started.ID,
-				started.Revision,
-				false,
-				!channels.DeliveryDefinitelyNotSent(err),
-				err.Error(),
-			)
-			if recordErr != nil {
-				return fmt.Errorf("record interaction control removal: %w", recordErr)
-			}
+		if err := al.deliverInteractionControlsRemoved(deliveryCtx, workspace, record, inbound); err != nil {
 			return err
 		}
 	}
@@ -2218,6 +2176,9 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}).
 		WithTaskID(taskID).
 		WithAsyncDelivery(mode)
+	if mode != toolshared.AsyncDeliveryParentOnly {
+		result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	}
 	if terminalDeliverable != nil {
 		result.WithDeliverable(taskresult.CloneDeliverable(terminalDeliverable))
 	}
@@ -2240,6 +2201,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	completionID := "interaction:" + record.ID
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		Context:      deliveryCtx,
 		TurnState:    turnState,
 		ToolName:     task.TaskKind,
 		CompletionID: completionID,
@@ -2247,34 +2209,45 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		Decision:     decideAsyncToolResultDelivery(result),
 		TraceScopes:  traceScopes,
 	})
-	task, _ = taskRegistry.Get(taskID)
+	if err := outboundTransactionFromContext(deliveryCtx).awaitDelivered(deliveryCtx); err != nil {
+		return err
+	}
+	task, ok = taskRegistry.Get(taskID)
+	if !ok {
+		return fmt.Errorf("owning task %q is unavailable after delivery", taskID)
+	}
+	if task.DeliveryStatus == taskregistry.DeliveryPending {
+		terminalStatus := taskregistry.DeliveryDelivered
+		if mode == toolshared.AsyncDeliveryParentOnly {
+			terminalStatus = taskregistry.DeliverySessionQueued
+		}
+		al.updateAsyncTaskDeliveryStatus(workspace, taskID, terminalStatus, completionID, "")
+		task, ok = taskRegistry.Get(taskID)
+		if !ok {
+			return fmt.Errorf("owning task %q is unavailable after delivery settlement", taskID)
+		}
+	}
 	success := task.DeliveryStatus == taskregistry.DeliveryDelivered ||
 		task.DeliveryStatus == taskregistry.DeliverySessionQueued ||
 		task.DeliveryStatus == taskregistry.DeliveryNotApplicable
 	detail := task.DeliveryError
-	ambiguous := !success
-	if task.DeliveryStatus == taskregistry.DeliveryParentMissing &&
-		mode == toolshared.AsyncDeliveryParentOnly {
-		ambiguous = false
-	}
-	updated, stateErr := registry.CompleteFinalDelivery(
-		started.ID, started.Revision, success, ambiguous, detail,
-	)
-	if stateErr != nil {
-		return fmt.Errorf("record task interaction delivery: %w", stateErr)
-	}
 	if !success {
 		if detail == "" {
 			detail = "task completion delivery did not reach a final state"
 		}
 		return fmt.Errorf("deliver resumed task completion: %s", detail)
 	}
-	_, err := registry.Resolve(updated.ID, updated.Revision)
+	current, found := registry.Get(record.ID)
+	if !found {
+		return interactions.ErrNotFound
+	}
+	_, err := registry.Resolve(current.ID, current.Revision)
 	return err
 }
 
 func (al *AgentLoop) deliverInteractionControlsRemoved(
 	ctx context.Context,
+	workspace string,
 	record interactions.Record,
 	inbound bus.InboundContext,
 ) error {
@@ -2290,7 +2263,7 @@ func (al *AgentLoop) deliverInteractionControlsRemoved(
 	}.ApplyToContext(&inbound)
 	replyToMessageID := interactionResponseReplyTarget(record, inbound)
 	inbound.ReplyToMessageID = replyToMessageID
-	return al.sendInteractionMessage(ctx, bus.OutboundMessage{
+	_, err := al.publishTransactionMessage(ctx, workspace, bus.OutboundMessage{
 		Channel:          record.Route.Channel,
 		ChatID:           record.Route.ChatID,
 		Context:          inbound,
@@ -2299,6 +2272,7 @@ func (al *AgentLoop) deliverInteractionControlsRemoved(
 		Content:          "Response recorded.",
 		ReplyToMessageID: replyToMessageID,
 	})
+	return err
 }
 
 func (al *AgentLoop) interactionContinuationExpectsUserDelivery(

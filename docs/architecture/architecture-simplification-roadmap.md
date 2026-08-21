@@ -450,9 +450,12 @@ Implementation sequence:
   reports delivery. Retry deadlines are honored, and recovered prompts are
   revalidated against their current interaction immediately before replay and
   settled from that exact admission's terminal receipt.
-- Final-answer and resumed-completion delivery move to the same ownership model
-  in the next focused change, after which the remaining final-delivery fields
-  and direct channel send path are deleted.
+- Final answers and resumed task completions now bind their exact deterministic
+  outbox IDs before intent creation, publish through the same coordinator, and
+  resolve only from exact terminal receipts. Interaction records retain only
+  those IDs; retry counters, transport timestamps, ambiguity flags, and the
+  direct channel-send path are deleted. Recovery derives every delivery
+  decision from the outbox and revalidates stale final intents before replay.
 
 ### D2 — Unify interaction, task, and continuation ownership
 

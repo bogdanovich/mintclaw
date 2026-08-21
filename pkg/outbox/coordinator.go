@@ -88,6 +88,13 @@ type Admission struct {
 	receipt  *admissionReceipt
 }
 
+// DeliveryInspection returns the durable intent together with whether this
+// process currently owns its publication or transport completion.
+type DeliveryInspection struct {
+	Intent Intent
+	Active bool
+}
+
 // OpenCoordinator opens the canonical outbox beneath the MintClaw instance root.
 func OpenCoordinator(instanceRoot string) (*Coordinator, error) {
 	root, err := canonicalInstanceRoot(instanceRoot)
@@ -236,15 +243,32 @@ func (c *Coordinator) MarkAmbiguous(deliveryID string, outcome Outcome) error {
 
 // Get returns the canonical durable intent for a delivery ID.
 func (c *Coordinator) Get(deliveryID string) (Intent, error) {
+	inspection, err := c.Inspect(deliveryID)
+	return inspection.Intent, err
+}
+
+// Inspect atomically returns the canonical intent and its in-process activity.
+func (c *Coordinator) Inspect(deliveryID string) (DeliveryInspection, error) {
 	if c == nil || c.store == nil {
-		return Intent{}, errors.New("outbox coordinator is unavailable")
+		return DeliveryInspection{}, errors.New("outbox coordinator is unavailable")
+	}
+	if err := validateID(deliveryID); err != nil {
+		return DeliveryInspection{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.validateOpenLocked(); err != nil {
-		return Intent{}, err
+		return DeliveryInspection{}, err
 	}
-	return c.store.Get(deliveryID)
+	intent, err := c.store.Get(deliveryID)
+	if err != nil {
+		return DeliveryInspection{}, err
+	}
+	return DeliveryInspection{
+		Intent: intent,
+		Active: c.leases[deliveryID] != 0 || c.publishing[deliveryID] != 0 ||
+			c.published[deliveryID] || c.attempting[deliveryID],
+	}, nil
 }
 
 // AwaitTerminal waits for the transport-terminal outcome belonging to an

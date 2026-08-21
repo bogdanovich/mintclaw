@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -961,7 +962,7 @@ func TestRegistryCompactsOldestEventsBeforeSnapshotBudgetIsExhausted(t *testing.
 	}
 }
 
-func TestRegistryBoundsFinalDeliveryAttempts(t *testing.T) {
+func TestRegistryBoundsFinalDeliveryBindings(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	final := makeWaiting(
 		t,
@@ -983,28 +984,22 @@ func TestRegistryBoundsFinalDeliveryAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range MaxDeliveryAttempts {
-		final, err = registry.RecordFinalDeliveryAttempt(
-			final.ID,
-			final.Revision,
-			false,
-			"definitely not sent",
+	for index := range MaxFinalDeliveries {
+		final, err = registry.BindFinalDelivery(
+			final.ID, final.Revision, fmt.Sprintf("out_final_%d", index),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = registry.RecordFinalDeliveryAttempt(
-		final.ID,
-		final.Revision,
-		false,
-		"definitely not sent",
+	if _, err = registry.BindFinalDelivery(
+		final.ID, final.Revision, "out_final_overflow",
 	); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("final attempt past budget error = %v", err)
+		t.Fatalf("final binding past budget error = %v", err)
 	}
 }
 
-func TestRegistryFinalDeliveryPreparationSurvivesRestartWithoutSpendingAttempt(t *testing.T) {
+func TestRegistryFinalDeliveryBindingsSurviveRestart(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	record := makeWaiting(
 		t,
@@ -1027,12 +1022,16 @@ func TestRegistryFinalDeliveryPreparationSurvivesRestartWithoutSpendingAttempt(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
+	record, err = registry.BindFinalDelivery(record.ID, record.Revision, "out_final_1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.FinalDeliveryState != DeliveryStateNotSent || record.FinalDeliveryTries != 0 {
-		t.Fatalf("prepared final delivery = %#v", record)
+	record, err = registry.BindFinalDelivery(record.ID, record.Revision, "out_final_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(record.FinalDeliveryIDs, []string{"out_final_1", "out_final_2"}) {
+		t.Fatalf("bound final deliveries = %#v", record.FinalDeliveryIDs)
 	}
 
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
@@ -1040,15 +1039,8 @@ func TestRegistryFinalDeliveryPreparationSurvivesRestartWithoutSpendingAttempt(t
 		t.Fatalf("reload prepared final delivery: %v", err)
 	}
 	record, ok := reloaded.Get(record.ID)
-	if !ok || record.FinalDeliveryState != DeliveryStateNotSent || record.FinalDeliveryTries != 0 {
-		t.Fatalf("reloaded prepared final delivery = %#v, found=%t", record, ok)
-	}
-	record, err = reloaded.StartFinalDelivery(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.FinalDeliveryState != DeliveryStateSending || record.FinalDeliveryTries != 1 {
-		t.Fatalf("started final delivery = %#v", record)
+	if !ok || !slices.Equal(record.FinalDeliveryIDs, []string{"out_final_1", "out_final_2"}) {
+		t.Fatalf("reloaded final deliveries = %#v, found=%t", record.FinalDeliveryIDs, ok)
 	}
 }
 
@@ -1075,17 +1067,23 @@ func TestRegistryCancellationCanWinPreparedFinalDeliveryFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
-	if err != nil || record.FinalDeliveryState != DeliveryStateNotSent ||
-		record.FinalDeliveryTries != 0 {
-		t.Fatalf("prepare final delivery = (%#v, %v)", record, err)
+	record, err = registry.BindFinalDelivery(record.ID, record.Revision, "out_final_cancel")
+	if err != nil || len(record.FinalDeliveryIDs) != 1 {
+		t.Fatalf("bind final delivery = (%#v, %v)", record, err)
 	}
 	canceling, err := registry.BeginCancellation(record.ID, record.Revision, "stop_requested")
 	if err != nil || canceling.Status != StatusCanceling {
 		t.Fatalf("begin cancellation = (%#v, %v)", canceling, err)
 	}
-	if _, err = registry.StartFinalDelivery(record.ID, record.Revision); !errors.Is(err, ErrConflict) {
-		t.Fatalf("stale start final delivery error = %v, want conflict", err)
+	if _, err = registry.BindFinalDelivery(
+		record.ID,
+		record.Revision,
+		"out_final_stale",
+	); !errors.Is(
+		err,
+		ErrConflict,
+	) {
+		t.Fatalf("stale final delivery binding error = %v, want conflict", err)
 	}
 }
 

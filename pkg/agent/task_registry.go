@@ -105,6 +105,9 @@ func (al *AgentLoop) updateAsyncTaskDeliveryStatus(
 		return
 	}
 	_ = registry.Update(taskID, func(rec *taskregistry.Record) {
+		if rec.Status == taskregistry.StatusCancelled {
+			return
+		}
 		rec.DeliveryStatus = status
 		if strings.TrimSpace(completionID) != "" {
 			rec.LastCompletionID = strings.TrimSpace(completionID)
