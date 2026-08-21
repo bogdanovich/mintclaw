@@ -291,6 +291,47 @@ func TestSanitizeSchemaForGemini_PreservesCommonUnionDiscriminatorValues(t *test
 	}
 }
 
+func TestSanitizeSchemaForGemini_DoesNotSynthesizeNonStringUnionEnums(t *testing.T) {
+	tests := []struct {
+		name   string
+		typeOf string
+		left   any
+		right  any
+	}{
+		{name: "boolean", typeOf: "boolean", left: true, right: false},
+		{name: "integer", typeOf: "integer", left: 1, right: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schema := map[string]any{
+				"oneOf": []any{
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"value": map[string]any{"type": test.typeOf, "const": test.left},
+						},
+					},
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"value": map[string]any{"type": test.typeOf, "const": test.right},
+						},
+					},
+				},
+			}
+
+			got := SanitizeSchemaForGemini(schema)
+			value := got["properties"].(map[string]any)["value"].(map[string]any)
+			if _, ok := value["enum"]; ok {
+				t.Fatalf("%s union synthesized unsupported enum: %#v", test.typeOf, value)
+			}
+			if value["type"] != test.typeOf {
+				t.Fatalf("value.type = %#v, want %q", value["type"], test.typeOf)
+			}
+		})
+	}
+}
+
 func assertSchemaKeyAbsent(t *testing.T, value any, key string) {
 	t.Helper()
 

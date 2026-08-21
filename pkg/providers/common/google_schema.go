@@ -1,7 +1,6 @@
 package common
 
 import (
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -336,7 +335,7 @@ func preserveCommonFinitePropertyValues(merged map[string]any, branches []map[st
 		for _, branch := range branches {
 			properties, propertiesOK := branch["properties"].(map[string]any)
 			property, propertyOK := properties[name].(map[string]any)
-			branchValues, constrained := finiteSchemaValues(property)
+			branchValues, constrained := finiteStringSchemaValues(property)
 			if !propertiesOK || !propertyOK || !constrained {
 				constrainedInEveryBranch = false
 				break
@@ -359,32 +358,26 @@ func preserveCommonFinitePropertyValues(merged map[string]any, branches []map[st
 	}
 }
 
-func finiteSchemaValues(schema map[string]any) ([]any, bool) {
-	if schema == nil {
+func finiteStringSchemaValues(schema map[string]any) ([]any, bool) {
+	if schema == nil || geminiSchemaBranchType(schema["type"]) != "string" {
 		return nil, false
 	}
 	if value, ok := schema["const"]; ok {
-		if isGeminiEnumValue(value) {
-			return []any{value}, true
-		}
-		return nil, false
+		text, valid := value.(string)
+		return []any{text}, valid
 	}
 	values := sanitizeGeminiEnum(schema["enum"])
-	return values, len(values) > 0
-}
-
-func isGeminiEnumValue(value any) bool {
-	switch value.(type) {
-	case string, bool, float64, int, int32, int64:
-		return true
-	default:
-		return false
+	for _, value := range values {
+		if _, valid := value.(string); !valid {
+			return nil, false
+		}
 	}
+	return values, len(values) > 0
 }
 
 func containsSchemaValue(values []any, candidate any) bool {
 	for _, value := range values {
-		if reflect.DeepEqual(value, candidate) {
+		if value == candidate {
 			return true
 		}
 	}
