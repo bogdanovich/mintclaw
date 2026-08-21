@@ -313,6 +313,35 @@ func TestDeliverAsyncToolCompletion_ParentPublishFailureUpdatesFailed(t *testing
 	}
 }
 
+func TestDeliverAsyncToolCompletion_EmptyParentSynthesisUpdatesFailed(t *testing.T) {
+	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "")
+	taskID := "coordinator-parent-empty"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM:  "parent data",
+		Control: toolshared.ToolControl{TaskID: taskID},
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
+
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState:    ts,
+		ToolName:     "delegate",
+		CompletionID: "completion-parent-empty",
+		Result:       result,
+		Decision:     decideAsyncToolResultDelivery(result),
+	})
+
+	record, _ := al.taskRegistryForWorkspace(workspace).Get(taskID)
+	if record.DeliveryStatus != taskregistry.DeliveryFailed ||
+		!strings.Contains(record.DeliveryError, "no final response") {
+		t.Fatalf("empty parent delivery = %+v", record)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("empty synthesis published outbound message: %+v", outbound)
+	default:
+	}
+}
+
 func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) {
 	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "parent synthesized")
 	taskID := "coordinator-user-and-parent"

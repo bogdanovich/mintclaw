@@ -1917,6 +1917,113 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 }
 
+func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	manager.setSendError(channels.DefiniteNotSentDeliveryError(errors.New("worker unavailable")))
+	coordinator := installInteractionChannelManager(t, al, manager)
+	workspace := agent.Workspace
+	tasks := al.taskRegistryForWorkspace(workspace)
+	const taskID = "subagent-parent-retry"
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "retry in parent", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+		DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
+		InteractionID:  "interaction-parent-retry",
+		Channel:        "discord", ChatID: "chat-1", RequesterSessionKey: "owner-session",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		ID: "interaction-parent-retry", Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: "owner-session", RouteSessionKey: "route-owner",
+			Channel: "discord", ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-task-retry", ToolCallID: "call-task-retry", ToolName: "request_user_input",
+			TaskID: taskID, ContinuationSessionKey: "task-session-retry",
+		},
+		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "yes", Values: map[string]string{"confirm": "yes"}, ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage("task-session-retry", providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-task-retry"}},
+	})
+	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage("task-session-retry", providers.Message{
+		Role: "assistant", Content: "raw child final",
+		Deliverable: &taskresult.Deliverable{Text: "canonical child result"},
+	})
+	inbound := bus.InboundContext{Channel: "discord", ChatID: "chat-1", SenderID: "user-1"}
+	err = al.deliverTaskInteractionFinal(
+		t.Context(), registry, workspace, record, inbound, "raw child final",
+		&taskresult.Deliverable{Text: "canonical child result"}, nil,
+	)
+	if err == nil {
+		t.Fatal("definitely-not-sent parent final unexpectedly succeeded")
+	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded || task.DeliveryStatus != taskregistry.DeliveryPending ||
+		task.LastCompletionID != "interaction:"+record.ID {
+		t.Fatalf("task after failed parent transport = %+v", task)
+	}
+	active, _ := registry.Get(record.ID)
+	if active.Status != interactions.StatusResuming || len(active.FinalDeliveryIDs) != 1 {
+		t.Fatalf("interaction after failed parent transport = %+v", active)
+	}
+	intent, err := coordinator.Get(active.FinalDeliveryIDs[0])
+	if err != nil || intent.Status != outbox.StatusDefinitelyFailed || intent.Attempts != 1 {
+		t.Fatalf("failed parent intent = (%+v, %v)", intent, err)
+	}
+
+	manager.setSendError(nil)
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+	}
+	resolved, _ := registry.Get(record.ID)
+	task, _ = tasks.Get(taskID)
+	intent, err = coordinator.Get(active.FinalDeliveryIDs[0])
+	if resolved.Status != interactions.StatusResolved ||
+		task.DeliveryStatus != taskregistry.DeliverySessionQueued ||
+		err != nil || intent.Status != outbox.StatusDelivered || intent.Attempts != 2 {
+		t.Fatalf(
+			"recovered parent delivery = interaction %+v, task %+v, intent %+v, err %v",
+			resolved,
+			task,
+			intent,
+			err,
+		)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if strings.TrimSpace(outbound.Content) == "" || outbound.Content == "raw child final" {
+			t.Fatalf("retried parent completion = %+v", outbound)
+		}
+	default:
+		t.Fatal("retried parent completion was not delivered")
+	}
+}
+
 func TestInteractionResponseReplyTargetUsesPersistedCallbackMessage(t *testing.T) {
 	record := interactions.Record{
 		Kind:  interactions.KindQuestion,

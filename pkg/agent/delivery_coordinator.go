@@ -99,6 +99,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	if deliveryContext == nil {
 		deliveryContext = context.Background()
 	}
+	deferDeliverySuccess := outboundTransactionFromContext(deliveryContext) != nil
 	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
 			map[string]any{
@@ -130,10 +131,14 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		}
 		switch {
 		case delivered:
+			status := taskregistry.DeliveryDelivered
+			if deferDeliverySuccess {
+				status = taskregistry.DeliveryPending
+			}
 			d.updateDeliveryStatus(
 				ts.workspace,
 				delivery.TaskID,
-				taskregistry.DeliveryDelivered,
+				status,
 				completionID,
 				"",
 			)
@@ -189,10 +194,14 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		}
 		if !delivery.QueueParent {
 			if userDelivered {
+				status := taskregistry.DeliveryDelivered
+				if deferDeliverySuccess {
+					status = taskregistry.DeliveryPending
+				}
 				d.updateDeliveryStatus(
 					ts.workspace,
 					delivery.TaskID,
-					taskregistry.DeliveryDelivered,
+					status,
 					completionID,
 					"",
 				)
@@ -279,7 +288,10 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		Origin:       origin,
 		SenderID:     fmt.Sprintf("async:%s", asyncToolName),
 	})
-	if err == nil && strings.TrimSpace(synthesized) != "" {
+	if err == nil && strings.TrimSpace(synthesized) == "" {
+		err = fmt.Errorf("async completion synthesis returned no final response")
+	}
+	if err == nil {
 		var msg bus.OutboundMessage
 		msg, err = outboundMessageForTraceSettlement(ts, synthesized, req.TraceScopes)
 		if err == nil {
@@ -306,6 +318,14 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 				"chat_id":       ts.chatID,
 				"error":         err.Error(),
 			})
+	} else if deferDeliverySuccess {
+		d.updateDeliveryStatus(
+			ts.workspace,
+			delivery.TaskID,
+			taskregistry.DeliveryPending,
+			completionID,
+			"",
+		)
 	} else if delivery.DeliveryMode == toolshared.AsyncDeliveryParentOnly {
 		d.updateDeliveryStatus(
 			ts.workspace,
