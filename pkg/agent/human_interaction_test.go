@@ -1792,7 +1792,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	installInteractionChannelManager(t, al, manager)
+	coordinator := installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
@@ -1882,8 +1882,14 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		t.Fatalf("parent-only task lost resumed deliverable: %#v", task.Deliverable)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 2 {
 		t.Fatalf("interaction after parent handoff = %#v", resolved)
+	}
+	for _, deliveryID := range resolved.FinalDeliveryIDs {
+		intent, getErr := coordinator.Get(deliveryID)
+		if getErr != nil || intent.Status != outbox.StatusDelivered {
+			t.Fatalf("parent delivery %q = (%+v, %v)", deliveryID, intent, getErr)
+		}
 	}
 	events := registry.ListEvents(record.ID)
 	boundAt, resolvedAt := -1, -1
@@ -1900,17 +1906,14 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 	select {
 	case outbound := <-manager.sent:
-		if outbound.Content == "raw child final" {
-			t.Fatalf("parent-only delivery leaked raw child final: %#v", outbound)
+		metadata := bus.OutboundMetadataFromMessage(outbound)
+		if strings.TrimSpace(outbound.Content) == "" || outbound.Content == "raw child final" ||
+			metadata.OutboundKind != bus.OutboundKindFinal ||
+			metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+			t.Fatalf("parent completion = %#v", outbound)
 		}
-	default:
-	}
-	select {
-	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
-		if outbound.Content == "raw child final" {
-			t.Fatalf("parent-only delivery leaked raw child final: %#v", outbound)
-		}
-	default:
+	case <-time.After(time.Second):
+		t.Fatal("parent completion was not delivered")
 	}
 }
 
@@ -2694,6 +2697,81 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 		}
 	default:
 		t.Fatal("definitely not-sent final was not retried")
+	}
+}
+
+func TestRecoveryRetriesReleasedPendingFinalWithoutRestart(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	coordinator := installInteractionChannelManager(t, al, manager)
+	sessionKey := "session-released-pending-final"
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
+	})
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = sessionKey
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "regenerated final"})
+	record = bindTestInteractionFinal(t, registry, record)
+	admission, err := coordinator.AdmitMessage(
+		agent.Workspace,
+		testInteractionFinalIdentity(record),
+		bus.OutboundMessage{
+			Channel: record.Route.Channel, ChatID: record.Route.ChatID,
+			SessionKey: record.Route.SessionKey, Content: "canonical released final",
+		},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if err = coordinator.ReleaseAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := coordinator.Inspect(admission.Intent.ID)
+	if err != nil || inspection.Active || inspection.Intent.Status != outbox.StatusPending {
+		t.Fatalf("released final = %+v, %v", inspection, err)
+	}
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+	}
+	resolved, _ := registry.Get(record.ID)
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
+		t.Fatalf("resolved interaction = %+v", resolved)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusDelivered || intent.Attempts != 1 {
+		t.Fatalf("retried final = %+v, %v", intent, err)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if outbound.Content != "canonical released final" {
+			t.Fatalf("retried outbound = %+v", outbound)
+		}
+	default:
+		t.Fatal("released pending final was not retried")
 	}
 }
 

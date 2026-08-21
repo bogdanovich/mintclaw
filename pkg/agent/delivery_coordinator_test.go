@@ -189,9 +189,9 @@ func TestAsyncToolCompletionDelivery_UsesCurrentConfigForFiltering(t *testing.T)
 		currentConfig: func() *config.Config {
 			return currentCfg
 		},
-		processCompletion: func(_ context.Context, input AsyncCompletionInput) (string, error) {
+		synthesizeCompletion: func(_ context.Context, input AsyncCompletionInput) (string, error) {
 			gotInput = input
-			return "ok", nil
+			return "", nil
 		},
 	}
 
@@ -286,6 +286,31 @@ func TestDeliverAsyncToolCompletion_ParentOnlyUpdatesSessionQueued(t *testing.T)
 	})
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliverySessionQueued)
 	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+}
+
+func TestDeliverAsyncToolCompletion_ParentPublishFailureUpdatesFailed(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "parent synthesized")
+	taskID := "coordinator-parent-publish-failed"
+	upsertAsyncTaskForTest(t, al, workspace, taskID)
+	result := (&toolshared.ToolResult{
+		ForLLM:  "parent data",
+		Control: toolshared.ToolControl{TaskID: taskID},
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
+	al.bus = failingMessageBus{}
+
+	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+		TurnState:    ts,
+		ToolName:     "delegate",
+		CompletionID: "completion-parent-publish-failed",
+		Result:       result,
+		Decision:     decideAsyncToolResultDelivery(result),
+	})
+
+	record, _ := al.taskRegistryForWorkspace(workspace).Get(taskID)
+	if record.DeliveryStatus != taskregistry.DeliveryFailed ||
+		!strings.Contains(record.DeliveryError, "publish failed") {
+		t.Fatalf("failed parent delivery = %+v", record)
+	}
 }
 
 func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) {

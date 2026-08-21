@@ -47,7 +47,7 @@ type asyncToolCompletionDelivery struct {
 	currentConfig                   func() *config.Config
 	events                          runtimeEventEmitter
 	deliverToUser                   func(context.Context, *turnState, *toolshared.ToolResult, string, []runtimeevents.TraceScope) ([]providers.Attachment, toolResultDeliveryOutcome, error)
-	processCompletion               func(context.Context, AsyncCompletionInput) (string, error)
+	synthesizeCompletion            func(context.Context, AsyncCompletionInput) (string, error)
 	publishOutbound                 func(context.Context, string, bus.OutboundMessage) error
 	asyncTaskDeliveryAlreadyHandled func(workspace, taskID, completionID string) bool
 	recordAsyncTaskDeliveryDecision func(workspace string, decision AsyncDeliveryDecision, completionID, sourceTool string)
@@ -59,10 +59,12 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		return nil
 	}
 	return &asyncToolCompletionDelivery{
-		currentConfig:     al.GetConfig,
-		events:            al.runtimeEventEmitter(),
-		deliverToUser:     al.deliverToolResultToUserWithScopes,
-		processCompletion: al.processAsyncCompletion,
+		currentConfig: al.GetConfig,
+		events:        al.runtimeEventEmitter(),
+		deliverToUser: al.deliverToolResultToUserWithScopes,
+		synthesizeCompletion: func(ctx context.Context, input AsyncCompletionInput) (string, error) {
+			return al.processAsyncCompletionWithDelivery(ctx, input, false)
+		},
 		publishOutbound: func(ctx context.Context, workspace string, msg bus.OutboundMessage) error {
 			_, err := al.publishTransactionMessage(ctx, workspace, msg)
 			return err
@@ -270,13 +272,25 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		asyncCompletionSynthesisTimeout,
 	)
 	defer completionCancel()
-	if _, err := d.processAsyncCompletion(completionCtx, AsyncCompletionInput{
+	synthesized, err := d.synthesizeAsyncCompletion(completionCtx, AsyncCompletionInput{
 		SourceTool:   asyncToolName,
 		CompletionID: completionID,
 		Content:      asyncCompletionPrompt(asyncToolName, content),
 		Origin:       origin,
 		SenderID:     fmt.Sprintf("async:%s", asyncToolName),
-	}); err != nil {
+	})
+	if err == nil && strings.TrimSpace(synthesized) != "" {
+		var msg bus.OutboundMessage
+		msg, err = outboundMessageForTraceSettlement(ts, synthesized, req.TraceScopes)
+		if err == nil {
+			bus.OutboundMetadata{
+				MessageKind:  bus.OutboundMessageKindFinalReply,
+				OutboundKind: bus.OutboundKindFinal,
+			}.ApplyToContext(&msg.Context)
+			err = d.publishMessage(completionCtx, ts.workspace, msg)
+		}
+	}
+	if err != nil {
 		d.updateDeliveryStatus(
 			ts.workspace,
 			delivery.TaskID,
@@ -385,14 +399,14 @@ func outboundMessageForTraceSettlement(
 	return msg, nil
 }
 
-func (d *asyncToolCompletionDelivery) processAsyncCompletion(
+func (d *asyncToolCompletionDelivery) synthesizeAsyncCompletion(
 	ctx context.Context,
 	input AsyncCompletionInput,
 ) (string, error) {
-	if d == nil || d.processCompletion == nil {
+	if d == nil || d.synthesizeCompletion == nil {
 		return "", fmt.Errorf("async completion processor is not initialized")
 	}
-	return d.processCompletion(ctx, input)
+	return d.synthesizeCompletion(ctx, input)
 }
 
 func (d *asyncToolCompletionDelivery) isAsyncTaskDeliveryAlreadyHandled(

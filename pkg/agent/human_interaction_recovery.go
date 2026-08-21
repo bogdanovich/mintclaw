@@ -641,7 +641,7 @@ func (al *AgentLoop) inspectInteractionFinalDeliveries(
 	}
 	allDelivered := true
 	for _, deliveryID := range record.FinalDeliveryIDs {
-		intent, err := coordinator.Get(deliveryID)
+		inspection, err := coordinator.Inspect(deliveryID)
 		if err != nil {
 			allDelivered = false
 			if errors.Is(err, os.ErrNotExist) {
@@ -649,12 +649,21 @@ func (al *AgentLoop) inspectInteractionFinalDeliveries(
 			}
 			return interactionFinalDeliveryInspection{wait: true}
 		}
+		intent := inspection.Intent
 		switch intent.Status {
 		case outbox.StatusDelivered:
-		case outbox.StatusPending, outbox.StatusAttempting:
+		case outbox.StatusPending:
+			if inspection.Active {
+				return interactionFinalDeliveryInspection{wait: true}
+			}
+			allDelivered = false
+		case outbox.StatusAttempting:
 			return interactionFinalDeliveryInspection{wait: true}
 		case outbox.StatusDefinitelyFailed:
 			allDelivered = false
+			if inspection.Active {
+				return interactionFinalDeliveryInspection{wait: true}
+			}
 			if intent.RetryExhausted() {
 				return interactionFinalDeliveryInspection{
 					failureCode:   "final_delivery_exhausted",
