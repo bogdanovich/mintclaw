@@ -100,7 +100,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		deliveryContext = context.Background()
 	}
 	deferDeliverySuccess := outboundTransactionFromContext(deliveryContext) != nil
-	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
+	if !deferDeliverySuccess && d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
 			map[string]any{
 				"tool":          asyncToolName,

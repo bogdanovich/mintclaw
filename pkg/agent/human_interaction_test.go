@@ -1995,6 +1995,13 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 	if err != nil || intent.Status != outbox.StatusDefinitelyFailed || intent.Attempts != 1 {
 		t.Fatalf("failed parent intent = (%+v, %v)", intent, err)
 	}
+	// The canonical outbox failure must remain replayable even if the task read
+	// model is stale and already claims success.
+	if err = tasks.Update(taskID, func(record *taskregistry.Record) {
+		record.DeliveryStatus = taskregistry.DeliverySessionQueued
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	manager.setSendError(nil)
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
