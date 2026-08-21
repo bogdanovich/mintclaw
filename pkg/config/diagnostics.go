@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,9 @@ import (
 )
 
 func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
-	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return wrapJSONError(data, err, label)
+	raw, err := parseUniqueJSON(data, label)
+	if err != nil {
+		return err
 	}
 
 	unknownFields := collectUnknownJSONFields(raw, reflect.TypeOf(target), "")
@@ -33,6 +34,80 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 		return wrapJSONError(data, err, label)
 	}
 	return nil
+}
+
+// ValidateConfigJSON rejects malformed configuration JSON and duplicate object
+// fields before callers normalize or merge the document.
+func ValidateConfigJSON(data []byte) error {
+	_, err := parseUniqueJSON(data, "config")
+	return err
+}
+
+func parseUniqueJSON(data []byte, label string) (any, error) {
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, wrapJSONError(data, err, label)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := rejectDuplicateJSONFields(decoder, label, ""); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func rejectDuplicateJSONFields(decoder *json.Decoder, label, path string) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", label, err)
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, keyErr := decoder.Token()
+			if keyErr != nil {
+				return fmt.Errorf("parse %s object field: %w", label, keyErr)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("parse %s object field: expected string, got %T", label, keyToken)
+			}
+			fieldPath := joinJSONFieldPath(path, key)
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("%s contains duplicate field: %s", label, fieldPath)
+			}
+			seen[key] = struct{}{}
+			if err := rejectDuplicateJSONFields(decoder, label, fieldPath); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return fmt.Errorf("parse %s object: %w", label, err)
+		}
+	case '[':
+		for index := 0; decoder.More(); index++ {
+			itemPath := fmt.Sprintf("%s[%d]", path, index)
+			if err := rejectDuplicateJSONFields(decoder, label, itemPath); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return fmt.Errorf("parse %s array: %w", label, err)
+		}
+	}
+	return nil
+}
+
+func joinJSONFieldPath(path, field string) string {
+	if path == "" {
+		return field
+	}
+	return path + "." + field
 }
 
 func DiagnosticSummary(err error) string {

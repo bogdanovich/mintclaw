@@ -1489,6 +1489,57 @@ func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsDuplicateFieldsWithoutRewriting(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		wantField string
+	}{
+		{
+			name: "top_level_version",
+			raw: fmt.Sprintf(
+				`{"version":%d,"version":%d}`,
+				CurrentVersion+1,
+				CurrentVersion,
+			),
+			wantField: "version",
+		},
+		{
+			name: "nested_field",
+			raw: fmt.Sprintf(
+				`{"version":%d,"tools":{"web":{"fetch_limit_bytes":1,"fetch_limit_bytes":2}}}`,
+				CurrentVersion,
+			),
+			wantField: "tools.web.fetch_limit_bytes",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(test.raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			_, err := LoadConfig(configPath)
+			if err == nil || !strings.Contains(err.Error(), "duplicate field: "+test.wantField) {
+				t.Fatalf("LoadConfig() error = %v, want duplicate field %q", err, test.wantField)
+			}
+			stored, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error: %v", err)
+			}
+			if string(stored) != test.raw {
+				t.Fatalf("LoadConfig() rewrote rejected config to %q", stored)
+			}
+			backups, err := filepath.Glob(configPath + ".*.bak")
+			if err != nil || len(backups) != 0 {
+				t.Fatalf("LoadConfig() backups = %v, %v", backups, err)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RejectsDeprecatedEditFileTool(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")

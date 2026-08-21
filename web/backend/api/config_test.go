@@ -251,6 +251,29 @@ func TestHandleUpdateConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) 
 			)
 		})
 	}
+
+	duplicateVersionBody := append(
+		[]byte(fmt.Sprintf(`{"version":%d,`, config.CurrentVersion+1)),
+		currentBody[1:]...,
+	)
+	assertRejectedConfigWritePreservesDocuments(
+		t,
+		configPath,
+		http.MethodPut,
+		duplicateVersionBody,
+		"duplicate field: version",
+	)
+	duplicateToolsBody := append(
+		[]byte(`{"tools":{"spawn_status":{"enabled":true}},`),
+		currentBody[1:]...,
+	)
+	assertRejectedConfigWritePreservesDocuments(
+		t,
+		configPath,
+		http.MethodPut,
+		duplicateToolsBody,
+		"duplicate field: tools",
+	)
 }
 
 func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
@@ -271,6 +294,16 @@ func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 			name:      "removed_field",
 			body:      `{"bindings":[]}`,
 			wantError: "unknown field(s): bindings",
+		},
+		{
+			name:      "duplicate_version",
+			body:      fmt.Sprintf(`{"version":%d,"version":%d}`, config.CurrentVersion+1, config.CurrentVersion),
+			wantError: "duplicate field: version",
+		},
+		{
+			name:      "nested_duplicate_field",
+			body:      `{"gateway":{"port":1234,"port":2345}}`,
+			wantError: "duplicate field: gateway.port",
 		},
 	}
 	for _, test := range tests {
