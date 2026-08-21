@@ -1,6 +1,9 @@
 package common
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestSanitizeSchemaForGemini_DereferencesRefsAndFlattensUnions(t *testing.T) {
 	schema := map[string]any{
@@ -231,6 +234,61 @@ func TestSanitizeSchemaForGemini_HandlesRecursiveRefs(t *testing.T) {
 		t.Fatalf("tree.type = %#v, want object", tree["type"])
 	}
 	assertSchemaKeyAbsent(t, tree, "$ref")
+}
+
+func TestSanitizeSchemaForGemini_PreservesCommonUnionDiscriminatorValues(t *testing.T) {
+	schema := map[string]any{
+		"oneOf": []any{
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"kind": map[string]any{"type": "string", "const": "navigate"},
+					"url":  map[string]any{"type": "string"},
+				},
+				"required": []string{"kind", "url"},
+			},
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"kind":      map[string]any{"type": "string", "const": "scroll"},
+					"direction": map[string]any{"type": "string"},
+				},
+				"required": []string{"kind", "direction"},
+			},
+		},
+	}
+
+	got := SanitizeSchemaForGemini(schema)
+	properties := got["properties"].(map[string]any)
+	kind := properties["kind"].(map[string]any)
+	want := []any{"navigate", "scroll"}
+	if !reflect.DeepEqual(kind["enum"], want) {
+		t.Fatalf("kind.enum = %#v, want %#v", kind["enum"], want)
+	}
+	if _, ok := kind["const"]; ok {
+		t.Fatalf("kind retained unsupported const: %#v", kind)
+	}
+
+	unconstrained := map[string]any{
+		"oneOf": []any{
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"kind": map[string]any{"type": "string", "const": "navigate"},
+				},
+			},
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"kind": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	unconstrainedKind := SanitizeSchemaForGemini(unconstrained)["properties"].(map[string]any)["kind"].(map[string]any)
+	if _, ok := unconstrainedKind["enum"]; ok {
+		t.Fatalf("partially unconstrained kind was narrowed: %#v", unconstrainedKind)
+	}
 }
 
 func assertSchemaKeyAbsent(t *testing.T, value any, key string) {

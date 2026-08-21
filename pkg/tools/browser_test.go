@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -1013,6 +1014,25 @@ func TestBrowserActSchemaUsesExclusiveTypedActionShapes(t *testing.T) {
 	if _, ok := dialogProperties["prompt_provided"]; ok ||
 		!slices.Contains(dialog["required"].([]string), "dialog_id") {
 		t.Fatalf("dialog authority schema = %#v", dialog)
+	}
+}
+
+func TestBrowserActSchemaSimpleTransformPreservesActionKinds(t *testing.T) {
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Parameters()
+	transformed := providercommon.SanitizeSchemaForGoogle(parameters)
+	properties := transformed["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+	actionProperties := action["properties"].(map[string]any)
+	kind := actionProperties["kind"].(map[string]any)
+
+	want := make([]any, 0, len(browseraction.Kinds()))
+	for _, actionKind := range browseraction.Kinds() {
+		want = append(want, string(actionKind))
+	}
+	if !reflect.DeepEqual(kind["enum"], want) {
+		t.Fatalf("transformed browser action kinds = %#v, want %#v", kind["enum"], want)
 	}
 }
 
