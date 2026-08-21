@@ -235,12 +235,12 @@ Important activation rules:
 | Hardware | `i2c`, `spi`, `serial` | Hardware access for supported devices and boards |
 | Messaging | `message`, `reaction` | Send outbound messages and reactions through channel integrations |
 | Media | `send_file`, `load_image`, `send_tts` | Send files, load local images into context, generate TTS output |
-| Subagents | `spawn`, `subagent`, `spawn_status`, `delegate` | Background tasks, synchronous sub-turns, task status, multi-agent delegation |
+| Subagents | `spawn`, `subagent`, `delegate`, `task_status` | Background tasks, synchronous sub-turns, durable status, multi-agent delegation |
 
 ### Tool Registration Notes
 
 - `send_tts` is registered only when a TTS provider is available.
-- `spawn` and `spawn_status` require `subagent` support to be enabled.
+- `spawn` requires `subagent` support to be enabled.
 - `delegate` is auto-registered only when more than one agent exists.
 - MCP discovery tools are relevant only when deferred MCP discovery is enabled.
 - `message` can be configured for outbound media as well as plain text.
@@ -256,7 +256,7 @@ The core idea is:
 - use `spawn` for background work that should continue without blocking the current turn
 - use `subagent` for an isolated synchronous sub-task when the parent needs the result now
 - use `delegate` to hand a task to a specific peer agent with its own identity, model, workspace, and tools
-- use `spawn_status` or `/subagents` to inspect what is currently running
+- use `task_status` for durable status or `/subagents` for the live turn tree
 
 ### Choosing the Right Subagent Tool
 
@@ -265,7 +265,7 @@ The core idea is:
 | `spawn` | Async background task | Web research, API polling, long scans, work that can report back later |
 | `subagent` | Sync isolated sub-turn | Focused analysis, transformation, or verification that must return before the parent continues |
 | `delegate` | Sync handoff to named peer agent | Work that should run as a specialized agent rather than as a generic child turn |
-| `spawn_status` | Inspection/status only | Check running, completed, failed, or canceled spawned tasks |
+| `task_status` | Durable task inspection | Check spawn, delegate, cron, and other runtime tasks |
 
 ### Specialized Peer Agents
 
@@ -329,7 +329,7 @@ Subagent execution semantics that matter:
 - `spawn` returns immediately and launches background work in a goroutine
 - `subagent` waits for completion and returns the result directly
 - `delegate` is synchronous and runs as the target peer agent instead of a generic child task
-- `spawn_status` is scoped to the current conversation when channel/chat context exists
+- `task_status` is scoped to the current conversation when channel/chat context exists
 - all subagents still share the same workspace security boundary; they do not bypass sandbox or path restrictions
 
 Runtime limits and lifecycle rules:
@@ -393,7 +393,7 @@ delegate(
 
 For live visibility:
 
-- call `spawn_status` to inspect one task or list visible tasks in the current conversation
+- call `task_status` to inspect one task or list visible tasks in the current conversation
 - use `/subagents` in chat channels to show the active subagent tree for the current session
 
 ## Voice, Transcription, and TTS

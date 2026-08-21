@@ -23,7 +23,6 @@ import (
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	hardwaretools "github.com/bogdanovich/mintclaw/pkg/tools/hardware"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
-	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func NewAgentLoop(
@@ -387,131 +386,32 @@ func registerSharedTools(
 			}
 		}
 
-		// Spawn and spawn_status tools share a SubagentManager. task_status uses
-		// the same durable registry, but does not require the SubagentManager.
-		// Construct the manager when either spawn-specific tool is enabled.
 		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
-		spawnStatusEnabled := cfg.Tools.IsToolEnabled("spawn_status")
-		if (spawnEnabled || spawnStatusEnabled) && cfg.Tools.IsToolEnabled("subagent") {
+		subagentEnabled := cfg.Tools.IsToolEnabled("subagent")
+		if spawnEnabled && subagentEnabled {
 			subagentManager := tools.NewSubagentManagerWithRegistry(
-				provider,
 				agent.Model,
-				agent.Workspace,
 				taskRegistry,
 			)
 			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
-			subagentManager.SetLoopDetection(agent.ToolLoopDetection)
-
-			// Inject a media resolver so the legacy RunToolLoop fallback path can
-			// resolve media:// refs in the same way the main AgentLoop does.
-			// This keeps subagent vision support working even when the optimized
-			// sub-turn spawner path is unavailable.
-			subagentManager.SetMediaResolver(func(msgs []providers.Message) []providers.Message {
-				return resolveMediaRefs(
-					msgs,
-					al.mediaStore,
-					cfg.Agents.Defaults.GetMaxMediaSize(),
-					0,
-				)
+			subagentManager.SetSpawner(NewSubTurnSpawner(al))
+			spawnTool := tools.NewSpawnTool(subagentManager)
+			currentAgentID := agentID
+			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
+				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			})
+			spawnTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+				if targetAgentID == "" {
+					targetAgentID = currentAgentID
+				}
+				target, ok := registry.GetAgent(targetAgentID)
+				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
 			})
 
-			// Set the spawner that links into AgentLoop's turnState
-			subagentManager.SetSpawner(func(
-				ctx context.Context,
-				taskID string,
-				task, label, targetAgentID string,
-				objectiveItems []toolshared.ObjectiveSpec,
-				tls *tools.ToolRegistry,
-				maxTokens int,
-				temperature float64,
-				hasMaxTokens, hasTemperature bool,
-			) (*toolshared.ToolResult, error) {
-				// 1. Recover parent Turn State from Context
-				parentTS := turnStateFromContext(ctx)
-				if parentTS == nil {
-					// Fallback: If no turnState exists in context, create an isolated ad-hoc root turn state
-					// so that the tool can still function outside of an agent loop (e.g. tests, raw invocations).
-					parentTS = &turnState{
-						ctx:            ctx,
-						turnID:         "adhoc-root",
-						depth:          0,
-						session:        nil, // Ephemeral session not needed for adhoc spawn
-						pendingResults: make(chan *toolshared.ToolResult, 16),
-						concurrencySem: make(chan struct{}, 5),
-					}
-				}
-
-				// 2. Build Tools slice from registry
-				var tlSlice []toolshared.Tool
-				for _, name := range tls.List() {
-					if t, ok := tls.Get(name); ok {
-						tlSlice = append(tlSlice, t)
-					}
-				}
-
-				// 3. System Prompt
-				systemPrompt := "You are a subagent. Complete the given task independently and report the result.\n" +
-					"You have access to tools - use them as needed to complete your task.\n" +
-					"After completing the task, provide a clear summary of what was done.\n\n" +
-					"Task: " + task
-
-				// 4. Resolve Model
-				modelToUse := agent.Model
-				if targetAgentID != "" {
-					if targetAgent, ok := al.GetRegistry().GetAgent(targetAgentID); ok {
-						modelToUse = targetAgent.Model
-					}
-				}
-
-				// 5. Build SubTurnConfig
-				cfg := SubTurnConfig{
-					TaskID:         taskID,
-					Model:          modelToUse,
-					Tools:          tlSlice,
-					SystemPrompt:   systemPrompt,
-					ObjectiveItems: objectiveItems,
-				}
-				if hasMaxTokens {
-					cfg.MaxTokens = maxTokens
-				}
-
-				// 6. Spawn SubTurn
-				return spawnSubTurn(ctx, al, parentTS, cfg)
-			})
-
-			// Clone the parent's tool registry so subagents can use all tools
-			// registered so far (file, web, etc.) but NOT spawn/spawn_status/task_status
-			// which are added below — preventing recursive subagent spawning.
-			subagentTools := agent.Tools.Clone()
-			subagentTools.Unregister("request_user_input")
-			subagentManager.SetTools(subagentTools)
-			if spawnEnabled {
-				spawnTool := tools.NewSpawnTool(subagentManager)
-				spawnTool.SetSpawner(NewSubTurnSpawner(al))
-				currentAgentID := agentID
-				spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
-					return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-				})
-				spawnTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-					if targetAgentID == "" {
-						targetAgentID = currentAgentID
-					}
-					target, ok := registry.GetAgent(targetAgentID)
-					return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
-				})
-
-				registerToolIfAllowed(agent, spawnTool)
-
-				// Also register the synchronous subagent tool
-				subagentTool := tools.NewSubagentTool(subagentManager)
-				subagentTool.SetSpawner(NewSubTurnSpawner(al))
-				registerToolIfAllowed(agent, subagentTool)
-			}
-			if spawnStatusEnabled {
-				registerToolIfAllowed(agent, tools.NewSpawnStatusTool(subagentManager))
-			}
-		} else if (spawnEnabled || spawnStatusEnabled) && !cfg.Tools.IsToolEnabled("subagent") {
-			logger.WarnCF("agent", "spawn/spawn_status tools require subagent to be enabled", nil)
+			registerToolIfAllowed(agent, spawnTool)
+			registerToolIfAllowed(agent, tools.NewSubagentTool(subagentManager))
+		} else if spawnEnabled {
+			logger.WarnCF("agent", "spawn tool requires subagent to be enabled", nil)
 		}
 
 		if cfg.Tools.IsToolEnabled("task_status") {

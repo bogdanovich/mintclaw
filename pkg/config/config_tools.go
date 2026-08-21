@@ -342,7 +342,6 @@ type ToolsConfig struct {
 	SendTTS          ToolConfig                  `json:"send_tts"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SEND_TTS_"`
 	SearchFiles      ToolConfig                  `json:"search_files"               yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SEARCH_FILES_"`
 	Spawn            ToolConfig                  `json:"spawn"                      yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SPAWN_"`
-	SpawnStatus      ToolConfig                  `json:"spawn_status"               yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SPAWN_STATUS_"`
 	SPI              ToolConfig                  `json:"spi"                        yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SPI_"`
 	Subagent         ToolConfig                  `json:"subagent"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SUBAGENT_"`
 	UpdatePlan       ToolConfig                  `json:"update_plan"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_UPDATE_PLAN_"`

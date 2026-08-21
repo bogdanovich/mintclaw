@@ -364,7 +364,7 @@ Exit criteria:
 - no `completionPayloadForLegacyStorage`; and
 - no persisted or rendered `Legacy completion` path.
 
-### T2 — Remove legacy task and subagent APIs
+### T2a — Remove legacy task and subagent APIs
 
 Depends on: T1
 
@@ -374,21 +374,38 @@ Scope:
 - require the current `AgentLoop` child runner;
 - remove `spawn_status` and use `task_status` as the sole status tool;
 - remove spawn-only projections and compatibility wording;
-- split stable execution output from suspension/task control and delivery
-  directives in `ToolResult`; and
 - update tool allowlists, prompts, schemas, docs, and fixtures atomically.
 
 Tests:
 
 - spawn, delegate, wait, cancel, and status use only the durable task path;
-- unavailable child execution fails explicitly instead of falling back; and
-- task output cannot express impossible legacy/current combinations.
+- unavailable child execution fails explicitly instead of falling back.
 
 Exit criteria:
 
 - one task registry, one child execution path, and one status tool;
-- `ToolResult` does not contain deprecated delivery or completion fields; and
 - no test-only compatibility adapter remains in production code.
+
+### T2b — Separate tool output, control, and delivery
+
+Depends on: T2a
+
+Scope:
+
+- split stable execution output from suspension/task control and delivery
+  directives in `ToolResult`;
+- make each layer consume only the part of the result it owns; and
+- update tool schemas, prompts, and fixtures atomically.
+
+Tests:
+
+- task output cannot express impossible legacy/current combinations; and
+- suspension and delivery directives do not mutate produced output.
+
+Exit criteria:
+
+- `ToolResult` does not contain deprecated delivery or completion fields; and
+- output, control, and delivery each have one explicit owner.
 
 ### D1 — Make outbox the sole delivery lifecycle owner
 

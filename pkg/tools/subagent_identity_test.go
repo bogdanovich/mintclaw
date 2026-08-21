@@ -8,20 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func NewSubagentManager(
-	provider providers.LLMProvider,
 	defaultModel, workspace string,
 ) *SubagentManager {
 	return NewSubagentManagerWithRegistry(
-		provider,
 		defaultModel,
-		workspace,
 		taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace)),
 	)
 }
@@ -31,15 +27,10 @@ func TestSubagentManagersSharingRegistryAllocateDistinctTaskIDs(t *testing.T) {
 	registry := taskregistry.NewRegistry(
 		taskregistry.WorkspaceStorePath(workspace),
 	)
-	first := NewSubagentManagerWithRegistry(
-		&MockLLMProvider{}, "model", workspace, registry,
-	)
-	second := NewSubagentManagerWithRegistry(
-		&MockLLMProvider{},
-		"model",
-		workspace+string(os.PathSeparator)+".",
-		registry,
-	)
+	first := NewSubagentManagerWithRegistry("model", registry)
+	second := NewSubagentManagerWithRegistry("model", registry)
+	first.SetSpawner(&mockSpawner{})
+	second.SetSpawner(&mockSpawner{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -87,9 +78,8 @@ func TestSubagentSpawnFailsBeforeLaunchWhenTaskCreateFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := taskregistry.NewRegistry(filepath.Join(blocked, "tasks.json"))
-	manager := NewSubagentManagerWithRegistry(
-		&MockLLMProvider{}, "model", root, registry,
-	)
+	manager := NewSubagentManagerWithRegistry("model", registry)
+	manager.SetSpawner(&mockSpawner{})
 
 	_, err := manager.Spawn(
 		context.Background(),
@@ -104,40 +94,40 @@ func TestSubagentSpawnFailsBeforeLaunchWhenTaskCreateFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "persist spawned subagent") {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	if tasks := manager.ListTaskCopies(); len(tasks) != 0 {
-		t.Fatalf("failed durable create published in-memory tasks: %#v", tasks)
+	if tasks := registry.List(); len(tasks) != 0 {
+		t.Fatalf("failed durable create published task records: %#v", tasks)
 	}
 }
 
 func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 	registry := taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
-	manager := NewSubagentManagerWithRegistry(
-		&MockLLMProvider{}, "model", t.TempDir(), registry,
-	)
-	task := &SubagentTask{
-		ID: "subagent-" + strings.Repeat("a", 36), Task: "test",
-		Status: "running", Created: time.Now().UnixMilli(),
+	manager := NewSubagentManagerWithRegistry("model", registry)
+	now := time.Now().UnixMilli()
+	task := taskregistry.Record{
+		TaskID: "subagent-" + strings.Repeat("a", 36), Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "test", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending, CreatedAt: now, StartedAt: now,
 	}
-	if err := manager.createTask(task); err != nil {
+	if err := registry.Create(task); err != nil {
 		t.Fatal(err)
 	}
-	created, _ := registry.Get(task.ID)
-	task.Created = created.CreatedAt + int64(time.Hour/time.Millisecond)
-	if err := registry.Update(task.ID, func(record *taskregistry.Record) {
+	created, _ := registry.Get(task.TaskID)
+	if err := registry.Update(task.TaskID, func(record *taskregistry.Record) {
 		record.InteractionID = "interaction-1"
 		record.Deliverable = &taskresult.Deliverable{Text: "existing"}
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.recordTask(
-		task,
+	if err := manager.updateTask(
+		task.TaskID,
 		taskregistry.StatusSucceeded,
 		taskregistry.DeliveryDelivered,
 		"done",
+		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
-	completed, _ := registry.Get(task.ID)
+	completed, _ := registry.Get(task.TaskID)
 	if completed.GenerationID != created.GenerationID ||
 		completed.CreatedAt != created.CreatedAt ||
 		completed.StartedAt != created.StartedAt ||
@@ -152,25 +142,25 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 
 func TestSubagentResultPersistsTerminalStateAndPayloadTogether(t *testing.T) {
 	registry := taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
-	manager := NewSubagentManagerWithRegistry(
-		&MockLLMProvider{}, "model", t.TempDir(), registry,
-	)
-	task := &SubagentTask{
-		ID: "subagent-" + strings.Repeat("b", 36), Task: "test",
-		Status: "running", Created: time.Now().UnixMilli(),
+	manager := NewSubagentManagerWithRegistry("model", registry)
+	now := time.Now().UnixMilli()
+	task := taskregistry.Record{
+		TaskID: "subagent-" + strings.Repeat("b", 36), Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "test", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending, CreatedAt: now, StartedAt: now,
 	}
-	if err := manager.createTask(task); err != nil {
+	if err := registry.Create(task); err != nil {
 		t.Fatal(err)
 	}
 
-	manager.recordTaskResult(task, &toolshared.ToolResult{
+	manager.recordTaskResult(task.TaskID, &toolshared.ToolResult{
 		ForLLM: "done",
 		Deliverable: &taskresult.Deliverable{
 			Text: "structured result",
 		},
 	})
 
-	completed, ok := registry.Get(task.ID)
+	completed, ok := registry.Get(task.TaskID)
 	if !ok {
 		t.Fatal("completed task not found")
 	}
@@ -180,7 +170,7 @@ func TestSubagentResultPersistsTerminalStateAndPayloadTogether(t *testing.T) {
 		completed.Deliverable.Text != "structured result" {
 		t.Fatalf("completed durable task = %#v", completed)
 	}
-	events := registry.ListEvents(task.ID)
+	events := registry.ListEvents(task.TaskID)
 	statusChanges := 0
 	for _, event := range events {
 		if event.Type == taskregistry.EventTaskStatusChanged {

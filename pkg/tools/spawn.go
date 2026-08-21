@@ -10,10 +10,6 @@ import (
 
 type SpawnTool struct {
 	manager                    *SubagentManager
-	spawner                    SubTurnSpawner
-	defaultModel               string
-	maxTokens                  int
-	temperature                float64
 	allowlistCheck             func(targetAgentID string) bool
 	requiresObjectiveChecklist func(targetAgentID string) bool
 }
@@ -22,45 +18,7 @@ type SpawnTool struct {
 var _ toolshared.AsyncExecutor = (*SpawnTool)(nil)
 
 func NewSpawnTool(manager *SubagentManager) *SpawnTool {
-	if manager == nil {
-		return &SpawnTool{}
-	}
-	return &SpawnTool{
-		manager:      manager,
-		defaultModel: manager.defaultModel,
-		maxTokens:    manager.maxTokens,
-		temperature:  manager.temperature,
-	}
-}
-
-// SetSpawner sets the SubTurnSpawner for direct sub-turn execution.
-func (t *SpawnTool) SetSpawner(spawner SubTurnSpawner) {
-	t.spawner = spawner
-	if t.manager != nil && spawner != nil {
-		t.manager.SetSpawner(func(
-			ctx context.Context,
-			taskID string,
-			task, label, agentID string,
-			objectiveItems []toolshared.ObjectiveSpec,
-			tools *ToolRegistry,
-			maxTokens int,
-			temperature float64,
-			hasMaxTokens, hasTemperature bool,
-		) (*toolshared.ToolResult, error) {
-			return spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				TaskID:         taskID,
-				TargetAgentID:  strings.TrimSpace(agentID),
-				Model:          t.defaultModel,
-				Tools:          nil,
-				SystemPrompt:   buildSpawnSystemPrompt(task, label),
-				MaxTokens:      maxTokens,
-				Temperature:    temperature,
-				Async:          false,
-				Critical:       true,
-				ObjectiveItems: objectiveItems,
-			})
-		})
-	}
+	return &SpawnTool{manager: manager}
 }
 
 func (t *SpawnTool) Name() string {
@@ -170,8 +128,8 @@ func (t *SpawnTool) execute(
 		)
 	}
 
-	// Preferred path: route through SubagentManager so spawned tasks are visible
-	// in both the spawn-specific status view and the generic task registry.
+	// Route through SubagentManager so admission and completion share the
+	// canonical task registry.
 	if t.manager != nil {
 		wrappedCallback := cb
 		if cb != nil {
