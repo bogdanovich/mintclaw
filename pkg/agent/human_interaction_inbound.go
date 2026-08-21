@@ -1640,16 +1640,17 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 	}
 	var resumedTurn turnResult
 	finalContent, runErr := al.runAgentLoop(ctx, agent, processOptions{
-		ModelBinding:               modelBinding,
-		TaskID:                     record.Origin.TaskID,
-		InteractionWorkspace:       interactionWorkspace,
-		InteractionSessionKey:      record.Route.SessionKey,
-		InteractionRouteKey:        routeSessionKey,
-		InteractionOriginExecution: record.Origin.ExecutionID,
-		InteractionOriginContext:   cloneInboundContext(record.Origin.ExecutionContext),
-		ObjectiveChecklist:         runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
-		TurnStatus:                 &turnStatus,
-		TurnResult:                 &resumedTurn,
+		ModelBinding:                modelBinding,
+		TaskID:                      record.Origin.TaskID,
+		InteractionWorkspace:        interactionWorkspace,
+		InteractionSessionKey:       record.Route.SessionKey,
+		InteractionRouteKey:         routeSessionKey,
+		InteractionOriginToolCallID: record.Origin.ToolCallID,
+		InteractionOriginExecution:  record.Origin.ExecutionID,
+		InteractionOriginContext:    cloneInboundContext(record.Origin.ExecutionContext),
+		ObjectiveChecklist:          runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
+		TurnStatus:                  &turnStatus,
+		TurnResult:                  &resumedTurn,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: routeSessionKey,
 			BaseSessionKey:  continuationSessionKey,
@@ -1842,10 +1843,11 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 		routeSessionKey = record.Route.SessionKey
 	}
 	opts := processOptions{
-		TaskID:                record.Origin.TaskID,
-		InteractionWorkspace:  interactionWorkspace,
-		InteractionSessionKey: record.Route.SessionKey,
-		InteractionRouteKey:   routeSessionKey,
+		TaskID:                      record.Origin.TaskID,
+		InteractionWorkspace:        interactionWorkspace,
+		InteractionSessionKey:       record.Route.SessionKey,
+		InteractionRouteKey:         routeSessionKey,
+		InteractionOriginToolCallID: record.Origin.ToolCallID,
 		ApprovalGrant: &ToolApprovalGrant{
 			InteractionID:      record.ID,
 			Revision:           record.Revision,

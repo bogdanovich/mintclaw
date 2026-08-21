@@ -7017,6 +7017,17 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 			},
 		},
 	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-produced-second-result"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-produced-second-result", Content: "second structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/second.txt", Kind: "file"}},
+			Metadata:  map[string]string{"round": "second"},
+		},
+	})
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -7028,9 +7039,11 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	}
 	task, _ := tasks.Get(taskID)
 	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
-		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 1 ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 2 ||
 		task.Deliverable.Artifacts[0].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Artifacts[1].Ref != "file:/tmp/second.txt" ||
 		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
+		task.Deliverable.Metadata["round"] != "second" ||
 		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
 		t.Fatalf("open-round recovery lost canonical deliverable: task=%#v deliverable=%+v", task, task.Deliverable)
 	}

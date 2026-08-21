@@ -168,13 +168,15 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 						Silent: true,
 					}
 					if legacy {
-						result.Media = []string{"media://legacy-final-handled"}
+						result.Media = []string{"media://canonical-handled"}
 						result.WithResponseHandled()
 					} else {
 						result.WithOutboundDelivery(toolshared.OutboundDelivery{
 							Channel: "telegram",
 							ChatID:  "chat-1",
-							Text:    "hello",
+							Media: []bus.MediaPart{{
+								Ref: "media://canonical-handled", Type: "image",
+							}},
 						}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 					}
 					result.WithDeliverable(&taskresult.Deliverable{
