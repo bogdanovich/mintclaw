@@ -46,6 +46,7 @@ func TestStatusCmd_RecognizesProviderFieldWithoutModelPrefix(t *testing.T) {
 	t.Setenv(config.EnvHome, tmpDir)
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName:   "gpt-5.4",
