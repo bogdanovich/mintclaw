@@ -182,14 +182,13 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		)
 		return toolshared.ErrorResult(fmt.Sprintf("delegation to agent %q returned no result", agentID))
 	}
-	if result.TaskSuspended {
+	if result.Control.TaskSuspended {
 		return toolshared.NewToolResult("Delegated task is waiting for human input.")
 	}
 
 	result.ForLLM = fmt.Sprintf("[Response from agent %q]\n%s", agentID, result.ForLLM)
 	if deliveryMode == toolshared.AsyncDeliveryUserOnly {
-		result.Silent = true
-		result.ResponseHandled = true
+		result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	}
 	t.recordDelegateTask(
 		ctx, taskID, agentID, task, deliveryMode,
@@ -266,7 +265,7 @@ func delegateDeliveryStatus(
 	case toolshared.AsyncDeliveryParentOnly:
 		return taskregistry.DeliverySessionQueued
 	case toolshared.AsyncDeliveryUserOnly:
-		if result.ResponseHandled || result.Silent {
+		if result.Delivery.SuppressesImplicitUserOutput() {
 			return taskregistry.DeliveryDelivered
 		}
 		return taskregistry.DeliveryPending

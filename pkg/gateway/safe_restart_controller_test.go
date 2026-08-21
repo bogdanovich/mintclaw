@@ -405,10 +405,10 @@ func TestGatewayRestartToolAlreadyScheduledIsFinalHandled(t *testing.T) {
 
 func assertFinalHandledRestartResult(t *testing.T, result *toolshared.ToolResult) {
 	t.Helper()
-	if result.DeliveryIntent != toolshared.DeliveryFinalHandled || !result.ResponseHandled {
+	if result.Delivery.Intent != toolshared.DeliveryFinalHandled || !result.Delivery.IsFinalHandled() {
 		t.Fatalf("successful restart result did not own the turn: %#v", result)
 	}
-	if result.ImmediateDelivery || result.Silent {
+	if result.Delivery.IsImmediate() || result.Delivery.IsSilent() {
 		t.Fatalf("successful restart retained immediate/silent flags: %#v", result)
 	}
 }

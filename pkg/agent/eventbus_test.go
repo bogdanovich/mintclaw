@@ -822,7 +822,7 @@ func (t *asyncFollowUpTool) ExecuteAsync(
 			res.WithAsyncDelivery(t.deliveryMode)
 		}
 		if t.taskID != "" {
-			res.WithAsyncTaskID(t.taskID)
+			res.WithTaskID(t.taskID)
 		}
 		cb(ctx, res)
 		if t.completionSig != nil {
@@ -1202,9 +1202,9 @@ func TestAsyncToolResultDeliveryRouting(t *testing.T) {
 		{
 			name: "silent_user_only_still_routes_explicit_user_payload",
 			result: (&toolshared.ToolResult{
-				ForLLM:  "parent text",
-				ForUser: "user text",
-				Silent:  true,
+				ForLLM:   "parent text",
+				ForUser:  "user text",
+				Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly),
 			wantPublishToUser: true,
 			wantQueueParent:   false,

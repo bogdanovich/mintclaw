@@ -1207,7 +1207,6 @@ func (h *respondHook) BeforeTool(
 		next.HookResult = &toolshared.ToolResult{
 			ForLLM:  "hook-responded: " + call.Tool,
 			ForUser: "",
-			Silent:  false,
 			IsError: false,
 		}
 		return next, HookDecision{Action: HookActionRespond}, nil
@@ -1509,12 +1508,13 @@ func (h *respondWithMediaHook) BeforeTool(
 	if h.respondTools[call.Tool] {
 		next := call.Clone()
 		next.HookResult = &toolshared.ToolResult{
-			ForLLM:          h.forLLM,
-			ForUser:         "media result",
-			Media:           h.media,
-			ResponseHandled: h.responseHandled,
-			Silent:          false,
-			IsError:         false,
+			ForLLM:  h.forLLM,
+			ForUser: "media result",
+			Media:   h.media,
+			IsError: false,
+		}
+		if h.responseHandled {
+			next.HookResult.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 		}
 		return next, HookDecision{Action: HookActionRespond}, nil
 	}

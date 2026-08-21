@@ -67,17 +67,17 @@ func TestRequestUserInputToolReturnsTypedSuspension(t *testing.T) {
 			},
 		},
 	})
-	if result.IsError || result.Suspension == nil {
+	if result.IsError || result.Control.Suspension == nil {
 		t.Fatalf("Execute() = %#v, want suspension", result)
 	}
 	if result.ContentForLLM() != "" {
 		t.Fatalf("ContentForLLM() = %q, want empty before resumption", result.ContentForLLM())
 	}
-	if result.Suspension.Kind != interactions.KindQuestion ||
-		result.Suspension.Timeout != time.Hour {
-		t.Fatalf("suspension = %#v", result.Suspension)
+	if result.Control.Suspension.Kind != interactions.KindQuestion ||
+		result.Control.Suspension.Timeout != time.Hour {
+		t.Fatalf("suspension = %#v", result.Control.Suspension)
 	}
-	if got := result.Suspension.Questions[0].Options[1].Label; got != "All" {
+	if got := result.Control.Suspension.Questions[0].Options[1].Label; got != "All" {
 		t.Fatalf("option label = %q, want All", got)
 	}
 	if got := tool.ToolLoopSemantics(); got != loopguard.SemanticsMutating {
@@ -97,7 +97,7 @@ func TestRequestUserInputToolAcceptsLocalizedHeader(t *testing.T) {
 			"question": "Создать событие?",
 		}},
 	})
-	if result.IsError || result.Suspension == nil {
+	if result.IsError || result.Control.Suspension == nil {
 		t.Fatalf("Execute() = %#v, want suspension", result)
 	}
 
@@ -129,7 +129,7 @@ func TestRequestUserInputToolUsesBoundedConfiguredTimeout(t *testing.T) {
 		"timeout_seconds": float64(600),
 	}
 	result := tool.Execute(t.Context(), args)
-	if result.IsError || result.Suspension.Timeout != 10*time.Minute {
+	if result.IsError || result.Control.Suspension.Timeout != 10*time.Minute {
 		t.Fatalf("Execute() = %#v", result)
 	}
 	args["timeout_seconds"] = float64(601)
@@ -180,7 +180,7 @@ func TestRequestUserInputToolRejectsInvalidQuestionShapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := tool.Execute(t.Context(), map[string]any{"questions": test.questions})
-			if !result.IsError || result.Suspension != nil {
+			if !result.IsError || result.Control.Suspension != nil {
 				t.Fatalf("Execute() = %#v, want validation error", result)
 			}
 		})

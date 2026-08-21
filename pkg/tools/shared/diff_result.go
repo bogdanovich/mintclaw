@@ -51,9 +51,7 @@ func DiffResult(path string, before, after []byte) *ToolResult {
 	return &ToolResult{
 		ForLLM:  llmContent,
 		ForUser: userContent,
-		Silent:  false,
 		IsError: false,
-		Async:   false,
 	}
 }
 

@@ -638,13 +638,6 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 		t.Fatal("expected default agent")
 	}
 	mt := integrationtools.NewMessageTool()
-	mt.SetSendCallback(func(
-		ctx context.Context,
-		channel, chatID, content, replyToMessageID string,
-		mediaParts []bus.MediaPart,
-	) error {
-		return nil
-	})
 	defaultAgent.Tools.Register(mt)
 
 	result := mt.Execute(
@@ -658,7 +651,7 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	if result == nil || result.IsError {
 		t.Fatalf("message tool execute failed: %+v", result)
 	}
-	result.ConfirmOutbound()
+	result.Delivery.Confirm()
 	admission := al.publishResponseWithContextIfNeeded(
 		context.Background(),
 		defaultAgent.Workspace,
@@ -690,13 +683,6 @@ func TestPublishResponseAlwaysPublishMarksFinalReplyAfterMessageTool(t *testing.
 		t.Fatal("expected default agent")
 	}
 	mt := integrationtools.NewMessageTool()
-	mt.SetSendCallback(func(
-		ctx context.Context,
-		channel, chatID, content, replyToMessageID string,
-		mediaParts []bus.MediaPart,
-	) error {
-		return nil
-	})
 	defaultAgent.Tools.Register(mt)
 
 	result := mt.Execute(
@@ -710,7 +696,7 @@ func TestPublishResponseAlwaysPublishMarksFinalReplyAfterMessageTool(t *testing.
 	if result == nil || result.IsError {
 		t.Fatalf("message tool execute failed: %+v", result)
 	}
-	result.ConfirmOutbound()
+	result.Delivery.Confirm()
 
 	al.publishResponseWithContextIfNeeded(
 		context.Background(),
@@ -3107,7 +3093,7 @@ func TestDeliverToolResultToUser_NoBusDoesNotReportQueuedMedia(t *testing.T) {
 		chatID:     "chat1",
 		sessionKey: "session-no-bus-media",
 	}
-	result := toolshared.MediaResult("media payload", []string{ref}).WithResponseHandled()
+	result := toolshared.MediaResult("media payload", []string{ref}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	_, outcome, err := al.deliverToolResultToUser(context.Background(), ts, result, "test_media")
 	if err != nil {
@@ -3146,9 +3132,9 @@ func TestDeliverExplicitToolOutbound_NoBusDoesNotReportQueuedText(t *testing.T) 
 		sessionKey: "session-no-bus-text",
 	}
 	result := &toolshared.ToolResult{
-		Outbound: &toolshared.OutboundDelivery{
+		Delivery: toolshared.ToolDelivery{Outbound: &toolshared.OutboundDelivery{
 			Text: "explicit outbound text",
-		},
+		}},
 	}
 
 	_, outcome, err := al.deliverToolResultToUser(context.Background(), ts, result, "test_text")
@@ -3187,7 +3173,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 		t.Run("explicit text/"+scopeCase.name, func(t *testing.T) {
 			result := (&toolshared.ToolResult{}).
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "checking services"}).
-				WithImmediateDelivery()
+				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
 				t.Context(), ts, result, "message", scopeCase.scopes,
 			); err != nil || outcome != toolResultDeliveryQueued {
@@ -3213,7 +3199,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
 					Type: "image", Ref: "media://test-image",
 				}}}).
-				WithImmediateDelivery()
+				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
 				t.Context(), ts, result, "image_generation", scopeCase.scopes,
 			); err != nil || outcome != toolResultDeliveryQueued {
@@ -3235,11 +3221,10 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 			}
 		})
 
-		t.Run("canonical immediate overrides stale handled/"+scopeCase.name, func(t *testing.T) {
+		t.Run("immediate delivery/"+scopeCase.name, func(t *testing.T) {
 			result := (&toolshared.ToolResult{}).
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "still working"}).
-				WithResponseHandled().
-				WithImmediateDelivery()
+				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
 				t.Context(), ts, result, "message", scopeCase.scopes,
 			); err != nil || outcome != toolResultDeliveryQueued {
@@ -3276,7 +3261,7 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
 		}}},
 	}
-	result := toolshared.UserResult("handled response").WithResponseHandled()
+	result := toolshared.UserResult("handled response").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	if _, outcome, err := al.deliverToolResultToUser(
 		t.Context(), ts, result, "delegate",
 	); err != nil || outcome != toolResultDeliveryDirect {
@@ -3310,7 +3295,7 @@ func TestRecoverableToolOutboundRejectsNonDurableRoute(t *testing.T) {
 			commitCalls++
 			return nil
 		}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	_, outcome, err := al.deliverToolResultToUser(t.Context(), ts, result, "browser_observe")
 	if err == nil || !strings.Contains(err.Error(), "durable outbound transaction is required") ||
 		outcome != toolResultDeliveryNone || commitCalls != 0 {
@@ -4676,7 +4661,8 @@ func (m *handledMediaTool) Execute(ctx context.Context, args map[string]any) *to
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
-	return toolshared.MediaResult("Attachment delivered by tool.", []string{ref}).WithResponseHandled()
+	return toolshared.MediaResult("Attachment delivered by tool.", []string{ref}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 type handledDeliverableArtifactsTool struct {
@@ -4710,9 +4696,7 @@ func (m *handledDeliverableArtifactsTool) Execute(
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
 	return (&toolshared.ToolResult{
-		ForLLM:          "Completion media delivered by runtime.",
-		Silent:          true,
-		ResponseHandled: true,
+		ForLLM: "Completion media delivered by runtime.",
 	}).WithDeliverable(&taskresult.Deliverable{
 		Text: m.text,
 		Artifacts: []taskresult.Artifact{{
@@ -4721,7 +4705,7 @@ func (m *handledDeliverableArtifactsTool) Execute(
 			Filename:    filepath.Base(m.path),
 			ContentType: "video/mp4",
 		}},
-	})
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 type handledUserTool struct{}
@@ -4739,7 +4723,7 @@ func (m *handledUserTool) Parameters() map[string]any {
 }
 
 func (m *handledUserTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	return toolshared.UserResult("Handled user output from tool.").WithResponseHandled()
+	return toolshared.UserResult("Handled user output from tool.").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 type handledMediaWithSteeringProvider struct {
@@ -4820,7 +4804,8 @@ func (m *handledMediaWithSteeringTool) Execute(
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
-	return toolshared.MediaResult("Attachment delivered by tool.", []string{ref}).WithResponseHandled()
+	return toolshared.MediaResult("Attachment delivered by tool.", []string{ref}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 }
 
 type mediaArtifactTool struct {
@@ -4879,7 +4864,7 @@ func (m *immediateMediaTool) Execute(ctx context.Context, args map[string]any) *
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
 	return toolshared.MediaResult("Immediate attachment delivered by tool.", []string{ref}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 }
 
 type toolLimitTestTool struct{}

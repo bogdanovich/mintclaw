@@ -71,12 +71,11 @@ func (t *SendTTSTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(err.Error()).WithError(err)
 	}
 
-	// Return with ForUser set to original text, Media containing the audio ref,
-	// and mark as ResponseHandled so the audio is sent immediately without LLM intervention.
-	return &ToolResult{
-		ForLLM:          "TTS audio sent",
-		ForUser:         text,
-		Media:           []string{ref},
-		ResponseHandled: true,
-	}
+	// Return with ForUser set to original text and Media containing the audio
+	// ref. Final delivery owns the user response without another LLM turn.
+	return (&ToolResult{
+		ForLLM:  "TTS audio sent",
+		ForUser: text,
+		Media:   []string{ref},
+	}).WithDeliveryIntent(DeliveryFinalHandled)
 }

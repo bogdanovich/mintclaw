@@ -534,7 +534,7 @@ func TestImplicitImmediateMediaUsesDurableCommitBoundary(t *testing.T) {
 			}
 			return nil
 		}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 
 	_, outcome, err := al.deliverToolResultToUser(
 		withOutboundTransaction(t.Context(), sourceID), ts, result, "image_generate",

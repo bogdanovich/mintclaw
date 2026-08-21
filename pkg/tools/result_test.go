@@ -17,21 +17,27 @@ func TestNewToolResult(t *testing.T) {
 	if result.ForLLM != "test content" {
 		t.Errorf("Expected ForLLM 'test content', got '%s'", result.ForLLM)
 	}
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be false")
 	}
 	if result.IsError {
 		t.Error("Expected IsError to be false")
 	}
-	if result.Async {
+	if result.Control.Async {
 		t.Error("Expected Async to be false")
 	}
 }
 
 func TestToolResultHasOneTaskResultContract(t *testing.T) {
 	typeOfResult := reflect.TypeOf(toolshared.ToolResult{})
-	if _, exists := typeOfResult.FieldByName("Completion"); exists {
-		t.Fatal("ToolResult must not expose a second completion contract")
+	for _, removed := range []string{
+		"Completion", "Messages", "Silent", "Async", "AsyncDelivery", "AsyncTaskID", "TaskSuspended",
+		"ResponseHandled", "ImmediateDelivery", "DeliveryIntent", "Outbound", "CommitOutbound", "ConfirmOutbound",
+		"Suspension", "SuspensionResolution",
+	} {
+		if _, exists := typeOfResult.FieldByName(removed); exists {
+			t.Fatalf("ToolResult must not expose removed field %q", removed)
+		}
 	}
 	field, exists := typeOfResult.FieldByName("Deliverable")
 	if !exists || field.Type != reflect.TypeOf((*taskresult.Deliverable)(nil)) {
@@ -45,13 +51,13 @@ func TestSilentResult(t *testing.T) {
 	if result.ForLLM != "silent operation" {
 		t.Errorf("Expected ForLLM 'silent operation', got '%s'", result.ForLLM)
 	}
-	if !result.Silent {
+	if !result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be true")
 	}
 	if result.IsError {
 		t.Error("Expected IsError to be false")
 	}
-	if result.Async {
+	if result.Control.Async {
 		t.Error("Expected Async to be false")
 	}
 }
@@ -59,13 +65,13 @@ func TestSilentResult(t *testing.T) {
 func TestDiffResult(t *testing.T) {
 	result := toolshared.DiffResult("pkg/tools/fs/edit.go", []byte("hello world\n"), []byte("hello universe\n"))
 
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be false")
 	}
 	if result.IsError {
 		t.Error("Expected IsError to be false")
 	}
-	if result.Async {
+	if result.Control.Async {
 		t.Error("Expected Async to be false")
 	}
 	if result.ForLLM == result.ForUser {
@@ -109,33 +115,33 @@ func TestAsyncResult(t *testing.T) {
 	if result.ForLLM != "async task started" {
 		t.Errorf("Expected ForLLM 'async task started', got '%s'", result.ForLLM)
 	}
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be false")
 	}
 	if result.IsError {
 		t.Error("Expected IsError to be false")
 	}
-	if !result.Async {
+	if !result.Control.Async {
 		t.Error("Expected Async to be true")
 	}
-	if result.AsyncDelivery != "" {
-		t.Errorf("Expected empty AsyncDelivery by default, got %q", result.AsyncDelivery)
+	if result.Delivery.AsyncMode != "" {
+		t.Errorf("Expected empty AsyncDelivery by default, got %q", result.Delivery.AsyncMode)
 	}
 }
 
 func TestToolResultWithAsyncDelivery(t *testing.T) {
 	result := toolshared.AsyncResult("async task started").WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	if result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
-		t.Fatalf("AsyncDelivery = %q, want %q", result.AsyncDelivery, toolshared.AsyncDeliveryUserOnly)
+	if result.Delivery.AsyncMode != toolshared.AsyncDeliveryUserOnly {
+		t.Fatalf("AsyncDelivery = %q, want %q", result.Delivery.AsyncMode, toolshared.AsyncDeliveryUserOnly)
 	}
 }
 
-func TestToolResultWithAsyncTaskID(t *testing.T) {
-	result := toolshared.AsyncResult("async task started").WithAsyncTaskID(" subagent-7 ")
+func TestToolResultWithTaskID(t *testing.T) {
+	result := toolshared.AsyncResult("async task started").WithTaskID(" subagent-7 ")
 
-	if result.AsyncTaskID != "subagent-7" {
-		t.Fatalf("AsyncTaskID = %q, want subagent-7", result.AsyncTaskID)
+	if result.Control.TaskID != "subagent-7" {
+		t.Fatalf("AsyncTaskID = %q, want subagent-7", result.Control.TaskID)
 	}
 }
 
@@ -267,13 +273,13 @@ func TestErrorResult(t *testing.T) {
 	if result.ForLLM != "operation failed" {
 		t.Errorf("Expected ForLLM 'operation failed', got '%s'", result.ForLLM)
 	}
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be false")
 	}
 	if !result.IsError {
 		t.Error("Expected IsError to be true")
 	}
-	if result.Async {
+	if result.Control.Async {
 		t.Error("Expected Async to be false")
 	}
 }
@@ -288,13 +294,13 @@ func TestUserResult(t *testing.T) {
 	if result.ForUser != content {
 		t.Errorf("Expected ForUser '%s', got '%s'", content, result.ForUser)
 	}
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("Expected Silent to be false")
 	}
 	if result.IsError {
 		t.Error("Expected IsError to be false")
 	}
-	if result.Async {
+	if result.Control.Async {
 		t.Error("Expected Async to be false")
 	}
 }
@@ -347,14 +353,14 @@ func TestToolResultJSONSerialization(t *testing.T) {
 			if decoded.ForUser != tt.result.ForUser {
 				t.Errorf("ForUser mismatch: got '%s', want '%s'", decoded.ForUser, tt.result.ForUser)
 			}
-			if decoded.Silent != tt.result.Silent {
-				t.Errorf("Silent mismatch: got %v, want %v", decoded.Silent, tt.result.Silent)
+			if decoded.Delivery.IsSilent() != tt.result.Delivery.IsSilent() {
+				t.Errorf("Silent mismatch: got %v, want %v", decoded.Delivery.IsSilent(), tt.result.Delivery.IsSilent())
 			}
 			if decoded.IsError != tt.result.IsError {
 				t.Errorf("IsError mismatch: got %v, want %v", decoded.IsError, tt.result.IsError)
 			}
-			if decoded.Async != tt.result.Async {
-				t.Errorf("Async mismatch: got %v, want %v", decoded.Async, tt.result.Async)
+			if decoded.Control.Async != tt.result.Control.Async {
+				t.Errorf("Async mismatch: got %v, want %v", decoded.Control.Async, tt.result.Control.Async)
 			}
 		})
 	}
@@ -388,7 +394,11 @@ func TestToolResultWithErrors(t *testing.T) {
 }
 
 func TestToolResultJSONStructure(t *testing.T) {
-	result := toolshared.UserResult("test content")
+	result := toolshared.UserResult("test content").
+		WithTaskID("task-1").
+		WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly).
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	result.Control.Async = true
 
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -401,39 +411,64 @@ func TestToolResultJSONStructure(t *testing.T) {
 		t.Fatalf("Failed to parse JSON: %v", err)
 	}
 
-	// Check expected keys exist
+	// Stable output remains top-level.
 	if _, ok := parsed["for_llm"]; !ok {
 		t.Error("Expected 'for_llm' key in JSON")
 	}
 	if _, ok := parsed["for_user"]; !ok {
 		t.Error("Expected 'for_user' key in JSON")
 	}
-	if _, ok := parsed["silent"]; !ok {
-		t.Error("Expected 'silent' key in JSON")
-	}
 	if _, ok := parsed["is_error"]; !ok {
 		t.Error("Expected 'is_error' key in JSON")
 	}
-	if _, ok := parsed["async"]; !ok {
-		t.Error("Expected 'async' key in JSON")
+	control, ok := parsed["control"].(map[string]any)
+	if !ok || control["async"] != true || control["task_id"] != "task-1" {
+		t.Fatalf("control = %#v", parsed["control"])
+	}
+	delivery, ok := parsed["delivery"].(map[string]any)
+	if !ok || delivery["intent"] != string(toolshared.DeliveryImmediateContinue) ||
+		delivery["async_mode"] != string(toolshared.AsyncDeliveryUserOnly) {
+		t.Fatalf("delivery = %#v", parsed["delivery"])
 	}
 
-	// Check that 'err' is NOT present (it should have json:"-" tag)
-	if _, ok := parsed["err"]; ok {
-		t.Error("Expected 'err' key to be excluded from JSON")
+	for _, removed := range []string{
+		"err", "silent", "async", "response_handled", "immediate_delivery", "delivery_intent", "async_delivery",
+	} {
+		if _, exists := parsed[removed]; exists {
+			t.Fatalf("removed flat field %q was serialized: %#v", removed, parsed)
+		}
 	}
 
 	// Verify values
 	if parsed["for_llm"] != "test content" {
 		t.Errorf("Expected for_llm 'test content', got %v", parsed["for_llm"])
 	}
-	if parsed["silent"] != false {
-		t.Errorf("Expected silent false, got %v", parsed["silent"])
+}
+
+func TestToolResultControlAndDeliveryDoNotMutateOutput(t *testing.T) {
+	result := toolshared.UserResult("stable output").WithDeliverable(&taskresult.Deliverable{Text: "artifact output"})
+	wantForLLM := result.ForLLM
+	wantForUser := result.ForUser
+	wantDeliverable := taskresult.CloneDeliverable(result.Deliverable)
+
+	result.Control = toolshared.ToolControl{Async: true, TaskID: "task-7"}
+	result.Delivery = toolshared.ToolDelivery{
+		Intent:    toolshared.DeliveryFinalHandled,
+		AsyncMode: toolshared.AsyncDeliveryUserOnly,
+	}
+
+	if result.ForLLM != wantForLLM || result.ForUser != wantForUser ||
+		!reflect.DeepEqual(result.Deliverable, wantDeliverable) {
+		t.Fatalf("directives mutated output: %#v", result)
+	}
+	if !result.Delivery.IsFinalHandled() || result.Delivery.IsImmediate() || result.Delivery.IsSilent() {
+		t.Fatalf("delivery intent is not exclusive: %#v", result.Delivery)
 	}
 }
 
 func TestToolResultContentForLLM_AppendsHandledDeliveryNote(t *testing.T) {
-	result := toolshared.MediaResult("Screenshot attached.", []string{"media://example"}).WithResponseHandled()
+	result := toolshared.MediaResult("Screenshot attached.", []string{"media://example"}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	content := result.ContentForLLM()
 	if !strings.Contains(content, "Screenshot attached.") {
@@ -445,7 +480,7 @@ func TestToolResultContentForLLM_AppendsHandledDeliveryNote(t *testing.T) {
 }
 
 func TestToolResultContentForLLM_UsesHandledDeliveryNoteWhenEmpty(t *testing.T) {
-	result := (&toolshared.ToolResult{}).WithResponseHandled()
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
 	if got := result.ContentForLLM(); got != toolshared.HandledToolLLMNote {
 		t.Fatalf("ContentForLLM() = %q, want %q", got, toolshared.HandledToolLLMNote)

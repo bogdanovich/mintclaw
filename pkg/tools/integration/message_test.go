@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -23,28 +22,23 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 
 	result := tool.Execute(ctx, args)
 
-	if result.Outbound == nil {
+	if result.Delivery.Outbound == nil {
 		t.Fatal("expected declarative outbound delivery")
 	}
-	if result.Outbound.Channel != "test-channel" {
-		t.Errorf("Expected channel 'test-channel', got '%s'", result.Outbound.Channel)
+	if result.Delivery.Outbound.Channel != "test-channel" {
+		t.Errorf("Expected channel 'test-channel', got '%s'", result.Delivery.Outbound.Channel)
 	}
-	if result.Outbound.ChatID != "test-chat-id" {
-		t.Errorf("Expected chatID 'test-chat-id', got '%s'", result.Outbound.ChatID)
+	if result.Delivery.Outbound.ChatID != "test-chat-id" {
+		t.Errorf("Expected chatID 'test-chat-id', got '%s'", result.Delivery.Outbound.ChatID)
 	}
-	if result.Outbound.Text != "Hello, world!" {
-		t.Errorf("Expected content 'Hello, world!', got '%s'", result.Outbound.Text)
+	if result.Delivery.Outbound.Text != "Hello, world!" {
+		t.Errorf("Expected content 'Hello, world!', got '%s'", result.Delivery.Outbound.Text)
 	}
-	if len(result.Outbound.Media) != 0 {
-		t.Fatalf("expected no media parts, got %d", len(result.Outbound.Media))
+	if len(result.Delivery.Outbound.Media) != 0 {
+		t.Fatalf("expected no media parts, got %d", len(result.Delivery.Outbound.Media))
 	}
 
-	// Verify ToolResult meets US-011 criteria:
-	// - Send success returns SilentResult (Silent=true)
-	if !result.Silent {
-		t.Error("Expected Silent=true for successful send")
-	}
-	if result.DeliveryIntent != DeliveryFinalHandled || !result.ResponseHandled {
+	if !result.Delivery.IsFinalHandled() {
 		t.Fatalf("delivery result = %+v, want final_handled", result)
 	}
 
@@ -77,18 +71,18 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	result := tool.Execute(ctx, args)
 
 	// Verify custom channel/chatID were used instead of defaults
-	if result.Outbound == nil {
+	if result.Delivery.Outbound == nil {
 		t.Fatal("expected declarative outbound delivery")
 	}
-	if result.Outbound.Channel != "custom-channel" {
-		t.Errorf("Expected channel 'custom-channel', got '%s'", result.Outbound.Channel)
+	if result.Delivery.Outbound.Channel != "custom-channel" {
+		t.Errorf("Expected channel 'custom-channel', got '%s'", result.Delivery.Outbound.Channel)
 	}
-	if result.Outbound.ChatID != "custom-chat-id" {
-		t.Errorf("Expected chatID 'custom-chat-id', got '%s'", result.Outbound.ChatID)
+	if result.Delivery.Outbound.ChatID != "custom-chat-id" {
+		t.Errorf("Expected chatID 'custom-chat-id', got '%s'", result.Delivery.Outbound.ChatID)
 	}
 
-	if !result.Silent {
-		t.Error("Expected Silent=true")
+	if !result.Delivery.IsFinalHandled() {
+		t.Fatalf("delivery result = %+v, want final_handled", result)
 	}
 	if result.ForLLM != "Message prepared for delivery to custom-channel:custom-chat-id" {
 		t.Errorf("unexpected ForLLM status: %q", result.ForLLM)
@@ -105,34 +99,8 @@ func TestMessageTool_Execute_ImmediateContinue(t *testing.T) {
 		},
 	)
 
-	if result.DeliveryIntent != DeliveryImmediateContinue || !result.ImmediateDelivery || result.ResponseHandled {
+	if !result.Delivery.IsImmediate() || result.Delivery.IsFinalHandled() {
 		t.Fatalf("delivery result = %+v, want immediate_continue", result)
-	}
-}
-
-func TestMessageTool_Execute_IgnoresLegacySendCallback(t *testing.T) {
-	tool := NewMessageTool()
-	called := false
-	tool.SetSendCallback(func(
-		ctx context.Context,
-		channel, chatID, content, replyToMessageID string,
-		mediaParts []bus.MediaPart,
-	) error {
-		called = true
-		return nil
-	})
-
-	ctx := WithToolContext(context.Background(), "test-channel", "test-chat-id")
-	args := map[string]any{
-		"content": "Test message",
-	}
-
-	result := tool.Execute(ctx, args)
-	if result.IsError {
-		t.Fatalf("expected declarative send success, got %s", result.ForLLM)
-	}
-	if called {
-		t.Fatal("legacy send callback should not be called")
 	}
 }
 
@@ -157,14 +125,6 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 	// No WithToolContext — channel/chatID are empty
 
-	tool.SetSendCallback(func(
-		ctx context.Context,
-		channel, chatID, content, replyToMessageID string,
-		mediaParts []bus.MediaPart,
-	) error {
-		return nil
-	})
-
 	ctx := context.Background()
 	args := map[string]any{
 		"content": "Test message",
@@ -183,7 +143,6 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 
 func TestMessageTool_Execute_DeclarativeWithoutCallback(t *testing.T) {
 	tool := NewMessageTool()
-	// No SetSendCallback called
 
 	ctx := WithToolContext(context.Background(), "test-channel", "test-chat-id")
 	args := map[string]any{
@@ -195,8 +154,8 @@ func TestMessageTool_Execute_DeclarativeWithoutCallback(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected declarative delivery without callback, got %s", result.ForLLM)
 	}
-	if result.Outbound == nil || result.Outbound.Text != "Test message" {
-		t.Fatalf("unexpected outbound: %+v", result.Outbound)
+	if result.Delivery.Outbound == nil || result.Delivery.Outbound.Text != "Test message" {
+		t.Fatalf("unexpected outbound: %+v", result.Delivery.Outbound)
 	}
 }
 
@@ -313,14 +272,6 @@ func TestMessageTool_Parameters_WithLocalMediaEnabled(t *testing.T) {
 
 func TestMessageTool_Execute_WithMediaDisabled(t *testing.T) {
 	tool := NewMessageTool()
-	tool.SetSendCallback(func(
-		ctx context.Context,
-		channel, chatID, content, replyToMessageID string,
-		mediaParts []bus.MediaPart,
-	) error {
-		t.Fatal("send callback should not run when message media is disabled")
-		return nil
-	})
 
 	ctx := WithToolContext(context.Background(), "telegram", "-1001")
 	result := tool.Execute(ctx, map[string]any{
@@ -349,8 +300,8 @@ func TestMessageTool_Execute_WithReplyToMessageID(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
-	if result.Outbound == nil || result.Outbound.ReplyToMessageID != "msg-123" {
-		t.Fatalf("unexpected reply_to_message_id in outbound: %+v", result.Outbound)
+	if result.Delivery.Outbound == nil || result.Delivery.Outbound.ReplyToMessageID != "msg-123" {
+		t.Fatalf("unexpected reply_to_message_id in outbound: %+v", result.Delivery.Outbound)
 	}
 }
 
@@ -375,7 +326,7 @@ func TestMessageTool_Execute_TracksSentTargetForTurnSuppression(t *testing.T) {
 	if tool.HasSentTo("sk_v1_tool", "test-channel", "test-chat-id") {
 		t.Fatal("prepared delivery must not be tracked as sent")
 	}
-	result.ConfirmOutbound()
+	result.Delivery.Confirm()
 	if !tool.HasSentTo("sk_v1_tool", "test-channel", "test-chat-id") {
 		t.Fatal("expected sent target tracking for final-response suppression")
 	}
@@ -404,22 +355,22 @@ func TestMessageTool_Execute_WithMedia(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
-	if result.Outbound == nil {
+	if result.Delivery.Outbound == nil {
 		t.Fatal("expected declarative outbound delivery")
 	}
-	if result.Outbound.Text != "Caption text" {
-		t.Fatalf("content = %q, want Caption text", result.Outbound.Text)
+	if result.Delivery.Outbound.Text != "Caption text" {
+		t.Fatalf("content = %q, want Caption text", result.Delivery.Outbound.Text)
 	}
-	if len(result.Outbound.Media) != 1 {
-		t.Fatalf("expected 1 media part, got %d", len(result.Outbound.Media))
+	if len(result.Delivery.Outbound.Media) != 1 {
+		t.Fatalf("expected 1 media part, got %d", len(result.Delivery.Outbound.Media))
 	}
-	if result.Outbound.Media[0].Caption != "Caption text" {
-		t.Fatalf("first part caption = %q, want Caption text", result.Outbound.Media[0].Caption)
+	if result.Delivery.Outbound.Media[0].Caption != "Caption text" {
+		t.Fatalf("first part caption = %q, want Caption text", result.Delivery.Outbound.Media[0].Caption)
 	}
-	if result.Outbound.Media[0].Ref == "" {
+	if result.Delivery.Outbound.Media[0].Ref == "" {
 		t.Fatal("expected media ref to be populated")
 	}
-	if result.Outbound.Media[0].Type == "" {
+	if result.Delivery.Outbound.Media[0].Type == "" {
 		t.Fatal("expected media type to be inferred")
 	}
 }

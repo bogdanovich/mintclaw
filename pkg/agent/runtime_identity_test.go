@@ -288,11 +288,6 @@ func TestInboundRecoveryBlockScopeIncludesRoutedWorkspace(t *testing.T) {
 func TestMessageToolSuppressionUsesExplicitSessionOwner(t *testing.T) {
 	first := integrationtools.NewMessageTool()
 	second := integrationtools.NewMessageTool()
-	first.SetSendCallback(func(
-		context.Context, string, string, string, string, []bus.MediaPart,
-	) error {
-		return nil
-	})
 	result := first.Execute(
 		toolshared.WithToolSessionContext(context.Background(), "first", "shared-session", nil),
 		map[string]any{"content": "sent", "channel": "test", "chat_id": "same"},
@@ -310,7 +305,7 @@ func TestMessageToolSuppressionUsesExplicitSessionOwner(t *testing.T) {
 	if messageToolSentToSameChat(firstAgent, "shared-session", "test", "same") {
 		t.Fatal("message target was recorded before outbound confirmation")
 	}
-	result.ConfirmOutbound()
+	result.Delivery.Confirm()
 	if !messageToolSentToSameChat(firstAgent, "shared-session", "test", "same") {
 		t.Fatal("first owner should report its sent message")
 	}

@@ -30,9 +30,9 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 		{
 			name: "default routes user text and parent content",
 			in: &toolshared.ToolResult{
-				ForLLM:      "parent text",
-				ForUser:     "user text",
-				AsyncTaskID: "subagent-9",
+				ForLLM:  "parent text",
+				ForUser: "user text",
+				Control: toolshared.ToolControl{TaskID: "subagent-9"},
 			},
 			want: AsyncDeliveryDecision{
 				TaskID:        "subagent-9",
@@ -75,9 +75,9 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 		{
 			name: "silent suppresses user but not parent",
 			in: (&toolshared.ToolResult{
-				ForLLM:  "parent text",
-				ForUser: "user text",
-				Silent:  true,
+				ForLLM:   "parent text",
+				ForUser:  "user text",
+				Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserAndParent),
 			want: AsyncDeliveryDecision{
 				DeliveryMode:  toolshared.AsyncDeliveryUserAndParent,
@@ -128,7 +128,7 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 			name: "user only durable deliverable publishes even when silent",
 			in: (&toolshared.ToolResult{
 				ForLLM:      "internal research envelope",
-				Silent:      true,
+				Delivery:    toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 				Deliverable: &taskresult.Deliverable{Text: "complete research report"},
 			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly),
 			want: AsyncDeliveryDecision{
@@ -221,9 +221,9 @@ func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 	taskID := "coordinator-user-only"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal",
-		ForUser:     "user done",
-		AsyncTaskID: taskID,
+		ForLLM:  "internal",
+		ForUser: "user done",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
@@ -268,9 +268,9 @@ func TestDeliverAsyncToolCompletion_ParentOnlyUpdatesSessionQueued(t *testing.T)
 	taskID := "coordinator-parent-only"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "parent data",
-		ForUser:     "do not send",
-		AsyncTaskID: taskID,
+		ForLLM:  "parent data",
+		ForUser: "do not send",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
 
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
@@ -293,9 +293,9 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 	taskID := "coordinator-user-and-parent"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "parent data",
-		ForUser:     "user visible",
-		AsyncTaskID: taskID,
+		ForLLM:  "parent data",
+		ForUser: "user visible",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserAndParent)
 	req := AsyncDeliveryRequest{
 		TurnState:    ts,
@@ -334,9 +334,9 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateUserDelivery(t *testing.T) {
 	taskID := "coordinator-duplicate-user"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal",
-		ForUser:     "user once",
-		AsyncTaskID: taskID,
+		ForLLM:  "internal",
+		ForUser: "user once",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 	req := AsyncDeliveryRequest{
 		TurnState:    ts,
@@ -359,9 +359,9 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *t
 	taskID := "coordinator-duplicate-parent"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "parent data",
-		ForUser:     "do not send",
-		AsyncTaskID: taskID,
+		ForLLM:  "parent data",
+		ForUser: "do not send",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
 	req := AsyncDeliveryRequest{
 		TurnState:    ts,
@@ -392,8 +392,8 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 	taskID := "coordinator-duplicate-media"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal media result",
-		AsyncTaskID: taskID,
+		ForLLM:  "internal media result",
+		Control: toolshared.ToolControl{TaskID: taskID},
 		Deliverable: &taskresult.Deliverable{
 			Text: "https://example.com/reel",
 			Artifacts: []taskresult.Artifact{{
@@ -441,8 +441,8 @@ func TestDeliverAsyncToolCompletion_MediaDeliveryFailureRecordsFailed(t *testing
 	taskID := "coordinator-media-failed"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal media result",
-		AsyncTaskID: taskID,
+		ForLLM:  "internal media result",
+		Control: toolshared.ToolControl{TaskID: taskID},
 		Deliverable: &taskresult.Deliverable{
 			Artifacts: []taskresult.Artifact{{
 				Ref:         "media://video-fail",
@@ -640,9 +640,9 @@ func TestDeliverAsyncToolCompletion_FailedDeliveryRecordsCompletionError(t *test
 	taskID := "coordinator-failed"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal",
-		ForUser:     "user fail",
-		AsyncTaskID: taskID,
+		ForLLM:  "internal",
+		ForUser: "user fail",
+		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	al.bus = failingMessageBus{}
@@ -676,8 +676,8 @@ func TestDeliverAsyncToolCompletion_UserOnlyDurableDeliverableIsDelivered(t *tes
 	fullReport := strings.Repeat("research result ", 700)
 	result := (&toolshared.ToolResult{
 		ForLLM:      "internal research envelope",
-		Silent:      true,
-		AsyncTaskID: taskID,
+		Delivery:    toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		Control:     toolshared.ToolControl{TaskID: taskID},
 		Deliverable: &taskresult.Deliverable{Text: fullReport},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
@@ -700,10 +700,10 @@ func TestDeliverAsyncToolCompletion_ErrorDeliveryUpdatesTaskStatus(t *testing.T)
 	taskID := "coordinator-error-delivered"
 	upsertAsyncTaskForTest(t, al, workspace, taskID)
 	result := (&toolshared.ToolResult{
-		ForLLM:      "internal error",
-		ForUser:     "user error",
-		AsyncTaskID: taskID,
-		IsError:     true,
+		ForLLM:  "internal error",
+		ForUser: "user error",
+		Control: toolshared.ToolControl{TaskID: taskID},
+		IsError: true,
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{

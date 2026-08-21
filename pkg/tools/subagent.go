@@ -229,7 +229,7 @@ func (sm *SubagentManager) runTask(
 	if result == nil && err == nil {
 		err = errors.New("subagent child runner returned no result")
 	}
-	if result != nil && result.TaskSuspended {
+	if result != nil && result.Control.TaskSuspended {
 		return
 	}
 
@@ -245,16 +245,14 @@ func (sm *SubagentManager) runTask(
 		result = &toolshared.ToolResult{
 			ForLLM:  summary,
 			ForUser: summary,
-			Silent:  false,
 			IsError: true,
-			Async:   false,
 			Err:     err,
 		}
 	} else {
 		sm.recordTaskResult(task.TaskID, result)
 	}
 	if result != nil {
-		result.WithAsyncTaskID(task.TaskID)
+		result.WithTaskID(task.TaskID)
 	}
 	if callback != nil && result != nil {
 		callback(ctx, result)
@@ -346,7 +344,8 @@ func (sm *SubagentManager) recordTaskResult(taskID string, result *toolshared.To
 		summary = result.ContentForLLM()
 	}
 	delivery := taskregistry.DeliveryPending
-	if result == nil || (result.Silent && result.AsyncDelivery == toolshared.AsyncDeliveryParentOnly) {
+	if result == nil || (result.Delivery.Intent == toolshared.DeliverySilent &&
+		result.Delivery.AsyncMode == toolshared.AsyncDeliveryParentOnly) {
 		delivery = taskregistry.DeliveryNotApplicable
 	}
 	deliverable := taskDeliverable(result)
@@ -467,7 +466,7 @@ Task: %s`,
 		if result == nil {
 			return toolshared.ErrorResult("Subagent execution returned no result")
 		}
-		if result.TaskSuspended {
+		if result.Control.TaskSuspended {
 			return result
 		}
 
@@ -490,8 +489,8 @@ Task: %s`,
 
 		result.ForLLM = llmContent
 		result.ForUser = userContent
-		result.Silent = false
-		result.Async = false
+		result.Control.Async = false
+		result.Delivery.Intent = toolshared.DeliveryDefault
 		return result
 	}
 

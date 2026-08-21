@@ -125,7 +125,7 @@ func TestSyncToolDeliveryMarksOnlyMediaInConfirmedOutbound(t *testing.T) {
 		WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
 			Ref: "media://sent", Type: "image",
 		}}}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	_, media = delivery.applySyncToolResultDelivery(deliveryCtx, &turnState{}, media, "test")
 	if !media.Deliverable.Artifacts[0].Delivered || media.Deliverable.Artifacts[1].Delivered {
 		t.Fatalf("explicit outbound delivery disposition = %#v", media.Deliverable.Artifacts)
@@ -146,7 +146,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
 					Ref: mediaRef, Type: "image",
 				}}}).
-				WithImmediateDelivery()
+				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			tool := &fixedToolResultTool{name: "generate_image", result: result}
 			registry := tools.NewToolRegistry()
 			registry.Register(tool)
@@ -210,7 +210,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 		WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
 			Ref: mediaRef, Type: "image",
 		}}}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	tool := &fixedToolResultTool{name: "generate_image", result: result}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
@@ -407,9 +407,12 @@ func (tool *boundApprovalSuspensionTool) Execute(ctx context.Context, _ map[stri
 		tool.continued = true
 		return toolshared.NewToolResult("approved")
 	}
-	return &toolshared.ToolResult{Silent: true, Suspension: &interactions.SuspensionRequest{
-		Kind: interactions.KindApproval, PromptSummary: "Publish the prepared browser action", Timeout: time.Minute,
-	}}
+	return &toolshared.ToolResult{
+		Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+			Kind: interactions.KindApproval, PromptSummary: "Publish the prepared browser action", Timeout: time.Minute,
+		}},
+		Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+	}
 }
 
 func (t *fixedToolResultTool) Name() string        { return t.name }
@@ -450,7 +453,7 @@ func (d *recordingToolResultDelivery) applySyncToolResultDelivery(
 	result *toolshared.ToolResult,
 	_ string,
 ) ([]providers.Attachment, *toolshared.ToolResult) {
-	if result != nil && (result.ResponseHandled || result.ImmediateDelivery) {
+	if result != nil && (result.Delivery.IsFinalHandled() || result.Delivery.IsImmediate()) {
 		d.syncCalls++
 	}
 	return nil, result
@@ -474,7 +477,7 @@ func (*dropToolSuspensionHook) AfterTool(
 	resp *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision, error) {
 	next := resp.Clone()
-	next.Result.Suspension = nil
+	next.Result.Control.Suspension = nil
 	return next, HookDecision{Action: HookActionModify}, nil
 }
 
@@ -564,7 +567,7 @@ func TestToolResultContextStatus(t *testing.T) {
 		{name: "error", result: toolshared.ErrorResult("failed"), want: providers.ToolResultStatusError},
 		{
 			name:   "async unresolved",
-			result: &toolshared.ToolResult{ForLLM: "started", Async: true},
+			result: &toolshared.ToolResult{ForLLM: "started", Control: toolshared.ToolControl{Async: true}},
 			want:   providers.ToolResultStatusUnresolved,
 		},
 		{name: "nil unresolved", want: providers.ToolResultStatusUnresolved},
@@ -831,13 +834,13 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 		{
 			name: "response handled",
 			result: func() *toolshared.ToolResult {
-				return (&toolshared.ToolResult{ForLLM: "handled result", ForUser: "handled delivery"}).WithResponseHandled()
+				return (&toolshared.ToolResult{ForLLM: "handled result", ForUser: "handled delivery"}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 			},
 		},
 		{
 			name: "immediate delivery",
 			result: func() *toolshared.ToolResult {
-				return (&toolshared.ToolResult{ForLLM: "immediate result", ForUser: "immediate delivery"}).WithImmediateDelivery()
+				return (&toolshared.ToolResult{ForLLM: "immediate result", ForUser: "immediate delivery"}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			},
 		},
 		{
@@ -930,7 +933,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 			commitCalls++
 			return nil
 		}).
-		WithImmediateDelivery()
+		WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	result.Media = []string{mediaRef}
 	tool := &protectedFixedToolResultTool{fixedToolResultTool: &fixedToolResultTool{
 		name: "browser_observe", result: result,
@@ -964,9 +967,9 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		deliveryCalls++
 		journaled := store.GetHistory(ts.sessionKey)
-		if commitCalls != 0 || got.Outbound == nil || got.Outbound.Recovery == nil ||
-			len(got.Outbound.Media) != 1 ||
-			got.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
+		if commitCalls != 0 || got.Delivery.Outbound == nil || got.Delivery.Outbound.Recovery == nil ||
+			len(got.Delivery.Outbound.Media) != 1 ||
+			got.Delivery.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
 			got.Deliverable != nil || len(journaled) != 2 || journaled[1].Role != "tool" {
 			t.Fatalf(
 				"delivery result = %#v; commit calls = %d; journaled = %#v",
@@ -1003,7 +1006,7 @@ func TestPipelineProtectedImmediateArtifactVisionErrorDoesNotRetryWithoutCurrent
 			result := (&toolshared.ToolResult{
 				ForLLM: `{"artifact":{"ref":"transfer-artifact://opaque"}}`,
 				Media:  []string{mediaRef},
-			}).WithImmediateDelivery()
+			}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			tool := &protectedFixedToolResultTool{fixedToolResultTool: &fixedToolResultTool{
 				name: "browser_observe", result: result,
 			}}
@@ -1074,13 +1077,13 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 				ForLLM:  "media result",
 				ForUser: "media delivery",
 				Media:   []string{"media://suppressed-result"},
-			}).WithResponseHandled()
+			}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 			if tc.immediate {
 				result = (&toolshared.ToolResult{
 					ForLLM:  "media result",
 					ForUser: "media delivery",
 					Media:   []string{"media://suppressed-result"},
-				}).WithImmediateDelivery()
+				}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			}
 
 			registry := tools.NewToolRegistry()
@@ -1368,17 +1371,19 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 	newTool := func(called chan interactions.Outcome) *fixedToolResultTool {
 		return &fixedToolResultTool{name: "domain_suspension", result: &toolshared.ToolResult{
-			Silent: true,
-			Suspension: &interactions.SuspensionRequest{
-				Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
-				Questions: []interactions.Question{{
-					ID: "release", Header: "Browser control", Question: "Release browser control?",
-				}},
+			Control: toolshared.ToolControl{
+				Suspension: &interactions.SuspensionRequest{
+					Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
+					Questions: []interactions.Question{{
+						ID: "release", Header: "Browser control", Question: "Release browser control?",
+					}},
+				},
+				ResolveSuspension: func(_ context.Context, outcome interactions.Outcome) error {
+					called <- outcome
+					return nil
+				},
 			},
-			SuspensionResolution: func(_ context.Context, outcome interactions.Outcome) error {
-				called <- outcome
-				return nil
-			},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 		}}
 	}
 	t.Run("durable", func(t *testing.T) {
@@ -1509,22 +1514,24 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			Kind: interactions.KindApproval, PromptSummary: "Injected prompt", Timeout: time.Hour,
 		}
 		injectedCalled := false
-		current := &toolshared.ToolResult{Suspension: trusted}
+		current := &toolshared.ToolResult{Control: toolshared.ToolControl{Suspension: trusted}}
 		replacement := &toolshared.ToolResult{
-			Suspension: injected,
-			SuspensionResolution: func(context.Context, interactions.Outcome) error {
-				injectedCalled = true
-				return nil
+			Control: toolshared.ToolControl{
+				Suspension: injected,
+				ResolveSuspension: func(context.Context, interactions.Outcome) error {
+					injectedCalled = true
+					return nil
+				},
 			},
 		}
 
 		if !transferToolSuspensionResolution(current, replacement) {
 			t.Fatal("trusted suspension was not transferred")
 		}
-		if replacement.Suspension != trusted {
-			t.Fatalf("suspension = %#v, want trusted request %#v", replacement.Suspension, trusted)
+		if replacement.Control.Suspension != trusted {
+			t.Fatalf("suspension = %#v, want trusted request %#v", replacement.Control.Suspension, trusted)
 		}
-		if replacement.SuspensionResolution != nil {
+		if replacement.Control.ResolveSuspension != nil {
 			t.Fatal("hook-injected suspension resolver was retained")
 		}
 		resolveCanceledToolSuspension(t.Context(), replacement)
@@ -2155,7 +2162,7 @@ func TestPipelineEmergencyHaltPreservesReasonForResponseHandledTool(t *testing.T
 
 	tool := &fixedToolResultTool{
 		name:   "handled-loop",
-		result: toolshared.SilentResult("same successful result").WithResponseHandled(),
+		result: toolshared.SilentResult("same successful result").WithDeliveryIntent(toolshared.DeliveryFinalHandled),
 	}
 	agent.Tools.Register(tool)
 	agent.ToolLoopDetection = loopguard.DefaultConfig()

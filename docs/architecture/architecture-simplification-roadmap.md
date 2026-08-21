@@ -407,6 +407,14 @@ Exit criteria:
 - `ToolResult` does not contain deprecated delivery or completion fields; and
 - output, control, and delivery each have one explicit owner.
 
+Implemented shape:
+
+- stable output remains on `ToolResult`;
+- async and suspension directives live under `ToolResult.Control`;
+- one enum plus prepared outbound state live under `ToolResult.Delivery`; and
+- the unused message send callback and boolean delivery projections are
+  deleted instead of retained as adapters.
+
 ### D1 — Make outbox the sole delivery lifecycle owner
 
 Scope:

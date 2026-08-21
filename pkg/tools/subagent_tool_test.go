@@ -123,12 +123,12 @@ func TestSubagentTool_Execute_Success(t *testing.T) {
 	}
 
 	// Verify not async
-	if result.Async {
+	if result.Control.Async {
 		t.Error("SubagentTool should be synchronous, not async")
 	}
 
 	// Verify not silent
-	if result.Silent {
+	if result.Delivery.IsSilent() {
 		t.Error("SubagentTool should not be silent")
 	}
 

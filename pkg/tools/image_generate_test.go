@@ -136,7 +136,7 @@ func TestImageGenerateToolCanUseInjectedProvider(t *testing.T) {
 	if len(result.Media) != 1 {
 		t.Fatalf("media refs = %d, want 1", len(result.Media))
 	}
-	if !result.ResponseHandled {
+	if !result.Delivery.IsFinalHandled() {
 		t.Fatal("expected default image generation result to be response-handled")
 	}
 }
@@ -192,14 +192,14 @@ func TestImageGenerateToolImmediateContinueLeavesResponseUnhandled(t *testing.T)
 	if result.IsError {
 		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
 	}
-	if result.ResponseHandled {
+	if result.Delivery.IsFinalHandled() {
 		t.Fatal("expected immediate_continue image generation result to leave response unhandled")
 	}
-	if !result.ImmediateDelivery {
+	if !result.Delivery.IsImmediate() {
 		t.Fatal("expected immediate_continue image generation result to request immediate delivery")
 	}
-	if !result.Silent {
-		t.Fatal("expected immediate_continue image generation result to be silent")
+	if !result.Delivery.SuppressesImplicitUserOutput() {
+		t.Fatal("expected immediate_continue image generation result to suppress implicit delivery")
 	}
 	if len(result.Media) != 1 {
 		t.Fatalf("media refs = %d, want 1", len(result.Media))

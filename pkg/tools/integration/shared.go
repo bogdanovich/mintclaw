@@ -19,8 +19,6 @@ const (
 	DeliveryDefault           = toolshared.DeliveryDefault
 	DeliveryImmediateContinue = toolshared.DeliveryImmediateContinue
 	DeliveryFinalHandled      = toolshared.DeliveryFinalHandled
-	DeliveryFinalWithFollowup = toolshared.DeliveryFinalWithFollowup
-	DeliveryParentOnly        = toolshared.DeliveryParentOnly
 	DeliverySilent            = toolshared.DeliverySilent
 )
 

@@ -285,11 +285,11 @@ func deliveredToolResultMediaRefs(result *toolshared.ToolResult) []string {
 	if result == nil {
 		return nil
 	}
-	if result.Outbound == nil {
+	if result.Delivery.Outbound == nil {
 		return toolResultMediaRefs(result)
 	}
-	refs := make([]string, 0, len(result.Outbound.Media))
-	for _, part := range result.Outbound.Media {
+	refs := make([]string, 0, len(result.Delivery.Outbound.Media))
+	for _, part := range result.Delivery.Outbound.Media {
 		if ref := strings.TrimSpace(part.Ref); ref != "" {
 			refs = append(refs, ref)
 		}
@@ -602,10 +602,10 @@ func (runner *toolLoopRunner) admitToolCall(
 					})
 				}
 				var toolResultMedia []string
-				if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
+				if len(hookResult.Media) > 0 && !hookResult.Delivery.IsFinalHandled() {
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
 				}
-				if !hookResult.ResponseHandled && !hookResult.ImmediateDelivery {
+				if !hookResult.Delivery.IsFinalHandled() && !hookResult.Delivery.IsImmediate() {
 					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
 				}
 				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
@@ -687,17 +687,17 @@ func (runner *toolLoopRunner) admitToolCall(
 					recordDeliverable(exec, hookResult.Deliverable)
 				}
 
-				shouldSendForUser := !hookResult.ResponseHandled &&
+				shouldSendForUser := !hookResult.Delivery.IsFinalHandled() &&
 					terminalTurnErr == nil &&
 					!ts.opts.SuppressToolUserDelivery &&
-					!hookResult.Silent &&
+					!hookResult.Delivery.SuppressesImplicitUserOutput() &&
 					hookResult.ForUser != "" &&
 					ts.opts.SendResponse
 				if shouldSendForUser {
 					_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
 				}
 
-				if !hookResult.ResponseHandled {
+				if !hookResult.Delivery.IsFinalHandled() {
 					llm.toolResponseDisposition = toolResponseNeedsModel
 				}
 
@@ -711,7 +711,7 @@ func (runner *toolLoopRunner) admitToolCall(
 						ForLLMLen:  len(contentForLLM),
 						ForUserLen: len(hookResult.ForUser),
 						IsError:    hookResult.IsError,
-						Async:      hookResult.Async,
+						Async:      hookResult.Control.Async,
 						ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 						DiagnosticResult: diagnosticTextPreview(
 							p.Cfg, durableContent, diagnosticToolResultBytes,
@@ -1009,10 +1009,13 @@ func (runner *toolLoopRunner) approveToolCall(
 						tc,
 						toolName,
 						0,
-						&toolshared.ToolResult{Silent: true, Suspension: &interactions.SuspensionRequest{
-							Kind: interactions.KindApproval, PromptSummary: approval.ActionSummary,
-							Timeout: time.Duration(approval.TimeoutSeconds) * time.Second,
-						}},
+						&toolshared.ToolResult{
+							Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+								Kind: interactions.KindApproval, PromptSummary: approval.ActionSummary,
+								Timeout: time.Duration(approval.TimeoutSeconds) * time.Second,
+							}},
+							Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+						},
 						argumentHash,
 						approval.ActionSummary,
 					)
@@ -1236,14 +1239,14 @@ func (runner *toolLoopRunner) invokeToolCall(
 			asyncCallback,
 		)
 	}
-	if toolResult != nil && toolResult.Async && asyncAckDelivery.ParentHandled {
-		toolResult.ResponseHandled = true
+	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
+		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
 	toolDuration := time.Since(toolStart)
 
 	if ts.hardAbortRequested() {
 		resolveCanceledToolSuspension(execCtx, toolResult)
-		if toolResult != nil && toolResult.Suspension == nil {
+		if toolResult != nil && toolResult.Control.Suspension == nil {
 			effectiveCall := tc
 			effectiveCall.Name = toolName
 			effectiveCall.Arguments = toolArgs
@@ -1273,9 +1276,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 					if toolResp.Result != toolResult {
 						if !transferToolSuspensionResolution(toolResult, toolResp.Result) {
 							resolveCanceledToolSuspension(execCtx, toolResult)
-							if toolResult != nil && toolResult.Suspension != nil &&
-								toolResp.Result.Suspension == nil {
-								toolResp.Result.SuspensionResolution = nil
+							if toolResult != nil && toolResult.Control.Suspension != nil &&
+								toolResp.Result.Control.Suspension == nil {
+								toolResp.Result.Control.ResolveSuspension = nil
 							}
 						}
 					}
@@ -1295,7 +1298,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if toolResult == nil {
 		toolResult = toolshared.ErrorResult("hook returned nil tool result")
 	}
-	if toolResult.Suspension != nil {
+	if toolResult.Control.Suspension != nil {
 		argumentHash, approvalAction, approvalErr := runner.prepareToolApprovalSuspension(
 			execCtx,
 			toolName,
@@ -1330,7 +1333,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		}
 		toolResult = fallback
 	}
-	if toolResult != nil && toolResult.Suspension == nil {
+	if toolResult != nil && toolResult.Control.Suspension == nil {
 		resolveCanceledToolSuspension(execCtx, toolResult)
 	}
 	toolResult = normalizeToolResultForSyncDelivery(ts, toolResult)
@@ -1376,7 +1379,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
-	if !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
+	if !toolResult.Delivery.IsFinalHandled() && !toolResult.Delivery.IsImmediate() {
 		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
 	}
 	protectedResult := call.protectedResult
@@ -1458,14 +1461,14 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		recordDeliverable(exec, toolResult.Deliverable)
 	}
 
-	if !toolResult.ResponseHandled {
+	if !toolResult.Delivery.IsFinalHandled() {
 		llm.toolResponseDisposition = toolResponseNeedsModel
 	}
 
-	shouldSendForUser := !toolResult.ResponseHandled &&
+	shouldSendForUser := !toolResult.Delivery.IsFinalHandled() &&
 		terminalTurnErr == nil &&
 		!ts.opts.SuppressToolUserDelivery &&
-		!toolResult.Silent &&
+		!toolResult.Delivery.SuppressesImplicitUserOutput() &&
 		toolResult.ForUser != "" &&
 		ts.opts.SendResponse
 	if shouldSendForUser {
@@ -1486,7 +1489,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			ForLLMLen:  len(contentForLLM),
 			ForUserLen: len(toolResult.ForUser),
 			IsError:    toolResult.IsError,
-			Async:      toolResult.Async,
+			Async:      toolResult.Control.Async,
 			ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
@@ -1707,13 +1710,14 @@ func (r *toolLoopRunner) prepareToolApprovalSuspension(
 	toolArgs map[string]any,
 	result *toolshared.ToolResult,
 ) (string, string, error) {
-	if result == nil || result.Suspension == nil || result.Suspension.Kind != interactions.KindApproval {
+	if result == nil || result.Control.Suspension == nil ||
+		result.Control.Suspension.Kind != interactions.KindApproval {
 		return "", "", nil
 	}
 	if r.ts == nil || r.ts.agent == nil || r.ts.agent.Tools == nil {
 		return "", "", errors.New("tool registry is unavailable")
 	}
-	action := result.Suspension.PromptSummary
+	action := result.Control.Suspension.PromptSummary
 	if err := validateApprovalDisplay(toolName, action); err != nil {
 		return "", "", err
 	}
@@ -1736,7 +1740,7 @@ func (r *toolLoopRunner) prepareToolApprovalSuspension(
 }
 
 func toolResultContextStatus(result *toolshared.ToolResult) providers.ToolResultStatus {
-	if result == nil || result.Async {
+	if result == nil || result.Control.Async {
 		return providers.ToolResultStatusUnresolved
 	}
 	if result.IsError {
@@ -1846,7 +1850,7 @@ func buildToolResultJournalMessage(
 		ToolResultStatus: toolResultContextStatus(result),
 		Deliverable:      taskresult.CloneDeliverable(result.Deliverable),
 	}
-	if len(result.Media) > 0 && !result.ResponseHandled {
+	if len(result.Media) > 0 && !result.Delivery.IsFinalHandled() {
 		message.Media = append(message.Media, result.Media...)
 	}
 	return message
@@ -1919,7 +1923,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryAmbiguous) {
 		turnErr = settledResult.Err
 	}
-	if settledResult != nil && settledResult.ResponseHandled {
+	if settledResult != nil && settledResult.Delivery.IsFinalHandled() {
 		markToolResultMediaDelivered(settledResult, deliveredToolResultMediaRefs(settledResult))
 	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
@@ -2071,7 +2075,7 @@ func (r *toolLoopRunner) settleCommittedImmediateResult(
 	result *toolshared.ToolResult,
 	protectedResult bool,
 ) (bool, error) {
-	if protectedResult || result == nil || !result.ImmediateDelivery || result.Deliverable == nil {
+	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
 		return false, nil
 	}
 	settledMsg := journaledMsg
@@ -2097,11 +2101,11 @@ func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 	result *toolshared.ToolResult,
 	protectedResult bool,
 ) {
-	if protectedResult || result == nil || !result.ImmediateDelivery || result.Deliverable == nil {
+	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
 		return
 	}
-	originalCommit := result.CommitOutbound
-	result.CommitOutbound = func(ctx context.Context) error {
+	originalCommit := result.Delivery.Commit
+	result.Delivery.Commit = func(ctx context.Context) error {
 		if originalCommit != nil {
 			if err := originalCommit(ctx); err != nil {
 				return err
@@ -2280,7 +2284,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	argumentHash string,
 	approvalAction string,
 ) (ToolControl, bool, *toolshared.ToolResult) {
-	if result == nil || result.Suspension == nil {
+	if result == nil || result.Control.Suspension == nil {
 		return ToolControlContinue, false, result
 	}
 	resolveCanceled := func() { resolveCanceledToolSuspension(ctx, result) }
@@ -2323,7 +2327,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	if r.p == nil || r.p.Interaction.Suspension == nil {
 		return fallback("human interaction suspension is unavailable in this runtime")
 	}
-	if err := interactions.ValidateSuspensionRequest(*result.Suspension); err != nil {
+	if err := interactions.ValidateSuspensionRequest(*result.Control.Suspension); err != nil {
 		return fallback(err.Error())
 	}
 
@@ -2361,11 +2365,11 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 	disposition, err := r.p.Interaction.Suspension.SuspendToolCall(ctx, ToolSuspensionRequest{
 		Workspace:        interactionWorkspace,
-		Prompt:           *result.Suspension,
+		Prompt:           *result.Control.Suspension,
 		Route:            route,
 		ApprovalAction:   strings.TrimSpace(approvalAction),
 		ExecutionContext: cloneInboundContext(originInbound),
-		Resolution:       result.SuspensionResolution,
+		Resolution:       result.Control.ResolveSuspension,
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,
 			ExecutionID:            effectiveToolExecutionID(r.ts),
@@ -2417,11 +2421,11 @@ func (r *toolLoopRunner) trySuspendToolCall(
 }
 
 func resolveCanceledToolSuspension(ctx context.Context, result *toolshared.ToolResult) {
-	if result == nil || result.SuspensionResolution == nil {
+	if result == nil || result.Control.ResolveSuspension == nil {
 		return
 	}
-	resolve := result.SuspensionResolution
-	result.SuspensionResolution = nil
+	resolve := result.Control.ResolveSuspension
+	result.Control.ResolveSuspension = nil
 	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	_ = resolve(resolveCtx, interactions.OutcomeCanceled)
@@ -2433,12 +2437,13 @@ func resolveCanceledToolSuspension(ctx context.Context, result *toolshared.ToolR
 // and resolver; a replacement that removes suspension is canceled by the
 // caller instead.
 func transferToolSuspensionResolution(current, replacement *toolshared.ToolResult) bool {
-	if current == nil || current.Suspension == nil || replacement == nil || replacement.Suspension == nil {
+	if current == nil || current.Control.Suspension == nil || replacement == nil ||
+		replacement.Control.Suspension == nil {
 		return false
 	}
-	replacement.Suspension = current.Suspension
-	replacement.SuspensionResolution = current.SuspensionResolution
-	current.SuspensionResolution = nil
+	replacement.Control.Suspension = current.Control.Suspension
+	replacement.Control.ResolveSuspension = current.Control.ResolveSuspension
+	current.Control.ResolveSuspension = nil
 	return true
 }
 

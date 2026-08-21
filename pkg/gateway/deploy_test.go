@@ -286,7 +286,7 @@ func TestGatewayDeployToolFailuresRemainExplicitAndUnhandled(t *testing.T) {
 			!strings.Contains(result.ForLLM, "failure") {
 			t.Fatalf("result = %#v", result)
 		}
-		if result.ResponseHandled || result.DeliveryIntent == toolshared.DeliveryFinalHandled {
+		if result.Delivery.IsFinalHandled() || result.Delivery.Intent == toolshared.DeliveryFinalHandled {
 			t.Fatalf("failed deploy claimed handled success: %#v", result)
 		}
 	})
@@ -294,13 +294,13 @@ func TestGatewayDeployToolFailuresRemainExplicitAndUnhandled(t *testing.T) {
 
 func assertFinalHandledDeployResult(t *testing.T, result *toolshared.ToolResult) {
 	t.Helper()
-	if result.DeliveryIntent != toolshared.DeliveryFinalHandled {
-		t.Fatalf("DeliveryIntent = %q, want final_handled", result.DeliveryIntent)
+	if result.Delivery.Intent != toolshared.DeliveryFinalHandled {
+		t.Fatalf("DeliveryIntent = %q, want final_handled", result.Delivery.Intent)
 	}
-	if !result.ResponseHandled {
+	if !result.Delivery.IsFinalHandled() {
 		t.Fatal("successful deploy result did not own the turn")
 	}
-	if result.ImmediateDelivery || result.Silent {
+	if result.Delivery.IsImmediate() || result.Delivery.IsSilent() {
 		t.Fatalf("successful deploy retained immediate/silent flags: %#v", result)
 	}
 }
@@ -310,7 +310,7 @@ func assertFailedDeployResult(t *testing.T, result *toolshared.ToolResult, wantE
 	if !errors.Is(result.Err, wantErr) || !result.IsError {
 		t.Fatalf("result = %#v, want error %v", result, wantErr)
 	}
-	if result.ResponseHandled || result.DeliveryIntent == toolshared.DeliveryFinalHandled {
+	if result.Delivery.IsFinalHandled() || result.Delivery.Intent == toolshared.DeliveryFinalHandled {
 		t.Fatalf("failed deploy claimed handled success: %#v", result)
 	}
 }

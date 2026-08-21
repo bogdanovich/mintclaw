@@ -147,7 +147,10 @@ func (t *RequestUserInputTool) Execute(_ context.Context, args map[string]any) *
 	if err := interactions.ValidateSuspensionRequest(request); err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return &toolshared.ToolResult{Silent: true, Suspension: &request}
+	return &toolshared.ToolResult{
+		Control:  toolshared.ToolControl{Suspension: &request},
+		Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+	}
 }
 
 func (*RequestUserInputTool) ToolLoopSemantics() loopguard.Semantics {

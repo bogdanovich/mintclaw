@@ -92,7 +92,7 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	if result.IsError {
 		t.Errorf("Expected success for valid task, got error: %s", result.ForLLM)
 	}
-	if !result.Async {
+	if !result.Control.Async {
 		t.Error("SpawnTool should return async result")
 	}
 	<-spawner.done
@@ -149,7 +149,7 @@ func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T
 		t.Error("callback must not run when browser objective preflight fails")
 	})
 
-	if result == nil || !result.IsError || result.Async {
+	if result == nil || !result.IsError || result.Control.Async {
 		t.Fatalf("result = %#v, want synchronous error", result)
 	}
 	if !strings.Contains(result.ForLLM, "retry spawn") {
@@ -212,7 +212,7 @@ func TestSpawnTool_TaskStatusSeesSpawnedTask(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Expected success for valid task, got error: %s", result.ForLLM)
 	}
-	if !result.Async {
+	if !result.Control.Async {
 		t.Fatal("SpawnTool should return async result")
 	}
 
@@ -264,7 +264,7 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 		done <- res
 	})
 
-	if result == nil || !result.Async {
+	if result == nil || !result.Control.Async {
 		t.Fatal("expected async acknowledgment result")
 	}
 
@@ -273,11 +273,11 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 		if cbResult == nil {
 			t.Fatal("expected callback result")
 		}
-		if cbResult.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
-			t.Fatalf("AsyncDelivery = %q, want %q", cbResult.AsyncDelivery, toolshared.AsyncDeliveryUserOnly)
+		if cbResult.Delivery.AsyncMode != toolshared.AsyncDeliveryUserOnly {
+			t.Fatalf("AsyncDelivery = %q, want %q", cbResult.Delivery.AsyncMode, toolshared.AsyncDeliveryUserOnly)
 		}
-		if !strings.HasPrefix(cbResult.AsyncTaskID, "subagent-") {
-			t.Fatalf("AsyncTaskID = %q, want subagent-*", cbResult.AsyncTaskID)
+		if !strings.HasPrefix(cbResult.Control.TaskID, "subagent-") {
+			t.Fatalf("AsyncTaskID = %q, want subagent-*", cbResult.Control.TaskID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for spawn callback result")
@@ -297,7 +297,7 @@ func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
 	}, func(context.Context, *toolshared.ToolResult) {
 		close(completed)
 	})
-	if result == nil || !result.Async {
+	if result == nil || !result.Control.Async {
 		t.Fatalf("spawn result = %#v", result)
 	}
 	select {
@@ -328,7 +328,7 @@ func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
 		done <- res
 	})
 
-	if result == nil || !result.Async {
+	if result == nil || !result.Control.Async {
 		t.Fatal("expected async acknowledgment result")
 	}
 
@@ -337,8 +337,8 @@ func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
 		if cbResult == nil {
 			t.Fatal("expected callback result")
 		}
-		if cbResult.AsyncDelivery != toolshared.AsyncDeliveryUserAndParent {
-			t.Fatalf("AsyncDelivery = %q, want %q", cbResult.AsyncDelivery, toolshared.AsyncDeliveryUserAndParent)
+		if cbResult.Delivery.AsyncMode != toolshared.AsyncDeliveryUserAndParent {
+			t.Fatalf("AsyncDelivery = %q, want %q", cbResult.Delivery.AsyncMode, toolshared.AsyncDeliveryUserAndParent)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for spawn callback result")

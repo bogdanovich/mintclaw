@@ -352,16 +352,18 @@ func (tool *browserHandoffContinuationTool) Execute(
 		tool.ownerExecutionID = executionID
 		return &toolshared.ToolResult{
 			ForLLM: `{"controller":"human"}`,
-			Suspension: &interactions.SuspensionRequest{
-				Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
-				Questions: []interactions.Question{{
-					ID: "release_browser", Header: "Browser control",
-					Question: "Release browser control?",
-				}},
-			},
-			SuspensionResolution: func(_ context.Context, outcome interactions.Outcome) error {
-				tool.released = outcome == interactions.OutcomeAnswered
-				return nil
+			Control: toolshared.ToolControl{
+				Suspension: &interactions.SuspensionRequest{
+					Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
+					Questions: []interactions.Question{{
+						ID: "release_browser", Header: "Browser control",
+						Question: "Release browser control?",
+					}},
+				},
+				ResolveSuspension: func(_ context.Context, outcome interactions.Outcome) error {
+					tool.released = outcome == interactions.OutcomeAnswered
+					return nil
+				},
 			},
 		}
 	case "resume", "observe":

@@ -624,7 +624,7 @@ func (r *ToolRegistry) executeToolWithContext(
 				"duration": duration.Milliseconds(),
 				"error":    result.ForLLM,
 			})
-	} else if result.Async {
+	} else if result.Control.Async {
 		logger.InfoCF("tool", "Tool started (async)",
 			map[string]any{
 				"tool":     name,

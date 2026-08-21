@@ -2216,7 +2216,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	result := (&toolshared.ToolResult{
 		ForLLM: projection, ForUser: projection,
 	}).
-		WithAsyncTaskID(taskID).
+		WithTaskID(taskID).
 		WithAsyncDelivery(mode)
 	if terminalDeliverable != nil {
 		result.WithDeliverable(taskresult.CloneDeliverable(terminalDeliverable))

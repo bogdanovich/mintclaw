@@ -685,14 +685,14 @@ func TestNodeDownloadDeliveryIsClaimedOnceWithoutCompletionReply(t *testing.T) {
 	args := nodeFileDownloadTestArgs(t, source, ctx, true)
 
 	first := tool.Execute(ctx, args)
-	if !first.ResponseHandled || len(first.Media) != 1 ||
+	if !first.Delivery.IsFinalHandled() || len(first.Media) != 1 ||
 		first.Media[0] != source.handoffRef || source.dispatchCalls != 1 ||
 		source.handoffCalls != 1 {
 		t.Fatalf("first delivery = %#v, dispatches=%d handoffs=%d",
 			first, source.dispatchCalls, source.handoffCalls)
 	}
 	second := tool.Execute(ctx, args)
-	if !second.ResponseHandled || len(second.Media) != 0 ||
+	if !second.Delivery.IsFinalHandled() || len(second.Media) != 0 ||
 		source.dispatchCalls != 1 || source.queryCalls != 1 ||
 		source.handoffCalls != 2 ||
 		!strings.Contains(second.ForLLM, "already_claimed") {

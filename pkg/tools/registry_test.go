@@ -406,7 +406,7 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	if at.lastCB == nil {
 		t.Error("expected ExecuteAsync to have received a callback")
 	}
-	if !result.Async {
+	if !result.Control.Async {
 		t.Error("expected async result")
 	}
 
