@@ -3473,10 +3473,15 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 		wantConsumed   bool
 		revokePolicy   bool
 		mutateArgs     bool
+		noContext      bool
 	}{
 		{
 			name: "allow once", answer: "allow_once", outcome: interactions.OutcomeAllowed,
 			wantExecutions: 1, wantConsumed: true,
+		},
+		{
+			name: "allow once without context history", answer: "allow_once", outcome: interactions.OutcomeAllowed,
+			wantExecutions: 1, wantConsumed: true, noContext: true,
 		},
 		{name: "deny", answer: "deny", outcome: interactions.OutcomeDenied},
 		{name: "policy revoked", answer: "allow_once", outcome: interactions.OutcomeAllowed, revokePolicy: true},
@@ -3495,6 +3500,9 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			}}
 			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 			defer cleanup()
+			if test.noContext {
+				al.contextManager = &noneContextManager{}
+			}
 			manager := newInteractionChannelManager()
 			installInteractionChannelManager(t, al, manager)
 			tool := &approvalCountingTool{}
@@ -3591,6 +3599,29 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				(resolved.ApprovalConsumedAt != 0) != test.wantConsumed ||
 				tool.executions != test.wantExecutions {
 				t.Fatalf("resolved approval = %#v, executions=%d", resolved, tool.executions)
+			}
+			if test.wantExecutions > 0 {
+				provider.mu.Lock()
+				requests := append([][]providers.Message(nil), provider.requests...)
+				provider.mu.Unlock()
+				if len(requests) != 2 {
+					t.Fatalf("provider requests = %d, want initial and continuation", len(requests))
+				}
+				callCount, resultCount := 0, 0
+				for _, message := range requests[1] {
+					if messageContainsToolCall(message, "call-protected") {
+						callCount++
+					}
+					if message.Role == "tool" && message.ToolCallID == "call-protected" {
+						resultCount++
+						if message.ToolResultStatus == providers.ToolResultStatusUnresolved {
+							t.Fatalf("continuation request retained unresolved result: %#v", requests[1])
+						}
+					}
+				}
+				if callCount != 1 || resultCount != 1 {
+					t.Fatalf("continuation tool pair = call:%d result:%d", callCount, resultCount)
+				}
 			}
 			select {
 			case final := <-manager.sent:

@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -14,23 +14,19 @@ import (
 // the prepared model loop directly; approvals first execute the journaled tool
 // call and then continue through that same setup, lifecycle, and cleanup.
 type interactionContinuationExecutor struct {
-	approvedTool  *providers.ToolCall
-	afterTool     func([]toolshared.WriteAuditEntry) error
-	validateTool  func() error
-	onAbort       func()
-	approval      *ToolApprovalGrant
-	origin        *bus.InboundContext
-	resumeInbound *bus.InboundContext
-	abortOnce     sync.Once
+	approvedTool *providers.ToolCall
+	afterTool    func([]toolshared.WriteAuditEntry) error
+	validateTool func() error
+	onAbort      func()
+	approval     *ToolApprovalGrant
+	abortOnce    sync.Once
 }
 
 func (e *interactionContinuationExecutor) configure(opts *processOptions) {
 	if e == nil || e.approvedTool == nil || opts == nil {
 		return
 	}
-	e.resumeInbound = cloneInboundContext(opts.Dispatch.InboundContext)
 	opts.ApprovalGrant = e.approval
-	opts.Dispatch.InboundContext = cloneInboundContext(e.origin)
 }
 
 func (e *interactionContinuationExecutor) abort() {
@@ -85,8 +81,12 @@ func (e *interactionContinuationExecutor) execute(
 				return turnResult{}, TurnEndStatusError, validateErr
 			}
 		}
+		if repairErr := repairJournaledToolPair(
+			exec, ts.agent.Sessions.GetHistory(ts.sessionKey), e.approvedTool.ID,
+		); repairErr != nil {
+			return turnResult{}, TurnEndStatusError, repairErr
+		}
 		ts.opts.ApprovalGrant = nil
-		ts.opts.Dispatch.InboundContext = cloneInboundContext(e.resumeInbound)
 		if outcome.Control == ToolControlBreak && llm.toolResponseDisposition == toolResponseHandled {
 			result, finalizeErr := pipeline.finalizeTurn(
 				turnCtx, ts, exec, llm, TurnEndStatusCompleted, "",
@@ -99,6 +99,66 @@ func (e *interactionContinuationExecutor) execute(
 	}
 
 	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, host, exec)
+}
+
+func repairJournaledToolPair(
+	exec *turnExecution,
+	history []providers.Message,
+	toolCallID string,
+) error {
+	originIndex, resultIndex := interactionToolPairIndexes(history, toolCallID)
+	if originIndex < 0 || resultIndex < 0 {
+		return fmt.Errorf("journaled tool pair %q is incomplete", toolCallID)
+	}
+
+	providerOriginIndex := -1
+	for index, message := range exec.messages {
+		if !messageContainsToolCall(message, toolCallID) {
+			continue
+		}
+		if providerOriginIndex >= 0 {
+			return fmt.Errorf("provider context contains duplicate tool call %q", toolCallID)
+		}
+		providerOriginIndex = index
+	}
+	if providerOriginIndex < 0 {
+		repaired := make([]providers.Message, 0, len(exec.messages)+resultIndex-originIndex)
+		for _, message := range exec.messages {
+			if message.Role != "tool" || message.ToolCallID != toolCallID {
+				repaired = append(repaired, message)
+			}
+		}
+		for _, message := range history[originIndex : resultIndex+1] {
+			repaired = append(repaired, providerPromptMessageForTurn(message))
+		}
+		exec.messages = repaired
+		return nil
+	}
+
+	repaired := make([]providers.Message, 0, len(exec.messages))
+	for index, message := range exec.messages {
+		if message.Role == "tool" && message.ToolCallID == toolCallID {
+			continue
+		}
+		repaired = append(repaired, message)
+		if index == providerOriginIndex {
+			repaired = append(repaired, providerPromptMessageForTurn(history[resultIndex]))
+		}
+	}
+	exec.messages = repaired
+	return nil
+}
+
+func messageContainsToolCall(message providers.Message, toolCallID string) bool {
+	if message.Role != "assistant" {
+		return false
+	}
+	for _, toolCall := range message.ToolCalls {
+		if toolCall.ID == toolCallID {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pipeline) executeJournaledToolCall(
