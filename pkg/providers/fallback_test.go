@@ -297,7 +297,11 @@ func TestFallback_ContextDeadlineDoesNotFallbackOrStartCooldown(t *testing.T) {
 		func(ctx context.Context, candidate FallbackCandidate) (*LLMResponse, error) {
 			calls++
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return nil, &ProviderError{
+				Kind:        ProviderErrorTimeout,
+				SafeMessage: "provider request timed out",
+				Cause:       ctx.Err(),
+			}
 		},
 		func(attempt FallbackAttempt) { observed = append(observed, attempt) },
 	)
@@ -310,6 +314,12 @@ func TestFallback_ContextDeadlineDoesNotFallbackOrStartCooldown(t *testing.T) {
 	}
 	if len(observed) != 1 || observed[0].Skipped || observed[0].Reason != "" {
 		t.Fatalf("observed attempts = %#v, want one unclassified failed attempt", observed)
+	}
+	diagnostic := observed[0].Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.ClassificationSource != ClassificationUnclassified ||
+		diagnostic.ProviderErrorKind != "" ||
+		!strings.Contains(diagnostic.Message, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline diagnostic = %#v, want caller-owned unclassified deadline", diagnostic)
 	}
 	for _, candidate := range candidates {
 		if !ct.IsAvailable(candidate.StableKey()) {

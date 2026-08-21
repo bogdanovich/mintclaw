@@ -329,7 +329,7 @@ func (fc *FallbackChain) ExecuteCandidateObserved(
 			recordAttempt(FallbackAttempt{
 				Provider: candidate.Provider,
 				Model:    candidate.Model,
-				Error:    err,
+				Error:    ctxErr,
 				Duration: elapsed,
 			})
 			return nil, ctxErr
@@ -482,7 +482,7 @@ func (fc *FallbackChain) ExecuteImage(
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider: candidate.Provider,
 				Model:    candidate.Model,
-				Error:    err,
+				Error:    ctxErr,
 				Duration: elapsed,
 			})
 			return nil, ctxErr
