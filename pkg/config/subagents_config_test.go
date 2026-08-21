@@ -9,7 +9,7 @@ import (
 func TestLoadConfig_SubagentsSessionModelOverrideMode(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
-		"version": 1,
+		"version": 3,
 		"agents": {
 			"defaults": {
 				"workspace": "/tmp/test",

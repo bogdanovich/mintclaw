@@ -80,7 +80,8 @@ The new `model_list` configuration offers several advantages:
 }
 ```
 
-> **Note**: The `enabled` field can be omitted — during V1→V2 migration it is auto-inferred (models with API keys or the `local-model` name are enabled by default). For new configs, you can explicitly set `"enabled": false` to disable a model entry without removing it.
+> **Note**: Set `enabled` explicitly in the converted document. Runtime startup
+> does not infer or migrate fields from an older schema version.
 
 ## Provider / Model Resolution
 
@@ -132,7 +133,8 @@ Examples:
 | `max_tokens_field` | No | Field name for max tokens |
 | `request_timeout` | No | HTTP request timeout in seconds; `<=0` uses default `120s` |
 
-> **Note**: `api_key` (singular) has been **removed** in V2 configs. Only `api_keys` (array) is supported. During migration from V0/V1, both `api_key` and `api_keys` are automatically merged into the new `api_keys` array.
+> **Note**: `api_key` (singular) is not accepted. Put every credential in the
+> `api_keys` array during the manual conversion.
 
 ## Load Balancing
 
@@ -217,14 +219,12 @@ With `model_list`, adding a new provider requires zero code changes:
 
 Just set `provider` to `openai` (or another supported provider), and provide your provider's API base URL.
 
-## Backward Compatibility
+## Runtime boundary
 
-During the migration period, your existing V0/V1 config will be auto-migrated to V2:
-
-1. If `model_list` is empty and `providers` has data, the system auto-converts internally
-2. Both `api_key` (singular) and `api_keys` (array) in V0/V1 configs are merged into the new `api_keys` array
-3. A deprecation warning is logged: `"providers config is deprecated, please migrate to model_list"`
-4. All existing functionality remains unchanged
+MintClaw accepts only the current config version. It does not read `providers`,
+merge singular `api_key` values, or rewrite an old document. Complete this
+conversion while MintClaw is stopped, validate the result with the new binary,
+and then upgrade the coordinated deployment.
 
 ## Migration Checklist
 

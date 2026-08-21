@@ -46,7 +46,7 @@ func TestSecurityConfigIntegration(t *testing.T) {
 		// Create config.json with direct security values using the current schema.
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 2,
+  "version": 3,
   "model_list": [
     {
       "model_name": "test-model",
@@ -55,10 +55,13 @@ func TestSecurityConfigIntegration(t *testing.T) {
       "api_keys": ["sk-from-config-json-direct"]
     }
   ],
-  "channels": {
+  "channel_list": {
     "telegram": {
       "enabled": true,
-      "token": "token-from-config-json-direct"
+      "type": "telegram",
+      "settings": {
+        "token": "token-from-config-json-direct"
+      }
     }
   },
   "tools": {
@@ -86,9 +89,10 @@ func TestSecurityConfigIntegration(t *testing.T) {
     api_keys:
       - "sk-from-security-yml"
 
-channels:
+channel_list:
   telegram:
-    token: "token-from-security-yml"
+    settings:
+      token: "token-from-security-yml"
 
 skills:
   github:
@@ -132,7 +136,7 @@ func TestSecurityConfigWithAPIKeysArray(t *testing.T) {
 		// Create config with APIKeys array
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "model_list": [
     {
       "model_name": "multi-key-model",
@@ -206,61 +210,83 @@ func TestAllSecurityKeysAccessible(t *testing.T) {
 		// Create config.json without sensitive values (they'll be in .security.yml)
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "model_list": [
     {
       "model_name": "test-model-1",
       "model": "openai/test-model-1"
     }
   ],
-  "channels": {
+  "channel_list": {
     "telegram": {
-      "enabled": true
+      "enabled": true,
+      "type": "telegram",
+      "settings": {}
     },
     "feishu": {
       "enabled": true,
-      "app_id": "test_app_id"
+      "type": "feishu",
+      "settings": {"app_id": "test_app_id"}
     },
     "discord": {
-      "enabled": true
+      "enabled": true,
+      "type": "discord",
+      "settings": {}
     },
     "dingtalk": {
       "enabled": true,
-      "client_id": "test_client_id"
+      "type": "dingtalk",
+      "settings": {"client_id": "test_client_id"}
     },
     "slack": {
-      "enabled": true
+      "enabled": true,
+      "type": "slack",
+      "settings": {}
     },
     "matrix": {
       "enabled": true,
-      "homeserver": "https://matrix.org",
-      "user_id": "@test:matrix.org"
+      "type": "matrix",
+      "settings": {
+        "homeserver": "https://matrix.org",
+        "user_id": "@test:matrix.org"
+      }
     },
     "line": {
       "enabled": true,
-      "webhook_host": "localhost",
-      "webhook_port": 8080,
-      "webhook_path": "/webhook"
+      "type": "line",
+      "settings": {
+        "webhook_host": "localhost",
+        "webhook_port": 8080,
+        "webhook_path": "/webhook"
+      }
     },
     "onebot": {
       "enabled": true,
-      "ws_url": "ws://localhost:8080"
+      "type": "onebot",
+      "settings": {"ws_url": "ws://localhost:8080"}
     },
     "wecom": {
       "enabled": true,
-      "bot_id": "test_wecom_bot_id"
+      "type": "wecom",
+      "settings": {"bot_id": "test_wecom_bot_id"}
     },
     "mintclaw": {
-      "enabled": true
+      "enabled": true,
+      "type": "mintclaw",
+      "settings": {}
     },
     "irc": {
       "enabled": true,
-      "server": "irc.example.com",
-      "nick": "testbot"
+      "type": "irc",
+      "settings": {
+        "server": "irc.example.com",
+        "nick": "testbot"
+      }
     },
     "qq": {
       "enabled": true,
-      "app_id": "test_qq_app_id"
+      "type": "qq",
+      "settings": {"app_id": "test_qq_app_id"}
     }
   },
   "tools": {
@@ -296,37 +322,49 @@ func TestAllSecurityKeysAccessible(t *testing.T) {
     api_keys:
       - "file://model_api_key.txt"
 
-channels:
+channel_list:
   telegram:
-    token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+    settings:
+      token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
   feishu:
-    app_secret: "feishu_test_app_secret"
-    encrypt_key: "feishu_test_encrypt_key"
-    verification_token: "feishu_test_verification_token"
+    settings:
+      app_secret: "feishu_test_app_secret"
+      encrypt_key: "feishu_test_encrypt_key"
+      verification_token: "feishu_test_verification_token"
   discord:
-    token: "discord_test_bot_token_xyz"
+    settings:
+      token: "discord_test_bot_token_xyz"
   dingtalk:
-    client_secret: "dingtalk_test_client_secret"
+    settings:
+      client_secret: "dingtalk_test_client_secret"
   slack:
-    bot_token: "xoxb-slack-bot-token-123"
-    app_token: "xapp-slack-app-token-456"
+    settings:
+      bot_token: "xoxb-slack-bot-token-123"
+      app_token: "xapp-slack-app-token-456"
   matrix:
-    access_token: "matrix_test_access_token"
+    settings:
+      access_token: "matrix_test_access_token"
   line:
-    channel_secret: "line_test_channel_secret"
-    channel_access_token: "line_test_channel_access_token"
+    settings:
+      channel_secret: "line_test_channel_secret"
+      channel_access_token: "line_test_channel_access_token"
   onebot:
-    access_token: "onebot_test_access_token"
+    settings:
+      access_token: "onebot_test_access_token"
   wecom:
-    secret: "wecom_test_secret"
+    settings:
+      secret: "wecom_test_secret"
   mintclaw:
-    token: "mintclaw_test_token"
+    settings:
+      token: "mintclaw_test_token"
   irc:
-    password: "irc_test_password"
-    nickserv_password: "irc_test_nickserv_password"
-    sasl_password: "irc_test_sasl_password"
+    settings:
+      password: "irc_test_password"
+      nickserv_password: "irc_test_nickserv_password"
+      sasl_password: "irc_test_sasl_password"
   qq:
-    app_secret: "qq_test_app_secret"
+    settings:
+      app_secret: "qq_test_app_secret"
 
 web:
   brave:
@@ -494,7 +532,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "tools": {
     "skills": {
       "registries": {
@@ -536,7 +574,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "tools": {
     "skills": {
       "registries": {
@@ -578,7 +616,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "tools": {
     "skills": {
       "registries": {
@@ -614,7 +652,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 1,
+  "version": 3,
   "tools": {
     "skills": {
       "registries": {

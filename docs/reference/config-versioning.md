@@ -1,285 +1,69 @@
-# Config Schema Versioning Guide
+# Config Schema Contract
 
-## Overview
-
-MintClaw uses a schema versioning system for `config.json` to ensure smooth upgrades as the configuration format evolves.
-
-## Version History
-
-### Version 1
-- **Introduction**: Initial version with version field support
-- **Changes**: Added `version` field to Config struct
-- **Migration**: No structural changes needed for existing configs
-
-### Version 2
-- **Introduction**: Model enable/disable support and channel config unification
-- **Changes**:
-  - Added `enabled` field to `ModelConfig` — allows disabling individual model entries without removing them
-  - During V1→V2 migration, `enabled` is auto-inferred: models with API keys or the reserved `local-model` name are enabled; others default to disabled
-  - Migrated legacy channel fields: Discord `mention_only` → `group_trigger.mention_only`, OneBot `group_trigger_prefix` → `group_trigger.prefixes`
-  - V0 configs now migrate directly to CurrentVersion (V2) instead of going through V1
-  - `makeBackup()` now uses date-only suffix (e.g., `config.json.20260330.bak`) and also backs up `.security.yml`
-
-### Version 3
-- **Introduction**: Enhanced type safety and improved error handling
-- **Changes**:
-  - Added comma-ok type assertions in channel configuration decoding to prevent potential panics
-  - Improved error logging for Weixin channel configuration decoding
-  - Enhanced security configuration documentation and examples
-  - **Auto-migration**: V2 configs are automatically migrated to V3 on load with no user action required
-  - **Backup**: Before migration, the system creates a date-stamped backup (e.g., `config.json.20260413.bak`) in the same directory
-  - **Downgrade risk**: Once migrated to V3, the config cannot be safely loaded by older V2-only versions. To downgrade, restore from the auto-created backup file.
-
-## How It Works
-
-### Automatic Migration
-When you load a config file:
-1. The system first reads the `version` field from the JSON
-2. Based on the detected version, it loads the appropriate config struct (`configV0`, `configV1`, etc.)
-3. If the loaded version is less than the latest, migrations are applied incrementally
-4. Before saving, the system automatically creates a date-stamped backup of `config.json` and `.security.yml`
-5. The version number is updated automatically
-6. The migrated config is automatically saved back to disk
-
-### Version Field
-The `version` field in `config.json` indicates the schema version:
-- `0` or missing: Legacy config (no version field)
-- `1`: Previous version (will be auto-migrated to V2 on load)
-- `2`: Previous version (will be auto-migrated to V3 on load)
-- `3`: Current version
+MintClaw accepts one `config.json` schema at runtime. The `version` field is
+required and must equal `config.CurrentVersion`; the current value is `3`.
 
 ```json
 {
   "version": 3,
-  "agents": {...},
-  ...
+  "agents": {},
+  "channel_list": {},
+  "model_list": [],
+  "tools": {}
 }
 ```
 
-## Adding a New Migration
+Missing, older, and future versions are rejected before the configuration is
+decoded. Loading never converts the document, writes a replacement, or creates
+a migration backup. Unknown and removed fields are also rejected with their
+exact JSON paths.
 
-When making breaking changes to the config schema:
+This keeps startup on one typed schema and makes configuration changes an
+explicit part of a coordinated upgrade.
 
-### Step 1: Define the New Version Struct
+## Current field shapes
 
-Create a new struct for the new version if the structure changes significantly:
+- Models belong in `model_list`; credentials use the `api_keys` array.
+- Agent model selection uses `agents.defaults.model_name`.
+- Channels belong in `channel_list`. Every entry has a `type`, common channel
+  fields at the entry root, and channel-specific fields under `settings`.
+- Agent routing uses `agents.dispatch.rules`; the removed top-level `bindings`
+  field is not accepted.
+- Removed tool names such as `tools.edit_file` are not ignored.
 
-```go
-// ConfigV3 represents version 3 config structure
-type ConfigV3 struct {
-    Version   int             `json:"version"`
-    Agents    AgentsConfig    `json:"agents"`
-    // ... other fields with new structure
-}
-```
+See [`config/config.example.json`](../../config/config.example.json) for a
+complete current document.
 
-### Step 2: Update Current Config Version
+## Coordinated upgrade procedure
 
-```go
-const CurrentVersion = 3  // Increment this
-```
+When a release changes the configuration schema:
 
-### Step 3: Add a Loader Function
+1. Stop all MintClaw processes that share the configuration.
+2. Back up `config.json` and `.security.yml` using the deployment's normal
+   backup mechanism.
+3. Convert both files to the new schema and set the new `version`.
+4. Validate the converted files with the new binary before replacing the
+   running version.
+5. Upgrade the gateway, CLI, coding frontend, companions, and other first-party
+   clients together.
+6. After the rollout is healthy, remove obsolete fields and temporary cutover
+   artifacts.
 
-```go
-// loadConfigV3 loads a version 3 config
-func loadConfigV3(data []byte) (*Config, error) {
-    cfg := DefaultConfig()
+Do not rely on MintClaw startup to preserve or transform an older document.
 
-    // Parse to ConfigV3 struct
-    var v3 ConfigV3
-    if err := json.Unmarshal(data, &v3); err != nil {
-        return nil, err
-    }
+## Changing the schema
 
-    // Convert to current Config
-    cfg.Version = v3.Version
-    cfg.Agents = v3.Agents
-    // ... map other fields
+For a breaking configuration change:
 
-    return cfg, nil
-}
-```
+1. Update `Config` and its nested current-schema types.
+2. Increment `CurrentVersion`.
+3. Update defaults, examples, documentation, fixtures, and the deployed
+   configuration in the same rollout.
+4. Add tests that the new version loads and older, missing, and future versions
+   fail without changing files.
+5. Document the one-time operator conversion in the release notes.
 
-### Step 4: Add Migration Logic
-
-```go
-func (c *configV2) Migrate() (*Config, error) {
-    // Apply V2→V3 structural changes here
-    migrated := &c.Config
-    migrated.Version = 3
-    // Apply structural changes
-    return migrated, nil
-}
-```
-
-### Step 5: Update LoadConfig Switch
-
-```go
-func LoadConfig(path string) (*Config, error) {
-    // ... read file ...
-
-    switch versionInfo.Version {
-    case 0:
-        cfg, err = loadConfigV0(data)
-    case 1:
-        cfg, err = loadConfigV1(data)
-    case 2:
-        cfg, err = loadConfig(data)
-    case 3:
-        cfg, err = loadConfigV3(data)
-    default:
-        return nil, fmt.Errorf("unsupported config version: %d", versionInfo.Version)
-    }
-
-    // ... migrate and validate ...
-}
-```
-
-### Step 6: Test Your Migration
-
-Create a test in `config_migration_test.go`:
-
-```go
-func TestMigrateV2ToV3(t *testing.T) {
-    // Create a version 3 config
-    v3Config := Config{
-        Version: 3,
-        // ... set up test data
-    }
-
-    // Apply migration
-    migrated, err := v2Config.Migrate()
-    if err != nil {
-        t.Fatalf("Migration failed: %v", err)
-    }
-
-    // Verify version is updated
-    if migrated.Version != 3 {
-        t.Errorf("Expected version 3, got %d", migrated.Version)
-    }
-
-    // Verify data is preserved/transformed correctly
-    // ...
-}
-```
-
-## Migration Best Practices
-
-1. **Version-Specific Structs**: Define a separate struct for each version that has structural changes
-2. **Backward Compatibility**: Ensure old configs can still be loaded with their specific structs
-3. **No Data Loss**: Migrations should preserve all user settings
-4. **Idempotent**: Running the same migration multiple times should be safe
-5. **Auto-Save**: Migrated configs are automatically saved to update the user's file
-6. **Auto-Backup**: Before saving, the system creates a date-stamped backup of `config.json` and `.security.yml`
-7. **Test Thoroughly**: Test with real user config files
-8. **Update Defaults**: Keep `defaults.go` in sync with the latest schema
-
-## V2→V3 Migration Guide
-
-### What Changed?
-
-Version 3 introduces improved type safety and error handling:
-
-- **Type-safe channel decoding**: All channel type assertions now use comma-ok pattern (`val, ok := v.(*Settings)`) to prevent panics if Type and Settings are mismatched
-- **Enhanced error logging**: Weixin channel now logs errors on `GetDecoded()` failure for consistency with other channels
-- **Documentation fixes**: Corrected stray quotes in JSON configuration examples
-
-### Auto-Migration Behavior
-
-When you run MintClaw with a V2 config file:
-
-1. **Detection**: MintClaw reads the `version` field and detects V2
-2. **Backup**: Before any changes, creates `config.json.YYYYMMDD.bak` (e.g., `config.json.20260413.bak`)
-3. **Migration**: Applies V2→V3 structural changes (primarily internal type safety improvements)
-4. **Save**: Writes the updated config with `"version": 3`
-5. **Continue**: Starts normally with the V3 config
-
-**No user action required** — the migration happens automatically on first load.
-
-### Backup Location
-
-Backups are created in the same directory as your config file:
-
-- **Default**: `~/.mintclaw/config.json.20260413.bak`
-- **Custom path**: If using `MINTCLAW_CONFIG`, backup is created next to that file
-- **Security file**: `.security.yml` is also backed up as `.security.yml.YYYYMMDD.bak`
-
-### Downgrade Risk
-
-⚠️ **Important**: Once migrated to V3, the config **cannot** be safely loaded by older MintClaw versions that only support V2.
-
-**To downgrade:**
-
-1. Stop MintClaw
-2. Restore the backup:
-   ```bash
-   cp ~/.mintclaw/config.json.20260413.bak ~/.mintclaw/config.json
-   cp ~/.mintclaw/.security.yml.20260413.bak ~/.mintclaw/.security.yml  # if it exists
-   ```
-3. Use a MintClaw version that supports V2 configs
-
-**Alternative**: Manually edit `config.json` and change `"version": 3` to `"version": 2`. This works because V3 changes are primarily code-level safety improvements, not structural schema changes.
-
-## Example Migration
-
-### Scenario: Adding a new field with default value
-
-Old config (version 3):
-```json
-{
-  "version": 3,
-  "model_list": [
-    {
-      "model_name": "gpt-5.4",
-      "model": "openai/gpt-5.4"
-    }
-  ]
-}
-```
-
-Migration to version 3:
-```go
-func (c *configV2) Migrate() (*Config, error) {
-    migrated := &c.Config
-    migrated.Version = 3
-
-    // Add new field with default value if not set
-    // ...
-
-    return migrated, nil
-}
-```
-
-New config (version 3):
-```json
-{
-  "version": 3,
-  "model_list": [
-    {
-      "model_name": "gpt-5.4",
-      "model": "openai/gpt-5.4",
-      "new_option": true
-    }
-  ]
-}
-```
-
-## Troubleshooting
-
-### Config Not Upgrading
-- Check that `CurrentVersion` is incremented
-- Verify migration logic handles the target version
-- Ensure `Migrate()` is called in `LoadConfig()`
-
-### Migration Errors
-- Check error messages for specific migration failures
-- Review migration logic for edge cases
-- Ensure all required fields are properly initialized
-- Verify the loader function for the source version
-
-### Data Loss After Migration
-- Ensure all fields are copied during migration
-- Check that the migration doesn't overwrite values with defaults unnecessarily
-- Review the conversion logic in the loader functions
-- Check the auto-backup files (e.g., `config.json.20260330.bak`) to recover original data
+Do not add version-specific runtime structs, migration chains, deprecated field
+stripping, dual readers, automatic rewrites, or migration backups. A one-time
+offline conversion script is acceptable for a large coordinated cutover, but it
+must not become part of the runtime loader.

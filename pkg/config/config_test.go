@@ -312,6 +312,7 @@ func TestLoadConfig_MCPMaxInlineTextChars(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
+		"version": 3,
 		"tools": {
 			"mcp": {
 				"enabled": true,
@@ -560,6 +561,7 @@ func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
+		"version": 3,
 		"tools": {
 			"image_generate": {
 				"enabled": true,
@@ -663,163 +665,11 @@ func TestAgentConfig_ParsesDispatchRules(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_MigratesLegacyBindingsToDispatchRules(t *testing.T) {
+func TestLoadConfig_RejectsLegacyBindings(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
-		"version": 2,
-		"agents": {
-			"defaults": {
-				"workspace": "~/.mintclaw/workspace",
-				"model": "glm-4.7"
-			},
-			"list": [
-				{ "id": "main", "default": true },
-				{ "id": "support" },
-				{ "id": "ops" },
-				{ "id": "slack" }
-			]
-		},
-		"bindings": [
-			{
-				"agent_id": "support",
-				"match": {
-					"channel": "telegram",
-					"peer": { "kind": "group", "id": "-100123" }
-				}
-			},
-			{
-				"agent_id": "ops",
-				"match": {
-					"channel": "discord",
-					"guild_id": "guild-1"
-				}
-			},
-			{
-				"agent_id": "slack",
-				"match": {
-					"channel": "slack",
-					"account_id": "*"
-				}
-			}
-		]
-	}`
-	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
-		t.Fatalf("WriteFile(configPath): %v", err)
-	}
-
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
-	}
-	if cfg.Agents.Dispatch == nil {
-		t.Fatal("Agents.Dispatch should not be nil")
-	}
-	if len(cfg.Agents.Dispatch.Rules) != 3 {
-		t.Fatalf("Dispatch.Rules len = %d, want 3", len(cfg.Agents.Dispatch.Rules))
-	}
-
-	first := cfg.Agents.Dispatch.Rules[0]
-	if first.Agent != "support" {
-		t.Fatalf("first.Agent = %q, want %q", first.Agent, "support")
-	}
-	if first.When.Channel != "telegram" || first.When.Chat != "group:-100123" {
-		t.Fatalf("first.When = %+v", first.When)
-	}
-	if first.When.Account != legacyDefaultAccountID {
-		t.Fatalf("first.When.Account = %q, want %q", first.When.Account, legacyDefaultAccountID)
-	}
-
-	second := cfg.Agents.Dispatch.Rules[1]
-	if second.Agent != "ops" || second.When.Space != "guild:guild-1" {
-		t.Fatalf("second = %+v", second)
-	}
-
-	third := cfg.Agents.Dispatch.Rules[2]
-	if third.Agent != "slack" {
-		t.Fatalf("third.Agent = %q, want %q", third.Agent, "slack")
-	}
-	if third.When.Channel != "slack" || third.When.Account != "" {
-		t.Fatalf("third.When = %+v", third.When)
-	}
-}
-
-func TestLoadConfig_PrefersDispatchRulesOverLegacyBindings(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.json")
-	raw := `{
-		"version": 2,
-		"agents": {
-			"defaults": {
-				"workspace": "~/.mintclaw/workspace",
-				"model": "glm-4.7"
-			},
-			"list": [
-				{ "id": "main", "default": true },
-				{ "id": "support" }
-			],
-			"dispatch": {
-				"rules": [
-					{
-						"name": "explicit",
-						"agent": "support",
-						"when": {
-							"channel": "telegram",
-							"chat": "group:-100123"
-						}
-					}
-				]
-			}
-		},
-		"bindings": [
-			{
-				"agent_id": "main",
-				"match": {
-					"channel": "telegram",
-					"account_id": "*"
-				}
-			}
-		]
-	}`
-	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
-		t.Fatalf("WriteFile(configPath): %v", err)
-	}
-
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
-	}
-	if cfg.Agents.Dispatch == nil {
-		t.Fatal("Agents.Dispatch should not be nil")
-	}
-	if len(cfg.Agents.Dispatch.Rules) != 1 {
-		t.Fatalf("Dispatch.Rules len = %d, want 1", len(cfg.Agents.Dispatch.Rules))
-	}
-	if cfg.Agents.Dispatch.Rules[0].Name != "explicit" {
-		t.Fatalf("Dispatch.Rules[0].Name = %q, want %q", cfg.Agents.Dispatch.Rules[0].Name, "explicit")
-	}
-}
-
-func TestLoadConfig_MigratesLegacyDirectBindingsWithIdentityLinks(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.json")
-	raw := `{
-		"version": 2,
-		"agents": {
-			"defaults": {
-				"workspace": "~/.mintclaw/workspace",
-				"model": "glm-4.7"
-			},
-			"list": [
-				{ "id": "main", "default": true },
-				{ "id": "support" }
-			]
-		},
-		"session": {
-			"identity_links": {
-				"john": ["telegram:123", "123"]
-			}
-		},
+		"version": 3,
 		"bindings": [
 			{
 				"agent_id": "support",
@@ -834,15 +684,9 @@ func TestLoadConfig_MigratesLegacyDirectBindingsWithIdentityLinks(t *testing.T) 
 		t.Fatalf("WriteFile(configPath): %v", err)
 	}
 
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
-	}
-	if cfg.Agents.Dispatch == nil || len(cfg.Agents.Dispatch.Rules) != 1 {
-		t.Fatalf("Dispatch.Rules = %+v, want 1 migrated rule", cfg.Agents.Dispatch)
-	}
-	if got := cfg.Agents.Dispatch.Rules[0].When.Sender; got != "john" {
-		t.Fatalf("migrated sender selector = %q, want %q", got, "john")
+	_, err := LoadConfig(configPath)
+	if err == nil || !strings.Contains(err.Error(), "unknown field(s): bindings") {
+		t.Fatalf("LoadConfig() error = %v, want legacy bindings rejection", err)
 	}
 }
 
@@ -1446,7 +1290,7 @@ func TestLoadConfig_ToolFeedbackDefaultsFalseWhenUnset(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"version":1,"agents":{"defaults":{"workspace":"./workspace"}}}`),
+		[]byte(`{"version":3,"agents":{"defaults":{"workspace":"./workspace"}}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
@@ -1483,7 +1327,7 @@ func TestLoadConfig_ToolFeedbackStyle(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"version":1,"agents":{"defaults":{"tool_feedback":{"enabled":true,"style":"working_summary"}}}}`),
+		[]byte(`{"version":3,"agents":{"defaults":{"tool_feedback":{"enabled":true,"style":"working_summary"}}}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
@@ -1503,7 +1347,7 @@ func TestLoadConfig_ToolFeedbackSubagentsFalse(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"version":1,"agents":{"defaults":{"tool_feedback":{"enabled":true,"subagents":false}}}}`),
+		[]byte(`{"version":3,"agents":{"defaults":{"tool_feedback":{"enabled":true,"subagents":false}}}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
@@ -1524,7 +1368,7 @@ func TestLoadConfig_ToolFeedbackThrottleIntervals(t *testing.T) {
 	if err := os.WriteFile(
 		configPath,
 		[]byte(
-			`{"version":1,"agents":{"defaults":{"tool_feedback":{"enabled":true,"animation_interval_secs":5,"edit_min_interval_seconds":10}}}}`,
+			`{"version":3,"agents":{"defaults":{"tool_feedback":{"enabled":true,"animation_interval_secs":5,"edit_min_interval_seconds":10}}}}`,
 		),
 		0o600,
 	); err != nil {
@@ -1546,7 +1390,7 @@ func TestLoadConfig_ToolFeedbackThrottleIntervals(t *testing.T) {
 func TestLoadConfig_WebPreferNativeDefaultsTrueWhenUnset(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":1,"tools":{"web":{"enabled":true}}}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3,"tools":{"web":{"enabled":true}}}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
@@ -1562,7 +1406,11 @@ func TestLoadConfig_WebPreferNativeDefaultsTrueWhenUnset(t *testing.T) {
 func TestLoadConfig_WebPreferNativeCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"tools":{"web":{"prefer_native":false}}}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		configPath,
+		[]byte(`{"version":3,"tools":{"web":{"prefer_native":false}}}`),
+		0o600,
+	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
@@ -1578,7 +1426,7 @@ func TestLoadConfig_WebPreferNativeCanBeDisabled(t *testing.T) {
 func TestLoadConfig_SyntaxErrorReportsLineAndColumn(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"web\": {\n      \"enabled\": true,,\n      \"format\": \"markdown\"\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"web\": {\n      \"enabled\": true,,\n      \"format\": \"markdown\"\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1601,7 +1449,7 @@ func TestLoadConfig_SyntaxErrorReportsLineAndColumn(t *testing.T) {
 func TestLoadConfig_TypeErrorReportsFieldPath(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"web\": {\n      \"fetch_limit_bytes\": \"oops\"\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"web\": {\n      \"fetch_limit_bytes\": \"oops\"\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1627,7 +1475,7 @@ func TestLoadConfig_TypeErrorReportsFieldPath(t *testing.T) {
 func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"weeb\": {\n      \"enabled\": true\n    },\n    \"web\": {\n      \"fatch_limit_bytes\": 123\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"weeb\": {\n      \"enabled\": true\n    },\n    \"web\": {\n      \"fatch_limit_bytes\": 123\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1641,7 +1489,7 @@ func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_ToleratesDeprecatedEditFileTool(t *testing.T) {
+func TestLoadConfig_RejectsDeprecatedEditFileTool(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	raw := fmt.Sprintf(`{
@@ -1655,53 +1503,46 @@ func TestLoadConfig_ToleratesDeprecatedEditFileTool(t *testing.T) {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
-	}
-	if cfg.Tools.ApplyPatch.Enabled {
-		t.Fatal("LoadConfig().Tools.ApplyPatch.Enabled should be false")
-	}
-
-	stored, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile() error: %v", err)
-	}
-	if !strings.Contains(string(stored), `"edit_file"`) {
-		t.Fatal("LoadConfig() should not rewrite the deprecated field on disk")
+	_, err := LoadConfig(configPath)
+	if err == nil || !strings.Contains(err.Error(), "unknown field(s): tools.edit_file") {
+		t.Fatalf("LoadConfig() error = %v, want deprecated field rejection", err)
 	}
 }
 
-func TestLoadConfig_MigratesDeprecatedEditFileToolFromLegacyVersions(t *testing.T) {
-	for _, version := range []int{0, 1, 2} {
-		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+func TestLoadConfig_RequiresCurrentVersionWithoutRewriting(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "missing", raw: `{}`},
+		{name: "version_0", raw: `{"version":0}`},
+		{name: "version_1", raw: `{"version":1}`},
+		{name: "version_2", raw: `{"version":2}`},
+		{name: "future", raw: fmt.Sprintf(`{"version":%d}`, CurrentVersion+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "config.json")
-			raw := fmt.Sprintf(`{
-  "version": %d,
-  "tools": {
-    "edit_file": {"enabled": true},
-    "apply_patch": {"enabled": false}
-  }
-}`, version)
-			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+			if err := os.WriteFile(configPath, []byte(test.raw), 0o600); err != nil {
 				t.Fatalf("WriteFile() error: %v", err)
 			}
 
-			cfg, err := LoadConfig(configPath)
-			if err != nil {
-				t.Fatalf("LoadConfig() error: %v", err)
-			}
-			if cfg.Tools.ApplyPatch.Enabled {
-				t.Fatal("LoadConfig().Tools.ApplyPatch.Enabled should be false")
+			_, err := LoadConfig(configPath)
+			if err == nil || !strings.Contains(err.Error(), "unsupported config version") {
+				t.Fatalf("LoadConfig() error = %v, want version rejection", err)
 			}
 
 			stored, err := os.ReadFile(configPath)
 			if err != nil {
 				t.Fatalf("ReadFile() error: %v", err)
 			}
-			if strings.Contains(string(stored), `"edit_file"`) {
-				t.Fatal("legacy migration should remove the deprecated field on disk")
+			if string(stored) != test.raw {
+				t.Fatalf("LoadConfig() rewrote rejected config to %q", stored)
+			}
+			backups, err := filepath.Glob(configPath + ".*.bak")
+			if err != nil || len(backups) != 0 {
+				t.Fatalf("LoadConfig() backups = %v, %v", backups, err)
 			}
 		})
 	}
@@ -1778,7 +1619,7 @@ func TestDefaultConfig_MessageMediaDisabled(t *testing.T) {
 func TestLoadConfig_LoadImageCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"load_image\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"load_image\": {\n      \"enabled\": false\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1798,7 +1639,7 @@ func TestLoadConfig_LoadImageCanBeDisabled(t *testing.T) {
 func TestLoadConfig_ApplyPatchCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"apply_patch\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"apply_patch\": {\n      \"enabled\": false\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1818,7 +1659,7 @@ func TestLoadConfig_ApplyPatchCanBeDisabled(t *testing.T) {
 func TestLoadConfig_SearchFilesCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"search_files\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 3,\n  \"tools\": {\n    \"search_files\": {\n      \"enabled\": false\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1908,7 +1749,7 @@ func TestDefaultConfig_LogLevel(t *testing.T) {
 func TestLoadConfig_ExecAllowRemoteDefaultsTrueWhenUnset(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":1,"tools":{"exec":{"enable_deny_patterns":true}}}`),
+	if err := os.WriteFile(configPath, []byte(`{"version":3,"tools":{"exec":{"enable_deny_patterns":true}}}`),
 		0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1925,7 +1766,7 @@ func TestLoadConfig_ExecAllowRemoteDefaultsTrueWhenUnset(t *testing.T) {
 func TestLoadConfig_ExecPermissionMode(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":1,"tools":{"exec":{"permission_mode":" READ_ONLY "}}}`),
+	if err := os.WriteFile(configPath, []byte(`{"version":3,"tools":{"exec":{"permission_mode":" READ_ONLY "}}}`),
 		0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1942,7 +1783,7 @@ func TestLoadConfig_ExecPermissionMode(t *testing.T) {
 func TestLoadConfig_InvalidExecPermissionMode(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":1,"tools":{"exec":{"permission_mode":"readonly"}}}`),
+	if err := os.WriteFile(configPath, []byte(`{"version":3,"tools":{"exec":{"permission_mode":"readonly"}}}`),
 		0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1959,7 +1800,7 @@ func TestLoadConfig_InvalidExecPermissionMode(t *testing.T) {
 func TestLoadConfig_InvalidExecPermissionModeFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":1}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 	t.Setenv("MINTCLAW_TOOLS_EXEC_PERMISSION_MODE", "readonly")
@@ -1978,7 +1819,7 @@ func TestLoadConfig_CronAllowCommandDefaultsTrueWhenUnset(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"version":1,"tools":{"cron":{"exec_timeout_minutes":5}}}`),
+		[]byte(`{"version":3,"tools":{"cron":{"exec_timeout_minutes":5}}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
@@ -1998,7 +1839,7 @@ func TestLoadConfig_CronCommandAllowedRemotes(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"version":1,"tools":{"cron":{"command_allowed_remotes":["telegram:1234567890","discord"]}}}`),
+		[]byte(`{"version":3,"tools":{"cron":{"command_allowed_remotes":["telegram:1234567890","discord"]}}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
@@ -2023,8 +1864,9 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
 	configJSON := `{
-  "agents": {"defaults":{"workspace":"./workspace","model":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
-  "model_list": [{"model_name":"gpt4","model":"openai/gpt-5.4","api_key":"x"}],
+	"version": 3,
+  "agents": {"defaults":{"workspace":"./workspace","model_name":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
+  "model_list": [{"model_name":"gpt4","model":"openai/gpt-5.4","api_keys":["x"]}],
   "tools": {"web":{"proxy":"http://127.0.0.1:7890"}}
 }`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
@@ -2044,7 +1886,7 @@ func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
 	configJSON := `{
-  "version": 1,
+  "version": 3,
   "hooks": {
     "processes": {
       "review-gate": {
@@ -2555,18 +2397,19 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	data := `{
-		"version": 1,
-		"agents": { "defaults": { "workspace": "", "model": "", "max_tokens": 0, "max_tool_iterations": 0 } },
+		"version": 3,
+		"agents": { "defaults": { "workspace": "", "model_name": "", "max_tokens": 0, "max_tool_iterations": 0 } },
 		"session": {},
-		"channels": {
+		"channel_list": {
 			"telegram": {
+				"type": "telegram",
 				"enabled": true,
-				"bot_token": "",
 				"allow_from": [],
 				"placeholder": {
 					"enabled": true,
 					"text": "Thinking..."
-				}
+				},
+				"settings": {}
 			}
 		},
 		"model_list": [],
@@ -2596,7 +2439,7 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 func TestLoadConfigReadOnly_WarnsForPlaintextAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	const original = `{"version":2,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
+	const original = `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2663,7 +2506,7 @@ func TestSaveConfig_EncryptsPlaintextAPIKey(t *testing.T) {
 func TestLoadConfig_NoSealWithoutPassphrase(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"model_list":[{"model_name":"test","model":"openai/gpt-4","api_key":"sk-plaintext"}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2690,7 +2533,7 @@ func TestLoadConfig_FileRefNotSealed(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte("sk-from-file"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	data := `{"version":1,"model_list":[{"model_name":"test","model":"openai/gpt-4"}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4"}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2852,10 +2695,11 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	mixed, _ := json.Marshal(map[string]any{
+		"version": CurrentVersion,
 		"model_list": []map[string]any{
-			{"model_name": "enc", "model": "openai/gpt-4", "api_key": encValue},
-			{"model_name": "plain", "model": "openai/gpt-4", "api_key": "sk-plain"},
-			{"model_name": "file", "model": "openai/gpt-4", "api_key": "file://api.key"},
+			{"model_name": "enc", "model": "openai/gpt-4", "api_keys": []string{encValue}},
+			{"model_name": "plain", "model": "openai/gpt-4", "api_keys": []string{"sk-plain"}},
+			{"model_name": "file", "model": "openai/gpt-4", "api_keys": []string{"file://api.key"}},
 		},
 	})
 	if err = os.WriteFile(cfgPath, mixed, 0o600); err != nil {
@@ -2940,8 +2784,9 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(map[string]any{
+		"version": CurrentVersion,
 		"model_list": []map[string]any{
-			{"model_name": "test", "model": "openai/gpt-4", "api_key": encrypted},
+			{"model_name": "test", "model": "openai/gpt-4", "api_keys": []string{encrypted}},
 		},
 	})
 	if err = os.WriteFile(cfgPath, raw, 0o600); err != nil {
@@ -2967,7 +2812,7 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 func TestConfigParsesLogLevel(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":1,"gateway":{"log_level":"debug"}}`
+	data := `{"version":3,"gateway":{"log_level":"debug"}}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2984,7 +2829,7 @@ func TestConfigParsesLogLevel(t *testing.T) {
 func TestConfigLogLevelEmpty(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":1}`
+	data := `{"version":3}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -3002,7 +2847,7 @@ func TestConfigLogLevelEmpty(t *testing.T) {
 func TestResolveGatewayLogLevel(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":1,"gateway":{"log_level":"debug"}}`
+	data := `{"version":3,"gateway":{"log_level":"debug"}}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -3015,7 +2860,7 @@ func TestResolveGatewayLogLevel(t *testing.T) {
 func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":1,"gateway":{"log_level":"debug"}}`
+	data := `{"version":3,"gateway":{"log_level":"debug"}}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -3034,7 +2879,7 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":2,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
+	data := `{"version":3,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -3078,7 +2923,7 @@ func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
 func TestLoadConfig_AppliesGitHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":2,"tools":{"skills":{"registries":{"github":{"enabled":true,"base_url":"https://github.com"}}}}}`
+	data := `{"version":3,"tools":{"skills":{"registries":{"github":{"enabled":true,"base_url":"https://github.com"}}}}}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -3424,7 +3269,7 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 func TestMakeBackup_WithDateSuffix(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -3447,7 +3292,7 @@ func TestMakeBackup_WithDateSuffix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile backup: %v", err)
 			}
-			if string(data) != `{"version":2}` {
+			if string(data) != `{"version":3}` {
 				t.Errorf("backup content = %q, want original content", string(data))
 			}
 			break
@@ -3465,7 +3310,7 @@ func TestMakeBackup_AlsoBacksSecurityFile(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	secPath := securityPath(configPath)
 
-	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
@@ -3519,7 +3364,7 @@ func TestMakeBackup_NonexistentFileSkipsBackup(t *testing.T) {
 func TestMakeBackup_OnlyConfigNoSecurity(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3553,7 +3398,7 @@ func TestMakeBackup_SameDateSuffix(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	secPath := securityPath(configPath)
 
-	if err := os.WriteFile(configPath, []byte(`{"version":2}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(secPath, []byte(`key: value`), 0o600); err != nil {

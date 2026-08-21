@@ -8,16 +8,16 @@ import (
 // rrCounter is a global counter for round-robin load balancing across models.
 var rrCounter atomic.Uint64
 
-// CurrentVersion is the latest config schema version
+// CurrentVersion is the only config schema version accepted at runtime.
 const CurrentVersion = 3
 
 func init() {
 	initChannel()
 }
 
-// Config is the current config structure with version support.
+// Config is the current configuration schema.
 type Config struct {
-	// Config schema version for migration.
+	// Version identifies the required config schema.
 	Version     int               `json:"version"                 yaml:"-"`
 	Isolation   IsolationConfig   `json:"isolation,omitempty"     yaml:"-"`
 	Agents      AgentsConfig      `json:"agents"                  yaml:"-"`

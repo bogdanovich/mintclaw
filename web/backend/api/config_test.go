@@ -981,20 +981,23 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 
 	// PUT request with mintclaw enabled but no token in JSON — token is in .security.yml
 	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{
-		"version": 1,
+		"version": 3,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace",
 				"model_name": "custom-default"
 			}
 		},
-		"channels": {
+		"channel_list": {
 			"mintclaw": {
 				"enabled": true,
-				"ping_interval": 30,
-				"read_timeout": 60,
-				"write_timeout": 10,
-				"max_connections": 100
+				"type": "mintclaw",
+				"settings": {
+					"ping_interval": 30,
+					"read_timeout": 60,
+					"write_timeout": 10,
+					"max_connections": 100
+				}
 			}
 		},
 		"model_list": [
@@ -1050,7 +1053,7 @@ func TestHandlePatchConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T)
 
 func TestHandleUpdateConfig_AppliesGatewayLogLevel(t *testing.T) {
 	assertGatewayLogLevelApplied(t, http.MethodPut, `{
-		"version": 1,
+		"version": 3,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace",

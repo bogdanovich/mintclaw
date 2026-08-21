@@ -83,9 +83,8 @@ func NewRepository(path string) *Repository {
 	return &Repository{path: cleanPath}
 }
 
-// ReadOnly returns a coherent public/security pair without running or
-// persisting configuration migrations. It may finish recovery of a transaction
-// interrupted by an earlier writer.
+// ReadOnly returns a coherent public/security pair. It may finish recovery of a
+// transaction interrupted by an earlier writer.
 func (r *Repository) ReadOnly() (Snapshot, error) {
 	return r.readSnapshot(true)
 }
@@ -159,39 +158,10 @@ func (r *Repository) Replace(expected Revision, cfg *Config) (Snapshot, error) {
 		if actual != expected {
 			return &ConflictError{Expected: expected, Actual: actual}
 		}
-		legacy, err := configNeedsMigrationBackup(r.path)
-		if err != nil {
-			return err
-		}
-		if legacy {
-			if err = MakeBackup(r.path); err != nil {
-				return fmt.Errorf("backup before migration replacement: %w", err)
-			}
-		}
 		snapshot, err = r.saveLocked(cfg)
 		return err
 	})
 	return snapshot, err
-}
-
-func configNeedsMigrationBackup(path string) (bool, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if len(data) <= 10 {
-		return false, nil
-	}
-	var version struct {
-		Value int `json:"version"`
-	}
-	if err = json.Unmarshal(data, &version); err != nil {
-		return false, wrapJSONError(data, err, "config.json")
-	}
-	return version.Value < CurrentVersion, nil
 }
 
 // Save performs an unconditional serialized replacement. It exists for

@@ -18,261 +18,15 @@ import (
 )
 
 func LoadConfig(path string) (*Config, error) {
-	repository := NewRepository(path)
-	var cfg *Config
-	err := repository.withLock(func() error {
-		if _, recoverErr := repository.recoverLocked(); recoverErr != nil {
-			return recoverErr
-		}
-		var loadErr error
-		cfg, loadErr = loadConfigWithMigration(path, func(documents configDocuments) error {
-			_, saveErr := repository.saveDocumentsLocked(documents)
-			return saveErr
-		})
-		return loadErr
-	})
-	return cfg, err
-}
-
-func loadConfigWithMigration(path string, persistMigration func(configDocuments) error) (*Config, error) {
-	updateResolver(filepath.Dir(path))
-
-	data, err := os.ReadFile(path)
+	snapshot, err := NewRepository(path).ReadOnly()
 	if err != nil {
-		if os.IsNotExist(err) {
-			logger.WarnF(
-				"config file not found, using default config",
-				map[string]any{"path": path},
-			)
-			return DefaultConfig(), nil
-		}
 		return nil, err
 	}
-
-	// First, try to detect config version by reading the version field
-	var versionInfo struct {
-		Version int `json:"version"`
-	}
-	if e := json.Unmarshal(data, &versionInfo); e != nil {
-		e = wrapJSONError(data, e, "config.json")
-		logger.ErrorCF(
-			"config",
-			formatDiagnosticLogMessage("Malformed config file", e),
-			map[string]any{"path": path},
-		)
-		return nil, e
-	}
-	if len(data) <= 10 {
-		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		return DefaultConfig(), nil
-	}
-
-	data, err = removeDeprecatedConfigFields(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to migrate deprecated config fields: %w", err)
-	}
-
-	// Load config based on detected version
-	var cfg *Config
-	migrationFrom := -1
-	switch versionInfo.Version {
-	case 0:
-		migrationFrom = versionInfo.Version
-		logger.InfoF(
-			"config migrate start",
-			map[string]any{"from": versionInfo.Version, "to": CurrentVersion},
-		)
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-
-		migrateErr := migrateV0ToV1(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V0→V1 migration failed: %w", migrateErr)
-		}
-		migrateErr = migrateV1ToV2(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V1→V2 migration failed: %w", migrateErr)
-		}
-		migrateErr = migrateV2ToV3(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-
-		cfg, err = loadConfig(migrated)
-		if err != nil {
-			return nil, err
-		}
-
-	case 1:
-		migrationFrom = versionInfo.Version
-		// V1→V3 migration: rename channels→channel_list, infer Enabled, migrate channel configs
-		logger.InfoF(
-			"config migrate start",
-			map[string]any{"from": versionInfo.Version, "to": CurrentVersion},
-		)
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-
-		migrateErr := migrateV1ToV2(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V1→V2 migration failed: %w", migrateErr)
-		}
-		migrateErr = migrateV2ToV3(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-
-		cfg, err = loadConfig(migrated)
-		if err != nil {
-			return nil, err
-		}
-
-	case 2:
-		migrationFrom = versionInfo.Version
-		// V2→V3 migration: rename channels→channel_list, convert flat→nested
-		logger.InfoF(
-			"config migrate start",
-			map[string]any{"from": versionInfo.Version, "to": CurrentVersion},
-		)
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		migrateErr := migrateV2ToV3(m)
-		if migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-
-		cfg, err = loadConfig(migrated)
-		if err != nil {
-			return nil, err
-		}
-
-	case CurrentVersion:
-		// Current version
-		cfg, err = loadConfig(data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		// Load security configuration
-		secPath := securityPath(path)
-		err = loadSecurityConfig(cfg, secPath)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("failed to load security config: %w", err)
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported config version: %d", versionInfo.Version)
-	}
-
-	applyLegacyBindingsMigration(data, cfg)
-	var migrationDocuments configDocuments
-	if migrationFrom >= 0 {
-		if err = initChannelList(cfg.Channels, false); err != nil {
-			return nil, err
-		}
-		migrationDocuments, err = marshalConfigDocuments(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("prepare migrated configuration: %w", err)
-		}
-	}
-
-	if err = finalizeLoadedConfig(cfg, true); err != nil {
-		return nil, err
-	}
-
-	if migrationFrom >= 0 {
-		if err = MakeBackup(path); err != nil {
-			return nil, err
-		}
-		if err = persistMigration(migrationDocuments); err != nil {
-			return nil, fmt.Errorf("persist migrated configuration: %w", err)
-		}
-		logger.InfoF(
-			"config migrate success",
-			map[string]any{"from": migrationFrom, "to": CurrentVersion},
-		)
-	}
-
-	return cfg, nil
+	return snapshot.Config, nil
 }
 
-// LoadConfigReadOnly loads configuration without creating backups, migrating files,
-// saving config/security documents, or otherwise mutating local state.
-//
-// It intentionally preserves LoadConfig behavior for callers that expect automatic
-// migration persistence; new read-only callers should use this helper instead.
+// LoadConfigReadOnly loads and validates the current configuration without
+// applying repository transaction recovery.
 func LoadConfigReadOnly(path string) (*Config, error) {
 	return loadConfigReadOnly(path, true)
 }
@@ -308,116 +62,15 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 		)
 		return nil, e
 	}
-	if len(data) <= 10 {
-		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		return DefaultConfig(), nil
+	if versionInfo.Version != CurrentVersion {
+		return nil, fmt.Errorf(
+			"unsupported config version: %d; current version is %d",
+			versionInfo.Version,
+			CurrentVersion,
+		)
 	}
 
-	data, err = removeDeprecatedConfigFields(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to migrate deprecated config fields: %w", err)
-	}
-
-	var cfg *Config
-	switch versionInfo.Version {
-	case 0:
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		if migrateErr := migrateV0ToV1(m); migrateErr != nil {
-			return nil, fmt.Errorf("V0→V1 migration failed: %w", migrateErr)
-		}
-		if migrateErr := migrateV1ToV2(m); migrateErr != nil {
-			return nil, fmt.Errorf("V1→V2 migration failed: %w", migrateErr)
-		}
-		if migrateErr := migrateV2ToV3(m); migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err = loadConfig(migrated)
-	case 1:
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		if migrateErr := migrateV1ToV2(m); migrateErr != nil {
-			return nil, fmt.Errorf("V1→V2 migration failed: %w", migrateErr)
-		}
-		if migrateErr := migrateV2ToV3(m); migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err = loadConfig(migrated)
-	case 2:
-		if err = validateLegacyConfigDiagnostics(data); err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		var m map[string]any
-		m, err = loadConfigMapData(path, data)
-		if err != nil {
-			logger.ErrorCF(
-				"config",
-				formatDiagnosticLogMessage("Failed to load config", err),
-				map[string]any{"path": path},
-			)
-			return nil, err
-		}
-		if migrateErr := migrateV2ToV3(m); migrateErr != nil {
-			return nil, fmt.Errorf("V2→V3 migration failed: %w", migrateErr)
-		}
-		var migrated []byte
-		migrated, err = json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err = loadConfig(migrated)
-	case CurrentVersion:
-		cfg, err = loadConfig(data)
-	default:
-		return nil, fmt.Errorf("unsupported config version: %d", versionInfo.Version)
-	}
+	cfg, err := loadConfig(data)
 	if err != nil {
 		logger.ErrorCF(
 			"config",
@@ -432,12 +85,27 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 		return nil, fmt.Errorf("failed to load security config: %w", err)
 	}
 
-	applyLegacyBindingsMigration(data, cfg)
-
 	if err = finalizeLoadedConfig(cfg, applyRuntimeOverrides); err != nil {
 		return nil, err
 	}
 
+	return cfg, nil
+}
+
+func loadConfig(data []byte) (*Config, error) {
+	cfg := DefaultConfig()
+	// Go's JSON decoder reuses existing slice elements. Decode once into an
+	// empty value so user-supplied model entries cannot inherit default fields.
+	var provided Config
+	if err := decodeJSONWithDiagnostics(data, &provided, "config.json"); err != nil {
+		return nil, err
+	}
+	if len(provided.ModelList) > 0 {
+		cfg.ModelList = nil
+	}
+	if err := decodeJSONWithDiagnostics(data, cfg, "config.json"); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

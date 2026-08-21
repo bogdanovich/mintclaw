@@ -88,10 +88,10 @@ func TestPlaintextCredentialFindingRedactsValue(t *testing.T) {
 func TestReadOnlyDoesNotCreateBackupsOrSecurityFile(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `{
-  "version": 2,
+  "version": 3,
   "agents": {"defaults": {"workspace": "`+dir+`", "restrict_to_workspace": true}},
   "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true}],
-  "channels": {}
+  "channel_list": {}
 }`)
 
 	if _, err := Run(Options{ConfigPath: path}); err != nil {
