@@ -90,6 +90,11 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 	activeInteractions := t.activeInteractionsByTask()
 	var protectedTaskIDs map[string]struct{}
 	if t.interactions != nil {
+		if err := t.interactions.LastLoadError(); err != nil {
+			return toolshared.ErrorResult(
+				fmt.Sprintf("failed to read current interaction state: %v", err),
+			).WithError(err)
+		}
 		protectedTaskIDs = t.interactions.NonterminalTaskIDs()
 	}
 	if _, err := t.registry.MarkStaleActiveLost(

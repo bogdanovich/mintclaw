@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +216,36 @@ func TestTaskStatusTool_ShowsBoundedWaitingInteraction(t *testing.T) {
 	stored, _ := registry.Get("task-waiting")
 	if stored.Status != taskregistry.StatusRunning {
 		t.Fatalf("active interaction did not protect stale task: %#v", stored)
+	}
+}
+
+func TestTaskStatusTool_DoesNotReconcileWhenInteractionStateIsInvalid(t *testing.T) {
+	workspace := t.TempDir()
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	stale := time.Now().Add(-time.Hour).UnixMilli()
+	if err := registry.Upsert(taskregistry.Record{
+		TaskID: "task-unknown-owner", Runtime: taskregistry.RuntimeTool,
+		Task: "preserve while ownership is unavailable", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending, CreatedAt: stale, LastEventAt: stale,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interactionStore := interactions.WorkspaceStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(interactionStore), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(interactionStore, []byte(`{"schema_version":"removed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	interactionRegistry := interactions.NewRegistry(interactionStore)
+
+	result := NewTaskStatusTool(registry, interactionRegistry).Execute(context.Background(), nil)
+	if !result.IsError || !strings.Contains(result.ForLLM, "failed to read current interaction state") {
+		t.Fatalf("task_status result = %#v", result)
+	}
+	stored, _ := registry.Get("task-unknown-owner")
+	if stored.Status != taskregistry.StatusRunning {
+		t.Fatalf("task_status rewrote task with unavailable interaction state: %#v", stored)
 	}
 }
 

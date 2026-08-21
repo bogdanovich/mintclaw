@@ -223,8 +223,17 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 	if len(active) == 0 {
 		return
 	}
+	protectedTaskIDs, protectionErr := al.activeInteractionTaskIDs(workspace)
+	if protectionErr != nil {
+		logger.WarnCF("agent", "Skipped active task reconciliation because interaction state is unavailable",
+			map[string]any{
+				"workspace": workspace,
+				"error":     protectionErr.Error(),
+			})
+		return
+	}
 	reason := "task was still active when the runtime registry was restored; previous runtime owner is no longer alive"
-	count, err := registry.MarkActiveLost(reason, al.activeInteractionTaskIDs(workspace))
+	count, err := registry.MarkActiveLost(reason, protectedTaskIDs)
 	if count == 0 {
 		return
 	}
@@ -236,12 +245,15 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 		})
 }
 
-func (al *AgentLoop) activeInteractionTaskIDs(workspace string) map[string]struct{} {
+func (al *AgentLoop) activeInteractionTaskIDs(workspace string) (map[string]struct{}, error) {
 	registry := al.interactionRegistryForWorkspace(workspace)
 	if registry == nil {
-		return nil
+		return nil, fmt.Errorf("interaction registry is unavailable")
 	}
-	return registry.NonterminalTaskIDs()
+	if err := registry.LastLoadError(); err != nil {
+		return nil, fmt.Errorf("load interaction registry: %w", err)
+	}
+	return registry.NonterminalTaskIDs(), nil
 }
 
 func errString(err error) string {
