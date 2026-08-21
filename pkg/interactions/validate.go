@@ -65,22 +65,18 @@ func validateStoredRecord(rec Record) error {
 	if err := validateStoredQuestions(rec.Kind, rec.Questions); err != nil {
 		return err
 	}
-	if !validDeliveryState(rec.PromptDeliveryState) || !validDeliveryState(rec.FinalDeliveryState) ||
-		(rec.PromptDelivered && rec.PromptDeliveryState != "" &&
-			rec.PromptDeliveryState != DeliveryStateDelivered) ||
+	if !validDeliveryState(rec.FinalDeliveryState) ||
 		(rec.FinalDelivered && rec.FinalDeliveryState != "" &&
 			rec.FinalDeliveryState != DeliveryStateDelivered) {
 		return fmt.Errorf("invalid delivery state for interaction %q", rec.ID)
 	}
 	switch rec.Status {
 	case StatusCreated:
-		if rec.Answer != nil || rec.Outcome != "" || rec.DeliveryTries < 0 {
+		if rec.Answer != nil || rec.Outcome != "" {
 			return fmt.Errorf("invalid created interaction %q", rec.ID)
 		}
 	case StatusWaiting:
-		if rec.Answer != nil || rec.Outcome != "" || rec.DeliveryTries == 0 ||
-			!rec.PromptDelivered ||
-			rec.DeliveryError != "" {
+		if rec.Answer != nil || rec.Outcome != "" || strings.TrimSpace(rec.PromptDeliveryID) == "" {
 			return fmt.Errorf("invalid waiting interaction %q", rec.ID)
 		}
 	case StatusClaimed, StatusResuming, StatusResolved:

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
-	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
@@ -70,26 +70,7 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 			}
 			switch record.Status {
 			case interactions.StatusCreated:
-				if record.PromptDelivered {
-					if _, err := registry.MarkWaiting(record.ID, record.Revision); err == nil {
-						recovered++
-					}
-				} else if record.PromptDeliveryState == interactions.DeliveryStateSending ||
-					record.PromptDeliveryState == interactions.DeliveryStateAmbiguous {
-					claimed, err := registry.ClaimDeliveryUnknown(record.ID, record.Revision)
-					if err == nil && al.recoverClaimedInteraction(ctx, workspace, claimed) {
-						recovered++
-					}
-				} else if record.DeliveryTries >= interactions.MaxDeliveryAttempts {
-					if al.recoverPromptDeliveryExhaustion(
-						ctx,
-						workspace,
-						registry,
-						record,
-					) {
-						recovered++
-					}
-				} else if al.retryInteractionPrompt(ctx, registry, record) {
+				if al.recoverInteractionPrompt(ctx, workspace, registry, record) {
 					recovered++
 				}
 			case interactions.StatusWaiting:
@@ -289,8 +270,11 @@ func (al *AgentLoop) interactionAgentAvailable(
 		return true
 	}
 	agent, ok := registry.GetAgent(record.Route.AgentID)
-	return ok && agent != nil && (record.Origin.TaskID != "" ||
-		strings.TrimSpace(agent.Workspace) == strings.TrimSpace(workspace))
+	if !ok || agent == nil || !registry.hasWorkspace(workspace) {
+		return false
+	}
+	return record.Origin.TaskID != "" ||
+		normalizeRuntimeWorkspace(agent.Workspace) == normalizeRuntimeWorkspace(workspace)
 }
 
 func (al *AgentLoop) recoverCancelingInteraction(
@@ -355,39 +339,205 @@ func (al *AgentLoop) recoverCancelingInteraction(
 	return true
 }
 
-func (al *AgentLoop) retryInteractionPrompt(
+func (al *AgentLoop) recoverInteractionPrompt(
 	ctx context.Context,
+	workspace string,
 	registry *interactions.Registry,
 	record interactions.Record,
 ) bool {
-	if al.channelManager == nil {
-		_, _ = registry.RecordDeliveryAttempt(
+	return al.recoverInteractionPromptAt(ctx, workspace, registry, record, time.Now().UTC())
+}
+
+func (al *AgentLoop) recoverInteractionPromptAt(
+	ctx context.Context,
+	workspace string,
+	registry *interactions.Registry,
+	record interactions.Record,
+	now time.Time,
+) bool {
+	if record.PromptDeliveryID != "" {
+		if coordinator := al.outboundCoordinator(); coordinator != nil {
+			if intent, getErr := coordinator.Get(record.PromptDeliveryID); getErr == nil {
+				if handled, recovered := al.settleRecoveredInteractionPrompt(
+					ctx, workspace, registry, record, intent, now,
+				); handled {
+					return recovered
+				}
+			}
+		}
+	}
+	current, intent, err := al.deliverInteractionPrompt(ctx, registry, workspace, record)
+	if err == nil {
+		return true
+	}
+	_, recovered := al.settleRecoveredInteractionPrompt(ctx, workspace, registry, current, intent, now)
+	return recovered
+}
+
+func (al *AgentLoop) settleRecoveredInteractionPrompt(
+	ctx context.Context,
+	workspace string,
+	registry *interactions.Registry,
+	record interactions.Record,
+	intent outbox.Intent,
+	now time.Time,
+) (bool, bool) {
+	switch intent.Status {
+	case outbox.StatusDelivered:
+		_, err := registry.MarkWaiting(record.ID, record.Revision)
+		return true, err == nil
+	case outbox.StatusAmbiguous:
+		claimed, claimErr := registry.ClaimDeliveryUnknown(
 			record.ID,
 			record.Revision,
-			false,
-			"channel manager unavailable",
+			record.PromptDeliveryID,
 		)
-		return false
+		return true, claimErr == nil && al.recoverClaimedInteraction(ctx, workspace, claimed)
+	case outbox.StatusDefinitelyFailed:
+		if intent.RetryExhausted() {
+			return true, al.recoverPromptDeliveryExhaustion(ctx, workspace, registry, record)
+		}
+		if !intent.RetryAfter.IsZero() && now.Before(intent.RetryAfter) {
+			return true, false
+		}
 	}
-	started, err := registry.BeginPromptDelivery(record.ID, record.Revision)
+	return false, false
+}
+
+// ReconcileRecoveredInteractionPromptAdmission verifies that a recovered
+// interaction prompt is still wanted immediately before gateway publication.
+// Stale prompts are durably abandoned so future restarts cannot revive them.
+func (al *AgentLoop) ReconcileRecoveredInteractionPromptAdmission(
+	admission outbox.Admission,
+	now time.Time,
+) (bool, error) {
+	interactionID, tagged := recoveredInteractionPromptID(admission.Intent)
+	if !tagged {
+		return true, nil
+	}
+	registry := al.interactionRegistryForWorkspace(admission.Intent.OwnerWorkspace)
+	if registry == nil {
+		return false, interactions.ErrStoreUnavailable
+	}
+	if err := registry.LastLoadError(); err != nil {
+		return false, fmt.Errorf("load interaction registry: %w", err)
+	}
+	record, active := activeInteractionPrompt(registry, interactionID, admission.Intent.ID, now)
+	if active && al.interactionAgentAvailable(admission.Intent.OwnerWorkspace, record) {
+		return true, nil
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return false, fmt.Errorf("outbound coordinator is unavailable")
+	}
+	if _, err := coordinator.Abandon(admission.Intent.ID, outbox.Outcome{
+		Error: "interaction prompt is no longer active",
+	}); err != nil {
+		return false, fmt.Errorf("abandon inactive interaction prompt: %w", err)
+	}
+	return false, nil
+}
+
+func (al *AgentLoop) validateInteractionPromptPublication(
+	registry *interactions.Registry,
+	workspace string,
+	record interactions.Record,
+	now time.Time,
+) error {
+	if registry == nil {
+		return interactions.ErrStoreUnavailable
+	}
+	if err := registry.LastLoadError(); err != nil {
+		return fmt.Errorf("load interaction registry: %w", err)
+	}
+	current, active := activeInteractionPrompt(registry, record.ID, record.PromptDeliveryID, now)
+	if active && al.interactionAgentAvailable(workspace, current) {
+		return nil
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return fmt.Errorf("outbound coordinator is unavailable")
+	}
+	if _, err := coordinator.Abandon(record.PromptDeliveryID, outbox.Outcome{
+		Error: "interaction prompt is no longer active",
+	}); err != nil {
+		return fmt.Errorf("abandon inactive interaction prompt: %w", err)
+	}
+	return fmt.Errorf("interaction prompt %q is no longer active", record.ID)
+}
+
+func activeInteractionPrompt(
+	registry *interactions.Registry,
+	interactionID string,
+	deliveryID string,
+	now time.Time,
+) (interactions.Record, bool) {
+	if registry == nil {
+		return interactions.Record{}, false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	record, found := registry.Get(interactionID)
+	active := found && record.Status == interactions.StatusCreated &&
+		record.PromptDeliveryID == deliveryID &&
+		(record.ExpiresAt <= 0 || now.UnixMilli() < record.ExpiresAt)
+	return record, active
+}
+
+// SettleRecoveredInteractionPromptAdmission advances an interaction from the
+// exact terminal receipt of a gateway-owned recovered prompt admission.
+func (al *AgentLoop) SettleRecoveredInteractionPromptAdmission(
+	ctx context.Context,
+	admission outbox.Admission,
+) error {
+	interactionID, tagged := recoveredInteractionPromptID(admission.Intent)
+	if !tagged {
+		return nil
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return fmt.Errorf("outbound coordinator is unavailable")
+	}
+	intent, err := coordinator.AwaitTerminal(ctx, admission)
 	if err != nil {
-		return false
+		return fmt.Errorf("await recovered interaction prompt: %w", err)
 	}
-	deliveryErr := al.humanInteractionRuntime().publishPrompt(ctx, started)
-	updated, err := registry.CompletePromptDelivery(
-		started.ID,
-		started.Revision,
-		deliveryErr == nil,
-		deliveryErr != nil && !channels.DeliveryDefinitelyNotSent(deliveryErr),
-		errString(deliveryErr),
+	registry := al.interactionRegistryForWorkspace(admission.Intent.OwnerWorkspace)
+	if registry == nil {
+		return interactions.ErrStoreUnavailable
+	}
+	if err = registry.LastLoadError(); err != nil {
+		return fmt.Errorf("load interaction registry: %w", err)
+	}
+	record, found := registry.Get(interactionID)
+	if !found || record.PromptDeliveryID != admission.Intent.ID {
+		return nil
+	}
+	al.settleRecoveredInteractionPrompt(
+		ctx,
+		admission.Intent.OwnerWorkspace,
+		registry,
+		record,
+		intent,
+		time.Now().UTC(),
 	)
-	if err != nil || deliveryErr != nil {
-		return false
+	return nil
+}
+
+func recoveredInteractionPromptID(intent outbox.Intent) (string, bool) {
+	const prefix = "interaction:"
+	const suffix = ":prompt"
+	sourceID := strings.TrimSpace(intent.Identity.SourceID)
+	if intent.Identity.Kind != outbox.KindMessage || intent.Identity.Ordinal != 0 ||
+		!strings.HasPrefix(sourceID, prefix) || !strings.HasSuffix(sourceID, suffix) {
+		return "", false
 	}
-	if _, err := registry.MarkWaiting(updated.ID, updated.Revision); err != nil {
-		return false
+	interactionID := strings.TrimSuffix(strings.TrimPrefix(sourceID, prefix), suffix)
+	if interactionID == "" || strings.Contains(interactionID, ":") {
+		return "", false
 	}
-	return true
+	return interactionID, true
 }
 
 func (al *AgentLoop) recoverClaimedInteraction(

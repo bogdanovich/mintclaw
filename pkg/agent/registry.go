@@ -145,6 +145,24 @@ func (r *AgentRegistry) GetAgent(agentID string) (*AgentInstance, bool) {
 	return agent, ok
 }
 
+func (r *AgentRegistry) hasWorkspace(workspace string) bool {
+	if r == nil {
+		return false
+	}
+	wanted := normalizeRuntimeWorkspace(workspace)
+	if wanted == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, agent := range r.agents {
+		if agent != nil && normalizeRuntimeWorkspace(agent.Workspace) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveRoute determines which agent handles the normalized inbound context.
 func (r *AgentRegistry) ResolveRoute(inbound bus.InboundContext) routing.ResolvedRoute {
 	return r.resolver.ResolveRoute(inbound)

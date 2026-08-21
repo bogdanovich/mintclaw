@@ -227,7 +227,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -364,12 +364,8 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 		rec.TerminalSummary != "deployed" {
 		t.Fatalf("task after resumed completion = %#v", rec)
 	}
-	msgBus, ok := al.bus.(*bus.MessageBus)
-	if !ok {
-		t.Fatalf("message bus = %T", al.bus)
-	}
 	select {
-	case final := <-msgBus.OutboundChan():
+	case final := <-manager.sent:
 		if final.Content != "deployed" {
 			t.Fatalf("resumed final = %#v", final)
 		}
@@ -394,7 +390,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := &outcomeBrowserApprovalTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("task-approval", &durableApprovalHook{
@@ -590,7 +586,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	}}
 	al, cleanup := newMultiAgentLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	if err := al.MountHook(NamedHook("child-scope-approval", &durableApprovalHook{
 		actionSummary: "Run the protected child action",
 	})); err != nil {

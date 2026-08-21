@@ -185,5 +185,6 @@ func testOutboundReceipt(t *testing.T) (outboundPublication, *outbox.Coordinator
 		published:   true,
 		deliveryID:  admission.Intent.ID,
 		coordinator: coordinator,
+		admission:   admission,
 	}, coordinator, admission.Intent.ID
 }

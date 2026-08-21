@@ -589,7 +589,7 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	}
 	msgBus := bus.NewMessageBus()
 	reconciler, err := startGatewayOutboundReconciler(
-		ctx, recovered, msgBus, admissions, runtime, workspace,
+		ctx, recovered, msgBus, admissions, runtime, workspace, nil,
 	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
@@ -653,7 +653,7 @@ func TestGatewayOutboundRecoveryTerminalizesMissingScreenshot(t *testing.T) {
 	runtime := &nodeAdmissionRuntime{}
 	msgBus := bus.NewMessageBus()
 	reconciler, err := startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, runtime, workspace,
+		t.Context(), second, msgBus, admissions, runtime, workspace, nil,
 	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)

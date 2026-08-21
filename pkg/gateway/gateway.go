@@ -1133,6 +1133,10 @@ func setupAndStartServicesWithHooks(
 		recoveredOutbound,
 		runningServices.NodeAdmission,
 		cfg.WorkspacePath(),
+		&recoveredOutboundCallbacks{
+			reconcile: agentLoop.ReconcileRecoveredInteractionPromptAdmission,
+			settle:    agentLoop.SettleRecoveredInteractionPromptAdmission,
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error reconciling outbound outbox: %w", err)

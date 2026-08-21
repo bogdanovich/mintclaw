@@ -31,7 +31,7 @@ func TestCoordinatorAwaitTerminalObservesDeliveredTransition(t *testing.T) {
 
 	done := make(chan Intent, 1)
 	go func() {
-		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), admission.Intent.ID)
+		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), admission)
 		if awaitErr == nil {
 			done <- intent
 		}
@@ -81,10 +81,181 @@ func TestCoordinatorAwaitTerminalReturnsExistingFailure(t *testing.T) {
 		t.Fatalf("MarkDefinitelyFailed() error = %v", err)
 	}
 
-	intent, err := coordinator.AwaitTerminal(context.Background(), admission.Intent.ID)
+	intent, err := coordinator.AwaitTerminal(context.Background(), admission)
 	if err != nil || intent.Status != StatusDefinitelyFailed ||
 		intent.LastError != "request entity too large" {
 		t.Fatalf("AwaitTerminal() = %+v, %v", intent, err)
+	}
+}
+
+func TestCoordinatorAwaitTerminalIgnoresPriorRetryFailure(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	identity := testIdentity()
+	message := bus.OutboundMessage{Content: "retry me"}
+	first, err := coordinator.AdmitMessage("/agents/main", identity, message)
+	if err != nil || !first.Dispatch {
+		t.Fatalf("first admission = %+v, %v", first, err)
+	}
+	commitTestAdmission(t, coordinator, first.Lease)
+	if err = coordinator.BeginAttempt(first.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt(first) error = %v", err)
+	}
+	if err = coordinator.MarkDefinitelyFailed(first.Intent.ID, Outcome{Error: "offline"}); err != nil {
+		t.Fatalf("MarkDefinitelyFailed() error = %v", err)
+	}
+
+	retry, err := coordinator.AdmitMessage("/agents/main", identity, message)
+	if err != nil || !retry.Dispatch {
+		t.Fatalf("retry admission = %+v, %v", retry, err)
+	}
+	commitTestAdmission(t, coordinator, retry.Lease)
+	done := make(chan Intent, 1)
+	go func() {
+		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), retry)
+		if awaitErr == nil {
+			done <- intent
+		}
+	}()
+	select {
+	case stale := <-done:
+		t.Fatalf("retry observed prior terminal failure: %+v", stale)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err = coordinator.BeginAttempt(retry.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt(retry) error = %v", err)
+	}
+	if err = coordinator.MarkDelivered(retry.Intent.ID, Outcome{}); err != nil {
+		t.Fatalf("MarkDelivered(retry) error = %v", err)
+	}
+	select {
+	case delivered := <-done:
+		if delivered.Status != StatusDelivered || delivered.Attempts != 2 {
+			t.Fatalf("retry outcome = %+v", delivered)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry terminal outcome was not observed")
+	}
+}
+
+func TestCoordinatorAwaitTerminalRetainsPriorAdmissionAfterRetryBegins(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	identity := testIdentity()
+	message := bus.OutboundMessage{Content: "retain exact retry receipts"}
+	first, err := coordinator.AdmitMessage("/agents/main", identity, message)
+	if err != nil || !first.Dispatch {
+		t.Fatalf("first admission = %+v, %v", first, err)
+	}
+	commitTestAdmission(t, coordinator, first.Lease)
+	if err = coordinator.BeginAttempt(first.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt(first) error = %v", err)
+	}
+	if err = coordinator.MarkDefinitelyFailed(first.Intent.ID, Outcome{Error: "offline"}); err != nil {
+		t.Fatalf("MarkDefinitelyFailed(first) error = %v", err)
+	}
+
+	retry, err := coordinator.AdmitMessage("/agents/main", identity, message)
+	if err != nil || !retry.Dispatch {
+		t.Fatalf("retry admission = %+v, %v", retry, err)
+	}
+	commitTestAdmission(t, coordinator, retry.Lease)
+	if err = coordinator.BeginAttempt(retry.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt(retry) error = %v", err)
+	}
+
+	for range 2 {
+		failed, awaitErr := coordinator.AwaitTerminal(context.Background(), first)
+		if awaitErr != nil || failed.Status != StatusDefinitelyFailed ||
+			failed.Attempts != 1 || failed.LastError != "offline" {
+			t.Fatalf("first admission terminal result = %+v, %v", failed, awaitErr)
+		}
+	}
+	if err = coordinator.MarkDelivered(retry.Intent.ID, Outcome{}); err != nil {
+		t.Fatalf("MarkDelivered(retry) error = %v", err)
+	}
+	delivered, err := coordinator.AwaitTerminal(context.Background(), retry)
+	if err != nil || delivered.Status != StatusDelivered || delivered.Attempts != 2 {
+		t.Fatalf("retry terminal result = %+v, %v", delivered, err)
+	}
+}
+
+func TestCoordinatorAwaitTerminalReturnsBeginAttemptPersistenceFailure(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "fail attempt persistence"},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("admission = %+v, %v", admission, err)
+	}
+	commitTestAdmission(t, coordinator, admission.Lease)
+	persistErr := errors.New("attempt persistence failed")
+	coordinator.store.writeAtomic = func(string, []byte, os.FileMode) error {
+		return persistErr
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); !errors.Is(err, persistErr) {
+		t.Fatalf("BeginAttempt() error = %v, want %v", err, persistErr)
+	}
+	intent, awaitErr := coordinator.AwaitTerminal(t.Context(), admission)
+	if !errors.Is(awaitErr, persistErr) || intent.ID != "" {
+		t.Fatalf("AwaitTerminal() = %+v, %v, want persistence error", intent, awaitErr)
+	}
+	coordinator.mu.Lock()
+	published := coordinator.published[admission.Intent.ID]
+	attempting := coordinator.attempting[admission.Intent.ID]
+	coordinator.mu.Unlock()
+	if !published || !attempting {
+		t.Fatalf("failed attempt fences = published:%t attempting:%t", published, attempting)
+	}
+}
+
+func TestCoordinatorAwaitTerminalReturnsOutcomePersistenceFailure(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "fail outcome persistence"},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("admission = %+v, %v", admission, err)
+	}
+	commitTestAdmission(t, coordinator, admission.Lease)
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt() error = %v", err)
+	}
+	persistErr := errors.New("outcome persistence failed")
+	coordinator.store.writeAtomic = func(string, []byte, os.FileMode) error {
+		return persistErr
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, Outcome{}); !errors.Is(err, persistErr) {
+		t.Fatalf("MarkDelivered() error = %v, want %v", err, persistErr)
+	}
+	intent, awaitErr := coordinator.AwaitTerminal(t.Context(), admission)
+	if !errors.Is(awaitErr, persistErr) || intent.ID != "" {
+		t.Fatalf("AwaitTerminal() = %+v, %v, want persistence error", intent, awaitErr)
+	}
+	coordinator.mu.Lock()
+	published := coordinator.published[admission.Intent.ID]
+	attempting := coordinator.attempting[admission.Intent.ID]
+	coordinator.mu.Unlock()
+	if !published || !attempting {
+		t.Fatalf("failed outcome fences = published:%t attempting:%t", published, attempting)
 	}
 }
 
@@ -104,7 +275,7 @@ func TestCoordinatorAwaitTerminalHonorsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = coordinator.AwaitTerminal(ctx, admission.Intent.ID); !errors.Is(err, context.Canceled) {
+	if _, err = coordinator.AwaitTerminal(ctx, admission); !errors.Is(err, context.Canceled) {
 		t.Fatalf("AwaitTerminal() error = %v, want context canceled", err)
 	}
 }
@@ -131,24 +302,11 @@ func TestCoordinatorTerminalTransitionDoesNotRereadPersistedRecord(t *testing.T)
 
 	done := make(chan Intent, 1)
 	go func() {
-		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), admission.Intent.ID)
+		intent, awaitErr := coordinator.AwaitTerminal(context.Background(), admission)
 		if awaitErr == nil {
 			done <- intent
 		}
 	}()
-	waiterDeadline := time.Now().Add(time.Second)
-	for {
-		coordinator.mu.Lock()
-		registered := len(coordinator.waiters[admission.Intent.ID]) == 1
-		coordinator.mu.Unlock()
-		if registered {
-			break
-		}
-		if time.Now().After(waiterDeadline) {
-			t.Fatal("AwaitTerminal() did not register its waiter")
-		}
-		time.Sleep(time.Millisecond)
-	}
 	err = coordinator.transitionPublished(admission.Intent.ID, true, func() (Intent, error) {
 		intent, transitionErr := coordinator.store.MarkDelivered(
 			admission.Intent.ID,
@@ -377,6 +535,58 @@ func TestCoordinatorDefinitelyFailedOutcomeCanBeReadmitted(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDefinitelyFailedOutcomeStopsAfterRetryBudget(t *testing.T) {
+	instanceRoot := t.TempDir()
+	coordinator, err := OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	identity := testIdentity()
+	message := bus.OutboundMessage{Content: "bounded retry"}
+	var exhausted Intent
+	for attempt := 1; attempt <= MaxDeliveryAttempts; attempt++ {
+		admission, admitErr := coordinator.AdmitMessage("/agents/main", identity, message)
+		if admitErr != nil || !admission.Dispatch {
+			t.Fatalf("AdmitMessage(attempt %d) = %+v, %v", attempt, admission, admitErr)
+		}
+		commitTestAdmission(t, coordinator, admission.Lease)
+		if beginErr := coordinator.BeginAttempt(admission.Intent.ID); beginErr != nil {
+			t.Fatalf("BeginAttempt(attempt %d) error = %v", attempt, beginErr)
+		}
+		if outcomeErr := coordinator.MarkDefinitelyFailed(
+			admission.Intent.ID,
+			Outcome{Error: "adapter unavailable"},
+		); outcomeErr != nil {
+			t.Fatalf("MarkDefinitelyFailed(attempt %d) error = %v", attempt, outcomeErr)
+		}
+		exhausted, err = coordinator.Get(admission.Intent.ID)
+		if err != nil || exhausted.Attempts != attempt {
+			t.Fatalf("intent after attempt %d = %+v, %v", attempt, exhausted, err)
+		}
+	}
+	if !exhausted.RetryExhausted() {
+		t.Fatalf("intent did not exhaust retry budget: %+v", exhausted)
+	}
+
+	rejected, err := coordinator.AdmitMessage("/agents/main", identity, message)
+	if err != nil || rejected.Dispatch || rejected.InFlight || !rejected.Intent.RetryExhausted() {
+		t.Fatalf("admission after retry exhaustion = %+v, %v", rejected, err)
+	}
+	if err = coordinator.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatalf("OpenCoordinator(reopen) error = %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	recovered, err := reopened.Recover()
+	if err != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() = %+v, %v, want no exhausted intent", recovered, err)
+	}
+}
+
 func TestCoordinatorMarksExactUnpublishedAdmissionUnrecoverable(t *testing.T) {
 	coordinator, err := OpenCoordinator(t.TempDir())
 	if err != nil {
@@ -413,7 +623,43 @@ func TestCoordinatorMarksExactUnpublishedAdmissionUnrecoverable(t *testing.T) {
 	}
 }
 
-func TestCoordinatorDispatchRejectionDoesNotCountTransportAttempt(t *testing.T) {
+func TestCoordinatorAbandonsUnsentIntentAndConsumesRecoveryLease(t *testing.T) {
+	coordinator, err := OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenCoordinator() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "obsolete prompt"},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	abandoned, err := coordinator.Abandon(admission.Intent.ID, Outcome{Error: "owner completed"})
+	if err != nil || !abandoned {
+		t.Fatalf("Abandon() = %t, %v", abandoned, err)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != StatusAbandoned || intent.LastError != "owner completed" {
+		t.Fatalf("abandoned intent = %+v, %v", intent, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err == nil {
+		t.Fatal("PrepareAdmission() accepted abandoned recovery lease")
+	}
+	if err = coordinator.ReleaseAdmission(admission.Lease); err != nil {
+		t.Fatalf("ReleaseAdmission() after abandonment error = %v", err)
+	}
+	if abandoned, err = coordinator.Abandon(admission.Intent.ID, Outcome{}); err != nil || abandoned {
+		t.Fatalf("second Abandon() = %t, %v", abandoned, err)
+	}
+	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() = %+v, %v", recovered, recoverErr)
+	}
+}
+
+func TestCoordinatorDispatchRejectionCountsDeliveryAttempt(t *testing.T) {
 	coordinator, err := OpenCoordinator(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenCoordinator() error = %v", err)
@@ -435,7 +681,7 @@ func TestCoordinatorDispatchRejectionDoesNotCountTransportAttempt(t *testing.T) 
 		t.Fatalf("MarkDispatchRejected() error = %v", rejectErr)
 	}
 	intent, err := coordinator.Get(admission.Intent.ID)
-	if err != nil || intent.Status != StatusDefinitelyFailed || intent.Attempts != 0 {
+	if err != nil || intent.Status != StatusDefinitelyFailed || intent.Attempts != 1 {
 		t.Fatalf("rejected intent = %+v, %v", intent, err)
 	}
 
@@ -455,8 +701,31 @@ func TestCoordinatorDispatchRejectionDoesNotCountTransportAttempt(t *testing.T) 
 		t.Fatalf("MarkDispatchRejected(retry) error = %v", rejectErr)
 	}
 	intent, err = coordinator.Get(retry.Intent.ID)
-	if err != nil || intent.Attempts != 0 || intent.LastError != "channel still unavailable" {
+	if err != nil || intent.Attempts != 2 || intent.LastError != "channel still unavailable" {
 		t.Fatalf("rejected retry intent = %+v, %v", intent, err)
+	}
+	last, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "reject before transport"},
+	)
+	if err != nil || !last.Dispatch {
+		t.Fatalf("last admission = %+v, %v", last, err)
+	}
+	commitTestAdmission(t, coordinator, last.Lease)
+	if err = coordinator.MarkDispatchRejected(
+		last.Intent.ID,
+		Outcome{Error: "channel remains unavailable"},
+	); err != nil {
+		t.Fatalf("MarkDispatchRejected(last) error = %v", err)
+	}
+	exhausted, err := coordinator.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "reject before transport"},
+	)
+	if err != nil || exhausted.Dispatch || !exhausted.Intent.RetryExhausted() {
+		t.Fatalf("exhausted admission = %+v, %v", exhausted, err)
 	}
 }
 

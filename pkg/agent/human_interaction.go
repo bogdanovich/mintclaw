@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
-	"github.com/bogdanovich/mintclaw/pkg/channels"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -149,6 +149,9 @@ func (al *AgentLoop) observeInteractionEvent(
 	}
 	al.resolveInteractionDomainState(observation)
 	al.projectInteractionTaskState(workspace, observation)
+	if observation.Record.Status != interactions.StatusCreated {
+		al.abandonInactiveInteractionPrompt(observation.Record)
+	}
 	kind := runtimeKindForInteractionEvent(observation.Event.Type)
 	if kind == "" {
 		return
@@ -175,6 +178,23 @@ func (al *AgentLoop) observeInteractionEvent(
 		Code:          observation.Event.Code,
 		Success:       observation.Event.Success,
 	})
+}
+
+func (al *AgentLoop) abandonInactiveInteractionPrompt(record interactions.Record) {
+	deliveryID := strings.TrimSpace(record.PromptDeliveryID)
+	coordinator := al.outboundCoordinator()
+	if deliveryID == "" || coordinator == nil {
+		return
+	}
+	if _, err := coordinator.Abandon(deliveryID, outbox.Outcome{
+		Error: "interaction prompt is no longer active",
+	}); err != nil {
+		logger.WarnCF("agent", "Failed to abandon inactive interaction prompt", map[string]any{
+			"interaction_id": record.ID,
+			"delivery_id":    deliveryID,
+			"error":          err.Error(),
+		})
+	}
 }
 
 func (al *AgentLoop) dismissTerminalInteractionToolFeedback(record interactions.Record) {
@@ -280,7 +300,7 @@ func runtimeKindForInteractionEvent(event interactions.EventType) runtimeevents.
 	switch event {
 	case interactions.EventCreated:
 		return runtimeevents.KindAgentInteractionCreated
-	case interactions.EventDeliveryAttempt, interactions.EventFinalDelivery:
+	case interactions.EventPromptDelivery, interactions.EventFinalDelivery:
 		return runtimeevents.KindAgentInteractionDelivery
 	case interactions.EventWaiting:
 		return runtimeevents.KindAgentInteractionWaiting
@@ -356,39 +376,9 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		runtime.al.interactionResolutions.Store(record.ID, request.Resolution)
 	}
 	disposition := ToolSuspensionDisposition{InteractionID: record.ID, Durable: true}
-	if runtime.al.channelManager == nil {
-		deliveryErr := fmt.Errorf("channel manager unavailable")
-		_, stateErr := registry.RecordDeliveryAttempt(
-			record.ID,
-			record.Revision,
-			false,
-			deliveryErr.Error(),
-		)
-		if stateErr != nil {
-			return disposition, fmt.Errorf("record interaction delivery: %w", stateErr)
-		}
-		return disposition, deliveryErr
-	}
-	record, err = registry.BeginPromptDelivery(record.ID, record.Revision)
+	_, _, err = runtime.al.deliverInteractionPrompt(ctx, registry, request.Workspace, record)
 	if err != nil {
-		return disposition, fmt.Errorf("begin interaction delivery: %w", err)
-	}
-	deliveryErr := runtime.publishPrompt(ctx, record)
-	record, stateErr := registry.CompletePromptDelivery(
-		record.ID,
-		record.Revision,
-		deliveryErr == nil,
-		deliveryErr != nil && !channels.DeliveryDefinitelyNotSent(deliveryErr),
-		errString(deliveryErr),
-	)
-	if stateErr != nil {
-		return disposition, fmt.Errorf("record interaction delivery: %w", stateErr)
-	}
-	if deliveryErr != nil {
-		return disposition, deliveryErr
-	}
-	if _, err := registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		return disposition, fmt.Errorf("mark interaction waiting: %w", err)
+		return disposition, err
 	}
 	return disposition, nil
 }
@@ -416,10 +406,15 @@ func (runtime *humanInteractionRuntime) ConsumeApproval(
 
 func (runtime *humanInteractionRuntime) publishPrompt(
 	ctx context.Context,
+	registry *interactions.Registry,
+	workspace string,
 	record interactions.Record,
-) error {
-	if runtime.al.channelManager == nil {
-		return fmt.Errorf("channel manager unavailable")
+) (outbox.Intent, error) {
+	if runtime == nil || runtime.al == nil || runtime.al.bus == nil {
+		return outbox.Intent{}, fmt.Errorf("message bus unavailable")
+	}
+	if !supportsDurableDeliveryReceipts(runtime.al.channelManager) {
+		return outbox.Intent{}, fmt.Errorf("durable channel delivery receipts are unavailable")
 	}
 	message := interactionPromptMessage(record)
 	message.Content = renderInteractionPrompt(record)
@@ -428,12 +423,100 @@ func (runtime *humanInteractionRuntime) publishPrompt(
 			traceScope := runtimeevents.NewTraceScope(agent.Workspace, record.Origin.TurnID)
 			if traceScope.Complete() {
 				if err := bus.SetOutboundTraceScopes(&message, []runtimeevents.TraceScope{traceScope}); err != nil {
-					return err
+					return outbox.Intent{}, err
 				}
 			}
 		}
 	}
-	return runtime.al.sendInteractionMessage(ctx, message)
+	ctx = withOutboundTransaction(ctx, interactionDeliveryKey(record.ID, "prompt"))
+	receipt, err := runtime.al.publishTransactionMessageReceiptAtBoundary(
+		ctx,
+		workspace,
+		message,
+		func(context.Context) error {
+			return runtime.al.validateInteractionPromptPublication(
+				registry,
+				workspace,
+				record,
+				time.Now().UTC(),
+			)
+		},
+	)
+	if err != nil {
+		return outbox.Intent{}, err
+	}
+	if receipt.deliveryID != record.PromptDeliveryID {
+		return outbox.Intent{}, fmt.Errorf(
+			"interaction prompt delivery ID %q does not match bound outbox ID %q",
+			receipt.deliveryID,
+			record.PromptDeliveryID,
+		)
+	}
+	intent, err := receipt.awaitTerminal(ctx)
+	if err != nil {
+		return outbox.Intent{}, err
+	}
+	if intent.Status == outbox.StatusDelivered {
+		return intent, nil
+	}
+	detail := strings.TrimSpace(intent.LastError)
+	if detail == "" {
+		detail = "delivery did not reach the remote channel"
+	}
+	return intent, fmt.Errorf("interaction prompt delivery is %s: %s", intent.Status, detail)
+}
+
+func interactionPromptDeliveryIdentity(record interactions.Record) outbox.Identity {
+	return outbox.Identity{
+		SourceID:   interactionDeliveryKey(record.ID, "prompt"),
+		Ordinal:    0,
+		Kind:       outbox.KindMessage,
+		Channel:    record.Route.Channel,
+		ChatID:     record.Route.ChatID,
+		SessionKey: record.Route.SessionKey,
+	}
+}
+
+func bindInteractionPromptDelivery(
+	registry *interactions.Registry,
+	record interactions.Record,
+) (interactions.Record, error) {
+	deliveryID, err := outbox.DeliveryID(interactionPromptDeliveryIdentity(record))
+	if err != nil {
+		return record, err
+	}
+	if record.PromptDeliveryID != "" {
+		if record.PromptDeliveryID != deliveryID {
+			return record, fmt.Errorf(
+				"interaction prompt is bound to outbox ID %q, want %q",
+				record.PromptDeliveryID,
+				deliveryID,
+			)
+		}
+		return record, nil
+	}
+	return registry.BindPromptDelivery(record.ID, record.Revision, deliveryID)
+}
+
+func (al *AgentLoop) deliverInteractionPrompt(
+	ctx context.Context,
+	registry *interactions.Registry,
+	workspace string,
+	record interactions.Record,
+) (interactions.Record, outbox.Intent, error) {
+	record, err := bindInteractionPromptDelivery(registry, record)
+	if err != nil {
+		return record, outbox.Intent{}, fmt.Errorf("bind interaction prompt delivery: %w", err)
+	}
+	intent, deliveryErr := al.humanInteractionRuntime().publishPrompt(ctx, registry, workspace, record)
+	if deliveryErr != nil {
+		return record, intent, deliveryErr
+	}
+	updated, err := registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		return record, intent, fmt.Errorf("mark interaction waiting: %w", err)
+	}
+	return updated, intent, nil
 }
 
 func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {

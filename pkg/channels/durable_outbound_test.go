@@ -190,8 +190,8 @@ func TestDurableDispatchRejectionPersistsDefinitelyFailed(t *testing.T) {
 			if !strings.Contains(intent.LastError, "channel missing not found") {
 				t.Fatalf("rejection error = %q", intent.LastError)
 			}
-			if intent.Attempts != 0 {
-				t.Fatalf("adapter attempts = %d, want 0", intent.Attempts)
+			if intent.Attempts != 1 {
+				t.Fatalf("delivery attempts = %d, want 1", intent.Attempts)
 			}
 			break
 		}
@@ -429,8 +429,8 @@ func TestCancellationDrainPersistsDurableDispatchRejections(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%q) error = %v", deliveryID, err)
 		}
-		if intent.Status != outbox.StatusDefinitelyFailed || intent.Attempts != 0 {
-			t.Fatalf("drained intent = %+v, want definitely failed without an adapter attempt", intent)
+		if intent.Status != outbox.StatusDefinitelyFailed || intent.Attempts != 1 {
+			t.Fatalf("drained intent = %+v, want one rejected delivery attempt", intent)
 		}
 		if !strings.Contains(intent.LastError, context.Canceled.Error()) {
 			t.Fatalf("drained intent error = %q, want cancellation", intent.LastError)

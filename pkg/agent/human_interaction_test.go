@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -29,9 +30,11 @@ type interactionChannelManager struct {
 	*recordingChannelManager
 	sent        chan bus.OutboundMessage
 	synced      chan bus.OutboundMessage
+	sendErrMu   sync.RWMutex
 	sendErr     error
 	sendStarted chan struct{}
 	sendRelease chan struct{}
+	outbox      *outbox.Coordinator
 }
 
 type blockingInteractionProvider struct {
@@ -524,6 +527,11 @@ func (m *interactionChannelManager) SyncInteractionControls(msg bus.OutboundMess
 }
 
 func (m *interactionChannelManager) SendMessage(_ context.Context, msg bus.OutboundMessage) error {
+	if msg.DeliveryID != "" && m.outbox != nil {
+		if err := m.outbox.BeginAttempt(msg.DeliveryID); err != nil {
+			return err
+		}
+	}
 	if m.sendStarted != nil {
 		select {
 		case m.sendStarted <- struct{}{}:
@@ -533,11 +541,39 @@ func (m *interactionChannelManager) SendMessage(_ context.Context, msg bus.Outbo
 	if m.sendRelease != nil {
 		<-m.sendRelease
 	}
-	if m.sendErr != nil {
-		return m.sendErr
+	m.sendErrMu.RLock()
+	sendErr := m.sendErr
+	m.sendErrMu.RUnlock()
+	if sendErr != nil {
+		if msg.DeliveryID != "" && m.outbox != nil {
+			outcome := outbox.Outcome{Error: sendErr.Error()}
+			var persistErr error
+			if channels.DeliveryDefinitelyNotSent(sendErr) {
+				persistErr = m.outbox.MarkDefinitelyFailed(msg.DeliveryID, outcome)
+			} else {
+				persistErr = m.outbox.MarkAmbiguous(msg.DeliveryID, outcome)
+			}
+			return errors.Join(sendErr, persistErr)
+		}
+		return sendErr
 	}
 	m.sent <- msg
+	if msg.DeliveryID != "" && m.outbox != nil {
+		if err := m.outbox.MarkDelivered(msg.DeliveryID, outbox.Outcome{}); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (m *interactionChannelManager) setSendError(err error) {
+	m.sendErrMu.Lock()
+	m.sendErr = err
+	m.sendErrMu.Unlock()
+}
+
+func (m *interactionChannelManager) SupportsDurableDeliveryReceipts() bool {
+	return m != nil && m.outbox != nil
 }
 
 func (m *interactionChannelManager) SendMessageDefiniteRetryOnly(
@@ -545,6 +581,474 @@ func (m *interactionChannelManager) SendMessageDefiniteRetryOnly(
 	msg bus.OutboundMessage,
 ) error {
 	return m.SendMessage(ctx, msg)
+}
+
+func attachInteractionOutbox(
+	t *testing.T,
+	al *AgentLoop,
+	messageBus *bus.MessageBus,
+	manager *interactionChannelManager,
+) *outbox.Coordinator {
+	t.Helper()
+	coordinator, err := outbox.OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetOutboundOutbox(coordinator)
+	manager.outbox = coordinator
+	dispatchCtx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-dispatchCtx.Done():
+				return
+			case msg := <-messageBus.OutboundChan():
+				_ = manager.SendMessage(dispatchCtx, msg)
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		al.SetOutboundOutbox(nil)
+		manager.outbox = nil
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return coordinator
+}
+
+func installInteractionChannelManager(
+	t *testing.T,
+	al *AgentLoop,
+	manager *interactionChannelManager,
+) *outbox.Coordinator {
+	t.Helper()
+	messageBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatalf("interaction test bus = %T, want *bus.MessageBus", al.bus)
+	}
+	al.channelManager = manager
+	return attachInteractionOutbox(t, al, messageBus, manager)
+}
+
+func openTestInteractionOutbox(t *testing.T, al *AgentLoop) *outbox.Coordinator {
+	t.Helper()
+	coordinator, err := outbox.OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetOutboundOutbox(coordinator)
+	t.Cleanup(func() {
+		al.SetOutboundOutbox(nil)
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return coordinator
+}
+
+func bindTestInteractionPrompt(
+	t *testing.T,
+	registry *interactions.Registry,
+	record interactions.Record,
+) interactions.Record {
+	t.Helper()
+	deliveryID, err := outbox.DeliveryID(interactionPromptDeliveryIdentity(record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.BindPromptDelivery(record.ID, record.Revision, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func seedTestInteractionPromptOutcome(
+	t *testing.T,
+	coordinator *outbox.Coordinator,
+	workspace string,
+	record interactions.Record,
+	status outbox.Status,
+	attempts int,
+	retryAfter ...time.Time,
+) outbox.Intent {
+	t.Helper()
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	for attempt := range attempts {
+		admission, err := coordinator.AdmitMessage(
+			workspace,
+			interactionPromptDeliveryIdentity(record),
+			message,
+		)
+		if err != nil || !admission.Dispatch {
+			t.Fatalf("AdmitMessage(attempt %d) = (%#v, %v)", attempt+1, admission, err)
+		}
+		if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+			t.Fatal(err)
+		}
+		if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+			t.Fatal(err)
+		}
+		if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+			t.Fatal(err)
+		}
+		outcome := outbox.Outcome{Error: "test delivery outcome"}
+		if len(retryAfter) > 0 && attempt == attempts-1 {
+			outcome.RetryAfter = retryAfter[0]
+		}
+		if attempt < attempts-1 || status == outbox.StatusDefinitelyFailed {
+			err = coordinator.MarkDefinitelyFailed(admission.Intent.ID, outcome)
+		} else if status == outbox.StatusAmbiguous {
+			err = coordinator.MarkAmbiguous(admission.Intent.ID, outcome)
+		} else {
+			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
+
+func TestInteractionPromptRecoveryHonorsRetryDeadline(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	coordinator := installInteractionChannelManager(t, al, manager)
+	workspace := agent.Workspace
+	request := testToolSuspensionRequest(workspace)
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	now := time.Now().UTC()
+	retryAt := now.Add(10 * time.Minute)
+	seedTestInteractionPromptOutcome(
+		t, coordinator, workspace, record, outbox.StatusDefinitelyFailed, 1, retryAt,
+	)
+
+	if recovered := al.recoverInteractionPromptAt(t.Context(), workspace, registry, record, now); recovered {
+		t.Fatal("recovery retried prompt before its durable retry deadline")
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil || intent.Attempts != 1 || intent.Status != outbox.StatusDefinitelyFailed {
+		t.Fatalf("intent before retry deadline = %+v, %v", intent, err)
+	}
+	select {
+	case outbound := <-manager.sent:
+		t.Fatalf("prompt sent before retry deadline: %#v", outbound)
+	default:
+	}
+
+	if recovered := al.recoverInteractionPromptAt(
+		t.Context(), workspace, registry, record, retryAt,
+	); !recovered {
+		t.Fatal("recovery did not retry prompt at its durable retry deadline")
+	}
+	updated, _ := registry.Get(record.ID)
+	intent, err = coordinator.Get(record.PromptDeliveryID)
+	if err != nil || updated.Status != interactions.StatusWaiting ||
+		intent.Status != outbox.StatusDelivered || intent.Attempts != 2 {
+		t.Fatalf("retried interaction = %+v, intent = %+v, %v", updated, intent, err)
+	}
+}
+
+func TestRecoveredInteractionPromptAdmissionIsAbandonedAfterExpiry(t *testing.T) {
+	al := &AgentLoop{cfg: config.DefaultConfig()}
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := t.TempDir()
+	request := testToolSuspensionRequest(workspace)
+	now := time.Now().UTC()
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+
+	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admission, now)
+	if err != nil || !publish {
+		t.Fatalf("active admission reconciliation = %t, %v", publish, err)
+	}
+	publish, err = al.ReconcileRecoveredInteractionPromptAdmission(admission, now.Add(2*time.Hour))
+	if err != nil || publish {
+		t.Fatalf("expired admission reconciliation = %t, %v", publish, err)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("expired prompt intent = %+v, %v", intent, err)
+	}
+}
+
+func TestRecoveredInteractionPromptAdmissionIsAbandonedAfterAgentRemoval(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	orphanWorkspace := filepath.Join(t.TempDir(), "removed-agent-workspace")
+	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(orphanWorkspace))
+	request := testToolSuspensionRequest(orphanWorkspace)
+	request.Route.AgentID = "removed-agent"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	instanceRoot := t.TempDir()
+	first, err := outbox.OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := first.AdmitMessage(
+		orphanWorkspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := outbox.OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetOutboundOutbox(second)
+	t.Cleanup(func() {
+		al.SetOutboundOutbox(nil)
+		_ = second.Close()
+	})
+	admissions, err := second.Recover()
+	if err != nil || len(admissions) != 1 {
+		t.Fatalf("Recover() = %+v, %v", admissions, err)
+	}
+	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admissions[0], time.Now().UTC())
+	if err != nil || publish {
+		t.Fatalf("orphaned prompt reconciliation = %t, %v", publish, err)
+	}
+	intent, err := second.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("orphaned prompt intent = %+v, %v", intent, err)
+	}
+	if current, ok := al.GetRegistry().GetAgent(agent.ID); !ok || current == nil {
+		t.Fatal("active agent was disturbed while abandoning orphaned prompt")
+	}
+}
+
+func TestRecoveredTaskInteractionPromptIsAbandonedAfterOwnerWorkspaceRemoval(t *testing.T) {
+	al, continuationAgent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	removedOwnerWorkspace := filepath.Join(t.TempDir(), "removed-parent-workspace")
+	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(removedOwnerWorkspace))
+	request := testToolSuspensionRequest(removedOwnerWorkspace)
+	request.Route.AgentID = continuationAgent.ID
+	request.Origin.TaskID = "task-owned-by-removed-parent"
+	request.Origin.ContinuationSessionKey = "continuation-agent-session"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	instanceRoot := t.TempDir()
+	first, err := outbox.OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := first.AdmitMessage(
+		removedOwnerWorkspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := outbox.OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetOutboundOutbox(second)
+	t.Cleanup(func() {
+		al.SetOutboundOutbox(nil)
+		_ = second.Close()
+	})
+	admissions, err := second.Recover()
+	if err != nil || len(admissions) != 1 {
+		t.Fatalf("Recover() = %+v, %v", admissions, err)
+	}
+	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admissions[0], time.Now().UTC())
+	if err != nil || publish {
+		t.Fatalf("orphaned task prompt reconciliation = %t, %v", publish, err)
+	}
+	intent, err := second.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("orphaned task prompt intent = %+v, %v", intent, err)
+	}
+	if current, ok := al.GetRegistry().GetAgent(continuationAgent.ID); !ok || current == nil {
+		t.Fatal("continuation agent was disturbed while abandoning orphaned task prompt")
+	}
+}
+
+func TestTerminalInteractionAbandonsUnpublishedPrompt(t *testing.T) {
+	al := &AgentLoop{cfg: config.DefaultConfig()}
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := t.TempDir()
+	request := testToolSuspensionRequest(workspace)
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if _, err = registry.Cancel(record.ID, record.Revision, "test_cancel"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("canceled prompt intent = %+v, %v", intent, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err == nil {
+		t.Fatal("PrepareAdmission() accepted a canceled prompt lease")
+	}
+}
+
+func TestInteractionPromptPublicationRevalidatesAfterAdmission(t *testing.T) {
+	al := &AgentLoop{cfg: config.DefaultConfig()}
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := t.TempDir()
+	request := testToolSuspensionRequest(workspace)
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	if _, err = registry.Cancel(record.ID, record.Revision, "cancel_before_admission"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if err = al.validateInteractionPromptPublication(registry, workspace, record, time.Now().UTC()); err == nil {
+		t.Fatal("publication validation accepted a prompt canceled before admission")
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("revalidated prompt intent = %+v, %v", intent, err)
+	}
+}
+
+func TestRecoveredInteractionPromptSettlesExactAdmissionReceipt(t *testing.T) {
+	al := &AgentLoop{cfg: config.DefaultConfig()}
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := t.TempDir()
+	request := testToolSuspensionRequest(workspace)
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	seedTestInteractionPromptOutcome(
+		t, coordinator, workspace, record, outbox.StatusDefinitelyFailed, 1,
+	)
+	admissions, err := coordinator.Recover()
+	if err != nil || len(admissions) != 1 {
+		t.Fatalf("Recover() = %+v, %v", admissions, err)
+	}
+	settled := make(chan error, 1)
+	go func() {
+		settled <- al.SettleRecoveredInteractionPromptAdmission(t.Context(), admissions[0])
+	}()
+	if err = coordinator.PrepareAdmission(admissions[0].Lease); err != nil {
+		t.Fatalf("PrepareAdmission() error = %v", err)
+	}
+	if err = coordinator.CommitAdmission(admissions[0].Lease); err != nil {
+		t.Fatalf("CommitAdmission() error = %v", err)
+	}
+	if err = coordinator.BeginAttempt(admissions[0].Intent.ID); err != nil {
+		t.Fatalf("BeginAttempt() error = %v", err)
+	}
+	if err = coordinator.MarkDelivered(admissions[0].Intent.ID, outbox.Outcome{}); err != nil {
+		t.Fatalf("MarkDelivered() error = %v", err)
+	}
+	select {
+	case err = <-settled:
+		if err != nil {
+			t.Fatalf("SettleRecoveredInteractionPromptAdmission() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovered interaction prompt receipt was not settled")
+	}
+	updated, _ := registry.Get(record.ID)
+	if updated.Status != interactions.StatusWaiting {
+		t.Fatalf("settled interaction = %+v", updated)
+	}
 }
 
 func TestCorruptHumanInteractionStoreFailsClosed(t *testing.T) {
@@ -585,6 +1089,21 @@ func testToolSuspensionRequest(workspace string) ToolSuspensionRequest {
 			TurnID: "turn-1", ToolCallID: "call-question", ToolName: "request_user_input",
 		},
 	}
+}
+
+func markTestInteractionWaiting(
+	t *testing.T,
+	registry *interactions.Registry,
+	record interactions.Record,
+) interactions.Record {
+	t.Helper()
+	record = bindTestInteractionPrompt(t, registry, record)
+	var err error
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
 }
 
 func prepareWaitingControlInteraction(
@@ -632,14 +1151,7 @@ func prepareWaitingControlInteraction(
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 	return record, target
 }
 
@@ -683,14 +1195,7 @@ func prepareWaitingControlInteractionWithContinuation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 	return record, target
 }
 
@@ -708,6 +1213,7 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	messageBus := bus.NewMessageBus()
 	manager := newInteractionChannelManager()
 	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
 
 	request := testToolSuspensionRequest(workspace)
@@ -719,12 +1225,13 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 		t.Fatalf("SuspendToolCall() = (%#v, %v)", disposition, err)
 	}
 	record, ok := al.interactionRegistryForWorkspace(workspace).Get(disposition.InteractionID)
-	if !ok || record.Status != interactions.StatusWaiting || record.DeliveryTries != 1 {
+	if !ok || record.Status != interactions.StatusWaiting || record.PromptDeliveryID == "" {
 		t.Fatalf("record = %#v", record)
 	}
 	select {
 	case outbound := <-manager.sent:
 		if !strings.Contains(outbound.Content, "Which mode should be used?") ||
+			outbound.DeliveryID != record.PromptDeliveryID ||
 			!strings.Contains(outbound.Content, "Canary") ||
 			!strings.Contains(outbound.Content, "`/answer "+record.ShortID+" …`") ||
 			strings.Contains(outbound.Content, "Input needed") ||
@@ -806,20 +1313,31 @@ func TestChainedInteractionKeepsContinuationToolFeedbackCarrier(t *testing.T) {
 }
 
 func TestNonTelegramApprovalPromptCarriesGenericControlsWithoutReplyThread(t *testing.T) {
+	messageBus := bus.NewMessageBus()
 	manager := newInteractionChannelManager()
-	al := &AgentLoop{cfg: config.DefaultConfig(), channelManager: manager}
-	record := interactions.Record{
-		ID: "approval-slack", ShortID: "apr123", Kind: interactions.KindApproval,
+	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	attachInteractionOutbox(t, al, messageBus, manager)
+	workspace := t.TempDir()
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
 		Route: interactions.Route{
 			AgentID: "main", SessionKey: "session-1", Channel: "slack", ChatID: "chat-1",
+			SenderID: "user-1",
 		},
 		Origin: interactions.Origin{
-			ToolName: "protected", ExecutionContext: &bus.InboundContext{MessageID: "origin-message"},
+			TurnID: "turn-1", ToolCallID: "call-1", ToolName: "protected",
+			ArgumentHash:     strings.Repeat("a", 64),
+			ExecutionContext: &bus.InboundContext{MessageID: "origin-message"},
 		},
-		ApprovalAction: "Run protected action",
+		ApprovalAction: "Run protected action", ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	record = bindTestInteractionPrompt(t, registry, record)
 
-	if err := al.humanInteractionRuntime().publishPrompt(t.Context(), record); err != nil {
+	if _, err = al.humanInteractionRuntime().publishPrompt(t.Context(), registry, workspace, record); err != nil {
 		t.Fatal(err)
 	}
 	prompt := <-manager.sent
@@ -1102,14 +1620,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	if al.interactionContinuationExpectsUserDelivery(workspace, record) {
 		t.Fatal("parent-only interaction must not wait for user delivery settlement")
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "yes", Values: map[string]string{"confirm": "yes"},
 		MessageID: "question-answer", ReceivedAt: time.Now().UnixMilli(),
@@ -1306,8 +1817,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "allow_once", MessageID: "typed-fallback-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAllowed)
@@ -1395,8 +1905,7 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "yes", Values: map[string]string{"confirm": "yes"}, ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
@@ -1487,9 +1996,11 @@ func TestDisabledRequestUserInputStillInitializesRecoveryRegistry(t *testing.T) 
 }
 
 func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing.T) {
+	messageBus := bus.NewMessageBus()
 	manager := newInteractionChannelManager()
-	manager.sendErr = errors.New("delivery failed")
-	al := &AgentLoop{cfg: config.DefaultConfig(), bus: failingMessageBus{}, channelManager: manager}
+	manager.setSendError(errors.New("delivery failed"))
+	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
 	disposition, err := al.humanInteractionRuntime().SuspendToolCall(
 		t.Context(),
@@ -1499,22 +2010,20 @@ func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing
 		t.Fatalf("SuspendToolCall() = (%#v, %v), want durable delivery error", disposition, err)
 	}
 	record, _ := al.interactionRegistryForWorkspace(workspace).Get(disposition.InteractionID)
-	if record.Status != interactions.StatusCreated || record.DeliveryError == "" ||
-		record.PromptDeliveryState != interactions.DeliveryStateAmbiguous {
+	intent, getErr := coordinator.Get(record.PromptDeliveryID)
+	if getErr != nil || record.Status != interactions.StatusCreated ||
+		intent.Status != outbox.StatusAmbiguous || intent.Attempts != 1 {
 		t.Fatalf("record after failed delivery = %#v", record)
 	}
 
-	manager.sendErr = nil
-	if al.retryInteractionPrompt(
+	manager.setSendError(nil)
+	if _, duplicateIntent, retryErr := al.deliverInteractionPrompt(
 		t.Context(),
 		al.interactionRegistryForWorkspace(workspace),
+		workspace,
 		record,
-	) {
-		t.Fatal("ambiguous prompt delivery was retried")
-	}
-	record, _ = al.interactionRegistryForWorkspace(workspace).Get(disposition.InteractionID)
-	if record.Status != interactions.StatusCreated || record.DeliveryTries != 1 {
-		t.Fatalf("record after refused retry = %#v", record)
+	); retryErr == nil || duplicateIntent.Status != outbox.StatusAmbiguous {
+		t.Fatalf("ambiguous retry = (%#v, %v)", duplicateIntent, retryErr)
 	}
 	select {
 	case duplicate := <-manager.sent:
@@ -1524,9 +2033,11 @@ func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing
 }
 
 func TestHumanInteractionDefiniteNotSentPromptRetries(t *testing.T) {
+	messageBus := bus.NewMessageBus()
 	manager := newInteractionChannelManager()
-	manager.sendErr = channels.DefiniteNotSentDeliveryError(errors.New("worker unavailable"))
-	al := &AgentLoop{cfg: config.DefaultConfig(), channelManager: manager}
+	manager.setSendError(channels.DefiniteNotSentDeliveryError(errors.New("worker unavailable")))
+	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
 	disposition, err := al.humanInteractionRuntime().SuspendToolCall(
 		t.Context(),
@@ -1537,17 +2048,19 @@ func TestHumanInteractionDefiniteNotSentPromptRetries(t *testing.T) {
 	}
 	registry := al.interactionRegistryForWorkspace(workspace)
 	record, _ := registry.Get(disposition.InteractionID)
-	if record.PromptDeliveryState != interactions.DeliveryStateNotSent {
-		t.Fatalf("definite failure state = %#v", record)
+	failed, getErr := coordinator.Get(record.PromptDeliveryID)
+	if getErr != nil || failed.Status != outbox.StatusDefinitelyFailed || failed.Attempts != 1 {
+		t.Fatalf("definite failure = (%#v, %v)", failed, getErr)
 	}
 
-	manager.sendErr = nil
-	if !al.retryInteractionPrompt(t.Context(), registry, record) {
-		t.Fatal("definite not-sent prompt was not retried")
+	manager.setSendError(nil)
+	record, delivered, retryErr := al.deliverInteractionPrompt(
+		t.Context(), registry, workspace, record,
+	)
+	if retryErr != nil || delivered.Status != outbox.StatusDelivered || delivered.Attempts != 2 {
+		t.Fatalf("retry result = (%#v, %v)", delivered, retryErr)
 	}
-	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusWaiting || !record.PromptDelivered ||
-		record.DeliveryTries != 2 {
+	if record.Status != interactions.StatusWaiting || record.PromptDeliveryID != delivered.ID {
 		t.Fatalf("record after definite retry = %#v", record)
 	}
 	select {
@@ -1582,14 +2095,7 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(
 		record.ID,
 		record.Revision,
@@ -1702,17 +2208,11 @@ func TestRecoveryFailsInteractionAfterPromptDeliveryRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range interactions.MaxDeliveryAttempts {
-		record, err = registry.RecordDeliveryAttempt(
-			record.ID,
-			record.Revision,
-			false,
-			"definitely not sent",
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	coordinator := openTestInteractionOutbox(t, al)
+	record = bindTestInteractionPrompt(t, registry, record)
+	seedTestInteractionPromptOutcome(
+		t, coordinator, workspace, record, outbox.StatusDefinitelyFailed, outbox.MaxDeliveryAttempts,
+	)
 	stateDir := filepath.Dir(taskregistry.WorkspaceStorePath(workspace))
 	if err = os.Chmod(stateDir, 0o500); err != nil {
 		t.Fatal(err)
@@ -1767,6 +2267,7 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	defer cleanup()
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
+	coordinator := openTestInteractionOutbox(t, al)
 	sessionKey := "session-ambiguous-prompt"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
@@ -1786,10 +2287,8 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.BeginPromptDelivery(record.ID, record.Revision)
-	if err != nil || record.PromptDeliveryState != interactions.DeliveryStateSending {
-		t.Fatalf("begin prompt delivery = (%#v, %v)", record, err)
-	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	seedTestInteractionPromptOutcome(t, coordinator, agent.Workspace, record, outbox.StatusAmbiguous, 1)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -1833,8 +2332,7 @@ func TestRecoveryDoesNotResendAmbiguousFinal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
 	}, interactions.OutcomeAnswered)
@@ -1887,8 +2385,7 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
 	}, interactions.OutcomeAnswered)
@@ -1974,8 +2471,7 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
 	}, interactions.OutcomeAnswered)
@@ -2059,8 +2555,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-			record, _ = registry.MarkWaiting(record.ID, record.Revision)
+			record = markTestInteractionWaiting(t, registry, record)
 			record, err = registry.ClaimAnswer(
 				record.ID,
 				record.Revision,
@@ -2136,6 +2631,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 func TestRecoveryCommitsAcknowledgedPromptWithoutDuplicateSend(t *testing.T) {
 	manager := newInteractionChannelManager()
 	al := &AgentLoop{cfg: config.DefaultConfig(), channelManager: manager}
+	coordinator := openTestInteractionOutbox(t, al)
 	workspace := t.TempDir()
 	request := testToolSuspensionRequest(workspace)
 	registry := al.interactionRegistryForWorkspace(workspace)
@@ -2146,15 +2642,13 @@ func TestRecoveryCommitsAcknowledgedPromptWithoutDuplicateSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil || !record.PromptDelivered || record.Status != interactions.StatusCreated {
-		t.Fatalf("acknowledged created record = (%#v, %v)", record, err)
-	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	seedTestInteractionPromptOutcome(t, coordinator, workspace, record, outbox.StatusDelivered, 1)
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusWaiting || record.DeliveryTries != 1 {
+	if record.Status != interactions.StatusWaiting || record.PromptDeliveryID == "" {
 		t.Fatalf("recovered record = %#v", record)
 	}
 	select {
@@ -2361,8 +2855,7 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	waitingRevision := record.Revision
 	target := &inboundDispatchTarget{
 		Agent: agent, SessionKey: sessionKey,
@@ -2618,7 +3111,7 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 			defer cleanup()
 			manager := newInteractionChannelManager()
-			al.channelManager = manager
+			installInteractionChannelManager(t, al, manager)
 			tool := &approvalCountingTool{}
 			agent.Tools.Register(tool)
 			hook := &durableApprovalHook{
@@ -2751,7 +3244,7 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := newBlockingApprovalTool()
 	tool.terminalResult = toolshared.ErrorResult(
 		`{"state":"unknown","code":"DISPATCH_UNCERTAIN","invocation_id":"inv_recover"}`,
@@ -2869,7 +3362,7 @@ func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *tes
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := &immediateApprovalTool{result: toolshared.ErrorResult(
 		`{"state":"unknown","code":"DISPATCH_UNCERTAIN","invocation_id":"inv_post_execute"}`,
 	)}
@@ -3007,7 +3500,7 @@ func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := &approvalBindingTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("prepared-approval", &durableApprovalHook{
@@ -3103,7 +3596,7 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := &browserHandoffContinuationTool{}
 	agent.Tools.Register(tool)
 	inbound := &bus.InboundContext{
@@ -3170,7 +3663,7 @@ func TestDurableHumanApprovalDoesNotPrepareAfterPolicyRevocation(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &approvalBindingTool{}
 	agent.Tools.Register(tool)
 	hook := &durableApprovalHook{actionSummary: "Run the prepared protected action"}
@@ -3234,7 +3727,7 @@ func TestHumanApprovalNeverRendersGenericArguments(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tool := &approvalCountingTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("opaque-approval", &durableApprovalHook{
@@ -3295,7 +3788,7 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
 			manager := newInteractionChannelManager()
-			al.channelManager = manager
+			installInteractionChannelManager(t, al, manager)
 			tool := &approvalCountingTool{}
 			agent.Tools.Register(tool)
 			sessionKey := "session-approval-recovery"
@@ -3334,8 +3827,7 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-			record, _ = registry.MarkWaiting(record.ID, record.Revision)
+			record = markTestInteractionWaiting(t, registry, record)
 			if test.consume {
 				record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 					Text: "allow_once", MessageID: "answer-recovery", ReceivedAt: time.Now().UnixMilli(),
@@ -3393,7 +3885,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &approvalContextTool{}
 	agent.Tools.Register(tool)
 	cleanupTool := &turnCleanupTestTool{
@@ -3486,7 +3978,7 @@ func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &approvalCountingTool{}
 	agent.Tools.Register(tool)
 	cleanupTool := &turnCleanupTestTool{
@@ -3558,7 +4050,7 @@ func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &hardAbortApprovalCountingTool{}
 	agent.Tools.Register(tool)
 	cleanupTool := &turnCleanupTestTool{
@@ -3657,7 +4149,7 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	al.channelManager = newInteractionChannelManager()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &journalReceiptApprovalTool{}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("approved-journal-receipt", &durableApprovalHook{
@@ -3731,7 +4223,7 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 			}}}
 			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 			defer cleanup()
-			al.channelManager = newInteractionChannelManager()
+			installInteractionChannelManager(t, al, newInteractionChannelManager())
 			tool := &approvalCountingTool{}
 			agent.Tools.Register(tool)
 			if err := al.MountHook(NamedHook("expiry-approval", &durableApprovalHook{
@@ -3781,8 +4273,7 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-			record, _ = registry.MarkWaiting(record.ID, record.Revision)
+			record = markTestInteractionWaiting(t, registry, record)
 			if test.expireBeforeClaim {
 				now = time.UnixMilli(record.ExpiresAt)
 			} else {
@@ -3868,8 +4359,7 @@ func TestInteractionIngressOnlyClaimsAuthorizedAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	waitingRevision := record.Revision
 	target := &inboundDispatchTarget{
 		Agent: agent, SessionKey: request.Route.SessionKey,
@@ -3936,8 +4426,7 @@ func TestInteractionIngressRetainsClaimedAnswerReplayOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"}, MessageID: "answer-1",
 	}, interactions.OutcomeAnswered)
@@ -3987,10 +4476,7 @@ func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 	target := &inboundDispatchTarget{
 		Agent: agent, SessionKey: sessionKey,
 		RouteClaimKey: runtimeRouteClaimKey(request.Route.RouteSessionKey, ""),
@@ -4045,8 +4531,7 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	if _, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"}, MessageID: "answer-1",
 	}, interactions.OutcomeAnswered); err != nil {
@@ -4146,8 +4631,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	target := &inboundDispatchTarget{
 		Agent: agent, SessionKey: ownerSession,
 		RouteClaimKey: runtimeRouteClaimKey("route-owner", ""),
@@ -4240,8 +4724,7 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	target := &inboundDispatchTarget{
 		Agent:         agent,
 		SessionKey:    sessionKey,
@@ -4437,7 +4920,7 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+			record = bindTestInteractionPrompt(t, registry, record)
 			if test.markWaiting {
 				record, _ = registry.MarkWaiting(record.ID, record.Revision)
 			}
@@ -4529,8 +5012,7 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _ = registry.RecordDeliveryAttempt(first.ID, first.Revision, true, "")
-	first, _ = registry.MarkWaiting(first.ID, first.Revision)
+	first = markTestInteractionWaiting(t, registry, first)
 	first, err = registry.ClaimAnswer(first.ID, first.Revision, interactions.Answer{
 		Text: "первый", Values: map[string]string{"deploy_mode": "первый"},
 		MessageID: "retained-answer",
@@ -4553,8 +5035,7 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _ = registry.RecordDeliveryAttempt(second.ID, second.Revision, true, "")
-	second, _ = registry.MarkWaiting(second.ID, second.Revision)
+	second = markTestInteractionWaiting(t, registry, second)
 	target := &inboundDispatchTarget{
 		Agent: agent, SessionKey: sessionKey,
 		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
@@ -4625,8 +5106,7 @@ func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "первый", Values: map[string]string{"deploy_mode": "первый"},
 		MessageID: "answer-first",
@@ -4739,8 +5219,7 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	target := &inboundDispatchTarget{
 		Agent:         agent,
 		SessionKey:    sessionKey,
@@ -4833,10 +5312,7 @@ func TestReloadWhileWaitingResumesAgainstPersistedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 
 	reloaded := *al.GetConfig()
 	if err = al.ReloadProviderAndConfig(t.Context(), &simpleConvProvider{}, &reloaded); err != nil {
@@ -4903,8 +5379,7 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	target := &inboundDispatchTarget{
 		Agent:         agent,
 		SessionKey:    sessionKey,
@@ -5511,14 +5986,7 @@ func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 
 	boundaryReached := make(chan struct{})
 	releaseFinalization := make(chan struct{})
@@ -6470,8 +6938,7 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.BeginCancellation(record.ID, record.Revision, "session_control_stop")
 	if err != nil || record.Status != interactions.StatusCanceling {
 		t.Fatalf("begin cancellation = (%#v, %v)", record, err)
@@ -6518,13 +6985,7 @@ func TestRecoveryRestoresWaitingQuestionControlsWithoutRepublishingPrompt(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	markTestInteractionWaiting(t, registry, record)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 0 durable transitions", recovered)
@@ -6569,13 +7030,7 @@ func TestRecoveryRestoresWaitingApprovalControlsWithoutRepublishingPrompt(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	markTestInteractionWaiting(t, registry, record)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 0 durable transitions", recovered)
@@ -6651,8 +7106,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"}, MessageID: "answer-1",
 	}, interactions.OutcomeAnswered)
@@ -6724,10 +7178,7 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	markTestInteractionWaiting(t, registry, record)
 
 	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
 	const followUp = "Check the deployment after approval."
@@ -6816,8 +7267,7 @@ func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"}, MessageID: "answer-recover",
 	}, interactions.OutcomeAnswered)
@@ -6900,8 +7350,7 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
 	}, interactions.OutcomeAnswered)
@@ -7022,8 +7471,7 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
 	}, interactions.OutcomeAnswered)
@@ -7189,8 +7637,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markTestInteractionWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "Canary", MessageID: "answer-message", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
@@ -7277,14 +7724,7 @@ func TestRecoverHumanInteractionsTerminalizesCatalogedOrphanWorkspace(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = registry.MarkWaiting(record.ID, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record = markTestInteractionWaiting(t, registry, record)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -7315,13 +7755,7 @@ func TestDrainQueuedSteeringStopsWhileInteractionIsNonterminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.MarkWaiting(record.ID, record.Revision); err != nil {
-		t.Fatal(err)
-	}
+	markTestInteractionWaiting(t, registry, record)
 	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
 	if err = al.enqueueSteeringMessageWithSender(scope, agent.ID, "user-2", providers.Message{
 		Role: "user", Content: "message that arrived during suspension",

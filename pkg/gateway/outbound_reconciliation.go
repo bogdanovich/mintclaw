@@ -22,6 +22,13 @@ type gatewayOutboundReconciler struct {
 	once   sync.Once
 }
 
+type recoveredOutboundAdmissionReconciler func(outbox.Admission, time.Time) (bool, error)
+
+type recoveredOutboundCallbacks struct {
+	reconcile recoveredOutboundAdmissionReconciler
+	settle    func(context.Context, outbox.Admission) error
+}
+
 func startGatewayOutboundReconciler(
 	parent context.Context,
 	coordinator *outbox.Coordinator,
@@ -29,6 +36,7 @@ func startGatewayOutboundReconciler(
 	admissions []outbox.Admission,
 	nodeRuntime *nodeAdmissionRuntime,
 	artifactWorkspace string,
+	callbacks *recoveredOutboundCallbacks,
 ) (*gatewayOutboundReconciler, error) {
 	if parent == nil {
 		parent = context.Background()
@@ -42,19 +50,41 @@ func startGatewayOutboundReconciler(
 		return recoveryDispatchAt(a.Intent).Compare(recoveryDispatchAt(b.Intent))
 	})
 	reconcileCtx, cancel := context.WithCancel(parent)
-	now := time.Now().UTC()
+	var settlements sync.WaitGroup
+	startSettlement := func(admission outbox.Admission) {
+		if callbacks == nil || callbacks.settle == nil {
+			return
+		}
+		settlements.Add(1)
+		go func() {
+			defer settlements.Done()
+			if err := callbacks.settle(reconcileCtx, admission); err != nil && reconcileCtx.Err() == nil {
+				logger.WarnCF("gateway", "Failed to settle recovered outbound admission", map[string]any{
+					"delivery_id": admission.Intent.ID,
+					"error":       err.Error(),
+				})
+			}
+		}()
+	}
 	firstDelayed := len(pending)
 	for index, admission := range pending {
+		now := time.Now().UTC()
 		if recoveryDispatchAt(admission.Intent).After(now) {
 			firstDelayed = index
 			break
 		}
-		if err := publishRecoveredAdmission(
+		published, err := reconcileRecoveredAdmission(
 			reconcileCtx, coordinator, msgBus, admission, nodeRuntime, artifactWorkspace,
-		); err != nil {
+			callbacks, now,
+		)
+		if err != nil {
 			cancel()
 			releaseRecoveredAdmissions(coordinator, pending[index+1:])
+			settlements.Wait()
 			return nil, fmt.Errorf("publish recovered outbound intent %q: %w", admission.Intent.ID, err)
+		}
+		if published {
+			startSettlement(admission)
 		}
 	}
 
@@ -63,20 +93,27 @@ func startGatewayOutboundReconciler(
 	delayed := pending[firstDelayed:]
 	go func() {
 		defer close(done)
+		defer settlements.Wait()
 		for index, admission := range delayed {
 			if err := waitForRecoveredAdmission(reconcileCtx, admission.Intent); err != nil {
 				releaseRecoveredAdmissions(coordinator, delayed[index:])
 				return
 			}
-			if err := publishRecoveredAdmission(
+			published, err := reconcileRecoveredAdmission(
 				reconcileCtx, coordinator, msgBus, admission, nodeRuntime, artifactWorkspace,
-			); err != nil {
+				callbacks, time.Now().UTC(),
+			)
+			if err != nil {
 				logger.ErrorCF("gateway", "Failed to publish scheduled outbound recovery", map[string]any{
 					"delivery_id": admission.Intent.ID,
 					"error":       err.Error(),
 				})
+				cancel()
 				releaseRecoveredAdmissions(coordinator, delayed[index+1:])
 				return
+			}
+			if published {
+				startSettlement(admission)
 			}
 		}
 	}()
@@ -89,6 +126,28 @@ func startGatewayOutboundReconciler(
 		})
 	}
 	return reconciler, nil
+}
+
+func reconcileRecoveredAdmission(
+	ctx context.Context,
+	coordinator *outbox.Coordinator,
+	msgBus *bus.MessageBus,
+	admission outbox.Admission,
+	nodeRuntime *nodeAdmissionRuntime,
+	artifactWorkspace string,
+	callbacks *recoveredOutboundCallbacks,
+	now time.Time,
+) (bool, error) {
+	if callbacks != nil && callbacks.reconcile != nil {
+		publish, err := callbacks.reconcile(admission, now)
+		if err != nil {
+			return false, errors.Join(err, coordinator.ReleaseAdmission(admission.Lease))
+		}
+		if !publish {
+			return false, nil
+		}
+	}
+	return publishRecoveredAdmission(ctx, coordinator, msgBus, admission, nodeRuntime, artifactWorkspace)
 }
 
 func (r *gatewayOutboundReconciler) stop() {
@@ -134,9 +193,9 @@ func publishRecoveredAdmission(
 	admission outbox.Admission,
 	nodeRuntime *nodeAdmissionRuntime,
 	artifactWorkspace string,
-) error {
+) (bool, error) {
 	if !admission.Dispatch {
-		return errors.New("recovered outbound admission does not own dispatch")
+		return false, errors.New("recovered outbound admission does not own dispatch")
 	}
 	if err := restoreRecoveredOutboundPrerequisite(
 		nodeRuntime, artifactWorkspace, admission.Intent,
@@ -146,18 +205,22 @@ func publishRecoveredAdmission(
 				admission.Lease,
 				outbox.Outcome{Error: missingRecoveredBrowserArtifactError},
 			); terminalErr != nil {
-				return errors.Join(err, terminalErr)
+				return false, errors.Join(err, terminalErr)
 			}
 			logger.WarnCF("gateway", "Skipped unrecoverable outbound browser artifact", map[string]any{
 				"delivery_id": admission.Intent.ID,
 				"reason":      missingRecoveredBrowserArtifactError,
 			})
-			return nil
+			return false, nil
 		}
-		return errors.Join(err, coordinator.ReleaseAdmission(admission.Lease))
+		return false, errors.Join(err, coordinator.ReleaseAdmission(admission.Lease))
 	}
 	if err := coordinator.PrepareAdmission(admission.Lease); err != nil {
-		return err
+		if current, getErr := coordinator.Get(admission.Intent.ID); getErr == nil &&
+			current.Status == outbox.StatusAbandoned {
+			return false, nil
+		}
+		return false, err
 	}
 
 	var publishErr error
@@ -178,9 +241,12 @@ func publishRecoveredAdmission(
 		publishErr = fmt.Errorf("recovered outbound intent has unsupported kind %q", admission.Intent.Identity.Kind)
 	}
 	if publishErr != nil {
-		return errors.Join(publishErr, coordinator.ReleaseAdmission(admission.Lease))
+		return false, errors.Join(publishErr, coordinator.ReleaseAdmission(admission.Lease))
 	}
-	return coordinator.CommitAdmission(admission.Lease)
+	if err := coordinator.CommitAdmission(admission.Lease); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func restoreRecoveredOutboundPrerequisite(
