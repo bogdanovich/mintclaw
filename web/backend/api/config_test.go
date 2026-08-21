@@ -279,6 +279,15 @@ func TestHandleUpdateConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) 
 func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
+	if _, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Channels["telegram_alerts"] = &config.Channel{
+			Type:     config.ChannelTelegram,
+			Settings: config.RawNode(`{}`),
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("add aliased channel fixture: %v", err)
+	}
 
 	tests := []struct {
 		name      string
@@ -304,6 +313,34 @@ func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 			name:      "nested_removed_field_null_tombstone",
 			body:      `{"tools":{"spawn_status":null}}`,
 			wantError: "unknown field(s): tools.spawn_status",
+		},
+		{
+			name: "unknown_channel_setting",
+			body: `{
+				"channel_list": {"telegram": {"settings": {"removed_setting": true}}}
+			}`,
+			wantError: "unknown field(s): channel_list.telegram.settings.removed_setting",
+		},
+		{
+			name: "unknown_channel_setting_null_tombstone",
+			body: `{
+				"channel_list": {"telegram": {"settings": {"removed_setting": null}}}
+			}`,
+			wantError: "unknown field(s): channel_list.telegram.settings.removed_setting",
+		},
+		{
+			name: "aliased_channel_unknown_setting",
+			body: `{
+				"channel_list": {"telegram_alerts": {"settings": {"removed_setting": true}}}
+			}`,
+			wantError: "unknown field(s): channel_list.telegram_alerts.settings.removed_setting",
+		},
+		{
+			name: "aliased_channel_unknown_setting_null_tombstone",
+			body: `{
+				"channel_list": {"telegram_alerts": {"settings": {"removed_setting": null}}}
+			}`,
+			wantError: "unknown field(s): channel_list.telegram_alerts.settings.removed_setting",
 		},
 		{
 			name:      "duplicate_version",

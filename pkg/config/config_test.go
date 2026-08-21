@@ -1489,6 +1489,49 @@ func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsUnknownChannelSettingsWithoutRewriting(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelName string
+		channelType string
+	}{
+		{name: "standard_name", channelName: ChannelTelegram},
+		{name: "aliased_instance", channelName: "telegram_alerts", channelType: ChannelTelegram},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			typeField := ""
+			if test.channelType != "" {
+				typeField = fmt.Sprintf(`"type":%q,`, test.channelType)
+			}
+			raw := fmt.Sprintf(
+				`{"version":%d,"channel_list":{%q:{%s"settings":{"removed_setting":null}}}}`,
+				CurrentVersion,
+				test.channelName,
+				typeField,
+			)
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			_, err := LoadConfig(configPath)
+			wantField := fmt.Sprintf("channel_list.%s.settings.removed_setting", test.channelName)
+			if err == nil || !strings.Contains(err.Error(), "unknown field(s): "+wantField) {
+				t.Fatalf("LoadConfig() error = %v, want unknown field %q", err, wantField)
+			}
+			stored, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error: %v", err)
+			}
+			if string(stored) != raw {
+				t.Fatalf("LoadConfig() rewrote rejected config to %q", stored)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RejectsDuplicateFieldsWithoutRewriting(t *testing.T) {
 	tests := []struct {
 		name      string

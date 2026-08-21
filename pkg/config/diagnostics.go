@@ -22,6 +22,9 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(target), label); err != nil {
 		return err
 	}
+	if err := rejectUnknownChannelSettings(raw, nil, label); err != nil {
+		return err
+	}
 
 	if err := json.Unmarshal(data, target); err != nil {
 		return wrapJSONError(data, err, label)
@@ -38,16 +41,66 @@ func ValidateConfigJSON(data []byte) error {
 
 // ValidateConfigPatchJSON rejects malformed, duplicate, and unknown fields in
 // a partial configuration document without requiring omitted fields.
-func ValidateConfigPatchJSON(data []byte) error {
+func ValidateConfigPatchJSON(data []byte, current *Config) error {
 	raw, err := parseUniqueJSON(data, "config patch")
 	if err != nil {
 		return err
 	}
-	return rejectUnknownJSONFields(raw, reflect.TypeOf(&Config{}), "config patch")
+	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {
+		return err
+	}
+	return rejectUnknownChannelSettings(raw, current, "config patch")
 }
 
 func rejectUnknownJSONFields(raw any, targetType reflect.Type, label string) error {
 	unknownFields := collectUnknownJSONFields(raw, targetType, "")
+	return unknownJSONFieldsError(unknownFields, label)
+}
+
+func rejectUnknownChannelSettings(raw any, current *Config, label string) error {
+	root, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	channels, ok := root["channel_list"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var unknownFields []string
+	for name, rawChannel := range channels {
+		channel, ok := rawChannel.(map[string]any)
+		if !ok {
+			continue
+		}
+		settings, hasSettings := channel["settings"]
+		if !hasSettings || settings == nil {
+			continue
+		}
+
+		channelType, _ := channel["type"].(string)
+		if channelType == "" && current != nil {
+			if existing := current.Channels.Get(name); existing != nil {
+				channelType = existing.Type
+			}
+		}
+		if channelType == "" {
+			channelType = name
+		}
+		settingsTarget := newChannelSettings(channelType)
+		if settingsTarget == nil {
+			continue
+		}
+		settingsPath := appendJSONPath(appendJSONPath("channel_list", name), "settings")
+		unknownFields = append(
+			unknownFields,
+			collectUnknownJSONFields(settings, reflect.TypeOf(settingsTarget), settingsPath)...,
+		)
+	}
+	return unknownJSONFieldsError(unknownFields, label)
+}
+
+func unknownJSONFieldsError(unknownFields []string, label string) error {
 	if len(unknownFields) == 0 {
 		return nil
 	}

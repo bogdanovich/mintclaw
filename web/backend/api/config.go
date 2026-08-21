@@ -167,13 +167,11 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
-	if err = config.ValidateConfigPatchJSON(patchBody); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid config patch: %v", err), http.StatusBadRequest)
-		return
-	}
-
 	var validationErrors []string
 	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if validateErr := config.ValidateConfigPatchJSON(patchBody, cfg); validateErr != nil {
+			return &configPatchRequestError{err: fmt.Errorf("invalid config patch: %w", validateErr)}
+		}
 		updated, updateErr := applyConfigMergePatch(cfg, patch, h.configPath)
 		if updateErr != nil {
 			return updateErr
