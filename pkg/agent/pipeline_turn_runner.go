@@ -16,8 +16,6 @@ func (p *Pipeline) runTurnLoop(
 	ts *turnState,
 	host turnRuntimeHost,
 ) (turnResult, TurnEndStatus, error) {
-	turnStatus := TurnEndStatusCompleted
-
 	exec, err := p.SetupTurn(turnCtx, ts)
 	if err != nil {
 		return turnResult{}, TurnEndStatusError, err
@@ -27,7 +25,17 @@ func (p *Pipeline) runTurnLoop(
 			exec.model.cleanup()
 		}
 	}()
+	return p.runPreparedTurnLoop(ctx, turnCtx, ts, host, exec)
+}
 
+func (p *Pipeline) runPreparedTurnLoop(
+	ctx context.Context,
+	turnCtx context.Context,
+	ts *turnState,
+	host turnRuntimeHost,
+	exec *turnExecution,
+) (turnResult, TurnEndStatus, error) {
+	turnStatus := TurnEndStatusCompleted
 	messages := exec.messages
 	maxMediaSize := p.maxMediaSize()
 	finalContent := ""

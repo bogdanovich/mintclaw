@@ -19,6 +19,15 @@ func (al *AgentLoop) runTurn(
 	ts *turnState,
 	pipeline *Pipeline,
 ) (result turnResult, err error) {
+	return al.runTurnLifecycle(ctx, ts, pipeline, nil)
+}
+
+func (al *AgentLoop) runTurnLifecycle(
+	ctx context.Context,
+	ts *turnState,
+	pipeline *Pipeline,
+	execute pipelineTurnExecutionFunc,
+) (result turnResult, err error) {
 	ctx, releaseAdmission, err := al.acquireAgentTurn(ctx, ts.agentID)
 	if err != nil {
 		return turnResult{}, err
@@ -150,7 +159,11 @@ func (al *AgentLoop) runTurn(
 		ts.opts.OnTurnReady()
 	}
 
-	result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts, host)
+	if execute == nil {
+		result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts, host)
+	} else {
+		result, turnStatus, err = execute(ctx, turnCtx, ts, host, pipeline)
+	}
 	return result, err
 }
 
