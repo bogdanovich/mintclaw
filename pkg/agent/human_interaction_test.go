@@ -1706,7 +1706,7 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 	}
 }
 
-func TestInteractionEventsProjectOwningTaskState(t *testing.T) {
+func TestInteractionEventsDoNotProjectOwningTaskState(t *testing.T) {
 	workspace := t.TempDir()
 	al := &AgentLoop{cfg: config.DefaultConfig()}
 	tasks := al.taskRegistryForWorkspace(workspace)
@@ -1725,9 +1725,8 @@ func TestInteractionEventsProjectOwningTaskState(t *testing.T) {
 		Event: interactions.Event{Type: interactions.EventWaiting}, Record: record,
 	})
 	task, _ := tasks.Get("task-1")
-	if task.Status != taskregistry.StatusWaitingForInput ||
-		task.InteractionShortID != "abc123" {
-		t.Fatalf("waiting task = %#v", task)
+	if task.Status != taskregistry.StatusRunning || task.ProgressSummary != "" {
+		t.Fatalf("interaction event mutated task = %#v", task)
 	}
 
 	record.Status = interactions.StatusClaimed
@@ -1735,8 +1734,8 @@ func TestInteractionEventsProjectOwningTaskState(t *testing.T) {
 		Event: interactions.Event{Type: interactions.EventAnswerClaimed}, Record: record,
 	})
 	task, _ = tasks.Get("task-1")
-	if task.Status != taskregistry.StatusRunning || task.InteractionShortID != "" {
-		t.Fatalf("resumed task = %#v", task)
+	if task.Status != taskregistry.StatusRunning || task.ProgressSummary != "" {
+		t.Fatalf("answer event mutated task = %#v", task)
 	}
 
 	record.Status = interactions.StatusFailed
@@ -1745,8 +1744,8 @@ func TestInteractionEventsProjectOwningTaskState(t *testing.T) {
 		Event: interactions.Event{Type: interactions.EventFailed}, Record: record,
 	})
 	task, _ = tasks.Get("task-1")
-	if task.Status != taskregistry.StatusFailed || task.Error != "continuation failed" {
-		t.Fatalf("failed task = %#v", task)
+	if task.Status != taskregistry.StatusRunning || task.Error != "" {
+		t.Fatalf("failure event mutated task = %#v", task)
 	}
 }
 
@@ -1800,7 +1799,6 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		TaskKind: "spawn", Task: "finish in parent", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
-		InteractionID:  "interaction-parent",
 		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: "owner-session",
 	}); err != nil {
 		t.Fatal(err)
@@ -1931,7 +1929,6 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 		TaskKind: "spawn", Task: "retry in parent", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
-		InteractionID:  "interaction-parent-retry",
 		Channel:        "discord", ChatID: "chat-1", RequesterSessionKey: "owner-session",
 	}); err != nil {
 		t.Fatal(err)
@@ -2107,7 +2104,6 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 		TaskKind: "spawn", Task: "finish approval in parent", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
-		InteractionID:  "interaction-approval-parent",
 		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: "owner-session",
 	}); err != nil {
 		t.Fatal(err)
@@ -2202,7 +2198,6 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		TaskKind: "spawn", Task: "finish for user", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
-		InteractionID:  "interaction-user",
 		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: "owner-session",
 	}); err != nil {
 		t.Fatal(err)
@@ -2401,7 +2396,7 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
 		TaskID: request.Origin.TaskID, Status: taskregistry.StatusRunning,
-		DeliveryStatus: taskregistry.DeliveryPending, InteractionID: interactionID,
+		DeliveryStatus: taskregistry.DeliveryPending,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2428,10 +2423,10 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = tasks.CompleteInteractionTask(
+	if err = tasks.Complete(
 		request.Origin.TaskID,
-		record.ID,
 		"task result that could not be delivered",
+		&taskresult.Deliverable{Text: "task result that could not be delivered"},
 		taskregistry.DeliveryPending,
 	); err != nil {
 		t.Fatal(err)
@@ -2455,11 +2450,11 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	}
 	nonterminal, ok := registry.Get(record.ID)
 	if !ok || nonterminal.Status != interactions.StatusResuming {
-		t.Fatalf("interaction after failed task projection = %#v, found=%t", nonterminal, ok)
+		t.Fatalf("interaction after failed task settlement = %#v, found=%t", nonterminal, ok)
 	}
 	unprojectedTask, ok := tasks.Get(request.Origin.TaskID)
 	if !ok || unprojectedTask.Status != taskregistry.StatusSucceeded {
-		t.Fatalf("task after failed projection = %#v, found=%t", unprojectedTask, ok)
+		t.Fatalf("task after failed settlement = %#v, found=%t", unprojectedTask, ok)
 	}
 	if err = os.Chmod(stateDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2506,7 +2501,7 @@ func TestRecoveryFailsInteractionAfterPromptDeliveryRetryBudget(t *testing.T) {
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
 		TaskID: request.Origin.TaskID, Status: taskregistry.StatusRunning,
-		DeliveryStatus: taskregistry.DeliveryPending, InteractionID: interactionID,
+		DeliveryStatus: taskregistry.DeliveryPending,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2540,11 +2535,11 @@ func TestRecoveryFailsInteractionAfterPromptDeliveryRetryBudget(t *testing.T) {
 	}
 	nonterminal, ok := registry.Get(record.ID)
 	if !ok || nonterminal.Status != interactions.StatusCreated {
-		t.Fatalf("interaction after failed task projection = %#v, found=%t", nonterminal, ok)
+		t.Fatalf("interaction after failed task settlement = %#v, found=%t", nonterminal, ok)
 	}
 	unprojectedTask, ok := tasks.Get(request.Origin.TaskID)
-	if !ok || unprojectedTask.Status != taskregistry.StatusWaitingForInput {
-		t.Fatalf("task after failed projection = %#v, found=%t", unprojectedTask, ok)
+	if !ok || unprojectedTask.Status != taskregistry.StatusRunning {
+		t.Fatalf("task after failed settlement = %#v, found=%t", unprojectedTask, ok)
 	}
 	if err = os.Chmod(stateDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2913,8 +2908,8 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 				TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
 				TaskKind: "spawn", Task: "recover prepared task final",
 				Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
-				DeliveryMode:  string(toolshared.AsyncDeliveryUserOnly),
-				InteractionID: interactionID, Channel: "telegram", ChatID: "chat-1",
+				DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+				Channel:      "telegram", ChatID: "chat-1",
 				RequesterSessionKey: ownerSession,
 			}); err != nil {
 				t.Fatal(err)
@@ -2965,8 +2960,11 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			})
 			_ = bindTestInteractionFinal(t, registry, record)
 			if test.completeTaskFirst {
-				if err = tasks.CompleteInteractionTask(
-					taskID, interactionID, finalContent, taskregistry.DeliveryPending,
+				if err = tasks.Complete(
+					taskID,
+					finalContent,
+					&taskresult.Deliverable{Text: finalContent},
+					taskregistry.DeliveryPending,
 				); err != nil {
 					t.Fatal(err)
 				}
@@ -5591,7 +5589,6 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 		TaskKind: "spawn", Task: "complete after input", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
-		InteractionID:  "interaction-task-concurrent-answer",
 		Channel:        request.Route.Channel, ChatID: request.Route.ChatID,
 		RequesterSessionKey: sessionKey,
 	}); err != nil {
@@ -6698,7 +6695,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 				task.DeliveryStatus != taskregistry.DeliveryNotApplicable ||
 				task.Deliverable != nil ||
 				task.LastCompletionID != "" || task.TerminalSummary != "" {
-				t.Fatalf("canceled task projection = %#v", task)
+				t.Fatalf("canceled task settlement = %#v", task)
 			}
 			select {
 			case outbound := <-manager.sent:
@@ -6977,7 +6974,7 @@ func TestWaitingTaskInteractionStopTerminalizesTaskWithoutDelivery(t *testing.T)
 	}
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "task-waiting-stop")
 	task, _ := tasks.Get("task-waiting-stop")
-	if task.Status != taskregistry.StatusWaitingForInput {
+	if task.Status != taskregistry.StatusRunning || record.Status != interactions.StatusWaiting {
 		t.Fatalf("task before stop = %#v", task)
 	}
 
@@ -7637,7 +7634,6 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 		TaskKind: "spawn", Task: "recover final", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
-		InteractionID:  interactionID,
 		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
 	}); err != nil {
 		t.Fatal(err)
@@ -7760,7 +7756,6 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		TaskKind: "spawn", Task: "recover open tool round", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
-		InteractionID:  interactionID,
 		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
 	}); err != nil {
 		t.Fatal(err)

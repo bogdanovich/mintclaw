@@ -40,6 +40,32 @@ func (r *Registry) ListNonterminal() []Record {
 	return out
 }
 
+// FindNonterminalByTaskID returns the current durable interaction owned by a task.
+func (r *Registry) FindNonterminalByTaskID(taskID string) (Record, bool) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return Record{}, false
+	}
+	records := r.ListNonterminal()
+	for index := len(records) - 1; index >= 0; index-- {
+		if strings.TrimSpace(records[index].Origin.TaskID) == taskID {
+			return records[index], true
+		}
+	}
+	return Record{}, false
+}
+
+// NonterminalTaskIDs returns the task side of every current interaction relation.
+func (r *Registry) NonterminalTaskIDs() map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, record := range r.ListNonterminal() {
+		if taskID := strings.TrimSpace(record.Origin.TaskID); taskID != "" {
+			ids[taskID] = struct{}{}
+		}
+	}
+	return ids
+}
+
 func (r *Registry) FindWaitingBySession(sessionKey string) []Record {
 	sessionKey = strings.TrimSpace(sessionKey)
 	all := r.List()

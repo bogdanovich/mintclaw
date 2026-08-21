@@ -94,6 +94,7 @@ var (
 	ErrConflict           = errors.New("interaction revision conflict")
 	ErrInvalidTransition  = errors.New("invalid interaction transition")
 	ErrSessionHasActive   = errors.New("session already has an active interaction")
+	ErrTaskHasActive      = errors.New("task already has an active interaction")
 	ErrDuplicateAnswer    = errors.New("answer message already claimed")
 	ErrAnswerTooLate      = errors.New("interaction is no longer waiting")
 	ErrApprovalExpired    = errors.New("approval expired before consumption")
@@ -280,22 +281,6 @@ func (o Origin) validate() error {
 }
 
 func validateQuestions(kind Kind, questions []Question) error {
-	return validateQuestionsWithPolicy(kind, questions, MaxOptions, true)
-}
-
-func validateStoredQuestions(kind Kind, questions []Question) error {
-	// interaction_snapshot.v1 allowed one to four options and did not require
-	// unique labels. Keep load validation tolerant while enforcing the tighter
-	// contract for every new create/suspension request.
-	return validateQuestionsWithPolicy(kind, questions, 4, false)
-}
-
-func validateQuestionsWithPolicy(
-	kind Kind,
-	questions []Question,
-	maxOptions int,
-	strictChoices bool,
-) error {
 	if kind == KindQuestion && (len(questions) == 0 || len(questions) > MaxQuestions) {
 		return fmt.Errorf(
 			"%w: questions must contain 1 to %d entries",
@@ -335,12 +320,12 @@ func validateQuestionsWithPolicy(
 				MaxQuestionLength,
 			)
 		}
-		if len(question.Options) > maxOptions || (strictChoices && len(question.Options) == 1) {
+		if len(question.Options) > MaxOptions || len(question.Options) == 1 {
 			return fmt.Errorf(
 				"%w: question %q must contain zero or 2 to %d options",
 				ErrInvalidInteraction,
 				question.ID,
-				maxOptions,
+				MaxOptions,
 			)
 		}
 		optionLabels := make(map[string]struct{}, len(question.Options))
@@ -372,7 +357,7 @@ func validateQuestionsWithPolicy(
 				)
 			}
 			label := strings.ToLower(strings.TrimSpace(option.Label))
-			if strictChoices && strings.EqualFold(
+			if strings.EqualFold(
 				strings.TrimSpace(option.Label),
 				bus.InboundInteractionCancelLabel,
 			) {
@@ -383,7 +368,7 @@ func validateQuestionsWithPolicy(
 					option.Label,
 				)
 			}
-			if _, ok := optionLabels[label]; ok && strictChoices {
+			if _, ok := optionLabels[label]; ok {
 				return fmt.Errorf(
 					"%w: question %q has duplicate option %q",
 					ErrInvalidInteraction,

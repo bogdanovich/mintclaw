@@ -64,8 +64,7 @@ func (r *Registry) ListActive() []Record {
 	records := r.List()
 	out := make([]Record, 0)
 	for _, rec := range records {
-		if rec.Status == StatusQueued || rec.Status == StatusRunning ||
-			rec.Status == StatusWaitingForInput {
+		if rec.Status == StatusQueued || rec.Status == StatusRunning {
 			out = append(out, rec)
 		}
 	}

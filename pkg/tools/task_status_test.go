@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -55,7 +56,7 @@ func TestTaskStatusTool_ListsVisibleRecords(t *testing.T) {
 		t.Fatalf("Upsert(other) error = %v", err)
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(toolshared.WithToolContext(context.Background(), "telegram", "chat-1"), nil)
 
 	if result.IsError {
@@ -97,7 +98,7 @@ func TestTaskStatusTool_ListReturnsNewestRecordsWithinDefaultLimit(t *testing.T)
 		}
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(toolshared.WithToolContext(context.Background(), "telegram", "chat-1"), nil)
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
@@ -127,7 +128,7 @@ func TestTaskStatusTool_ListReturnsNewestRecordsWithinDefaultLimit(t *testing.T)
 
 func TestTaskStatusTool_ListLimitValidation(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 
 	for _, args := range []map[string]any{
 		{"limit": 0},
@@ -155,7 +156,7 @@ func TestTaskStatusTool_TaskID(t *testing.T) {
 		t.Fatalf("Upsert(subagent) error = %v", err)
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(context.Background(), map[string]any{"task_id": "subagent-1"})
 
 	if result.IsError {
@@ -167,26 +168,52 @@ func TestTaskStatusTool_TaskID(t *testing.T) {
 }
 
 func TestTaskStatusTool_ShowsBoundedWaitingInteraction(t *testing.T) {
-	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	workspace := t.TempDir()
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	stale := time.Now().Add(-time.Hour).UnixMilli()
 	if err := registry.Upsert(taskregistry.Record{
 		TaskID: "task-waiting", Runtime: taskregistry.RuntimeTool, TaskKind: "coding",
-		Task: "deploy the service", Status: taskregistry.StatusWaitingForInput,
-		DeliveryStatus: taskregistry.DeliveryPending, InteractionID: "secret-full-id",
-		InteractionShortID: "abc123", InteractionSummary: "Choose the deployment mode",
+		Task: "deploy the service", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending, CreatedAt: stale, LastEventAt: stale,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	interactionRegistry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	interaction, err := interactionRegistry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: "session-1", Channel: "telegram",
+			ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-1", ToolCallID: "call-1", ToolName: "request_user_input",
+			TaskID: "task-waiting",
+		},
+		Questions:     []interactions.Question{{ID: "mode", Question: "Choose the deployment mode"}},
+		PromptSummary: "Choose the deployment mode",
+		ExpiresAt:     time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	result := NewTaskStatusTool(registry).Execute(
+	result := NewTaskStatusTool(registry, interactionRegistry).Execute(
 		context.Background(), map[string]any{"task_id": "task-waiting"},
 	)
-	if result.IsError || !strings.Contains(
-		result.ForLLM, "Input required: request=abc123 summary=Choose the deployment mode",
-	) {
+	if result.IsError ||
+		!strings.Contains(result.ForLLM, "Status: waiting_for_input") ||
+		!strings.Contains(
+			result.ForLLM,
+			"Input required: request="+interaction.ShortID+" summary=Choose the deployment mode",
+		) {
 		t.Fatalf("waiting task output = %q", result.ForLLM)
 	}
-	if strings.Contains(result.ForLLM, "secret-full-id") {
+	if strings.Contains(result.ForLLM, interaction.ID) {
 		t.Fatalf("full interaction ID leaked in status output: %q", result.ForLLM)
+	}
+	stored, _ := registry.Get("task-waiting")
+	if stored.Status != taskregistry.StatusRunning {
+		t.Fatalf("active interaction did not protect stale task: %#v", stored)
 	}
 }
 
@@ -204,7 +231,7 @@ func TestTaskStatusTool_TaskIDIncludesCompleteDeliverable(t *testing.T) {
 		t.Fatalf("Upsert(subagent) error = %v", err)
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(context.Background(), map[string]any{
 		"task_id":             "subagent-53",
 		"include_deliverable": true,
@@ -220,7 +247,7 @@ func TestTaskStatusTool_TaskIDIncludesCompleteDeliverable(t *testing.T) {
 
 func TestTaskStatusTool_CompleteDeliverableRequiresTaskID(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
-	result := NewTaskStatusTool(registry).Execute(context.Background(), map[string]any{
+	result := NewTaskStatusTool(registry, nil).Execute(context.Background(), map[string]any{
 		"include_deliverable": true,
 	})
 	if !result.IsError || !strings.Contains(result.ForLLM, "requires task_id") {
@@ -258,7 +285,7 @@ func TestTaskStatusTool_TaskIDIncludesEvents(t *testing.T) {
 		t.Fatalf("Update(subagent) error = %v", err)
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(context.Background(), map[string]any{
 		"task_id":        "subagent-1",
 		"include_events": true,
@@ -307,7 +334,7 @@ func TestTaskStatusTool_ListIncludesRecentEvents(t *testing.T) {
 		t.Fatalf("AppendEvent(cron) error = %v", err)
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(context.Background(), map[string]any{"include_events": true})
 
 	if result.IsError {
@@ -362,7 +389,7 @@ func TestTaskStatusTool_ListsSpawnAndDelegateRecords(t *testing.T) {
 		}
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	ctx := toolshared.WithToolTopicID(toolshared.WithToolContext(context.Background(), "telegram", "chat-1"), "topic-1")
 	result := tool.Execute(ctx, nil)
 
@@ -409,7 +436,7 @@ func TestTaskStatusTool_TaskKindFilter(t *testing.T) {
 		}
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	result := tool.Execute(toolshared.WithToolContext(context.Background(), "telegram", "chat-1"), map[string]any{
 		"task_kind": "delegate",
 	})
@@ -454,7 +481,7 @@ func TestTaskStatusTool_TopicScoping(t *testing.T) {
 		}
 	}
 
-	tool := NewTaskStatusTool(registry)
+	tool := NewTaskStatusTool(registry, nil)
 	ctx := toolshared.WithToolTopicID(toolshared.WithToolContext(context.Background(), "telegram", "chat-1"), "topic-1")
 	result := tool.Execute(ctx, nil)
 

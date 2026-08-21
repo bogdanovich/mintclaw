@@ -113,7 +113,6 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 	}
 	created, _ := registry.Get(task.TaskID)
 	if err := registry.Update(task.TaskID, func(record *taskregistry.Record) {
-		record.InteractionID = "interaction-1"
 		record.Deliverable = &taskresult.Deliverable{Text: "existing"}
 	}); err != nil {
 		t.Fatal(err)
@@ -133,7 +132,6 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 		completed.StartedAt != created.StartedAt ||
 		completed.Status != taskregistry.StatusSucceeded ||
 		completed.TerminalSummary != "done" ||
-		completed.InteractionID != "interaction-1" ||
 		completed.Deliverable == nil ||
 		completed.Deliverable.Text != "existing" {
 		t.Fatalf("updated durable task = %#v, created = %#v", completed, created)

@@ -224,7 +224,7 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 		return
 	}
 	reason := "task was still active when the runtime registry was restored; previous runtime owner is no longer alive"
-	count, err := registry.MarkActiveLost(reason)
+	count, err := registry.MarkActiveLost(reason, al.activeInteractionTaskIDs(workspace))
 	if count == 0 {
 		return
 	}
@@ -234,6 +234,14 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 			"count":     count,
 			"error":     errString(err),
 		})
+}
+
+func (al *AgentLoop) activeInteractionTaskIDs(workspace string) map[string]struct{} {
+	registry := al.interactionRegistryForWorkspace(workspace)
+	if registry == nil {
+		return nil
+	}
+	return registry.NonterminalTaskIDs()
 }
 
 func errString(err error) string {

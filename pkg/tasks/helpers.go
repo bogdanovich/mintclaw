@@ -33,19 +33,7 @@ func (r *Registry) normalizeRecord(rec Record, now int64) Record {
 	if rec.Deliverable != nil {
 		rec.Deliverable = normalizeDeliverable(rec.Deliverable, now)
 	}
-	rec.InteractionID = strings.TrimSpace(rec.InteractionID)
-	rec.InteractionShortID = truncateInteractionField(rec.InteractionShortID, 64)
-	rec.InteractionSummary = truncateInteractionField(rec.InteractionSummary, 500)
 	return rec
-}
-
-func truncateInteractionField(value string, maxRunes int) string {
-	value = strings.TrimSpace(value)
-	runes := []rune(value)
-	if maxRunes > 0 && len(runes) > maxRunes {
-		return string(runes[:maxRunes])
-	}
-	return value
 }
 
 func normalizeDeliverable(payload *taskresult.Deliverable, generatedAt int64) *taskresult.Deliverable {

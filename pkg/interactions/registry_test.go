@@ -99,6 +99,20 @@ func validCreate(clock *testClock, id, session string) CreateRequest {
 	}
 }
 
+func TestCreateRejectsSecondCurrentInteractionForTask(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	first := validCreate(clock, "interaction-task-first", "session-1")
+	first.Origin.TaskID = "task-1"
+	if _, err := registry.Create(first); err != nil {
+		t.Fatal(err)
+	}
+	second := validCreate(clock, "interaction-task-second", "session-2")
+	second.Origin.TaskID = "task-1"
+	if _, err := registry.Create(second); !errors.Is(err, ErrTaskHasActive) {
+		t.Fatalf("Create(second task interaction) error = %v, want ErrTaskHasActive", err)
+	}
+}
+
 func makeWaiting(t *testing.T, registry *Registry, clock *testClock, id, session string) Record {
 	t.Helper()
 	rec, err := registry.Create(validCreate(clock, id, session))
@@ -865,6 +879,38 @@ func TestRegistrySnapshotRejectsDuplicateActiveSession(t *testing.T) {
 	}
 }
 
+func TestRegistrySnapshotRejectsDuplicateActiveTask(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	_ = makeWaiting(t, registry, clock, "interaction_15151515aaaaaaaa", "session-1")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	first := snapshot.Records[0]
+	first.Origin.TaskID = "task-1"
+	snapshot.Records[0] = first
+	duplicate := first
+	duplicate.ID = "interaction_16161616aaaaaaaa"
+	duplicate.ShortID = "16161616"
+	duplicate.Route.SessionKey = "session-2"
+	snapshot.Records = append(snapshot.Records, duplicate)
+	data, err = json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err == nil || !strings.Contains(err.Error(), "share task") {
+		t.Fatalf("LastLoadError = %v, want duplicate active task", err)
+	}
+}
+
 func TestRegistryReloadsTrimmedContiguousEventTail(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
 	path := WorkspaceStorePath(t.TempDir())
@@ -1617,48 +1663,5 @@ func TestRegistryConsumeApprovalEnforcesExpiryAtomically(t *testing.T) {
 	events := reloaded.ListEvents(record.ID)
 	if len(events) == 0 || events[len(events)-1].Type != EventApprovalExpired {
 		t.Fatalf("expired approval events = %#v", events)
-	}
-}
-
-func TestStoredV1QuestionsRemainLoadableUnderTighterCreatePolicy(t *testing.T) {
-	reservedCancel := []Question{{
-		ID: "reserved_cancel", Question: "Cancel?",
-		Options: []Option{
-			{Label: bus.InboundInteractionCancelLabel},
-			{Label: "Continue"},
-		},
-	}}
-	if err := validateStoredQuestions(KindQuestion, reservedCancel); err != nil {
-		t.Fatalf("stored reserved-label question rejected: %v", err)
-	}
-	if err := validateQuestions(KindQuestion, reservedCancel); err == nil {
-		t.Fatal("new question accepted reserved cancellation label")
-	}
-
-	legacySingle := []Question{{
-		ID: "legacy_single", Question: "Legacy choice?",
-		Options: []Option{{Label: "Only", Description: "Previously valid."}},
-	}}
-	if err := validateStoredQuestions(KindQuestion, legacySingle); err != nil {
-		t.Fatalf("stored single-option question rejected: %v", err)
-	}
-	if err := validateQuestions(KindQuestion, legacySingle); err == nil {
-		t.Fatal("new single-option question accepted")
-	}
-
-	legacyFour := []Question{{
-		ID: "legacy_four", Question: "Legacy choices?",
-		Options: []Option{
-			{Label: "Same", Description: "First."},
-			{Label: "same", Description: "Duplicate labels were previously valid."},
-			{Label: "Third", Description: "Third."},
-			{Label: "Fourth", Description: "Fourth."},
-		},
-	}}
-	if err := validateStoredQuestions(KindQuestion, legacyFour); err != nil {
-		t.Fatalf("stored four-option question rejected: %v", err)
-	}
-	if err := validateQuestions(KindQuestion, legacyFour); err == nil {
-		t.Fatal("new four-option question accepted")
 	}
 }

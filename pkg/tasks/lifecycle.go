@@ -152,102 +152,18 @@ func (r *Registry) Heartbeat(taskID, progress string) error {
 	})
 }
 
-// MarkWaitingForInput projects a durable human interaction onto a running task.
-// Only bounded, user-safe interaction metadata belongs in the task registry.
-func (r *Registry) MarkWaitingForInput(
-	taskID, interactionID, shortID, summary string,
-) error {
-	interactionID = strings.TrimSpace(interactionID)
-	if interactionID == "" {
-		return fmt.Errorf("interaction ID is required")
-	}
-	return r.updateInteractionProjection(taskID, func(rec *Record) (bool, error) {
-		if rec.Status == StatusWaitingForInput && rec.InteractionID != interactionID {
-			return false, fmt.Errorf(
-				"task %q already waits for interaction %q",
-				taskID,
-				rec.InteractionID,
-			)
-		}
-		if rec.Status != StatusQueued && rec.Status != StatusRunning &&
-			rec.Status != StatusWaitingForInput {
-			return false, fmt.Errorf(
-				"task %q cannot wait for input from status %q", taskID, rec.Status,
-			)
-		}
-		rec.Status = StatusWaitingForInput
-		rec.InteractionID = interactionID
-		rec.InteractionShortID = truncateInteractionField(shortID, 64)
-		rec.InteractionSummary = truncateInteractionField(summary, 500)
-		rec.ProgressSummary = "waiting for human input"
-		return true, nil
-	})
-}
-
-// MarkInteractionRunning returns a matching waiting task to running before its
-// suspended continuation starts. The interaction ID is retained for audit and
-// correlation while display-only waiting metadata is cleared.
-func (r *Registry) MarkInteractionRunning(taskID, interactionID string) error {
-	interactionID = strings.TrimSpace(interactionID)
-	if interactionID == "" {
-		return fmt.Errorf("interaction ID is required")
-	}
-	return r.updateInteractionProjection(taskID, func(rec *Record) (bool, error) {
-		if rec.InteractionID != interactionID {
-			return false, fmt.Errorf(
-				"task %q interaction mismatch: have %q, got %q",
-				taskID,
-				rec.InteractionID,
-				interactionID,
-			)
-		}
-		if rec.Status != StatusWaitingForInput && rec.Status != StatusRunning &&
-			rec.Status != StatusLost {
-			return false, fmt.Errorf(
-				"task %q cannot resume from status %q", taskID, rec.Status,
-			)
-		}
-		if rec.Status == StatusLost {
-			rec.EndedAt = 0
-			rec.CleanupAfter = 0
-			rec.Error = ""
-			if rec.DeliveryStatus == DeliveryNotApplicable {
-				rec.DeliveryStatus = DeliveryPending
-			}
-		}
-		rec.Status = StatusRunning
-		rec.InteractionShortID = ""
-		rec.InteractionSummary = ""
-		rec.ProgressSummary = "resuming after human input"
-		return true, nil
-	})
-}
-
-// FinishInteraction projects a terminal interaction failure onto its owning
-// task. Successful answers resume the task and are completed by the task owner.
-func (r *Registry) FinishInteraction(
-	taskID, interactionID string,
+// Fail records a terminal failure chosen by the task's owning runtime.
+func (r *Registry) Fail(
+	taskID string,
 	status Status,
 	summary string,
 ) error {
 	switch status {
 	case StatusFailed, StatusTimedOut, StatusCancelled:
 	default:
-		return fmt.Errorf("invalid terminal interaction task status %q", status)
+		return fmt.Errorf("invalid terminal task status %q", status)
 	}
-	interactionID = strings.TrimSpace(interactionID)
-	if interactionID == "" {
-		return fmt.Errorf("interaction ID is required")
-	}
-	return r.updateInteractionProjection(taskID, func(rec *Record) (bool, error) {
-		if rec.InteractionID != interactionID {
-			return false, fmt.Errorf(
-				"task %q interaction mismatch: have %q, got %q",
-				taskID,
-				rec.InteractionID,
-				interactionID,
-			)
-		}
+	return r.updateTask(taskID, func(rec *Record) (bool, error) {
 		undeliveredSucceededResult := rec.Status == StatusSucceeded &&
 			rec.DeliveryStatus != DeliveryDelivered &&
 			rec.DeliveryStatus != DeliverySessionQueued &&
@@ -276,48 +192,22 @@ func (r *Registry) FinishInteraction(
 			rec.TerminalSummary = ""
 			rec.Deliverable = nil
 		}
-		rec.InteractionShortID = ""
-		rec.InteractionSummary = ""
 		rec.ProgressSummary = ""
-		rec.Error = truncateInteractionField(summary, 1000)
+		rec.Error = truncateTaskSummary(summary)
 		return true, nil
 	})
 }
 
-// CompleteInteractionTask terminalizes a task only after its suspended
-// continuation has produced and delivered the final result.
-func (r *Registry) CompleteInteractionTask(
-	taskID, interactionID, content string,
-	delivery DeliveryStatus,
-) error {
-	var deliverable *taskresult.Deliverable
-	if strings.TrimSpace(content) != "" {
-		deliverable = &taskresult.Deliverable{Text: content}
-	}
-	return r.CompleteInteractionTaskResult(taskID, interactionID, content, deliverable, delivery)
-}
-
-// CompleteInteractionTaskResult terminalizes a suspended task and preserves
-// its canonical deliverable across restart and delivery recovery.
-func (r *Registry) CompleteInteractionTaskResult(
-	taskID, interactionID, summary string,
+// Complete records the canonical result produced by the task's owning runtime.
+func (r *Registry) Complete(
+	taskID, summary string,
 	deliverable *taskresult.Deliverable,
 	delivery DeliveryStatus,
 ) error {
-	interactionID = strings.TrimSpace(interactionID)
-	if interactionID == "" {
-		return fmt.Errorf("interaction ID is required")
-	}
 	if delivery == "" {
 		delivery = DeliveryNotApplicable
 	}
-	return r.updateInteractionProjection(taskID, func(rec *Record) (bool, error) {
-		if rec.InteractionID != interactionID {
-			return false, fmt.Errorf(
-				"task %q interaction mismatch: have %q, got %q",
-				taskID, rec.InteractionID, interactionID,
-			)
-		}
+	return r.updateTask(taskID, func(rec *Record) (bool, error) {
 		if isTerminalStatus(rec.Status) && rec.Status != StatusLost {
 			return false, nil
 		}
@@ -325,15 +215,13 @@ func (r *Registry) CompleteInteractionTaskResult(
 			rec.EndedAt = 0
 			rec.CleanupAfter = 0
 		}
-		terminalSummary := truncateInteractionField(summary, 1000)
+		terminalSummary := truncateTaskSummary(summary)
 		var objectiveOutcome *taskresult.Outcome
 		if deliverable != nil {
 			objectiveOutcome = deliverable.ObjectiveOutcome
 		}
 		rec.Status = TerminalStatusForObjectiveOutcome(objectiveOutcome)
 		rec.DeliveryStatus = delivery
-		rec.InteractionShortID = ""
-		rec.InteractionSummary = ""
 		rec.ProgressSummary = ""
 		rec.TerminalSummary = terminalSummary
 		rec.Error = ""
@@ -359,7 +247,7 @@ func TerminalStatusForObjectiveOutcome(outcome *taskresult.Outcome) Status {
 	return StatusFailed
 }
 
-func (r *Registry) updateInteractionProjection(
+func (r *Registry) updateTask(
 	taskID string,
 	mutate func(*Record) (bool, error),
 ) error {
@@ -397,4 +285,13 @@ func (r *Registry) updateInteractionProjection(
 	r.completeMutationLocked(err, rollbackState)
 	r.mu.Unlock()
 	return err
+}
+
+func truncateTaskSummary(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) > 1000 {
+		return string(runes[:1000])
+	}
+	return value
 }

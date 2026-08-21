@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
@@ -141,5 +142,40 @@ func TestTaskRegistryForWorkspace_ReconcilesRecentRestoredActiveTaskAsLost(t *te
 			rec.DeliveryStatus,
 			taskregistry.DeliveryNotApplicable,
 		)
+	}
+}
+
+func TestTaskRegistryForWorkspace_PreservesTaskOwnedByCurrentInteraction(t *testing.T) {
+	workspace := t.TempDir()
+	tasks := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: "subagent-waiting", Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "wait for operator", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interactionRegistry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	if _, err := interactionRegistry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: "session-1", Channel: "telegram",
+			ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-1", ToolCallID: "call-1", ToolName: "request_user_input",
+			TaskID: "subagent-waiting",
+		},
+		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	al := &AgentLoop{}
+	reconciled := al.taskRegistryForWorkspace(workspace)
+	record, ok := reconciled.Get("subagent-waiting")
+	if !ok || record.Status != taskregistry.StatusRunning {
+		t.Fatalf("interaction-owned task after restore = %#v, found=%t", record, ok)
 	}
 }

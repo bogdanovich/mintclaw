@@ -59,13 +59,14 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				return false
 			}
 			if !al.interactionAgentAvailable(workspace, record) {
-				if failed, err := registry.Fail(
-					record.ID,
-					record.Revision,
+				if al.failRecoveredInteraction(
+					ctx,
+					workspace,
+					registry,
+					record,
 					"agent_unavailable",
 					"the originating agent or workspace is no longer configured",
-				); err == nil {
-					al.syncInteractionControls(workspace, failed, bus.OutboundInteractionControlsRemove)
+				) {
 					recovered++
 				}
 				continue
@@ -217,9 +218,8 @@ func (al *AgentLoop) failRecoveredInteraction(
 		if tasks == nil {
 			return false
 		}
-		if err := tasks.FinishInteraction(
+		if err := tasks.Fail(
 			taskID,
-			record.ID,
 			taskregistry.StatusFailed,
 			detail,
 		); err != nil {
@@ -324,6 +324,14 @@ func (al *AgentLoop) recoverCancelingInteraction(
 		agent,
 		record,
 		record.FailureCode,
+	); err != nil {
+		return false
+	}
+	if err := al.failInteractionTask(
+		workspace,
+		record,
+		taskregistry.StatusCancelled,
+		"human input was canceled",
 	); err != nil {
 		return false
 	}

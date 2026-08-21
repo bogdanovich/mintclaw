@@ -196,7 +196,7 @@ func TestSpawnTool_TaskStatusSeesSpawnedTask(t *testing.T) {
 	spawnTool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
 	manager.SetSpawner(spawner)
-	statusTool := NewTaskStatusTool(manager.taskRegistry)
+	statusTool := NewTaskStatusTool(manager.taskRegistry, nil)
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	args := map[string]any{
