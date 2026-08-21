@@ -266,7 +266,7 @@ func unfinishedTurnDeliverable(history []providers.Message) *taskresult.Delivera
 	start := 0
 	for index := len(history) - 1; index >= 0; index-- {
 		message := history[index]
-		if message.Role == "assistant" && len(message.ToolCalls) == 0 {
+		if message.Role == "user" || (message.Role == "assistant" && len(message.ToolCalls) == 0) {
 			start = index + 1
 			break
 		}

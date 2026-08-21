@@ -6962,6 +6962,19 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		taskID        = "recover-open-tool-round-task"
 		interactionID = "recover-open-tool-round-interaction"
 	)
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "previous request"})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-prior-final-handled"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-prior-final-handled", Content: "prior final-handled result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/prior-turn.txt", Kind: "file", Delivered: true}},
+			Metadata:  map[string]string{"turn": "prior"},
+		},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "current request"})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-chained-interaction"}},
 	})
@@ -7057,6 +7070,7 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		task.Deliverable.Metadata["phase"] != "before-interaction" ||
 		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
 		task.Deliverable.Metadata["round"] != "second" ||
+		task.Deliverable.Metadata["turn"] != "" ||
 		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
 		t.Fatalf("open-round recovery lost canonical deliverable: task=%#v deliverable=%+v", task, task.Deliverable)
 	}
