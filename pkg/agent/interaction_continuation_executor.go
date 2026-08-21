@@ -56,7 +56,7 @@ func (e *interactionContinuationExecutor) execute(
 	}
 
 	if e != nil && e.approvedTool != nil {
-		outcome := pipeline.executeJournaledToolCall(turnCtx, ts, exec, *e.approvedTool)
+		outcome, llm := pipeline.executeJournaledToolCall(turnCtx, ts, exec, *e.approvedTool)
 		if e.afterTool != nil {
 			if afterErr := e.afterTool(exec.writeAudit); afterErr != nil {
 				return turnResult{}, TurnEndStatusError, afterErr
@@ -87,6 +87,15 @@ func (e *interactionContinuationExecutor) execute(
 		}
 		ts.opts.ApprovalGrant = nil
 		ts.opts.Dispatch.InboundContext = cloneInboundContext(e.resumeInbound)
+		if outcome.Control == ToolControlBreak && llm.toolResponseDisposition == toolResponseHandled {
+			result, finalizeErr := pipeline.finalizeTurn(
+				turnCtx, ts, exec, llm, TurnEndStatusCompleted, "",
+			)
+			if finalizeErr != nil {
+				return result, TurnEndStatusError, finalizeErr
+			}
+			return result, TurnEndStatusCompleted, nil
+		}
 	}
 
 	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, host, exec)
@@ -97,7 +106,7 @@ func (p *Pipeline) executeJournaledToolCall(
 	ts *turnState,
 	exec *turnExecution,
 	toolCall providers.ToolCall,
-) ToolLoopOutcome {
+) (ToolLoopOutcome, *LLMIterationState) {
 	llm := newLLMIterationState(1)
 	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall}}
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
@@ -107,5 +116,5 @@ func (p *Pipeline) executeJournaledToolCall(
 	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	p.pauseToolFeedbackForTurn(pauseCtx, ts)
 	pauseCancel()
-	return outcome
+	return outcome, llm
 }
