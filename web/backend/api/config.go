@@ -73,6 +73,10 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
+	if err = config.ValidateConfigJSON(body); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
+		return
+	}
 	if err = normalizeChannelArrayFields(raw); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
 		return
@@ -83,8 +87,8 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg config.Config
-	if err = json.Unmarshal(normalizedBody, &cfg); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	if err = config.DecodeCurrentConfig(normalizedBody, &cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
 		return
 	}
 	cfg.Session.ApplyDmScope()
@@ -163,9 +167,11 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
-
 	var validationErrors []string
 	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		if validateErr := config.ValidateConfigPatchJSON(patchBody, cfg); validateErr != nil {
+			return &configPatchRequestError{err: fmt.Errorf("invalid config patch: %w", validateErr)}
+		}
 		updated, updateErr := applyConfigMergePatch(cfg, patch, h.configPath)
 		if updateErr != nil {
 			return updateErr
@@ -242,7 +248,7 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 		return nil, fmt.Errorf("serialize merged config: %w", err)
 	}
 	var updated config.Config
-	if err = json.Unmarshal(merged, &updated); err != nil {
+	if err = config.DecodeCurrentConfig(merged, &updated); err != nil {
 		return nil, &configPatchRequestError{err: fmt.Errorf("decode merged config: %w", err)}
 	}
 	updated.Session.ApplyDmScope()

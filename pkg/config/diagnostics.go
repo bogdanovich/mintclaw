@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,25 +15,168 @@ import (
 )
 
 func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
-	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return wrapJSONError(data, err, label)
+	raw, err := parseUniqueJSON(data, label)
+	if err != nil {
+		return err
 	}
-
-	unknownFields := collectUnknownJSONFields(raw, reflect.TypeOf(target), "")
-	if len(unknownFields) > 0 {
-		sort.Strings(unknownFields)
-		return fmt.Errorf(
-			"%s contains unknown field(s): %s",
-			label,
-			strings.Join(unknownFields, ", "),
-		)
+	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(target), label); err != nil {
+		return err
+	}
+	if err := rejectUnknownChannelSettings(raw, nil, label); err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal(data, target); err != nil {
 		return wrapJSONError(data, err, label)
 	}
 	return nil
+}
+
+// ValidateConfigJSON rejects malformed configuration JSON and duplicate object
+// fields before callers normalize or merge the document.
+func ValidateConfigJSON(data []byte) error {
+	_, err := parseUniqueJSON(data, "config")
+	return err
+}
+
+// ValidateConfigPatchJSON rejects malformed, duplicate, and unknown fields in
+// a partial configuration document without requiring omitted fields.
+func ValidateConfigPatchJSON(data []byte, current *Config) error {
+	raw, err := parseUniqueJSON(data, "config patch")
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {
+		return err
+	}
+	return rejectUnknownChannelSettings(raw, current, "config patch")
+}
+
+func rejectUnknownJSONFields(raw any, targetType reflect.Type, label string) error {
+	unknownFields := collectUnknownJSONFields(raw, targetType, "")
+	return unknownJSONFieldsError(unknownFields, label)
+}
+
+func rejectUnknownChannelSettings(raw any, current *Config, label string) error {
+	root, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	channels, ok := root["channel_list"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var unknownFields []string
+	for name, rawChannel := range channels {
+		channel, ok := rawChannel.(map[string]any)
+		if !ok {
+			continue
+		}
+		settings, hasSettings := channel["settings"]
+		if !hasSettings || settings == nil {
+			continue
+		}
+
+		channelType, _ := channel["type"].(string)
+		if channelType == "" && current != nil {
+			if existing := current.Channels.Get(name); existing != nil {
+				channelType = existing.Type
+			}
+		}
+		if channelType == "" {
+			channelType = name
+		}
+		settingsTarget := newChannelSettings(channelType)
+		if settingsTarget == nil {
+			continue
+		}
+		settingsPath := appendJSONPath(appendJSONPath("channel_list", name), "settings")
+		unknownFields = append(
+			unknownFields,
+			collectUnknownJSONFields(settings, reflect.TypeOf(settingsTarget), settingsPath)...,
+		)
+	}
+	return unknownJSONFieldsError(unknownFields, label)
+}
+
+func unknownJSONFieldsError(unknownFields []string, label string) error {
+	if len(unknownFields) == 0 {
+		return nil
+	}
+	sort.Strings(unknownFields)
+	return fmt.Errorf(
+		"%s contains unknown field(s): %s",
+		label,
+		strings.Join(unknownFields, ", "),
+	)
+}
+
+func parseUniqueJSON(data []byte, label string) (any, error) {
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, wrapJSONError(data, err, label)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := rejectDuplicateJSONFields(decoder, label, ""); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func rejectDuplicateJSONFields(decoder *json.Decoder, label, path string) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", label, err)
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, keyErr := decoder.Token()
+			if keyErr != nil {
+				return fmt.Errorf("parse %s object field: %w", label, keyErr)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("parse %s object field: expected string, got %T", label, keyToken)
+			}
+			fieldPath := joinJSONFieldPath(path, key)
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("%s contains duplicate field: %s", label, fieldPath)
+			}
+			seen[key] = struct{}{}
+			if err := rejectDuplicateJSONFields(decoder, label, fieldPath); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return fmt.Errorf("parse %s object: %w", label, err)
+		}
+	case '[':
+		for index := 0; decoder.More(); index++ {
+			itemPath := fmt.Sprintf("%s[%d]", path, index)
+			if err := rejectDuplicateJSONFields(decoder, label, itemPath); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return fmt.Errorf("parse %s array: %w", label, err)
+		}
+	}
+	return nil
+}
+
+func joinJSONFieldPath(path, field string) string {
+	if path == "" {
+		return field
+	}
+	return path + "." + field
 }
 
 func DiagnosticSummary(err error) string {

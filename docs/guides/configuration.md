@@ -1591,9 +1591,11 @@ model_list:
 }
 ```
 
-#### Migration from Legacy `providers` Config
+#### Converting a removed `providers` config
 
-The old `providers` configuration is **deprecated** and has been removed in V2. Existing V0/V1 configs are auto-migrated. See [docs/migration/model-list-migration.md](../migration/model-list-migration.md) for the full guide.
+Current MintClaw versions reject the removed `providers` field. Convert it to
+the current `model_list` schema before upgrading; startup does not migrate old
+documents. See [the manual conversion guide](../migration/model-list-migration.md).
 
 ### Provider Architecture
 

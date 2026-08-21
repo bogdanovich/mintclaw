@@ -245,6 +245,7 @@ func TestMCPAddRejectsInvalidRuntimeOverrideWithoutWriting(t *testing.T) {
 func TestMCPAddOverwritePromptDecline(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -272,6 +273,7 @@ func TestMCPAddOverwritePromptDecline(t *testing.T) {
 func TestMCPAddOverwriteWithConfirmation(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -380,6 +382,7 @@ func TestMCPAddPreservesInterleavedDisjointConfigChange(t *testing.T) {
 func TestMCPAddRejectsInterleavedSameServerChange(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{MCP: config.MCPConfig{
 			ToolConfig: config.ToolConfig{Enabled: true},
 			Servers: map[string]config.MCPServerConfig{
@@ -411,6 +414,7 @@ func TestMCPAddRejectsInterleavedSameServerChange(t *testing.T) {
 func TestMCPRemoveRemovesLastServerAndDisablesMCP(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -438,6 +442,7 @@ func TestMCPRemoveRemovesLastServerAndDisablesMCP(t *testing.T) {
 func TestMCPListPrintsTable(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -471,6 +476,7 @@ func TestMCPListPrintsTable(t *testing.T) {
 func TestMCPListWithStatusUsesProbe(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -848,6 +854,7 @@ func TestMCPEditRequiresEditor(t *testing.T) {
 func TestMCPTestUsesProbe(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -881,6 +888,7 @@ func TestMCPTestReportsExclusiveLeaseBusyWithoutLockPath(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	lockPath := filepath.Join(t.TempDir(), "private-playwright.lock")
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -966,6 +974,7 @@ func TestMCPShowNotFound(t *testing.T) {
 func TestMCPShowDisabledServer(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -990,6 +999,7 @@ func TestMCPShowDisabledServer(t *testing.T) {
 func TestMCPShowUsesProbe(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},
@@ -1044,6 +1054,7 @@ func TestMCPShowReportsConfigurationWhenExclusiveLeaseIsBusy(t *testing.T) {
 	commandPath := filepath.Join(t.TempDir(), "playwright-mcp")
 	secretArgument := "secret-profile-token"
 	writeMCPConfig(t, configPath, &config.Config{
+		Version: config.CurrentVersion,
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
 				ToolConfig: config.ToolConfig{Enabled: true},

@@ -520,9 +520,10 @@ User-facing failover errors also include provider, model, status, classification
 
 If you use key-level failover for the same model, MintClaw can chain through additional key-backed candidates before moving to cross-model backups.
 
-#### Migration from Legacy `providers` Config
+#### Converting a removed `providers` config
 
-The old `providers` configuration is **deprecated** and has been removed in V2. Existing V0/V1 configs are auto-migrated.
+Current MintClaw versions reject the removed `providers` field. Convert the
+document to the current schema before upgrading; startup does not migrate it.
 
 **Old Config (deprecated):**
 
@@ -543,7 +544,7 @@ The old `providers` configuration is **deprecated** and has been removed in V2. 
 }
 ```
 
-**New Config (recommended):**
+**Current Config:**
 
 ```json
 {
@@ -564,7 +565,8 @@ The old `providers` configuration is **deprecated** and has been removed in V2. 
 }
 ```
 
-For detailed migration guide, see [migration/model-list-migration.md](../migration/model-list-migration.md).
+For a manual conversion checklist, see
+[the `model_list` conversion guide](../migration/model-list-migration.md).
 
 ### Provider Architecture
 

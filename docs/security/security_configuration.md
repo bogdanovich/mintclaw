@@ -433,7 +433,7 @@ The pattern is: `MINTCLAW_<SECTION>_<KEY>_<FIELD>` with underscores separating p
 3. **Set file permissions**: `chmod 600 ~/.mintclaw/.security.yml`
 4. **Use different keys** for different environments (dev, staging, production)
 5. **Rotate keys regularly** and update `.security.yml`
-6. **Backup securely**: Encrypt backups containing `.security.yml`. Note that config migrations automatically create date-stamped backups (e.g., `config.json.20260330.bak` and `.security.yml.20260330.bak`)
+6. **Backup securely**: Encrypt operator-created backups containing `.security.yml`. MintClaw does not create migration backups while loading configuration.
 7. **Review access**: Ensure only authorized users have read access to the file
 
 ## API

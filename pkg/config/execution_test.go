@@ -259,16 +259,16 @@ func TestLoadConfigRejectsUnknownExecutionTargetReference(t *testing.T) {
 	}
 }
 
-func TestLegacyLoadersPreserveExecutionTargetPolicy(t *testing.T) {
+func TestConfigLoadersPreserveExecutionTargetPolicy(t *testing.T) {
 	loaders := map[string]func(string) (*Config, error){
-		"migrating": LoadConfig,
-		"read-only": LoadConfigReadOnly,
+		"repository": LoadConfig,
+		"read-only":  LoadConfigReadOnly,
 	}
 	for name, load := range loaders {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			if err := os.WriteFile(path, []byte(`{
-				"version": 2,
+				"version": 3,
 				"agents": {
 					"defaults": {
 						"target_policy": {
@@ -306,10 +306,10 @@ func TestLegacyLoadersPreserveExecutionTargetPolicy(t *testing.T) {
 	}
 }
 
-func TestLegacyInvalidTargetPolicyDoesNotRewriteConfig(t *testing.T) {
+func TestInvalidTargetPolicyDoesNotRewriteConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	original := []byte(`{
-		"version": 2,
+		"version": 3,
 		"agents": {
 			"defaults": {
 				"target_policy": {"allowed_targets": ["missing"]}
@@ -334,13 +334,13 @@ func TestLegacyInvalidTargetPolicyDoesNotRewriteConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(after) != string(original) {
-		t.Fatalf("failed migration rewrote config:\n%s", after)
+		t.Fatalf("failed load rewrote config:\n%s", after)
 	}
 	backups, err := filepath.Glob(path + ".*.bak")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(backups) != 0 {
-		t.Fatalf("failed migration created backups: %v", backups)
+		t.Fatalf("failed load created backups: %v", backups)
 	}
 }

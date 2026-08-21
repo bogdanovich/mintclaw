@@ -11,7 +11,7 @@ func writeGatewayHostTestConfig(t *testing.T, host string) string {
 	t.Helper()
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	raw := fmt.Sprintf(`{"version":2,"gateway":{"host":%q,"port":18790}}`, host)
+	raw := fmt.Sprintf(`{"version":3,"gateway":{"host":%q,"port":18790}}`, host)
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile(configPath): %v", err)
 	}

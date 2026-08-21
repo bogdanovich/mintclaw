@@ -489,10 +489,9 @@ func TestRepositoriesSharingSecurityDocumentUseOneLease(t *testing.T) {
 	assertNoConfigTransactionArtifacts(t, firstPath)
 }
 
-func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
+func TestRepositorySnapshotMatchesCommittedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	candidate := DefaultConfig()
-	candidate.Version = CurrentVersion - 1
 	candidate.ModelList = append(candidate.ModelList, &ModelConfig{
 		ModelName: "virtual",
 		Model:     "virtual",
@@ -506,9 +505,6 @@ func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
 	if snapshot.Config == candidate {
 		t.Fatal("Save() returned the unnormalized input pointer")
 	}
-	if snapshot.Config.Version != CurrentVersion {
-		t.Fatalf("snapshot version = %d, want %d", snapshot.Config.Version, CurrentVersion)
-	}
 	for _, model := range snapshot.Config.ModelList {
 		if model != nil && model.isVirtual {
 			t.Fatal("snapshot retained a virtual model")
@@ -521,6 +517,35 @@ func TestRepositorySnapshotMatchesNormalizedCommittedConfig(t *testing.T) {
 	if reloaded.Revision != snapshot.Revision || reloaded.Config.Version != snapshot.Config.Version {
 		t.Fatalf("reloaded snapshot = revision %q, version %d; saved = %q, %d",
 			reloaded.Revision, reloaded.Config.Version, snapshot.Revision, snapshot.Config.Version)
+	}
+}
+
+func TestRepositorySaveRejectsNonCurrentVersionWithoutWriting(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+	}{
+		{name: "missing", version: 0},
+		{name: "previous", version: CurrentVersion - 1},
+		{name: "future", version: CurrentVersion + 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			candidate := DefaultConfig()
+			candidate.Version = test.version
+
+			_, err := NewRepository(path).Save(candidate)
+			if err == nil || !strings.Contains(err.Error(), "unsupported config version") {
+				t.Fatalf("Save() error = %v, want version rejection", err)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("config file after rejected save: %v", err)
+			}
+			if _, err := os.Stat(securityPath(path)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("security file after rejected save: %v", err)
+			}
+		})
 	}
 }
 
@@ -571,22 +596,25 @@ func TestLoadConfigRecoversInterruptedConfigurationTransaction(t *testing.T) {
 	assertNoConfigTransactionArtifacts(t, path)
 }
 
-func TestRepositoryReadOnlyDoesNotPersistMigration(t *testing.T) {
+func TestRepositoryReadOnlyRejectsOldVersionWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	legacy := []byte(
+	old := []byte(
 		`{"version":2,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
 			`"gateway":{},"tools":{},"heartbeat":{},"devices":{},"voice":{}}`,
 	)
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+	if err := os.WriteFile(path, old, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewRepository(path).ReadOnly(); err != nil {
-		t.Fatalf("ReadOnly() error = %v", err)
+	if _, err = NewRepository(
+		path,
+	).ReadOnly(); err == nil ||
+		!strings.Contains(err.Error(), "unsupported config version") {
+		t.Fatalf("ReadOnly() error = %v, want old-version rejection", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -817,44 +845,13 @@ func TestRepositoryResetRejectsUnreadableSecurityWithoutChangingConfig(t *testin
 	}
 }
 
-func TestLoadConfigPropagatesMigrationPersistenceFailure(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	legacy := []byte(
-		`{"version":2,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
-			`"gateway":{},"tools":{},"heartbeat":{},"devices":{},"voice":{}}`,
-	)
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	injected := errors.New("injected persistence failure")
-	originalWrite := configWriteFileAtomic
-	configWriteFileAtomic = func(target string, data []byte, perm os.FileMode) error {
-		if strings.HasSuffix(target, ".transaction") {
-			return injected
-		}
-		return fileutil.WriteFileAtomic(target, data, perm)
-	}
-	t.Cleanup(func() { configWriteFileAtomic = originalWrite })
-
-	_, err := LoadConfig(path)
-	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "persist migrated configuration") {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil || string(data) != string(legacy) {
-		t.Fatalf("failed migration changed config = %q, %v", data, readErr)
-	}
-}
-
-func TestLoadConfigMigrationDoesNotPersistRuntimeEnvironmentOverrides(t *testing.T) {
+func TestLoadConfigDoesNotPersistRuntimeEnvironmentOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := []byte(
-		`{"version":2,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
+	baseline := []byte(
+		`{"version":3,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
 			`"gateway":{"log_level":"warn"},"tools":{},"heartbeat":{},"devices":{},"voice":{}}`,
 	)
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+	if err := os.WriteFile(path, baseline, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 

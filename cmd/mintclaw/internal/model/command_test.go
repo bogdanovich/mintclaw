@@ -165,6 +165,7 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 	initTest(t)
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName: "old-model",
@@ -238,6 +239,7 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 	initTest(t)
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName: "existing-model",
@@ -262,6 +264,7 @@ func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 	initTest(t)
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName: "existing-model",
@@ -317,6 +320,7 @@ func TestModelCommandExecution_Show(t *testing.T) {
 
 	// Create a test config
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName: "test-model",
@@ -349,6 +353,7 @@ func TestModelCommandExecution_Set(t *testing.T) {
 	initTest(t)
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ModelName: "old-model",
