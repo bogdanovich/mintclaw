@@ -126,6 +126,10 @@ type Message struct {
 	// from provider-bound history just like durable tool execution markers.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
 
+	// RootTurnStart is canonical-session-only identity for the user message
+	// that admitted a new root turn. In-turn user-shaped messages do not set it.
+	RootTurnStart bool `json:"root_turn_start,omitempty"`
+
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.
 	PromptLayer    string `json:"-"`

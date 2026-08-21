@@ -40,13 +40,16 @@ func TestSanitizeHistoryForProviderStripsCanonicalDeliverable(t *testing.T) {
 	deliverable := &taskresult.Deliverable{
 		Text: "tool-owned result", Metadata: map[string]string{"producer": "tool"},
 	}
-	history := []providers.Message{{Role: "assistant", Content: "done", Deliverable: deliverable}}
+	history := []providers.Message{{
+		Role: "user", Content: "current request", Deliverable: deliverable, RootTurnStart: true,
+	}}
 
 	result := sanitizeHistoryForProvider(history)
-	if len(result) != 1 || result[0].Deliverable != nil {
-		t.Fatalf("provider history retained canonical deliverable: %#v", result)
+	if len(result) != 1 || result[0].Deliverable != nil || result[0].RootTurnStart {
+		t.Fatalf("provider history retained canonical session state: %#v", result)
 	}
-	if history[0].Deliverable != deliverable || history[0].Deliverable.Metadata["producer"] != "tool" {
+	if history[0].Deliverable != deliverable || history[0].Deliverable.Metadata["producer"] != "tool" ||
+		!history[0].RootTurnStart {
 		t.Fatalf("sanitization mutated canonical history: %#v", history)
 	}
 }

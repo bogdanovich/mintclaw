@@ -6962,7 +6962,9 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		taskID        = "recover-open-tool-round-task"
 		interactionID = "recover-open-tool-round-interaction"
 	)
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "previous request"})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "user", Content: "previous request", RootTurnStart: true,
+	})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-prior-final-handled"}},
 	})
@@ -6974,7 +6976,9 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 			Metadata:  map[string]string{"turn": "prior"},
 		},
 	})
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "current request"})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "user", Content: "current request", RootTurnStart: true,
+	})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-chained-interaction"}},
 	})
@@ -6986,6 +6990,9 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 			Metadata:  map[string]string{"phase": "before-interaction"},
 		},
 	})
+	agent.Sessions.AddFullMessage(sessionKey, steeringPromptMessage(providers.Message{
+		Role: "user", Content: "keep the current request",
+	}))
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
 	})
@@ -7052,6 +7059,29 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 			Metadata:  map[string]string{"round": "second"},
 		},
 	})
+	if closeErr := agent.Sessions.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	agent.Sessions = initSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	var foundCurrentRoot, foundReloadedSteering bool
+	for _, message := range agent.Sessions.GetHistory(sessionKey) {
+		switch message.Content {
+		case "current request":
+			foundCurrentRoot = message.RootTurnStart
+		case "keep the current request":
+			foundReloadedSteering = true
+			if message.RootTurnStart || message.PromptSource != "" {
+				t.Fatalf("reloaded steering acquired root identity: %#v", message)
+			}
+		}
+	}
+	if !foundCurrentRoot || !foundReloadedSteering {
+		t.Fatalf(
+			"reloaded turn identity incomplete: root=%v steering=%v",
+			foundCurrentRoot,
+			foundReloadedSteering,
+		)
+	}
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)

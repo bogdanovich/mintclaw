@@ -57,17 +57,18 @@ func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.
 	}
 
 	history := []providers.Message{
-		{Role: "user", Content: "previous request"},
+		{Role: "user", Content: "previous request", RootTurnStart: true},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "old-call"}}},
 		{Role: "tool", ToolCallID: "old-call", Deliverable: &taskresult.Deliverable{
 			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/old.txt", Kind: "file"}},
 		}},
-		{Role: "user", Content: "current request"},
+		{Role: "user", Content: "current request", RootTurnStart: true},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-interaction"}}},
 		{Role: "tool", ToolCallID: "call-before-interaction", Deliverable: &taskresult.Deliverable{
 			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/before-interaction.txt", Kind: "file"}},
 			Metadata:  map[string]string{"phase": "before-interaction"},
 		}},
+		steeringPromptMessage(providers.Message{Role: "user", Content: "keep the current request"}),
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-interaction"}}},
 		{Role: "tool", ToolCallID: "call-interaction", Content: "answer"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1"}}},

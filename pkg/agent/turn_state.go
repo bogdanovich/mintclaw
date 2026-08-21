@@ -1050,6 +1050,7 @@ func messagesEquivalent(a, b providers.Message) bool {
 }
 
 func normalizeMessageForComparison(msg providers.Message) providers.Message {
+	msg.RootTurnStart = false
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""

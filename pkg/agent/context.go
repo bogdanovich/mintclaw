@@ -1493,6 +1493,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 func stripCanonicalMessageState(message providers.Message) providers.Message {
 	message.ToolExecutions = nil
 	message.Deliverable = nil
+	message.RootTurnStart = false
 	return message
 }
 
