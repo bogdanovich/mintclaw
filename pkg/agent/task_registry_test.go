@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
@@ -141,5 +142,71 @@ func TestTaskRegistryForWorkspace_ReconcilesRecentRestoredActiveTaskAsLost(t *te
 			rec.DeliveryStatus,
 			taskregistry.DeliveryNotApplicable,
 		)
+	}
+}
+
+func TestTaskRegistryForWorkspace_PreservesTaskOwnedByCurrentInteraction(t *testing.T) {
+	workspace := t.TempDir()
+	tasks := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: "subagent-waiting", Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "wait for operator", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interactionRegistry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	if _, err := interactionRegistry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: "session-1", Channel: "telegram",
+			ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-1", ToolCallID: "call-1", ToolName: "request_user_input",
+			TaskID: "subagent-waiting",
+		},
+		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	al := &AgentLoop{}
+	reconciled := al.taskRegistryForWorkspace(workspace)
+	record, ok := reconciled.Get("subagent-waiting")
+	if !ok || record.Status != taskregistry.StatusRunning {
+		t.Fatalf("interaction-owned task after restore = %#v, found=%t", record, ok)
+	}
+}
+
+func TestTaskRegistryForWorkspace_DoesNotReconcileWhenInteractionStateIsInvalid(t *testing.T) {
+	workspace := t.TempDir()
+	tasks := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: "subagent-unknown-owner", Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "preserve while ownership is unavailable",
+		Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interactionStore := interactions.WorkspaceStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(interactionStore), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(interactionStore, []byte(`{"schema_version":"removed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	al := &AgentLoop{}
+	reconciled := al.taskRegistryForWorkspace(workspace)
+	record, ok := reconciled.Get("subagent-unknown-owner")
+	if !ok || record.Status != taskregistry.StatusRunning {
+		t.Fatalf("task after unavailable interaction state = %#v, found=%t", record, ok)
+	}
+	reloaded := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace))
+	record, ok = reloaded.Get("subagent-unknown-owner")
+	if !ok || record.Status != taskregistry.StatusRunning {
+		t.Fatalf("persisted task after unavailable interaction state = %#v, found=%t", record, ok)
 	}
 }

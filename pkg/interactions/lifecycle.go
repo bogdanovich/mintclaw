@@ -60,6 +60,12 @@ func (r *Registry) Create(req CreateRequest) (Record, error) {
 			r.mu.Unlock()
 			return Record{}, fmt.Errorf("%w: %s", ErrSessionHasActive, existing.ShortID)
 		}
+		if !isTerminal(existing.Status) && rec.Origin.TaskID != "" &&
+			existing.Origin.TaskID == rec.Origin.TaskID {
+			releaseStore()
+			r.mu.Unlock()
+			return Record{}, fmt.Errorf("%w: %s", ErrTaskHasActive, existing.ShortID)
+		}
 		if !isTerminal(existing.Status) && existing.ShortID == rec.ShortID {
 			releaseStore()
 			r.mu.Unlock()

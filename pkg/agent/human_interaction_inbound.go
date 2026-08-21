@@ -215,6 +215,15 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 		result.Failed = true
 		return result, fmt.Errorf("persist %s cancellation result: %w", name, err)
 	}
+	if err := al.failInteractionTask(
+		target.Agent.Workspace,
+		record,
+		taskregistry.StatusCancelled,
+		"human input was canceled",
+	); err != nil {
+		result.Failed = true
+		return result, fmt.Errorf("cancel owning task: %w", err)
+	}
 	completed, err := registry.CompleteCancellation(record.ID, record.Revision)
 	if err != nil {
 		result.Failed = true
@@ -1521,8 +1530,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 			}
 		}
 		// Approval replies arrive on the parent route, but execution resumes in
-		// the agent that owns the durable continuation. This also repairs legacy
-		// metadata written before cross-agent ownership was persisted correctly.
+		// the agent that owns the durable continuation.
 		continuationScope.AgentID = agent.ID
 		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope, nil)
 	}
@@ -2030,9 +2038,6 @@ func (al *AgentLoop) deliverInteractionFinal(
 		updated, err := registry.Resolve(record.ID, record.Revision)
 		if err == nil {
 			al.dismissInteractionToolFeedback(ctx, updated, inbound, traceScopes)
-			al.completeInteractionTask(
-				interactionWorkspace, updated, content, taskregistry.DeliveryNotApplicable,
-			)
 		}
 		return err
 	}
@@ -2072,12 +2077,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if !found {
 		return interactions.ErrNotFound
 	}
-	resolved, err := registry.Resolve(current.ID, current.Revision)
-	if err == nil {
-		al.completeInteractionTask(
-			interactionWorkspace, resolved, content, taskregistry.DeliveryDelivered,
-		)
-	}
+	_, err := registry.Resolve(current.ID, current.Revision)
 	return err
 }
 
@@ -2144,8 +2144,8 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
 	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
-	if err := taskRegistry.CompleteInteractionTaskResult(
-		taskID, record.ID, projection, terminalDeliverable, taskregistry.DeliveryPending,
+	if err := taskRegistry.Complete(
+		taskID, projection, terminalDeliverable, taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
@@ -2294,28 +2294,21 @@ func (al *AgentLoop) interactionContinuationExpectsUserDelivery(
 	return toolshared.AsyncDeliveryMode(strings.TrimSpace(task.DeliveryMode)) != toolshared.AsyncDeliveryParentOnly
 }
 
-func (al *AgentLoop) completeInteractionTask(
+func (al *AgentLoop) failInteractionTask(
 	workspace string,
 	record interactions.Record,
-	content string,
-	delivery taskregistry.DeliveryStatus,
-) {
+	status taskregistry.Status,
+	summary string,
+) error {
 	taskID := strings.TrimSpace(record.Origin.TaskID)
 	if al == nil || taskID == "" {
-		return
+		return nil
 	}
 	registry := al.taskRegistryForWorkspace(workspace)
 	if registry == nil {
-		return
+		return fmt.Errorf("owning task registry is unavailable")
 	}
-	if err := registry.CompleteInteractionTask(
-		taskID, record.ID, content, delivery,
-	); err != nil {
-		logger.WarnCF("agent", "Failed to complete resumed interaction task", map[string]any{
-			"workspace": workspace, "task_id": taskID,
-			"interaction_id": record.ID, "error": err.Error(),
-		})
-	}
+	return registry.Fail(taskID, status, summary)
 }
 
 func interactionFinalAfterToolResult(

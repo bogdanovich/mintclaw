@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -182,11 +181,6 @@ func canPruneRecord(rec Record) bool {
 }
 
 func taskRecordIsRetentionTerminal(rec Record) bool {
-	if strings.TrimSpace(rec.InteractionID) != "" &&
-		(rec.Status == StatusLost ||
-			rec.DeliveryStatus == DeliveryFailed) {
-		return false
-	}
 	return isTerminalStatus(rec.Status) &&
 		isFinalDeliveryStatus(rec.DeliveryStatus)
 }
@@ -194,6 +188,15 @@ func taskRecordIsRetentionTerminal(rec Record) bool {
 func isTerminalStatus(status Status) bool {
 	switch status {
 	case StatusSucceeded, StatusFailed, StatusTimedOut, StatusCancelled, StatusLost:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTaskStatus(status Status) bool {
+	switch status {
+	case StatusQueued, StatusRunning, StatusSucceeded, StatusFailed, StatusTimedOut, StatusCancelled, StatusLost:
 		return true
 	default:
 		return false

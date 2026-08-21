@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -56,6 +57,7 @@ func (r *Registry) load() error {
 		return fmt.Errorf("unsupported interaction snapshot schema %q", snapshot.SchemaVersion)
 	}
 	activeSessions := make(map[string]string)
+	activeTasks := make(map[string]string)
 	activeShortIDs := make(map[string]string)
 	answerMessages := make(map[answerMessageIdentity]string)
 	for _, rec := range snapshot.Records {
@@ -72,8 +74,15 @@ func (r *Registry) load() error {
 			if existing := activeShortIDs[rec.ShortID]; existing != "" {
 				return fmt.Errorf("active interactions %q and %q share short id", existing, rec.ID)
 			}
+			taskID := strings.TrimSpace(rec.Origin.TaskID)
+			if existing := activeTasks[taskID]; taskID != "" && existing != "" {
+				return fmt.Errorf("active interactions %q and %q share task %q", existing, rec.ID, taskID)
+			}
 			activeSessions[rec.Route.SessionKey] = rec.ID
 			activeShortIDs[rec.ShortID] = rec.ID
+			if taskID != "" {
+				activeTasks[taskID] = rec.ID
+			}
 		}
 		if rec.Answer != nil && rec.Answer.MessageID != "" {
 			identity := scopedAnswerMessageIdentity(rec.Route, rec.Answer.MessageID)

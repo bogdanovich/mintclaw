@@ -214,8 +214,8 @@ func registerSharedTools(
 		if !ok {
 			continue
 		}
+		interactionRegistry := al.interactionRegistryForWorkspace(agent.Workspace)
 		taskRegistry := al.taskRegistryForWorkspace(agent.Workspace)
-		_ = al.interactionRegistryForWorkspace(agent.Workspace)
 		if cfg.Tools.IsToolEnabled("request_user_input") {
 			requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{
 				DefaultTimeout: cfg.Tools.RequestUserInput.DefaultTimeout(),
@@ -415,7 +415,7 @@ func registerSharedTools(
 		}
 
 		if cfg.Tools.IsToolEnabled("task_status") {
-			registerToolIfAllowed(agent, tools.NewTaskStatusTool(taskRegistry))
+			registerToolIfAllowed(agent, tools.NewTaskStatusTool(taskRegistry, interactionRegistry))
 		}
 
 		// Register delegate tool for multi-agent setups.

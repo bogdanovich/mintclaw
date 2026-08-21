@@ -48,6 +48,9 @@ func (r *Registry) load() error {
 		if rec.LastEventSeq <= 0 {
 			return fmt.Errorf("task %q has invalid last_event_sequence", rec.TaskID)
 		}
+		if !validTaskStatus(rec.Status) {
+			return fmt.Errorf("task %q has invalid status %q", rec.TaskID, rec.Status)
+		}
 		records[rec.TaskID] = r.normalizeRecord(rec, now)
 	}
 	for _, evt := range snap.Events {
@@ -62,6 +65,9 @@ func (r *Registry) load() error {
 				"task event %q has schema %q, want %q",
 				evt.EventID, evt.SchemaVersion, TaskEventSchemaVersion,
 			)
+		}
+		if evt.Status != "" && !validTaskStatus(evt.Status) {
+			return fmt.Errorf("task event %q has invalid status %q", evt.EventID, evt.Status)
 		}
 		if rec, ok := records[evt.TaskID]; ok && rec.GenerationID == evt.GenerationID &&
 			(evt.Seq <= 0 || evt.Seq > rec.LastEventSeq) {

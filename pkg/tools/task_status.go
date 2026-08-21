@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -24,11 +25,20 @@ const (
 // TaskStatusTool reports durable runtime task/run records across spawn,
 // delegate, cron, and future background runtimes.
 type TaskStatusTool struct {
-	registry *taskregistry.Registry
+	registry     *taskregistry.Registry
+	interactions *interactions.Registry
 }
 
-func NewTaskStatusTool(registry *taskregistry.Registry) *TaskStatusTool {
-	return &TaskStatusTool{registry: registry}
+type taskStatusView struct {
+	task        taskregistry.Record
+	interaction *interactions.Record
+}
+
+func NewTaskStatusTool(
+	registry *taskregistry.Registry,
+	interactionRegistry *interactions.Registry,
+) *TaskStatusTool {
+	return &TaskStatusTool{registry: registry, interactions: interactionRegistry}
 }
 
 func (t *TaskStatusTool) Name() string {
@@ -77,9 +87,20 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 	if t == nil || t.registry == nil {
 		return toolshared.ErrorResult("task registry not configured")
 	}
+	activeInteractions := t.activeInteractionsByTask()
+	var protectedTaskIDs map[string]struct{}
+	if t.interactions != nil {
+		if err := t.interactions.LastLoadError(); err != nil {
+			return toolshared.ErrorResult(
+				fmt.Sprintf("failed to read current interaction state: %v", err),
+			).WithError(err)
+		}
+		protectedTaskIDs = t.interactions.NonterminalTaskIDs()
+	}
 	if _, err := t.registry.MarkStaleActiveLost(
 		taskStatusActiveStaleAfter,
 		"active task did not report progress before task_status stale timeout",
+		protectedTaskIDs,
 	); err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to reconcile stale active tasks: %v", err)).WithError(err)
 	}
@@ -111,7 +132,7 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		if !ok || !taskRecordVisibleToCaller(rec, callerChannel, callerChatID, callerTopicID) {
 			return toolshared.ErrorResult(fmt.Sprintf("No task found with task ID: %s", taskID))
 		}
-		out := formatTaskRecord(rec)
+		out := formatTaskRecord(taskStatusView{task: rec, interaction: waitingTaskInteraction(rec, activeInteractions)})
 		if includeDeliverable {
 			out += formatCompleteTaskDeliverable(rec)
 		}
@@ -126,7 +147,7 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 
 	records := t.registry.List()
-	filtered := make([]taskregistry.Record, 0, len(records))
+	filtered := make([]taskStatusView, 0, len(records))
 	for _, rec := range records {
 		if taskKind != "" && rec.TaskKind != taskKind {
 			continue
@@ -134,7 +155,10 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		if !taskRecordVisibleToCaller(rec, callerChannel, callerChatID, callerTopicID) {
 			continue
 		}
-		filtered = append(filtered, rec)
+		filtered = append(filtered, taskStatusView{
+			task:        rec,
+			interaction: waitingTaskInteraction(rec, activeInteractions),
+		})
 	}
 	if len(filtered) == 0 {
 		if taskKind != "" {
@@ -143,29 +167,29 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 		return toolshared.NewToolResult("No visible durable tasks are registered for this conversation.")
 	}
 
-	slices.SortFunc(filtered, func(a, b taskregistry.Record) int {
-		if c := cmp.Compare(b.CreatedAt, a.CreatedAt); c != 0 {
+	slices.SortFunc(filtered, func(a, b taskStatusView) int {
+		if c := cmp.Compare(b.task.CreatedAt, a.task.CreatedAt); c != 0 {
 			return c
 		}
-		return cmp.Compare(b.TaskID, a.TaskID)
+		return cmp.Compare(b.task.TaskID, a.task.TaskID)
 	})
 
-	counts := map[taskregistry.Status]int{}
-	for _, rec := range filtered {
-		counts[rec.Status]++
+	counts := map[string]int{}
+	for _, view := range filtered {
+		counts[view.status()]++
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Task status report (%d total):\n", len(filtered))
-	for _, status := range []taskregistry.Status{
-		taskregistry.StatusQueued,
-		taskregistry.StatusRunning,
-		taskregistry.StatusWaitingForInput,
-		taskregistry.StatusSucceeded,
-		taskregistry.StatusFailed,
-		taskregistry.StatusTimedOut,
-		taskregistry.StatusCancelled,
-		taskregistry.StatusLost,
+	for _, status := range []string{
+		string(taskregistry.StatusQueued),
+		string(taskregistry.StatusRunning),
+		"waiting_for_input",
+		string(taskregistry.StatusSucceeded),
+		string(taskregistry.StatusFailed),
+		string(taskregistry.StatusTimedOut),
+		string(taskregistry.StatusCancelled),
+		string(taskregistry.StatusLost),
 	} {
 		if n := counts[status]; n > 0 {
 			fmt.Fprintf(&sb, "  %-10s %d\n", status+":", n)
@@ -176,11 +200,11 @@ func (t *TaskStatusTool) Execute(ctx context.Context, args map[string]any) *tool
 	if len(visible) > limit {
 		visible = visible[:limit]
 	}
-	for _, rec := range visible {
-		sb.WriteString(formatTaskListRecord(rec))
+	for _, view := range visible {
+		sb.WriteString(formatTaskListRecord(view))
 		if includeEvents {
 			sb.WriteString("\n")
-			sb.WriteString(formatRecentTaskEvents(t.registry.ListEvents(rec.TaskID), 3))
+			sb.WriteString(formatRecentTaskEvents(t.registry.ListEvents(view.task.TaskID), 3))
 		}
 		sb.WriteString("\n")
 	}
@@ -266,10 +290,11 @@ func taskRecordVisibleToCaller(rec taskregistry.Record, channel, chatID, topicID
 	return true
 }
 
-func formatTaskRecord(rec taskregistry.Record) string {
+func formatTaskRecord(view taskStatusView) string {
+	rec := view.task
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Task %s [%s/%s]\n", rec.TaskID, rec.Runtime, rec.TaskKind)
-	fmt.Fprintf(&sb, "  Status: %s\n", rec.Status)
+	fmt.Fprintf(&sb, "  Status: %s\n", view.status())
 	fmt.Fprintf(&sb, "  Delivery: %s", rec.DeliveryStatus)
 	if rec.DeliveryMode != "" {
 		fmt.Fprintf(&sb, " (%s)", rec.DeliveryMode)
@@ -303,7 +328,7 @@ func formatTaskRecord(rec taskregistry.Record) string {
 	if rec.Task != "" {
 		fmt.Fprintf(&sb, "  Task: %s\n", truncateTaskText(rec.Task, 240))
 	}
-	appendTaskInteractionStatus(&sb, rec, "  ")
+	appendTaskInteractionStatus(&sb, view.interaction, "  ")
 	if rec.TerminalSummary != "" {
 		fmt.Fprintf(&sb, "  Result: %s\n", truncateTaskText(rec.TerminalSummary, 500))
 	}
@@ -322,13 +347,14 @@ func formatTaskRecord(rec taskregistry.Record) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func formatTaskListRecord(rec taskregistry.Record) string {
+func formatTaskListRecord(view taskStatusView) string {
+	rec := view.task
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Task %s [%s/%s] status=%s delivery=%s",
 		rec.TaskID,
 		rec.Runtime,
 		rec.TaskKind,
-		rec.Status,
+		view.status(),
 		rec.DeliveryStatus)
 	if rec.AgentID != "" {
 		fmt.Fprintf(&sb, " agent=%s", rec.AgentID)
@@ -339,7 +365,7 @@ func formatTaskListRecord(rec taskregistry.Record) string {
 	if rec.Task != "" {
 		fmt.Fprintf(&sb, "\n  Task: %s", truncateTaskText(rec.Task, 160))
 	}
-	appendTaskInteractionStatus(&sb, rec, "\n  ")
+	appendTaskInteractionStatus(&sb, view.interaction, "\n  ")
 	if rec.TerminalSummary != "" {
 		fmt.Fprintf(&sb, "\n  Result: %s", truncateTaskText(rec.TerminalSummary, 240))
 	} else if rec.Error != "" {
@@ -356,23 +382,63 @@ func formatTaskListRecord(rec taskregistry.Record) string {
 
 func appendTaskInteractionStatus(
 	sb *strings.Builder,
-	rec taskregistry.Record,
+	interaction *interactions.Record,
 	prefix string,
 ) {
-	if sb == nil || rec.Status != taskregistry.StatusWaitingForInput {
+	if sb == nil || interaction == nil {
 		return
 	}
-	requestID := strings.TrimSpace(rec.InteractionShortID)
+	requestID := strings.TrimSpace(interaction.ShortID)
 	if requestID == "" {
 		requestID = "unknown"
 	}
 	fmt.Fprintf(sb, "%sInput required: request=%s", prefix, requestID)
-	if summary := strings.TrimSpace(rec.InteractionSummary); summary != "" {
+	if summary := strings.TrimSpace(interaction.PromptSummary); summary != "" {
 		sb.WriteString(" summary=" + truncateTaskText(summary, 240))
 	}
 	if prefix == "  " {
 		sb.WriteString("\n")
 	}
+}
+
+func (view taskStatusView) status() string {
+	if view.interaction != nil {
+		return "waiting_for_input"
+	}
+	return string(view.task.Status)
+}
+
+func (t *TaskStatusTool) activeInteractionsByTask() map[string]interactions.Record {
+	active := make(map[string]interactions.Record)
+	if t == nil || t.interactions == nil {
+		return active
+	}
+	for _, record := range t.interactions.ListNonterminal() {
+		taskID := strings.TrimSpace(record.Origin.TaskID)
+		if taskID == "" {
+			continue
+		}
+		current, exists := active[taskID]
+		if !exists || record.UpdatedAt > current.UpdatedAt ||
+			(record.UpdatedAt == current.UpdatedAt && record.ID > current.ID) {
+			active[taskID] = record
+		}
+	}
+	return active
+}
+
+func waitingTaskInteraction(
+	task taskregistry.Record,
+	active map[string]interactions.Record,
+) *interactions.Record {
+	if task.Status != taskregistry.StatusQueued && task.Status != taskregistry.StatusRunning {
+		return nil
+	}
+	record, ok := active[task.TaskID]
+	if !ok || (record.Status != interactions.StatusCreated && record.Status != interactions.StatusWaiting) {
+		return nil
+	}
+	return &record
 }
 
 func formatDeliverableReport(report *taskresult.Report) string {

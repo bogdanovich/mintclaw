@@ -62,7 +62,7 @@ func validateStoredRecord(rec Record) error {
 	); err != nil {
 		return fmt.Errorf("invalid approval metadata for interaction %q: %w", rec.ID, err)
 	}
-	if err := validateStoredQuestions(rec.Kind, rec.Questions); err != nil {
+	if err := validateQuestions(rec.Kind, rec.Questions); err != nil {
 		return err
 	}
 	if len(rec.FinalDeliveryIDs) > MaxFinalDeliveries {

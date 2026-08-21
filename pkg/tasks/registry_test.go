@@ -312,7 +312,7 @@ func TestRegistrySeparatesReusedTaskGenerationsAfterEventRetention(t *testing.T)
 
 func TestRegistryRejectsSnapshotsWithoutGenerationIdentity(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "task_registry.json")
-	data, err := json.Marshal(Snapshot{Tasks: []Record{{TaskID: "legacy"}}})
+	data, err := json.Marshal(Snapshot{Tasks: []Record{{TaskID: "missing-generation"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +322,24 @@ func TestRegistryRejectsSnapshotsWithoutGenerationIdentity(t *testing.T) {
 	registry := NewRegistry(store)
 	if err := registry.LastLoadError(); err == nil || !strings.Contains(err.Error(), "generation_id") {
 		t.Fatalf("LastLoadError = %v, want missing generation_id", err)
+	}
+}
+
+func TestRegistryRejectsRemovedWaitingForInputStatus(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "task_registry.json")
+	data, err := json.Marshal(Snapshot{Tasks: []Record{{
+		TaskID: "old-waiting", GenerationID: "generation-old", LastEventSeq: 1,
+		Status: Status("waiting_for_input"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(store)
+	if err := registry.LastLoadError(); err == nil || !strings.Contains(err.Error(), "invalid status") {
+		t.Fatalf("LastLoadError = %v, want invalid-status error", err)
 	}
 }
 
@@ -425,61 +443,34 @@ func TestRegistrySequenceSurvivesEventRetentionAndReload(t *testing.T) {
 	}
 }
 
-func TestRegistryProjectsDurableInteractionLifecycle(t *testing.T) {
+func TestRegistryRecordsTaskFailure(t *testing.T) {
 	registry := NewRegistry("")
 	if err := registry.Upsert(Record{
 		TaskID: "task-1", Status: StatusRunning, DeliveryStatus: DeliveryPending,
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := registry.MarkWaitingForInput(
-		"task-1", "interaction-1", "abc123", strings.Repeat("summary ", 100),
-	); err != nil {
-		t.Fatalf("MarkWaitingForInput() error = %v", err)
+	if err := registry.Fail("task-1", StatusTimedOut, "human input timed out"); err != nil {
+		t.Fatalf("Fail() error = %v", err)
 	}
 	rec, _ := registry.Get("task-1")
-	if rec.Status != StatusWaitingForInput || rec.InteractionID != "interaction-1" ||
-		rec.InteractionShortID != "abc123" || len([]rune(rec.InteractionSummary)) != 500 {
-		t.Fatalf("waiting record = %#v", rec)
-	}
-	if err := registry.MarkWaitingForInput(
-		"task-1", "interaction-2", "other", "other prompt",
-	); err == nil {
-		t.Fatal("replaced a task's active interaction")
-	}
-	if err := registry.MarkInteractionRunning("task-1", "interaction-1"); err != nil {
-		t.Fatalf("MarkInteractionRunning() error = %v", err)
-	}
-	rec, _ = registry.Get("task-1")
-	if rec.Status != StatusRunning || rec.InteractionID != "interaction-1" ||
-		rec.InteractionShortID != "" || rec.InteractionSummary != "" {
-		t.Fatalf("resumed record = %#v", rec)
-	}
-	if err := registry.FinishInteraction(
-		"task-1", "interaction-1", StatusTimedOut, "human input timed out",
-	); err != nil {
-		t.Fatalf("FinishInteraction() error = %v", err)
-	}
-	rec, _ = registry.Get("task-1")
 	if rec.Status != StatusTimedOut || rec.Error != "human input timed out" ||
 		rec.DeliveryStatus != DeliveryNotApplicable || registry.Stats().ProtectedTaskCount != 0 {
 		t.Fatalf("terminal record = %#v", rec)
 	}
 }
 
-func TestFinishInteractionFailsSucceededTaskWithUndeliveredResult(t *testing.T) {
+func TestFailReplacesSucceededTaskWithUndeliveredResult(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
 	registry := NewRegistry(store)
 	if err := registry.Upsert(Record{
 		TaskID: "task-undelivered", Status: StatusSucceeded,
-		DeliveryStatus: DeliveryPending, InteractionID: "interaction-1",
+		DeliveryStatus: DeliveryPending,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.FinishInteraction(
+	if err := registry.Fail(
 		"task-undelivered",
-		"interaction-1",
 		StatusFailed,
 		"final delivery exhausted",
 	); err != nil {
@@ -493,12 +484,12 @@ func TestFinishInteractionFailsSucceededTaskWithUndeliveredResult(t *testing.T) 
 	}
 }
 
-func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T) {
+func TestFailCancelsSucceededTaskWithUndeliveredResult(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
 	registry := NewRegistry(store)
 	if err := registry.Upsert(Record{
 		TaskID: "task-undelivered-cancel", Status: StatusSucceeded,
-		DeliveryStatus: DeliveryPending, InteractionID: "interaction-1",
+		DeliveryStatus:   DeliveryPending,
 		LastCompletionID: "interaction:interaction-1",
 		DeliveryError:    "pending",
 		TerminalSummary:  "result awaiting delivery",
@@ -506,9 +497,8 @@ func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.FinishInteraction(
+	if err := registry.Fail(
 		"task-undelivered-cancel",
-		"interaction-1",
 		StatusCancelled,
 		"stopped before delivery",
 	); err != nil {
@@ -528,17 +518,17 @@ func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T
 	}
 }
 
-func TestFinishInteractionDoesNotCancelDeliveredSucceededTask(t *testing.T) {
+func TestFailDoesNotCancelDeliveredSucceededTask(t *testing.T) {
 	registry := NewRegistry("")
 	if err := registry.Upsert(Record{
 		TaskID: "task-delivered", Status: StatusSucceeded,
-		DeliveryStatus: DeliveryDelivered, InteractionID: "interaction-1",
-		Deliverable: &taskresult.Deliverable{Text: "delivered result"},
+		DeliveryStatus: DeliveryDelivered,
+		Deliverable:    &taskresult.Deliverable{Text: "delivered result"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.FinishInteraction(
-		"task-delivered", "interaction-1", StatusCancelled, "late stop",
+	if err := registry.Fail(
+		"task-delivered", StatusCancelled, "late stop",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +539,7 @@ func TestFinishInteractionDoesNotCancelDeliveredSucceededTask(t *testing.T) {
 	}
 }
 
-func TestWaitingForInputSurvivesReloadAndActiveReconciliation(t *testing.T) {
+func TestProtectedActiveTaskSurvivesReloadReconciliation(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
 	registry := NewRegistry(store)
 	if err := registry.Upsert(Record{
@@ -557,57 +547,43 @@ func TestWaitingForInputSurvivesReloadAndActiveReconciliation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.MarkWaitingForInput(
-		"task-waiting", "interaction-1", "abc123", "Choose a deployment mode",
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	reloaded := NewRegistry(store)
 	active := reloaded.ListActive()
-	if len(active) != 1 || active[0].Status != StatusWaitingForInput {
+	if len(active) != 1 || active[0].Status != StatusRunning {
 		t.Fatalf("active after reload = %#v", active)
 	}
-	count, err := reloaded.MarkActiveLost("runtime restarted")
+	count, err := reloaded.MarkActiveLost(
+		"runtime restarted",
+		map[string]struct{}{"task-waiting": {}},
+	)
 	if err != nil || count != 0 {
 		t.Fatalf("MarkActiveLost() = (%d, %v), want waiting task preserved", count, err)
 	}
 	rec, _ := reloaded.Get("task-waiting")
-	if rec.Status != StatusWaitingForInput || rec.InteractionShortID != "abc123" {
+	if rec.Status != StatusRunning {
 		t.Fatalf("record after reconciliation = %#v", rec)
 	}
 }
 
-func TestCorrelatedResumingTaskSurvivesRestartAndRepairsLostState(t *testing.T) {
+func TestCompleteRepairsLostTaskState(t *testing.T) {
 	registry := NewRegistry("")
 	if err := registry.Upsert(Record{
 		TaskID: "task-resuming", Status: StatusRunning,
-		DeliveryStatus: DeliveryPending, InteractionID: "interaction-1",
+		DeliveryStatus: DeliveryPending,
 	}); err != nil {
 		t.Fatal(err)
-	}
-	count, err := registry.MarkActiveLost("runtime restarted")
-	if err != nil || count != 0 {
-		t.Fatalf("MarkActiveLost() = (%d, %v)", count, err)
-	}
-	rec, _ := registry.Get("task-resuming")
-	if rec.Status != StatusRunning {
-		t.Fatalf("correlated task status = %q", rec.Status)
 	}
 	if err := registry.Update("task-resuming", func(rec *Record) {
 		rec.Status = StatusLost
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.MarkInteractionRunning("task-resuming", "interaction-1"); err != nil {
-		t.Fatalf("MarkInteractionRunning() repair error = %v", err)
-	}
-	if err := registry.CompleteInteractionTask(
-		"task-resuming", "interaction-1", "done", DeliveryDelivered,
+	if err := registry.Complete(
+		"task-resuming", "done", &taskresult.Deliverable{Text: "done"}, DeliveryDelivered,
 	); err != nil {
-		t.Fatalf("CompleteInteractionTask() error = %v", err)
+		t.Fatalf("Complete() error = %v", err)
 	}
-	rec, _ = registry.Get("task-resuming")
+	rec, _ := registry.Get("task-resuming")
 	if rec.Status != StatusSucceeded || rec.DeliveryStatus != DeliveryDelivered {
 		t.Fatalf("repaired task = %#v", rec)
 	}
@@ -1264,7 +1240,7 @@ func TestRegistryMarkStaleActiveLost(t *testing.T) {
 		}
 	}
 
-	count, err := registry.MarkStaleActiveLost(30*time.Minute, "stale owner")
+	count, err := registry.MarkStaleActiveLost(30*time.Minute, "stale owner", nil)
 	if err != nil {
 		t.Fatalf("MarkStaleActiveLost() error = %v", err)
 	}
@@ -1359,7 +1335,7 @@ func TestRegistryMarkActiveLost(t *testing.T) {
 		}
 	}
 
-	count, err := registry.MarkActiveLost("runtime restarted")
+	count, err := registry.MarkActiveLost("runtime restarted", nil)
 	if err != nil {
 		t.Fatalf("MarkActiveLost() error = %v", err)
 	}
@@ -1396,7 +1372,7 @@ func TestRegistryMarkActiveLostEmitsTransitionEvents(t *testing.T) {
 		t.Fatalf("Upsert(running) error = %v", err)
 	}
 
-	changed, err := registry.MarkActiveLost("runtime restarted")
+	changed, err := registry.MarkActiveLost("runtime restarted", nil)
 	if err != nil {
 		t.Fatalf("MarkActiveLost error = %v", err)
 	}

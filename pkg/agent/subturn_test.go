@@ -265,10 +265,10 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
 	}
 	rec, _ := tasks.Get("subagent-1")
-	if rec.Status != taskregistry.StatusWaitingForInput || rec.InteractionID == "" {
+	if rec.Status != taskregistry.StatusRunning {
 		t.Fatalf("task after suspension = %#v", rec)
 	}
-	interaction, ok := al.interactionRegistryForWorkspace(agent.Workspace).Get(rec.InteractionID)
+	interaction, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || interaction.Route.SessionKey != "owner-session" ||
 		interaction.Origin.TaskID != "subagent-1" ||
 		interaction.Origin.ContinuationSessionKey != durableTaskSessionKey(
@@ -310,12 +310,11 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
 	}
 	rec, _ = tasks.Get("subagent-1")
-	if rec.Status != taskregistry.StatusWaitingForInput ||
-		rec.InteractionID == interaction.ID {
+	if rec.Status != taskregistry.StatusRunning {
 		t.Fatalf("task after repeated wait = %#v", rec)
 	}
-	second, ok := al.interactionRegistryForWorkspace(agent.Workspace).Get(rec.InteractionID)
-	if !ok || second.Status != interactions.StatusWaiting ||
+	second, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
+	if !ok || second.ID == interaction.ID || second.Status != interactions.StatusWaiting ||
 		second.Route.SessionKey != "owner-session" ||
 		second.Origin.ContinuationSessionKey != interaction.Origin.ContinuationSessionKey {
 		t.Fatalf("second interaction = %#v", second)
@@ -431,7 +430,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
 	}
 	task, _ := tasks.Get("subagent-approval")
-	if task.Status != taskregistry.StatusWaitingForInput || task.InteractionID == "" || tool.executions != 0 {
+	if task.Status != taskregistry.StatusRunning || tool.executions != 0 {
 		t.Fatalf("waiting approval task = %#v, executions=%d", task, tool.executions)
 	}
 	select {
@@ -440,7 +439,10 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 		t.Fatal("task approval prompt was not delivered")
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	record, _ := registry.Get(task.InteractionID)
+	record, ok := registry.FindNonterminalByTaskID(task.TaskID)
+	if !ok {
+		t.Fatal("task approval interaction was not persisted")
+	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: "allow_once", MessageID: "task-approval-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAllowed)
@@ -634,12 +636,12 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
 	}
 	task, _ := tasks.Get(taskID)
-	if task.Status != taskregistry.StatusWaitingForInput || task.InteractionID == "" {
+	if task.Status != taskregistry.StatusRunning {
 		t.Fatalf("waiting cross-agent task = %#v", task)
 	}
-	record, ok := al.interactionRegistryForWorkspace(alpha.Workspace).Get(task.InteractionID)
+	record, ok := al.interactionRegistryForWorkspace(alpha.Workspace).FindNonterminalByTaskID(taskID)
 	if !ok {
-		t.Fatalf("interaction %q was not persisted", task.InteractionID)
+		t.Fatalf("interaction for task %q was not persisted", taskID)
 	}
 	continuationKey := interactionContinuationSessionKey(record)
 	metaStore, ok := beta.Sessions.(session.MetadataAwareSessionStore)

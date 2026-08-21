@@ -5,7 +5,11 @@ import (
 	"time"
 )
 
-func (r *Registry) MarkStaleActiveLost(maxAge time.Duration, reason string) (int, error) {
+func (r *Registry) MarkStaleActiveLost(
+	maxAge time.Duration,
+	reason string,
+	protectedTaskIDs map[string]struct{},
+) (int, error) {
 	if r == nil || maxAge <= 0 {
 		return 0, nil
 	}
@@ -29,7 +33,7 @@ func (r *Registry) MarkStaleActiveLost(maxAge time.Duration, reason string) (int
 		if rec.Status != StatusQueued && rec.Status != StatusRunning {
 			continue
 		}
-		if rec.Status == StatusRunning && strings.TrimSpace(rec.InteractionID) != "" {
+		if _, protected := protectedTaskIDs[rec.TaskID]; protected {
 			continue
 		}
 		before := rec
@@ -71,7 +75,7 @@ func (r *Registry) MarkStaleActiveLost(maxAge time.Duration, reason string) (int
 	return changed, err
 }
 
-func (r *Registry) MarkActiveLost(reason string) (int, error) {
+func (r *Registry) MarkActiveLost(reason string, protectedTaskIDs map[string]struct{}) (int, error) {
 	if r == nil {
 		return 0, nil
 	}
@@ -94,7 +98,7 @@ func (r *Registry) MarkActiveLost(reason string) (int, error) {
 		if rec.Status != StatusQueued && rec.Status != StatusRunning {
 			continue
 		}
-		if rec.Status == StatusRunning && strings.TrimSpace(rec.InteractionID) != "" {
+		if _, protected := protectedTaskIDs[rec.TaskID]; protected {
 			continue
 		}
 		before := rec

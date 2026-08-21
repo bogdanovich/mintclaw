@@ -27,17 +27,15 @@ func TestTerminalStatusForObjectiveOutcome(t *testing.T) {
 	}
 }
 
-func TestCompleteInteractionTaskResultPreservesBlockedStatus(t *testing.T) {
+func TestCompletePreservesBlockedStatus(t *testing.T) {
 	registry := NewRegistry("")
 	if err := registry.Upsert(Record{
 		TaskID: "blocked-browser-task", Status: StatusRunning, DeliveryStatus: DeliveryPending,
-		InteractionID: "approval-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.CompleteInteractionTaskResult(
+	if err := registry.Complete(
 		"blocked-browser-task",
-		"approval-1",
 		"Task could not be completed",
 		&taskresult.Deliverable{
 			Text: "Task could not be completed",

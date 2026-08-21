@@ -26,13 +26,12 @@ var ErrTaskAlreadyExists = errors.New("task already exists")
 type Status string
 
 const (
-	StatusQueued          Status = "queued"
-	StatusRunning         Status = "running"
-	StatusWaitingForInput Status = "waiting_for_input"
-	StatusSucceeded       Status = "succeeded"
-	StatusFailed          Status = "failed"
-	StatusTimedOut        Status = "timed_out"
-	//nolint:misspell // External task status value intentionally uses British spelling for compatibility.
+	StatusQueued    Status = "queued"
+	StatusRunning   Status = "running"
+	StatusSucceeded Status = "succeeded"
+	StatusFailed    Status = "failed"
+	StatusTimedOut  Status = "timed_out"
+	//nolint:misspell // The task API uses British spelling for this current status value.
 	StatusCancelled Status = "cancelled"
 	StatusLost      Status = "lost"
 )
@@ -131,9 +130,6 @@ type Record struct {
 	Error               string                  `json:"error,omitempty"`
 	ProgressSummary     string                  `json:"progress_summary,omitempty"`
 	TerminalSummary     string                  `json:"terminal_summary,omitempty"`
-	InteractionID       string                  `json:"interaction_id,omitempty"`
-	InteractionShortID  string                  `json:"interaction_short_id,omitempty"`
-	InteractionSummary  string                  `json:"interaction_summary,omitempty"`
 	Deliverable         *taskresult.Deliverable `json:"deliverable,omitempty"`
 }
 

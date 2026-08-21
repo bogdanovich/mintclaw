@@ -12,7 +12,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
-	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -149,7 +148,6 @@ func (al *AgentLoop) observeInteractionEvent(
 		return
 	}
 	al.resolveInteractionDomainState(observation)
-	al.projectInteractionTaskState(workspace, observation)
 	if observation.Record.Status != interactions.StatusCreated {
 		al.abandonInactiveInteractionPrompt(observation.Record)
 	}
@@ -236,63 +234,6 @@ func (al *AgentLoop) resolveInteractionDomainState(observation interactions.Even
 		logger.WarnCF("agent", "Human interaction domain resolution failed", map[string]any{
 			"interaction_id": observation.Record.ID,
 			"error":          err.Error(),
-		})
-	}
-}
-
-func (al *AgentLoop) projectInteractionTaskState(
-	workspace string,
-	observation interactions.EventObservation,
-) {
-	record := observation.Record
-	taskID := strings.TrimSpace(record.Origin.TaskID)
-	if taskID == "" {
-		return
-	}
-	registry := al.taskRegistryForWorkspace(workspace)
-	if registry == nil {
-		return
-	}
-	var err error
-	switch observation.Event.Type {
-	case interactions.EventCreated, interactions.EventWaiting:
-		err = registry.MarkWaitingForInput(
-			taskID,
-			record.ID,
-			record.ShortID,
-			record.PromptSummary,
-		)
-	case interactions.EventAnswerClaimed, interactions.EventResumeStarted:
-		err = registry.MarkInteractionRunning(taskID, record.ID)
-	case interactions.EventResolved:
-		switch record.Outcome {
-		case interactions.OutcomeTimedOut:
-			err = registry.FinishInteraction(
-				taskID, record.ID, taskregistry.StatusTimedOut, "human input timed out",
-			)
-		case interactions.OutcomeCanceled:
-			err = registry.FinishInteraction(
-				taskID, record.ID, taskregistry.StatusCancelled, "human input was canceled",
-			)
-		}
-	case interactions.EventCancelled:
-		err = registry.FinishInteraction(
-			taskID, record.ID, taskregistry.StatusCancelled, "human input was canceled",
-		)
-	case interactions.EventFailed:
-		summary := strings.TrimSpace(record.FailureDetail)
-		if summary == "" {
-			summary = "human interaction failed"
-		}
-		err = registry.FinishInteraction(
-			taskID, record.ID, taskregistry.StatusFailed, summary,
-		)
-	}
-	if err != nil {
-		logger.WarnCF("agent", "Failed to project human interaction task state", map[string]any{
-			"workspace": workspace, "task_id": taskID,
-			"interaction_id": record.ID, "event": observation.Event.Type,
-			"error": err.Error(),
 		})
 	}
 }
