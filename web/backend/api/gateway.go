@@ -463,9 +463,6 @@ func computeConfigSignature(cfg *config.Config) string {
 	if cfg.Tools.Spawn.Enabled {
 		toolSignatures = append(toolSignatures, "spawn")
 	}
-	if cfg.Tools.SpawnStatus.Enabled {
-		toolSignatures = append(toolSignatures, "spawn_status")
-	}
 	if cfg.Tools.I2C.Enabled {
 		toolSignatures = append(toolSignatures, "i2c")
 	}

@@ -49,7 +49,7 @@ provider := llmscenario.NewScriptedProvider(
 )
 ```
 
-Then run the real `AgentLoop` or `tools.RunToolLoop` with that provider.
+Then run the real `AgentLoop` with that provider.
 
 ## Test Boundary
 

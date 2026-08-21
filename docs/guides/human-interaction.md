@@ -89,7 +89,7 @@ normal session change without emitting an extra stop acknowledgement.
 ## Background Tasks
 
 Spawned and delegated durable tasks move to `waiting_for_input` while a question
-or approval is pending. `task_status` and `spawn_status` expose the safe short
+or approval is pending. `task_status` exposes the safe short
 interaction ID and bounded summary. Waiting does not publish task completion or
 consume a completion ID.
 

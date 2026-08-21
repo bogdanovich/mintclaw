@@ -2645,13 +2645,11 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 
 	t.Run("spawn", func(t *testing.T) {
 		manager := tools.NewSubagentManagerWithRegistry(
-			provider,
 			"test-model",
-			alphaAgent.Workspace,
 			taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.jsonl")),
 		)
 		spawnTool := tools.NewSpawnTool(manager)
-		spawnTool.SetSpawner(NewSubTurnSpawner(al))
+		manager.SetSpawner(NewSubTurnSpawner(al))
 		completed := make(chan *toolshared.ToolResult, 1)
 		result := spawnTool.ExecuteAsync(ctx, map[string]any{
 			"agent_id":        "beta",

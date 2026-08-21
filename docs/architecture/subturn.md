@@ -188,7 +188,8 @@ This implements the `tools.SubTurnSpawner` interface for use by tools that need 
 func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner
 ```
 
-Creates a new spawner instance for the given AgentLoop. Pass the returned value to `SpawnTool.SetSpawner()` or `SubagentTool.SetSpawner()` during tool registration.
+Creates the child runner for an `AgentLoop`. Tool registration injects it once
+into the shared `SubagentManager`; both `spawn` and `subagent` use that runner.
 
 ### Continue
 
