@@ -279,6 +279,82 @@ func TestFallback_ContextCanceled(t *testing.T) {
 	}
 }
 
+func TestFallback_ContextDeadlineDoesNotFallbackOrStartCooldown(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChain(ct, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	candidates := []FallbackCandidate{
+		makeCandidate("openai", "gpt-4"),
+		makeCandidate("anthropic", "claude"),
+	}
+	calls := 0
+	observed := make([]FallbackAttempt, 0, 1)
+
+	_, err := fc.ExecuteCandidateObserved(
+		ctx,
+		candidates,
+		func(ctx context.Context, candidate FallbackCandidate) (*LLMResponse, error) {
+			calls++
+			<-ctx.Done()
+			return nil, &ProviderError{
+				Kind:        ProviderErrorTimeout,
+				SafeMessage: "provider request timed out",
+				Cause:       ctx.Err(),
+			}
+		},
+		func(attempt FallbackAttempt) { observed = append(observed, attempt) },
+	)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ExecuteCandidateObserved() error = %v, want context deadline", err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+	if len(observed) != 1 || observed[0].Skipped || observed[0].Reason != "" {
+		t.Fatalf("observed attempts = %#v, want one unclassified failed attempt", observed)
+	}
+	diagnostic := observed[0].Diagnostic(FailureDiagnosticOptions{IncludeMessage: true})
+	if diagnostic.ClassificationSource != ClassificationUnclassified ||
+		diagnostic.ProviderErrorKind != "" ||
+		!strings.Contains(diagnostic.Message, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline diagnostic = %#v, want caller-owned unclassified deadline", diagnostic)
+	}
+	for _, candidate := range candidates {
+		if !ct.IsAvailable(candidate.StableKey()) {
+			t.Fatalf("candidate %s entered cooldown after caller deadline", candidate.StableKey())
+		}
+	}
+}
+
+func TestImageFallback_ContextDeadlineDoesNotTryNextCandidate(t *testing.T) {
+	fc := NewFallbackChain(NewCooldownTracker(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	calls := 0
+
+	_, err := fc.ExecuteImage(
+		ctx,
+		[]FallbackCandidate{
+			makeCandidate("openai", "gpt-4"),
+			makeCandidate("anthropic", "claude"),
+		},
+		func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+			calls++
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ExecuteImage() error = %v, want context deadline", err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
 func TestFallback_NonRetriableError(t *testing.T) {
 	ct := NewCooldownTracker()
 	fc := NewFallbackChain(ct, nil)
