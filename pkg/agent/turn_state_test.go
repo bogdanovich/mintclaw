@@ -98,6 +98,7 @@ func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 			},
 		},
 	}
+	persisted[0].RootTurnStart = true
 
 	if got := matchingTurnMessageTail(history, persisted); got != 2 {
 		t.Fatalf("matchingTurnMessageTail() = %d, want 2", got)

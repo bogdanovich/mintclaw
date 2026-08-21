@@ -27,6 +27,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -241,10 +242,11 @@ func newStartedTestChannelManagerWithConfig(
 	store media.MediaStore,
 	name string,
 	ch channels.Channel,
+	options ...channels.ManagerOption,
 ) *channels.Manager {
 	t.Helper()
 
-	cm, err := channels.NewManager(cfg, msgBus, store)
+	cm, err := channels.NewManager(cfg, msgBus, store, options...)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -2709,6 +2711,9 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 			len(telegramChannel.sentMedia[0].Parts),
 		)
 	}
+	if got := telegramChannel.sentMedia[0].Parts[0].Type; got != "image" {
+		t.Fatalf("sent media type = %q, want image inferred from MediaStore metadata", got)
+	}
 
 	select {
 	case extra := <-msgBus.OutboundMediaChan():
@@ -2866,7 +2871,7 @@ func TestProcessMessage_HandledMediaDismissesToolFeedbackWithoutFinalText(t *tes
 	}
 }
 
-func TestProcessMessage_HandledCompletionMediaUsesCompletionTextAsCaption(t *testing.T) {
+func TestProcessMessage_HandledDeliverableArtifactsUsesDeliverableTextAsCaption(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -2880,7 +2885,7 @@ func TestProcessMessage_HandledCompletionMediaUsesCompletionTextAsCaption(t *tes
 	}
 
 	msgBus := bus.NewMessageBus()
-	provider := &handledCompletionMediaProvider{}
+	provider := &handledDeliverableArtifactsProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	store := media.NewFileMediaStore()
@@ -2896,7 +2901,7 @@ func TestProcessMessage_HandledCompletionMediaUsesCompletionTextAsCaption(t *tes
 	}
 
 	const completionText = "Video saved. Recipe translation is below."
-	al.RegisterTool(&handledCompletionMediaTool{
+	al.RegisterTool(&handledDeliverableArtifactsTool{
 		store: store,
 		path:  videoPath,
 		text:  completionText,
@@ -2913,7 +2918,7 @@ func TestProcessMessage_HandledCompletionMediaUsesCompletionTextAsCaption(t *tes
 	}
 	if response != "" {
 		t.Fatalf(
-			"expected no final response when completion media handled delivery, got %q",
+			"expected no final response when deliverable artifacts handled delivery, got %q",
 			response,
 		)
 	}
@@ -2935,7 +2940,7 @@ func TestProcessMessage_HandledCompletionMediaUsesCompletionTextAsCaption(t *tes
 	}
 }
 
-func TestDeliverFinalTurnResult_SendsCompletionMediaWithFinalTextCaption(t *testing.T) {
+func TestDeliverFinalTurnResult_SendsDeliverableArtifactsWithFinalTextCaption(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -2991,12 +2996,14 @@ func TestDeliverFinalTurnResult_SendsCompletionMediaWithFinalTextCaption(t *test
 			SendResponse: true,
 		}, turnResult{
 			finalContent: finalText,
-			completionMedia: []toolshared.CompletionMedia{{
-				Ref:         ref,
-				Type:        "video",
-				Filename:    "reel.mp4",
-				ContentType: "video/mp4",
-			}},
+			deliverable: &taskresult.Deliverable{
+				Artifacts: []taskresult.Artifact{{
+					Ref:         ref,
+					Kind:        "video",
+					Filename:    "reel.mp4",
+					ContentType: "video/mp4",
+				}},
+			},
 		})
 
 	if len(telegramChannel.sentMedia) != 1 {
@@ -3936,11 +3943,11 @@ func (m *handledMediaProvider) GetDefaultModel() string {
 	return "handled-media-model"
 }
 
-type handledCompletionMediaProvider struct {
+type handledDeliverableArtifactsProvider struct {
 	calls int
 }
 
-func (m *handledCompletionMediaProvider) Chat(
+func (m *handledDeliverableArtifactsProvider) Chat(
 	ctx context.Context,
 	messages []providers.Message,
 	tools []providers.ToolDefinition,
@@ -3953,7 +3960,7 @@ func (m *handledCompletionMediaProvider) Chat(
 			ToolCalls: []providers.ToolCall{{
 				ID:        "call_completion_media",
 				Type:      "function",
-				Name:      "handled_completion_media_tool",
+				Name:      "handled_deliverable_artifacts_tool",
 				Arguments: map[string]any{},
 			}},
 		}, nil
@@ -3961,7 +3968,7 @@ func (m *handledCompletionMediaProvider) Chat(
 	return &providers.LLMResponse{}, nil
 }
 
-func (m *handledCompletionMediaProvider) GetDefaultModel() string {
+func (m *handledDeliverableArtifactsProvider) GetDefaultModel() string {
 	return "handled-completion-media-model"
 }
 
@@ -4672,33 +4679,33 @@ func (m *handledMediaTool) Execute(ctx context.Context, args map[string]any) *to
 	return toolshared.MediaResult("Attachment delivered by tool.", []string{ref}).WithResponseHandled()
 }
 
-type handledCompletionMediaTool struct {
+type handledDeliverableArtifactsTool struct {
 	store media.MediaStore
 	path  string
 	text  string
 }
 
-func (m *handledCompletionMediaTool) Name() string { return "handled_completion_media_tool" }
-func (m *handledCompletionMediaTool) Description() string {
+func (m *handledDeliverableArtifactsTool) Name() string { return "handled_deliverable_artifacts_tool" }
+func (m *handledDeliverableArtifactsTool) Description() string {
 	return "Returns a structured completion with media and marks the response handled"
 }
 
-func (m *handledCompletionMediaTool) Parameters() map[string]any {
+func (m *handledDeliverableArtifactsTool) Parameters() map[string]any {
 	return map[string]any{
 		"type":       "object",
 		"properties": map[string]any{},
 	}
 }
 
-func (m *handledCompletionMediaTool) Execute(
+func (m *handledDeliverableArtifactsTool) Execute(
 	ctx context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
 	ref, err := m.store.Store(m.path, media.MediaMeta{
 		Filename:    filepath.Base(m.path),
 		ContentType: "video/mp4",
-		Source:      "test:handled_completion_media_tool",
-	}, "test:handled_completion_media")
+		Source:      "test:handled_deliverable_artifacts_tool",
+	}, "test:handled_deliverable_artifacts")
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
@@ -4706,11 +4713,11 @@ func (m *handledCompletionMediaTool) Execute(
 		ForLLM:          "Completion media delivered by runtime.",
 		Silent:          true,
 		ResponseHandled: true,
-	}).WithCompletion(&toolshared.CompletionResult{
+	}).WithDeliverable(&taskresult.Deliverable{
 		Text: m.text,
-		Media: []toolshared.CompletionMedia{{
+		Artifacts: []taskresult.Artifact{{
 			Ref:         ref,
-			Type:        "video",
+			Kind:        "video",
 			Filename:    filepath.Base(m.path),
 			ContentType: "video/mp4",
 		}},
@@ -9263,10 +9270,19 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	msgBus := bus.NewMessageBus()
 	provider := &messageToolMediaThenFinalProvider{mediaPath: videoPath}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	installTestOutboundCoordinator(t, al, t.TempDir())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	mediaChannel := newBlockingMediaChannel()
-	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", mediaChannel))
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t,
+		cfg,
+		msgBus,
+		store,
+		"telegram",
+		mediaChannel,
+		channels.WithOutboundOutbox(al.outboundCoordinator()),
+	))
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -9278,7 +9294,8 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	var runErr error
 	go func() {
 		defer close(done)
-		response, runErr = al.runAgentLoop(context.Background(), agent, processOptions{
+		runCtx := withOutboundTransaction(context.Background(), "message-tool-media-final-test")
+		response, runErr = al.runAgentLoop(runCtx, agent, processOptions{
 			Dispatch: DispatchRequest{
 				SessionKey:  "message-tool-media-final-test",
 				UserMessage: "send media then final answer",
@@ -9422,10 +9439,19 @@ func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.
 	msgBus := bus.NewMessageBus()
 	provider := &immediateMediaThenFinalProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	installTestOutboundCoordinator(t, al, t.TempDir())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	mediaChannel := &fakeMediaChannel{}
-	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", mediaChannel))
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t,
+		cfg,
+		msgBus,
+		store,
+		"telegram",
+		mediaChannel,
+		channels.WithOutboundOutbox(al.outboundCoordinator()),
+	))
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -9433,7 +9459,8 @@ func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.
 	}
 	agent.Tools.Register(&immediateMediaTool{store: store, path: imagePath})
 
-	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
+	runCtx := withOutboundTransaction(context.Background(), "immediate-media-final-test")
+	response, err := al.runAgentLoop(runCtx, agent, processOptions{
 		Dispatch: DispatchRequest{
 			SessionKey:  "immediate-media-final-test",
 			UserMessage: "send an image then final answer",

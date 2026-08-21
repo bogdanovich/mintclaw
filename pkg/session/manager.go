@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 type Session struct {
@@ -74,7 +75,8 @@ func (sm *SessionManager) GetOrCreate(key string) *Session {
 
 	session, ok := sm.sessions[key]
 	if ok {
-		return session
+		snapshot := cloneSession(*session)
+		return &snapshot
 	}
 
 	session = &Session{
@@ -85,7 +87,8 @@ func (sm *SessionManager) GetOrCreate(key string) *Session {
 	}
 	sm.sessions[key] = session
 
-	return session
+	snapshot := cloneSession(*session)
+	return &snapshot
 }
 
 func ensureMessageCreatedAt(msg *providers.Message, fallback time.Time) {
@@ -101,6 +104,27 @@ func normalizeHistoryCreatedAt(history []providers.Message) {
 	for i := range history {
 		ensureMessageCreatedAt(&history[i], now)
 	}
+}
+
+func cloneSessionMessage(message providers.Message) providers.Message {
+	cloned := message
+	if message.CreatedAt != nil {
+		createdAt := *message.CreatedAt
+		cloned.CreatedAt = &createdAt
+	}
+	cloned.Deliverable = taskresult.CloneDeliverable(message.Deliverable)
+	return cloned
+}
+
+func cloneSessionMessages(messages []providers.Message) []providers.Message {
+	if messages == nil {
+		return nil
+	}
+	cloned := make([]providers.Message, len(messages))
+	for index, message := range messages {
+		cloned[index] = cloneSessionMessage(message)
+	}
+	return cloned
 }
 
 func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
@@ -121,6 +145,7 @@ func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Messag
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
 		return
 	}
+	msg = cloneSessionMessage(msg)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -159,6 +184,7 @@ func (sm *SessionManager) AppendTurnMessage(
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
 		return nil
 	}
+	msg = cloneSessionMessage(msg)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -222,11 +248,11 @@ func (sm *SessionManager) MutateTurnHistory(
 	if current := sm.sessions[sessionKey]; current != nil {
 		next = cloneSession(*current)
 	}
-	history, changed, err := mutate(append([]providers.Message(nil), next.Messages...))
+	history, changed, err := mutate(cloneSessionMessages(next.Messages))
 	if err != nil || !changed {
 		return false, err
 	}
-	next.Messages = messageutil.FilterInvalidHistoryMessages(history)
+	next.Messages = cloneSessionMessages(messageutil.FilterInvalidHistoryMessages(history))
 	normalizeHistoryCreatedAt(next.Messages)
 	advanceHistoryRevision(&next)
 	next.Updated = now
@@ -264,7 +290,7 @@ func (sm *SessionManager) replaceTurnSnapshot(
 	if current := sm.sessions[sessionKey]; current != nil {
 		next = cloneSession(*current)
 	}
-	next.Messages = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
+	next.Messages = cloneSessionMessages(messageutil.FilterInvalidHistoryMessages(history))
 	normalizeHistoryCreatedAt(next.Messages)
 	if replaceSummary {
 		next.Summary = summary
@@ -288,9 +314,7 @@ func (sm *SessionManager) GetHistory(key string) []providers.Message {
 		return []providers.Message{}
 	}
 
-	history := make([]providers.Message, len(session.Messages))
-	copy(history, session.Messages)
-	return history
+	return cloneSessionMessages(session.Messages)
 }
 
 func (sm *SessionManager) GetHistoryWithError(key string) ([]providers.Message, error) {
@@ -314,7 +338,7 @@ func (sm *SessionManager) ReadTurnHistory(
 	if session == nil {
 		return []providers.Message{}, nil
 	}
-	return append([]providers.Message(nil), session.Messages...), nil
+	return cloneSessionMessages(session.Messages), nil
 }
 
 // ReadTurnHistoryPage returns a bounded in-memory history window.
@@ -427,7 +451,7 @@ func (sm *SessionManager) Save(key string) error {
 
 func cloneSession(stored Session) Session {
 	snapshot := stored
-	snapshot.Messages = append([]providers.Message(nil), stored.Messages...)
+	snapshot.Messages = cloneSessionMessages(stored.Messages)
 	return snapshot
 }
 
@@ -496,10 +520,8 @@ func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
 	session, ok := sm.sessions[key]
 	if ok {
 		history = messageutil.FilterInvalidHistoryMessages(history)
-		// Create a deep copy to strictly isolate internal state
-		// from the caller's slice.
-		msgs := make([]providers.Message, len(history))
-		copy(msgs, history)
+		// Isolate pointer-valued canonical result data from the caller.
+		msgs := cloneSessionMessages(history)
 		normalizeHistoryCreatedAt(msgs)
 		session.Messages = msgs
 		advanceHistoryRevision(session)

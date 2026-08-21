@@ -160,12 +160,12 @@ func TestImageGenerateToolUsesConfiguredOutputDir(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
 	}
-	if len(result.ArtifactTags) != 1 {
-		t.Fatalf("artifact tags = %d, want 1", len(result.ArtifactTags))
+	if result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 {
+		t.Fatalf("artifacts = %#v, want 1", result.Deliverable)
 	}
-	wantPrefix := "[file:" + filepath.Join(workspace, "tmp", "generated-images") + string(filepath.Separator)
-	if !strings.HasPrefix(result.ArtifactTags[0], wantPrefix) {
-		t.Fatalf("artifact path = %q, want prefix %q", result.ArtifactTags[0], wantPrefix)
+	wantPrefix := filepath.Join(workspace, "tmp", "generated-images") + string(filepath.Separator)
+	if !strings.HasPrefix(result.Deliverable.Artifacts[0].LocalPath, wantPrefix) {
+		t.Fatalf("artifact path = %q, want prefix %q", result.Deliverable.Artifacts[0].LocalPath, wantPrefix)
 	}
 }
 

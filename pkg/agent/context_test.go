@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func msg(role, content string) providers.Message {
@@ -32,6 +33,24 @@ func TestSanitizeHistoryForProvider_EmptyHistory(t *testing.T) {
 	result = sanitizeHistoryForProvider([]providers.Message{})
 	if len(result) != 0 {
 		t.Fatalf("expected empty, got %d messages", len(result))
+	}
+}
+
+func TestSanitizeHistoryForProviderStripsCanonicalDeliverable(t *testing.T) {
+	deliverable := &taskresult.Deliverable{
+		Text: "tool-owned result", Metadata: map[string]string{"producer": "tool"},
+	}
+	history := []providers.Message{{
+		Role: "user", Content: "current request", Deliverable: deliverable, RootTurnStart: true,
+	}}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 1 || result[0].Deliverable != nil || result[0].RootTurnStart {
+		t.Fatalf("provider history retained canonical session state: %#v", result)
+	}
+	if history[0].Deliverable != deliverable || history[0].Deliverable.Metadata["producer"] != "tool" ||
+		!history[0].RootTurnStart {
+		t.Fatalf("sanitization mutated canonical history: %#v", history)
 	}
 }
 

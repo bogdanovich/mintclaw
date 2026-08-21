@@ -1,12 +1,13 @@
 package tasks
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (r *Registry) normalizeRecord(rec Record, now int64) Record {
@@ -30,7 +31,7 @@ func (r *Registry) normalizeRecord(rec Record, now int64) Record {
 		rec.CleanupAfter = base + int64(r.options.TerminalRetention/time.Millisecond)
 	}
 	if rec.Deliverable != nil {
-		rec.Deliverable = normalizeDeliverablePayload(rec.Deliverable, now)
+		rec.Deliverable = normalizeDeliverable(rec.Deliverable, now)
 	}
 	rec.InteractionID = strings.TrimSpace(rec.InteractionID)
 	rec.InteractionShortID = truncateInteractionField(rec.InteractionShortID, 64)
@@ -47,37 +48,34 @@ func truncateInteractionField(value string, maxRunes int) string {
 	return value
 }
 
-func normalizeDeliverablePayload(payload *DeliverablePayload, generatedAt int64) *DeliverablePayload {
+func normalizeDeliverable(payload *taskresult.Deliverable, generatedAt int64) *taskresult.Deliverable {
 	if payload == nil {
 		return nil
 	}
-	out := *payload
-	out.Artifacts = append([]DeliverableItem(nil), payload.Artifacts...)
-	out.Metadata = copyStringMap(payload.Metadata)
-	out.ObjectiveOutcome = cloneObjectiveOutcome(payload.ObjectiveOutcome)
+	out := taskresult.CloneDeliverable(payload)
 	if payload.Report != nil {
-		report := cloneDeliverableReport(payload.Report)
+		report := taskresult.CloneReport(payload.Report)
 		if report.SchemaVersion == "" {
-			report.SchemaVersion = DeliverableReportV1
+			report.SchemaVersion = taskresult.ReportSchemaV1
 		}
 		if report.GeneratedAt == 0 {
 			report.GeneratedAt = generatedAt
 		}
 		if report.ContentHash == "" {
-			report.ContentHash = deliverableContentHash(&out)
+			report.ContentHash = deliverableContentHash(out)
 		}
 		if report.ReportID == "" {
 			report.ReportID = "deliverable:" + report.ContentHash
 		}
 		out.Report = report
-		return &out
+		return out
 	}
 	if strings.TrimSpace(out.Text) == "" && len(out.Artifacts) == 0 && len(out.Metadata) == 0 {
-		return &out
+		return out
 	}
-	contentHash := deliverableContentHash(&out)
-	report := &DeliverableReport{
-		SchemaVersion: DeliverableReportV1,
+	contentHash := deliverableContentHash(out)
+	report := &taskresult.Report{
+		SchemaVersion: taskresult.ReportSchemaV1,
 		ReportID:      "deliverable:" + contentHash,
 		ContentHash:   contentHash,
 		GeneratedAt:   generatedAt,
@@ -89,61 +87,34 @@ func normalizeDeliverablePayload(payload *DeliverablePayload, generatedAt int64)
 		},
 	}
 	if summary := strings.TrimSpace(out.Text); summary != "" {
-		report.Claims = append(report.Claims, ReportClaim{
+		report.Claims = append(report.Claims, taskresult.Claim{
 			Kind:       "fact",
 			Text:       summary,
 			Confidence: "producer_reported",
 		})
 	}
 	out.Report = report
-	return &out
+	return out
 }
 
-func deliverableContentHash(payload *DeliverablePayload) string {
+func deliverableContentHash(payload *taskresult.Deliverable) string {
 	if payload == nil {
 		return ""
 	}
 	type hashPayload struct {
-		Text             string            `json:"text,omitempty"`
-		Artifacts        []DeliverableItem `json:"artifacts,omitempty"`
-		Metadata         map[string]string `json:"metadata,omitempty"`
-		ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
+		Text             string                `json:"text,omitempty"`
+		Artifacts        []taskresult.Artifact `json:"artifacts,omitempty"`
+		Metadata         map[string]string     `json:"metadata,omitempty"`
+		ObjectiveOutcome *taskresult.Outcome   `json:"objective_outcome,omitempty"`
 	}
 	data, _ := json.Marshal(hashPayload{
 		Text:             strings.TrimSpace(payload.Text),
-		Artifacts:        append([]DeliverableItem(nil), payload.Artifacts...),
+		Artifacts:        append([]taskresult.Artifact(nil), payload.Artifacts...),
 		Metadata:         copyStringMap(payload.Metadata),
-		ObjectiveOutcome: cloneObjectiveOutcome(payload.ObjectiveOutcome),
+		ObjectiveOutcome: taskresult.CloneOutcome(payload.ObjectiveOutcome),
 	})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-func cloneDeliverableReport(report *DeliverableReport) *DeliverableReport {
-	if report == nil {
-		return nil
-	}
-	cloned := &DeliverableReport{
-		SchemaVersion: report.SchemaVersion,
-		ReportID:      report.ReportID,
-		ContentHash:   report.ContentHash,
-		GeneratedAt:   report.GeneratedAt,
-		Summary:       report.Summary,
-		Provenance:    copyStringMap(report.Provenance),
-		Metadata:      copyStringMap(report.Metadata),
-		Extra:         copyAnyMap(report.Extra),
-	}
-	for _, claim := range report.Claims {
-		cloned.Claims = append(cloned.Claims, ReportClaim{
-			Kind:       claim.Kind,
-			Text:       claim.Text,
-			Confidence: claim.Confidence,
-			SourceRefs: append([]string(nil), claim.SourceRefs...),
-			Metadata:   copyStringMap(claim.Metadata),
-		})
-	}
-	cloned.FieldDeltas = append([]ReportFieldDelta(nil), report.FieldDeltas...)
-	return cloned
 }
 
 func recordChanged(before, after Record) bool {
@@ -188,50 +159,4 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
-}
-
-func copyAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out, err := canonicalAnyMap(in)
-	if err == nil {
-		return out
-	}
-	// Public mutations reject invalid Extra values before accepting state.
-	// Keep the outer map detached while the invalid candidate is validated.
-	out = make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func canonicalizeRecordExtra(record *Record) error {
-	if record == nil || record.Deliverable == nil || record.Deliverable.Report == nil {
-		return nil
-	}
-	extra, err := canonicalAnyMap(record.Deliverable.Report.Extra)
-	if err != nil {
-		return err
-	}
-	record.Deliverable.Report.Extra = extra
-	return nil
-}
-
-func canonicalAnyMap(in map[string]any) (map[string]any, error) {
-	if len(in) == 0 {
-		return nil, nil
-	}
-	data, err := json.Marshal(in)
-	if err != nil {
-		return nil, err
-	}
-	var out map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }

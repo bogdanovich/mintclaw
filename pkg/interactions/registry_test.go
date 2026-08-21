@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 type testClock struct {
@@ -199,7 +200,7 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.RecordOutcomeReceipts(record.ID, record.Revision, []OutcomeReceipt{{
+	record, err = registry.RecordOutcomeReceipts(record.ID, record.Revision, []taskresult.Receipt{{
 		ID: "inv-1", Kind: "external_action", Target: "https://example.com",
 		Metadata: map[string]string{"invocation_id": "inv-1"},
 	}})

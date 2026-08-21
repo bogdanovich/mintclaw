@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	mintclawmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -543,7 +544,15 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 			"[MCP returned a large text result (%d chars); omitted from model context and saved as a local artifact.]",
 			size,
 		),
-		ArtifactTags: []string{"[file:" + path + "]"},
+		Deliverable: &taskresult.Deliverable{Artifacts: []taskresult.Artifact{
+			{
+				Ref:         "file:" + path,
+				LocalPath:   path,
+				Kind:        "file",
+				Filename:    filepath.Base(path),
+				ContentType: "text/plain",
+			},
+		}},
 	}
 }
 

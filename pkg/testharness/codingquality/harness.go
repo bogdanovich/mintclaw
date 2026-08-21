@@ -320,10 +320,11 @@ func buildFixture(root string, scale FixtureScale) (int, error) {
 }
 
 func commandArtifactIsComplete(result *toolshared.ToolResult) bool {
-	if result == nil || len(result.ArtifactTags) != 1 || !strings.Contains(result.ForLLM, "truncated") {
+	if result == nil || result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 ||
+		!strings.Contains(result.ForLLM, "truncated") {
 		return false
 	}
-	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	path := result.Deliverable.Artifacts[0].LocalPath
 	data, err := os.ReadFile(path)
 	return err == nil && len(data) > maxExpectedCommandContext &&
 		strings.Contains(string(data), "QUALITY_HEAD") && strings.Contains(string(data), "QUALITY_TAIL")

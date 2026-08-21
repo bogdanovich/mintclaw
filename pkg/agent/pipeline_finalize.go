@@ -7,6 +7,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -45,7 +46,7 @@ type FinalizationContext struct {
 	modelName        string
 	defaultModelName string
 	usage            finalizationUsage
-	completionMedia  []toolshared.CompletionMedia
+	deliverable      *taskresult.Deliverable
 	writeAudit       []toolshared.WriteAuditEntry
 	followUps        []bus.InboundMessage
 	historyMessage   *providers.Message
@@ -73,6 +74,7 @@ func newFinalizationContext(
 			Content:          content,
 			ModelName:        exec.model.llmModelName,
 			ReasoningContent: responseReasoningContent(llm.response),
+			Deliverable:      taskresult.CloneDeliverable(exec.deliverable),
 		}
 		historyMessage = &message
 	}
@@ -88,10 +90,10 @@ func newFinalizationContext(
 			outputTokens: outputTokens,
 			totalTokens:  totalTokens,
 		},
-		completionMedia: append([]toolshared.CompletionMedia(nil), exec.completionMedia...),
-		writeAudit:      append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
-		followUps:       append([]bus.InboundMessage(nil), ts.followUps...),
-		historyMessage:  historyMessage,
+		deliverable:    taskresult.CloneDeliverable(exec.deliverable),
+		writeAudit:     append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
+		followUps:      append([]bus.InboundMessage(nil), ts.followUps...),
+		historyMessage: historyMessage,
 		stream: finalizationStream{
 			publisher: llm.streamingPublisher,
 			fallback:  llm.streamingFallback,
@@ -179,7 +181,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		usageInputTokens:       f.usage.inputTokens,
 		usageOutputTokens:      f.usage.outputTokens,
 		usageTotalTokens:       f.usage.totalTokens,
-		completionMedia:        append([]toolshared.CompletionMedia(nil), f.completionMedia...),
+		deliverable:            taskresult.CloneDeliverable(f.deliverable),
 		writeAudit:             append([]toolshared.WriteAuditEntry(nil), f.writeAudit...),
 		status:                 f.status,
 		followUps:              append([]bus.InboundMessage(nil), f.followUps...),

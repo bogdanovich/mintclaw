@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
@@ -628,6 +629,29 @@ func TestCloneProviderMessagesDetachesNonNilEmptySlices(t *testing.T) {
 			cloned[0].ToolCalls,
 			cap(cloned[0].ToolCalls),
 		)
+	}
+}
+
+func TestCloneProviderMessagesDetachesDeliverable(t *testing.T) {
+	messages := []providers.Message{{
+		Deliverable: &taskresult.Deliverable{
+			Text:     "tool-owned result",
+			Metadata: map[string]string{"producer": "tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+				Metadata:      map[string]string{"format": "summary"},
+			},
+		},
+	}}
+
+	cloned := cloneProviderMessages(messages)
+	messages[0].Deliverable.Metadata["producer"] = "mutated"
+	messages[0].Deliverable.Report.Metadata["format"] = "mutated"
+	if cloned[0].Deliverable == nil || cloned[0].Deliverable.Text != "tool-owned result" ||
+		cloned[0].Deliverable.Metadata["producer"] != "tool" ||
+		cloned[0].Deliverable.Report.Metadata["format"] != "summary" {
+		t.Fatalf("cloned message deliverable was not detached: %#v", cloned[0].Deliverable)
 	}
 }
 
@@ -1341,27 +1365,24 @@ func TestHookManager_BeforeTool_RespondAction(t *testing.T) {
 func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	original := &toolshared.ToolResult{
 		ForLLM: "review finished",
-		Deliverable: &toolshared.DeliverableResult{
-			Report: &toolshared.DeliverableReport{
+		Deliverable: &taskresult.Deliverable{
+			Report: &taskresult.Report{
 				SchemaVersion: "deliverable_report.v1",
 				ReportID:      "review-1",
 				ContentHash:   "abc123",
 				Summary:       "No high-confidence issues found",
-				Claims: []toolshared.ReportClaim{{
+				Claims: []taskresult.Claim{{
 					Kind:       "negative_evidence",
 					Text:       "No correctness issues found",
 					Confidence: "high",
 					SourceRefs: []string{"diff"},
 					Metadata:   map[string]string{"path": "pkg/review.go"},
 				}},
-				FieldDeltas: []toolshared.ReportFieldDelta{{
+				FieldDeltas: []taskresult.FieldDelta{{
 					Field: "review_status",
 					To:    "clean",
 				}},
 				Provenance: map[string]string{"producer": "reviewer"},
-				Extra: map[string]any{
-					"nested": map[string]any{"key": "value"},
-				},
 			},
 		},
 	}
@@ -1373,7 +1394,6 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	original.Deliverable.Report.Claims[0].Metadata["path"] = "mutated"
 	original.Deliverable.Report.FieldDeltas[0].To = "mutated"
 	original.Deliverable.Report.Provenance["producer"] = "mutated"
-	original.Deliverable.Report.Extra["nested"].(map[string]any)["key"] = "mutated"
 
 	report := cloned.Deliverable.Report
 	if report == nil {
@@ -1396,10 +1416,6 @@ func TestCloneToolResultPreservesDeliverableReport(t *testing.T) {
 	}
 	if report.Provenance["producer"] != "reviewer" {
 		t.Fatalf("cloned provenance aliased: %+v", report.Provenance)
-	}
-	nested := report.Extra["nested"].(map[string]any)
-	if nested["key"] != "value" {
-		t.Fatalf("cloned extra aliased: %+v", report.Extra)
 	}
 }
 

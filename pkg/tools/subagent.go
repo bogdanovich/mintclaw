@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,13 +13,10 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
-)
-
-var labeledArtifactPathRe = regexp.MustCompile(
-	`(?im)(?:^|\n)\s*(?:[-*]\s*)?(?:sendable_file_path|file_path|artifact_path|local_path)\s*:\s*` + "`?" + `([^` + "`" + `\n]+)` + "`?",
 )
 
 // SubTurnSpawner is an interface for spawning sub-turns.
@@ -605,15 +600,13 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 	if result == nil || (result.Silent && result.AsyncDelivery == toolshared.AsyncDeliveryParentOnly) {
 		delivery = taskregistry.DeliveryNotApplicable
 	}
-	completion := completionPayloadForTaskRegistry(result)
-	deliverable := deliverablePayloadForTaskRegistry(result)
+	deliverable := taskDeliverable(result)
 	if err := sm.updateTask(
 		task,
 		terminalTaskStatusForResult(result),
 		delivery,
 		summary,
 		func(rec *taskregistry.Record) {
-			rec.Completion = completionPayloadForLegacyStorage(completion, deliverable)
 			rec.Deliverable = deliverable
 		},
 	); err != nil {
@@ -625,309 +618,22 @@ func (sm *SubagentManager) recordTaskResult(task *SubagentTask, result *toolshar
 }
 
 func terminalTaskStatusForResult(result *toolshared.ToolResult) taskregistry.Status {
-	var outcome *taskregistry.ObjectiveOutcome
-	if result != nil {
-		if result.Deliverable != nil {
-			outcome = objectiveOutcomePayloadForTaskRegistry(result.Deliverable.ObjectiveOutcome)
-		}
-		if outcome == nil && result.Completion != nil {
-			outcome = objectiveOutcomePayloadForTaskRegistry(result.Completion.ObjectiveOutcome)
-		}
+	if result == nil || result.Deliverable == nil {
+		return taskregistry.TerminalStatusForObjectiveOutcome(nil)
 	}
-	return taskregistry.TerminalStatusForObjectiveOutcome(outcome)
+	return taskregistry.TerminalStatusForObjectiveOutcome(result.Deliverable.ObjectiveOutcome)
 }
 
-func completionPayloadForLegacyStorage(
-	completion *taskregistry.CompletionPayload,
-	deliverable *taskregistry.DeliverablePayload,
-) *taskregistry.CompletionPayload {
-	if deliverable != nil {
+func taskDeliverable(result *toolshared.ToolResult) *taskresult.Deliverable {
+	if result == nil || result.Deliverable == nil {
 		return nil
 	}
-	return completion
-}
-
-func completionPayloadForTaskRegistry(result *toolshared.ToolResult) *taskregistry.CompletionPayload {
-	if result == nil || result.Completion == nil {
+	deliverable := taskresult.CloneDeliverable(result.Deliverable)
+	if deliverable.Text == "" && len(deliverable.Artifacts) == 0 && len(deliverable.Metadata) == 0 &&
+		deliverable.Report == nil && deliverable.ObjectiveOutcome == nil {
 		return nil
 	}
-	payload := &taskregistry.CompletionPayload{
-		Text:             result.Completion.Text,
-		ObjectiveOutcome: objectiveOutcomePayloadForTaskRegistry(result.Completion.ObjectiveOutcome),
-	}
-	for _, item := range result.Completion.Media {
-		payload.Media = append(payload.Media, taskregistry.CompletionMedia{
-			Ref:         item.Ref,
-			Type:        item.Type,
-			Filename:    item.Filename,
-			ContentType: item.ContentType,
-		})
-	}
-	if payload.Text == "" && len(payload.Media) == 0 && payload.ObjectiveOutcome == nil {
-		return nil
-	}
-	return payload
-}
-
-func deliverablePayloadForTaskRegistry(result *toolshared.ToolResult) *taskregistry.DeliverablePayload {
-	if result == nil {
-		return nil
-	}
-	deliverable := result.Deliverable
-	if deliverable == nil && result.Completion != nil {
-		deliverable = &toolshared.DeliverableResult{
-			Text: result.Completion.Text, ObjectiveOutcome: result.Completion.ObjectiveOutcome,
-		}
-		for _, item := range result.Completion.Media {
-			deliverable.Artifacts = append(deliverable.Artifacts, toolshared.DeliverableItem{
-				Ref:         item.Ref,
-				Kind:        item.Type,
-				Filename:    item.Filename,
-				ContentType: item.ContentType,
-			})
-		}
-	}
-	if deliverable == nil {
-		return nil
-	}
-	if result.Completion != nil {
-		deliverable.Artifacts = appendMissingDeliverableArtifacts(
-			deliverable.Artifacts,
-			extractLabeledArtifactItems(result.Completion.Text),
-		)
-	}
-	payload := &taskregistry.DeliverablePayload{
-		Text:             deliverable.Text,
-		Metadata:         copyDeliverableMetadata(deliverable.Metadata),
-		Report:           deliverableReportPayloadForTaskRegistry(deliverable.Report),
-		ObjectiveOutcome: objectiveOutcomePayloadForTaskRegistry(deliverable.ObjectiveOutcome),
-	}
-	for _, item := range deliverable.Artifacts {
-		payload.Artifacts = append(payload.Artifacts, taskregistry.DeliverableItem{
-			Ref:         item.Ref,
-			Kind:        item.Kind,
-			Filename:    item.Filename,
-			ContentType: item.ContentType,
-			Delivered:   item.Delivered,
-		})
-	}
-	if payload.Text == "" && len(payload.Artifacts) == 0 && len(payload.Metadata) == 0 && payload.Report == nil &&
-		payload.ObjectiveOutcome == nil {
-		return nil
-	}
-	return payload
-}
-
-func objectiveOutcomePayloadForTaskRegistry(
-	outcome *toolshared.ObjectiveOutcome,
-) *taskregistry.ObjectiveOutcome {
-	if outcome == nil {
-		return nil
-	}
-	payload := &taskregistry.ObjectiveOutcome{
-		Status: string(outcome.Status), MissingItems: append([]string(nil), outcome.MissingItems...),
-	}
-	for _, item := range outcome.CompletedItems {
-		mapped := taskregistry.ObjectiveItem{Item: item.Item, Kind: item.Kind}
-		for _, receipt := range item.Receipts {
-			mapped.Receipts = append(mapped.Receipts, taskregistry.ObjectiveReceipt{
-				ID: receipt.ID, Kind: receipt.Kind, Target: receipt.Target, Action: receipt.Action,
-				Tool: receipt.Tool, Summary: receipt.Summary,
-				Metadata: copyDeliverableMetadata(receipt.Metadata),
-			})
-		}
-		payload.CompletedItems = append(payload.CompletedItems, mapped)
-	}
-	return payload
-}
-
-func deliverableReportPayloadForTaskRegistry(report *toolshared.DeliverableReport) *taskregistry.DeliverableReport {
-	if report == nil {
-		return nil
-	}
-	payload := &taskregistry.DeliverableReport{
-		SchemaVersion: report.SchemaVersion,
-		ReportID:      report.ReportID,
-		ContentHash:   report.ContentHash,
-		GeneratedAt:   report.GeneratedAt,
-		Summary:       report.Summary,
-		Provenance:    copyDeliverableMetadata(report.Provenance),
-		Metadata:      copyDeliverableMetadata(report.Metadata),
-		Extra:         copyReportExtra(report.Extra),
-	}
-	for _, claim := range report.Claims {
-		payload.Claims = append(payload.Claims, taskregistry.ReportClaim{
-			Kind:       claim.Kind,
-			Text:       claim.Text,
-			Confidence: claim.Confidence,
-			SourceRefs: append([]string(nil), claim.SourceRefs...),
-			Metadata:   copyDeliverableMetadata(claim.Metadata),
-		})
-	}
-	for _, delta := range report.FieldDeltas {
-		payload.FieldDeltas = append(payload.FieldDeltas, taskregistry.ReportFieldDelta{
-			Field: delta.Field,
-			From:  delta.From,
-			To:    delta.To,
-		})
-	}
-	if payload.SchemaVersion == "" &&
-		payload.ReportID == "" &&
-		payload.ContentHash == "" &&
-		payload.Summary == "" &&
-		len(payload.Claims) == 0 &&
-		len(payload.FieldDeltas) == 0 &&
-		len(payload.Provenance) == 0 &&
-		len(payload.Metadata) == 0 &&
-		len(payload.Extra) == 0 {
-		return nil
-	}
-	return payload
-}
-
-func copyReportExtra(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func appendMissingDeliverableArtifacts(existing, extra []toolshared.DeliverableItem) []toolshared.DeliverableItem {
-	if len(extra) == 0 {
-		return existing
-	}
-	seen := make(map[string]struct{}, len(existing)+len(extra))
-	for _, item := range existing {
-		if ref := strings.TrimSpace(item.Ref); ref != "" {
-			seen[ref] = struct{}{}
-		}
-	}
-	out := append([]toolshared.DeliverableItem(nil), existing...)
-	for _, item := range extra {
-		ref := strings.TrimSpace(item.Ref)
-		if ref == "" {
-			continue
-		}
-		if _, ok := seen[ref]; ok {
-			continue
-		}
-		seen[ref] = struct{}{}
-		out = append(out, item)
-	}
-	return out
-}
-
-func extractLabeledArtifactItems(text string) []toolshared.DeliverableItem {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	matches := labeledArtifactPathRe.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(matches))
-	items := make([]toolshared.DeliverableItem, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		path := normalizeCompletionArtifactPath(match[1])
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		items = append(items, toolshared.DeliverableItem{
-			Ref:         "file:" + path,
-			Kind:        artifactKindForPath(path),
-			Filename:    filepath.Base(path),
-			ContentType: contentTypeForArtifactPath(path),
-		})
-	}
-	return items
-}
-
-func normalizeCompletionArtifactPath(raw string) string {
-	path := strings.TrimSpace(raw)
-	path = strings.Trim(path, "`'\"")
-	if idx := strings.IndexAny(path, " \t\r"); idx >= 0 {
-		path = path[:idx]
-	}
-	path = strings.TrimRight(path, ".,;)")
-	if !strings.HasPrefix(path, "/") {
-		return ""
-	}
-	return filepath.Clean(path)
-}
-
-func artifactKindForPath(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp4", ".mov", ".m4v", ".webm", ".mkv":
-		return "video"
-	case ".mp3", ".m4a", ".wav", ".ogg", ".flac":
-		return "audio"
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic":
-		return "image"
-	case ".md", ".txt", ".json", ".csv", ".pdf":
-		return "file"
-	default:
-		return "file"
-	}
-}
-
-func contentTypeForArtifactPath(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp4":
-		return "video/mp4"
-	case ".mov":
-		return "video/quicktime"
-	case ".webm":
-		return "video/webm"
-	case ".mp3":
-		return "audio/mpeg"
-	case ".m4a":
-		return "audio/mp4"
-	case ".wav":
-		return "audio/wav"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".md":
-		return "text/markdown"
-	case ".txt":
-		return "text/plain"
-	case ".json":
-		return "application/json"
-	case ".csv":
-		return "text/csv"
-	case ".pdf":
-		return "application/pdf"
-	default:
-		return ""
-	}
-}
-
-func copyDeliverableMetadata(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
+	return deliverable
 }
 
 func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {

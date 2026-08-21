@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // genericPlaceholderRegex matches generic media placeholders emitted by various
@@ -234,22 +235,29 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 	return buf.String()
 }
 
-func buildArtifactTags(store mediaResolver, refs []string) []string {
-	if store == nil || len(refs) == 0 {
+func buildMediaArtifacts(store mediaResolver, refs []string) []taskresult.Artifact {
+	if len(refs) == 0 {
 		return nil
 	}
 
-	tags := make([]string, 0, len(refs))
+	artifacts := make([]taskresult.Artifact, 0, len(refs))
 	for _, ref := range refs {
-		localPath, meta, err := store.ResolveWithMeta(ref)
-		if err != nil {
+		artifact := taskresult.Artifact{Ref: ref}
+		if store == nil {
+			artifacts = append(artifacts, artifact)
 			continue
 		}
-		mime := detectMIME(localPath, meta)
-		tags = append(tags, buildPathTag(mime, localPath))
+		localPath, meta, err := store.ResolveWithMeta(ref)
+		if err == nil {
+			artifact.LocalPath = localPath
+			artifact.Filename = meta.Filename
+			artifact.ContentType = meta.ContentType
+			artifact.Kind = inferMediaType(meta.Filename, meta.ContentType)
+		}
+		artifacts = append(artifacts, artifact)
 	}
 
-	return tags
+	return artifacts
 }
 
 func buildProviderAttachments(store mediaResolver, refs []string) []providers.Attachment {

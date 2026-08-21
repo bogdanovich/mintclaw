@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -925,6 +926,7 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 		if msg.ToolExecutions != nil {
 			cloned[i].ToolExecutions = append([]providers.ToolExecution(nil), msg.ToolExecutions...)
 		}
+		cloned[i].Deliverable = taskresult.CloneDeliverable(msg.Deliverable)
 	}
 	return cloned
 }
@@ -1006,9 +1008,6 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	if len(result.Media) > 0 {
 		cloned.Media = append([]string(nil), result.Media...)
 	}
-	if len(result.ArtifactTags) > 0 {
-		cloned.ArtifactTags = append([]string(nil), result.ArtifactTags...)
-	}
 	if len(result.WriteAudit) > 0 {
 		cloned.WriteAudit = make([]toolshared.WriteAuditEntry, len(result.WriteAudit))
 		for i, entry := range result.WriteAudit {
@@ -1028,30 +1027,7 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 			cloned.Outbound.Recovery = &recovery
 		}
 	}
-	if result.Completion != nil {
-		cloned.Completion = &toolshared.CompletionResult{
-			Text:             result.Completion.Text,
-			Media:            append([]toolshared.CompletionMedia(nil), result.Completion.Media...),
-			ObjectiveOutcome: cloneObjectiveOutcome(result.Completion.ObjectiveOutcome),
-		}
-	}
-	if result.Deliverable != nil {
-		cloned.Deliverable = &toolshared.DeliverableResult{
-			Text: result.Deliverable.Text,
-			Artifacts: append(
-				[]toolshared.DeliverableItem(nil),
-				result.Deliverable.Artifacts...,
-			),
-			Report:           cloneToolDeliverableReport(result.Deliverable.Report),
-			ObjectiveOutcome: cloneObjectiveOutcome(result.Deliverable.ObjectiveOutcome),
-		}
-		if len(result.Deliverable.Metadata) > 0 {
-			cloned.Deliverable.Metadata = make(map[string]string, len(result.Deliverable.Metadata))
-			for k, v := range result.Deliverable.Metadata {
-				cloned.Deliverable.Metadata[k] = v
-			}
-		}
-	}
+	cloned.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
 	if len(result.Messages) > 0 {
 		cloned.Messages = make([]providers.Message, len(result.Messages))
 		copy(cloned.Messages, result.Messages)
@@ -1075,38 +1051,6 @@ func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.T
 	return &cloned
 }
 
-func cloneToolDeliverableReport(report *toolshared.DeliverableReport) *toolshared.DeliverableReport {
-	if report == nil {
-		return nil
-	}
-	cloned := &toolshared.DeliverableReport{
-		SchemaVersion: report.SchemaVersion,
-		ReportID:      report.ReportID,
-		ContentHash:   report.ContentHash,
-		GeneratedAt:   report.GeneratedAt,
-		Summary:       report.Summary,
-		Provenance:    cloneHookStringMap(report.Provenance),
-		Metadata:      cloneHookStringMap(report.Metadata),
-		Extra:         cloneHookAnyMap(report.Extra),
-	}
-	if len(report.Claims) > 0 {
-		cloned.Claims = make([]toolshared.ReportClaim, len(report.Claims))
-		for i, claim := range report.Claims {
-			cloned.Claims[i] = toolshared.ReportClaim{
-				Kind:       claim.Kind,
-				Text:       claim.Text,
-				Confidence: claim.Confidence,
-				SourceRefs: append([]string(nil), claim.SourceRefs...),
-				Metadata:   cloneHookStringMap(claim.Metadata),
-			}
-		}
-	}
-	if len(report.FieldDeltas) > 0 {
-		cloned.FieldDeltas = append([]toolshared.ReportFieldDelta(nil), report.FieldDeltas...)
-	}
-	return cloned
-}
-
 func cloneHookStringMap(src map[string]string) map[string]string {
 	if len(src) == 0 {
 		return nil
@@ -1114,17 +1058,6 @@ func cloneHookStringMap(src map[string]string) map[string]string {
 	cloned := make(map[string]string, len(src))
 	for key, value := range src {
 		cloned[key] = value
-	}
-	return cloned
-}
-
-func cloneHookAnyMap(src map[string]any) map[string]any {
-	if src == nil {
-		return nil
-	}
-	cloned := make(map[string]any, len(src))
-	for key, value := range src {
-		cloned[key] = cloneHookAnyValue(value)
 	}
 	return cloned
 }

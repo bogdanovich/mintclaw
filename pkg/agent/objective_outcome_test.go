@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -28,7 +29,7 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	})
 	clean, outcome := extractObjectiveOutcome(content, audits, true, checklist)
 	if clean != "Published what could be completed." || outcome == nil ||
-		outcome.Status != toolshared.ObjectiveOutcomePartial || len(outcome.CompletedItems) != 1 ||
+		outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
 		outcome.CompletedItems[0].Item != "Yakima published" ||
 		len(outcome.CompletedItems[0].Receipts) != 1 ||
 		outcome.CompletedItems[0].Receipts[0].ID != "inv_yakima" || len(outcome.MissingItems) != 1 ||
@@ -47,7 +48,7 @@ func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 	}}
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "published", Kind: "external_action"}})
 	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
-	if outcome.Status != toolshared.ObjectiveOutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+	if outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
 		len(outcome.MissingItems) != 1 {
 		t.Fatalf("non-browser receipt verified external action: %#v", outcome)
 	}
@@ -61,7 +62,7 @@ func TestExtractObjectiveOutcomeUsesRuntimeClassification(t *testing.T) {
 		Item: "like and follow the account", Kind: "external_action",
 	}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome.Status != toolshared.ObjectiveOutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+	if outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
 		len(outcome.MissingItems) != 1 {
 		t.Fatalf("misclassified publish claim was accepted: %#v", outcome)
 	}
@@ -70,7 +71,7 @@ func TestExtractObjectiveOutcomeUsesRuntimeClassification(t *testing.T) {
 func TestExtractObjectiveOutcomeRequiresBrowserChildReport(t *testing.T) {
 	clean, outcome := extractObjectiveOutcome("I think it worked.", nil, true)
 	if clean != "I think it worked." || outcome == nil ||
-		outcome.Status != toolshared.ObjectiveOutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
 		len(outcome.MissingItems) != 1 {
 		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
 	}
@@ -82,7 +83,7 @@ func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome == nil || outcome.Status != toolshared.ObjectiveOutcomeSucceeded ||
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded ||
 		len(outcome.CompletedItems) != 1 || len(outcome.MissingItems) != 0 {
 		t.Fatalf("outcome = %#v", outcome)
 	}
@@ -94,7 +95,7 @@ func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome == nil || outcome.Status != toolshared.ObjectiveOutcomePartial ||
+	if outcome == nil || outcome.Status != taskresult.OutcomePartial ||
 		len(outcome.CompletedItems) != 1 || len(outcome.MissingItems) != 1 {
 		t.Fatalf("outcome = %#v", outcome)
 	}
@@ -109,7 +110,7 @@ func TestExtractObjectiveOutcomeRejectsOmittedRequestedItem(t *testing.T) {
 		{Item: "inspect old postings", Kind: "result"},
 	})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome.Status != toolshared.ObjectiveOutcomePartial || len(outcome.CompletedItems) != 1 ||
+	if outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
 		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "old postings") {
 		t.Fatalf("omitted objective was accepted: %#v", outcome)
 	}
@@ -130,16 +131,16 @@ func TestExtractObjectiveOutcomeDoesNotReuseReceiptAcrossActions(t *testing.T) {
 		Metadata: map[string]string{"invocation_id": "inv-one", "effect": "external_commit"},
 	}}
 	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
-	if outcome.Status != toolshared.ObjectiveOutcomePartial || len(outcome.CompletedItems) != 1 ||
+	if outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
 		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "Vissani") {
 		t.Fatalf("one receipt certified multiple actions: %#v", outcome)
 	}
 }
 
 func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing.T) {
-	outcome := &toolshared.ObjectiveOutcome{
-		Status:         toolshared.ObjectiveOutcomePartial,
-		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published"}},
+	outcome := &taskresult.Outcome{
+		Status:         taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{{Item: "Yakima published"}},
 		MissingItems:   []string{"Vissani not verified"},
 	}
 	got := objectiveOutcomeUserContent("Both items were published.", outcome)

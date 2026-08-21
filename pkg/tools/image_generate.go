@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -210,9 +211,14 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	default:
 		result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	}
-	result.ArtifactTags = make([]string, 0, len(paths))
-	for _, path := range paths {
-		result.ArtifactTags = append(result.ArtifactTags, "[file:"+path+"]")
+	for index, path := range paths {
+		if index >= len(result.Deliverable.Artifacts) {
+			result.Deliverable.Artifacts = append(
+				result.Deliverable.Artifacts,
+				taskresult.Artifact{Ref: "file:" + path},
+			)
+		}
+		result.Deliverable.Artifacts[index].LocalPath = path
 	}
 	return result
 }

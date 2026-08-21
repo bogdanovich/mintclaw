@@ -3,27 +3,28 @@ package tools
 import (
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestTerminalTaskStatusForResultUsesObjectiveOutcome(t *testing.T) {
-	result := &toolshared.ToolResult{Completion: &toolshared.CompletionResult{
-		ObjectiveOutcome: &toolshared.ObjectiveOutcome{Status: toolshared.ObjectiveOutcomeBlocked},
+	result := &toolshared.ToolResult{Deliverable: &taskresult.Deliverable{
+		ObjectiveOutcome: &taskresult.Outcome{Status: taskresult.OutcomeBlocked},
 	}}
 	if got := terminalTaskStatusForResult(result); got != taskregistry.StatusFailed {
 		t.Fatalf("status = %q, want %q", got, taskregistry.StatusFailed)
 	}
 }
 
-func TestTaskRegistryPayloadPreservesVerifiedObjectiveOutcome(t *testing.T) {
-	result := toolshared.NewToolResult("partial result").WithCompletion(&toolshared.CompletionResult{
+func TestTaskDeliverablePreservesVerifiedObjectiveOutcome(t *testing.T) {
+	result := toolshared.NewToolResult("partial result").WithDeliverable(&taskresult.Deliverable{
 		Text: "Yakima published; Vissani missing",
-		ObjectiveOutcome: &toolshared.ObjectiveOutcome{
-			Status: toolshared.ObjectiveOutcomePartial,
-			CompletedItems: []toolshared.ObjectiveItem{{
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomePartial,
+			CompletedItems: []taskresult.Item{{
 				Item: "Yakima published", Kind: "external_action",
-				Receipts: []toolshared.ObjectiveReceipt{{
+				Receipts: []taskresult.Receipt{{
 					ID: "inv_yakima", Kind: "external_action", Tool: "browser_act",
 					Metadata: map[string]string{"invocation_id": "inv_yakima"},
 				}},
@@ -32,13 +33,12 @@ func TestTaskRegistryPayloadPreservesVerifiedObjectiveOutcome(t *testing.T) {
 		},
 	})
 
-	completion := completionPayloadForTaskRegistry(result)
-	deliverable := deliverablePayloadForTaskRegistry(result)
-	if completion == nil || completion.ObjectiveOutcome == nil ||
-		completion.ObjectiveOutcome.Status != "partial" || deliverable == nil ||
-		deliverable.ObjectiveOutcome == nil || len(deliverable.ObjectiveOutcome.CompletedItems) != 1 ||
+	deliverable := taskDeliverable(result)
+	if deliverable == nil || deliverable.ObjectiveOutcome == nil ||
+		deliverable.ObjectiveOutcome.Status != taskresult.OutcomePartial ||
+		len(deliverable.ObjectiveOutcome.CompletedItems) != 1 ||
 		deliverable.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv_yakima" ||
 		len(deliverable.ObjectiveOutcome.MissingItems) != 1 {
-		t.Fatalf("completion = %#v; deliverable = %#v", completion, deliverable)
+		t.Fatalf("deliverable = %#v", deliverable)
 	}
 }

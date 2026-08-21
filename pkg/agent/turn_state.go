@@ -17,6 +17,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -118,9 +119,8 @@ type turnResult struct {
 	usageInputTokens       int
 	usageOutputTokens      int
 	usageTotalTokens       int
-	completionMedia        []toolshared.CompletionMedia
+	deliverable            *taskresult.Deliverable
 	writeAudit             []toolshared.WriteAuditEntry
-	objectiveOutcome       *toolshared.ObjectiveOutcome
 	status                 TurnEndStatus
 	followUps              []bus.InboundMessage
 	preferNewOutboundReply bool
@@ -159,7 +159,7 @@ type turnExecution struct {
 	summary         string
 
 	// Turn output
-	completionMedia        []toolshared.CompletionMedia
+	deliverable            *taskresult.Deliverable
 	actionLog              []TurnActionRecord
 	writeAudit             []toolshared.WriteAuditEntry
 	finalRenderToolCalls   map[string]finalRenderToolCallState
@@ -1050,6 +1050,7 @@ func messagesEquivalent(a, b providers.Message) bool {
 }
 
 func normalizeMessageForComparison(msg providers.Message) providers.Message {
+	msg.RootTurnStart = false
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""

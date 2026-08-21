@@ -10,6 +10,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // SetupTurn extracts the one-time initialization phase, returning a
@@ -155,6 +156,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
+		rootMsg.RootTurnStart = true
 		if writeErr := persistFullSessionMessage(ctx, ts.agent.Sessions, ts.sessionKey, rootMsg); writeErr != nil {
 			return nil, &turnAdmissionError{err: fmt.Errorf("persist root user message: %w", writeErr)}
 		}
@@ -190,6 +192,14 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		summary,
 		messages,
 	)
+	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
+		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
+		recoveryHistory := history
+		if ts.agent != nil && ts.agent.Sessions != nil {
+			recoveryHistory = ts.agent.Sessions.GetHistory(ts.sessionKey)
+		}
+		exec.deliverable = unfinishedTurnDeliverable(recoveryHistory)
+	}
 	exec.model.selectedCandidates = selection.selectedCandidates
 	exec.model.activeCandidates = selection.activeCandidates
 	exec.model.activeModel = selection.model
@@ -251,6 +261,25 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 
 	return exec, nil
+}
+
+func unfinishedTurnDeliverable(history []providers.Message) *taskresult.Deliverable {
+	start := 0
+	for index := len(history) - 1; index >= 0; index-- {
+		message := history[index]
+		if message.RootTurnStart || (message.Role == "assistant" && len(message.ToolCalls) == 0) {
+			start = index + 1
+			break
+		}
+	}
+
+	var deliverable *taskresult.Deliverable
+	for _, message := range history[start:] {
+		if message.Role == "tool" {
+			deliverable = mergeDeliverables(deliverable, message.Deliverable)
+		}
+	}
+	return deliverable
 }
 
 func effectiveHistoryBudget(contextWindow, maxTokens, reserveTokens int) int {

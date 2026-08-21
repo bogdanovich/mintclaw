@@ -3,9 +3,11 @@ package tools
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -23,6 +25,17 @@ func TestNewToolResult(t *testing.T) {
 	}
 	if result.Async {
 		t.Error("Expected Async to be false")
+	}
+}
+
+func TestToolResultHasOneTaskResultContract(t *testing.T) {
+	typeOfResult := reflect.TypeOf(toolshared.ToolResult{})
+	if _, exists := typeOfResult.FieldByName("Completion"); exists {
+		t.Fatal("ToolResult must not expose a second completion contract")
+	}
+	field, exists := typeOfResult.FieldByName("Deliverable")
+	if !exists || field.Type != reflect.TypeOf((*taskresult.Deliverable)(nil)) {
+		t.Fatalf("Deliverable field type = %v", field.Type)
 	}
 }
 
@@ -126,22 +139,22 @@ func TestToolResultWithAsyncTaskID(t *testing.T) {
 	}
 }
 
-func TestToolResultContentForLLMIncludesCompletion(t *testing.T) {
-	result := toolshared.NewToolResult("child finished").WithCompletion(&toolshared.CompletionResult{
+func TestToolResultContentForLLMIncludesDeliverableOutcome(t *testing.T) {
+	result := toolshared.NewToolResult("child finished").WithDeliverable(&taskresult.Deliverable{
 		Text: "recipe text",
-		Media: []toolshared.CompletionMedia{
+		Artifacts: []taskresult.Artifact{
 			{
 				Ref:         "media://video",
-				Type:        "video",
+				Kind:        "video",
 				Filename:    "clip.mp4",
 				ContentType: "video/mp4",
 			},
 		},
-		ObjectiveOutcome: &toolshared.ObjectiveOutcome{
-			Status: toolshared.ObjectiveOutcomePartial,
-			CompletedItems: []toolshared.ObjectiveItem{{
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomePartial,
+			CompletedItems: []taskresult.Item{{
 				Item: "Yakima published", Kind: "external_action",
-				Receipts: []toolshared.ObjectiveReceipt{{ID: "inv_yakima", Tool: "browser_act"}},
+				Receipts: []taskresult.Receipt{{ID: "inv_yakima", Tool: "browser_act"}},
 			}},
 			MissingItems: []string{"Vissani not published"},
 		},
@@ -151,39 +164,36 @@ func TestToolResultContentForLLMIncludesCompletion(t *testing.T) {
 	if !strings.Contains(content, "child finished") {
 		t.Fatalf("expected base content, got %q", content)
 	}
-	if !strings.Contains(content, "Structured child completion:") {
-		t.Fatalf("expected structured completion note, got %q", content)
+	if !strings.Contains(content, "Structured deliverable:") {
+		t.Fatalf("expected structured deliverable note, got %q", content)
 	}
 	if !strings.Contains(content, `"text":"recipe text"`) {
-		t.Fatalf("expected completion text JSON, got %q", content)
+		t.Fatalf("expected deliverable text JSON, got %q", content)
 	}
 	if !strings.Contains(content, `"ref":"media://video"`) {
-		t.Fatalf("expected completion media JSON, got %q", content)
+		t.Fatalf("expected deliverable artifact JSON, got %q", content)
 	}
-	if !strings.Contains(content, `"type":"video"`) {
-		t.Fatalf("expected completion media type JSON, got %q", content)
+	if !strings.Contains(content, `"kind":"video"`) {
+		t.Fatalf("expected deliverable artifact kind JSON, got %q", content)
 	}
 	if !strings.Contains(content, `"status":"partial"`) ||
 		!strings.Contains(content, `"id":"inv_yakima"`) ||
 		!strings.Contains(content, `"missing_items":["Vissani not published"]`) {
 		t.Fatalf("expected verified objective outcome JSON, got %q", content)
 	}
-	if result.Deliverable == nil {
-		t.Fatalf("expected completion to mirror into deliverable")
-	}
 	if len(result.Deliverable.Artifacts) != 1 || result.Deliverable.Artifacts[0].Ref != "media://video" {
 		t.Fatalf("unexpected deliverable: %+v", result.Deliverable)
 	}
 	if result.Deliverable.ObjectiveOutcome == nil ||
-		result.Deliverable.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomePartial {
-		t.Fatalf("completion objective outcome was not mirrored: %+v", result.Deliverable)
+		result.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomePartial {
+		t.Fatalf("deliverable objective outcome was lost: %+v", result.Deliverable)
 	}
 }
 
 func TestToolResultContentForLLMIncludesDeliverable(t *testing.T) {
-	result := toolshared.NewToolResult("tool finished").WithDeliverable(&toolshared.DeliverableResult{
+	result := toolshared.NewToolResult("tool finished").WithDeliverable(&taskresult.Deliverable{
 		Text: "saved recipe",
-		Artifacts: []toolshared.DeliverableItem{
+		Artifacts: []taskresult.Artifact{
 			{
 				Ref:         "file:/tmp/recipe.md",
 				Kind:        "file",
@@ -210,12 +220,12 @@ func TestToolResultContentForLLMIncludesDeliverable(t *testing.T) {
 }
 
 func TestToolResultContentForLLMIncludesDeliverableReport(t *testing.T) {
-	result := toolshared.NewToolResult("tool finished").WithDeliverable(&toolshared.DeliverableResult{
-		Report: &toolshared.DeliverableReport{
+	result := toolshared.NewToolResult("tool finished").WithDeliverable(&taskresult.Deliverable{
+		Report: &taskresult.Report{
 			SchemaVersion: "deliverable_report.v1",
 			ReportID:      "review-1",
 			Summary:       "No high-confidence issues found",
-			Claims: []toolshared.ReportClaim{{
+			Claims: []taskresult.Claim{{
 				Kind:       "negative_evidence",
 				Text:       "No correctness issues found",
 				Confidence: "high",
@@ -246,8 +256,8 @@ func TestMediaResultCreatesDeliverable(t *testing.T) {
 	if len(result.Deliverable.Artifacts) != 2 {
 		t.Fatalf("artifact count = %d, want 2", len(result.Deliverable.Artifacts))
 	}
-	if result.Deliverable.Artifacts[0].Kind != "media" {
-		t.Fatalf("artifact kind = %q, want media", result.Deliverable.Artifacts[0].Kind)
+	if result.Deliverable.Artifacts[0].Kind != "" {
+		t.Fatalf("artifact kind = %q, want inference at the delivery edge", result.Deliverable.Artifacts[0].Kind)
 	}
 }
 
@@ -444,8 +454,10 @@ func TestToolResultContentForLLM_UsesHandledDeliveryNoteWhenEmpty(t *testing.T) 
 
 func TestToolResultContentForLLM_AppendsArtifactPaths(t *testing.T) {
 	result := &toolshared.ToolResult{
-		ForLLM:       "Artifact created.",
-		ArtifactTags: []string{"[file:/tmp/example.png]"},
+		ForLLM: "Artifact created.",
+		Deliverable: &taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
+			Ref: "file:/tmp/example.png", LocalPath: "/tmp/example.png", Kind: "file",
+		}}},
 	}
 
 	content := result.ContentForLLM()

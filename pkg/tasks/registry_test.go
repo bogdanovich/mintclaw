@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestRegistryCreateAtomicallyRejectsDuplicateTaskID(t *testing.T) {
@@ -45,6 +47,17 @@ func TestRegistryCreateAtomicallyRejectsDuplicateTaskID(t *testing.T) {
 	if !ok || record.GenerationID == "" ||
 		(record.Task != "first" && record.Task != "second") {
 		t.Fatalf("stored task = (%#v, %v)", record, ok)
+	}
+}
+
+func TestRecordStoresOneTaskResultContract(t *testing.T) {
+	typeOfRecord := reflect.TypeOf(Record{})
+	if _, exists := typeOfRecord.FieldByName("Completion"); exists {
+		t.Fatal("Record must not store a second completion contract")
+	}
+	field, exists := typeOfRecord.FieldByName("Deliverable")
+	if !exists || field.Type != reflect.TypeOf((*taskresult.Deliverable)(nil)) {
+		t.Fatalf("Deliverable field type = %v", field.Type)
 	}
 }
 
@@ -489,8 +502,7 @@ func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T
 		LastCompletionID: "interaction:interaction-1",
 		DeliveryError:    "pending",
 		TerminalSummary:  "result awaiting delivery",
-		Completion:       &CompletionPayload{Text: "undelivered result"},
-		Deliverable:      &DeliverablePayload{Text: "undelivered result"},
+		Deliverable:      &taskresult.Deliverable{Text: "undelivered result"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +521,7 @@ func TestFinishInteractionCancelsSucceededTaskWithUndeliveredResult(t *testing.T
 		record.Error != "stopped before delivery" || record.DeliveredAt == 0 {
 		t.Fatalf("reloaded canceled task = %#v, found=%t", record, ok)
 	}
-	if record.Completion != nil || record.Deliverable != nil ||
+	if record.Deliverable != nil ||
 		record.LastCompletionID != "" || record.TerminalSummary != "" ||
 		record.DeliveryError != "" {
 		t.Fatalf("canceled task retained undelivered result = %#v", record)
@@ -521,7 +533,7 @@ func TestFinishInteractionDoesNotCancelDeliveredSucceededTask(t *testing.T) {
 	if err := registry.Upsert(Record{
 		TaskID: "task-delivered", Status: StatusSucceeded,
 		DeliveryStatus: DeliveryDelivered, InteractionID: "interaction-1",
-		Completion: &CompletionPayload{Text: "delivered result"},
+		Deliverable: &taskresult.Deliverable{Text: "delivered result"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +544,7 @@ func TestFinishInteractionDoesNotCancelDeliveredSucceededTask(t *testing.T) {
 	}
 	record, _ := registry.Get("task-delivered")
 	if record.Status != StatusSucceeded || record.DeliveryStatus != DeliveryDelivered ||
-		record.Completion == nil || record.Completion.Text != "delivered result" {
+		record.Deliverable == nil || record.Deliverable.Text != "delivered result" {
 		t.Fatalf("late cancellation replaced delivered task = %#v", record)
 	}
 }
@@ -722,9 +734,9 @@ func TestRegistryPersistsDeliverableFields(t *testing.T) {
 		ParentTaskID: "root-1",
 		Task:         "download the reel",
 		Status:       StatusSucceeded,
-		Deliverable: &DeliverablePayload{
+		Deliverable: &taskresult.Deliverable{
 			Text: "video downloaded",
-			Artifacts: []DeliverableItem{
+			Artifacts: []taskresult.Artifact{
 				{
 					Ref:         "media://video",
 					Kind:        "video",
@@ -759,11 +771,11 @@ func TestRegistryPersistsDeliverableFields(t *testing.T) {
 	if rec.Deliverable.Report == nil {
 		t.Fatal("expected deliverable report projection")
 	}
-	if rec.Deliverable.Report.SchemaVersion != DeliverableReportV1 {
+	if rec.Deliverable.Report.SchemaVersion != taskresult.ReportSchemaV1 {
 		t.Fatalf(
 			"report schema = %q, want %q",
 			rec.Deliverable.Report.SchemaVersion,
-			DeliverableReportV1,
+			taskresult.ReportSchemaV1,
 		)
 	}
 	if rec.Deliverable.Report.Summary != "video downloaded" {
@@ -777,33 +789,85 @@ func TestRegistryPersistsDeliverableFields(t *testing.T) {
 	}
 }
 
+func TestRegistryRoundTripsCurrentTaskResultOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      Status
+		outcome     *taskresult.Outcome
+		errorDetail string
+	}{
+		{
+			name: "successful", status: StatusSucceeded,
+			outcome: &taskresult.Outcome{
+				Status: taskresult.OutcomeSucceeded,
+				CompletedItems: []taskresult.Item{{
+					Item: "published", Kind: "external_action",
+					Receipts: []taskresult.Receipt{{
+						ID: "inv-1", Kind: "external_action", Tool: "browser_act",
+						Metadata: map[string]string{"effect": "external_commit"},
+					}},
+				}},
+			},
+		},
+		{
+			name: "partial", status: StatusFailed,
+			outcome: &taskresult.Outcome{
+				Status: taskresult.OutcomePartial, MissingItems: []string{"second item"},
+			},
+		},
+		{name: "failed", status: StatusFailed, errorDetail: "child execution failed"},
+		{
+			name: "unverifiable", status: StatusFailed,
+			outcome: &taskresult.Outcome{
+				Status: taskresult.OutcomeBlocked, MissingItems: []string{"verification receipt missing"},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "task_registry.json")
+			registry := NewRegistry(store)
+			if err := registry.Upsert(Record{
+				TaskID: "task-1", Task: test.name, Status: test.status, Error: test.errorDetail,
+				Deliverable: &taskresult.Deliverable{Text: test.name, ObjectiveOutcome: test.outcome},
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			got, ok := NewRegistry(store).Get("task-1")
+			if !ok || got.Status != test.status || got.Error != test.errorDetail || got.Deliverable == nil ||
+				!reflect.DeepEqual(got.Deliverable.ObjectiveOutcome, test.outcome) {
+				t.Fatalf("round trip = %#v", got)
+			}
+		})
+	}
+}
+
 func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 	registry := NewRegistry("")
-	report := &DeliverableReport{
-		SchemaVersion: DeliverableReportV1,
+	report := &taskresult.Report{
+		SchemaVersion: taskresult.ReportSchemaV1,
 		ReportID:      "review-1",
 		ContentHash:   "abc123",
 		Summary:       "No findings",
-		Claims: []ReportClaim{{
+		Claims: []taskresult.Claim{{
 			Kind:       "negative_evidence",
 			Text:       "No high-confidence issues found",
 			Confidence: "high",
 			SourceRefs: []string{"diff"},
 			Metadata:   map[string]string{"path": "pkg/review.go"},
 		}},
-		FieldDeltas: []ReportFieldDelta{{
+		FieldDeltas: []taskresult.FieldDelta{{
 			Field: "review_status",
 			To:    "clean",
 		}},
 		Provenance: map[string]string{"producer": "reviewer"},
-		Extra: map[string]any{
-			"nested": map[string]any{"key": "value"},
-		},
 	}
 	if err := registry.Upsert(Record{
 		TaskID: "delegate-1",
 		Task:   "review code",
-		Deliverable: &DeliverablePayload{
+		Deliverable: &taskresult.Deliverable{
 			Text:   "reviewed",
 			Report: report,
 		},
@@ -816,7 +880,6 @@ func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 	report.Claims[0].Metadata["path"] = "mutated"
 	report.FieldDeltas[0].To = "mutated"
 	report.Provenance["producer"] = "mutated"
-	report.Extra["nested"].(map[string]any)["key"] = "mutated"
 
 	rec, ok := registry.Get("delegate-1")
 	if !ok {
@@ -840,10 +903,6 @@ func TestRegistryPreservesExplicitDeliverableReport(t *testing.T) {
 	}
 	if storedReport.FieldDeltas[0].To != "clean" {
 		t.Fatalf("field deltas aliased: %+v", storedReport.FieldDeltas)
-	}
-	nested := storedReport.Extra["nested"].(map[string]any)
-	if nested["key"] != "value" {
-		t.Fatalf("extra map aliased: %+v", storedReport.Extra)
 	}
 }
 
@@ -1039,7 +1098,7 @@ func TestRegistryPrunesSnapshotBytesWithoutDroppingProtectedTasks(t *testing.T) 
 			Task:           strings.Repeat("terminal task ", 50),
 			Status:         StatusSucceeded,
 			DeliveryStatus: DeliveryDelivered,
-			Deliverable:    &DeliverablePayload{Text: strings.Repeat("deliverable ", 80)},
+			Deliverable:    &taskresult.Deliverable{Text: strings.Repeat("deliverable ", 80)},
 		},
 	} {
 		if err := registry.Upsert(rec); err != nil {

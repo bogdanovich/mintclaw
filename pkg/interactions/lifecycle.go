@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (r *Registry) Create(req CreateRequest) (Record, error) {
@@ -725,7 +727,7 @@ func (r *Registry) transition(
 func (r *Registry) RecordOutcomeReceipts(
 	id string,
 	expectedRevision int64,
-	receipts []OutcomeReceipt,
+	receipts []taskresult.Receipt,
 ) (Record, error) {
 	return r.update(id, expectedRevision, func(rec *Record, _ int64) (EventType, string, *bool, error) {
 		seen := make(map[string]struct{}, len(rec.OutcomeReceipts))

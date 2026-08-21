@@ -1,6 +1,10 @@
 package protocoltypes
 
-import "time"
+import (
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+)
 
 type ToolCall struct {
 	ID               string         `json:"id"`
@@ -117,6 +121,14 @@ type Message struct {
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ToolResultStatus ToolResultStatus `json:"tool_result_status,omitempty"`
 	ToolExecutions   []ToolExecution  `json:"tool_executions,omitempty"`
+
+	// Deliverable is canonical-session-only task output. The agent removes it
+	// from provider-bound history just like durable tool execution markers.
+	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
+
+	// RootTurnStart is canonical-session-only identity for the user message
+	// that admitted a new root turn. In-turn user-shaped messages do not set it.
+	RootTurnStart bool `json:"root_turn_start,omitempty"`
 
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.

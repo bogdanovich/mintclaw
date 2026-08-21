@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -458,10 +459,10 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	task, _ = tasks.Get("subagent-approval")
 	if task.Status != taskregistry.StatusSucceeded ||
 		task.DeliveryStatus != taskregistry.DeliveryDelivered ||
-		tool.executions != 1 || task.Completion == nil || task.Completion.ObjectiveOutcome == nil ||
-		task.Completion.ObjectiveOutcome.Status != string(toolshared.ObjectiveOutcomeSucceeded) ||
-		len(task.Completion.ObjectiveOutcome.CompletedItems) != 1 ||
-		task.Completion.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv-approved" {
+		tool.executions != 1 || task.Deliverable == nil || task.Deliverable.ObjectiveOutcome == nil ||
+		task.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded ||
+		len(task.Deliverable.ObjectiveOutcome.CompletedItems) != 1 ||
+		task.Deliverable.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID != "inv-approved" {
 		t.Fatalf("completed approval task = %#v, executions=%d", task, tool.executions)
 	}
 }
@@ -506,8 +507,7 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 		!strings.Contains(userText, "Vissani not published") || !result.ResponseHandled {
 		t.Fatalf("user-only verified result = %#v, user text = %q", result, userText)
 	}
-	if strings.Contains(result.ForLLM, "Both items") || result.Completion == nil ||
-		strings.Contains(result.Completion.Text, "Both items") || result.Deliverable == nil ||
+	if strings.Contains(result.ForLLM, "Both items") || result.Deliverable == nil ||
 		strings.Contains(result.Deliverable.Text, "Both items") {
 		t.Fatalf("parent or durable projection retained contradictory prose: %#v", result)
 	}
@@ -2416,7 +2416,15 @@ func (m *subturnMediaTool) Execute(ctx context.Context, args map[string]any) *to
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
-	return toolshared.MediaResult("Created media artifact.", []string{ref})
+	result := toolshared.MediaResult("Created media artifact.", []string{ref})
+	result.Deliverable.Text = "Tool-owned deliverable"
+	result.Deliverable.Metadata = map[string]string{"producer": "subturn_media_tool"}
+	result.Deliverable.Report = &taskresult.Report{
+		SchemaVersion: taskresult.ReportSchemaV1,
+		ReportID:      "subturn-report",
+		Summary:       "Structured subturn output",
+	}
+	return result
 }
 
 type subturnToolThenFinalProvider struct {
@@ -2558,8 +2566,8 @@ func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", SystemPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
 	})
-	if err != nil || result == nil || result.Completion == nil || result.Completion.ObjectiveOutcome == nil ||
-		result.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomeBlocked {
+	if err != nil || result == nil || result.Deliverable == nil || result.Deliverable.ObjectiveOutcome == nil ||
+		result.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
 		t.Fatalf("browser preflight result = (%#v, %v)", result, err)
 	}
 	if tool.executions != 0 || len(provider.toolNames()) != 0 {
@@ -2677,11 +2685,11 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 
 func assertSucceededObjectiveOutcome(t *testing.T, result *toolshared.ToolResult) {
 	t.Helper()
-	if result == nil || result.IsError || result.Completion == nil || result.Completion.ObjectiveOutcome == nil {
+	if result == nil || result.IsError || result.Deliverable == nil || result.Deliverable.ObjectiveOutcome == nil {
 		t.Fatalf("browser child result = %#v, want structured objective outcome", result)
 	}
-	if result.Completion.ObjectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
-		t.Fatalf("objective outcome = %#v, want succeeded", result.Completion.ObjectiveOutcome)
+	if result.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded {
+		t.Fatalf("objective outcome = %#v, want succeeded", result.Deliverable.ObjectiveOutcome)
 	}
 }
 
@@ -2956,35 +2964,53 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawnSubTurn failed: %v", err)
 	}
-	if result == nil || result.Completion == nil {
-		t.Fatalf("expected structured completion, got %+v", result)
+	if result == nil || result.Deliverable == nil {
+		t.Fatalf("expected structured deliverable, got %+v", result)
 	}
-	if result.Completion.Text != "Final child text" {
-		t.Fatalf("completion text = %q, want Final child text", result.Completion.Text)
+	if result.Deliverable.Text != "Tool-owned deliverable" {
+		t.Fatalf("deliverable text = %q, want tool-owned text", result.Deliverable.Text)
 	}
-	if len(result.Completion.Media) != 1 {
-		t.Fatalf("completion media count = %d, want 1; result=%+v", len(result.Completion.Media), result)
+	if result.Deliverable.Metadata["producer"] != "subturn_media_tool" ||
+		result.Deliverable.Report == nil || result.Deliverable.Report.ReportID != "subturn-report" {
+		t.Fatalf("structured deliverable fields were lost: %+v", result.Deliverable)
 	}
-	if result.Completion.Media[0].Ref == "" {
-		t.Fatalf("completion media ref is empty: %+v", result.Completion.Media[0])
+	if len(result.Deliverable.Artifacts) != 1 {
+		t.Fatalf("artifact count = %d, want 1; result=%+v", len(result.Deliverable.Artifacts), result)
 	}
-	if result.Completion.Media[0].Type != "image" {
-		t.Fatalf("completion media type = %q, want image", result.Completion.Media[0].Type)
+	if result.Deliverable.Artifacts[0].Ref == "" {
+		t.Fatalf("artifact ref is empty: %+v", result.Deliverable.Artifacts[0])
 	}
-	if result.Completion.Media[0].Filename != "artifact.png" {
-		t.Fatalf("completion media filename = %q, want artifact.png", result.Completion.Media[0].Filename)
+	if result.Deliverable.Artifacts[0].Kind != "image" {
+		t.Fatalf("artifact kind = %q, want image", result.Deliverable.Artifacts[0].Kind)
 	}
-	if result.Completion.Media[0].ContentType != "image/png" {
-		t.Fatalf("completion media content type = %q, want image/png", result.Completion.Media[0].ContentType)
+	if result.Deliverable.Artifacts[0].Filename != "artifact.png" {
+		t.Fatalf("artifact filename = %q, want artifact.png", result.Deliverable.Artifacts[0].Filename)
 	}
-	if len(result.Media) != 1 || result.Media[0] != result.Completion.Media[0].Ref {
-		t.Fatalf("legacy result media refs = %#v, completion ref = %q", result.Media, result.Completion.Media[0].Ref)
+	if result.Deliverable.Artifacts[0].ContentType != "image/png" {
+		t.Fatalf("artifact content type = %q, want image/png", result.Deliverable.Artifacts[0].ContentType)
+	}
+	if len(result.Media) != 1 || result.Media[0] != result.Deliverable.Artifacts[0].Ref {
+		t.Fatalf("delivery media refs = %#v, artifact ref = %q", result.Media, result.Deliverable.Artifacts[0].Ref)
 	}
 	if result.ForUser != "" {
 		t.Fatalf("parent_only result ForUser = %q, want empty", result.ForUser)
 	}
-	if !strings.Contains(result.ContentForLLM(), "Structured child completion:") {
-		t.Fatalf("ContentForLLM missing structured completion: %q", result.ContentForLLM())
+	if !strings.Contains(result.ContentForLLM(), "Structured deliverable:") {
+		t.Fatalf("ContentForLLM missing structured deliverable: %q", result.ContentForLLM())
+	}
+}
+
+func TestMediaArtifactRefsExcludeNonMediaDeliverables(t *testing.T) {
+	items := []taskresult.Artifact{
+		{Ref: "media://image", Kind: "image"},
+		{Ref: "file:/tmp/report.txt", LocalPath: "/tmp/report.txt", Kind: "file"},
+		{Ref: "https://example.com/report", Kind: "link"},
+	}
+
+	got := mediaArtifactRefs(items)
+	want := []string{"media://image"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("media artifact refs = %#v, want %#v", got, want)
 	}
 }
 

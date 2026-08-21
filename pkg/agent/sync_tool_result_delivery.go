@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -36,7 +37,7 @@ func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
 	if strings.TrimSpace(toolResultUserText(result)) == "" {
 		return false
 	}
-	return !result.Silent || result.Completion != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
+	return !result.Silent || result.Deliverable != nil || result.AsyncDelivery == toolshared.AsyncDeliveryUserOnly
 }
 
 func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {
@@ -66,11 +67,19 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 	result = normalizeToolResultForSyncDelivery(ts, result)
 
 	if !ts.opts.SuppressToolUserDelivery && result.ImmediateDelivery {
+		if len(deliveredToolResultMediaRefs(result)) > 0 && !hasOutboundTransaction(ctx) {
+			err := fmt.Errorf("durable outbound transaction is required for immediate media delivery")
+			return nil, wrapToolDeliveryError(result, err.Error(), err)
+		}
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
-		if _, _, err := d.deliverToUser(ctx, ts, result, toolName); err != nil {
+		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName)
+		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
+		}
+		if outcome != toolResultDeliveryNone {
+			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
 		}
 	}
 
@@ -81,6 +90,9 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		attachments, outcome, err := d.deliverToUser(ctx, ts, result, toolName)
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
+		}
+		if outcome != toolResultDeliveryNone {
+			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
 		}
 		if outcome != toolResultDeliveryDirect && len(toolResultMediaRefs(result)) > 0 {
 			result.ResponseHandled = false
@@ -117,9 +129,12 @@ func wrapToolDeliveryError(
 	err error,
 ) *toolshared.ToolResult {
 	wrapped := toolshared.ErrorResult(message).WithError(err)
-	if original == nil || len(original.WriteAudit) == 0 {
+	if original == nil {
 		return wrapped
 	}
-	wrapped.WriteAudit = append(wrapped.WriteAudit, original.WriteAudit...)
+	wrapped.Deliverable = taskresult.CloneDeliverable(original.Deliverable)
+	if len(original.WriteAudit) > 0 {
+		wrapped.WriteAudit = append(wrapped.WriteAudit, original.WriteAudit...)
+	}
 	return wrapped
 }

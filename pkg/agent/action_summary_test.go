@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -159,6 +160,12 @@ func TestBuildFinalTurnRenderMessagesSuppressesUnverifiedWriteToolResults(t *tes
 
 func TestWrapToolDeliveryErrorPreservesWriteAudit(t *testing.T) {
 	original := toolshared.SilentResult("File written: notes/family.md").
+		WithDeliverable(&taskresult.Deliverable{
+			Text: "produced result",
+			Artifacts: []taskresult.Artifact{{
+				Ref: "media://unsent", Kind: "image",
+			}},
+		}).
 		WithFileWriteAudit("notes/family.md", "write", "write_file")
 
 	wrapped := wrapToolDeliveryError(original, "failed to deliver attachment: boom", errors.New("boom"))
@@ -170,5 +177,10 @@ func TestWrapToolDeliveryErrorPreservesWriteAudit(t *testing.T) {
 	}
 	if got := wrapped.WriteAudit[0].Target; got != "notes/family.md" {
 		t.Fatalf("write audit target = %q, want notes/family.md", got)
+	}
+	original.Deliverable.Artifacts[0].Delivered = true
+	if wrapped.Deliverable == nil || wrapped.Deliverable.Text != "produced result" ||
+		len(wrapped.Deliverable.Artifacts) != 1 || wrapped.Deliverable.Artifacts[0].Delivered {
+		t.Fatalf("wrapped deliverable = %#v, want detached unsent result", wrapped.Deliverable)
 	}
 }

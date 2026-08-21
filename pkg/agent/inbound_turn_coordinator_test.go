@@ -15,6 +15,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type finalResponseAdmissionTestBus struct {
@@ -483,6 +485,70 @@ func TestOutboundTransactionMediaCommitRunsInsideAdmissionBoundary(t *testing.T)
 	case <-msgBus.OutboundMediaChan():
 	case <-time.After(time.Second):
 		t.Fatal("pending durable media was not published after simulated crash")
+	}
+}
+
+func TestImplicitImmediateMediaUsesDurableCommitBoundary(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	root := t.TempDir()
+	installTestOutboundCoordinator(t, al, root)
+	agent := al.registry.GetDefaultAgent()
+	const (
+		sourceID   = "spool-immediate-media"
+		mediaRef   = "media://immediate-media"
+		sessionKey = "session-immediate-media"
+	)
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, workspace: agent.Workspace,
+		channel: "telegram", chatID: "chat-1", sessionKey: sessionKey,
+		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+	}
+	identity := outbox.Identity{
+		SourceID: sourceID, Ordinal: 0, Kind: outbox.KindMedia,
+		Channel: ts.channel, ChatID: ts.chatID, SessionKey: sessionKey,
+	}
+	deliveryID, err := outbox.DeliveryID(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := outbox.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitCalls := 0
+	result := (&toolshared.ToolResult{Media: []string{mediaRef}}).
+		WithDeliverable(&taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
+			Ref: mediaRef, Kind: "image",
+		}}}).
+		WithOutboundCommit(func(context.Context) error {
+			commitCalls++
+			intent, getErr := store.Get(deliveryID)
+			if getErr != nil || intent.Status != outbox.StatusPending {
+				t.Fatalf("intent at immediate commit = %+v, %v", intent, getErr)
+			}
+			select {
+			case outbound := <-msgBus.OutboundMediaChan():
+				t.Fatalf("immediate media published before journal commit: %+v", outbound)
+			default:
+			}
+			return nil
+		}).
+		WithImmediateDelivery()
+
+	_, outcome, err := al.deliverToolResultToUser(
+		withOutboundTransaction(t.Context(), sourceID), ts, result, "image_generate",
+	)
+	if err != nil || outcome != toolResultDeliveryQueued || commitCalls != 1 {
+		t.Fatalf("delivery = (%v, %v), commit calls = %d", outcome, err, commitCalls)
+	}
+	select {
+	case outbound := <-msgBus.OutboundMediaChan():
+		if outbound.DeliveryID != deliveryID || len(outbound.Parts) != 1 || outbound.Parts[0].Ref != mediaRef {
+			t.Fatalf("durable immediate media = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("durable immediate media was not published")
 	}
 }
 
