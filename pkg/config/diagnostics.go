@@ -19,15 +19,8 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 	if err != nil {
 		return err
 	}
-
-	unknownFields := collectUnknownJSONFields(raw, reflect.TypeOf(target), "")
-	if len(unknownFields) > 0 {
-		sort.Strings(unknownFields)
-		return fmt.Errorf(
-			"%s contains unknown field(s): %s",
-			label,
-			strings.Join(unknownFields, ", "),
-		)
+	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(target), label); err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal(data, target); err != nil {
@@ -41,6 +34,29 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 func ValidateConfigJSON(data []byte) error {
 	_, err := parseUniqueJSON(data, "config")
 	return err
+}
+
+// ValidateConfigPatchJSON rejects malformed, duplicate, and unknown fields in
+// a partial configuration document without requiring omitted fields.
+func ValidateConfigPatchJSON(data []byte) error {
+	raw, err := parseUniqueJSON(data, "config patch")
+	if err != nil {
+		return err
+	}
+	return rejectUnknownJSONFields(raw, reflect.TypeOf(&Config{}), "config patch")
+}
+
+func rejectUnknownJSONFields(raw any, targetType reflect.Type, label string) error {
+	unknownFields := collectUnknownJSONFields(raw, targetType, "")
+	if len(unknownFields) == 0 {
+		return nil
+	}
+	sort.Strings(unknownFields)
+	return fmt.Errorf(
+		"%s contains unknown field(s): %s",
+		label,
+		strings.Join(unknownFields, ", "),
+	)
 }
 
 func parseUniqueJSON(data []byte, label string) (any, error) {

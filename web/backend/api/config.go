@@ -167,7 +167,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
-	if err = config.ValidateConfigJSON(patchBody); err != nil {
+	if err = config.ValidateConfigPatchJSON(patchBody); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid config patch: %v", err), http.StatusBadRequest)
 		return
 	}

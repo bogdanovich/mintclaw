@@ -296,6 +296,16 @@ func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 			wantError: "unknown field(s): bindings",
 		},
 		{
+			name:      "removed_field_null_tombstone",
+			body:      `{"bindings":null}`,
+			wantError: "unknown field(s): bindings",
+		},
+		{
+			name:      "nested_removed_field_null_tombstone",
+			body:      `{"tools":{"spawn_status":null}}`,
+			wantError: "unknown field(s): tools.spawn_status",
+		},
+		{
 			name:      "duplicate_version",
 			body:      fmt.Sprintf(`{"version":%d,"version":%d}`, config.CurrentVersion+1, config.CurrentVersion),
 			wantError: "duplicate field: version",
