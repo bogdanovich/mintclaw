@@ -28,6 +28,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -176,7 +177,17 @@ func TestNodeFileTransferVerticalSliceWithApprovalAndDelivery(t *testing.T) {
 	}
 
 	channel := newNodeVerticalSliceChannel()
-	manager, err := channels.NewManager(cfg, msgBus, mediaStore)
+	outboundOutbox, err := outbox.OpenCoordinator(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentLoop.SetOutboundOutbox(outboundOutbox)
+	manager, err := channels.NewManager(
+		cfg,
+		msgBus,
+		mediaStore,
+		channels.WithOutboundOutbox(outboundOutbox),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

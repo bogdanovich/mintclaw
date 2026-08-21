@@ -441,6 +441,19 @@ Exit criteria:
   and
 - channel-specific delivery outcomes enter one typed coordinator.
 
+Implementation sequence:
+
+- Prompt delivery binds one deterministic outbox ID to the interaction before
+  publication. The outbox owns transport attempts, definite failure,
+  ambiguity, retry exhaustion, abandonment, and restart recovery; the
+  interaction moves to `waiting` only after the admission-specific receipt
+  reports delivery. Retry deadlines are honored, and recovered prompts are
+  revalidated against their current interaction immediately before replay and
+  settled from that exact admission's terminal receipt.
+- Final-answer and resumed-completion delivery move to the same ownership model
+  in the next focused change, after which the remaining final-delivery fields
+  and direct channel send path are deleted.
+
 ### D2 — Unify interaction, task, and continuation ownership
 
 Depends on: D1 and T1

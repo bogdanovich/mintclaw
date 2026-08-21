@@ -30,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -492,7 +493,17 @@ func newNodeJobAgentHarness(
 		t.Fatal(err)
 	}
 	channel := newNodeVerticalSliceChannel()
-	manager, err := channels.NewManager(cfg, messageBus, mediaStore)
+	outboundOutbox, err := outbox.OpenCoordinator(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop.SetOutboundOutbox(outboundOutbox)
+	manager, err := channels.NewManager(
+		cfg,
+		messageBus,
+		mediaStore,
+		channels.WithOutboundOutbox(outboundOutbox),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

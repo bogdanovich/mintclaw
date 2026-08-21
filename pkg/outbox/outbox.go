@@ -21,6 +21,11 @@ import (
 
 const recordVersion = 2
 
+// MaxDeliveryAttempts bounds recoverable delivery attempts for one logical
+// outbound intent. Retry ownership belongs to the outbox rather than to the
+// domain record that requested delivery.
+const MaxDeliveryAttempts = 3
+
 const interruptedAttemptError = "process stopped before the delivery outcome was persisted"
 
 // Status records what is known about remote acceptance of an outbound intent.
@@ -31,6 +36,9 @@ const (
 	StatusAttempting       Status = "attempting"
 	StatusDelivered        Status = "delivered"
 	StatusDefinitelyFailed Status = "definitely_failed"
+	// StatusAbandoned is terminal and means the owning domain no longer wants
+	// an intent that was still known to be unsent.
+	StatusAbandoned Status = "abandoned"
 	// StatusAmbiguous is terminal and never retried automatically. It covers an
 	// uncertain remote outcome and an irrecoverable pre-dispatch prerequisite;
 	// LastError preserves which condition occurred.
@@ -70,6 +78,13 @@ type Intent struct {
 	LastError          string                    `json:"last_error,omitempty"`
 	CreatedAt          time.Time                 `json:"created_at"`
 	UpdatedAt          time.Time                 `json:"updated_at"`
+}
+
+// RetryExhausted reports whether a definitely-not-sent intent consumed the
+// outbox retry budget. Ambiguous outcomes are terminal for a different reason:
+// they may already have reached the remote channel.
+func (intent Intent) RetryExhausted() bool {
+	return intent.Status == StatusDefinitelyFailed && intent.Attempts >= MaxDeliveryAttempts
 }
 
 // Outcome supplies terminal metadata captured from a channel adapter.
@@ -259,23 +274,43 @@ func (s *Store) Create(intent Intent) (Intent, error) {
 
 // BeginAttempt persists the crash boundary immediately before a transport call.
 func (s *Store) BeginAttempt(id string) (Intent, error) {
-	return s.transition(id, StatusAttempting, Outcome{}, false, StatusPending, StatusAttempting, StatusDefinitelyFailed)
+	return s.transition(
+		id, StatusAttempting, Outcome{}, false, true,
+		StatusPending, StatusAttempting, StatusDefinitelyFailed,
+	)
 }
 
 // MarkDispatchRejected records a failure before any transport call was made.
 func (s *Store) MarkDispatchRejected(id string, outcome Outcome) (Intent, error) {
-	return s.transition(id, StatusDefinitelyFailed, outcome, true, StatusPending, StatusDefinitelyFailed)
+	return s.transition(
+		id, StatusDefinitelyFailed, outcome, true, true,
+		StatusPending, StatusDefinitelyFailed,
+	)
 }
 
 // MarkUnrecoverable records a terminal pre-dispatch failure whose prerequisite
-// cannot be reconstructed. The existing non-retryable status preserves record
-// compatibility with older binaries while LastError distinguishes this from an
-// uncertain transport outcome.
+// cannot be reconstructed. LastError preserves the concrete cause for
+// diagnostics.
 func (s *Store) MarkUnrecoverable(id string, outcome Outcome) (Intent, error) {
 	return s.transition(
 		id,
 		StatusAmbiguous,
 		outcome,
+		false,
+		false,
+		StatusPending,
+		StatusDefinitelyFailed,
+	)
+}
+
+// MarkAbandoned records that the owning domain canceled an intent while it
+// was still known to be unsent.
+func (s *Store) MarkAbandoned(id string, outcome Outcome) (Intent, error) {
+	return s.transition(
+		id,
+		StatusAbandoned,
+		outcome,
+		false,
 		false,
 		StatusPending,
 		StatusDefinitelyFailed,
@@ -284,17 +319,17 @@ func (s *Store) MarkUnrecoverable(id string, outcome Outcome) (Intent, error) {
 
 // MarkDelivered records confirmed remote acceptance and platform message IDs.
 func (s *Store) MarkDelivered(id string, outcome Outcome) (Intent, error) {
-	return s.transition(id, StatusDelivered, outcome, false, StatusAttempting)
+	return s.transition(id, StatusDelivered, outcome, false, false, StatusAttempting)
 }
 
 // MarkDefinitelyFailed records a failure known to precede remote acceptance.
 func (s *Store) MarkDefinitelyFailed(id string, outcome Outcome) (Intent, error) {
-	return s.transition(id, StatusDefinitelyFailed, outcome, false, StatusAttempting)
+	return s.transition(id, StatusDefinitelyFailed, outcome, false, false, StatusAttempting)
 }
 
 // MarkAmbiguous records an outcome that may have been accepted remotely.
 func (s *Store) MarkAmbiguous(id string, outcome Outcome) (Intent, error) {
-	return s.transition(id, StatusAmbiguous, outcome, false, StatusAttempting)
+	return s.transition(id, StatusAmbiguous, outcome, false, false, StatusAttempting)
 }
 
 // Recover converts interrupted attempts to ambiguous and returns records that
@@ -310,8 +345,12 @@ func (s *Store) Recover() ([]Intent, error) {
 	dispatchable := make([]Intent, 0, len(records))
 	for _, intent := range records {
 		switch intent.Status {
-		case StatusPending, StatusDefinitelyFailed:
+		case StatusPending:
 			dispatchable = append(dispatchable, intent)
+		case StatusDefinitelyFailed:
+			if !intent.RetryExhausted() {
+				dispatchable = append(dispatchable, intent)
+			}
 		case StatusAttempting:
 			intent.Status = StatusAmbiguous
 			intent.LastError = interruptedAttemptError
@@ -342,6 +381,7 @@ func (s *Store) transition(
 	next Status,
 	outcome Outcome,
 	refreshSame bool,
+	countAttempt bool,
 	allowed ...Status,
 ) (Intent, error) {
 	s.mu.Lock()
@@ -361,7 +401,7 @@ func (s *Store) transition(
 		return Intent{}, fmt.Errorf("outbox intent %q cannot transition from %q to %q", id, intent.Status, next)
 	}
 	intent.Status = next
-	if next == StatusAttempting {
+	if countAttempt {
 		intent.Attempts++
 	}
 	intent.PlatformMessageIDs = append([]string(nil), outcome.PlatformMessageIDs...)
@@ -555,7 +595,7 @@ func validateID(id string) error {
 
 func validStatus(status Status) bool {
 	switch status {
-	case StatusPending, StatusAttempting, StatusDelivered, StatusDefinitelyFailed, StatusAmbiguous:
+	case StatusPending, StatusAttempting, StatusDelivered, StatusDefinitelyFailed, StatusAbandoned, StatusAmbiguous:
 		return true
 	default:
 		return false

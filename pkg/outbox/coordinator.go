@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ type Coordinator struct {
 	publishing map[string]uint64
 	published  map[string]bool
 	attempting map[string]bool
-	waiters    map[string]map[chan terminalResult]struct{}
+	receipts   map[string]*admissionReceipt
 	now        func() time.Time
 	closed     bool
 }
@@ -31,6 +32,36 @@ type Coordinator struct {
 type terminalResult struct {
 	intent Intent
 	err    error
+}
+
+// admissionReceipt retains one immutable terminal result for the exact
+// dispatch admission that produced it. The ready channel supports any number
+// of late or concurrent waiters without retaining completed receipts in the
+// coordinator after their admission has finished.
+type admissionReceipt struct {
+	deliveryID string
+	generation uint64
+	ready      chan struct{}
+	once       sync.Once
+	result     terminalResult
+}
+
+func newAdmissionReceipt(lease DispatchLease) *admissionReceipt {
+	return &admissionReceipt{
+		deliveryID: lease.deliveryID,
+		generation: lease.generation,
+		ready:      make(chan struct{}),
+	}
+}
+
+func (r *admissionReceipt) finish(result terminalResult) {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		r.result = result
+		close(r.ready)
+	})
 }
 
 var coordinatorRoots = struct {
@@ -54,6 +85,7 @@ type Admission struct {
 	Dispatch bool
 	InFlight bool
 	Lease    DispatchLease
+	receipt  *admissionReceipt
 }
 
 // OpenCoordinator opens the canonical outbox beneath the MintClaw instance root.
@@ -89,7 +121,7 @@ func newCoordinator(store *Store) *Coordinator {
 		publishing: make(map[string]uint64),
 		published:  make(map[string]bool),
 		attempting: make(map[string]bool),
-		waiters:    make(map[string]map[chan terminalResult]struct{}),
+		receipts:   make(map[string]*admissionReceipt),
 		now:        time.Now,
 	}
 }
@@ -163,6 +195,11 @@ func (c *Coordinator) BeginAttempt(deliveryID string) error {
 		return fmt.Errorf("outbox intent %q already has an active delivery attempt", deliveryID)
 	}
 	if _, err := c.store.BeginAttempt(deliveryID); err != nil {
+		// Retain an in-process no-retry fence even though the durable attempt
+		// boundary could not be written. Restart recovery may safely inspect the
+		// unchanged record, but this process must not reuse the failed admission.
+		c.attempting[deliveryID] = true
+		c.finishReceiptLocked(deliveryID, terminalResult{err: err})
 		return err
 	}
 	c.attempting[deliveryID] = true
@@ -210,53 +247,48 @@ func (c *Coordinator) Get(deliveryID string) (Intent, error) {
 	return c.store.Get(deliveryID)
 }
 
-// AwaitTerminal waits until the durable intent reaches a transport-terminal
-// state. Registration and state inspection share the coordinator lock, so a
-// transition cannot be lost between the initial read and waiter setup.
-func (c *Coordinator) AwaitTerminal(ctx context.Context, deliveryID string) (Intent, error) {
+// AwaitTerminal waits for the transport-terminal outcome belonging to an
+// admission. A retry admission does not mistake the prior attempt's terminal
+// failure for the outcome of the newly published attempt.
+func (c *Coordinator) AwaitTerminal(ctx context.Context, admission Admission) (Intent, error) {
 	if c == nil || c.store == nil {
 		return Intent{}, errors.New("outbox coordinator is unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	deliveryID := admission.Intent.ID
 	if err := validateID(deliveryID); err != nil {
 		return Intent{}, err
 	}
 
-	waiter := make(chan terminalResult, 1)
+	receipt := admission.receipt
+	if receipt != nil {
+		if receipt.deliveryID != deliveryID || receipt.generation == 0 ||
+			(admission.Dispatch && receipt.generation != admission.Lease.generation) {
+			return Intent{}, errors.New("outbox admission receipt is invalid")
+		}
+		select {
+		case <-receipt.ready:
+			return receipt.result.intent, receipt.result.err
+		case <-ctx.Done():
+			return Intent{}, ctx.Err()
+		}
+	}
+
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.validateOpenLocked(); err != nil {
-		c.mu.Unlock()
 		return Intent{}, err
 	}
 	intent, err := c.store.Get(deliveryID)
 	if err != nil {
-		c.mu.Unlock()
 		return Intent{}, err
 	}
-	if isTerminalStatus(intent.Status) {
-		c.mu.Unlock()
-		return intent, nil
+	if !isTerminalStatus(intent.Status) {
+		return Intent{}, errors.New("outbox admission has no terminal receipt")
 	}
-	if c.waiters[deliveryID] == nil {
-		c.waiters[deliveryID] = make(map[chan terminalResult]struct{})
-	}
-	c.waiters[deliveryID][waiter] = struct{}{}
-	c.mu.Unlock()
-
-	select {
-	case result := <-waiter:
-		return result.intent, result.err
-	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.waiters[deliveryID], waiter)
-		if len(c.waiters[deliveryID]) == 0 {
-			delete(c.waiters, deliveryID)
-		}
-		c.mu.Unlock()
-		return Intent{}, ctx.Err()
-	}
+	return intent, nil
 }
 
 // Recover classifies persisted crash states and claims every intent that is
@@ -311,11 +343,13 @@ func (c *Coordinator) transitionPublished(
 	}
 	intent, err := transition()
 	if err != nil {
+		c.attempting[deliveryID] = true
+		c.finishReceiptLocked(deliveryID, terminalResult{err: err})
 		return err
 	}
 	delete(c.attempting, deliveryID)
 	delete(c.published, deliveryID)
-	c.notifyTerminalLocked(deliveryID, terminalResult{intent: intent})
+	c.finishReceiptLocked(deliveryID, terminalResult{intent: intent})
 	return nil
 }
 
@@ -330,8 +364,8 @@ func (c *Coordinator) Close() error {
 		return nil
 	}
 	c.closed = true
-	for deliveryID := range c.waiters {
-		c.notifyTerminalLocked(deliveryID, terminalResult{
+	for deliveryID := range c.receipts {
+		c.finishReceiptLocked(deliveryID, terminalResult{
 			err: errors.New("outbox coordinator is closed"),
 		})
 	}
@@ -392,6 +426,9 @@ func (c *Coordinator) ReleaseAdmission(lease DispatchLease) error {
 		return err
 	}
 	if c.leases[lease.deliveryID] != lease.generation {
+		if intent, err := c.store.Get(lease.deliveryID); err == nil && intent.Status == StatusAbandoned {
+			return nil
+		}
 		return fmt.Errorf("dispatch lease for %q is stale", lease.deliveryID)
 	}
 	// The exact lease is sufficient proof that this caller owns the unsent
@@ -400,6 +437,9 @@ func (c *Coordinator) ReleaseAdmission(lease DispatchLease) error {
 	delete(c.leases, lease.deliveryID)
 	delete(c.publishing, lease.deliveryID)
 	delete(c.published, lease.deliveryID)
+	c.finishReceiptLocked(lease.deliveryID, terminalResult{
+		err: errors.New("outbox admission was released before publication"),
+	})
 	intent, err := c.store.Get(lease.deliveryID)
 	if err != nil {
 		return err
@@ -433,28 +473,67 @@ func (c *Coordinator) MarkAdmissionUnrecoverable(lease DispatchLease, outcome Ou
 	}
 	intent, err := c.store.MarkUnrecoverable(lease.deliveryID, outcome)
 	if err != nil {
+		c.finishReceiptLocked(lease.deliveryID, terminalResult{err: err})
 		return err
 	}
 	delete(c.leases, lease.deliveryID)
-	c.notifyTerminalLocked(lease.deliveryID, terminalResult{intent: intent})
+	c.finishReceiptLocked(lease.deliveryID, terminalResult{intent: intent})
 	return nil
+}
+
+// Abandon records that the owning domain no longer wants an intent that has
+// not reached the delivery bus. Any unpublished recovery lease is consumed so
+// a delayed replay cannot revive the intent.
+func (c *Coordinator) Abandon(deliveryID string, outcome Outcome) (bool, error) {
+	if c == nil || c.store == nil {
+		return false, errors.New("outbox coordinator is unavailable")
+	}
+	if err := validateID(deliveryID); err != nil {
+		return false, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateOpenLocked(); err != nil {
+		return false, err
+	}
+	if c.publishing[deliveryID] != 0 || c.published[deliveryID] || c.attempting[deliveryID] {
+		return false, nil
+	}
+	current, err := c.store.Get(deliveryID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		c.finishReceiptLocked(deliveryID, terminalResult{err: err})
+		return false, err
+	}
+	if current.Status != StatusPending && current.Status != StatusDefinitelyFailed {
+		return false, nil
+	}
+	intent, err := c.store.MarkAbandoned(deliveryID, outcome)
+	if err != nil {
+		c.finishReceiptLocked(deliveryID, terminalResult{err: err})
+		return false, err
+	}
+	delete(c.leases, deliveryID)
+	c.finishReceiptLocked(deliveryID, terminalResult{intent: intent})
+	return true, nil
 }
 
 func isTerminalStatus(status Status) bool {
 	switch status {
-	case StatusDelivered, StatusDefinitelyFailed, StatusAmbiguous:
+	case StatusDelivered, StatusDefinitelyFailed, StatusAbandoned, StatusAmbiguous:
 		return true
 	default:
 		return false
 	}
 }
 
-func (c *Coordinator) notifyTerminalLocked(deliveryID string, result terminalResult) {
-	for waiter := range c.waiters[deliveryID] {
-		waiter <- result
-		close(waiter)
-	}
-	delete(c.waiters, deliveryID)
+func (c *Coordinator) finishReceiptLocked(deliveryID string, result terminalResult) {
+	receipt := c.receipts[deliveryID]
+	delete(c.receipts, deliveryID)
+	receipt.finish(result)
 }
 
 func (c *Coordinator) admit(candidate Intent) (Admission, error) {
@@ -472,7 +551,8 @@ func (c *Coordinator) admit(candidate Intent) (Admission, error) {
 }
 
 func (c *Coordinator) claimDispatchLocked(intent Intent) Admission {
-	dispatchable := intent.Status == StatusPending || intent.Status == StatusDefinitelyFailed
+	dispatchable := intent.Status == StatusPending ||
+		(intent.Status == StatusDefinitelyFailed && !intent.RetryExhausted())
 	_, leased := c.leases[intent.ID]
 	published := c.published[intent.ID]
 	dispatch := dispatchable && !leased && !published
@@ -481,9 +561,13 @@ func (c *Coordinator) claimDispatchLocked(intent Intent) Admission {
 		generation := dispatchLeaseSequence.Add(1)
 		c.leases[intent.ID] = generation
 		lease = DispatchLease{deliveryID: intent.ID, generation: generation}
+		c.receipts[intent.ID] = newAdmissionReceipt(lease)
 	}
 	inFlight := dispatchable && leased
-	return Admission{Intent: intent, Dispatch: dispatch, InFlight: inFlight, Lease: lease}
+	return Admission{
+		Intent: intent, Dispatch: dispatch, InFlight: inFlight, Lease: lease,
+		receipt: c.receipts[intent.ID],
+	}
 }
 
 func (c *Coordinator) validateOpenLocked() error {

@@ -8,9 +8,10 @@ final text and media delivery.
 
 ## Guarantee
 
-MintClaw provides at-least-once delivery attempts while it can prove that a
+MintClaw makes a bounded number of delivery attempts while it can prove that a
 logical outbound payload was not accepted remotely. It does not promise
-exactly-once delivery across arbitrary channel APIs.
+exactly-once delivery across arbitrary channel APIs or retry indefinitely when
+a destination remains unavailable.
 
 Once a transport attempt may have reached a remote platform, uncertainty is
 persisted as `ambiguous`. Ambiguous work is not automatically replayed. This
@@ -19,8 +20,11 @@ user-visible message.
 
 The practical contract is:
 
-- `pending` and `definitely_failed` are safe to dispatch again;
+- `pending` is safe to dispatch, and `definitely_failed` is safe to dispatch
+  until its bounded retry budget is exhausted;
 - `delivered` is terminal and retains confirmed platform message IDs;
+- `abandoned` is terminal when the owning domain no longer wants an intent
+  that is still known to be unsent;
 - `attempting` becomes `ambiguous` after a process restart;
 - `ambiguous` is terminal until an explicit future operator or platform
   reconciliation policy resolves it.
@@ -118,7 +122,10 @@ payloads from becoming durable retry work.
 
 ## Channel Outcome Boundary
 
-Immediately before an adapter call, the channel manager persists `attempting`.
+Every publication that reaches channel dispatch counts against the bounded
+delivery-attempt budget. A rejection before an adapter call is persisted
+directly as `definitely_failed`; immediately before an adapter call, the
+channel manager persists `attempting`.
 The adapter then returns a typed result containing:
 
 - confirmed platform message IDs;
@@ -156,9 +163,10 @@ Recovery performs these transitions:
 | Persisted status | Startup action |
 | --- | --- |
 | `pending` | Claim and publish after channel dispatch is live. |
-| `definitely_failed` | Claim and publish at or after its absolute retry deadline. |
+| `definitely_failed` | Claim and publish at or after its absolute retry deadline while its retry budget remains. |
 | `attempting` | Persist `ambiguous`; never replay automatically. |
 | `delivered` | No action. |
+| `abandoned` | No action. |
 | `ambiguous` | No action. |
 
 Due work is published synchronously after channel workers and dispatchers have
@@ -166,6 +174,15 @@ started. Future rate-limit retries are sorted by deadline and held by one
 gateway-lifetime reconciler. Shutdown cancels that reconciler and releases every
 unpublished lease before channel draining, allowing the next process to recover
 the same records.
+
+Domain-owned recovered messages are revalidated immediately before publication.
+For example, a canceled, completed, missing, or expired interaction abandons
+its unsent prompt instead of allowing a startup or delayed retry to revive it;
+the same rule applies when its originating agent or workspace is no longer
+configured.
+Each recovered admission receives a fresh deadline check, and the gateway
+settles its exact terminal receipt immediately rather than waiting for a
+periodic domain scan.
 
 Recovery always republishes the stored payload and route. A failure before bus
 acceptance releases the lease. A crash after bus acceptance is classified by

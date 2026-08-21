@@ -57,7 +57,7 @@ type EventType string
 
 const (
 	EventCreated          EventType = "interaction.created"
-	EventDeliveryAttempt  EventType = "interaction.delivery_attempted"
+	EventPromptDelivery   EventType = "interaction.prompt_delivery_bound"
 	EventFinalDelivery    EventType = "interaction.final_delivery_attempted"
 	EventWaiting          EventType = "interaction.waiting"
 	EventAnswerClaimed    EventType = "interaction.answer_claimed"
@@ -195,11 +195,7 @@ type Record struct {
 	ExpiresAt           int64                `json:"expires_at"`
 	ResolvedAt          int64                `json:"resolved_at,omitempty"`
 	CleanupAfter        int64                `json:"cleanup_after,omitempty"`
-	DeliveryTries       int                  `json:"delivery_tries,omitempty"`
-	LastDeliveryAt      int64                `json:"last_delivery_at,omitempty"`
-	DeliveryError       string               `json:"delivery_error,omitempty"`
-	PromptDelivered     bool                 `json:"prompt_delivered,omitempty"`
-	PromptDeliveryState DeliveryState        `json:"prompt_delivery_state,omitempty"`
+	PromptDeliveryID    string               `json:"prompt_delivery_id,omitempty"`
 	FinalDeliveryTries  int                  `json:"final_delivery_tries,omitempty"`
 	LastFinalDeliveryAt int64                `json:"last_final_delivery_at,omitempty"`
 	FinalDelivered      bool                 `json:"final_delivered,omitempty"`

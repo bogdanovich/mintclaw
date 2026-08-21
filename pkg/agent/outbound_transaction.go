@@ -28,6 +28,7 @@ type outboundTransactionKey struct{}
 type durableMessageAdmission struct {
 	message     bus.OutboundMessage
 	coordinator *outbox.Coordinator
+	admission   outbox.Admission
 	lease       outbox.DispatchLease
 	durable     bool
 	dispatch    bool
@@ -36,6 +37,7 @@ type durableMessageAdmission struct {
 type durableMediaAdmission struct {
 	message     bus.OutboundMediaMessage
 	coordinator *outbox.Coordinator
+	admission   outbox.Admission
 	lease       outbox.DispatchLease
 	durable     bool
 	dispatch    bool
@@ -45,13 +47,14 @@ type outboundPublication struct {
 	published   bool
 	deliveryID  string
 	coordinator *outbox.Coordinator
+	admission   outbox.Admission
 }
 
 func (p outboundPublication) awaitTerminal(ctx context.Context) (outbox.Intent, error) {
 	if p.coordinator == nil || strings.TrimSpace(p.deliveryID) == "" {
 		return outbox.Intent{}, errors.New("durable delivery receipt is unavailable")
 	}
-	return p.coordinator.AwaitTerminal(ctx, p.deliveryID)
+	return p.coordinator.AwaitTerminal(ctx, p.admission)
 }
 
 func withOutboundTransaction(ctx context.Context, sourceID string) context.Context {
@@ -197,6 +200,7 @@ func (al *AgentLoop) admitDurableMessage(
 	}
 	result.message = *admission.Intent.Message
 	result.coordinator = coordinator
+	result.admission = admission
 	result.lease = admission.Lease
 	result.durable = true
 	result.dispatch = admission.Dispatch
@@ -239,6 +243,7 @@ func (al *AgentLoop) admitDurableMedia(
 	}
 	result.message = *admission.Intent.Media
 	result.coordinator = coordinator
+	result.admission = admission
 	result.lease = admission.Lease
 	result.durable = true
 	result.dispatch = admission.Dispatch
@@ -293,6 +298,7 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 	receipt := outboundPublication{
 		deliveryID:  admission.message.DeliveryID,
 		coordinator: admission.coordinator,
+		admission:   admission.admission,
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
@@ -373,6 +379,7 @@ func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
 	receipt := outboundPublication{
 		deliveryID:  admission.message.DeliveryID,
 		coordinator: admission.coordinator,
+		admission:   admission.admission,
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {

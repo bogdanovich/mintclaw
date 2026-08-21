@@ -104,10 +104,22 @@ func makeWaiting(t *testing.T, registry *Registry, clock *testClock, id, session
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	rec, err = registry.RecordDeliveryAttempt(rec.ID, rec.Revision, true, "")
+	return markWaiting(t, registry, rec)
+}
+
+func bindPromptDelivery(t *testing.T, registry *Registry, rec Record) Record {
+	t.Helper()
+	rec, err := registry.BindPromptDelivery(rec.ID, rec.Revision, "out_test_"+rec.ShortID)
 	if err != nil {
-		t.Fatalf("record delivery: %v", err)
+		t.Fatalf("bind prompt delivery: %v", err)
 	}
+	return rec
+}
+
+func markWaiting(t *testing.T, registry *Registry, rec Record) Record {
+	t.Helper()
+	rec = bindPromptDelivery(t, registry, rec)
+	var err error
 	rec, err = registry.MarkWaiting(rec.ID, rec.Revision)
 	if err != nil {
 		t.Fatalf("mark waiting: %v", err)
@@ -125,24 +137,9 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 		t.Fatalf("created record = %+v", rec)
 	}
 
-	rec, err = registry.RecordDeliveryAttempt(
-		rec.ID,
-		rec.Revision,
-		false,
-		"temporary channel error",
-	)
-	if err != nil {
-		t.Fatalf("record failed delivery: %v", err)
-	}
-	if rec.Status != StatusCreated || rec.DeliveryTries != 1 || rec.DeliveryError == "" {
-		t.Fatalf("failed delivery record = %+v", rec)
-	}
-	rec, err = registry.RecordDeliveryAttempt(rec.ID, rec.Revision, true, "")
-	if err != nil {
-		t.Fatalf("record successful delivery: %v", err)
-	}
-	if !rec.PromptDelivered {
-		t.Fatal("successful prompt delivery was not persisted")
+	rec = bindPromptDelivery(t, registry, rec)
+	if rec.PromptDeliveryID == "" {
+		t.Fatal("prompt outbox identity was not persisted")
 	}
 	rec, err = registry.MarkWaiting(rec.ID, rec.Revision)
 	if err != nil {
@@ -167,7 +164,7 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if rec.Status != StatusResolved || rec.CleanupAfter == 0 || rec.Revision != 7 {
+	if rec.Status != StatusResolved || rec.CleanupAfter == 0 || rec.Revision != 6 {
 		t.Fatalf("resolved record = %+v", rec)
 	}
 
@@ -180,8 +177,8 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 		t.Fatalf("reloaded record = %+v, found=%v", got, ok)
 	}
 	events := reloaded.ListEvents(rec.ID)
-	if len(events) != 7 {
-		t.Fatalf("events = %d, want 7", len(events))
+	if len(events) != 6 {
+		t.Fatalf("events = %d, want 6", len(events))
 	}
 	for i, event := range events {
 		if event.Sequence != int64(i+1) || event.Revision != int64(i+1) {
@@ -236,8 +233,7 @@ func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
 		Text: "Open All postings instead", Media: []string{"media://guidance-image"},
 		Superseded: true, MessageID: "guidance-1",
@@ -308,8 +304,7 @@ func TestRegistryChainsSequentialForegroundInteractions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _ = registry.RecordDeliveryAttempt(first.ID, first.Revision, true, "")
-	first, _ = registry.MarkWaiting(first.ID, first.Revision)
+	first = markWaiting(t, registry, first)
 	first, _ = registry.ClaimAnswer(
 		first.ID, first.Revision, Answer{Text: "continue"}, OutcomeAnswered,
 	)
@@ -515,8 +510,7 @@ func TestRegistryAllowsSameAnswerMessageIDOnDifferentRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create second: %v", err)
 	}
-	second, _ = registry.RecordDeliveryAttempt(second.ID, second.Revision, true, "")
-	second, _ = registry.MarkWaiting(second.ID, second.Revision)
+	second = markWaiting(t, registry, second)
 	if _, err := registry.ClaimAnswer(second.ID, second.Revision, Answer{
 		Text: "Production", MessageID: "message-1",
 	}, OutcomeAnswered); err != nil {
@@ -608,7 +602,7 @@ func TestRegistryRevisionAndTransitionConflictsFailClosed(t *testing.T) {
 	}
 }
 
-func TestRegistryWaitingRequiresSuccessfulDelivery(t *testing.T) {
+func TestRegistryWaitingRequiresBoundPromptDelivery(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	rec, err := registry.Create(validCreate(clock, "interaction_12121212aaaaaaaa", "session-1"))
 	if err != nil {
@@ -618,21 +612,15 @@ func TestRegistryWaitingRequiresSuccessfulDelivery(t *testing.T) {
 		waitErr,
 		ErrInvalidTransition,
 	) {
-		t.Fatalf("waiting without delivery error = %v", waitErr)
+		t.Fatalf("waiting without bound delivery error = %v", waitErr)
 	}
-	rec, err = registry.RecordDeliveryAttempt(rec.ID, rec.Revision, false, "channel unavailable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, waitErr := registry.MarkWaiting(rec.ID, rec.Revision); !errors.Is(
-		waitErr,
-		ErrInvalidTransition,
-	) {
-		t.Fatalf("waiting after failed delivery error = %v", waitErr)
+	rec = bindPromptDelivery(t, registry, rec)
+	if _, waitErr := registry.MarkWaiting(rec.ID, rec.Revision); waitErr != nil {
+		t.Fatalf("waiting after binding prompt delivery: %v", waitErr)
 	}
 }
 
-func TestRegistryPersistsAmbiguousPromptDeliveryWindow(t *testing.T) {
+func TestRegistryPersistsPromptDeliveryIdentityForUnknownOutcome(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	record, err := registry.Create(validCreate(
 		clock,
@@ -642,23 +630,14 @@ func TestRegistryPersistsAmbiguousPromptDeliveryWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = registry.BeginPromptDelivery(record.ID, record.Revision)
-	if err != nil || record.PromptDeliveryState != DeliveryStateSending || record.DeliveryTries != 1 {
-		t.Fatalf("begin prompt delivery = (%#v, %v)", record, err)
-	}
-	if _, waitErr := registry.MarkWaiting(record.ID, record.Revision); !errors.Is(
-		waitErr,
-		ErrInvalidTransition,
-	) {
-		t.Fatalf("waiting during ambiguous send error = %v", waitErr)
-	}
+	record = bindPromptDelivery(t, registry, record)
 
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
 	record, _ = reloaded.Get(record.ID)
-	if record.PromptDeliveryState != DeliveryStateSending || record.PromptDelivered {
-		t.Fatalf("reloaded ambiguous delivery = %#v", record)
+	if record.PromptDeliveryID == "" {
+		t.Fatalf("reloaded prompt delivery identity = %#v", record)
 	}
-	record, err = reloaded.ClaimDeliveryUnknown(record.ID, record.Revision)
+	record, err = reloaded.ClaimDeliveryUnknown(record.ID, record.Revision, record.PromptDeliveryID)
 	if err != nil || record.Status != StatusClaimed || record.Outcome != OutcomeDeliveryUnknown {
 		t.Fatalf("claim unknown delivery = (%#v, %v)", record, err)
 	}
@@ -982,36 +961,8 @@ func TestRegistryCompactsOldestEventsBeforeSnapshotBudgetIsExhausted(t *testing.
 	}
 }
 
-func TestRegistryBoundsDefiniteDeliveryAttempts(t *testing.T) {
+func TestRegistryBoundsFinalDeliveryAttempts(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
-	prompt, err := registry.Create(validCreate(
-		clock,
-		"interaction_17171717aaaaaaaa",
-		"session-prompt-budget",
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range MaxDeliveryAttempts {
-		prompt, err = registry.RecordDeliveryAttempt(
-			prompt.ID,
-			prompt.Revision,
-			false,
-			"definitely not sent",
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err = registry.RecordDeliveryAttempt(
-		prompt.ID,
-		prompt.Revision,
-		false,
-		"definitely not sent",
-	); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("prompt attempt past budget error = %v", err)
-	}
-
 	final := makeWaiting(
 		t,
 		registry,
@@ -1019,7 +970,7 @@ func TestRegistryBoundsDefiniteDeliveryAttempts(t *testing.T) {
 		"interaction_18181818aaaaaaaa",
 		"session-final-budget",
 	)
-	final, err = registry.ClaimAnswer(
+	final, err := registry.ClaimAnswer(
 		final.ID,
 		final.Revision,
 		Answer{Text: "continue"},
@@ -1540,14 +1491,7 @@ func TestValidateQuestionsAndApprovalAuthorityBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("policy approval create: %v", err)
 	}
-	approval, err = registry.RecordDeliveryAttempt(approval.ID, approval.Revision, true, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	approval, err = registry.MarkWaiting(approval.ID, approval.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	approval = markWaiting(t, registry, approval)
 	if _, err := registry.ClaimAnswer(
 		approval.ID,
 		approval.Revision,
@@ -1581,8 +1525,7 @@ func TestRegistryConsumesApprovalExactlyOnceAndMatchesCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markWaiting(t, registry, record)
 	record, err = registry.ClaimAnswer(
 		record.ID, record.Revision,
 		Answer{Text: "allow_once", ReceivedAt: clock.Now().UnixMilli()},
@@ -1643,8 +1586,7 @@ func TestRegistryConsumeApprovalEnforcesExpiryAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
-	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record = markWaiting(t, registry, record)
 	clock.Advance(time.Minute - time.Millisecond)
 	record, err = registry.ClaimAnswer(
 		record.ID, record.Revision,

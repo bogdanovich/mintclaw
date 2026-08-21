@@ -116,9 +116,9 @@ func (r *Registry) MarkWaiting(id string, expectedRevision int64) (Record, error
 					StatusWaiting,
 				)
 			}
-			if rec.DeliveryTries == 0 || rec.DeliveryError != "" || !rec.PromptDelivered {
+			if strings.TrimSpace(rec.PromptDeliveryID) == "" {
 				return "", "", nil, fmt.Errorf(
-					"%w: prompt delivery has not succeeded",
+					"%w: prompt delivery is not bound",
 					ErrInvalidTransition,
 				)
 			}
@@ -128,93 +128,23 @@ func (r *Registry) MarkWaiting(id string, expectedRevision int64) (Record, error
 	)
 }
 
-func (r *Registry) RecordDeliveryAttempt(
-	id string,
-	expectedRevision int64,
-	success bool,
-	detail string,
-) (Record, error) {
+// BindPromptDelivery stores the sole durable outbox identity for the prompt.
+// Transport attempts, errors, and retry policy remain owned by the outbox.
+func (r *Registry) BindPromptDelivery(id string, expectedRevision int64, deliveryID string) (Record, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
 	return r.update(
 		id,
 		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusCreated || rec.DeliveryTries >= MaxDeliveryAttempts {
+		func(rec *Record, _ int64) (EventType, string, *bool, error) {
+			if rec.Status != StatusCreated || deliveryID == "" || rec.PromptDeliveryID != "" {
 				return "", "", nil, fmt.Errorf(
-					"%w: delivery from %s",
+					"%w: bind prompt delivery from %s",
 					ErrInvalidTransition,
 					rec.Status,
 				)
 			}
-			rec.DeliveryTries++
-			rec.LastDeliveryAt = now
-			if success {
-				rec.PromptDelivered = true
-				rec.PromptDeliveryState = DeliveryStateDelivered
-				rec.DeliveryError = ""
-			} else {
-				rec.DeliveryError = bounded(detail, MaxSummaryLength)
-			}
-			return EventDeliveryAttempt, "", &success, nil
-		},
-	)
-}
-
-func (r *Registry) BeginPromptDelivery(id string, expectedRevision int64) (Record, error) {
-	return r.update(
-		id,
-		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusCreated ||
-				(rec.PromptDeliveryState != "" && rec.PromptDeliveryState != DeliveryStateNotSent) ||
-				rec.PromptDelivered || rec.DeliveryTries >= MaxDeliveryAttempts {
-				return "", "", nil, fmt.Errorf(
-					"%w: begin prompt delivery from %s/%s",
-					ErrInvalidTransition,
-					rec.Status,
-					rec.PromptDeliveryState,
-				)
-			}
-			rec.DeliveryTries++
-			rec.LastDeliveryAt = now
-			rec.DeliveryError = ""
-			rec.PromptDeliveryState = DeliveryStateSending
-			return EventDeliveryAttempt, "delivery_started", nil, nil
-		},
-	)
-}
-
-func (r *Registry) CompletePromptDelivery(
-	id string,
-	expectedRevision int64,
-	success bool,
-	ambiguous bool,
-	detail string,
-) (Record, error) {
-	return r.update(
-		id,
-		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusCreated || rec.PromptDeliveryState != DeliveryStateSending {
-				return "", "", nil, fmt.Errorf(
-					"%w: complete prompt delivery from %s/%s",
-					ErrInvalidTransition,
-					rec.Status,
-					rec.PromptDeliveryState,
-				)
-			}
-			rec.LastDeliveryAt = now
-			if success {
-				rec.PromptDelivered = true
-				rec.PromptDeliveryState = DeliveryStateDelivered
-				rec.DeliveryError = ""
-			} else if ambiguous {
-				rec.PromptDeliveryState = DeliveryStateAmbiguous
-				rec.DeliveryError = bounded(detail, MaxSummaryLength)
-			} else {
-				rec.PromptDeliveryState = DeliveryStateNotSent
-				rec.DeliveryError = bounded(detail, MaxSummaryLength)
-			}
-			return EventDeliveryAttempt, "delivery_completed", &success, nil
+			rec.PromptDeliveryID = deliveryID
+			return EventPromptDelivery, "", nil, nil
 		},
 	)
 }
@@ -334,19 +264,22 @@ func (r *Registry) CompleteFinalDelivery(
 	)
 }
 
-func (r *Registry) ClaimDeliveryUnknown(id string, expectedRevision int64) (Record, error) {
+func (r *Registry) ClaimDeliveryUnknown(
+	id string,
+	expectedRevision int64,
+	promptDeliveryID string,
+) (Record, error) {
+	promptDeliveryID = strings.TrimSpace(promptDeliveryID)
 	return r.update(
 		id,
 		expectedRevision,
 		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusCreated ||
-				(rec.PromptDeliveryState != DeliveryStateSending &&
-					rec.PromptDeliveryState != DeliveryStateAmbiguous) {
+			if rec.Status != StatusCreated || promptDeliveryID == "" ||
+				rec.PromptDeliveryID != promptDeliveryID {
 				return "", "", nil, fmt.Errorf(
-					"%w: claim unknown delivery from %s/%s",
+					"%w: claim unknown delivery from %s",
 					ErrInvalidTransition,
 					rec.Status,
-					rec.PromptDeliveryState,
 				)
 			}
 			rec.Status = StatusClaimed
