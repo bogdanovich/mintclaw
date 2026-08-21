@@ -192,16 +192,12 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		messages,
 	)
 	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
-		strings.TrimSpace(ts.opts.InteractionOriginToolCallID) != "" &&
 		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
 		recoveryHistory := history
 		if ts.agent != nil && ts.agent.Sessions != nil {
 			recoveryHistory = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		}
-		exec.deliverable = unfinishedInteractionDeliverable(
-			recoveryHistory,
-			ts.opts.InteractionOriginToolCallID,
-		)
+		exec.deliverable = unfinishedTurnDeliverable(recoveryHistory)
 	}
 	exec.model.selectedCandidates = selection.selectedCandidates
 	exec.model.activeCandidates = selection.activeCandidates
@@ -266,20 +262,18 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	return exec, nil
 }
 
-func unfinishedInteractionDeliverable(
-	history []providers.Message,
-	originToolCallID string,
-) *taskresult.Deliverable {
-	_, resultIndex := interactionToolPairIndexes(history, strings.TrimSpace(originToolCallID))
-	if resultIndex < 0 {
-		return nil
+func unfinishedTurnDeliverable(history []providers.Message) *taskresult.Deliverable {
+	start := 0
+	for index := len(history) - 1; index >= 0; index-- {
+		message := history[index]
+		if message.Role == "assistant" && len(message.ToolCalls) == 0 {
+			start = index + 1
+			break
+		}
 	}
 
 	var deliverable *taskresult.Deliverable
-	for _, message := range history[resultIndex:] {
-		if message.Role == "assistant" && len(message.ToolCalls) == 0 {
-			return nil
-		}
+	for _, message := range history[start:] {
 		if message.Role == "tool" {
 			deliverable = mergeDeliverables(deliverable, message.Deliverable)
 		}

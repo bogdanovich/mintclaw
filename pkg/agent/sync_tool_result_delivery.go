@@ -67,6 +67,10 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 	result = normalizeToolResultForSyncDelivery(ts, result)
 
 	if !ts.opts.SuppressToolUserDelivery && result.ImmediateDelivery {
+		if len(deliveredToolResultMediaRefs(result)) > 0 && !hasOutboundTransaction(ctx) {
+			err := fmt.Errorf("durable outbound transaction is required for immediate media delivery")
+			return nil, wrapToolDeliveryError(result, err.Error(), err)
+		}
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}

@@ -560,8 +560,22 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 				bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.
 					ApplyToContext(&outboundMedia.Context)
 			}
-			if _, err := al.publishTransactionMedia(ctx, ts.workspace, outboundMedia); err != nil {
+			receipt, err := al.publishTransactionMediaReceiptAtBoundary(
+				ctx,
+				ts.workspace,
+				outboundMedia,
+				func(commitCtx context.Context) error {
+					return commitToolResultOutbound(commitCtx, result)
+				},
+			)
+			if err != nil {
 				return nil, toolResultDeliveryNone, err
+			}
+			if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				return buildProviderAttachments(al.mediaStore, mediaRefs), toolResultDeliveryDirect, nil
 			}
 			return nil, toolResultDeliveryQueued, nil
 		}
@@ -583,8 +597,22 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	}
 	applyToolResultOutboundMetadata(result, &outbound.Context)
 	outbound.TraceSettlement = traceSettlement
-	if _, err := al.publishTransactionMessage(ctx, ts.workspace, outbound); err != nil {
+	receipt, err := al.publishTransactionMessageReceiptAtBoundary(
+		ctx,
+		ts.workspace,
+		outbound,
+		func(commitCtx context.Context) error {
+			return commitToolResultOutbound(commitCtx, result)
+		},
+	)
+	if err != nil {
 		return nil, toolResultDeliveryNone, err
+	}
+	if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+		if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+			return nil, toolResultDeliveryNone, err
+		}
+		return nil, toolResultDeliveryDirect, nil
 	}
 	logger.DebugCF("agent", "Sent tool result to user",
 		map[string]any{
@@ -705,6 +733,12 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 					classifyFinalHandledPublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+			if result.ImmediateDelivery && receiptsSupported {
+				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
+			}
 			if isFinalHandledDelivery(result) && receiptsSupported {
 				if err = settleFinalHandledDelivery(ctx, receipt, result, len(out.Media)); err != nil {
 					return nil, toolResultDeliveryNone, err
@@ -774,6 +808,12 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				classifyFinalHandledPublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+		if result.ImmediateDelivery && receiptsSupported {
+			if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+				return nil, toolResultDeliveryNone, err
+			}
+			return nil, toolResultDeliveryDirect, nil
+		}
 		if isFinalHandledDelivery(result) && receiptsSupported {
 			if err = settleFinalHandledDelivery(ctx, receipt, result, 0); err != nil {
 				return nil, toolResultDeliveryNone, err
@@ -833,6 +873,36 @@ func isFinalHandledDelivery(result *toolshared.ToolResult) bool {
 		return result.DeliveryIntent == toolshared.DeliveryFinalHandled
 	}
 	return result.ResponseHandled && !result.ImmediateDelivery
+}
+
+func settleImmediateDelivery(
+	ctx context.Context,
+	receipt outboundPublication,
+	result *toolshared.ToolResult,
+) error {
+	intent, err := receipt.awaitTerminal(ctx)
+	if err != nil {
+		return fmt.Errorf("await immediate delivery confirmation: %w", err)
+	}
+	switch intent.Status {
+	case outbox.StatusDelivered:
+		confirmToolResultOutbound(result)
+		return nil
+	case outbox.StatusDefinitelyFailed:
+		return fmt.Errorf(
+			"immediate delivery %s definitely failed before remote acceptance: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "channel rejected the message"),
+		)
+	case outbox.StatusAmbiguous:
+		return fmt.Errorf(
+			"immediate delivery %s has ambiguous remote acceptance: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
+		)
+	default:
+		return fmt.Errorf("immediate delivery %s has status %s", intent.ID, intent.Status)
+	}
 }
 
 func settleFinalHandledDelivery(

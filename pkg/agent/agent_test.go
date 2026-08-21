@@ -242,10 +242,11 @@ func newStartedTestChannelManagerWithConfig(
 	store media.MediaStore,
 	name string,
 	ch channels.Channel,
+	options ...channels.ManagerOption,
 ) *channels.Manager {
 	t.Helper()
 
-	cm, err := channels.NewManager(cfg, msgBus, store)
+	cm, err := channels.NewManager(cfg, msgBus, store, options...)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -9269,10 +9270,19 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	msgBus := bus.NewMessageBus()
 	provider := &messageToolMediaThenFinalProvider{mediaPath: videoPath}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	installTestOutboundCoordinator(t, al, t.TempDir())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	mediaChannel := newBlockingMediaChannel()
-	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", mediaChannel))
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t,
+		cfg,
+		msgBus,
+		store,
+		"telegram",
+		mediaChannel,
+		channels.WithOutboundOutbox(al.outboundCoordinator()),
+	))
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -9284,7 +9294,8 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	var runErr error
 	go func() {
 		defer close(done)
-		response, runErr = al.runAgentLoop(context.Background(), agent, processOptions{
+		runCtx := withOutboundTransaction(context.Background(), "message-tool-media-final-test")
+		response, runErr = al.runAgentLoop(runCtx, agent, processOptions{
 			Dispatch: DispatchRequest{
 				SessionKey:  "message-tool-media-final-test",
 				UserMessage: "send media then final answer",
@@ -9428,10 +9439,19 @@ func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.
 	msgBus := bus.NewMessageBus()
 	provider := &immediateMediaThenFinalProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	installTestOutboundCoordinator(t, al, t.TempDir())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	mediaChannel := &fakeMediaChannel{}
-	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", mediaChannel))
+	al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+		t,
+		cfg,
+		msgBus,
+		store,
+		"telegram",
+		mediaChannel,
+		channels.WithOutboundOutbox(al.outboundCoordinator()),
+	))
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -9439,7 +9459,8 @@ func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.
 	}
 	agent.Tools.Register(&immediateMediaTool{store: store, path: imagePath})
 
-	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
+	runCtx := withOutboundTransaction(context.Background(), "immediate-media-final-test")
+	response, err := al.runAgentLoop(runCtx, agent, processOptions{
 		Dispatch: DispatchRequest{
 			SessionKey:  "immediate-media-final-test",
 			UserMessage: "send an image then final answer",

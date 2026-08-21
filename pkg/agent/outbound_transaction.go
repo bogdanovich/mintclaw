@@ -345,14 +345,6 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 	return receipt, nil
 }
 
-func (al *AgentLoop) publishTransactionMedia(
-	ctx context.Context,
-	workspace string,
-	msg bus.OutboundMediaMessage,
-) (bool, error) {
-	return al.publishTransactionMediaAtBoundary(ctx, workspace, msg, nil)
-}
-
 func (al *AgentLoop) publishTransactionMediaAtBoundary(
 	ctx context.Context,
 	workspace string,

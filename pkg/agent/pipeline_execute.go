@@ -673,23 +673,15 @@ func (runner *toolLoopRunner) admitToolCall(
 						})
 					}
 
-					attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
-					hookResult = deliveredResult
-					runner.handledAttachments = append(runner.handledAttachments, attachments...)
-					aborted, err = runner.settleCommittedImmediateResult(
+					runner.bindImmediateDeliverySettlement(
 						toolResultMsg,
 						durableToolResultMsg,
 						hookResult,
 						protectedResult,
 					)
-					if err != nil {
-						return stopToolBatch(ToolLoopOutcome{})
-					}
-					if aborted {
-						return stopToolBatch(ToolLoopOutcome{
-							Control: ToolControlBreak, AbortCause: TurnAbortHard,
-						})
-					}
+					attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
+					hookResult = deliveredResult
+					runner.handledAttachments = append(runner.handledAttachments, attachments...)
 				}
 				if !protectedResult && hookResult.Deliverable != nil {
 					recordDeliverable(exec, hookResult.Deliverable)
@@ -1452,23 +1444,15 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			})
 		}
 
-		attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
-		toolResult = deliveredResult
-		runner.handledAttachments = append(runner.handledAttachments, attachments...)
-		aborted, err = runner.settleCommittedImmediateResult(
+		runner.bindImmediateDeliverySettlement(
 			toolResultMsg,
 			durableToolResultMsg,
 			toolResult,
 			protectedResult,
 		)
-		if err != nil {
-			return stopToolBatch(ToolLoopOutcome{})
-		}
-		if aborted {
-			return stopToolBatch(ToolLoopOutcome{
-				Control: ToolControlBreak, AbortCause: TurnAbortHard,
-			})
-		}
+		attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
+		toolResult = deliveredResult
+		runner.handledAttachments = append(runner.handledAttachments, attachments...)
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)
@@ -2105,6 +2089,39 @@ func (r *toolLoopRunner) settleCommittedImmediateResult(
 		settledDurableMsg,
 		false,
 	)
+}
+
+func (r *toolLoopRunner) bindImmediateDeliverySettlement(
+	journaledMsg providers.Message,
+	journaledDurableMsg providers.Message,
+	result *toolshared.ToolResult,
+	protectedResult bool,
+) {
+	if protectedResult || result == nil || !result.ImmediateDelivery || result.Deliverable == nil {
+		return
+	}
+	originalCommit := result.CommitOutbound
+	result.CommitOutbound = func(ctx context.Context) error {
+		if originalCommit != nil {
+			if err := originalCommit(ctx); err != nil {
+				return err
+			}
+		}
+		markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+		aborted, err := r.settleCommittedImmediateResult(
+			journaledMsg,
+			journaledDurableMsg,
+			result,
+			protectedResult,
+		)
+		if err != nil {
+			return err
+		}
+		if aborted {
+			return errors.New("immediate delivery settlement was interrupted")
+		}
+		return nil
+	}
 }
 
 func (r *toolLoopRunner) replaceJournaledToolResult(

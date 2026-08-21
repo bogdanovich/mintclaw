@@ -121,7 +121,6 @@ type processOptions struct {
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
 	InteractionSessionKey        string              // User-facing session that owns interaction answers
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers
-	InteractionOriginToolCallID  string              // Tool result that starts an interaction continuation
 	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
 	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
 	TurnStatus                   *TurnEndStatus

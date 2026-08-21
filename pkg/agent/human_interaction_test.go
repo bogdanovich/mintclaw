@@ -6963,6 +6963,17 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		interactionID = "recover-open-tool-round-interaction"
 	)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-chained-interaction"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-before-chained-interaction", Content: "earlier structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/before-interaction.txt", Kind: "file"}},
+			Metadata:  map[string]string{"phase": "before-interaction"},
+		},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -7039,9 +7050,11 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	}
 	task, _ := tasks.Get(taskID)
 	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
-		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 2 ||
-		task.Deliverable.Artifacts[0].Ref != "file:/tmp/recovered.txt" ||
-		task.Deliverable.Artifacts[1].Ref != "file:/tmp/second.txt" ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 3 ||
+		task.Deliverable.Artifacts[0].Ref != "file:/tmp/before-interaction.txt" ||
+		task.Deliverable.Artifacts[1].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Artifacts[2].Ref != "file:/tmp/second.txt" ||
+		task.Deliverable.Metadata["phase"] != "before-interaction" ||
 		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
 		task.Deliverable.Metadata["round"] != "second" ||
 		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
