@@ -89,6 +89,7 @@ func cloneRecord(rec Record) Record {
 	rec.Origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), rec.Origin.ObjectiveChecklist...)
 	rec.Origin.ExecutionContext = cloneExecutionContext(rec.Origin.ExecutionContext)
 	rec.Questions = cloneQuestions(rec.Questions)
+	rec.FinalDeliveryIDs = append([]string(nil), rec.FinalDeliveryIDs...)
 	if rec.Answer != nil {
 		answer := *rec.Answer
 		answer.Values = cloneStringMap(rec.Answer.Values)

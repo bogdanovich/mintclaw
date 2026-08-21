@@ -720,6 +720,91 @@ func seedTestInteractionPromptOutcome(
 	return intent
 }
 
+func testInteractionFinalIdentity(record interactions.Record) outbox.Identity {
+	return outbox.Identity{
+		SourceID:   interactionDeliveryKey(record.ID, "final"),
+		Ordinal:    0,
+		Kind:       outbox.KindMessage,
+		Channel:    record.Route.Channel,
+		ChatID:     record.Route.ChatID,
+		SessionKey: record.Route.SessionKey,
+	}
+}
+
+func bindTestInteractionFinal(
+	t *testing.T,
+	registry *interactions.Registry,
+	record interactions.Record,
+) interactions.Record {
+	t.Helper()
+	deliveryID, err := outbox.DeliveryID(testInteractionFinalIdentity(record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.BindFinalDelivery(record.ID, record.Revision, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func seedTestInteractionFinalOutcome(
+	t *testing.T,
+	coordinator *outbox.Coordinator,
+	registry *interactions.Registry,
+	workspace string,
+	record interactions.Record,
+	status outbox.Status,
+	attempts int,
+	retryAfter ...time.Time,
+) (interactions.Record, outbox.Intent) {
+	t.Helper()
+	record = bindTestInteractionFinal(t, registry, record)
+	message := bus.OutboundMessage{
+		Channel: record.Route.Channel, ChatID: record.Route.ChatID,
+		AgentID: record.Route.AgentID, SessionKey: record.Route.SessionKey,
+		Content: "final response",
+	}
+	for attempt := range attempts {
+		admission, err := coordinator.AdmitMessage(
+			workspace,
+			testInteractionFinalIdentity(record),
+			message,
+		)
+		if err != nil || !admission.Dispatch {
+			t.Fatalf("AdmitMessage(attempt %d) = (%#v, %v)", attempt+1, admission, err)
+		}
+		if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+			t.Fatal(err)
+		}
+		if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+			t.Fatal(err)
+		}
+		if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+			t.Fatal(err)
+		}
+		outcome := outbox.Outcome{Error: "test final delivery outcome"}
+		if len(retryAfter) > 0 && attempt == attempts-1 {
+			outcome.RetryAfter = retryAfter[0]
+		}
+		if attempt < attempts-1 || status == outbox.StatusDefinitelyFailed {
+			err = coordinator.MarkDefinitelyFailed(admission.Intent.ID, outcome)
+		} else if status == outbox.StatusAmbiguous {
+			err = coordinator.MarkAmbiguous(admission.Intent.ID, outcome)
+		} else {
+			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	intent, err := coordinator.Get(record.FinalDeliveryIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record, intent
+}
+
 func TestInteractionPromptRecoveryHonorsRetryDeadline(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
@@ -794,11 +879,11 @@ func TestRecoveredInteractionPromptAdmissionIsAbandonedAfterExpiry(t *testing.T)
 		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
 	}
 
-	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admission, now)
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admission, now)
 	if err != nil || !publish {
 		t.Fatalf("active admission reconciliation = %t, %v", publish, err)
 	}
-	publish, err = al.ReconcileRecoveredInteractionPromptAdmission(admission, now.Add(2*time.Hour))
+	publish, err = al.ReconcileRecoveredInteractionAdmission(admission, now.Add(2*time.Hour))
 	if err != nil || publish {
 		t.Fatalf("expired admission reconciliation = %t, %v", publish, err)
 	}
@@ -854,7 +939,7 @@ func TestRecoveredInteractionPromptAdmissionIsAbandonedAfterAgentRemoval(t *test
 	if err != nil || len(admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
-	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admissions[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("orphaned prompt reconciliation = %t, %v", publish, err)
 	}
@@ -915,7 +1000,7 @@ func TestRecoveredTaskInteractionPromptIsAbandonedAfterOwnerWorkspaceRemoval(t *
 	if err != nil || len(admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
-	publish, err := al.ReconcileRecoveredInteractionPromptAdmission(admissions[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("orphaned task prompt reconciliation = %t, %v", publish, err)
 	}
@@ -1023,7 +1108,7 @@ func TestRecoveredInteractionPromptSettlesExactAdmissionReceipt(t *testing.T) {
 	}
 	settled := make(chan error, 1)
 	go func() {
-		settled <- al.SettleRecoveredInteractionPromptAdmission(t.Context(), admissions[0])
+		settled <- al.SettleRecoveredInteractionAdmission(t.Context(), admissions[0])
 	}()
 	if err = coordinator.PrepareAdmission(admissions[0].Lease); err != nil {
 		t.Fatalf("PrepareAdmission() error = %v", err)
@@ -1040,7 +1125,7 @@ func TestRecoveredInteractionPromptSettlesExactAdmissionReceipt(t *testing.T) {
 	select {
 	case err = <-settled:
 		if err != nil {
-			t.Fatalf("SettleRecoveredInteractionPromptAdmission() error = %v", err)
+			t.Fatalf("SettleRecoveredInteractionAdmission() error = %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("recovered interaction prompt receipt was not settled")
@@ -1048,6 +1133,126 @@ func TestRecoveredInteractionPromptSettlesExactAdmissionReceipt(t *testing.T) {
 	updated, _ := registry.Get(record.ID)
 	if updated.Status != interactions.StatusWaiting {
 		t.Fatalf("settled interaction = %+v", updated)
+	}
+}
+
+func TestRecoveredInteractionFinalAdmissionIsAbandonedWhenInteractionEnds(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := agent.Workspace
+	request := testToolSuspensionRequest(workspace)
+	request.Route.AgentID = agent.ID
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(
+		record.ID,
+		record.Revision,
+		interactions.Answer{Text: "Canary", ReceivedAt: time.Now().UnixMilli()},
+		interactions.OutcomeAnswered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionFinal(t, registry, record)
+	admission, err := coordinator.AdmitMessage(
+		workspace,
+		testInteractionFinalIdentity(record),
+		bus.OutboundMessage{
+			Channel: record.Route.Channel, ChatID: record.Route.ChatID,
+			SessionKey: record.Route.SessionKey, Content: "recovered final",
+		},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admission, time.Now().UTC())
+	if err != nil || !publish {
+		t.Fatalf("active final reconciliation = %t, %v", publish, err)
+	}
+	if _, err = registry.Fail(record.ID, record.Revision, "test_failure", "interaction ended"); err != nil {
+		t.Fatal(err)
+	}
+	publish, err = al.ReconcileRecoveredInteractionAdmission(admission, time.Now().UTC())
+	if err != nil || publish {
+		t.Fatalf("terminal final reconciliation = %t, %v", publish, err)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned {
+		t.Fatalf("terminal final intent = %+v, %v", intent, err)
+	}
+}
+
+func TestRecoveredInteractionFinalSettlesExactAdmissionReceipt(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	coordinator := openTestInteractionOutbox(t, al)
+	workspace := agent.Workspace
+	request := testToolSuspensionRequest(workspace)
+	request.Route.AgentID = agent.ID
+	registry := al.interactionRegistryForWorkspace(workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(
+		record.ID,
+		record.Revision,
+		interactions.Answer{Text: "Canary", ReceivedAt: time.Now().UnixMilli()},
+		interactions.OutcomeAnswered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionFinal(t, registry, record)
+	admission, err := coordinator.AdmitMessage(
+		workspace,
+		testInteractionFinalIdentity(record),
+		bus.OutboundMessage{
+			Channel: record.Route.Channel, ChatID: record.Route.ChatID,
+			SessionKey: record.Route.SessionKey, Content: "recovered final",
+		},
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %+v, %v", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = al.SettleRecoveredInteractionAdmission(t.Context(), admission); err != nil {
+		t.Fatal(err)
+	}
+	resolved, _ := registry.Get(record.ID)
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
+		t.Fatalf("settled final interaction = %+v", resolved)
 	}
 }
 
@@ -1587,7 +1792,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
@@ -1677,25 +1882,21 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		t.Fatalf("parent-only task lost resumed deliverable: %#v", task.Deliverable)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved ||
-		resolved.FinalDeliveryState != interactions.DeliveryStateDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
 		t.Fatalf("interaction after parent handoff = %#v", resolved)
 	}
 	events := registry.ListEvents(record.ID)
-	startedAt, completedAt := -1, -1
+	boundAt, resolvedAt := -1, -1
 	for i, event := range events {
-		if event.Type != interactions.EventFinalDelivery {
-			continue
-		}
-		switch event.Code {
-		case "delivery_started":
-			startedAt = i
-		case "delivery_completed":
-			completedAt = i
+		switch event.Type {
+		case interactions.EventFinalDelivery:
+			boundAt = i
+		case interactions.EventResolved:
+			resolvedAt = i
 		}
 	}
-	if startedAt < 0 || completedAt <= startedAt {
-		t.Fatalf("task delivery was not durably started before completion: %#v", events)
+	if boundAt < 0 || resolvedAt <= boundAt {
+		t.Fatalf("task delivery was not bound before resolution: %#v", events)
 	}
 	select {
 	case outbound := <-manager.sent:
@@ -1738,7 +1939,7 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "Canary",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:callback-reply-target"),
@@ -1781,7 +1982,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
@@ -1860,8 +2061,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 		t.Fatalf("parent-only approval task = %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved ||
-		resolved.FinalDeliveryState != interactions.DeliveryStateDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
 		t.Fatalf("parent-only approval interaction = %#v", resolved)
 	}
 	select {
@@ -1876,6 +2076,8 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
@@ -1936,7 +2138,7 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
 	select {
-	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+	case outbound := <-manager.sent:
 		if outbound.Content != projection || strings.Contains(outbound.Content, "Both items") ||
 			!outbound.TraceSettlement ||
 			len(outbound.TraceScopes) != 1 ||
@@ -1957,8 +2159,7 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatalf("task retained optimistic resume projection: %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved ||
-		resolved.FinalDeliveryState != interactions.DeliveryStateDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
 		t.Fatalf("interaction after user delivery = %#v", resolved)
 	}
 }
@@ -2075,6 +2276,7 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	defer cleanup()
 	workspace := agent.Workspace
 	registry := al.interactionRegistryForWorkspace(workspace)
+	coordinator := openTestInteractionOutbox(t, al)
 	request := testToolSuspensionRequest(workspace)
 	request.Route.AgentID = agent.ID
 	request.Origin.TaskID = "task-final-delivery-budget"
@@ -2117,17 +2319,15 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	for range interactions.MaxDeliveryAttempts {
-		record, err = registry.RecordFinalDeliveryAttempt(
-			record.ID,
-			record.Revision,
-			false,
-			"definitely not sent",
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	record, _ = seedTestInteractionFinalOutcome(
+		t,
+		coordinator,
+		registry,
+		workspace,
+		record,
+		outbox.StatusDefinitelyFailed,
+		outbox.MaxDeliveryAttempts,
+	)
 	stateDir := filepath.Dir(taskregistry.WorkspaceStorePath(workspace))
 	if err = os.Chmod(stateDir, 0o500); err != nil {
 		t.Fatal(err)
@@ -2266,8 +2466,7 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
-	coordinator := openTestInteractionOutbox(t, al)
+	coordinator := installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-ambiguous-prompt"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
@@ -2317,7 +2516,7 @@ func TestRecoveryDoesNotResendAmbiguousFinal(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	coordinator := installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-ambiguous-final"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
@@ -2341,14 +2540,9 @@ func TestRecoveryDoesNotResendAmbiguousFinal(t *testing.T) {
 	}
 	record, _ = registry.MarkResuming(record.ID, record.Revision)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Final response"})
-	record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
-	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateNotSent {
-		t.Fatalf("begin final delivery = (%#v, %v)", record, err)
-	}
-	record, err = registry.StartFinalDelivery(record.ID, record.Revision)
-	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateSending {
-		t.Fatalf("start final delivery = (%#v, %v)", record, err)
-	}
+	record, _ = seedTestInteractionFinalOutcome(
+		t, coordinator, registry, agent.Workspace, record, outbox.StatusAmbiguous, 1,
+	)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -2370,7 +2564,7 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 	manager := newInteractionChannelManager()
 	manager.sendStarted = make(chan struct{}, 1)
 	manager.sendRelease = make(chan struct{})
-	al.channelManager = manager
+	coordinator := installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-active-final"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
@@ -2425,16 +2619,18 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 		t.Fatal("active final delivery did not start")
 	}
 	active, _ := registry.Get(record.ID)
-	if active.Status != interactions.StatusResuming ||
-		active.FinalDeliveryState != interactions.DeliveryStateSending {
+	if active.Status != interactions.StatusResuming || len(active.FinalDeliveryIDs) != 1 {
 		t.Fatalf("active final delivery = %#v", active)
+	}
+	intent, getErr := coordinator.Get(active.FinalDeliveryIDs[0])
+	if getErr != nil || intent.Status != outbox.StatusAttempting {
+		t.Fatalf("active outbox delivery = (%#v, %v)", intent, getErr)
 	}
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 0 while live owner is sending", recovered)
 	}
 	active, _ = registry.Get(record.ID)
-	if active.Status != interactions.StatusResuming ||
-		active.FinalDeliveryState != interactions.DeliveryStateSending {
+	if active.Status != interactions.StatusResuming || len(active.FinalDeliveryIDs) != 1 {
 		t.Fatalf("recovery changed active final delivery = %#v", active)
 	}
 	close(manager.sendRelease)
@@ -2447,7 +2643,7 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 		t.Fatal("active final delivery did not finish")
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved || !resolved.FinalDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
 		t.Fatalf("resolved interaction = %#v", resolved)
 	}
 }
@@ -2456,7 +2652,7 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	coordinator := installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-not-sent-final"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
@@ -2480,29 +2676,20 @@ func TestRecoveryRetriesDefinitelyNotSentFinal(t *testing.T) {
 	}
 	record, _ = registry.MarkResuming(record.ID, record.Revision)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Final response"})
-	record, _ = registry.BeginFinalDelivery(record.ID, record.Revision)
-	record, _ = registry.StartFinalDelivery(record.ID, record.Revision)
-	record, err = registry.CompleteFinalDelivery(
-		record.ID,
-		record.Revision,
-		false,
-		false,
-		"worker unavailable",
+	record, _ = seedTestInteractionFinalOutcome(
+		t, coordinator, registry, agent.Workspace, record, outbox.StatusDefinitelyFailed, 1,
 	)
-	if err != nil || record.FinalDeliveryState != interactions.DeliveryStateNotSent {
-		t.Fatalf("complete not-sent final = (%#v, %v)", record, err)
-	}
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
+	if record.Status != interactions.StatusResolved || len(record.FinalDeliveryIDs) != 1 {
 		t.Fatalf("record after not-sent final recovery = %#v", record)
 	}
 	select {
 	case outbound := <-manager.sent:
-		if outbound.Content != "Final response" {
+		if outbound.Content != "final response" {
 			t.Fatalf("retried final = %#v", outbound)
 		}
 	default:
@@ -2521,6 +2708,8 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
+			manager := newInteractionChannelManager()
+			coordinator := installInteractionChannelManager(t, al, manager)
 			workspace := agent.Workspace
 			taskID := "task-prepared-final-" + strings.ReplaceAll(test.name, " ", "-")
 			interactionID := "interaction_prepared_" + strings.ReplaceAll(test.name, " ", "_")
@@ -2582,11 +2771,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 				Role: "assistant", Content: finalContent,
 			})
-			record, err = registry.BeginFinalDelivery(record.ID, record.Revision)
-			if err != nil || record.FinalDeliveryState != interactions.DeliveryStateNotSent ||
-				record.FinalDeliveryTries != 0 {
-				t.Fatalf("prepare final delivery = (%#v, %v)", record, err)
-			}
+			_ = bindTestInteractionFinal(t, registry, record)
 			if test.completeTaskFirst {
 				if err = tasks.CompleteInteractionTask(
 					taskID, interactionID, finalContent, taskregistry.DeliveryPending,
@@ -2605,10 +2790,12 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			}
 			reloadedRegistry := al.interactionRegistryForWorkspace(workspace)
 			resolved, ok := reloadedRegistry.Get(interactionID)
-			if !ok || resolved.Status != interactions.StatusResolved ||
-				resolved.FinalDeliveryState != interactions.DeliveryStateDelivered ||
-				resolved.FinalDeliveryTries != 1 {
+			if !ok || resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
 				t.Fatalf("recovered interaction = %#v, found=%t", resolved, ok)
+			}
+			intent, getErr := coordinator.Get(resolved.FinalDeliveryIDs[0])
+			if getErr != nil || intent.Status != outbox.StatusDelivered {
+				t.Fatalf("recovered final outbox delivery = (%#v, %v)", intent, getErr)
 			}
 			reloadedTasks := al.taskRegistryForWorkspace(workspace)
 			task, ok := reloadedTasks.Get(taskID)
@@ -2617,7 +2804,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 				t.Fatalf("recovered task = %#v, found=%t", task, ok)
 			}
 			select {
-			case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+			case outbound := <-manager.sent:
 				if outbound.Content != finalContent {
 					t.Fatalf("recovered task outbound = %#v", outbound)
 				}
@@ -2827,7 +3014,7 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 
@@ -2883,6 +3070,14 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 	}
 	if acked, released := tracker.counts(); acked != 0 || released != 0 {
 		t.Fatalf("malformed answer ownership = acked:%d released:%d, want 0/0", acked, released)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if !strings.Contains(outbound.Content, "unknown question id") {
+			t.Fatalf("malformed answer response = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("malformed answer response was not delivered")
 	}
 
 	valid := bus.InboundMessage{
@@ -4586,7 +4781,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 
@@ -4699,7 +4894,7 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 
@@ -4838,7 +5033,7 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 		record.Answer.MessageID != "answer-first" {
 		t.Fatalf("durable winner = %#v", record.Answer)
 	}
-	if record.ResumeTries != 1 || record.FinalDeliveryTries != 1 || !record.FinalDelivered {
+	if record.ResumeTries != 1 || len(record.FinalDeliveryIDs) != 1 {
 		t.Fatalf("continuation/delivery counts = %#v", record)
 	}
 	eventCounts := map[interactions.EventType]int{}
@@ -5180,7 +5375,7 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 
@@ -5274,7 +5469,7 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 		time.Sleep(time.Millisecond)
 	}
 	if record.Answer == nil || record.Answer.Text != "первый" ||
-		record.ResumeTries != 1 || record.FinalDeliveryTries != 1 {
+		record.ResumeTries != 1 || len(record.FinalDeliveryIDs) != 1 {
 		t.Fatalf("task interaction winner/counts = %#v", record)
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
@@ -5291,7 +5486,7 @@ func TestReloadWhileWaitingResumesAgainstPersistedSession(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-reload-waiting"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
@@ -5336,7 +5531,7 @@ func TestReloadWhileWaitingResumesAgainstPersistedSession(t *testing.T) {
 		t.Fatalf("processInteractionInbound() = (%v, %v)", ownership, err)
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
+	if record.Status != interactions.StatusResolved || len(record.FinalDeliveryIDs) == 0 {
 		t.Fatalf("record after reload answer = %#v", record)
 	}
 	select {
@@ -5419,136 +5614,46 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	}
 }
 
-func TestStopDoesNotCancelFinalizationStartedBeforeRestart(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		legacy bool
-		start  func(*testing.T, *interactions.Registry, interactions.Record) interactions.Record
-	}{
-		{
-			name: "sending",
-			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
-				t.Helper()
-				record, err := registry.BeginFinalDelivery(record.ID, record.Revision)
-				if err != nil {
-					t.Fatal(err)
-				}
-				record, err = registry.StartFinalDelivery(record.ID, record.Revision)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return record
-			},
+func TestStopDoesNotCancelBoundFinalizationAfterRestart(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	stop := testInboundMessage(bus.InboundMessage{
+		Content:    "/stop",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:final-started"),
+		Context: bus.InboundContext{
+			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
+			SenderID: "user-1",
 		},
-		{
-			name: "ambiguous",
-			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
-				t.Helper()
-				record, err := registry.BeginFinalDelivery(record.ID, record.Revision)
-				if err != nil {
-					t.Fatal(err)
-				}
-				record, err = registry.StartFinalDelivery(record.ID, record.Revision)
-				if err != nil {
-					t.Fatal(err)
-				}
-				record, err = registry.CompleteFinalDelivery(
-					record.ID, record.Revision, false, true, "delivery outcome unknown",
-				)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return record
-			},
-		},
-		{
-			name: "delivered",
-			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
-				t.Helper()
-				record, err := registry.RecordFinalDeliveryAttempt(record.ID, record.Revision, true, "")
-				if err != nil {
-					t.Fatal(err)
-				}
-				return record
-			},
-		},
-		{
-			name:   "legacy final delivered",
-			legacy: true,
-			start: func(t *testing.T, registry *interactions.Registry, record interactions.Record) interactions.Record {
-				t.Helper()
-				record, err := registry.RecordFinalDeliveryAttempt(record.ID, record.Revision, true, "")
-				if err != nil {
-					t.Fatal(err)
-				}
-				return record
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
-			defer cleanup()
-			stop := testInboundMessage(bus.InboundMessage{
-				Content:    "/stop",
-				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:final-started-" + test.name),
-				Context: bus.InboundContext{
-					Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
-					SenderID: "user-1",
-				},
-			})
-			record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
-			registry := al.interactionRegistryForWorkspace(agent.Workspace)
-			var err error
-			record, err = registry.ClaimAnswer(
-				record.ID,
-				record.Revision,
-				interactions.Answer{Text: "continue", ReceivedAt: time.Now().UnixMilli()},
-				interactions.OutcomeAnswered,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			record, err = registry.MarkResuming(record.ID, record.Revision)
-			if err != nil {
-				t.Fatal(err)
-			}
-			record = test.start(t, registry, record)
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	var err error
+	record, err = registry.ClaimAnswer(
+		record.ID,
+		record.Revision,
+		interactions.Answer{Text: "continue", ReceivedAt: time.Now().UnixMilli()},
+		interactions.OutcomeAnswered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionFinal(t, registry, record)
+	al.interactionRegistries.Delete(agent.Workspace)
 
-			if test.legacy {
-				storePath := interactions.WorkspaceStorePath(agent.Workspace)
-				data, readErr := os.ReadFile(storePath)
-				if readErr != nil {
-					t.Fatal(readErr)
-				}
-				legacy := strings.Replace(
-					string(data),
-					`"final_delivery_state": "delivered"`,
-					`"final_delivery_state": ""`,
-					1,
-				)
-				if legacy == string(data) {
-					t.Fatal("failed to construct legacy final-delivery fixture")
-				}
-				if writeErr := os.WriteFile(storePath, []byte(legacy), 0o600); writeErr != nil {
-					t.Fatal(writeErr)
-				}
-			}
-			al.interactionRegistries.Delete(agent.Workspace)
-
-			result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
-			if cancelErr == nil || !strings.Contains(cancelErr.Error(), "finalization already started") {
-				t.Fatalf("stop cancellation error = %v", cancelErr)
-			}
-			if !result.Matched || result.Canceled || !result.Failed || result.CommandHandled {
-				t.Fatalf("stop cancellation result = %#v", result)
-			}
-			reloaded, found := al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
-			if !found || reloaded.Status != interactions.StatusResuming || !reloaded.FinalDelivered &&
-				reloaded.FinalDeliveryState != interactions.DeliveryStateSending &&
-				reloaded.FinalDeliveryState != interactions.DeliveryStateAmbiguous {
-				t.Fatalf("interaction after rejected stop = %#v, found=%t", reloaded, found)
-			}
-		})
+	result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
+	if cancelErr == nil || !strings.Contains(cancelErr.Error(), "finalization already started") {
+		t.Fatalf("stop cancellation error = %v", cancelErr)
+	}
+	if !result.Matched || result.Canceled || !result.Failed || result.CommandHandled {
+		t.Fatalf("stop cancellation result = %#v", result)
+	}
+	reloaded, found := al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
+	if !found || reloaded.Status != interactions.StatusResuming || len(reloaded.FinalDeliveryIDs) != 1 {
+		t.Fatalf("interaction after rejected stop = %#v, found=%t", reloaded, found)
 	}
 }
 
@@ -5943,9 +6048,9 @@ func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
 	provider := newBlockingInteractionProvider()
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
-	al.channelManager = newInteractionChannelManager()
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "start interaction",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:late-resume-owner"),
@@ -6295,12 +6400,14 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 		name     string
 		boundary string
 	}{
-		{name: "prepared", boundary: interactionBoundaryFinalPrepared},
+		{name: "ready", boundary: interactionBoundaryFinalReady},
 		{name: "task completed", boundary: interactionBoundaryTaskCompleted},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
+			manager := newInteractionChannelManager()
+			installInteractionChannelManager(t, al, manager)
 			stop := testInboundMessage(bus.InboundMessage{
 				Content: "/stop",
 				SessionKey: session.BuildOpaqueSessionKey(
@@ -6402,7 +6509,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 				t.Fatalf("canceled task projection = %#v", task)
 			}
 			select {
-			case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+			case outbound := <-manager.sent:
 				t.Fatalf("canceled task final was published: %#v", outbound)
 			default:
 			}
@@ -7085,7 +7192,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	sessionKey := "session-resume"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
@@ -7124,7 +7231,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 		t.Fatalf("resumeClaimedInteraction() error = %v", err)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved || !resolved.FinalDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
 		t.Fatalf("record status = %q, want resolved", resolved.Status)
 	}
 	history := agent.Sessions.GetHistory(sessionKey)
@@ -7247,7 +7354,7 @@ func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testin
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-recover-interaction"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
@@ -7288,7 +7395,7 @@ func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testin
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
+	if record.Status != interactions.StatusResolved || len(record.FinalDeliveryIDs) == 0 {
 		t.Fatalf("status after recovery = %q", record.Status)
 	}
 	if got := al.pendingSteeringCountForScope(scope); got != 0 {
@@ -7318,6 +7425,8 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	provider := &toolCallRespProvider{toolName: "must_not_run", response: "must not run"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
 	sessionKey := "session-recover-final"
 	const (
 		taskID        = "recover-final-task"
@@ -7383,7 +7492,7 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 		t.Fatalf("provider calls = %d, want 0", provider.callCount)
 	}
 	record, _ = registry.Get(record.ID)
-	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
+	if record.Status != interactions.StatusResolved || len(record.FinalDeliveryIDs) == 0 {
 		t.Fatalf("status = %q, want resolved", record.Status)
 	}
 	task, _ := tasks.Get(taskID)
@@ -7395,7 +7504,7 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 		t.Fatalf("recovered task lost canonical deliverable: %#v", task)
 	}
 	select {
-	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+	case outbound := <-manager.sent:
 		if outbound.Content != "Recovered final" {
 			t.Fatalf("outbound = %#v", outbound)
 		}
@@ -7408,6 +7517,8 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	provider := &interactionCaptureProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
 	const (
 		sessionKey    = "session-recover-open-tool-round"
 		taskID        = "recover-open-tool-round-task"
@@ -7555,7 +7666,7 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 		t.Fatalf("open-round recovery lost canonical deliverable: task=%#v deliverable=%+v", task, task.Deliverable)
 	}
 	select {
-	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+	case outbound := <-manager.sent:
 		if outbound.Content != "continued with corrected navigation" {
 			t.Fatalf("outbound = %#v", outbound)
 		}
@@ -7627,7 +7738,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	installInteractionChannelManager(t, al, manager)
 	request := testToolSuspensionRequest(agent.Workspace)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
@@ -7679,7 +7790,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 		t.Fatal("handled attachment final did not remove Telegram controls")
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved || !resolved.FinalDelivered {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
 		t.Fatalf("handled attachment interaction = %#v", resolved)
 	}
 }

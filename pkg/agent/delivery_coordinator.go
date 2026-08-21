@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -35,6 +34,7 @@ type AsyncDeliveryDecision struct {
 }
 
 type AsyncDeliveryRequest struct {
+	Context      context.Context
 	TurnState    *turnState
 	ToolName     string
 	CompletionID string
@@ -44,11 +44,11 @@ type AsyncDeliveryRequest struct {
 }
 
 type asyncToolCompletionDelivery struct {
-	bus                             interfaces.MessageBus
 	currentConfig                   func() *config.Config
 	events                          runtimeEventEmitter
 	deliverToUser                   func(context.Context, *turnState, *toolshared.ToolResult, string, []runtimeevents.TraceScope) ([]providers.Attachment, toolResultDeliveryOutcome, error)
 	processCompletion               func(context.Context, AsyncCompletionInput) (string, error)
+	publishOutbound                 func(context.Context, string, bus.OutboundMessage) error
 	asyncTaskDeliveryAlreadyHandled func(workspace, taskID, completionID string) bool
 	recordAsyncTaskDeliveryDecision func(workspace string, decision AsyncDeliveryDecision, completionID, sourceTool string)
 	updateAsyncTaskDeliveryStatus   func(workspace, taskID string, status taskregistry.DeliveryStatus, completionID, errorSummary string)
@@ -59,11 +59,14 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		return nil
 	}
 	return &asyncToolCompletionDelivery{
-		bus:                             al.bus,
-		currentConfig:                   al.GetConfig,
-		events:                          al.runtimeEventEmitter(),
-		deliverToUser:                   al.deliverToolResultToUserWithScopes,
-		processCompletion:               al.processAsyncCompletion,
+		currentConfig:     al.GetConfig,
+		events:            al.runtimeEventEmitter(),
+		deliverToUser:     al.deliverToolResultToUserWithScopes,
+		processCompletion: al.processAsyncCompletion,
+		publishOutbound: func(ctx context.Context, workspace string, msg bus.OutboundMessage) error {
+			_, err := al.publishTransactionMessage(ctx, workspace, msg)
+			return err
+		},
 		asyncTaskDeliveryAlreadyHandled: al.asyncTaskDeliveryAlreadyHandled,
 		recordAsyncTaskDeliveryDecision: al.recordAsyncTaskDeliveryDecision,
 		updateAsyncTaskDeliveryStatus:   al.updateAsyncTaskDeliveryStatus,
@@ -90,6 +93,10 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 	ts = turnStateForAsyncUserDelivery(ts, delivery)
 	completionID := strings.TrimSpace(req.CompletionID)
+	deliveryContext := req.Context
+	if deliveryContext == nil {
+		deliveryContext = context.Background()
+	}
 	if d.isAsyncTaskDeliveryAlreadyHandled(ts.workspace, delivery.TaskID, completionID) {
 		logger.InfoCF("agent", "Skipping duplicate async delivery",
 			map[string]any{
@@ -108,12 +115,12 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		delivered := false
 		deliveryErr := ""
 		if content != "" && result.Delivery.Intent != toolshared.DeliverySilent {
-			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			outCtx, outCancel := context.WithTimeout(context.WithoutCancel(deliveryContext), 5*time.Second)
 			defer outCancel()
 			msg, err := outboundMessageForTraceSettlement(ts, content, req.TraceScopes)
 			if err != nil {
 				deliveryErr = err.Error()
-			} else if err := d.publishOutbound(outCtx, msg); err != nil {
+			} else if err := d.publishMessage(outCtx, ts.workspace, msg); err != nil {
 				deliveryErr = err.Error()
 			} else {
 				delivered = true
@@ -148,7 +155,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		return
 	}
 	if delivery.PublishToUser {
-		outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		outCtx, outCancel := context.WithTimeout(context.WithoutCancel(deliveryContext), 5*time.Second)
 		defer outCancel()
 		userDelivered := false
 		userDeliveryErr := ""
@@ -170,7 +177,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			msg, err := outboundMessageForTraceSettlement(ts, result.ForUser, req.TraceScopes)
 			if err != nil {
 				userDeliveryErr = err.Error()
-			} else if err := d.publishOutbound(outCtx, msg); err != nil {
+			} else if err := d.publishMessage(outCtx, ts.workspace, msg); err != nil {
 				userDeliveryErr = err.Error()
 			} else {
 				userDelivered = true
@@ -258,7 +265,10 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		}
 		origin.SenderID = fmt.Sprintf("async:%s", asyncToolName)
 	}
-	completionCtx, completionCancel := context.WithTimeout(context.Background(), asyncCompletionSynthesisTimeout)
+	completionCtx, completionCancel := context.WithTimeout(
+		context.WithoutCancel(deliveryContext),
+		asyncCompletionSynthesisTimeout,
+	)
 	defer completionCancel()
 	if _, err := d.processAsyncCompletion(completionCtx, AsyncCompletionInput{
 		SourceTool:   asyncToolName,
@@ -331,11 +341,15 @@ func turnStateForAsyncUserDelivery(
 	return cloned
 }
 
-func (d *asyncToolCompletionDelivery) publishOutbound(ctx context.Context, msg bus.OutboundMessage) error {
-	if d == nil || d.bus == nil {
+func (d *asyncToolCompletionDelivery) publishMessage(
+	ctx context.Context,
+	workspace string,
+	msg bus.OutboundMessage,
+) error {
+	if d == nil || d.publishOutbound == nil {
 		return fmt.Errorf("message bus not initialized")
 	}
-	return d.bus.PublishOutbound(ctx, msg)
+	return d.publishOutbound(ctx, workspace, msg)
 }
 
 func (d *asyncToolCompletionDelivery) getConfig() *config.Config {

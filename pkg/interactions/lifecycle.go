@@ -149,117 +149,39 @@ func (r *Registry) BindPromptDelivery(id string, expectedRevision int64, deliver
 	)
 }
 
-func (r *Registry) RecordFinalDeliveryAttempt(
-	id string,
-	expectedRevision int64,
-	success bool,
-	detail string,
-) (Record, error) {
+// BindFinalDelivery stores one exact outbox identity before its intent is
+// created. Transport attempts and outcomes remain exclusively in the outbox.
+func (r *Registry) BindFinalDelivery(id string, expectedRevision int64, deliveryID string) (Record, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
 	return r.update(
 		id,
 		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusResuming || rec.FinalDeliveryTries >= MaxDeliveryAttempts {
+		func(rec *Record, _ int64) (EventType, string, *bool, error) {
+			if rec.Status != StatusResuming || deliveryID == "" {
 				return "", "", nil, fmt.Errorf(
-					"%w: final delivery from %s", ErrInvalidTransition, rec.Status,
-				)
-			}
-			rec.FinalDeliveryTries++
-			rec.LastFinalDeliveryAt = now
-			if success {
-				rec.FinalDelivered = true
-				rec.FinalDeliveryState = DeliveryStateDelivered
-				rec.FinalDeliveryError = ""
-			} else {
-				rec.FinalDeliveryError = bounded(detail, MaxSummaryLength)
-			}
-			return EventFinalDelivery, "", &success, nil
-		},
-	)
-}
-
-func (r *Registry) BeginFinalDelivery(id string, expectedRevision int64) (Record, error) {
-	return r.update(
-		id,
-		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusResuming ||
-				(rec.FinalDeliveryState != "" && rec.FinalDeliveryState != DeliveryStateNotSent) ||
-				rec.FinalDelivered || rec.FinalDeliveryTries >= MaxDeliveryAttempts {
-				return "", "", nil, fmt.Errorf(
-					"%w: begin final delivery from %s/%s",
+					"%w: bind final delivery from %s",
 					ErrInvalidTransition,
 					rec.Status,
-					rec.FinalDeliveryState,
 				)
 			}
-			rec.LastFinalDeliveryAt = now
-			rec.FinalDeliveryError = ""
-			rec.FinalDeliveryState = DeliveryStateNotSent
-			return EventFinalDelivery, "delivery_prepared", nil, nil
-		},
-	)
-}
-
-// StartFinalDelivery crosses the durable no-replay boundary immediately before
-// an external delivery attempt. The preceding definitely-not-sent state remains
-// recoverable after a crash because no channel or parent delivery has started.
-func (r *Registry) StartFinalDelivery(id string, expectedRevision int64) (Record, error) {
-	return r.update(
-		id,
-		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusResuming ||
-				rec.FinalDeliveryState != DeliveryStateNotSent ||
-				rec.FinalDelivered || rec.FinalDeliveryTries >= MaxDeliveryAttempts {
+			for _, existing := range rec.FinalDeliveryIDs {
+				if existing == deliveryID {
+					return "", "", nil, fmt.Errorf(
+						"%w: final delivery %q is already bound",
+						ErrConflict,
+						deliveryID,
+					)
+				}
+			}
+			if len(rec.FinalDeliveryIDs) >= MaxFinalDeliveries {
 				return "", "", nil, fmt.Errorf(
-					"%w: start final delivery from %s/%s",
+					"%w: interaction %q has too many final deliveries",
 					ErrInvalidTransition,
-					rec.Status,
-					rec.FinalDeliveryState,
+					rec.ID,
 				)
 			}
-			rec.FinalDeliveryTries++
-			rec.LastFinalDeliveryAt = now
-			rec.FinalDeliveryError = ""
-			rec.FinalDeliveryState = DeliveryStateSending
-			return EventFinalDelivery, "delivery_started", nil, nil
-		},
-	)
-}
-
-func (r *Registry) CompleteFinalDelivery(
-	id string,
-	expectedRevision int64,
-	success bool,
-	ambiguous bool,
-	detail string,
-) (Record, error) {
-	return r.update(
-		id,
-		expectedRevision,
-		func(rec *Record, now int64) (EventType, string, *bool, error) {
-			if rec.Status != StatusResuming || rec.FinalDeliveryState != DeliveryStateSending {
-				return "", "", nil, fmt.Errorf(
-					"%w: complete final delivery from %s/%s",
-					ErrInvalidTransition,
-					rec.Status,
-					rec.FinalDeliveryState,
-				)
-			}
-			rec.LastFinalDeliveryAt = now
-			if success {
-				rec.FinalDelivered = true
-				rec.FinalDeliveryState = DeliveryStateDelivered
-				rec.FinalDeliveryError = ""
-			} else if ambiguous {
-				rec.FinalDeliveryState = DeliveryStateAmbiguous
-				rec.FinalDeliveryError = bounded(detail, MaxSummaryLength)
-			} else {
-				rec.FinalDeliveryState = DeliveryStateNotSent
-				rec.FinalDeliveryError = bounded(detail, MaxSummaryLength)
-			}
-			return EventFinalDelivery, "delivery_completed", &success, nil
+			rec.FinalDeliveryIDs = append(rec.FinalDeliveryIDs, deliveryID)
+			return EventFinalDelivery, "", nil, nil
 		},
 	)
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -578,15 +579,78 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 	}
 }
 
-func (al *AgentLoop) sendInteractionMessage(ctx context.Context, msg bus.OutboundMessage) error {
-	if al == nil || al.channelManager == nil {
-		return fmt.Errorf("channel manager unavailable")
-	}
-	return al.channelManager.SendMessageDefiniteRetryOnly(ctx, msg)
-}
-
 func interactionDeliveryKey(interactionID, kind string) string {
 	return "interaction:" + strings.TrimSpace(interactionID) + ":" + strings.TrimSpace(kind)
+}
+
+func (al *AgentLoop) withInteractionFinalTransaction(
+	ctx context.Context,
+	registry *interactions.Registry,
+	workspace string,
+	record interactions.Record,
+) context.Context {
+	sourceID := interactionDeliveryKey(record.ID, "final")
+	return withBoundOutboundTransaction(
+		ctx,
+		sourceID,
+		func(deliveryID string) error {
+			return bindInteractionFinalDelivery(registry, record.ID, deliveryID)
+		},
+		func(deliveryID string) error {
+			return al.validateInteractionFinalPublication(
+				registry,
+				workspace,
+				record.ID,
+				deliveryID,
+			)
+		},
+	)
+}
+
+func bindInteractionFinalDelivery(
+	registry *interactions.Registry,
+	interactionID string,
+	deliveryID string,
+) error {
+	if registry == nil {
+		return interactions.ErrStoreUnavailable
+	}
+	var lastErr error
+	for range 4 {
+		record, found := registry.Get(interactionID)
+		if !found {
+			return interactions.ErrNotFound
+		}
+		if interactionHasFinalDelivery(record, deliveryID) {
+			return nil
+		}
+		if record.Status != interactions.StatusResuming {
+			return fmt.Errorf(
+				"%w: interaction %q cannot bind final delivery from %s",
+				interactions.ErrConflict,
+				interactionID,
+				record.Status,
+			)
+		}
+		if _, err := registry.BindFinalDelivery(record.ID, record.Revision, deliveryID); err == nil {
+			return nil
+		} else if !errors.Is(err, interactions.ErrConflict) {
+			return err
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("bind final delivery for interaction %q: %w", interactionID, lastErr)
+}
+
+func interactionHasFinalDelivery(record interactions.Record, deliveryID string) bool {
+	deliveryID = strings.TrimSpace(deliveryID)
+	for _, existing := range record.FinalDeliveryIDs {
+		if existing == deliveryID {
+			return true
+		}
+	}
+	return false
 }
 
 func renderInteractionPrompt(record interactions.Record) string {

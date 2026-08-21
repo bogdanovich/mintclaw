@@ -65,10 +65,19 @@ func validateStoredRecord(rec Record) error {
 	if err := validateStoredQuestions(rec.Kind, rec.Questions); err != nil {
 		return err
 	}
-	if !validDeliveryState(rec.FinalDeliveryState) ||
-		(rec.FinalDelivered && rec.FinalDeliveryState != "" &&
-			rec.FinalDeliveryState != DeliveryStateDelivered) {
-		return fmt.Errorf("invalid delivery state for interaction %q", rec.ID)
+	if len(rec.FinalDeliveryIDs) > MaxFinalDeliveries {
+		return fmt.Errorf("too many final deliveries for interaction %q", rec.ID)
+	}
+	seenFinalDeliveries := make(map[string]struct{}, len(rec.FinalDeliveryIDs))
+	for _, deliveryID := range rec.FinalDeliveryIDs {
+		deliveryID = strings.TrimSpace(deliveryID)
+		if deliveryID == "" {
+			return fmt.Errorf("invalid final delivery for interaction %q", rec.ID)
+		}
+		if _, exists := seenFinalDeliveries[deliveryID]; exists {
+			return fmt.Errorf("duplicate final delivery for interaction %q", rec.ID)
+		}
+		seenFinalDeliveries[deliveryID] = struct{}{}
 	}
 	switch rec.Status {
 	case StatusCreated:
@@ -132,16 +141,6 @@ func validStoredOutcome(kind Kind, outcome Outcome) bool {
 		return outcome == OutcomeAnswered
 	}
 	return outcome == OutcomeAllowed || outcome == OutcomeDenied
-}
-
-func validDeliveryState(state DeliveryState) bool {
-	switch state {
-	case "", DeliveryStateNotSent, DeliveryStateSending, DeliveryStateDelivered,
-		DeliveryStateAmbiguous:
-		return true
-	default:
-		return false
-	}
 }
 
 func validArgumentHashForKind(kind Kind, value string) bool {
