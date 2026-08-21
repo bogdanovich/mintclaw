@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -1121,8 +1122,21 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	inbound := bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
+	resumedDeliverable := &taskresult.Deliverable{
+		Text: "tool-owned child result",
+		Artifacts: []taskresult.Artifact{{
+			Ref:       "file:/tmp/report.txt",
+			LocalPath: "/tmp/report.txt",
+			Kind:      "file",
+		}},
+		Metadata: map[string]string{"producer": "resumed-tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "resume-report",
+		},
+	}
 	if err := al.deliverTaskInteractionFinal(
-		t.Context(), registry, workspace, record, inbound, "raw child final", nil, nil,
+		t.Context(), registry, workspace, record, inbound, "raw child final", resumedDeliverable, nil,
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -1142,6 +1156,12 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	if task.Status != taskregistry.StatusSucceeded ||
 		task.DeliveryStatus != taskregistry.DeliverySessionQueued {
 		t.Fatalf("parent-only task = %#v", task)
+	}
+	if task.Deliverable == nil || task.Deliverable.Text != "tool-owned child result" ||
+		len(task.Deliverable.Artifacts) != 1 || task.Deliverable.Artifacts[0].Ref != "file:/tmp/report.txt" ||
+		task.Deliverable.Metadata["producer"] != "resumed-tool" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "resume-report" {
+		t.Fatalf("parent-only task lost resumed deliverable: %#v", task.Deliverable)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.Status != interactions.StatusResolved ||
@@ -1389,16 +1409,18 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only interaction must wait for user delivery settlement")
 	}
 	traceScope := runtimeevents.NewTraceScope(workspace, "resume-turn")
-	objectiveOutcome := &toolshared.ObjectiveOutcome{
-		Status:         toolshared.ObjectiveOutcomePartial,
-		CompletedItems: []toolshared.ObjectiveItem{{Item: "Yakima published", Kind: "external_action"}},
+	objectiveOutcome := &taskresult.Outcome{
+		Status:         taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{{Item: "Yakima published", Kind: "external_action"}},
 		MissingItems:   []string{"Vissani not published"},
 	}
 	projection := objectiveOutcomeUserContent("Both items were published.", objectiveOutcome)
 	if err := al.deliverTaskInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{Channel: "telegram", ChatID: "chat-1", SenderID: "user-1"},
-		"Both items were published.", objectiveOutcome, []runtimeevents.TraceScope{traceScope},
+		"Both items were published.",
+		&taskresult.Deliverable{ObjectiveOutcome: objectiveOutcome},
+		[]runtimeevents.TraceScope{traceScope},
 	); err != nil {
 		t.Fatalf("deliverTaskInteractionFinal() error = %v", err)
 	}
@@ -1419,8 +1441,8 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 		t.Fatal("user-only task completion was not queued")
 	}
 	task, _ := tasks.Get("subagent-user")
-	if task.TerminalSummary != projection || task.Completion == nil || task.Completion.Text != projection ||
-		task.Deliverable == nil || task.Deliverable.Text != projection || strings.Contains(task.TerminalSummary, "Both items") {
+	if task.TerminalSummary != projection || task.Deliverable == nil || task.Deliverable.Text != projection ||
+		strings.Contains(task.TerminalSummary, "Both items") {
 		t.Fatalf("task retained optimistic resume projection: %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
@@ -5905,7 +5927,7 @@ func TestStopCancellationWinsTaskFinalPreparationBoundaries(t *testing.T) {
 			task, _ := tasks.Get(taskID)
 			if task.Status != taskregistry.StatusCancelled ||
 				task.DeliveryStatus != taskregistry.DeliveryNotApplicable ||
-				task.Completion != nil || task.Deliverable != nil ||
+				task.Deliverable != nil ||
 				task.LastCompletionID != "" || task.TerminalSummary != "" {
 				t.Fatalf("canceled task projection = %#v", task)
 			}
@@ -6844,16 +6866,32 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	provider := &toolCallRespProvider{toolName: "must_not_run", response: "must not run"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	manager := newInteractionChannelManager()
-	al.channelManager = manager
 	sessionKey := "session-recover-final"
+	const (
+		taskID        = "recover-final-task"
+		interactionID = "recover-final-interaction"
+	)
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
+	request.Origin.TaskID = taskID
+	request.Origin.ContinuationSessionKey = sessionKey
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "recover final", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
+		InteractionID:  interactionID,
+		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
+		ID:   interactionID,
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
 		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
 	})
@@ -6868,11 +6906,24 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
 		t.Fatal(ensureErr)
 	}
-	record, err = registry.MarkResuming(record.ID, record.Revision)
+	_, err = registry.MarkResuming(record.ID, record.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "Recovered final"})
+	recoveredDeliverable := &taskresult.Deliverable{
+		Text: "tool-owned recovered result",
+		Artifacts: []taskresult.Artifact{{
+			Ref: "file:/tmp/recovered.txt", LocalPath: "/tmp/recovered.txt", Kind: "file",
+		}},
+		Metadata: map[string]string{"producer": "recovered-tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "recovered-report",
+		},
+	}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", Content: "Recovered final", Deliverable: recoveredDeliverable,
+	})
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -6884,14 +6935,182 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	if record.Status != interactions.StatusResolved || !record.FinalDelivered {
 		t.Fatalf("status = %q, want resolved", record.Status)
 	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 1 ||
+		task.Deliverable.Artifacts[0].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
+		t.Fatalf("recovered task lost canonical deliverable: %#v", task)
+	}
 	select {
-	case outbound := <-manager.sent:
-		if outbound.Content != "Recovered final" ||
-			outbound.Context.Raw["delivery_key"] != interactionDeliveryKey(record.ID, "final") {
+	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+		if outbound.Content != "Recovered final" {
 			t.Fatalf("outbound = %#v", outbound)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for replayed final")
+	}
+}
+
+func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *testing.T) {
+	provider := &interactionCaptureProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	const (
+		sessionKey    = "session-recover-open-tool-round"
+		taskID        = "recover-open-tool-round-task"
+		interactionID = "recover-open-tool-round-interaction"
+	)
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "user", Content: "previous request", RootTurnStart: true,
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-prior-final-handled"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-prior-final-handled", Content: "prior final-handled result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/prior-turn.txt", Kind: "file", Delivered: true}},
+			Metadata:  map[string]string{"turn": "prior"},
+		},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "user", Content: "current request", RootTurnStart: true,
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-chained-interaction"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-before-chained-interaction", Content: "earlier structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/before-interaction.txt", Kind: "file"}},
+			Metadata:  map[string]string{"phase": "before-interaction"},
+		},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, steeringPromptMessage(providers.Message{
+		Role: "user", Content: "keep the current request",
+	}))
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}},
+	})
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = sessionKey
+	request.Origin.TaskID = taskID
+	request.Origin.ContinuationSessionKey = sessionKey
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	if err := tasks.Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
+		TaskKind: "spawn", Task: "recover open tool round", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+		DeliveryMode:   string(toolshared.AsyncDeliveryUserOnly),
+		InteractionID:  interactionID,
+		Channel:        "telegram", ChatID: "chat-1", RequesterSessionKey: sessionKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		ID:   interactionID,
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ = registry.RecordDeliveryAttempt(record.ID, record.Revision, true, "")
+	record, _ = registry.MarkWaiting(record.ID, record.Revision)
+	record, _ = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Canary", Values: map[string]string{"deploy_mode": "Canary"},
+	}, interactions.OutcomeAnswered)
+	if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
+		t.Fatal(ensureErr)
+	}
+	_, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-produced-result"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-produced-result", Content: "structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned recovered result",
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/recovered.txt", Kind: "file"}},
+			Metadata:  map[string]string{"producer": "recovered-tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "recovered-report",
+			},
+		},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-produced-second-result"}},
+	})
+	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+		Role: "tool", ToolCallID: "call-produced-second-result", Content: "second structured result",
+		ToolResultStatus: providers.ToolResultStatusSuccess,
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/second.txt", Kind: "file"}},
+			Metadata:  map[string]string{"round": "second"},
+		},
+	})
+	if closeErr := agent.Sessions.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	agent.Sessions = initSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	var foundCurrentRoot, foundReloadedSteering bool
+	for _, message := range agent.Sessions.GetHistory(sessionKey) {
+		switch message.Content {
+		case "current request":
+			foundCurrentRoot = message.RootTurnStart
+		case "keep the current request":
+			foundReloadedSteering = true
+			if message.RootTurnStart || message.PromptSource != "" {
+				t.Fatalf("reloaded steering acquired root identity: %#v", message)
+			}
+		}
+	}
+	if !foundCurrentRoot || !foundReloadedSteering {
+		t.Fatalf(
+			"reloaded turn identity incomplete: root=%v steering=%v",
+			foundCurrentRoot,
+			foundReloadedSteering,
+		)
+	}
+
+	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
+		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
+	}
+	for _, message := range provider.messages {
+		if message.Deliverable != nil {
+			t.Fatalf("provider received canonical deliverable: %#v", message)
+		}
+	}
+	task, _ := tasks.Get(taskID)
+	if task.Status != taskregistry.StatusSucceeded || task.Deliverable == nil ||
+		task.Deliverable.Text != "tool-owned recovered result" || len(task.Deliverable.Artifacts) != 3 ||
+		task.Deliverable.Artifacts[0].Ref != "file:/tmp/before-interaction.txt" ||
+		task.Deliverable.Artifacts[1].Ref != "file:/tmp/recovered.txt" ||
+		task.Deliverable.Artifacts[2].Ref != "file:/tmp/second.txt" ||
+		task.Deliverable.Metadata["phase"] != "before-interaction" ||
+		task.Deliverable.Metadata["producer"] != "recovered-tool" ||
+		task.Deliverable.Metadata["round"] != "second" ||
+		task.Deliverable.Metadata["turn"] != "" ||
+		task.Deliverable.Report == nil || task.Deliverable.Report.ReportID != "recovered-report" {
+		t.Fatalf("open-round recovery lost canonical deliverable: task=%#v deliverable=%+v", task, task.Deliverable)
+	}
+	select {
+	case outbound := <-al.bus.(*bus.MessageBus).OutboundChan():
+		if outbound.Content != "continued with corrected navigation" {
+			t.Fatalf("outbound = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered completion")
 	}
 }
 
@@ -6902,11 +7121,38 @@ func TestInteractionFinalAfterToolResultRequiresMatchingOrder(t *testing.T) {
 		{Role: "tool", ToolCallID: "call-1", Content: "answer"},
 		{Role: "assistant", Content: "continued"},
 	}
-	if content, ok := interactionFinalAfterToolResult(history, "call-1"); !ok || content != "continued" {
-		t.Fatalf("interactionFinalAfterToolResult() = (%q, %v)", content, ok)
+	if content, deliverable, ok := interactionFinalAfterToolResult(
+		history,
+		"call-1",
+	); !ok || content != "continued" ||
+		deliverable != nil {
+		t.Fatalf("interactionFinalAfterToolResult() = (%q, %#v, %v)", content, deliverable, ok)
 	}
-	if _, ok := interactionFinalAfterToolResult(history, "other"); ok {
+	if _, _, ok := interactionFinalAfterToolResult(history, "other"); ok {
 		t.Fatal("unmatched tool result produced a final response")
+	}
+}
+
+func TestInteractionFinalAfterToolResultDetachesDeliverable(t *testing.T) {
+	history := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1"}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "answer"},
+		{
+			Role: "assistant", Content: "continued",
+			Deliverable: &taskresult.Deliverable{
+				Text:     "tool-owned result",
+				Metadata: map[string]string{"producer": "tool"},
+			},
+		},
+	}
+
+	_, deliverable, ok := interactionFinalAfterToolResult(history, "call-1")
+	if !ok || deliverable == nil {
+		t.Fatalf("interaction final = (%#v, %t), want deliverable", deliverable, ok)
+	}
+	history[2].Deliverable.Metadata["producer"] = "mutated"
+	if deliverable.Text != "tool-owned result" || deliverable.Metadata["producer"] != "tool" {
+		t.Fatalf("recovered deliverable was not detached: %#v", deliverable)
 	}
 }
 
@@ -6922,7 +7168,7 @@ func TestInteractionFinalAfterToolResultDoesNotDuplicateHandledAttachment(t *tes
 			}},
 		},
 	}
-	if content, ok := interactionFinalAfterToolResult(history, "call-media"); !ok || content != "" {
+	if content, _, ok := interactionFinalAfterToolResult(history, "call-media"); !ok || content != "" {
 		t.Fatalf("interactionFinalAfterToolResult() = (%q, %v), want empty handled final", content, ok)
 	}
 }
@@ -6961,7 +7207,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 			Attachments: []providers.Attachment{{Ref: "media://delivered"}},
 		},
 	}
-	content, ok := interactionFinalAfterToolResult(history, record.Origin.ToolCallID)
+	content, _, ok := interactionFinalAfterToolResult(history, record.Origin.ToolCallID)
 	if !ok || content != "" {
 		t.Fatalf("handled attachment final = (%q, %t)", content, ok)
 	}
@@ -7001,7 +7247,7 @@ func TestInteractionPairingIgnoresReusedToolCallIDFromOlderRound(t *testing.T) {
 	if origin != 4 || result != -1 {
 		t.Fatalf("interactionToolPairIndexes() = (%d, %d), want (4, -1)", origin, result)
 	}
-	if _, ok := interactionFinalAfterToolResult(history, "call-reused"); ok {
+	if _, _, ok := interactionFinalAfterToolResult(history, "call-reused"); ok {
 		t.Fatal("older reused result was treated as current continuation")
 	}
 }

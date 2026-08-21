@@ -10,6 +10,7 @@ import (
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -80,6 +81,9 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	if err != nil {
 		t.Fatalf("SetupTurn() error = %v", err)
 	}
+	exec.messages[len(exec.messages)-1].Deliverable = &taskresult.Deliverable{
+		Text: "canonical-only result",
+	}
 	llm := newLLMIterationState(1)
 
 	prepared, err := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm)
@@ -98,6 +102,10 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	}
 	if len(llm.callMessages) == 0 || llm.llmModel == "" || llm.llmOpts == nil {
 		t.Fatalf("preparation did not populate request state: %+v", llm)
+	}
+	if llm.callMessages[len(llm.callMessages)-1].Deliverable != nil ||
+		exec.messages[len(exec.messages)-1].Deliverable == nil {
+		t.Fatalf("provider preparation leaked or mutated canonical message state")
 	}
 
 	invoked, err := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm)

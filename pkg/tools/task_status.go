@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -195,8 +196,6 @@ func formatCompleteTaskDeliverable(rec taskregistry.Record) string {
 	text := ""
 	if rec.Deliverable != nil {
 		text = rec.Deliverable.Text
-	} else if rec.Completion != nil {
-		text = rec.Completion.Text
 	}
 	if strings.TrimSpace(text) == "" {
 		return "\n\nComplete deliverable: no durable text is available."
@@ -321,11 +320,6 @@ func formatTaskRecord(rec taskregistry.Record) string {
 			sb.WriteString(formatDeliverableReport(rec.Deliverable.Report))
 		}
 	}
-	if rec.Completion != nil && rec.Deliverable == nil {
-		fmt.Fprintf(&sb, "  Legacy completion: text=%t media=%d\n",
-			rec.Completion.Text != "",
-			len(rec.Completion.Media))
-	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
@@ -382,7 +376,7 @@ func appendTaskInteractionStatus(
 	}
 }
 
-func formatDeliverableReport(report *taskregistry.DeliverableReport) string {
+func formatDeliverableReport(report *taskresult.Report) string {
 	if report == nil {
 		return ""
 	}
@@ -421,7 +415,7 @@ func formatDeliverableReport(report *taskregistry.DeliverableReport) string {
 	return sb.String()
 }
 
-func formatReportClaim(claim taskregistry.ReportClaim) string {
+func formatReportClaim(claim taskresult.Claim) string {
 	kind := strings.TrimSpace(claim.Kind)
 	if kind == "" {
 		kind = "claim"

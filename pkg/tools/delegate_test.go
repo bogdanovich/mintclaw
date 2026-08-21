@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -200,16 +201,16 @@ func TestDelegateTool_Execute_RecordsTaskRegistry(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Execute_RecordsDeliverableFromCompletion(t *testing.T) {
+func TestDelegateTool_Execute_RecordsDeliverable(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	spawner := &delegateMockSpawner{
 		result: (&toolshared.ToolResult{
 			ForLLM: "child finished",
-			Completion: &toolshared.CompletionResult{
+			Deliverable: &taskresult.Deliverable{
 				Text: "recipe text",
-				Media: []toolshared.CompletionMedia{{
+				Artifacts: []taskresult.Artifact{{
 					Ref:         "media://video",
-					Type:        "video",
+					Kind:        "video",
 					Filename:    "source.mp4",
 					ContentType: "video/mp4",
 				}},
@@ -233,9 +234,6 @@ func TestDelegateTool_Execute_RecordsDeliverableFromCompletion(t *testing.T) {
 		t.Fatalf("registry records = %d, want 1: %#v", len(records), records)
 	}
 	rec := records[0]
-	if rec.Completion != nil {
-		t.Fatalf("Completion = %+v, want nil when Deliverable is present", rec.Completion)
-	}
 	if rec.Deliverable == nil || rec.Deliverable.Text != "recipe text" {
 		t.Fatalf("Deliverable = %+v, want recipe text", rec.Deliverable)
 	}
@@ -248,8 +246,8 @@ func TestDelegateTool_Execute_RecordsBlockedObjectiveAsFailed(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	spawner := &delegateMockSpawner{result: (&toolshared.ToolResult{
 		ForLLM: "browser objective blocked",
-		Completion: &toolshared.CompletionResult{ObjectiveOutcome: &toolshared.ObjectiveOutcome{
-			Status:       toolshared.ObjectiveOutcomeBlocked,
+		Deliverable: &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
+			Status:       taskresult.OutcomeBlocked,
 			MissingItems: []string{"Craigslist verification"},
 		}},
 	})}
@@ -267,7 +265,7 @@ func TestDelegateTool_Execute_RecordsBlockedObjectiveAsFailed(t *testing.T) {
 	records := registry.List()
 	if len(records) != 1 || records[0].Status != taskregistry.StatusFailed ||
 		records[0].Deliverable == nil || records[0].Deliverable.ObjectiveOutcome == nil ||
-		records[0].Deliverable.ObjectiveOutcome.Status != string(toolshared.ObjectiveOutcomeBlocked) {
+		records[0].Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
 		t.Fatalf("delegate task record = %#v", records)
 	}
 }
@@ -277,19 +275,19 @@ func TestDelegateTool_Execute_RecordsExplicitDeliverableReport(t *testing.T) {
 	spawner := &delegateMockSpawner{
 		result: (&toolshared.ToolResult{
 			ForLLM: "review finished",
-		}).WithDeliverable(&toolshared.DeliverableResult{
+		}).WithDeliverable(&taskresult.Deliverable{
 			Text: "No issues found",
-			Report: &toolshared.DeliverableReport{
-				SchemaVersion: taskregistry.DeliverableReportV1,
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
 				ReportID:      "review-1",
 				ContentHash:   "abc123",
 				Summary:       "No high-confidence issues found",
-				Claims: []toolshared.ReportClaim{{
+				Claims: []taskresult.Claim{{
 					Kind:       "negative_evidence",
 					Text:       "No correctness issues found",
 					Confidence: "high",
 				}},
-				FieldDeltas: []toolshared.ReportFieldDelta{{
+				FieldDeltas: []taskresult.FieldDelta{{
 					Field: "review_status",
 					From:  "pending",
 					To:    "clean",
@@ -332,13 +330,17 @@ func TestDelegateTool_Execute_RecordsExplicitDeliverableReport(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Execute_RecordsDeliverableArtifactFromLabeledPath(t *testing.T) {
+func TestDelegateTool_Execute_RecordsExplicitDeliverableArtifact(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	spawner := &delegateMockSpawner{
 		result: (&toolshared.ToolResult{
 			ForLLM: "child finished",
-			Completion: &toolshared.CompletionResult{
-				Text: "- sendable_file_path: `/tmp/mintclaw/source.mp4`\n- russian_recipe_translation: `recipe`",
+			Deliverable: &taskresult.Deliverable{
+				Text: "recipe",
+				Artifacts: []taskresult.Artifact{{
+					Ref: "file:/tmp/mintclaw/source.mp4", LocalPath: "/tmp/mintclaw/source.mp4",
+					Kind: "video", Filename: "source.mp4", ContentType: "video/mp4",
+				}},
 			},
 		}),
 	}
@@ -377,17 +379,6 @@ func TestDelegateTool_Execute_RecordsDeliverableArtifactFromLabeledPath(t *testi
 	}
 	if artifact.ContentType != "video/mp4" {
 		t.Fatalf("artifact content type = %q, want video/mp4", artifact.ContentType)
-	}
-}
-
-func TestCompletionPayloadForLegacyStorageKeepsCompletionOnlyRecords(t *testing.T) {
-	completion := &taskregistry.CompletionPayload{Text: "legacy-only result"}
-	if got := completionPayloadForLegacyStorage(completion, nil); got != completion {
-		t.Fatalf("completion-only storage = %+v, want original completion", got)
-	}
-	deliverable := &taskregistry.DeliverablePayload{Text: "typed result"}
-	if got := completionPayloadForLegacyStorage(completion, deliverable); got != nil {
-		t.Fatalf("deliverable-backed storage completion = %+v, want nil", got)
 	}
 }
 

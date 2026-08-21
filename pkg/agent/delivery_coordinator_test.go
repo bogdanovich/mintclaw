@@ -10,6 +10,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -87,12 +88,12 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 			},
 		},
 		{
-			name: "media counts direct and completion media",
+			name: "media counts direct and deliverable artifacts",
 			in: (&toolshared.ToolResult{
 				ForLLM: "parent text",
 				Media:  []string{"media://direct"},
-				Completion: &toolshared.CompletionResult{
-					Media: []toolshared.CompletionMedia{
+				Deliverable: &taskresult.Deliverable{
+					Artifacts: []taskresult.Artifact{
 						{Ref: "media://completion-1"},
 						{Ref: "media://completion-2"},
 					},
@@ -109,8 +110,8 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 			name: "user only media publishes without user text",
 			in: (&toolshared.ToolResult{
 				ForLLM: "internal media result",
-				Completion: &toolshared.CompletionResult{
-					Media: []toolshared.CompletionMedia{{Ref: "media://completion-video"}},
+				Deliverable: &taskresult.Deliverable{
+					Artifacts: []taskresult.Artifact{{Ref: "media://completion-video"}},
 				},
 			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly),
 			want: AsyncDeliveryDecision{
@@ -128,7 +129,7 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 			in: (&toolshared.ToolResult{
 				ForLLM:      "internal research envelope",
 				Silent:      true,
-				Deliverable: &toolshared.DeliverableResult{Text: "complete research report"},
+				Deliverable: &taskresult.Deliverable{Text: "complete research report"},
 			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly),
 			want: AsyncDeliveryDecision{
 				DeliveryMode:  toolshared.AsyncDeliveryUserOnly,
@@ -393,11 +394,11 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 	result := (&toolshared.ToolResult{
 		ForLLM:      "internal media result",
 		AsyncTaskID: taskID,
-		Completion: &toolshared.CompletionResult{
+		Deliverable: &taskresult.Deliverable{
 			Text: "https://example.com/reel",
-			Media: []toolshared.CompletionMedia{{
+			Artifacts: []taskresult.Artifact{{
 				Ref:         "media://video-1",
-				Type:        "video",
+				Kind:        "video",
 				Filename:    "source.mp4",
 				ContentType: "video/mp4",
 			}},
@@ -442,10 +443,10 @@ func TestDeliverAsyncToolCompletion_MediaDeliveryFailureRecordsFailed(t *testing
 	result := (&toolshared.ToolResult{
 		ForLLM:      "internal media result",
 		AsyncTaskID: taskID,
-		Completion: &toolshared.CompletionResult{
-			Media: []toolshared.CompletionMedia{{
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{
 				Ref:         "media://video-fail",
-				Type:        "video",
+				Kind:        "video",
 				Filename:    "source.mp4",
 				ContentType: "video/mp4",
 			}},
@@ -677,7 +678,7 @@ func TestDeliverAsyncToolCompletion_UserOnlyDurableDeliverableIsDelivered(t *tes
 		ForLLM:      "internal research envelope",
 		Silent:      true,
 		AsyncTaskID: taskID,
-		Deliverable: &toolshared.DeliverableResult{Text: fullReport},
+		Deliverable: &taskresult.Deliverable{Text: fullReport},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{

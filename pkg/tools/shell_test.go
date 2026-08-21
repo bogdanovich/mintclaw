@@ -577,8 +577,8 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "truncated") {
 		t.Fatalf("expected truncation marker, got: %s", result.ForLLM)
 	}
-	if len(result.ArtifactTags) != 0 {
-		t.Fatalf("non-coding exec should not retain output artifacts: %v", result.ArtifactTags)
+	if result.Deliverable != nil && len(result.Deliverable.Artifacts) != 0 {
+		t.Fatalf("non-coding exec should not retain output artifacts: %v", result.Deliverable.Artifacts)
 	}
 }
 
@@ -614,11 +614,11 @@ func TestCodingShellTool_RetainsFullTruncatedOutputArtifact(t *testing.T) {
 			"command": "python3 -c \"print('HEAD-' + 'x' * 20000 + '-TAIL')\"",
 		},
 	)
-	if result.IsError || len(result.ArtifactTags) != 1 ||
+	if result.IsError || result.Deliverable == nil || len(result.Deliverable.Artifacts) != 1 ||
 		!strings.Contains(result.ForLLM, "Full command output retained") {
 		t.Fatalf("coding truncated result = %#v", result)
 	}
-	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	path := result.Deliverable.Artifacts[0].LocalPath
 	if !strings.HasPrefix(path, filepath.Join(scratch, "command-output")) {
 		t.Fatalf("artifact path = %q, want under scratch %q", path, scratch)
 	}

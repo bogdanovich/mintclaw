@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 type Runtime string
@@ -61,7 +62,6 @@ const (
 	DefaultMaxEvents         = 5000
 	DefaultMaxSnapshotBytes  = 2 * 1024 * 1024
 	TaskEventSchemaVersion   = "task_event.v2"
-	DeliverableReportV1      = "deliverable_report.v1"
 )
 
 type EventType string
@@ -75,87 +75,6 @@ const (
 	EventTaskUpdated          EventType = "task.updated"
 	EventTaskReconciled       EventType = "task.reconciled"
 )
-
-type CompletionPayload struct {
-	Text             string            `json:"text,omitempty"`
-	Media            []CompletionMedia `json:"media,omitempty"`
-	ObjectiveOutcome *ObjectiveOutcome `json:"objective_outcome,omitempty"`
-}
-
-type CompletionMedia struct {
-	Ref         string `json:"ref"`
-	Type        string `json:"type,omitempty"`
-	Filename    string `json:"filename,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-}
-
-type DeliverablePayload struct {
-	Text             string             `json:"text,omitempty"`
-	Artifacts        []DeliverableItem  `json:"artifacts,omitempty"`
-	Metadata         map[string]string  `json:"metadata,omitempty"`
-	Report           *DeliverableReport `json:"report,omitempty"`
-	ObjectiveOutcome *ObjectiveOutcome  `json:"objective_outcome,omitempty"`
-}
-
-type ObjectiveOutcome struct {
-	Status         string          `json:"status"`
-	CompletedItems []ObjectiveItem `json:"completed_items,omitempty"`
-	MissingItems   []string        `json:"missing_items,omitempty"`
-}
-
-type ObjectiveItem struct {
-	Item     string             `json:"item"`
-	Kind     string             `json:"kind,omitempty"`
-	Receipts []ObjectiveReceipt `json:"receipts,omitempty"`
-}
-
-type ObjectiveReceipt struct {
-	ID       string            `json:"id"`
-	Kind     string            `json:"kind,omitempty"`
-	Target   string            `json:"target,omitempty"`
-	Action   string            `json:"action,omitempty"`
-	Tool     string            `json:"tool,omitempty"`
-	Summary  string            `json:"summary,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-}
-
-type DeliverableItem struct {
-	Ref         string `json:"ref"`
-	Kind        string `json:"kind,omitempty"`
-	Filename    string `json:"filename,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	Delivered   bool   `json:"delivered,omitempty"`
-}
-
-// DeliverableReport is a versioned canonical report for durable outputs. The
-// surrounding DeliverablePayload remains the compatibility projection for older
-// tools; Report is the schemaed contract new consumers should prefer.
-type DeliverableReport struct {
-	SchemaVersion string             `json:"schema_version"`
-	ReportID      string             `json:"report_id"`
-	ContentHash   string             `json:"content_hash"`
-	GeneratedAt   int64              `json:"generated_at"`
-	Summary       string             `json:"summary,omitempty"`
-	Claims        []ReportClaim      `json:"claims,omitempty"`
-	FieldDeltas   []ReportFieldDelta `json:"field_deltas,omitempty"`
-	Provenance    map[string]string  `json:"provenance,omitempty"`
-	Metadata      map[string]string  `json:"metadata,omitempty"`
-	Extra         map[string]any     `json:"extra,omitempty"`
-}
-
-type ReportClaim struct {
-	Kind       string            `json:"kind"`
-	Text       string            `json:"text"`
-	Confidence string            `json:"confidence,omitempty"`
-	SourceRefs []string          `json:"source_refs,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
-}
-
-type ReportFieldDelta struct {
-	Field string `json:"field"`
-	From  string `json:"from,omitempty"`
-	To    string `json:"to,omitempty"`
-}
 
 // TaskEvent is the append-only canonical event stream for task state. Records
 // remain the current-state projection; chat, terminal, and status tools should
@@ -179,44 +98,43 @@ type TaskEvent struct {
 }
 
 type Record struct {
-	TaskID              string              `json:"task_id"`
-	GenerationID        string              `json:"generation_id"`
-	LastEventSeq        int64               `json:"last_event_sequence"`
-	Runtime             Runtime             `json:"runtime"`
-	TaskKind            string              `json:"task_kind,omitempty"`
-	ParentTaskID        string              `json:"parent_task_id,omitempty"`
-	RequesterSessionKey string              `json:"requester_session_key,omitempty"`
-	OwnerKey            string              `json:"owner_key,omitempty"`
-	HistoryPolicyKnown  bool                `json:"history_policy_known,omitempty"`
-	HistoryDisabled     bool                `json:"history_disabled,omitempty"`
-	ScopeKind           string              `json:"scope_kind,omitempty"`
-	Channel             string              `json:"channel,omitempty"`
-	ChatID              string              `json:"chat_id,omitempty"`
-	TopicID             string              `json:"topic_id,omitempty"`
-	AgentID             string              `json:"agent_id,omitempty"`
-	Label               string              `json:"label,omitempty"`
-	Task                string              `json:"task"`
-	Status              Status              `json:"status"`
-	DeliveryStatus      DeliveryStatus      `json:"delivery_status"`
-	NotifyPolicy        NotifyPolicy        `json:"notify_policy"`
-	DeliveryMode        string              `json:"delivery_mode,omitempty"`
-	TimeoutSeconds      int                 `json:"timeout_seconds,omitempty"`
-	LastCompletionID    string              `json:"last_completion_id,omitempty"`
-	DeliveredAt         int64               `json:"delivered_at,omitempty"`
-	DeliveryError       string              `json:"delivery_error,omitempty"`
-	CreatedAt           int64               `json:"created_at"`
-	StartedAt           int64               `json:"started_at,omitempty"`
-	EndedAt             int64               `json:"ended_at,omitempty"`
-	LastEventAt         int64               `json:"last_event_at,omitempty"`
-	CleanupAfter        int64               `json:"cleanup_after,omitempty"`
-	Error               string              `json:"error,omitempty"`
-	ProgressSummary     string              `json:"progress_summary,omitempty"`
-	TerminalSummary     string              `json:"terminal_summary,omitempty"`
-	InteractionID       string              `json:"interaction_id,omitempty"`
-	InteractionShortID  string              `json:"interaction_short_id,omitempty"`
-	InteractionSummary  string              `json:"interaction_summary,omitempty"`
-	Completion          *CompletionPayload  `json:"completion,omitempty"`
-	Deliverable         *DeliverablePayload `json:"deliverable,omitempty"`
+	TaskID              string                  `json:"task_id"`
+	GenerationID        string                  `json:"generation_id"`
+	LastEventSeq        int64                   `json:"last_event_sequence"`
+	Runtime             Runtime                 `json:"runtime"`
+	TaskKind            string                  `json:"task_kind,omitempty"`
+	ParentTaskID        string                  `json:"parent_task_id,omitempty"`
+	RequesterSessionKey string                  `json:"requester_session_key,omitempty"`
+	OwnerKey            string                  `json:"owner_key,omitempty"`
+	HistoryPolicyKnown  bool                    `json:"history_policy_known,omitempty"`
+	HistoryDisabled     bool                    `json:"history_disabled,omitempty"`
+	ScopeKind           string                  `json:"scope_kind,omitempty"`
+	Channel             string                  `json:"channel,omitempty"`
+	ChatID              string                  `json:"chat_id,omitempty"`
+	TopicID             string                  `json:"topic_id,omitempty"`
+	AgentID             string                  `json:"agent_id,omitempty"`
+	Label               string                  `json:"label,omitempty"`
+	Task                string                  `json:"task"`
+	Status              Status                  `json:"status"`
+	DeliveryStatus      DeliveryStatus          `json:"delivery_status"`
+	NotifyPolicy        NotifyPolicy            `json:"notify_policy"`
+	DeliveryMode        string                  `json:"delivery_mode,omitempty"`
+	TimeoutSeconds      int                     `json:"timeout_seconds,omitempty"`
+	LastCompletionID    string                  `json:"last_completion_id,omitempty"`
+	DeliveredAt         int64                   `json:"delivered_at,omitempty"`
+	DeliveryError       string                  `json:"delivery_error,omitempty"`
+	CreatedAt           int64                   `json:"created_at"`
+	StartedAt           int64                   `json:"started_at,omitempty"`
+	EndedAt             int64                   `json:"ended_at,omitempty"`
+	LastEventAt         int64                   `json:"last_event_at,omitempty"`
+	CleanupAfter        int64                   `json:"cleanup_after,omitempty"`
+	Error               string                  `json:"error,omitempty"`
+	ProgressSummary     string                  `json:"progress_summary,omitempty"`
+	TerminalSummary     string                  `json:"terminal_summary,omitempty"`
+	InteractionID       string                  `json:"interaction_id,omitempty"`
+	InteractionShortID  string                  `json:"interaction_short_id,omitempty"`
+	InteractionSummary  string                  `json:"interaction_summary,omitempty"`
+	Deliverable         *taskresult.Deliverable `json:"deliverable,omitempty"`
 }
 
 type Options struct {

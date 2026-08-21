@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -34,6 +35,231 @@ type protectedLoopGuardTool struct {
 }
 
 type protectedResultProjectionTool struct{}
+
+func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.T) {
+	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
+		Text:      "tool-owned result",
+		Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/result.txt", Kind: "file"}},
+		Metadata:  map[string]string{"producer": "tool"},
+		Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      "report-1",
+		},
+	})
+	message := buildToolResultJournalMessage(
+		&Pipeline{}, &turnState{}, "call-1", "test_tool", result, result.ForLLM,
+	)
+	result.Deliverable.Metadata["producer"] = "mutated"
+	if message.Deliverable == nil || message.Deliverable.Text != "tool-owned result" ||
+		message.Deliverable.Metadata["producer"] != "tool" ||
+		message.Deliverable.Report == nil || message.Deliverable.Report.ReportID != "report-1" {
+		t.Fatalf("journal message lost detached deliverable: %#v", message)
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "previous request", RootTurnStart: true},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "old-call"}}},
+		{Role: "tool", ToolCallID: "old-call", Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/old.txt", Kind: "file"}},
+		}},
+		{Role: "user", Content: "current request", RootTurnStart: true},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-interaction"}}},
+		{Role: "tool", ToolCallID: "call-before-interaction", Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/before-interaction.txt", Kind: "file"}},
+			Metadata:  map[string]string{"phase": "before-interaction"},
+		}},
+		steeringPromptMessage(providers.Message{Role: "user", Content: "keep the current request"}),
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-interaction"}}},
+		{Role: "tool", ToolCallID: "call-interaction", Content: "answer"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1"}}},
+		message,
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-2"}}},
+		{Role: "tool", ToolCallID: "call-2", Content: "second result", Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/second.txt", Kind: "file"}},
+			Metadata:  map[string]string{"round": "second"},
+		}},
+	}
+	recovered := unfinishedTurnDeliverable(history)
+	message.Deliverable.Metadata["producer"] = "journal mutated"
+	if recovered == nil || recovered.Text != "tool-owned result" || len(recovered.Artifacts) != 3 ||
+		recovered.Artifacts[0].Ref != "file:/tmp/before-interaction.txt" ||
+		recovered.Metadata["phase"] != "before-interaction" ||
+		recovered.Artifacts[1].Ref != "file:/tmp/result.txt" || recovered.Metadata["producer"] != "tool" ||
+		recovered.Artifacts[2].Ref != "file:/tmp/second.txt" || recovered.Metadata["round"] != "second" ||
+		recovered.Report == nil || recovered.Report.ReportID != "report-1" {
+		t.Fatalf("unfinished interaction lost deliverable: %#v", recovered)
+	}
+	closed := append(history, providers.Message{Role: "assistant", Content: "final"})
+	if deliverable := unfinishedTurnDeliverable(closed); deliverable != nil {
+		t.Fatalf("closed interaction recovered stale deliverable: %#v", deliverable)
+	}
+}
+
+func TestSyncToolDeliveryMarksOnlyMediaInConfirmedOutbound(t *testing.T) {
+	delivery := &syncToolResultDelivery{deliverToUser: func(
+		context.Context,
+		*turnState,
+		*toolshared.ToolResult,
+		string,
+	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
+		return nil, toolResultDeliveryDirect, nil
+	}}
+
+	textOnly := (&toolshared.ToolResult{}).
+		WithDeliverable(&taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
+			Ref: "media://not-sent", Kind: "image",
+		}}}).
+		WithOutboundDelivery(toolshared.OutboundDelivery{Text: "sent as text only"}).
+		WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	deliveryCtx := withOutboundTransaction(t.Context(), "sync-delivery")
+	_, textOnly = delivery.applySyncToolResultDelivery(deliveryCtx, &turnState{}, textOnly, "test")
+	if textOnly.Deliverable.Artifacts[0].Delivered {
+		t.Fatal("text-only outbound marked an unrelated artifact delivered")
+	}
+
+	media := (&toolshared.ToolResult{}).
+		WithDeliverable(&taskresult.Deliverable{Artifacts: []taskresult.Artifact{
+			{Ref: "media://sent", Kind: "image"},
+			{Ref: "media://not-sent", Kind: "image"},
+		}}).
+		WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
+			Ref: "media://sent", Type: "image",
+		}}}).
+		WithImmediateDelivery()
+	_, media = delivery.applySyncToolResultDelivery(deliveryCtx, &turnState{}, media, "test")
+	if !media.Deliverable.Artifacts[0].Delivered || media.Deliverable.Artifacts[1].Delivered {
+		t.Fatalf("explicit outbound delivery disposition = %#v", media.Deliverable.Artifacts)
+	}
+}
+
+func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
+	for _, hook := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hook_%t", hook), func(t *testing.T) {
+			const mediaRef = "media://immediate-result"
+			result := (&toolshared.ToolResult{ForLLM: "generated image"}).
+				WithDeliverable(&taskresult.Deliverable{
+					Text: "generated image",
+					Artifacts: []taskresult.Artifact{{
+						Ref: mediaRef, Kind: "image",
+					}},
+				}).
+				WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
+					Ref: mediaRef, Type: "image",
+				}}}).
+				WithImmediateDelivery()
+			tool := &fixedToolResultTool{name: "generate_image", result: result}
+			registry := tools.NewToolRegistry()
+			registry.Register(tool)
+			store := session.NewSessionManager("")
+			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-immediate-result",
+				sessionKey: "session-immediate-result",
+				opts: processOptions{
+					SendResponse: true,
+					Dispatch:     DispatchRequest{SessionKey: "session-immediate-result"},
+				},
+			}
+			toolCall := providers.ToolCall{ID: "call-image", Name: tool.Name(), Arguments: map[string]any{}}
+			intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
+				t.Fatal(err)
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+			llm.assistantToolCallsPersisted = true
+			delivery := &syncToolResultDelivery{deliverToUser: func(
+				deliveryCtx context.Context,
+				_ *turnState,
+				got *toolshared.ToolResult,
+				_ string,
+			) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
+				if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				return nil, toolResultDeliveryQueued, nil
+			}}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: delivery}}
+			if hook {
+				pipeline.Interaction.Hooks = &toolResultRespondHook{result: result}
+			}
+
+			deliveryCtx := withOutboundTransaction(t.Context(), "immediate-result")
+			outcome := pipeline.ExecuteTools(deliveryCtx, deliveryCtx, ts, exec, llm)
+			if outcome.JournalErr != nil {
+				t.Fatalf("ExecuteTools() journal error = %v", outcome.JournalErr)
+			}
+			history := store.GetHistory(ts.sessionKey)
+			if len(history) != 2 || history[1].Deliverable == nil ||
+				len(history[1].Deliverable.Artifacts) != 1 ||
+				!history[1].Deliverable.Artifacts[0].Delivered || exec.deliverable == nil ||
+				len(exec.deliverable.Artifacts) != 1 || !exec.deliverable.Artifacts[0].Delivered {
+				t.Fatalf("immediate deliverable was not settled: history=%#v exec=%#v", history, exec.deliverable)
+			}
+		})
+	}
+}
+
+func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
+	const mediaRef = "media://journal-failure"
+	result := (&toolshared.ToolResult{ForLLM: "generated image"}).
+		WithDeliverable(&taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
+			Ref: mediaRef, Kind: "image",
+		}}}).
+		WithOutboundDelivery(toolshared.OutboundDelivery{Media: []bus.MediaPart{{
+			Ref: mediaRef, Type: "image",
+		}}}).
+		WithImmediateDelivery()
+	tool := &fixedToolResultTool{name: "generate_image", result: result}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	baseStore := session.NewSessionManager("")
+	journalErr := errors.New("settle immediate journal")
+	store := &mutateFailingSessionStore{SessionStore: baseStore, err: journalErr, failAt: 1}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-immediate-journal-failure",
+		sessionKey: "session-immediate-journal-failure",
+		opts: processOptions{
+			SendResponse: true,
+			Dispatch:     DispatchRequest{SessionKey: "session-immediate-journal-failure"},
+		},
+	}
+	toolCall := providers.ToolCall{ID: "call-image", Name: tool.Name(), Arguments: map[string]any{}}
+	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
+	if err := baseStore.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
+		t.Fatal(err)
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
+	llm.assistantToolCallsPersisted = true
+	published := false
+	delivery := &syncToolResultDelivery{deliverToUser: func(
+		deliveryCtx context.Context,
+		_ *turnState,
+		got *toolshared.ToolResult,
+		_ string,
+	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
+		if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
+			return nil, toolResultDeliveryNone, err
+		}
+		published = true
+		return nil, toolResultDeliveryQueued, nil
+	}}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: delivery}}
+	deliveryCtx := withOutboundTransaction(t.Context(), "immediate-journal-failure")
+	outcome := pipeline.ExecuteTools(deliveryCtx, deliveryCtx, ts, exec, llm)
+	if !errors.Is(outcome.JournalErr, journalErr) || published {
+		t.Fatalf("ExecuteTools() journal error = %v, published = %t", outcome.JournalErr, published)
+	}
+	history := baseStore.GetHistory(ts.sessionKey)
+	if len(history) != 2 || history[1].Deliverable == nil ||
+		len(history[1].Deliverable.Artifacts) != 1 || history[1].Deliverable.Artifacts[0].Delivered {
+		t.Fatalf("failed settlement changed canonical history: %#v", history)
+	}
+}
 
 type protectedResultRegistrySwapHook struct {
 	agent *AgentInstance
@@ -741,7 +967,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		if commitCalls != 0 || got.Outbound == nil || got.Outbound.Recovery == nil ||
 			len(got.Outbound.Media) != 1 ||
 			got.Outbound.Media[0].Ref != mediaRef || !slices.Equal(got.Media, []string{mediaRef}) ||
-			len(got.ArtifactTags) != 0 || len(journaled) != 2 || journaled[1].Role != "tool" {
+			got.Deliverable != nil || len(journaled) != 2 || journaled[1].Role != "tool" {
 			t.Fatalf(
 				"delivery result = %#v; commit calls = %d; journaled = %#v",
 				got, commitCalls, journaled,
@@ -753,7 +979,8 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		return nil, toolResultDeliveryQueued, nil
 	}}
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: delivery}}
-	pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	deliveryCtx := withOutboundTransaction(t.Context(), "protected-immediate-artifact")
+	pipeline.ExecuteTools(deliveryCtx, deliveryCtx, ts, exec, llm)
 
 	history := store.GetHistory(ts.sessionKey)
 	if deliveryCalls != 1 || commitCalls != 1 || len(history) != 2 ||
@@ -902,8 +1129,9 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 					delivery.syncCalls,
 				)
 			}
-			if len(exec.completionMedia) != 1 || exec.completionMedia[0].Ref != "media://suppressed-result" {
-				t.Fatalf("completion media = %+v, want suppressed result", exec.completionMedia)
+			if exec.deliverable == nil || len(exec.deliverable.Artifacts) != 1 ||
+				exec.deliverable.Artifacts[0].Ref != "media://suppressed-result" {
+				t.Fatalf("deliverable = %+v, want suppressed result", exec.deliverable)
 			}
 			history := store.GetHistory(ts.sessionKey)
 			if len(history) != 2 || len(history[1].Media) != 1 ||

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (r *Registry) nowMillis() int64 {
@@ -94,10 +95,7 @@ func cloneRecord(rec Record) Record {
 		answer.Media = append([]string(nil), rec.Answer.Media...)
 		rec.Answer = &answer
 	}
-	rec.OutcomeReceipts = append([]OutcomeReceipt(nil), rec.OutcomeReceipts...)
-	for index := range rec.OutcomeReceipts {
-		rec.OutcomeReceipts[index].Metadata = cloneStringMap(rec.OutcomeReceipts[index].Metadata)
-	}
+	rec.OutcomeReceipts = taskresult.CloneReceipts(rec.OutcomeReceipts)
 	return rec
 }
 

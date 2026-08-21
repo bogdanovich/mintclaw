@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -1607,7 +1608,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		}
 		resuming = current
 	}
-	if finalContent, ok := interactionFinalAfterToolResult(
+	if finalContent, recoveredDeliverable, ok := interactionFinalAfterToolResult(
 		agent.Sessions.GetHistory(continuationSessionKey),
 		record.Origin.ToolCallID,
 	); ok {
@@ -1616,7 +1617,8 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		)
 		al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 		_, finalizeErr := al.finalizeResumedInteraction(
-			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent, objectiveOutcome, nil,
+			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent,
+			terminalTurnDeliverable(recoveredDeliverable, cleanContent, objectiveOutcome), nil,
 			interactionBoundaryPrecomputedFinal,
 		)
 		return finalizeErr
@@ -1691,7 +1693,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		resuming,
 		inbound,
 		finalContent,
-		objectiveOutcome,
+		terminalTurnDeliverable(resumedTurn.deliverable, finalContent, objectiveOutcome),
 		traceScopes,
 		interactionBoundaryModelFinal,
 	)
@@ -1743,7 +1745,7 @@ func (al *AgentLoop) finalizeResumedInteraction(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *toolshared.ObjectiveOutcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 	boundary string,
 ) (interactionFinalizationDisposition, error) {
@@ -1757,7 +1759,7 @@ func (al *AgentLoop) finalizeResumedInteraction(
 		return interactionFinalizationCanceled, nil
 	case interactions.StatusResuming:
 		return interactionFinalizationDelivered, al.deliverInteractionFinal(
-			ctx, registry, interactionWorkspace, current, inbound, content, objectiveOutcome, traceScopes,
+			ctx, registry, interactionWorkspace, current, inbound, content, deliverable, traceScopes,
 		)
 	default:
 		return interactionFinalizationDelivered, fmt.Errorf(
@@ -1766,12 +1768,34 @@ func (al *AgentLoop) finalizeResumedInteraction(
 	}
 }
 
+func terminalTurnDeliverable(
+	base *taskresult.Deliverable,
+	content string,
+	objectiveOutcome *taskresult.Outcome,
+) *taskresult.Deliverable {
+	deliverable := taskresult.CloneDeliverable(base)
+	if deliverable == nil {
+		deliverable = &taskresult.Deliverable{}
+	}
+	if strings.TrimSpace(deliverable.Text) == "" {
+		deliverable.Text = content
+	}
+	if objectiveOutcome != nil {
+		deliverable.ObjectiveOutcome = taskresult.CloneOutcome(objectiveOutcome)
+	}
+	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 &&
+		len(deliverable.Metadata) == 0 && deliverable.Report == nil && deliverable.ObjectiveOutcome == nil {
+		return nil
+	}
+	return deliverable
+}
+
 func extractResumedObjectiveOutcome(
 	content string,
 	audits []toolshared.WriteAuditEntry,
 	record interactions.Record,
 	agent *AgentInstance,
-) (string, *toolshared.ObjectiveOutcome) {
+) (string, *taskresult.Outcome) {
 	required := strings.TrimSpace(record.Origin.TaskID) != "" && agent != nil &&
 		agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
 	return extractObjectiveOutcome(
@@ -1922,14 +1946,14 @@ func (al *AgentLoop) executeApprovedInteractionTool(
 	return outcome.Control, false, nil
 }
 
-func interactionOutcomeReceipts(audits []toolshared.WriteAuditEntry) []interactions.OutcomeReceipt {
-	var receipts []interactions.OutcomeReceipt
+func interactionOutcomeReceipts(audits []toolshared.WriteAuditEntry) []taskresult.Receipt {
+	var receipts []taskresult.Receipt
 	for _, audit := range audits {
 		id := strings.TrimSpace(audit.Metadata["invocation_id"])
 		if !audit.Success || audit.Kind != "external_action" || id == "" {
 			continue
 		}
-		receipts = append(receipts, interactions.OutcomeReceipt{
+		receipts = append(receipts, taskresult.Receipt{
 			ID: id, Kind: audit.Kind, Target: audit.Target, Action: audit.Action,
 			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
 		})
@@ -1987,7 +2011,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *toolshared.ObjectiveOutcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
@@ -1999,7 +2023,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	}.ApplyToContext(&inbound)
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
-			ctx, registry, interactionWorkspace, record, inbound, content, objectiveOutcome, traceScopes,
+			ctx, registry, interactionWorkspace, record, inbound, content, deliverable, traceScopes,
 		)
 	}
 	if strings.TrimSpace(content) == "" && record.Kind == interactions.KindQuestion &&
@@ -2126,7 +2150,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	record interactions.Record,
 	inbound bus.InboundContext,
 	content string,
-	objectiveOutcome *toolshared.ObjectiveOutcome,
+	deliverable *taskresult.Deliverable,
 	traceScopes []runtimeevents.TraceScope,
 ) error {
 	taskRegistry := al.taskRegistryForWorkspace(workspace)
@@ -2142,10 +2166,15 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	if stateErr != nil {
 		return fmt.Errorf("begin task interaction delivery: %w", stateErr)
 	}
+	var objectiveOutcome *taskresult.Outcome
+	if deliverable != nil {
+		objectiveOutcome = deliverable.ObjectiveOutcome
+	}
 	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
+	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalPrepared)
 	if err := taskRegistry.CompleteInteractionTaskResult(
-		taskID, record.ID, projection, taskregistryObjectiveOutcome(objectiveOutcome), taskregistry.DeliveryPending,
+		taskID, record.ID, projection, terminalDeliverable, taskregistry.DeliveryPending,
 	); err != nil {
 		return err
 	}
@@ -2189,13 +2218,8 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}).
 		WithAsyncTaskID(taskID).
 		WithAsyncDelivery(mode)
-	if strings.TrimSpace(projection) != "" || objectiveOutcome != nil {
-		result.WithCompletion(&toolshared.CompletionResult{
-			Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
-		})
-		result.WithDeliverable(&toolshared.DeliverableResult{
-			Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(objectiveOutcome),
-		})
+	if terminalDeliverable != nil {
+		result.WithDeliverable(taskresult.CloneDeliverable(terminalDeliverable))
 	}
 	agent := al.interactionContinuationAgent(record, nil)
 	turnState := &turnState{
@@ -2247,27 +2271,6 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	_, err := registry.Resolve(updated.ID, updated.Revision)
 	return err
-}
-
-func taskregistryObjectiveOutcome(outcome *toolshared.ObjectiveOutcome) *taskregistry.ObjectiveOutcome {
-	if outcome == nil {
-		return nil
-	}
-	result := &taskregistry.ObjectiveOutcome{
-		Status: string(outcome.Status), MissingItems: append([]string(nil), outcome.MissingItems...),
-	}
-	for _, item := range outcome.CompletedItems {
-		mapped := taskregistry.ObjectiveItem{Item: item.Item, Kind: item.Kind}
-		for _, receipt := range item.Receipts {
-			mapped.Receipts = append(mapped.Receipts, taskregistry.ObjectiveReceipt{
-				ID: receipt.ID, Kind: receipt.Kind, Target: receipt.Target,
-				Action: receipt.Action, Tool: receipt.Tool, Summary: receipt.Summary,
-				Metadata: copyObjectiveMetadata(receipt.Metadata),
-			})
-		}
-		result.CompletedItems = append(result.CompletedItems, mapped)
-	}
-	return result
 }
 
 func (al *AgentLoop) deliverInteractionControlsRemoved(
@@ -2344,21 +2347,21 @@ func (al *AgentLoop) completeInteractionTask(
 func interactionFinalAfterToolResult(
 	history []providers.Message,
 	toolCallID string,
-) (string, bool) {
+) (string, *taskresult.Deliverable, bool) {
 	_, resultIndex := interactionToolPairIndexes(history, toolCallID)
 	if resultIndex < 0 {
-		return "", false
+		return "", nil, false
 	}
 	for _, message := range history[resultIndex+1:] {
 		if message.Role == "assistant" && len(message.ToolCalls) == 0 &&
 			strings.TrimSpace(message.Content) != "" {
 			if message.Content == handledToolResponseSummary && len(message.Attachments) > 0 {
-				return "", true
+				return "", taskresult.CloneDeliverable(message.Deliverable), true
 			}
-			return message.Content, true
+			return message.Content, taskresult.CloneDeliverable(message.Deliverable), true
 		}
 	}
-	return "", false
+	return "", nil, false
 }
 
 func (al *AgentLoop) ensureInteractionToolResult(

@@ -3,18 +3,20 @@ package tasks
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestTerminalStatusForObjectiveOutcome(t *testing.T) {
 	tests := []struct {
 		name    string
-		outcome *ObjectiveOutcome
+		outcome *taskresult.Outcome
 		want    Status
 	}{
-		{name: "legacy", want: StatusSucceeded},
-		{name: "succeeded", outcome: &ObjectiveOutcome{Status: "succeeded"}, want: StatusSucceeded},
-		{name: "partial", outcome: &ObjectiveOutcome{Status: "partial"}, want: StatusFailed},
-		{name: "blocked", outcome: &ObjectiveOutcome{Status: "blocked"}, want: StatusFailed},
+		{name: "no outcome", want: StatusSucceeded},
+		{name: "succeeded", outcome: &taskresult.Outcome{Status: "succeeded"}, want: StatusSucceeded},
+		{name: "partial", outcome: &taskresult.Outcome{Status: "partial"}, want: StatusFailed},
+		{name: "blocked", outcome: &taskresult.Outcome{Status: "blocked"}, want: StatusFailed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -37,15 +39,20 @@ func TestCompleteInteractionTaskResultPreservesBlockedStatus(t *testing.T) {
 		"blocked-browser-task",
 		"approval-1",
 		"Task could not be completed",
-		&ObjectiveOutcome{Status: "blocked", MissingItems: []string{"browser verification"}},
+		&taskresult.Deliverable{
+			Text: "Task could not be completed",
+			ObjectiveOutcome: &taskresult.Outcome{
+				Status: "blocked", MissingItems: []string{"browser verification"},
+			},
+		},
 		DeliveryDelivered,
 	); err != nil {
 		t.Fatal(err)
 	}
 	record, ok := registry.Get("blocked-browser-task")
 	if !ok || record.Status != StatusFailed || record.Error != "Task could not be completed" ||
-		record.Completion == nil || record.Completion.ObjectiveOutcome == nil ||
-		record.Completion.ObjectiveOutcome.Status != "blocked" {
+		record.Deliverable == nil || record.Deliverable.ObjectiveOutcome == nil ||
+		record.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
 		t.Fatalf("record = %#v", record)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -244,40 +245,126 @@ func shouldQueueAsyncToolResultForParent(result *toolshared.ToolResult) bool {
 	return decideAsyncToolResultDelivery(result).QueueParent
 }
 
-func recordCompletionMedia(exec *turnExecution, store mediaResolver, refs []string) {
-	if exec == nil || len(refs) == 0 {
+func recordDeliverable(exec *turnExecution, deliverable *taskresult.Deliverable) {
+	if exec == nil || deliverable == nil {
 		return
 	}
-	seen := make(map[string]struct{}, len(exec.completionMedia)+len(refs))
-	for _, item := range exec.completionMedia {
-		seen[item.Ref] = struct{}{}
+	exec.deliverable = mergeDeliverables(exec.deliverable, deliverable)
+}
+
+func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult.Deliverable {
+	if additional == nil {
+		return taskresult.CloneDeliverable(existing)
 	}
+	if existing == nil {
+		return taskresult.CloneDeliverable(additional)
+	}
+	out := taskresult.CloneDeliverable(existing)
+	if strings.TrimSpace(additional.Text) != "" {
+		out.Text = additional.Text
+	}
+	out.Artifacts = mergeDeliverableArtifacts(out.Artifacts, additional.Artifacts)
+	if len(additional.Metadata) > 0 {
+		if out.Metadata == nil {
+			out.Metadata = make(map[string]string, len(additional.Metadata))
+		}
+		for key, value := range additional.Metadata {
+			out.Metadata[key] = value
+		}
+	}
+	if additional.Report != nil {
+		out.Report = taskresult.CloneReport(additional.Report)
+	}
+	if additional.ObjectiveOutcome != nil {
+		out.ObjectiveOutcome = taskresult.CloneOutcome(additional.ObjectiveOutcome)
+	}
+	return out
+}
+
+func deliveredToolResultMediaRefs(result *toolshared.ToolResult) []string {
+	if result == nil {
+		return nil
+	}
+	if result.Outbound == nil {
+		return toolResultMediaRefs(result)
+	}
+	refs := make([]string, 0, len(result.Outbound.Media))
+	for _, part := range result.Outbound.Media {
+		if ref := strings.TrimSpace(part.Ref); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func markToolResultMediaDelivered(result *toolshared.ToolResult, refs []string) {
+	if result == nil || result.Deliverable == nil || len(refs) == 0 {
+		return
+	}
+	delivered := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
+		delivered[strings.TrimSpace(ref)] = struct{}{}
+	}
+	deliverable := taskresult.CloneDeliverable(result.Deliverable)
+	for index := range deliverable.Artifacts {
+		ref := strings.TrimSpace(deliverable.Artifacts[index].Ref)
+		if _, ok := delivered[ref]; ok {
+			deliverable.Artifacts[index].Delivered = true
+		}
+	}
+	result.Deliverable = deliverable
+}
+
+func attachMediaArtifacts(result *toolshared.ToolResult, store mediaResolver) {
+	if result == nil || len(result.Media) == 0 {
+		return
+	}
+	if result.Deliverable == nil {
+		result.Deliverable = &taskresult.Deliverable{}
+	}
+	result.Deliverable.Artifacts = mergeDeliverableArtifacts(
+		result.Deliverable.Artifacts,
+		buildMediaArtifacts(store, result.Media),
+	)
+}
+
+func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []taskresult.Artifact {
+	out := append([]taskresult.Artifact(nil), existing...)
+	byRef := make(map[string]int, len(out))
+	for index, artifact := range out {
+		if ref := strings.TrimSpace(artifact.Ref); ref != "" {
+			byRef[ref] = index
+		}
+	}
+	for _, artifact := range additional {
+		ref := strings.TrimSpace(artifact.Ref)
 		if ref == "" {
 			continue
 		}
-		if _, ok := seen[ref]; ok {
+		if index, exists := byRef[ref]; exists {
+			mergeArtifactHints(&out[index], artifact)
 			continue
 		}
-		exec.completionMedia = append(exec.completionMedia, buildCompletionMedia(store, ref))
-		seen[ref] = struct{}{}
+		byRef[ref] = len(out)
+		out = append(out, artifact)
 	}
+	return out
 }
 
-func buildCompletionMedia(store mediaResolver, ref string) toolshared.CompletionMedia {
-	item := toolshared.CompletionMedia{Ref: ref}
-	if store == nil {
-		return item
+func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact) {
+	if target.LocalPath == "" {
+		target.LocalPath = source.LocalPath
 	}
-	_, meta, err := store.ResolveWithMeta(ref)
-	if err != nil {
-		return item
+	if target.Kind == "" || target.Kind == "media" {
+		target.Kind = source.Kind
 	}
-	item.Filename = meta.Filename
-	item.ContentType = meta.ContentType
-	item.Type = inferMediaType(meta.Filename, meta.ContentType)
-	return item
+	if target.Filename == "" {
+		target.Filename = source.Filename
+	}
+	if target.ContentType == "" {
+		target.ContentType = source.ContentType
+	}
+	target.Delivered = target.Delivered || source.Delivered
 }
 
 type toolLoopRunner struct {
@@ -517,10 +604,9 @@ func (runner *toolLoopRunner) admitToolCall(
 				var toolResultMedia []string
 				if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
-					if !hookResult.ImmediateDelivery {
-						recordCompletionMedia(exec, p.Context.MediaResolver, hookResult.Media)
-						hookResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, hookResult.Media)
-					}
+				}
+				if !hookResult.ResponseHandled && !hookResult.ImmediateDelivery {
+					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
 				}
 				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
 				_, semantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
@@ -568,12 +654,14 @@ func (runner *toolLoopRunner) admitToolCall(
 						ToolCallID:       tc.ID,
 						ToolResultStatus: toolResultContextStatus(hookResult),
 						Media:            toolResultMedia,
+						Deliverable:      taskresult.CloneDeliverable(hookResult.Deliverable),
 					}
 					durableContent = durableToolResultContent(contentForLLM, protectedResult)
 					durableToolResultMsg := toolResultMsg
 					durableToolResultMsg.Content = durableContent
 					if protectedResult {
 						durableToolResultMsg.Media = nil
+						durableToolResultMsg.Deliverable = nil
 					}
 					aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 					if err != nil {
@@ -585,9 +673,18 @@ func (runner *toolLoopRunner) admitToolCall(
 						})
 					}
 
+					runner.bindImmediateDeliverySettlement(
+						toolResultMsg,
+						durableToolResultMsg,
+						hookResult,
+						protectedResult,
+					)
 					attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
 					hookResult = deliveredResult
 					runner.handledAttachments = append(runner.handledAttachments, attachments...)
+				}
+				if !protectedResult && hookResult.Deliverable != nil {
+					recordDeliverable(exec, hookResult.Deliverable)
 				}
 
 				shouldSendForUser := !hookResult.ResponseHandled &&
@@ -1279,9 +1376,8 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
-	if len(toolResult.Media) > 0 && !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
-		recordCompletionMedia(exec, p.Context.MediaResolver, toolResult.Media)
-		toolResult.ArtifactTags = buildArtifactTags(p.Context.MediaResolver, toolResult.Media)
+	if !toolResult.ResponseHandled && !toolResult.ImmediateDelivery {
+		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
 	}
 	protectedResult := call.protectedResult
 	var contentForLLM string
@@ -1336,6 +1432,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		durableToolResultMsg.Content = durableContent
 		if protectedResult {
 			durableToolResultMsg.Media = nil
+			durableToolResultMsg.Deliverable = nil
 		}
 		aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
 		if err != nil {
@@ -1347,9 +1444,18 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			})
 		}
 
+		runner.bindImmediateDeliverySettlement(
+			toolResultMsg,
+			durableToolResultMsg,
+			toolResult,
+			protectedResult,
+		)
 		attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
 		toolResult = deliveredResult
 		runner.handledAttachments = append(runner.handledAttachments, attachments...)
+	}
+	if !protectedResult && toolResult.Deliverable != nil {
+		recordDeliverable(exec, toolResult.Deliverable)
 	}
 
 	if !toolResult.ResponseHandled {
@@ -1544,6 +1650,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 			Role:        "assistant",
 			Content:     handledToolResponseSummary,
 			Attachments: append([]providers.Attachment(nil), runner.handledAttachments...),
+			Deliverable: taskresult.CloneDeliverable(exec.deliverable),
 		}
 		if !ts.opts.NoHistory {
 			writeErr := persistFullSessionMessage(
@@ -1711,6 +1818,7 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	durableMsg.Content = durableToolResultContent(msg.Content, protectedResult)
 	if protectedResult {
 		durableMsg.Media = nil
+		durableMsg.Deliverable = nil
 	}
 	return r.appendToolMessageWithDurableContext(
 		ctx,
@@ -1736,6 +1844,7 @@ func buildToolResultJournalMessage(
 	message := providers.Message{
 		Role: "tool", Content: content, ToolCallID: toolCallID,
 		ToolResultStatus: toolResultContextStatus(result),
+		Deliverable:      taskresult.CloneDeliverable(result.Deliverable),
 	}
 	if len(result.Media) > 0 && !result.ResponseHandled {
 		message.Media = append(message.Media, result.Media...)
@@ -1810,6 +1919,9 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	if settledResult != nil && errors.Is(settledResult.Err, errFinalHandledDeliveryAmbiguous) {
 		turnErr = settledResult.Err
 	}
+	if settledResult != nil && settledResult.ResponseHandled {
+		markToolResultMediaDelivered(settledResult, deliveredToolResultMediaRefs(settledResult))
+	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
 		r.ts,
@@ -1834,12 +1946,14 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	settledDurableMsg.Content = durableContent
 	if protectedResult {
 		settledDurableMsg.Media = nil
+		settledDurableMsg.Deliverable = nil
 	}
-	aborted, err = r.finalizePendingToolResult(
+	aborted, err = r.replaceJournaledToolResult(
 		pendingMsg,
 		pendingDurableMsg,
 		settledMsg,
 		settledDurableMsg,
+		true,
 	)
 	r.exec.messages = r.messages
 	return terminalDeliverySettlement{
@@ -1951,11 +2065,71 @@ func (r *toolLoopRunner) commitExecutedToolResult(
 	return r.ts.hardAbortRequested(), nil
 }
 
-func (r *toolLoopRunner) finalizePendingToolResult(
-	pendingMsg providers.Message,
-	pendingDurableMsg providers.Message,
-	settledMsg providers.Message,
-	settledDurableMsg providers.Message,
+func (r *toolLoopRunner) settleCommittedImmediateResult(
+	journaledMsg providers.Message,
+	journaledDurableMsg providers.Message,
+	result *toolshared.ToolResult,
+	protectedResult bool,
+) (bool, error) {
+	if protectedResult || result == nil || !result.ImmediateDelivery || result.Deliverable == nil {
+		return false, nil
+	}
+	settledMsg := journaledMsg
+	settledMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	settledDurableMsg := journaledDurableMsg
+	settledDurableMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	if messagesEquivalent(journaledMsg, settledMsg) &&
+		messagesEquivalent(journaledDurableMsg, settledDurableMsg) {
+		return false, nil
+	}
+	return r.replaceJournaledToolResult(
+		journaledMsg,
+		journaledDurableMsg,
+		settledMsg,
+		settledDurableMsg,
+		false,
+	)
+}
+
+func (r *toolLoopRunner) bindImmediateDeliverySettlement(
+	journaledMsg providers.Message,
+	journaledDurableMsg providers.Message,
+	result *toolshared.ToolResult,
+	protectedResult bool,
+) {
+	if protectedResult || result == nil || !result.ImmediateDelivery || result.Deliverable == nil {
+		return
+	}
+	originalCommit := result.CommitOutbound
+	result.CommitOutbound = func(ctx context.Context) error {
+		if originalCommit != nil {
+			if err := originalCommit(ctx); err != nil {
+				return err
+			}
+		}
+		markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+		aborted, err := r.settleCommittedImmediateResult(
+			journaledMsg,
+			journaledDurableMsg,
+			result,
+			protectedResult,
+		)
+		if err != nil {
+			return err
+		}
+		if aborted {
+			return errors.New("immediate delivery settlement was interrupted")
+		}
+		return nil
+	}
+}
+
+func (r *toolLoopRunner) replaceJournaledToolResult(
+	expectedMsg providers.Message,
+	expectedDurableMsg providers.Message,
+	replacementMsg providers.Message,
+	replacementDurableMsg providers.Message,
+	ingestReplacement bool,
 ) (bool, error) {
 	fail := func(err error) (bool, error) {
 		if r.journalErr == nil {
@@ -1976,17 +2150,17 @@ func (r *toolLoopRunner) finalizePendingToolResult(
 			func(current []providers.Message) ([]providers.Message, bool, error) {
 				history := append([]providers.Message(nil), current...)
 				for i := len(history) - 1; i >= 0; i-- {
-					if !pendingToolResultMatches(history[i], pendingDurableMsg) {
+					if !pendingToolResultMatches(history[i], expectedDurableMsg) {
 						continue
 					}
-					replacement := settledDurableMsg
+					replacement := replacementDurableMsg
 					replacement.CreatedAt = history[i].CreatedAt
 					history[i] = replacement
 					return history, true, nil
 				}
 				return nil, false, fmt.Errorf(
-					"pending tool result %s is missing from canonical history",
-					pendingMsg.ToolCallID,
+					"journaled tool result %s is missing from canonical history",
+					expectedMsg.ToolCallID,
 				)
 			},
 		)
@@ -1995,34 +2169,34 @@ func (r *toolLoopRunner) finalizePendingToolResult(
 		}
 		if !changed {
 			return fail(fmt.Errorf(
-				"pending tool result %s was not finalized",
-				pendingMsg.ToolCallID,
+				"journaled tool result %s was not replaced",
+				expectedMsg.ToolCallID,
 			))
 		}
 		if !r.ts.replacePersistedToolMessagePair(
-			pendingMsg,
-			pendingDurableMsg,
-			settledMsg,
-			settledDurableMsg,
+			expectedMsg,
+			expectedDurableMsg,
+			replacementMsg,
+			replacementDurableMsg,
 		) {
 			return fail(fmt.Errorf(
-				"pending tool result %s is missing from turn state",
-				pendingMsg.ToolCallID,
+				"journaled tool result %s is missing from turn state",
+				expectedMsg.ToolCallID,
 			))
 		}
-		if r.p != nil {
-			r.p.ingestMessage(ctx, r.ts, settledDurableMsg, nil)
+		if ingestReplacement && r.p != nil {
+			r.p.ingestMessage(ctx, r.ts, replacementDurableMsg, nil)
 		}
 	}
 	for i := len(r.messages) - 1; i >= 0; i-- {
-		if pendingToolResultMatches(r.messages[i], pendingMsg) {
-			r.messages[i] = settledMsg
+		if pendingToolResultMatches(r.messages[i], expectedMsg) {
+			r.messages[i] = replacementMsg
 			return r.ts != nil && r.ts.hardAbortRequested(), nil
 		}
 	}
 	return fail(fmt.Errorf(
-		"pending tool result %s is missing from live context",
-		pendingMsg.ToolCallID,
+		"journaled tool result %s is missing from live context",
+		expectedMsg.ToolCallID,
 	))
 }
 

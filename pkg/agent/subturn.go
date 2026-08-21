@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -626,10 +627,7 @@ func spawnSubTurn(
 		outcome := blockedObjectiveOutcome("a valid declared objective checklist is required before browser execution")
 		projection := objectiveOutcomeUserContent("", outcome)
 		return (&toolshared.ToolResult{ForLLM: projection, ForUser: projection}).
-			WithCompletion(&toolshared.CompletionResult{
-				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
-			}).
-			WithDeliverable(&toolshared.DeliverableResult{
+			WithDeliverable(&taskresult.Deliverable{
 				Text: projection, ObjectiveOutcome: cloneObjectiveOutcome(outcome),
 			}), nil
 	}
@@ -806,8 +804,9 @@ func spawnSubTurn(
 	// 8. Execute sub-turn via the real agent loop.
 	pipeline := NewPipeline(al)
 	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
+	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
-		turnRes.finalContent, turnRes.objectiveOutcome = extractObjectiveOutcome(
+		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(
 			turnRes.finalContent,
 			turnRes.writeAudit,
 			requireObjectiveOutcome,
@@ -836,10 +835,9 @@ func spawnSubTurn(
 	} else if turnRes.status == TurnEndStatusSuspended {
 		result = &toolshared.ToolResult{TaskSuspended: true}
 	} else {
-		userContent := objectiveOutcomeUserContent(turnRes.finalContent, turnRes.objectiveOutcome)
+		userContent := objectiveOutcomeUserContent(turnRes.finalContent, objectiveOutcome)
 		parentContent := turnRes.finalContent
-		if turnRes.objectiveOutcome != nil &&
-			turnRes.objectiveOutcome.Status != toolshared.ObjectiveOutcomeSucceeded {
+		if objectiveOutcome != nil && objectiveOutcome.Status != taskresult.OutcomeSucceeded {
 			parentContent = userContent
 		}
 		result = &toolshared.ToolResult{
@@ -847,15 +845,19 @@ func spawnSubTurn(
 			ForUser: userContent,
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
-		if strings.TrimSpace(turnRes.finalContent) != "" || len(turnRes.completionMedia) > 0 ||
-			turnRes.objectiveOutcome != nil {
-			result.WithCompletion(&toolshared.CompletionResult{
-				Text: parentContent, Media: append(
-					[]toolshared.CompletionMedia(nil), turnRes.completionMedia...,
-				),
-				ObjectiveOutcome: cloneObjectiveOutcome(turnRes.objectiveOutcome),
-			})
-			result.Media = append(result.Media, completionMediaRefs(turnRes.completionMedia)...)
+		if strings.TrimSpace(turnRes.finalContent) != "" || turnRes.deliverable != nil || objectiveOutcome != nil {
+			deliverable := taskresult.CloneDeliverable(turnRes.deliverable)
+			if deliverable == nil {
+				deliverable = &taskresult.Deliverable{}
+			}
+			if strings.TrimSpace(deliverable.Text) == "" {
+				deliverable.Text = parentContent
+			}
+			if objectiveOutcome != nil {
+				deliverable.ObjectiveOutcome = cloneObjectiveOutcome(objectiveOutcome)
+			}
+			result.WithDeliverable(deliverable)
+			result.Media = append(result.Media, mediaArtifactRefs(deliverable.Artifacts)...)
 		}
 		if !cfg.Async {
 			switch deliveryMode {
@@ -890,11 +892,14 @@ func durableTaskSessionKey(ownerWorkspace, taskID string) string {
 	return "task:" + hex.EncodeToString(sum[:8]) + ":" + strings.TrimSpace(taskID)
 }
 
-func completionMediaRefs(items []toolshared.CompletionMedia) []string {
+func mediaArtifactRefs(items []taskresult.Artifact) []string {
 	refs := make([]string, 0, len(items))
 	for _, item := range items {
+		if item.Delivered {
+			continue
+		}
 		ref := strings.TrimSpace(item.Ref)
-		if ref != "" {
+		if strings.HasPrefix(ref, "media://") {
 			refs = append(refs, ref)
 		}
 	}

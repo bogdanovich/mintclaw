@@ -120,6 +120,7 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.llmModel,
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
+	llm.callMessages = stripCanonicalMessageStateFromAll(llm.callMessages)
 
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,

@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
@@ -94,12 +95,8 @@ func terminalTaskPromptTimestamp(record taskregistry.Record) int64 {
 
 func terminalTaskPromptState(record taskregistry.Record) string {
 	if record.Deliverable != nil && record.Deliverable.ObjectiveOutcome != nil &&
-		strings.TrimSpace(record.Deliverable.ObjectiveOutcome.Status) != "" {
-		return record.Deliverable.ObjectiveOutcome.Status
-	}
-	if record.Completion != nil && record.Completion.ObjectiveOutcome != nil &&
-		strings.TrimSpace(record.Completion.ObjectiveOutcome.Status) != "" {
-		return record.Completion.ObjectiveOutcome.Status
+		strings.TrimSpace(string(record.Deliverable.ObjectiveOutcome.Status)) != "" {
+		return string(record.Deliverable.ObjectiveOutcome.Status)
 	}
 	return string(record.Status)
 }
@@ -107,7 +104,6 @@ func terminalTaskPromptState(record taskregistry.Record) string {
 func terminalTaskPromptSummary(record taskregistry.Record) string {
 	for _, candidate := range []string{
 		record.TerminalSummary,
-		completionTaskPromptText(record.Completion),
 		deliverableTaskPromptText(record.Deliverable),
 		record.Error,
 	} {
@@ -118,14 +114,7 @@ func terminalTaskPromptSummary(record taskregistry.Record) string {
 	return "No result summary was recorded."
 }
 
-func completionTaskPromptText(completion *taskregistry.CompletionPayload) string {
-	if completion == nil {
-		return ""
-	}
-	return completion.Text
-}
-
-func deliverableTaskPromptText(deliverable *taskregistry.DeliverablePayload) string {
+func deliverableTaskPromptText(deliverable *taskresult.Deliverable) string {
 	if deliverable == nil {
 		return ""
 	}

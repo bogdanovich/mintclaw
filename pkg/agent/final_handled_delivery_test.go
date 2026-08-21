@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -167,15 +168,28 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 						Silent: true,
 					}
 					if legacy {
-						result.Media = []string{"media://legacy-final-handled"}
+						result.Media = []string{"media://canonical-handled"}
 						result.WithResponseHandled()
 					} else {
 						result.WithOutboundDelivery(toolshared.OutboundDelivery{
 							Channel: "telegram",
 							ChatID:  "chat-1",
-							Text:    "hello",
+							Media: []bus.MediaPart{{
+								Ref: "media://canonical-handled", Type: "image",
+							}},
 						}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 					}
+					result.WithDeliverable(&taskresult.Deliverable{
+						Text: "canonical handled result",
+						Artifacts: []taskresult.Artifact{{
+							Ref: "media://canonical-handled", Kind: "image",
+						}},
+						Metadata: map[string]string{"producer": "final_message"},
+						Report: &taskresult.Report{
+							SchemaVersion: taskresult.ReportSchemaV1,
+							ReportID:      "handled-report",
+						},
+					})
 					result.WriteAudit = []toolshared.WriteAuditEntry{{
 						Target:  "outbound:telegram:chat-1",
 						Action:  "send",
@@ -254,6 +268,17 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 						if historyResult.ToolResultStatus != providers.ToolResultStatusSuccess ||
 							!strings.Contains(historyResult.Content, "confirmed delivered") {
 							t.Fatalf("delivered canonical result = %#v", historyResult)
+						}
+						if historyResult.Deliverable == nil || exec.deliverable == nil ||
+							historyResult.Deliverable.Text != "canonical handled result" ||
+							historyResult.Deliverable.Metadata["producer"] != "final_message" ||
+							historyResult.Deliverable.Report == nil ||
+							historyResult.Deliverable.Report.ReportID != "handled-report" ||
+							len(historyResult.Deliverable.Artifacts) != 1 ||
+							!historyResult.Deliverable.Artifacts[0].Delivered ||
+							len(mediaArtifactRefs(exec.deliverable.Artifacts)) != 0 {
+							t.Fatalf("handled deliverable was not retained as delivered: %#v / %#v",
+								historyResult.Deliverable, exec.deliverable)
 						}
 					} else {
 						if historyResult.ToolResultStatus != providers.ToolResultStatusError ||

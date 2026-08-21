@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestSessionManagerAppendTurnMessagePersistsBeforeReturn(t *testing.T) {
@@ -22,6 +24,91 @@ func TestSessionManagerAppendTurnMessagePersistsBeforeReturn(t *testing.T) {
 	history := reopened.GetHistory("turn")
 	if len(history) != 1 || history[0].Content != msg.Content {
 		t.Fatalf("reopened history = %+v", history)
+	}
+}
+
+func TestSessionManagerPersistsCanonicalDeliverable(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewSessionManager(dir)
+	msg := providers.Message{
+		Role: "assistant", Content: "done",
+		Deliverable: &taskresult.Deliverable{
+			Text:      "tool-owned result",
+			Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/result.txt", Kind: "file"}},
+			Metadata:  map[string]string{"producer": "tool"},
+			Report: &taskresult.Report{
+				SchemaVersion: taskresult.ReportSchemaV1,
+				ReportID:      "report-1",
+			},
+		},
+	}
+	if err := manager.AppendTurnMessage(t.Context(), "turn", msg); err != nil {
+		t.Fatalf("AppendTurnMessage() error = %v", err)
+	}
+
+	reopened := NewSessionManager(dir)
+	history := reopened.GetHistory("turn")
+	if len(history) != 1 || history[0].Deliverable == nil ||
+		history[0].Deliverable.Text != "tool-owned result" ||
+		len(history[0].Deliverable.Artifacts) != 1 ||
+		history[0].Deliverable.Artifacts[0].Ref != "file:/tmp/result.txt" ||
+		history[0].Deliverable.Metadata["producer"] != "tool" ||
+		history[0].Deliverable.Report == nil || history[0].Deliverable.Report.ReportID != "report-1" {
+		t.Fatalf("reopened history lost canonical deliverable: %#v", history)
+	}
+}
+
+func TestSessionManagerDetachesCanonicalDeliverableAtBoundaries(t *testing.T) {
+	manager := NewSessionManager("")
+	const key = "detached-deliverable"
+	original := &taskresult.Deliverable{
+		Text:     "original",
+		Metadata: map[string]string{"producer": "tool"},
+	}
+	manager.AddFullMessage(key, providers.Message{
+		Role: "assistant", Content: "done", Deliverable: original,
+	})
+	original.Text = "mutated caller"
+	original.Metadata["producer"] = "mutated caller"
+
+	history := manager.GetHistory(key)
+	if len(history) != 1 || history[0].Deliverable == nil || history[0].Deliverable.Text != "original" ||
+		history[0].Deliverable.Metadata["producer"] != "tool" {
+		t.Fatalf("ingress retained caller aliases: %#v", history)
+	}
+	history[0].Deliverable.Text = "mutated get"
+	history[0].Deliverable.Metadata["producer"] = "mutated get"
+	read, err := manager.ReadTurnHistory(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read[0].Deliverable.Text = "mutated read"
+	read[0].Deliverable.Metadata["producer"] = "mutated read"
+	page, err := manager.ReadTurnHistoryPage(t.Context(), key, memory.HistoryPageRequest{Before: -1, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page.Messages[0].Deliverable.Text = "mutated page"
+	page.Messages[0].Deliverable.Metadata["producer"] = "mutated page"
+
+	var callbackDeliverable *taskresult.Deliverable
+	changed, err := manager.MutateTurnHistory(
+		t.Context(), key,
+		func(current []providers.Message) ([]providers.Message, bool, error) {
+			callbackDeliverable = current[0].Deliverable
+			current[0].Deliverable.Text = "stored mutation"
+			return current, true, nil
+		},
+	)
+	if err != nil || !changed {
+		t.Fatalf("MutateTurnHistory() = (%t, %v)", changed, err)
+	}
+	callbackDeliverable.Text = "mutated after callback"
+
+	stored := manager.GetHistory(key)
+	if stored[0].Deliverable.Text != "stored mutation" ||
+		stored[0].Deliverable.Metadata["producer"] != "tool" {
+		t.Fatalf("session boundary leaked deliverable alias: %#v", stored)
 	}
 }
 

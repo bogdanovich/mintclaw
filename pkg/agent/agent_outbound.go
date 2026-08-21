@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -339,7 +340,7 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		UsageTotalTokens:  result.usageTotalTokens,
 	}.ApplyToContext(&outboundCtx)
 
-	if len(result.completionMedia) > 0 {
+	if result.deliverable != nil && len(mediaArtifactRefs(result.deliverable.Artifacts)) > 0 {
 		ts := &turnState{
 			agent:      agent,
 			agentID:    agent.ID,
@@ -385,11 +386,8 @@ func (al *AgentLoop) deliverFinalTurnMedia(
 		ForUser:         result.finalContent,
 		Silent:          true,
 		ResponseHandled: true,
-	}).WithCompletion(&toolshared.CompletionResult{
-		Text:  result.finalContent,
-		Media: append([]toolshared.CompletionMedia(nil), result.completionMedia...),
-	})
-	mediaRefs := completionMediaRefs(result.completionMedia)
+	}).WithDeliverable(taskresult.CloneDeliverable(result.deliverable))
+	mediaRefs := mediaArtifactRefs(result.deliverable.Artifacts)
 	mediaResult.Media = append(mediaResult.Media, mediaRefs...)
 	_, outcome, err := al.deliverToolResultToUser(ctx, ts, mediaResult, "final_turn")
 	return outcome, err
@@ -503,7 +501,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	mediaRefs := toolResultMediaRefs(result)
 	text := toolResultUserText(result)
 	if len(mediaRefs) > 0 {
-		parts := al.mediaPartsFromRefs(mediaRefs, result.Completion, text)
+		parts := al.mediaPartsFromRefs(mediaRefs, toolResultArtifacts(result), text)
 		outboundMedia := bus.OutboundMediaMessage{
 			Channel: ts.channel,
 			ChatID:  ts.chatID,
@@ -562,8 +560,22 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 				bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.
 					ApplyToContext(&outboundMedia.Context)
 			}
-			if _, err := al.publishTransactionMedia(ctx, ts.workspace, outboundMedia); err != nil {
+			receipt, err := al.publishTransactionMediaReceiptAtBoundary(
+				ctx,
+				ts.workspace,
+				outboundMedia,
+				func(commitCtx context.Context) error {
+					return commitToolResultOutbound(commitCtx, result)
+				},
+			)
+			if err != nil {
 				return nil, toolResultDeliveryNone, err
+			}
+			if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				return buildProviderAttachments(al.mediaStore, mediaRefs), toolResultDeliveryDirect, nil
 			}
 			return nil, toolResultDeliveryQueued, nil
 		}
@@ -573,7 +585,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if strings.TrimSpace(text) == "" {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if result.Silent && result.Completion == nil && result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
+	if result.Silent && result.Deliverable == nil && result.AsyncDelivery != toolshared.AsyncDeliveryUserOnly {
 		return nil, toolResultDeliveryNone, nil
 	}
 	if al.bus == nil {
@@ -585,8 +597,22 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	}
 	applyToolResultOutboundMetadata(result, &outbound.Context)
 	outbound.TraceSettlement = traceSettlement
-	if _, err := al.publishTransactionMessage(ctx, ts.workspace, outbound); err != nil {
+	receipt, err := al.publishTransactionMessageReceiptAtBoundary(
+		ctx,
+		ts.workspace,
+		outbound,
+		func(commitCtx context.Context) error {
+			return commitToolResultOutbound(commitCtx, result)
+		},
+	)
+	if err != nil {
 		return nil, toolResultDeliveryNone, err
+	}
+	if result.ImmediateDelivery && supportsDurableDeliveryReceipts(al.channelManager) {
+		if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+			return nil, toolResultDeliveryNone, err
+		}
+		return nil, toolResultDeliveryDirect, nil
 	}
 	logger.DebugCF("agent", "Sent tool result to user",
 		map[string]any{
@@ -616,7 +642,7 @@ func (al *AgentLoop) normalizeLegacyFinalHandledOutbound(
 		ChatID:           ts.chatID,
 		ReplyToMessageID: ts.opts.Dispatch.ReplyToMessageID(),
 		Text:             text,
-		Media:            al.mediaPartsFromRefs(mediaRefs, result.Completion, text),
+		Media:            al.mediaPartsFromRefs(mediaRefs, toolResultArtifacts(result), text),
 	}
 }
 
@@ -707,6 +733,12 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 					classifyFinalHandledPublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+			if result.ImmediateDelivery && receiptsSupported {
+				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+					return nil, toolResultDeliveryNone, err
+				}
+				return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
+			}
 			if isFinalHandledDelivery(result) && receiptsSupported {
 				if err = settleFinalHandledDelivery(ctx, receipt, result, len(out.Media)); err != nil {
 					return nil, toolResultDeliveryNone, err
@@ -776,6 +808,12 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				classifyFinalHandledPublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
+		if result.ImmediateDelivery && receiptsSupported {
+			if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
+				return nil, toolResultDeliveryNone, err
+			}
+			return nil, toolResultDeliveryDirect, nil
+		}
 		if isFinalHandledDelivery(result) && receiptsSupported {
 			if err = settleFinalHandledDelivery(ctx, receipt, result, 0); err != nil {
 				return nil, toolResultDeliveryNone, err
@@ -835,6 +873,36 @@ func isFinalHandledDelivery(result *toolshared.ToolResult) bool {
 		return result.DeliveryIntent == toolshared.DeliveryFinalHandled
 	}
 	return result.ResponseHandled && !result.ImmediateDelivery
+}
+
+func settleImmediateDelivery(
+	ctx context.Context,
+	receipt outboundPublication,
+	result *toolshared.ToolResult,
+) error {
+	intent, err := receipt.awaitTerminal(ctx)
+	if err != nil {
+		return fmt.Errorf("await immediate delivery confirmation: %w", err)
+	}
+	switch intent.Status {
+	case outbox.StatusDelivered:
+		confirmToolResultOutbound(result)
+		return nil
+	case outbox.StatusDefinitelyFailed:
+		return fmt.Errorf(
+			"immediate delivery %s definitely failed before remote acceptance: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "channel rejected the message"),
+		)
+	case outbox.StatusAmbiguous:
+		return fmt.Errorf(
+			"immediate delivery %s has ambiguous remote acceptance: %s",
+			intent.ID,
+			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
+		)
+	default:
+		return fmt.Errorf("immediate delivery %s has status %s", intent.ID, intent.Status)
+	}
 }
 
 func settleFinalHandledDelivery(
@@ -937,9 +1005,6 @@ func toolResultUserText(result *toolshared.ToolResult) string {
 	if text := strings.TrimSpace(result.ForUser); text != "" {
 		return result.ForUser
 	}
-	if result.Completion != nil {
-		return result.Completion.Text
-	}
 	if result.Deliverable != nil {
 		return result.Deliverable.Text
 	}
@@ -966,26 +1031,36 @@ func toolResultMediaRefs(result *toolshared.ToolResult) []string {
 	for _, ref := range result.Media {
 		appendRef(ref)
 	}
-	if result.Completion != nil {
-		for _, item := range result.Completion.Media {
-			appendRef(item.Ref)
+	if result.Deliverable != nil {
+		for _, item := range result.Deliverable.Artifacts {
+			if item.Delivered {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(item.Ref), "media://") {
+				appendRef(item.Ref)
+			}
 		}
 	}
 	return refs
 }
 
+func toolResultArtifacts(result *toolshared.ToolResult) []taskresult.Artifact {
+	if result == nil || result.Deliverable == nil {
+		return nil
+	}
+	return result.Deliverable.Artifacts
+}
+
 func (al *AgentLoop) mediaPartsFromRefs(
 	refs []string,
-	completion *toolshared.CompletionResult,
+	artifacts []taskresult.Artifact,
 	caption string,
 ) []bus.MediaPart {
-	hints := make(map[string]toolshared.CompletionMedia)
-	if completion != nil {
-		for _, item := range completion.Media {
-			ref := strings.TrimSpace(item.Ref)
-			if ref != "" {
-				hints[ref] = item
-			}
+	hints := make(map[string]taskresult.Artifact)
+	for _, item := range artifacts {
+		ref := strings.TrimSpace(item.Ref)
+		if ref != "" {
+			hints[ref] = item
 		}
 	}
 
@@ -993,7 +1068,7 @@ func (al *AgentLoop) mediaPartsFromRefs(
 	for i, ref := range refs {
 		part := bus.MediaPart{Ref: ref}
 		if item, ok := hints[ref]; ok {
-			part.Type = item.Type
+			part.Type = item.Kind
 			part.Filename = item.Filename
 			part.ContentType = item.ContentType
 		}
@@ -1005,10 +1080,10 @@ func (al *AgentLoop) mediaPartsFromRefs(
 				if part.ContentType == "" {
 					part.ContentType = meta.ContentType
 				}
-				if part.Type == "" {
-					part.Type = inferMediaType(meta.Filename, meta.ContentType)
-				}
 			}
+		}
+		if part.Type == "" {
+			part.Type = inferMediaType(part.Filename, part.ContentType)
 		}
 		if i == 0 {
 			part.Caption = caption
