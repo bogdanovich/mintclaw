@@ -1294,7 +1294,14 @@ const browserProtectedInputRedaction = "*"
 // DurableArguments removes protected fill and dialog-prompt text before assistant intent can be
 // persisted or reused. It deliberately leaves the current in-memory call
 // untouched so the broker can consume the value exactly once.
-func (*BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
+func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	if tool != nil && tool.runtime != nil {
+		limits = tool.runtime.config.Limits.Effective()
+	}
+	if _, err := browseraction.DecodeModelAction(args["action"], limits.TextInputBytes); err != nil {
+		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
+	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return nil, err
@@ -1543,7 +1550,10 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	if err != nil {
 		return browser.Preparation{}, err
 	}
-	action, err := browserActionFromArgs(args["action"])
+	action, err := browseraction.DecodeModelAction(
+		args["action"],
+		tool.runtime.config.Limits.Effective().TextInputBytes,
+	)
 	if err != nil {
 		return browser.Preparation{}, err
 	}
@@ -1577,40 +1587,6 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		FrameID: frameID, ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
 	})
-}
-
-func browserActionFromArgs(raw any) (browser.Action, error) {
-	args, ok := raw.(map[string]any)
-	if !ok {
-		return browser.Action{}, browser.ErrInvalid
-	}
-	action := browser.Action{}
-	kind, ok := args["kind"].(string)
-	if !ok {
-		return browser.Action{}, browser.ErrInvalid
-	}
-	action.Kind = browser.ActionKind(kind)
-	action.URL, _ = args["url"].(string)
-	action.Ref, _ = args["ref"].(string)
-	action.SourceRef, _ = args["source_ref"].(string)
-	action.DestinationRef, _ = args["destination_ref"].(string)
-	action.DialogID, _ = args["dialog_id"].(string)
-	action.Target, _ = args["target"].(string)
-	action.Value, _ = args["value"].(string)
-	if action.Kind == browser.ActionDialog {
-		_, action.PromptProvided = args["value"]
-	}
-	action.Key, _ = args["key"].(string)
-	action.Direction, _ = args["direction"].(string)
-	action.Decision, _ = args["decision"].(string)
-	action.ArtifactRef, _ = args["artifact_ref"].(string)
-	action.Deliver, _ = args["deliver"].(bool)
-	amount, amountOK := browserInteger(args["amount"])
-	if _, present := args["amount"]; present && !amountOK {
-		return browser.Action{}, browser.ErrInvalid
-	}
-	action.Amount = amount
-	return action, nil
 }
 
 func browserInteger(value any) (int, bool) {

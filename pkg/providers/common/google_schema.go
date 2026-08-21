@@ -300,6 +300,7 @@ func mergeUnionObjectSchemas(branches []map[string]any) map[string]any {
 			}
 		}
 	}
+	preserveCommonFinitePropertyValues(merged, branches)
 
 	if len(commonRequired) > 0 {
 		filtered := make([]string, 0, len(commonRequired))
@@ -316,6 +317,71 @@ func mergeUnionObjectSchemas(branches []map[string]any) map[string]any {
 	}
 
 	return merged
+}
+
+func preserveCommonFinitePropertyValues(merged map[string]any, branches []map[string]any) {
+	mergedProperties, ok := merged["properties"].(map[string]any)
+	if !ok || len(branches) == 0 {
+		return
+	}
+	firstProperties, ok := branches[0]["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	for name := range firstProperties {
+		values := make([]any, 0, len(branches))
+		constrainedInEveryBranch := true
+		for _, branch := range branches {
+			properties, propertiesOK := branch["properties"].(map[string]any)
+			property, propertyOK := properties[name].(map[string]any)
+			branchValues, constrained := finiteStringSchemaValues(property)
+			if !propertiesOK || !propertyOK || !constrained {
+				constrainedInEveryBranch = false
+				break
+			}
+			for _, value := range branchValues {
+				if !containsSchemaValue(values, value) {
+					values = append(values, value)
+				}
+			}
+		}
+		if !constrainedInEveryBranch || len(values) == 0 {
+			continue
+		}
+		property, ok := mergedProperties[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(property, "const")
+		property["enum"] = values
+	}
+}
+
+func finiteStringSchemaValues(schema map[string]any) ([]any, bool) {
+	if schema == nil || geminiSchemaBranchType(schema["type"]) != "string" {
+		return nil, false
+	}
+	if value, ok := schema["const"]; ok {
+		text, valid := value.(string)
+		return []any{text}, valid
+	}
+	values := sanitizeGeminiEnum(schema["enum"])
+	for _, value := range values {
+		if _, valid := value.(string); !valid {
+			return nil, false
+		}
+	}
+	return values, len(values) > 0
+}
+
+func containsSchemaValue(values []any, candidate any) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeUnionArraySchemas(branches []map[string]any) map[string]any {

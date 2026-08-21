@@ -192,7 +192,8 @@ func (action *Action) Validate(maxTextBytes int) error {
 		}
 	case ActionFill, ActionSelect:
 		if !validIdentifier(action.Ref) || action.URL != "" || action.Target != "" || action.Key != "" ||
-			action.Direction != "" || action.Decision != "" || action.PromptProvided || action.Amount != 0 {
+			action.Direction != "" || action.Decision != "" || action.PromptProvided ||
+			action.Amount != 0 {
 			return fmt.Errorf("%w: malformed %s action", ErrInvalid, action.Kind)
 		}
 	case ActionPress:
@@ -252,9 +253,21 @@ func ValidKey(key string) bool {
 }
 
 // Schema projects the current action vocabulary into JSON Schema. Strict
-// callers expose only model-authored fields; tolerant transport callers also
-// admit additive fields and the derived prompt-presence bit.
+// model-facing callers receive one exclusive branch per kind. Tolerant
+// transport callers receive one additive flat object and the derived
+// prompt-presence bit for forward compatibility.
 func Schema(kinds []ActionKind, maxTextBytes int, allowUnknownFields bool) map[string]any {
+	if !allowUnknownFields {
+		branches := make([]any, 0, len(kinds))
+		for _, kind := range kinds {
+			branches = append(branches, strictSchemaBranch(kind, maxTextBytes))
+		}
+		return map[string]any{"oneOf": branches}
+	}
+	return flatSchema(kinds, maxTextBytes, true)
+}
+
+func flatSchema(kinds []ActionKind, maxTextBytes int, allowUnknownFields bool) map[string]any {
 	properties := map[string]any{
 		"kind": map[string]any{"type": "string", "enum": actionKindStrings(kinds)},
 	}
@@ -300,6 +313,132 @@ func Schema(kinds []ActionKind, maxTextBytes int, allowUnknownFields bool) map[s
 		"required":             []string{"kind"},
 		"additionalProperties": allowUnknownFields,
 	}
+}
+
+func strictSchemaBranch(kind ActionKind, maxTextBytes int) map[string]any {
+	branch := flatSchema([]ActionKind{kind}, maxTextBytes, false)
+	properties := branch["properties"].(map[string]any)
+	properties["kind"] = map[string]any{"type": "string", "const": string(kind)}
+	required := []string{"kind"}
+	switch kind {
+	case ActionNavigate:
+		required = append(required, "url")
+	case ActionClick, ActionCheck, ActionUncheck, ActionHover, ActionDownload:
+		required = append(required, "ref")
+	case ActionFill, ActionSelect:
+		required = append(required, "ref", "value")
+		properties["value"].(map[string]any)["minLength"] = 1
+	case ActionPress:
+		required = append(required, "target", "key")
+	case ActionScroll:
+		required = append(required, "direction", "amount")
+	case ActionDialog:
+		required = append(required, "dialog_id", "decision")
+	case ActionDrag:
+		required = append(required, "source_ref", "destination_ref")
+	case ActionFileChooser:
+		required = append(required, "ref", "artifact_ref")
+	}
+	branch["required"] = required
+	return branch
+}
+
+// DecodeModelAction parses the strict model-facing wire contract. It rejects
+// unknown, cross-kind, mistyped, and incomplete fields before any browser
+// preparation can observe the request.
+func DecodeModelAction(raw any, maxTextBytes int) (Action, error) {
+	args, ok := raw.(map[string]any)
+	if !ok {
+		return Action{}, ErrInvalid
+	}
+	kindValue, ok := args["kind"].(string)
+	kind := ActionKind(kindValue)
+	if !ok || !kind.Valid() {
+		return Action{}, ErrInvalid
+	}
+	branch := strictSchemaBranch(kind, maxTextBytes)
+	properties := branch["properties"].(map[string]any)
+	for _, name := range branch["required"].([]string) {
+		if _, present := args[name]; !present {
+			return Action{}, ErrInvalid
+		}
+	}
+	action := Action{Kind: kind}
+	for name, value := range args {
+		property, admitted := properties[name].(map[string]any)
+		if !admitted {
+			return Action{}, ErrInvalid
+		}
+		switch property["type"] {
+		case "string":
+			text, valid := value.(string)
+			if !valid {
+				return Action{}, ErrInvalid
+			}
+			assignModelActionString(&action, name, text)
+		case "boolean":
+			boolean, valid := value.(bool)
+			if !valid || name != "deliver" {
+				return Action{}, ErrInvalid
+			}
+			action.Deliver = boolean
+		case "integer":
+			amount, valid := decodeModelActionAmount(value)
+			if !valid || name != "amount" {
+				return Action{}, ErrInvalid
+			}
+			action.Amount = amount
+		default:
+			return Action{}, ErrInvalid
+		}
+	}
+	if action.Kind == ActionDialog {
+		_, action.PromptProvided = args["value"]
+	}
+	if (action.Kind == ActionFill || action.Kind == ActionSelect) && action.Value == "" {
+		return Action{}, ErrInvalid
+	}
+	if err := action.Validate(maxTextBytes); err != nil {
+		return Action{}, ErrInvalid
+	}
+	return action, nil
+}
+
+func assignModelActionString(action *Action, name, value string) {
+	switch name {
+	case "kind":
+	case "url":
+		action.URL = value
+	case "ref":
+		action.Ref = value
+	case "source_ref":
+		action.SourceRef = value
+	case "destination_ref":
+		action.DestinationRef = value
+	case "dialog_id":
+		action.DialogID = value
+	case "target":
+		action.Target = value
+	case "value":
+		action.Value = value
+	case "key":
+		action.Key = value
+	case "direction":
+		action.Direction = value
+	case "decision":
+		action.Decision = value
+	case "artifact_ref":
+		action.ArtifactRef = value
+	}
+}
+
+func decodeModelActionAmount(value any) (int, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 0, false
+	}
+	amount, err := decodeActionAmount(encoded)
+	return amount, err == nil
 }
 
 type schemaField uint16

@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -118,6 +119,30 @@ func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *test
 		"action": map[string]any{"kind": "dialog", "dialog_id": "dialog_1", "decision": "dismiss"},
 	}) {
 		t.Fatal("dialog dismissal unexpectedly required protected batching")
+	}
+}
+
+func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjection(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(&BrowserActTool{})
+	secret := "durable-projection-secret"
+	projected, protected, err := registry.DurableArguments("browser_act", map[string]any{
+		"browser_session_id":  "session_1",
+		"tab_id":              "tab_1",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 1,
+		"action": map[string]any{
+			"kind": "fill", "ref": "ref_1", "value": secret, "unknown_sensitive_field": secret,
+		},
+	})
+	if err == nil {
+		t.Fatal("DurableArguments() error = nil, want malformed action rejection")
+	}
+	if projected != nil || protected {
+		t.Fatalf("DurableArguments() = %#v, protected %v; want no persistent projection", projected, protected)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("DurableArguments() leaked protected input in error: %v", err)
 	}
 }
 
@@ -916,15 +941,8 @@ func TestBrowserActSchemaDoesNotAdvertiseDeferredDownload(t *testing.T) {
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionDownload) {
-			t.Fatalf("deferred download action advertised in schema: %#v", kind["enum"])
-		}
-	}
-	if _, ok := actionProperties["deliver"]; ok {
-		t.Fatalf("download-only deliver field advertised in schema: %#v", actionProperties)
+	if branch := browserActionSchemaBranch(action, browser.ActionDownload); branch != nil {
+		t.Fatalf("deferred download action advertised in schema: %#v", branch)
 	}
 }
 
@@ -932,15 +950,11 @@ func TestBrowserActSchemaAdvertisesAdmittedDownload(t *testing.T) {
 	parameters := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true}).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	download := false
-	for _, candidate := range kind["enum"].([]string) {
-		download = download || candidate == string(browser.ActionDownload)
+	branch := browserActionSchemaBranch(action, browser.ActionDownload)
+	if branch == nil {
+		t.Fatalf("admitted download action missing from schema: %#v", action)
 	}
-	if !download {
-		t.Fatalf("admitted download action missing from schema: %#v", kind["enum"])
-	}
+	actionProperties := branch["properties"].(map[string]any)
 	if _, ok := actionProperties["deliver"]; !ok {
 		t.Fatalf("admitted download delivery field missing from schema: %#v", actionProperties)
 	}
@@ -952,14 +966,73 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
+	for _, candidate := range browseraction.Kinds() {
+		if browserActionSchemaBranch(action, candidate) == nil {
+			t.Fatalf("%s missing from browser_act schema: %#v", candidate, action)
+		}
+	}
+}
+
+func browserActionSchemaBranch(action map[string]any, kind browser.ActionKind) map[string]any {
+	for _, candidate := range action["oneOf"].([]any) {
+		branch := candidate.(map[string]any)
+		properties := branch["properties"].(map[string]any)
+		kindSchema := properties["kind"].(map[string]any)
+		if kindSchema["const"] == string(kind) {
+			return branch
+		}
+	}
+	return nil
+}
+
+func TestBrowserActSchemaUsesExclusiveTypedActionShapes(t *testing.T) {
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Parameters()
+	properties := parameters["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
+
+	scroll := browserActionSchemaBranch(action, browser.ActionScroll)
+	scrollProperties := scroll["properties"].(map[string]any)
+	if _, ok := scrollProperties["target"]; ok {
+		t.Fatalf("scroll schema advertises press-only target: %#v", scrollProperties)
+	}
+	amount := scrollProperties["amount"].(map[string]any)
+	if amount["minimum"] != 1 || amount["maximum"] != browser.MaxScrollAmount {
+		t.Fatalf("scroll amount schema = %#v", amount)
+	}
+	press := browserActionSchemaBranch(action, browser.ActionPress)
+	pressProperties := press["properties"].(map[string]any)
+	if target := pressProperties["target"].(map[string]any); !slices.Equal(
+		target["enum"].([]string),
+		[]string{"document"},
+	) {
+		t.Fatalf("press target schema = %#v", pressProperties["target"])
+	}
+	dialog := browserActionSchemaBranch(action, browser.ActionDialog)
+	dialogProperties := dialog["properties"].(map[string]any)
+	if _, ok := dialogProperties["prompt_provided"]; ok ||
+		!slices.Contains(dialog["required"].([]string), "dialog_id") {
+		t.Fatalf("dialog authority schema = %#v", dialog)
+	}
+}
+
+func TestBrowserActSchemaSimpleTransformPreservesActionKinds(t *testing.T) {
+	parameters := NewBrowserActTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Parameters()
+	transformed := providercommon.SanitizeSchemaForGoogle(parameters)
+	properties := transformed["properties"].(map[string]any)
+	action := properties["action"].(map[string]any)
 	actionProperties := action["properties"].(map[string]any)
 	kind := actionProperties["kind"].(map[string]any)
-	want := make([]string, 0, len(browseraction.Kinds()))
-	for _, candidate := range browseraction.Kinds() {
-		want = append(want, string(candidate))
+
+	want := make([]any, 0, len(browseraction.Kinds()))
+	for _, actionKind := range browseraction.Kinds() {
+		want = append(want, string(actionKind))
 	}
-	if got := kind["enum"].([]string); !slices.Equal(got, want) {
-		t.Fatalf("browser_act actions = %#v, want current vocabulary %#v", got, want)
+	if !reflect.DeepEqual(kind["enum"], want) {
+		t.Fatalf("transformed browser action kinds = %#v, want %#v", kind["enum"], want)
 	}
 }
 
@@ -1180,15 +1253,10 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	for _, candidate := range kind["enum"].([]string) {
-		if candidate == string(browser.ActionFileChooser) || candidate == string(browser.ActionDownload) {
-			t.Fatalf("unsupported transfer action advertised in schema: %#v", kind["enum"])
+	for _, kind := range []browser.ActionKind{browser.ActionFileChooser, browser.ActionDownload} {
+		if branch := browserActionSchemaBranch(action, kind); branch != nil {
+			t.Fatalf("unsupported transfer action advertised in schema: %#v", branch)
 		}
-	}
-	if _, ok := actionProperties["deliver"]; ok {
-		t.Fatalf("download delivery field advertised without transfer support: %#v", actionProperties)
 	}
 }
 
@@ -1201,10 +1269,8 @@ func TestBrowserActSchemaIncludesFileChooserForNodeTarget(t *testing.T) {
 	parameters := NewBrowserActTool(cfg, &fakeBrowserToolSource{available: true}).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
-	actionProperties := action["properties"].(map[string]any)
-	kind := actionProperties["kind"].(map[string]any)
-	if !slices.Contains(kind["enum"].([]string), string(browser.ActionFileChooser)) {
-		t.Fatalf("node file chooser missing from schema: %#v", kind["enum"])
+	if browserActionSchemaBranch(action, browser.ActionFileChooser) == nil {
+		t.Fatalf("node file chooser missing from schema: %#v", action)
 	}
 }
 
@@ -1650,6 +1716,31 @@ func TestBrowserActApprovalPreparationFailsWithSafeDenial(t *testing.T) {
 	}
 }
 
+func TestBrowserActRejectsInvalidActionFieldsBeforePreparation(t *testing.T) {
+	for _, action := range []map[string]any{
+		{"kind": "scroll", "direction": "down", "amount": 1, "target": "document"},
+		{"kind": "scroll", "direction": "down", "amount": 1, "unexpected": true},
+		{"kind": "scroll", "direction": false, "amount": 1},
+		{"kind": "fill", "ref": "element_1", "value": ""},
+		{"kind": "select", "ref": "element_1", "value": ""},
+		{"kind": "dialog", "dialog_id": "dialog_1", "decision": "accept", "value": false},
+		{"kind": "download", "ref": "download_1", "deliver": "true"},
+	} {
+		source := &fakeBrowserToolSource{available: true}
+		result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+			browserToolTestContext(),
+			map[string]any{
+				"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+				"snapshot_id": "snapshot_1", "snapshot_generation": 1, "action": action,
+			},
+		)
+		if result == nil || !result.IsError || source.prepareCalls != 0 ||
+			!strings.Contains(result.ContentForLLM(), `"code":"invalid_request"`) {
+			t.Fatalf("invalid action result = %#v; prepare calls = %d", result, source.prepareCalls)
+		}
+	}
+}
+
 func TestBrowserActApprovalStaleDenialUsesActionRecovery(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true, err: browser.ErrStale}
 	tool := NewBrowserActTool(browserToolTestConfig(), source)
@@ -1754,46 +1845,6 @@ func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 		!strings.Contains(result.ContentForLLM(), `"code":"policy_denied"`) ||
 		strings.Contains(result.ContentForLLM(), "post_action_state_unavailable") {
 		t.Fatalf("dry-run denial result = %#v", result)
-	}
-}
-
-func TestBrowserActionFromArgsPreservesTypedInputAndDialogPresence(t *testing.T) {
-	for _, kind := range []string{"check", "uncheck", "hover"} {
-		action, err := browserActionFromArgs(map[string]any{"kind": kind, "ref": "element_1"})
-		if err != nil || action.Kind != browser.ActionKind(kind) || action.Ref != "element_1" {
-			t.Fatalf("%s action = %#v, error = %v", kind, action, err)
-		}
-	}
-	drag, err := browserActionFromArgs(map[string]any{
-		"kind": "drag", "source_ref": "element_1", "destination_ref": "element_2",
-	})
-	if err != nil || drag.Kind != browser.ActionDrag || drag.SourceRef != "element_1" ||
-		drag.DestinationRef != "element_2" {
-		t.Fatalf("drag action = %#v, error = %v", drag, err)
-	}
-	press, err := browserActionFromArgs(map[string]any{
-		"kind": "press", "target": "document", "key": "Tab",
-	})
-	if err != nil || press.Target != "document" || press.Key != "Tab" {
-		t.Fatalf("press action = %#v, error = %v", press, err)
-	}
-	fill, err := browserActionFromArgs(map[string]any{
-		"kind": "fill", "ref": "element_1", "value": "draft text",
-	})
-	if err != nil || fill.Value != "draft text" || fill.PromptProvided {
-		t.Fatalf("fill action = %#v, error = %v", fill, err)
-	}
-	prompt, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "decision": "accept", "value": "",
-	})
-	if err != nil || !prompt.PromptProvided || prompt.Value != "" {
-		t.Fatalf("prompt action = %#v, error = %v", prompt, err)
-	}
-	dismiss, err := browserActionFromArgs(map[string]any{
-		"kind": "dialog", "decision": "dismiss",
-	})
-	if err != nil || dismiss.PromptProvided {
-		t.Fatalf("dismiss action = %#v, error = %v", dismiss, err)
 	}
 }
 
