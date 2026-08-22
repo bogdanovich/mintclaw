@@ -16,6 +16,13 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) *ToolResult
 }
 
+// ArgumentsCanonicalizer returns a cloned, semantically equivalent argument
+// map for schema validation and execution. Implementations must not mutate the
+// provider-owned input map.
+type ArgumentsCanonicalizer interface {
+	CanonicalArguments(map[string]any) (map[string]any, error)
+}
+
 // DurableArgumentsProvider projects model-authored arguments into the exact
 // schema-valid form that may be retained after the current tool execution.
 // The original map remains available only to the in-memory execution path.
