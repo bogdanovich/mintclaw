@@ -95,7 +95,12 @@ func newAgentLoopWithRegistry(
 				al.state = manager
 			}
 		} else if !al.isolatedToolBootstrap {
-			al.state = state.NewManager(defaultAgent.Workspace)
+			manager, err := state.NewManagerChecked(defaultAgent.Workspace)
+			if err != nil {
+				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+			} else {
+				al.state = manager
+			}
 		}
 	}
 	if al.runtimeEvents == nil {
@@ -145,6 +150,11 @@ func NewAgentLoopChecked(
 		return nil, err
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	if al.runtimeProfileInitErr != nil {
+		err := al.runtimeProfileInitErr
+		al.Close()
+		return nil, err
+	}
 	if al.contextManagerInitErr != nil {
 		al.Close()
 		return nil, al.contextManagerInitErr

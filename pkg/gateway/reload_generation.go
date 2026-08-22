@@ -146,10 +146,14 @@ func prepareReloadGeneration(
 		return nil, err
 	}
 
+	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		return nil, fmt.Errorf("prepare device state: %w", err)
+	}
 	next.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
-	}, state.NewManager(cfg.WorkspacePath()))
+	}, stateManager)
 	next.DeviceService.SetBus(msgBus)
 	cleanup.add("device service", func(context.Context) error {
 		next.DeviceService.Stop()

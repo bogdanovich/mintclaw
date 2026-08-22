@@ -44,6 +44,25 @@ func TestNewAgentLoopCheckedRejectsUnusableCanonicalSessionStore(t *testing.T) {
 	}
 }
 
+func TestNewAgentLoopCheckedRejectsUnusableCurrentStateStore(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "state"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg(nil)
+	cfg.Agents.Defaults.Workspace = workspace
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+
+	loop, err := NewAgentLoopChecked(cfg, msgBus, &mockRegistryProvider{})
+	if err == nil || loop != nil {
+		t.Fatalf("NewAgentLoopChecked() = (%T, %v), want current-state startup error", loop, err)
+	}
+	if !strings.Contains(err.Error(), "load runtime state") {
+		t.Fatalf("NewAgentLoopChecked() error = %v", err)
+	}
+}
+
 func (m *mockRegistryProvider) GetDefaultModel() string {
 	return "mock-model"
 }

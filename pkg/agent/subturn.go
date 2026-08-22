@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -649,6 +652,9 @@ func spawnSubTurn(
 		// continuation is stored and compacted by the target agent. Persist that
 		// runtime ownership so context provenance remains stable across resumes.
 		childSessionScope.AgentID = agent.ID
+		if durableTask {
+			childSessionScope.ClientSessionID = ""
+		}
 	}
 	dispatch := DispatchRequest{
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
@@ -882,9 +888,11 @@ func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.W
 }
 
 func durableTaskSessionKey(ownerWorkspace, taskID string) string {
-	return session.BuildOpaqueSessionKey(
-		"task|workspace=" + strings.TrimSpace(ownerWorkspace) + "|task=" + strings.TrimSpace(taskID),
-	)
+	workspace := filepath.Clean(strings.TrimSpace(ownerWorkspace))
+	taskID = strings.TrimSpace(taskID)
+	identity := fmt.Sprintf("%d:%s%d:%s", len(workspace), workspace, len(taskID), taskID)
+	digest := sha256.Sum256([]byte(identity))
+	return session.BuildOpaqueSessionKey("task:" + hex.EncodeToString(digest[:]))
 }
 
 func mediaArtifactRefs(items []taskresult.Artifact) []string {

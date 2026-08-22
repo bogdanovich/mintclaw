@@ -616,7 +616,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	parentScope := &session.SessionScope{
 		Version: session.ScopeVersion, AgentID: alpha.ID, Channel: "telegram",
 		Dimensions: []string{"chat"}, Values: map[string]string{"chat": "chat-cross-agent"},
-		RouteScopeKey: "telegram:chat-cross-agent",
+		RouteScopeKey: "telegram:chat-cross-agent", ClientSessionID: "frontend-cross-agent",
 	}
 	parent := newTurnState(alpha, processOptions{Dispatch: DispatchRequest{
 		RouteSessionKey: "route-cross-agent", SessionKey: "owner-cross-agent",
@@ -649,14 +649,15 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		t.Fatalf("beta session store %T does not expose metadata", beta.Sessions)
 	}
 	persistedScope := metaStore.GetSessionScope(continuationKey)
-	if persistedScope == nil || persistedScope.AgentID != beta.ID ||
+	if persistedScope == nil || persistedScope.AgentID != beta.ID || persistedScope.ClientSessionID != "" ||
 		persistedScope.RouteScopeKey != parentScope.RouteScopeKey {
 		t.Fatalf("persisted child scope = %#v", persistedScope)
 	}
-	legacyScope := session.CloneScope(persistedScope)
-	legacyScope.AgentID = alpha.ID
-	legacyScope.RouteScopeKey = ""
-	metaStore.EnsureSessionMetadata(continuationKey, legacyScope)
+	staleScope := session.CloneScope(persistedScope)
+	staleScope.AgentID = alpha.ID
+	staleScope.RouteScopeKey = ""
+	staleScope.ClientSessionID = parentScope.ClientSessionID
+	metaStore.EnsureSessionMetadata(continuationKey, staleScope)
 
 	registry := al.interactionRegistryForWorkspace(alpha.Workspace)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
@@ -703,14 +704,15 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		}
 	}
 	if tool.executions != 1 || tool.agentID != beta.ID || tool.scope == nil ||
-		tool.scope.AgentID != beta.ID || tool.scope.RouteScopeKey != parentScope.RouteScopeKey {
+		tool.scope.AgentID != beta.ID || tool.scope.ClientSessionID != "" ||
+		tool.scope.RouteScopeKey != parentScope.RouteScopeKey {
 		t.Fatalf(
 			"approved tool executions=%d agent=%q scope=%#v",
 			tool.executions, tool.agentID, tool.scope,
 		)
 	}
 	repairedScope := metaStore.GetSessionScope(continuationKey)
-	if repairedScope == nil || repairedScope.AgentID != beta.ID ||
+	if repairedScope == nil || repairedScope.AgentID != beta.ID || repairedScope.ClientSessionID != "" ||
 		repairedScope.RouteScopeKey != parentScope.RouteScopeKey {
 		t.Fatalf("repaired child scope = %#v", repairedScope)
 	}
@@ -1053,6 +1055,17 @@ func TestDurableTaskSessionKeyIncludesOwnerWorkspace(t *testing.T) {
 	second := durableTaskSessionKey("/workspace/two", "subagent-1")
 	if first == second || !session.IsOpaqueSessionKey(first) || !session.IsOpaqueSessionKey(second) {
 		t.Fatalf("durable task keys = %q, %q", first, second)
+	}
+	if durableTaskSessionKey("/workspace/Agent", "subagent-1") ==
+		durableTaskSessionKey("/workspace/agent", "subagent-1") {
+		t.Fatal("case-distinct workspace paths produced the same durable task key")
+	}
+	if durableTaskSessionKey("/workspace/a|task=b", "c") ==
+		durableTaskSessionKey("/workspace/a", "b|task=c") {
+		t.Fatal("distinct workspace and task tuples produced the same durable task key")
+	}
+	if durableTaskSessionKey("/workspace/one/../one", "subagent-1") != first {
+		t.Fatal("equivalent cleaned workspace paths produced different durable task keys")
 	}
 }
 

@@ -91,6 +91,21 @@ func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
 	}
 }
 
+func TestNewManagerRemainsUsableWhenDirectoryCreationFails(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "state"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(workspace)
+	if manager == nil {
+		t.Fatal("NewManager() returned nil")
+	}
+	if err := manager.SetLastChatID("chat"); err == nil {
+		t.Fatal("SetLastChatID() error = nil, want unavailable-state error")
+	}
+}
+
 func TestSetLastChatID(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "state-test-*")
 	if err != nil {

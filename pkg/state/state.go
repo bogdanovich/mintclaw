@@ -103,11 +103,23 @@ func NewManager(workspace string) *Manager {
 	return NewManagerAt(filepath.Join(workspace, "state", "state.json"))
 }
 
+// NewManagerChecked creates a strict manager for the current workspace state
+// location and returns initialization failures to the runtime composition root.
+func NewManagerChecked(workspace string) (*Manager, error) {
+	return NewManagerAtChecked(filepath.Join(workspace, "state", "state.json"))
+}
+
 // NewManagerAt creates a manager for an exact runtime-owned state file.
 func NewManagerAt(stateFile string) *Manager {
 	sm, err := NewManagerAtChecked(stateFile)
 	if err != nil {
 		logger.WarnCF("state", "failed to load state", map[string]any{"error": err.Error()})
+	}
+	if sm == nil {
+		sm = &Manager{
+			stateFile: filepath.Clean(strings.TrimSpace(stateFile)),
+			state:     &State{},
+		}
 	}
 	return sm
 }

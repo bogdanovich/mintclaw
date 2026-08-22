@@ -1169,7 +1169,10 @@ func setupAndStartServicesWithHooks(
 		healthAddr,
 	)
 
-	stateManager := state.NewManager(cfg.WorkspacePath())
+	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		return nil, fmt.Errorf("initialize device state: %w", err)
+	}
 	runningServices.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
@@ -242,6 +245,34 @@ func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
 	}
 	if generation.services.VoiceAgentCancel != nil || generation.services.VoiceAgentDone != nil {
 		t.Fatal("prepared voice runtime subscribed before commit")
+	}
+}
+
+func TestPrepareReloadGenerationRejectsUnusableCurrentStateStore(t *testing.T) {
+	harness := newGatewayReloadHarness(t)
+	next := *harness.config
+	next.Agents.Defaults.Workspace = t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(next.Agents.Defaults.Workspace, "state", "state.json"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	generation, err := prepareReloadGeneration(
+		context.Background(),
+		&next,
+		harness.loop,
+		nil,
+		harness.services,
+		harness.bus,
+		gatewayReloadHooks{},
+	)
+	if err == nil || generation != nil {
+		t.Fatalf("prepareReloadGeneration() = (%T, %v), want current-state error", generation, err)
+	}
+	if !strings.Contains(err.Error(), "prepare device state") {
+		t.Fatalf("prepareReloadGeneration() error = %v", err)
 	}
 }
 
