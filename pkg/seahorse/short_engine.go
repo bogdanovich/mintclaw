@@ -432,11 +432,6 @@ func (e *Engine) initAssemblerOnce() {
 	}
 }
 
-// IngestMessages is an alias for Ingest.
-func (e *Engine) IngestMessages(ctx context.Context, sessionKey string, messages []Message) (*IngestResult, error) {
-	return e.Ingest(ctx, sessionKey, messages)
-}
-
 // ClearSession removes all stored data for a session (messages, summaries, context).
 // If the session has no prior seahorse record, it is a no-op.
 func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
