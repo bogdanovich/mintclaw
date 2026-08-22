@@ -42,10 +42,8 @@ func (f *fakeChannel) Stop(ctx context.Context) error  { return nil }
 func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	return nil, nil
 }
-func (f *fakeChannel) IsRunning() bool                            { return true }
-func (f *fakeChannel) IsAllowed(string) bool                      { return true }
-func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
-func (f *fakeChannel) ReasoningChannelID() string                 { return f.id }
+func (f *fakeChannel) IsRunning() bool            { return true }
+func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
