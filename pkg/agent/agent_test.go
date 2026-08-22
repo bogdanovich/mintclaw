@@ -3441,7 +3441,7 @@ func TestRunAgentLoop_ResponseHandledToolPublishesForUserWhenSendResponseDisable
 			SessionKey:  "session-1",
 			UserMessage: "take a screenshot of the screen and send it to me",
 			SessionScope: &session.SessionScope{
-				Version:    session.ScopeVersionV1,
+				Version:    session.ScopeVersion,
 				AgentID:    defaultAgent.ID,
 				Channel:    "telegram",
 				Dimensions: []string{"chat"},
@@ -3525,7 +3525,7 @@ func TestAppendEventContextFields_IncludesInboundRouteAndScope(t *testing.T) {
 			},
 		},
 		Scope: &session.SessionScope{
-			Version:    session.ScopeVersionV1,
+			Version:    session.ScopeVersion,
 			AgentID:    "support",
 			Channel:    "slack",
 			Account:    "workspace-a",

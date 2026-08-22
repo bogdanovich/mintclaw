@@ -63,6 +63,22 @@ func TestNewManagerAtCheckedRejectsCorruptState(t *testing.T) {
 	}
 }
 
+func TestNewManagerIgnoresRemovedWorkspaceStateLocation(t *testing.T) {
+	workspace := t.TempDir()
+	legacyData, err := json.Marshal(State{LastChannel: "removed-location"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "state.json"), legacyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(workspace)
+	if got := manager.GetLastChannel(); got != "" {
+		t.Fatalf("GetLastChannel() = %q, want removed state location ignored", got)
+	}
+}
+
 func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
 	root := t.TempDir()
 	blockedParent := filepath.Join(root, "blocked")
@@ -72,6 +88,71 @@ func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
 	manager, err := NewManagerAtChecked(filepath.Join(blockedParent, "runtime", "state.json"))
 	if err == nil || manager != nil {
 		t.Fatalf("NewManagerAtChecked() = (%T, %v), want nil manager and error", manager, err)
+	}
+}
+
+func TestNewManagerRemainsUsableWhenDirectoryCreationFails(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "state"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(workspace)
+	if manager == nil {
+		t.Fatal("NewManager() returned nil")
+	}
+	if err := manager.SetLastChatID("chat"); err == nil {
+		t.Fatal("SetLastChatID() error = nil, want unavailable-state error")
+	}
+}
+
+func TestManagerValidateStorageRejectsUnavailableCurrentDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewManagerChecked(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetLastChannel("telegram"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err != nil {
+		t.Fatalf("ValidateStorage() error = %v", err)
+	}
+	if got := manager.GetLastChannel(); got != "telegram" {
+		t.Fatalf("GetLastChannel() = %q after validation, want telegram", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(workspace, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "state.json" {
+		t.Fatalf("state directory after validation = %v, want only state.json", entries)
+	}
+
+	stateDir := filepath.Join(workspace, "state")
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err == nil {
+		t.Fatal("ValidateStorage() error = nil, want unavailable-directory error")
+	}
+}
+
+func TestManagerValidateStorageRejectsCorruptCurrentFile(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewManagerChecked(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(workspace, "state", "state.json")
+	if err := os.WriteFile(stateFile, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err == nil {
+		t.Fatal("ValidateStorage() error = nil, want corrupt-state error")
 	}
 }
 

@@ -93,7 +93,6 @@ type SessionGoal struct {
 
 // Manager manages persistent state with atomic saves.
 type Manager struct {
-	workspace string
 	state     *State
 	mu        sync.RWMutex
 	stateFile string
@@ -101,59 +100,26 @@ type Manager struct {
 
 // NewManager creates a new state manager for the given workspace.
 func NewManager(workspace string) *Manager {
-	stateDir := filepath.Join(workspace, "state")
-	stateFile := filepath.Join(stateDir, "state.json")
-	oldStateFile := filepath.Join(workspace, "state.json")
-
-	// Create state directory if it doesn't exist
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		logger.WarnCF("state", "failed to create state directory", map[string]any{
-			"dir":   stateDir,
-			"error": err.Error(),
-		})
-	}
-
-	sm := &Manager{
-		workspace: workspace,
-		stateFile: stateFile,
-		state:     &State{},
-	}
-
-	// Try to load from new location first
-	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
-		// New file doesn't exist, try migrating from old location
-		if data, err := os.ReadFile(oldStateFile); err == nil {
-			if err := json.Unmarshal(data, sm.state); err == nil {
-				// Migrate to new location
-				if err := sm.saveAtomic(); err != nil {
-					logger.WarnCF("state", "failed to save state", map[string]any{
-						"error": err.Error(),
-					})
-				}
-				logger.InfoCF("state", "migrated state", map[string]any{
-					"from": oldStateFile,
-					"to":   stateFile,
-				})
-			}
-		}
-	} else {
-		// Load from new location
-		if err := sm.load(); err != nil {
-			logger.WarnCF("state", "failed to load state", map[string]any{
-				"error": err.Error(),
-			})
-		}
-	}
-
-	return sm
+	return NewManagerAt(filepath.Join(workspace, "state", "state.json"))
 }
 
-// NewManagerAt creates a manager for an exact runtime-owned state file. It
-// intentionally performs no legacy workspace migration.
+// NewManagerChecked creates a strict manager for the current workspace state
+// location and returns initialization failures to the runtime composition root.
+func NewManagerChecked(workspace string) (*Manager, error) {
+	return NewManagerAtChecked(filepath.Join(workspace, "state", "state.json"))
+}
+
+// NewManagerAt creates a manager for an exact runtime-owned state file.
 func NewManagerAt(stateFile string) *Manager {
 	sm, err := NewManagerAtChecked(stateFile)
 	if err != nil {
 		logger.WarnCF("state", "failed to load state", map[string]any{"error": err.Error()})
+	}
+	if sm == nil {
+		sm = &Manager{
+			stateFile: filepath.Clean(strings.TrimSpace(stateFile)),
+			state:     &State{},
+		}
 	}
 	return sm
 }
@@ -167,7 +133,6 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 		return nil, fmt.Errorf("create state directory %q: %w", stateDir, err)
 	}
 	sm := &Manager{
-		workspace: stateDir,
 		stateFile: stateFile,
 		state:     &State{},
 	}
@@ -175,6 +140,60 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 		return sm, err
 	}
 	return sm, nil
+}
+
+// ValidateStorage checks that the current state file remains readable and its
+// directory can still complete the same atomic replacement used by state
+// mutations without replacing this live manager or its canonical state file.
+func (sm *Manager) ValidateStorage() error {
+	if sm == nil {
+		return fmt.Errorf("state manager is required")
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	stateFile := strings.TrimSpace(sm.stateFile)
+	if stateFile == "" {
+		return fmt.Errorf("state file is required")
+	}
+	stateDir := filepath.Dir(stateFile)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("create state directory %q: %w", stateDir, err)
+	}
+	data, err := os.ReadFile(stateFile)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read state file: %w", err)
+	}
+	if err == nil {
+		var persisted State
+		if decodeErr := json.Unmarshal(data, &persisted); decodeErr != nil {
+			return fmt.Errorf("decode state file: %w", decodeErr)
+		}
+	}
+	payload, err := json.MarshalIndent(sm.state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode state write probe: %w", err)
+	}
+
+	probe, err := os.CreateTemp(stateDir, ".mintclaw-state-check-*")
+	if err != nil {
+		return fmt.Errorf("create state write probe: %w", err)
+	}
+	probePath := probe.Name()
+	closeErr := probe.Close()
+	if closeErr != nil {
+		_ = os.Remove(probePath)
+		return fmt.Errorf("close state write probe: %w", closeErr)
+	}
+	writeErr := fileutil.WriteFileAtomic(probePath, payload, 0o600)
+	removeErr := os.Remove(probePath)
+	if writeErr != nil {
+		return fmt.Errorf("replace state write probe atomically: %w", writeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove state write probe: %w", removeErr)
+	}
+	return nil
 }
 
 // SetLastChannel atomically updates the last channel and saves the state.

@@ -85,7 +85,7 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
-	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && al.state == nil {
 		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
 			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
 			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)
@@ -95,7 +95,12 @@ func newAgentLoopWithRegistry(
 				al.state = manager
 			}
 		} else if !al.isolatedToolBootstrap {
-			al.state = state.NewManager(defaultAgent.Workspace)
+			manager, err := state.NewManagerChecked(defaultAgent.Workspace)
+			if err != nil {
+				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+			} else {
+				al.state = manager
+			}
 		}
 	}
 	if al.runtimeEvents == nil {
@@ -133,15 +138,23 @@ func newAgentLoopWithRegistry(
 	return al
 }
 
-// NewAgentLoopChecked constructs an AgentLoop and returns context-manager
-// initialization failures to startup callers.
+// NewAgentLoopChecked constructs an AgentLoop and returns startup failures.
 func NewAgentLoopChecked(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	al := NewAgentLoop(cfg, msgBus, provider, opts...)
+	registry, err := newAgentRegistry(cfg, provider)
+	if err != nil {
+		return nil, err
+	}
+	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	if al.runtimeProfileInitErr != nil {
+		err := al.runtimeProfileInitErr
+		al.Close()
+		return nil, err
+	}
 	if al.contextManagerInitErr != nil {
 		al.Close()
 		return nil, al.contextManagerInitErr

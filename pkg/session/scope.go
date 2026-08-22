@@ -2,11 +2,8 @@ package session
 
 import "time"
 
-// ScopeVersionV1 is the first structured session-scope schema version.
-const ScopeVersionV1 = 1
-
-// ScopeVersionV2 adds stable route-scope and lifecycle-epoch provenance.
-const ScopeVersionV2 = 2
+// ScopeVersion is the current structured session-scope schema version.
+const ScopeVersion = 2
 
 type SessionEpoch struct {
 	Strategy string    `json:"strategy"`

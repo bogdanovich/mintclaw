@@ -49,7 +49,7 @@ func TestCalendarEpochWeekStartsOnISOMonday(t *testing.T) {
 
 func TestApplyEpochCreatesIsolatedStructuredScope(t *testing.T) {
 	routeScope := SessionScope{
-		Version: ScopeVersionV1,
+		Version: ScopeVersion,
 		AgentID: "main",
 		Channel: "telegram",
 		Values:  map[string]string{"chat": "direct:42"},
@@ -58,7 +58,7 @@ func TestApplyEpochCreatesIsolatedStructuredScope(t *testing.T) {
 	epoch := SessionEpoch{Strategy: LifecycleCalendar, ID: "day:UTC:2026-07-17"}
 
 	epochScope := ApplyEpoch(routeScope, routeKey, epoch)
-	if epochScope.Version != ScopeVersionV2 || epochScope.RouteScopeKey != routeKey {
+	if epochScope.Version != ScopeVersion || epochScope.RouteScopeKey != routeKey {
 		t.Fatalf("epoch scope = %#v", epochScope)
 	}
 	if got := BuildSessionKey(epochScope); got == routeKey {

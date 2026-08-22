@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -143,7 +144,7 @@ func TestJSONLBackendRestoreTurnSnapshotPropagatesReplacementFailures(t *testing
 
 // Compile-time interface satisfaction checks.
 var (
-	_ session.SessionStore = (*session.SessionManager)(nil)
+	_ session.SessionStore = (*session.MemoryStore)(nil)
 	_ session.SessionStore = (*session.JSONLBackend)(nil)
 )
 
@@ -346,9 +347,10 @@ func TestJSONLBackend_SummarizeFlow(t *testing.T) {
 
 func TestJSONLBackendPersistsScopeForExactSessionKey(t *testing.T) {
 	b := newBackend(t)
+	sessionKey := session.BuildOpaqueSessionKey("current-scope")
 
 	scope := &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "telegram",
 		Account:    "default",
@@ -357,9 +359,9 @@ func TestJSONLBackendPersistsScopeForExactSessionKey(t *testing.T) {
 			"chat": "group:c1",
 		},
 	}
-	b.EnsureSessionMetadata("canonical", scope)
-	b.AddMessage("canonical", "user", "hello")
-	history := b.GetHistory("canonical")
+	b.EnsureSessionMetadata(sessionKey, scope)
+	b.AddMessage(sessionKey, "user", "hello")
+	history := b.GetHistory(sessionKey)
 	if len(history) != 1 {
 		t.Fatalf("len(history) = %d, want 1", len(history))
 	}
@@ -367,12 +369,65 @@ func TestJSONLBackendPersistsScopeForExactSessionKey(t *testing.T) {
 		t.Fatalf("history[0].Content = %q, want %q", history[0].Content, "hello")
 	}
 
-	resolvedScope := b.GetSessionScope("canonical")
+	resolvedScope := b.GetSessionScope(sessionKey)
 	if resolvedScope == nil {
 		t.Fatal("GetSessionScope() returned nil")
 	}
 	if resolvedScope.AgentID != scope.AgentID || resolvedScope.Values["chat"] != scope.Values["chat"] {
 		t.Fatalf("GetSessionScope() = %+v, want %+v", resolvedScope, scope)
+	}
+}
+
+func TestJSONLBackendRejectsRemovedScopeVersion(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("removed-scope-version")
+	rawScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion - 1,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSessionMeta(t.Context(), key, rawScope, "removed-client"); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := session.NewJSONLBackend(store)
+	if scope := backend.GetSessionScope(key); scope != nil {
+		t.Fatalf("GetSessionScope() = %#v, want removed version rejected", scope)
+	}
+}
+
+func TestJSONLBackendClearsAccumulatedClientSessionIDs(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("durable-child")
+	scope := &session.SessionScope{
+		Version: session.ScopeVersion, AgentID: "child", ClientSessionID: "browser-parent",
+	}
+	backend := session.NewJSONLBackend(store)
+	backend.EnsureSessionMetadata(key, scope)
+
+	if err := backend.ClearSessionClientIDs(key); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.GetSessionMeta(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.ClientSessionIDs) != 0 {
+		t.Fatalf("ClientSessionIDs = %v, want none", meta.ClientSessionIDs)
+	}
+	if resolved := backend.GetSessionScope(key); resolved == nil || resolved.AgentID != scope.AgentID {
+		t.Fatalf("GetSessionScope() = %#v, want child scope preserved", resolved)
 	}
 }
 

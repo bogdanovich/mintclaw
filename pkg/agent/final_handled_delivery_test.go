@@ -162,7 +162,7 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 				name := fmt.Sprintf("hook_%t/implicit_%t/delivered_%t", hook, implicit, delivered)
 				t.Run(name, func(t *testing.T) {
 					const sessionKey = "final-handled-settlement"
-					store := session.NewSessionManager("")
+					store := session.NewMemoryStore()
 					result := &toolshared.ToolResult{
 						ForLLM: "Message prepared for delivery to telegram:chat-1",
 					}
@@ -303,7 +303,7 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 
 func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T) {
 	const sessionKey = "final-handled-pending-receipt"
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	result := toolshared.MediaResult(
 		"File prepared for delivery",
 		[]string{"media://implicit-final-handled"},
@@ -394,7 +394,7 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 
 func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	const sessionKey = "final-handled-ambiguous-receipt"
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery",
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
@@ -517,7 +517,7 @@ func TestImmediateContinueKeepsNormalSynchronousRetryPolicy(t *testing.T) {
 
 func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	const sessionKey = "final-handled-hard-abort"
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	result := (&toolshared.ToolResult{
 		ForLLM: "Message prepared for delivery to telegram:chat-1",
 	}).WithOutboundDelivery(toolshared.OutboundDelivery{
@@ -590,7 +590,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 
 func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	const sessionKey = "final-handled-reservation-failure"
-	baseStore := session.NewSessionManager("")
+	baseStore := session.NewMemoryStore()
 	mutationErr := errors.New("reserve terminal delivery batch")
 	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 1}
 	result := (&toolshared.ToolResult{
@@ -682,7 +682,7 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 
 func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *testing.T) {
 	const sessionKey = "final-handled-finalization-failure"
-	baseStore := session.NewSessionManager("")
+	baseStore := session.NewMemoryStore()
 	mutationErr := errors.New("replace settled tool result")
 	store := &mutateFailingSessionStore{SessionStore: baseStore, err: mutationErr, failAt: 2}
 	result := (&toolshared.ToolResult{

@@ -46,11 +46,14 @@ func IsExplicitSessionKey(key string) bool {
 // ResolveAgentID returns the routed agent ID associated with a session. It
 // reads the current structured session scope metadata.
 func ResolveAgentID(store any, sessionKey string) string {
+	if !IsOpaqueSessionKey(sessionKey) {
+		return ""
+	}
 	if scopeReader, ok := store.(interface {
 		GetSessionScope(sessionKey string) *SessionScope
 	}); ok {
 		scope := scopeReader.GetSessionScope(sessionKey)
-		if scope != nil && strings.TrimSpace(scope.AgentID) != "" {
+		if scope != nil && scope.Version == ScopeVersion && strings.TrimSpace(scope.AgentID) != "" {
 			return routing.NormalizeAgentID(scope.AgentID)
 		}
 	}
@@ -141,5 +144,8 @@ func CanonicalScopeSignature(scope SessionScope) string {
 
 // BuildSessionKey returns the current opaque key for a structured session scope.
 func BuildSessionKey(scope SessionScope) string {
+	if scope.Version != ScopeVersion {
+		return ""
+	}
 	return BuildOpaqueSessionKey(CanonicalScopeSignature(scope))
 }

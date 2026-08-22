@@ -9,8 +9,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/state"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+func TestNewHeartbeatServiceWithStateUsesRuntimeManager(t *testing.T) {
+	workspace := t.TempDir()
+	manager := state.NewManager(workspace)
+	service := NewHeartbeatServiceWithState(workspace, 30, false, manager)
+	if service.state != manager {
+		t.Fatal("heartbeat service did not retain the runtime-owned state manager")
+	}
+}
 
 func TestExecuteHeartbeat_Async(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")

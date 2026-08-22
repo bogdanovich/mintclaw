@@ -934,7 +934,7 @@ func TestInboundTurnCoordinatorReleasesRootJournalFailuresBeforeLLM(t *testing.T
 			defer al.UnsubscribeEvents(events.ID)
 			journalErr := errors.New("injected " + stage + " failure")
 			agent.Sessions = &failingRootTurnJournal{
-				SessionStore: session.NewSessionManager(""),
+				SessionStore: session.NewMemoryStore(),
 				err:          journalErr,
 			}
 			trackingBus := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}

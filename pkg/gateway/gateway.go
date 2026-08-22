@@ -177,6 +177,10 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if err = preCheckConfig(cfg); err != nil {
 		return fmt.Errorf("config pre-check failed: %w", err)
 	}
+	gatewayState, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		return fmt.Errorf("initialize gateway state: %w", err)
+	}
 	// Debug mode permanently overrides the config log level to DEBUG.
 	if debug {
 		fmt.Println("🔍 Debug mode enabled")
@@ -232,7 +236,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if spoolErr := configureGatewayInboundSpool(cfg, msgBus); spoolErr != nil {
 		return fmt.Errorf("configure inbound spool: %w", spoolErr)
 	}
-	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider)
+	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider, agent.WithStateManager(gatewayState))
 	if err != nil {
 		return fmt.Errorf("initialize agent: %w", err)
 	}
@@ -264,7 +268,15 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		return fmt.Errorf("agent loop startup failed: %w", startupErr)
 	}
 
-	runningServices, err := setupAndStartServices(ctx, cfg, agentLoop, msgBus, pidData.Token, listenResult)
+	runningServices, err := setupAndStartServices(
+		ctx,
+		cfg,
+		agentLoop,
+		msgBus,
+		gatewayState,
+		pidData.Token,
+		listenResult,
+	)
 	if err != nil {
 		return err
 	}
@@ -896,6 +908,7 @@ func setupAndStartServices(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	authToken string,
 	listenResult netbind.OpenResult,
 ) (*services, error) {
@@ -904,6 +917,7 @@ func setupAndStartServices(
 		cfg,
 		agentLoop,
 		msgBus,
+		stateManager,
 		authToken,
 		listenResult,
 		gatewayStartupHooks{},
@@ -915,10 +929,17 @@ func setupAndStartServicesWithHooks(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	authToken string,
 	listenResult netbind.OpenResult,
 	hooks gatewayStartupHooks,
 ) (runningServices *services, setupErr error) {
+	if stateManager == nil {
+		return nil, fmt.Errorf("gateway state manager is required")
+	}
+	if agentLoop == nil || agentLoop.StateManager() != stateManager {
+		return nil, fmt.Errorf("gateway services and agent loop must share one state manager")
+	}
 	runningServices = &services{}
 	generation := runningServices
 	cleanup := &gatewayStartupTransaction{
@@ -976,10 +997,11 @@ func setupAndStartServicesWithHooks(
 	}
 	fmt.Println("✓ Cron service started")
 
-	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
+	runningServices.HeartbeatService = heartbeat.NewHeartbeatServiceWithState(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
+		stateManager,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
@@ -1169,7 +1191,6 @@ func setupAndStartServicesWithHooks(
 		healthAddr,
 	)
 
-	stateManager := state.NewManager(cfg.WorkspacePath())
 	runningServices.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
@@ -1413,6 +1434,13 @@ func handleConfigReloadWithHooks(
 	if err := preflightConfigReload(al, newCfg); err != nil {
 		return err
 	}
+	runtimeState := al.StateManager()
+	if runtimeState == nil {
+		return fmt.Errorf("gateway state manager is unavailable")
+	}
+	if err := runtimeState.ValidateStorage(); err != nil {
+		return fmt.Errorf("validate gateway state before reload: %w", err)
+	}
 	oldCfg := al.GetConfig()
 
 	newModel := newCfg.Agents.Defaults.ModelName
@@ -1514,6 +1542,7 @@ func handleConfigReloadWithHooks(
 		prepared,
 		runningServices,
 		msgBus,
+		runtimeState,
 		hooks,
 	)
 	if err != nil {
@@ -1640,6 +1669,7 @@ func rollbackReloadGeneration(
 		nil,
 		runningServices,
 		msgBus,
+		al.StateManager(),
 		gatewayReloadHooks{},
 	)
 	if err != nil {

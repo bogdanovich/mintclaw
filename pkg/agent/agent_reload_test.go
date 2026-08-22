@@ -2,12 +2,33 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+func TestValidateConfigReloadRejectsDefaultAgentWorkspaceChange(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{
+		ID: "main", Default: true, Workspace: t.TempDir(),
+	}}
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	t.Cleanup(loop.Close)
+
+	next := *cfg
+	next.Agents.List = append([]config.AgentConfig(nil), cfg.Agents.List...)
+	next.Agents.List[0].Workspace = t.TempDir()
+	err := loop.ValidateConfigReload(&next)
+	if err == nil || !strings.Contains(err.Error(), "default agent workspace changes require a gateway restart") {
+		t.Fatalf("ValidateConfigReload() error = %v", err)
+	}
+}
 
 type preparedReloadProvider struct {
 	mockProvider

@@ -58,6 +58,7 @@ func prepareReloadGeneration(
 	prepared *agent.PreparedConfigReload,
 	persistent *services,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	hooks gatewayReloadHooks,
 ) (generation *gatewayReloadGeneration, prepareErr error) {
 	next := &services{
@@ -76,12 +77,15 @@ func prepareReloadGeneration(
 			generation = nil
 		}
 	}()
+	if stateManager == nil || al == nil || al.StateManager() != stateManager {
+		return nil, fmt.Errorf("reload generation requires the active gateway state manager")
+	}
+	var err error
 	registerTool := al.RegisterTool
 	if prepared != nil {
 		registerTool = prepared.RegisterTool
 	}
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var err error
 	next.CronService, err = setupCronToolWithRegistrar(
 		al,
 		msgBus,
@@ -104,10 +108,11 @@ func prepareReloadGeneration(
 		return nil, err
 	}
 
-	next.HeartbeatService = heartbeat.NewHeartbeatService(
+	next.HeartbeatService = heartbeat.NewHeartbeatServiceWithState(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
+		stateManager,
 	)
 	next.HeartbeatService.SetBus(msgBus)
 	next.HeartbeatService.SetHandler(createHeartbeatHandler(al))
@@ -149,7 +154,7 @@ func prepareReloadGeneration(
 	next.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
-	}, state.NewManager(cfg.WorkspacePath()))
+	}, stateManager)
 	next.DeviceService.SetBus(msgBus)
 	cleanup.add("device service", func(context.Context) error {
 		next.DeviceService.Stop()

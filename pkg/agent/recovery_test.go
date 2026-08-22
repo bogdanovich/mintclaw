@@ -77,7 +77,7 @@ func TestSessionNeedsUnansweredRecovery(t *testing.T) {
 
 func TestInboundContextFromSessionScope(t *testing.T) {
 	scope := &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "telegram",
 		Account:    "bot-a",
@@ -125,7 +125,7 @@ func TestAgentLoopRecoverUnansweredSessions(t *testing.T) {
 		t.Fatal("expected metadata-aware session store")
 	}
 	metaStore.EnsureSessionMetadata(sessionKey, &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "telegram",
 		Dimensions: []string{"chat"},
@@ -194,7 +194,7 @@ func TestAgentLoopRecoverUnansweredSessionsSkipsUnackedInboundSpool(t *testing.T
 		t.Fatal("expected metadata-aware session store")
 	}
 	metaStore.EnsureSessionMetadata(sessionKey, &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "telegram",
 		Dimensions: []string{"chat"},

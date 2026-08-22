@@ -128,7 +128,7 @@ func IsIndeterminateAppendError(err error) bool {
 
 func contextCause(ctx context.Context) error {
 	if ctx == nil {
-		return nil
+		return errors.New("memory: context is required")
 	}
 	return context.Cause(ctx)
 }
@@ -179,7 +179,6 @@ func (s *JSONLStore) metaPath(key string) string {
 }
 
 // sanitizeKey converts a session key to a safe filename component.
-// Mirrors pkg/session.sanitizeFilename so that migration paths match.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_'
 // so composite IDs (e.g. Telegram forum "chatID/threadID", Slack "channel/thread_ts")
 // do not create subdirectories or break on Windows.
@@ -274,12 +273,6 @@ func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error 
 		targetReached = digest == meta.HistoryTargetDigest
 	}
 	if meta.HistoryHasPrevious && meta.HistoryTargetDigest != "" && !targetReached {
-		meta.Count = meta.HistoryPreviousCount
-		meta.Skip = meta.HistoryPreviousSkip
-	} else if meta.HistoryHasPrevious && meta.HistoryTargetDigest == "" && rawCount != meta.Count {
-		// Legacy dirty metadata did not record a replacement identity. Keep
-		// the historical count-based fallback for stores created before the
-		// digest field existed.
 		meta.Count = meta.HistoryPreviousCount
 		meta.Skip = meta.HistoryPreviousSkip
 	} else {
@@ -454,6 +447,28 @@ func (s *JSONLStore) UpsertSessionMeta(
 	}
 	meta.UpdatedAt = now
 
+	return s.writeMeta(sessionKey, meta)
+}
+
+// ClearSessionClientIDs removes every frontend mapping from a session while
+// preserving its structured routing scope and history metadata.
+func (s *JSONLStore) ClearSessionClientIDs(ctx context.Context, sessionKey string) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+	if len(meta.ClientSessionIDs) == 0 {
+		return nil
+	}
+	meta.ClientSessionIDs = nil
+	meta.UpdatedAt = time.Now()
 	return s.writeMeta(sessionKey, meta)
 }
 

@@ -1853,7 +1853,7 @@ func TestAgentLoop_Run_ReleasesInjectedSteeringSpoolOnContinuationSaveFailure(t 
 		t.Fatal("expected default agent")
 	}
 	agent.Sessions = &saveFailOnContentSessionStore{
-		SessionStore: session.NewSessionManager(""),
+		SessionStore: session.NewMemoryStore(),
 		content:      "continued response",
 		err:          errors.New("session save failed on continuation"),
 	}
@@ -2476,7 +2476,7 @@ func TestAgentLoop_AgentForRuntimeScope_UsesStoredScopeMetadata(t *testing.T) {
 
 	key := session.BuildOpaqueSessionKey("route|agent=support|channel=slack|chat=channel:c001")
 	scope := &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "support",
 		Channel:    "slack",
 		Account:    "default",

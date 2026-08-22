@@ -262,7 +262,7 @@ func replayRecallIsolation(t *testing.T) recallReplay {
 	otherSenderID := seed("epoch:b", "route:chat:sender-b", "main", "other-sender")
 	otherAgentID := seed("epoch:reviewer", "route:chat:sender-a", "reviewer", "other-agent")
 	toolCtx := toolshared.WithToolSessionContext(ctx, "main", "epoch:a:current", &session.SessionScope{
-		Version: session.ScopeVersionV2, AgentID: "main", RouteScopeKey: "route:chat:sender-a",
+		Version: session.ScopeVersion, AgentID: "main", RouteScopeKey: "route:chat:sender-a",
 	})
 
 	grepResult := seahorse.NewGrepTool(engine.GetRetrieval()).Execute(toolCtx, map[string]any{

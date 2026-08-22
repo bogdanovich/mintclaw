@@ -2,6 +2,7 @@ package agent
 
 import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 // AgentLoopOption configures an AgentLoop at construction time.
@@ -27,6 +28,16 @@ func WithRuntimeEvents(bus runtimeevents.Bus) AgentLoopOption {
 func WithIsolatedToolBootstrap() AgentLoopOption {
 	return func(al *AgentLoop) {
 		al.isolatedToolBootstrap = true
+	}
+}
+
+// WithStateManager injects the runtime-owned current state manager before
+// state-backed tools and model execution are constructed.
+func WithStateManager(manager *state.Manager) AgentLoopOption {
+	return func(al *AgentLoop) {
+		if manager != nil {
+			al.state = manager
+		}
 	}
 }
 

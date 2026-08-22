@@ -542,7 +542,7 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 }
 
 func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing.T) {
-	sessions := session.NewSessionManager("")
+	sessions := session.NewMemoryStore()
 	sessions.AddFullMessage("coding:thread", providers.Message{Role: "user", Content: "inspect 界"})
 	sessions.AddFullMessage("coding:thread", providers.Message{
 		Role: "assistant", ReasoningContent: "consider e\u0301", Content: "done 👩🏽‍💻",

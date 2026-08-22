@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -651,6 +652,9 @@ func spawnSubTurn(
 		// continuation is stored and compacted by the target agent. Persist that
 		// runtime ownership so context provenance remains stable across resumes.
 		childSessionScope.AgentID = agent.ID
+		if durableTask {
+			childSessionScope.ClientSessionID = ""
+		}
 	}
 	dispatch := DispatchRequest{
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
@@ -662,6 +666,9 @@ func spawnSubTurn(
 		SessionScope:    childSessionScope,
 	}
 	if durableTask {
+		if err = clearSessionClientIDs(agent.Sessions, childSessionKey); err != nil {
+			return nil, fmt.Errorf("clear durable task frontend mappings: %w", err)
+		}
 		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
 	opts := processOptions{
@@ -884,8 +891,11 @@ func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.W
 }
 
 func durableTaskSessionKey(ownerWorkspace, taskID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(ownerWorkspace)))
-	return "task:" + hex.EncodeToString(sum[:8]) + ":" + strings.TrimSpace(taskID)
+	workspace := filepath.Clean(strings.TrimSpace(ownerWorkspace))
+	taskID = strings.TrimSpace(taskID)
+	identity := fmt.Sprintf("%d:%s%d:%s", len(workspace), workspace, len(taskID), taskID)
+	digest := sha256.Sum256([]byte(identity))
+	return session.BuildOpaqueSessionKey("task:" + hex.EncodeToString(digest[:]))
 }
 
 func mediaArtifactRefs(items []taskresult.Artifact) []string {

@@ -1148,7 +1148,7 @@ func TestRunTurn_FinalizeJournalErrorEmitsErrorTurnEnd(t *testing.T) {
 
 	saveErr := errors.New("session save failed")
 	agent.Sessions = &saveFailingSessionStore{
-		SessionStore: session.NewSessionManager(""),
+		SessionStore: session.NewMemoryStore(),
 		err:          saveErr,
 	}
 

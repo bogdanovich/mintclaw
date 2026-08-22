@@ -1939,12 +1939,14 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 	workspace := agent.Workspace
 	tasks := al.taskRegistryForWorkspace(workspace)
 	const taskID = "subagent-parent-retry"
+	ownerSession := session.BuildOpaqueSessionKey("agent:main:test:parent-final-retry-owner")
+	continuationSession := session.BuildOpaqueSessionKey("agent:main:test:parent-final-retry-child")
 	if err := tasks.Upsert(taskregistry.Record{
 		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent,
 		TaskKind: "spawn", Task: "retry in parent", Status: taskregistry.StatusRunning,
 		DeliveryStatus: taskregistry.DeliveryPending,
 		DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
-		Channel:        "discord", ChatID: "chat-1", RequesterSessionKey: "owner-session",
+		Channel:        "discord", ChatID: "chat-1", RequesterSessionKey: ownerSession,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1952,12 +1954,12 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 	record, err := registry.Create(interactions.CreateRequest{
 		ID: "interaction-parent-retry", Kind: interactions.KindQuestion,
 		Route: interactions.Route{
-			AgentID: agent.ID, SessionKey: "owner-session", RouteSessionKey: "route-owner",
+			AgentID: agent.ID, SessionKey: ownerSession, RouteSessionKey: "route-owner",
 			Channel: "discord", ChatID: "chat-1", SenderID: "user-1",
 		},
 		Origin: interactions.Origin{
 			TurnID: "turn-task-retry", ToolCallID: "call-task-retry", ToolName: "request_user_input",
-			TaskID: taskID, ContinuationSessionKey: "task-session-retry",
+			TaskID: taskID, ContinuationSessionKey: continuationSession,
 		},
 		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
 		ExpiresAt: time.Now().Add(time.Hour),
@@ -1972,7 +1974,7 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent.Sessions.AddFullMessage("task-session-retry", providers.Message{
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-task-retry"}},
 	})
 	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
@@ -1982,7 +1984,7 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent.Sessions.AddFullMessage("task-session-retry", providers.Message{
+	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "assistant", Content: "raw child final",
 		Deliverable: &taskresult.Deliverable{Text: "canonical child result"},
 	})
@@ -2728,7 +2730,7 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 		resumeDone <- al.resumeClaimedInteraction(
 			t.Context(), registry, agent.Workspace, agent,
 			&session.SessionScope{
-				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 				RouteScopeKey: record.Route.RouteSessionKey,
 			},
 			inboundContextForInteraction(record.Route), record,
@@ -2915,8 +2917,12 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			workspace := agent.Workspace
 			taskID := "task-prepared-final-" + strings.ReplaceAll(test.name, " ", "-")
 			interactionID := "interaction_prepared_" + strings.ReplaceAll(test.name, " ", "_")
-			continuationSession := "task-prepared-session-" + strings.ReplaceAll(test.name, " ", "-")
-			ownerSession := "owner-prepared-session-" + strings.ReplaceAll(test.name, " ", "-")
+			continuationSession := session.BuildOpaqueSessionKey(
+				"agent:main:test:task-prepared-session-" + strings.ReplaceAll(test.name, " ", "-"),
+			)
+			ownerSession := session.BuildOpaqueSessionKey(
+				"agent:main:test:owner-prepared-session-" + strings.ReplaceAll(test.name, " ", "-"),
+			)
 
 			tasks := al.taskRegistryForWorkspace(workspace)
 			if err := tasks.Upsert(taskregistry.Record{
@@ -3890,7 +3896,7 @@ func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *tes
 
 func TestInteractionCancellationDoesNotReplaceConsumedApprovalResult(t *testing.T) {
 	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:consumed-approval-cancellation")
-	agent := &AgentInstance{Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{Sessions: session.NewMemoryStore()}
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role:      "assistant",
 		ToolCalls: []providers.ToolCall{{ID: "call-consumed", Name: "protected_mutation"}},
@@ -5036,7 +5042,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 		guidance            = "Открой All postings и найди микроволновку там"
 	)
 	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
-		Version: 1, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
+		Version: session.ScopeVersion, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
 	})
 	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "user", Content: "Find the expired microwave listing",
@@ -5624,8 +5630,8 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 	al.bus = tracker
 
-	sessionKey := "session-task-concurrent-answer"
-	continuationSessionKey := "task-continuation-concurrent-answer"
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:task-concurrent-answer-owner")
+	continuationSessionKey := session.BuildOpaqueSessionKey("agent:main:test:task-concurrent-answer-child")
 	agent.Sessions.AddFullMessage(continuationSessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
@@ -6816,7 +6822,7 @@ func TestStopCancellationWinsPrecomputedFinalizationBoundary(t *testing.T) {
 			agent.Workspace,
 			agent,
 			&session.SessionScope{
-				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 				RouteScopeKey: record.Route.RouteSessionKey,
 			},
 			inboundContextForInteraction(record.Route),
@@ -7466,7 +7472,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	}
 	inbound := inboundContextForInteraction(record.Route)
 	scope := &session.SessionScope{
-		Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+		Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 		RouteScopeKey: record.Route.RouteSessionKey,
 	}
 	if err := al.resumeClaimedInteraction(
@@ -7671,7 +7677,7 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	defer cleanup()
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
-	sessionKey := "session-recover-final"
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:recover-final")
 	const (
 		taskID        = "recover-final-task"
 		interactionID = "recover-final-interaction"
@@ -7762,8 +7768,8 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	defer cleanup()
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:recover-open-tool-round")
 	const (
-		sessionKey    = "session-recover-open-tool-round"
 		taskID        = "recover-open-tool-round-task"
 		interactionID = "recover-open-tool-round-interaction"
 	)
@@ -7865,7 +7871,11 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	if closeErr := agent.Sessions.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	agent.Sessions = initSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	reloadedSessions, err := initRuntimeSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions = reloadedSessions
 	var foundCurrentRoot, foundReloadedSteering bool
 	for _, message := range agent.Sessions.GetHistory(sessionKey) {
 		switch message.Content {

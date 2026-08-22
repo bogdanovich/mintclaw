@@ -7,6 +7,7 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 type trackedStartupProvider struct {
@@ -47,6 +49,36 @@ func (channel *failingStopStartupChannel) Send(
 	bus.OutboundMessage,
 ) ([]string, error) {
 	return nil, nil
+}
+
+func TestGatewayServiceCompositionRejectsSplitStateOwnership(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	runtimeState := state.NewManager(cfg.WorkspacePath())
+	loop := agent.NewAgentLoop(
+		cfg,
+		msgBus,
+		&startupBlockedProvider{reason: "not used"},
+		agent.WithStateManager(runtimeState),
+	)
+	t.Cleanup(loop.Close)
+
+	_, err := setupAndStartServicesWithHooks(
+		context.Background(),
+		cfg,
+		loop,
+		msgBus,
+		state.NewManager(t.TempDir()),
+		"test-token",
+		netbind.OpenResult{},
+		gatewayStartupHooks{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "must share one state manager") {
+		t.Fatalf("setupAndStartServicesWithHooks() error = %v, want split-owner rejection", err)
+	}
 }
 
 func TestServiceShutdownReportsChannelAndNodeDrainFailures(t *testing.T) {
@@ -197,7 +229,13 @@ func TestServiceStartupRollbackReturnsChannelStopFailure(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
-	al := agent.NewAgentLoop(cfg, msgBus, &startupBlockedProvider{reason: "not used"})
+	runtimeState := state.NewManager(cfg.WorkspacePath())
+	al := agent.NewAgentLoop(
+		cfg,
+		msgBus,
+		&startupBlockedProvider{reason: "not used"},
+		agent.WithStateManager(runtimeState),
+	)
 	t.Cleanup(al.Close)
 	injectedErr := errors.New("startup failed after channels started")
 
@@ -206,6 +244,7 @@ func TestServiceStartupRollbackReturnsChannelStopFailure(t *testing.T) {
 		cfg,
 		al,
 		msgBus,
+		runtimeState,
 		"test-token",
 		netbind.OpenResult{
 			Listeners: []net.Listener{listener},
@@ -264,7 +303,13 @@ func TestSetupAndStartServicesRollsBackEveryCompletedStage(t *testing.T) {
 
 			msgBus := bus.NewMessageBus()
 			t.Cleanup(msgBus.Close)
-			al := agent.NewAgentLoop(cfg, msgBus, &startupBlockedProvider{reason: "not used"})
+			runtimeState := state.NewManager(cfg.WorkspacePath())
+			al := agent.NewAgentLoop(
+				cfg,
+				msgBus,
+				&startupBlockedProvider{reason: "not used"},
+				agent.WithStateManager(runtimeState),
+			)
 			t.Cleanup(al.Close)
 
 			injectedErr := fmt.Errorf("injected failure after %s", stage)
@@ -276,6 +321,7 @@ func TestSetupAndStartServicesRollsBackEveryCompletedStage(t *testing.T) {
 				cfg,
 				al,
 				msgBus,
+				runtimeState,
 				"test-token",
 				netbind.OpenResult{
 					Listeners: []net.Listener{listener},

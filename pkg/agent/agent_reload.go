@@ -52,16 +52,16 @@ func (al *AgentLoop) PrepareConfigReload(
 			}
 			resultCh <- result
 		}()
-		result.registry = NewAgentRegistry(cfg, provider)
+		result.registry, result.err = newAgentRegistry(cfg, provider)
 	}()
 
 	var result preparedRegistryResult
 	select {
 	case result = <-resultCh:
+		if result.err != nil {
+			return nil, fmt.Errorf("registry creation failed: %w", result.err)
+		}
 		if result.registry == nil {
-			if result.err != nil {
-				return nil, fmt.Errorf("registry creation failed: %w", result.err)
-			}
 			return nil, fmt.Errorf("registry creation failed (nil result)")
 		}
 	case <-ctx.Done():

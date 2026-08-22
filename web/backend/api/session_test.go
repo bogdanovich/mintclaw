@@ -36,7 +36,7 @@ func sessionsTestDir(t *testing.T, configPath string) string {
 func mintClawTestScope(t *testing.T, sessionID string) json.RawMessage {
 	t.Helper()
 	scope, err := json.Marshal(session.SessionScope{
-		Version:    session.ScopeVersionV2,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "mintclaw",
 		Account:    "default",
@@ -483,7 +483,7 @@ func TestHandleGetSession_ExposesHandledToolAttachmentsWithDurableURL(t *testing
 	}
 }
 
-func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
+func TestHandleSessionsRejectsPreviousReleaseScopeOnlyMetadata(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -505,7 +505,7 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	}
 
 	scopeData, err := json.Marshal(session.SessionScope{
-		Version:    session.ScopeVersionV2,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "mintclaw",
 		Account:    "default",
@@ -536,25 +536,32 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("Unmarshal(list) error = %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("len(items) = %d, want 1", len(items))
-	}
-	if items[0].ID != "scope-jsonl" {
-		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, "scope-jsonl")
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
 	}
 
 	detailRec := httptest.NewRecorder()
 	detailReq := httptest.NewRequest(http.MethodGet, "/api/sessions/scope-jsonl", nil)
 	mux.ServeHTTP(detailRec, detailReq)
-	if detailRec.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, want %d, body=%s", detailRec.Code, http.StatusOK, detailRec.Body.String())
+	if detailRec.Code != http.StatusNotFound {
+		t.Fatalf(
+			"detail status = %d, want %d, body=%s",
+			detailRec.Code,
+			http.StatusNotFound,
+			detailRec.Body.String(),
+		)
 	}
 
 	deleteRec := httptest.NewRecorder()
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/sessions/scope-jsonl", nil)
 	mux.ServeHTTP(deleteRec, deleteReq)
-	if deleteRec.Code != http.StatusNoContent {
-		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf(
+			"delete status = %d, want %d, body=%s",
+			deleteRec.Code,
+			http.StatusNotFound,
+			deleteRec.Body.String(),
+		)
 	}
 }
 
@@ -570,7 +577,7 @@ func TestHandleSessions_SharedHistoryResolvesAllCurrentClientIDs(t *testing.T) {
 	backend := session.NewJSONLBackend(store)
 	sessionKey := session.BuildOpaqueSessionKey("mintclaw|sender=mintclaw-user")
 	baseScope := session.SessionScope{
-		Version:    session.ScopeVersionV2,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "mintclaw",
 		Dimensions: []string{"sender"},
@@ -1889,12 +1896,22 @@ func TestHandleGetSessionRejectsLegacyJSON(t *testing.T) {
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	manager := session.NewSessionManager(dir)
 	sessionKey := "agent:main:mintclaw:direct:mintclaw:legacy-json"
-	manager.AddMessage(sessionKey, "user", "legacy user")
-	manager.AddMessage(sessionKey, "assistant", "legacy assistant")
-	if err := manager.Save(sessionKey); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	legacyData, err := json.Marshal(sessionFile{
+		Key: sessionKey,
+		Messages: []providers.Message{
+			{Role: "user", Content: "legacy user"},
+			{Role: "assistant", Content: "legacy assistant"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy.json"), legacyData, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	h := NewHandler(configPath)

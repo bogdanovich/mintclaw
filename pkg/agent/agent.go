@@ -373,7 +373,31 @@ func (al *AgentLoop) ValidateConfigReload(cfg *config.Config) error {
 		contextManagerConfigName(cfg) != "none" {
 		return fmt.Errorf("context manager changes require restart; hot reload is supported only for none")
 	}
+	currentDefault := al.GetRegistry().GetDefaultAgent()
+	nextWorkspace := configuredDefaultAgentWorkspace(cfg)
+	if currentDefault == nil || nextWorkspace == "" {
+		return fmt.Errorf("default agent workspace cannot be resolved for hot reload")
+	}
+	currentWorkspace := normalizeRuntimeWorkspace(currentDefault.Workspace)
+	if currentWorkspace != nextWorkspace {
+		return fmt.Errorf(
+			"default agent workspace changes require a gateway restart: %q -> %q",
+			currentWorkspace,
+			nextWorkspace,
+		)
+	}
 	return nil
+}
+
+func configuredDefaultAgentWorkspace(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	agentCfg := config.AgentConfig{ID: routing.DefaultAgentID, Default: true}
+	if configured := configuredDefaultAgent(cfg); configured != nil {
+		agentCfg = *configured
+	}
+	return normalizeRuntimeWorkspace(resolveAgentWorkspace(&agentCfg, &cfg.Agents.Defaults))
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.

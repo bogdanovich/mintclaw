@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent"
@@ -13,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 type gatewayReloadHarness struct {
@@ -40,12 +44,17 @@ func newGatewayReloadHarness(t *testing.T) *gatewayReloadHarness {
 
 	msgBus := bus.NewMessageBus()
 	provider := providers.LLMProvider(&startupBlockedProvider{reason: "not used"})
-	loop := agent.NewAgentLoop(cfg, msgBus, provider)
+	runtimeState, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatalf("NewManagerChecked() error = %v", err)
+	}
+	loop := agent.NewAgentLoop(cfg, msgBus, provider, agent.WithStateManager(runtimeState))
 	runningServices, err := setupAndStartServices(
 		context.Background(),
 		cfg,
 		loop,
 		msgBus,
+		runtimeState,
 		"reload-test-token",
 		netbind.OpenResult{
 			Listeners: []net.Listener{listener},
@@ -223,6 +232,7 @@ func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
 		nil,
 		harness.services,
 		harness.bus,
+		harness.loop.StateManager(),
 		gatewayReloadHooks{},
 	)
 	if err != nil {
@@ -242,6 +252,41 @@ func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
 	}
 	if generation.services.VoiceAgentCancel != nil || generation.services.VoiceAgentDone != nil {
 		t.Fatal("prepared voice runtime subscribed before commit")
+	}
+}
+
+func TestConfigReloadRejectsUnusableCurrentStateBeforeServiceDrain(t *testing.T) {
+	harness := newGatewayReloadHarness(t)
+	next := *harness.config
+	stateDir := filepath.Join(next.WorkspacePath(), "state")
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldProvider := harness.provider
+	oldHeartbeat := harness.services.HeartbeatService
+
+	err := handleConfigReload(
+		context.Background(),
+		harness.loop,
+		&next,
+		&harness.provider,
+		harness.services,
+		harness.bus,
+		true,
+		false,
+		serviceShutdownTimeout,
+	)
+	if err == nil || !strings.Contains(err.Error(), "validate gateway state before reload") {
+		t.Fatalf("handleConfigReload() error = %v, want current-state validation error", err)
+	}
+	if harness.provider != oldProvider || harness.loop.GetConfig() != harness.config {
+		t.Fatal("state preflight failure changed the active provider or config")
+	}
+	if harness.services.HeartbeatService != oldHeartbeat || !oldHeartbeat.IsRunning() {
+		t.Fatal("state preflight failure disrupted the active heartbeat service")
 	}
 }
 

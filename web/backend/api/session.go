@@ -202,23 +202,7 @@ func extractMintClawSessionIDs(meta memory.SessionMeta, scope session.SessionSco
 	if !strings.EqualFold(strings.TrimSpace(scope.Channel), "mintclaw") {
 		return nil
 	}
-	if len(meta.ClientSessionIDs) > 0 {
-		return meta.ClientSessionIDs
-	}
-
-	// Drop this preceding-release V2 fallback at the next state cutover.
-	if scope.Version != session.ScopeVersionV2 || !slices.Contains(scope.Dimensions, "chat") {
-		return nil
-	}
-	chatType, chatID, ok := strings.Cut(strings.TrimSpace(scope.Values["chat"]), ":")
-	if !ok || !strings.EqualFold(strings.TrimSpace(chatType), "direct") {
-		return nil
-	}
-	sessionID, ok := strings.CutPrefix(strings.TrimSpace(chatID), "mintclaw:")
-	if !ok || strings.TrimSpace(sessionID) == "" {
-		return nil
-	}
-	return []string{strings.TrimSpace(sessionID)}
+	return meta.ClientSessionIDs
 }
 
 func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
@@ -227,6 +211,9 @@ func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	}
 	var scope session.SessionScope
 	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
+		return nil
+	}
+	if scope.Version != session.ScopeVersion {
 		return nil
 	}
 	ids := extractMintClawSessionIDs(meta, scope)

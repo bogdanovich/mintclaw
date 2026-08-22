@@ -41,7 +41,7 @@ func buildSessionScope(input AllocationInput) SessionScope {
 	inbound := input.Context
 	includeTopicInChatDimension := shouldPreserveTelegramForumIsolation(input)
 	scope := SessionScope{
-		Version:         ScopeVersionV2,
+		Version:         ScopeVersion,
 		AgentID:         routing.NormalizeAgentID(input.AgentID),
 		Channel:         strings.ToLower(strings.TrimSpace(inbound.Channel)),
 		Account:         routing.NormalizeAccountID(inbound.Account),

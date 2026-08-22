@@ -310,7 +310,7 @@ func TestMessageTool_Execute_TracksSentTargetForTurnSuppression(t *testing.T) {
 
 	ctx := WithToolContext(context.Background(), "test-channel", "test-chat-id")
 	ctx = WithToolSessionContext(ctx, "main", "sk_v1_tool", &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "main",
 		Channel:    "telegram",
 		Dimensions: []string{"chat"},

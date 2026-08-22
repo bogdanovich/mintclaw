@@ -65,7 +65,7 @@ func CalendarEpoch(policy LifecyclePolicy, now time.Time) (SessionEpoch, error) 
 
 func ApplyEpoch(routeScope SessionScope, routeScopeKey string, epoch SessionEpoch) SessionScope {
 	scope := *CloneScope(&routeScope)
-	scope.Version = ScopeVersionV2
+	scope.Version = ScopeVersion
 	scope.RouteScopeKey = strings.TrimSpace(routeScopeKey)
 	scope.Epoch = &epoch
 	return scope

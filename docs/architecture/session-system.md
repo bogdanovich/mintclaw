@@ -6,7 +6,7 @@ This document describes the runtime session system used by MintClaw to:
 
 - map inbound messages onto stable conversation scopes
 - persist message history and summaries
-- preserve compatibility with legacy `agent:...` session keys while the runtime uses opaque canonical keys
+- expose current frontend session references without making them storage aliases
 
 This document covers the core runtime path in `pkg/session`, `pkg/memory`, and `pkg/agent`.
 It does not describe launcher login cookies or dashboard authentication sessions in `web/backend/middleware`.
@@ -18,17 +18,17 @@ The session system has four jobs:
 1. Decide which messages should share the same conversation context.
 2. Persist that context durably across turns and restarts.
 3. Expose a small `SessionStore` interface to the agent loop.
-4. Keep older session-key formats working during storage and routing migrations.
+4. Keep routing identity, lifecycle identity, and frontend presentation identity separate.
 
 ## Main Components
 
 | Layer | Files | Responsibility |
 | --- | --- | --- |
 | Session contract | `pkg/session/session_store.go` | Defines the `SessionStore` interface used by the agent loop. |
-| Legacy backend | `pkg/session/manager.go` | Stores one JSON file per session. Still used as a fallback. |
-| Session adapter | `pkg/session/jsonl_backend.go` | Adapts `pkg/memory.Store` to `SessionStore`, including alias and scope metadata support. |
+| Ephemeral store | `pkg/session/memory_store.go` | Supplies a non-persistent store for tests, benchmarks, and explicit ephemeral use. |
+| Session adapter | `pkg/session/jsonl_backend.go` | Adapts `pkg/memory.Store` to `SessionStore` and persists structured scope metadata. |
 | Durable storage | `pkg/memory/jsonl.go` | Append-only JSONL storage plus `.meta.json` sidecar metadata. |
-| Scope and key building | `pkg/session/scope.go`, `pkg/session/key.go`, `pkg/session/allocator.go` | Builds structured scopes, opaque canonical keys, and legacy aliases from routing results. |
+| Scope and key building | `pkg/session/scope.go`, `pkg/session/key.go`, `pkg/session/allocator.go` | Builds structured scopes and opaque canonical keys from routing results. |
 | Runtime integration | `pkg/agent/instance.go`, `pkg/agent/agent.go`, `pkg/agent/agent_message.go` | Initializes the store, allocates session scope, and persists metadata before turns run. |
 
 ## Session Data Model
@@ -37,13 +37,14 @@ The structured session identity is represented by `session.SessionScope`:
 
 | Field | Meaning |
 | --- | --- |
-| `Version` | Schema version. Current value is `ScopeVersionV2`. |
+| `Version` | Schema version. Current value is `ScopeVersion`. |
 | `AgentID` | Routed agent handling the turn. |
 | `Channel` | Normalized inbound channel name. |
 | `Account` | Normalized account or bot identifier. |
 | `Dimensions` | Ordered list of active partition dimensions such as `chat` or `sender`. |
 | `Values` | Concrete normalized values for each selected dimension. |
 | `RouteScopeKey` | Stable trusted identity shared by all lifecycle epochs of one routed conversation. |
+| `ClientSessionID` | Current MintClaw frontend provenance; never part of canonical storage identity. |
 | `Epoch` | Optional lifecycle partition that selects the current history epoch. |
 
 Only four dimensions are currently recognized by the allocator:
@@ -65,7 +66,7 @@ The default config uses:
 
 That means one shared conversation per chat unless a dispatch rule overrides it.
 
-## Canonical Keys And Legacy Aliases
+## Canonical Keys
 
 The runtime now prefers opaque canonical keys:
 
@@ -74,25 +75,12 @@ sk_v1_<sha256>
 ```
 
 These keys are built from a canonical scope signature in `pkg/session/key.go`.
-The goal is to make storage keys stable while decoupling them from any specific legacy text format.
+Only exact `sk_v1_` keys are accepted as explicit incoming session keys.
+Textual keys, metadata aliases, and alias-based lookup are not runtime formats.
 
-For compatibility, the allocator also emits legacy aliases such as:
-
-```text
-agent:main:direct:user123
-agent:main:slack:channel:c001
-agent:main:mintclaw:direct:mintclaw:session-123
-```
-
-These aliases matter because older sessions, tests, and some tools still refer to the legacy shape.
-The JSONL backend resolves aliases back to the canonical key before reads and writes.
-
-The agent loop also preserves explicit incoming session keys when the caller already supplied one of the recognized explicit formats:
-
-- opaque canonical key
-- legacy `agent:...` key
-
-That behavior lives in `pkg/agent/agent_utils.go:resolveScopeKey`.
+MintClaw frontend session IDs are recorded in `SessionMeta.ClientSessionIDs`.
+They let the web API present the newest usable canonical history for a current
+frontend ID, but they cannot redirect session-store reads or writes.
 
 ## Allocation Flow
 
@@ -114,14 +102,14 @@ More concretely:
 2. `session.AllocateRouteSession` converts the route's `SessionPolicy` plus inbound context into a structured `SessionScope`.
 3. The allocator builds:
    - `SessionKey`: canonical routed session key
-   - `SessionAliases`: compatibility aliases for that routed scope
-   - `MainSessionKey`: agent-level main session key
-   - `MainAliases`: legacy alias for the main session
-4. `runAgentLoop` persists scope metadata and aliases through `ensureSessionMetadata`.
-5. During later reads or writes, `JSONLBackend.ResolveSessionKey` maps aliases back onto the canonical key.
+   - `RouteScopeKey`: stable route identity before lifecycle epoch selection
+4. `runAgentLoop` persists current scope and frontend provenance through `ensureSessionMetadata`.
+5. Later reads and writes address that exact opaque key.
 
 The main session key is separate from routed chat sessions.
-It is used for agent-level or compatibility flows that need one stable per-agent conversation, for example legacy `processSystemMessage` adapters. New async task completions should not be transported as synthetic system inbound messages; they use typed `AsyncCompletionInput` delivery instead.
+It is used for agent-level flows that need one stable per-agent conversation.
+Async task completions use typed `AsyncCompletionInput` delivery instead of
+synthetic inbound messages.
 
 ## Seahorse Retrieval Boundaries
 
@@ -140,7 +128,7 @@ Retrieval tools expose only an enum, not identity values:
 - `workspace` resolves all rows for the current agent in the workspace-local database
 
 The tool boundary reads the session key and scope from trusted execution context, then passes an explicit conversation
-ID set into every FTS and LIKE query. An empty set matches nothing. Missing or legacy provenance is excluded, and
+ID set into every FTS and LIKE query. An empty set matches nothing. Missing provenance is excluded, and
 `short_expand` checks the same resolved ID set so a message ID from `short_grep` cannot be expanded across scope.
 
 An operator maximum is applied before those IDs are resolved. It defaults to `conversation`; `workspace` requires an
@@ -173,7 +161,7 @@ If non-history plus output reserves consume the model window, assembly returns a
 the provider. Otherwise, source data over a configured target produces a structured budget report, a context-pressure
 event, and deduplicated background compaction. Reports distinguish requested and retained recent turns and expose tail
 overflow or hard-limit degradation. Degradation does not schedule compaction because compaction preserves the configured
-raw tail and cannot make progress until that protected window advances. Forced compaction may bypass the legacy
+raw tail and cannot make progress until that protected window advances. Forced compaction may bypass the configured
 message-count tail, but never splits an explicit recent turn.
 
 ## Tool Result Projection
@@ -239,7 +227,8 @@ Each session uses two files:
 The files store:
 
 - `.jsonl`: one `providers.Message` per line, append-only
-- `.meta.json`: summary, timestamps, line counts, logical truncation offset, scope, aliases
+- `.meta.json`: summary, timestamps, history revision state, structured scope,
+  and current frontend session references
 
 `SessionMeta` currently includes:
 
@@ -250,7 +239,9 @@ The files store:
 - `CreatedAt`
 - `UpdatedAt`
 - `Scope`
-- `Aliases`
+- `ClientSessionIDs`
+- `HistoryRevision`
+- `HistoryDirty` and the fields used to recover an interrupted replacement
 
 ## Write And Crash Semantics
 
@@ -270,34 +261,17 @@ In other words, `Save` is no longer "flush dirty memory to disk"; it is now "rec
 `pkg/memory.JSONLStore` uses a fixed 64-shard mutex array keyed by session hash.
 That gives per-session serialization without keeping an unbounded mutex map in memory.
 
-The legacy `SessionManager` uses a single in-memory map guarded by an RW mutex.
+## Startup And Storage Cutovers
 
-Both backends satisfy the same `SessionStore` interface, which is why the agent loop does not need storage-specific code.
+Persistent runtimes create `memory.JSONLStore` and wrap it with
+`session.JSONLBackend`. Initialization failure is a startup error: MintClaw
+does not switch to a second persistence format or import JSON snapshots while
+serving traffic.
 
-## Compatibility And Migration
-
-`pkg/agent/instance.go:initSessionStore` prefers the JSONL backend.
-
-Startup sequence:
-
-1. Create `memory.NewJSONLStore(dir)`.
-2. Run `memory.MigrateFromJSON(...)` to import legacy `.json` sessions.
-3. Wrap the store with `session.NewJSONLBackend(store)`.
-4. If JSONL initialization or migration fails, fall back to `session.NewSessionManager(dir)`.
-
-This fallback is intentional: a partial migration would be worse than staying on the legacy store for one run.
-
-### Alias promotion
-
-When canonical metadata is first created, `EnsureSessionMetadata` may promote history from a non-empty legacy alias into the canonical session.
-That promotion only happens when the canonical session is still empty, so active canonical history is not overwritten.
-
-This is how the system preserves old histories such as:
-
-- legacy direct-message keys
-- older MintClaw direct-session keys
-
-while moving the runtime onto opaque canonical keys.
+Storage migrations are coordinated deployment operations. Once all first-party
+processes are upgraded, the runtime reader for the previous format is removed.
+This keeps one writer, one current identity format, and one recovery owner in
+the running product.
 
 ## Other SessionStore Implementations
 
@@ -306,18 +280,21 @@ It satisfies the same `SessionStore` interface, but keeps data in memory only an
 
 That lets SubTurn reuse the same session-facing APIs without writing child-session history into the parent's durable storage.
 
+`pkg/session.MemoryStore` provides the same deliberately non-persistent
+behavior for tests and benchmarks. It does not read or write a historical disk
+format.
+
 ## Operational Consumers
 
 The session system is consumed by more than the agent loop:
 
-- `web/backend/api/session.go` reads JSONL metadata and legacy JSON sessions to expose session history in the launcher UI.
+- `web/backend/api/session.go` reads current JSONL metadata to expose session history in the launcher UI.
 - `pkg/agent/steering.go` can recover scope metadata for active steering flows.
-- tooling and tests can still refer to legacy aliases because alias resolution is handled below the agent loop.
 
 ## Related Files
 
 - `pkg/session/session_store.go`
-- `pkg/session/manager.go`
+- `pkg/session/memory_store.go`
 - `pkg/session/jsonl_backend.go`
 - `pkg/session/scope.go`
 - `pkg/session/key.go`

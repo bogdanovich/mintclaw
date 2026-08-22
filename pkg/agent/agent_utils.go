@@ -434,6 +434,14 @@ func ensureSessionMetadata(store session.SessionStore, key string, scope *sessio
 	metaStore.EnsureSessionMetadata(key, scope)
 }
 
+func clearSessionClientIDs(store session.SessionStore, key string) error {
+	metaStore, ok := store.(session.MetadataAwareSessionStore)
+	if !ok {
+		return nil
+	}
+	return metaStore.ClearSessionClientIDs(key)
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

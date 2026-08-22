@@ -325,12 +325,12 @@ func TestAgentForRuntimeScopeFailsClosedOnAmbiguousStoredOwners(t *testing.T) {
 	}
 	firstStore := session.NewJSONLBackend(firstJSONL)
 	secondStore := session.NewJSONLBackend(secondJSONL)
-	key := "shared-session"
+	key := session.BuildOpaqueSessionKey("test|session=shared")
 	firstStore.EnsureSessionMetadata(key, &session.SessionScope{
-		Version: session.ScopeVersionV1, AgentID: "first",
+		Version: session.ScopeVersion, AgentID: "first",
 	})
 	secondStore.EnsureSessionMetadata(key, &session.SessionScope{
-		Version: session.ScopeVersionV1, AgentID: "second",
+		Version: session.ScopeVersion, AgentID: "second",
 	})
 	al := &AgentLoop{registry: &AgentRegistry{agents: map[string]*AgentInstance{
 		"first": {

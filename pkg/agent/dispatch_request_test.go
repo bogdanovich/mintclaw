@@ -66,7 +66,7 @@ func TestNormalizeProcessOptions_UsesDispatchAsSourceOfTruth(t *testing.T) {
 		},
 	}
 	scope := &session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersion,
 		AgentID:    "support",
 		Channel:    "slack",
 		Account:    "workspace-a",
@@ -114,7 +114,7 @@ func TestNormalizeProcessOptions_InfersLegacyChatTypeFromSessionScope(t *testing
 		SenderID:    "user-1",
 		UserMessage: "hello",
 		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersionV1,
+			Version:    session.ScopeVersion,
 			AgentID:    "main",
 			Channel:    "telegram",
 			Dimensions: []string{"chat"},

@@ -354,14 +354,14 @@ func TestJSONLStoreCanceledTurnJournalWaitDoesNotMutate(t *testing.T) {
 	}
 }
 
-func TestJSONLStoreLegacyNilContextStillAppends(t *testing.T) {
+func TestJSONLStoreRejectsNilContext(t *testing.T) {
 	store := newTestStore(t)
-	//nolint:staticcheck // intentional: proves the legacy nil-context contract still appends
-	if err := store.AddFullMessage(nil, "turn", providers.Message{Role: "user", Content: "legacy"}); err != nil {
-		t.Fatalf("AddFullMessage(nil) error = %v", err)
+	//nolint:staticcheck // The current contract must reject a nil context without mutating history.
+	if err := store.AddFullMessage(nil, "turn", providers.Message{Role: "user", Content: "rejected"}); err == nil {
+		t.Fatal("AddFullMessage(nil) error = nil")
 	}
 	history, err := store.GetHistory(t.Context(), "turn")
-	if err != nil || len(history) != 1 || history[0].Content != "legacy" {
+	if err != nil || len(history) != 0 {
 		t.Fatalf("GetHistory() = %+v, %v", history, err)
 	}
 }
@@ -707,6 +707,38 @@ func TestSessionMetaScopePersists(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotScope, wantScope) {
 		t.Fatalf("meta.Scope = %#v, want %#v", gotScope, wantScope)
+	}
+}
+
+func TestClearSessionClientIDsPreservesCurrentScope(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	scope := json.RawMessage(`{"version":2,"agent_id":"main"}`)
+	for _, clientID := range []string{"browser-1", "browser-2"} {
+		if err := store.UpsertSessionMeta(ctx, "canonical", scope, clientID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.ClearSessionClientIDs(ctx, "canonical"); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.GetSessionMeta(ctx, "canonical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.ClientSessionIDs) != 0 {
+		t.Fatalf("ClientSessionIDs = %v, want none", meta.ClientSessionIDs)
+	}
+	var gotScope, wantScope map[string]any
+	if err := json.Unmarshal(meta.Scope, &gotScope); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(scope, &wantScope); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotScope, wantScope) {
+		t.Fatalf("Scope = %#v, want %#v", gotScope, wantScope)
 	}
 }
 

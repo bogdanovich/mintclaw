@@ -92,10 +92,10 @@ func TestSeahorseClearStopsBeforeDerivedStateWhenCanonicalClearFails(t *testing.
 func TestSeahorseContextManagerPersistsTrustedConversationProvenance(t *testing.T) {
 	mgr, _ := newReconciliationTestManager(t)
 	ctx := context.Background()
-	key := "epoch:daily"
+	key := session.BuildOpaqueSessionKey("test|epoch=daily")
 	metadataStore := singleTestRuntime(mgr).sessions.(session.MetadataAwareSessionStore)
 	metadataStore.EnsureSessionMetadata(key, &session.SessionScope{
-		Version:       session.ScopeVersionV2,
+		Version:       session.ScopeVersion,
 		AgentID:       "nutrition",
 		RouteScopeKey: "telegram:account:chat:topic",
 	})
@@ -330,8 +330,8 @@ func TestSeahorseConcurrentLiveIngestDoesNotDuplicate(t *testing.T) {
 
 func TestSeahorseReconciliationUsesRoutedSessionOwner(t *testing.T) {
 	mgr, _ := newReconciliationTestManager(t)
-	mainStore := session.NewSessionManager("")
-	supportStore := session.NewSessionManager("")
+	mainStore := session.NewMemoryStore()
+	supportStore := session.NewMemoryStore()
 	key := "agent:support:direct:42"
 	supportStore.AddMessage(key, "user", "owned by support")
 	singleTestRuntime(mgr).sessions = mainStore
