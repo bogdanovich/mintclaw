@@ -1323,6 +1323,15 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 	if err = json.Unmarshal(encoded, &projected); err != nil {
 		return nil, err
 	}
+	// Providers sometimes encode omitted optional context authority as JSON
+	// null. The live action path already treats those values as absent; make
+	// the durable projection canonical before schema validation so persistence
+	// does not reject an otherwise valid top-level page action.
+	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation"} {
+		if value, present := projected[field]; present && value == nil {
+			delete(projected, field)
+		}
+	}
 	action, ok := projected["action"].(map[string]any)
 	if !ok {
 		return nil, errors.New("browser action is unavailable")

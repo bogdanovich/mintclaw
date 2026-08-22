@@ -147,6 +147,30 @@ func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjectio
 	}
 }
 
+func TestToolRegistryDurableArgumentsOmitNullOptionalBrowserContext(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(&BrowserActTool{})
+	arguments := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_1",
+		"frame_id": nil, "context_catalog_id": nil, "context_generation": nil,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"action": map[string]any{"kind": "click", "ref": "ref_1"},
+		"effect": "navigation",
+	}
+	projected, protected, err := registry.DurableArguments("browser_act", arguments)
+	if err != nil || protected {
+		t.Fatalf("DurableArguments() = %#v, protected %v, %v", projected, protected, err)
+	}
+	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation"} {
+		if _, present := projected[field]; present {
+			t.Fatalf("durable arguments retained null optional field %q: %#v", field, projected)
+		}
+		if value, present := arguments[field]; !present || value != nil {
+			t.Fatalf("live arguments were mutated at %q: %#v", field, arguments)
+		}
+	}
+}
+
 func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	observe := &BrowserObserveTool{}
 	contexts := &BrowserContextsTool{}
