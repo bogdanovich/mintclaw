@@ -50,10 +50,44 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
 		"Do not infer click effect from the element role or HTTP method",
+		"call browser_act with external_commit during this turn",
+		"Never replace that tool call with a prose approval question",
+		"do not close the browser session while the runtime is suspended",
 	} {
 		if !strings.Contains(instruction, required) {
 			t.Fatalf("objective instruction omitted %q: %s", required, instruction)
 		}
+	}
+}
+
+func TestObjectiveOutcomeCarriesBoundedReportedBlocker(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"All six source photo files are missing from temporary storage."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "upload saved photos", Kind: "external_action",
+	}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeBlocked ||
+		outcome.Explanation != "All six source photo files are missing from temporary storage." {
+		t.Fatalf("blocked outcome = %#v", outcome)
+	}
+	userContent := objectiveOutcomeUserContent("Photos uploaded.", outcome)
+	if strings.Contains(userContent, "Photos uploaded") ||
+		!strings.Contains(userContent, "Reported reason: All six source photo files are missing") {
+		t.Fatalf("blocked user content = %q", userContent)
+	}
+}
+
+func TestObjectiveOutcomeDropsExplanationOnVerifiedSuccess(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"explanation":"stale blocker"}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspected", Kind: "result"}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" {
+		t.Fatalf("successful outcome retained explanation: %#v", outcome)
 	}
 }
 

@@ -59,7 +59,11 @@ func (t *DelegateTool) Description() string {
 	return "Delegate a task to another agent and wait for the result. " +
 		"Use this when another agent is better suited to handle a specific task " +
 		"based on their capabilities. The target agent runs with its own workspace, " +
-		"model, and tools."
+		"model, and tools. Durable human approvals are owned and delivered by the child runtime; " +
+		"for an action that should occur only after approval, declare the pending action as an " +
+		"external_action objective and let the child invoke it so the runtime can suspend before commit. " +
+		"When a delegated task suspends, do not ask a second confirmation, invent missing credentials or steps, " +
+		"or start a replacement delegate."
 }
 
 func (t *DelegateTool) Parameters() map[string]any {
@@ -183,7 +187,12 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		return toolshared.ErrorResult(fmt.Sprintf("delegation to agent %q returned no result", agentID))
 	}
 	if result.Control.TaskSuspended {
-		return toolshared.NewToolResult("Delegated task is waiting for human input.")
+		result.ForLLM = "The delegated task is durably suspended on its own human interaction. " +
+			"The runtime already delivered the exact approval prompt and owns the continuation. " +
+			"Do not ask another confirmation, invent missing credentials or human steps, start a replacement delegate, " +
+			"or report completion."
+		result.ForUser = ""
+		return result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	}
 
 	result.ForLLM = fmt.Sprintf("[Response from agent %q]\n%s", agentID, result.ForLLM)

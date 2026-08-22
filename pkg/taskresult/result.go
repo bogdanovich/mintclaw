@@ -38,6 +38,7 @@ type Outcome struct {
 	Status         OutcomeStatus `json:"status"`
 	CompletedItems []Item        `json:"completed_items,omitempty"`
 	MissingItems   []string      `json:"missing_items,omitempty"`
+	Explanation    string        `json:"explanation,omitempty"`
 }
 
 type Item struct {
@@ -108,6 +109,7 @@ func CloneOutcome(input *Outcome) *Outcome {
 	out := &Outcome{
 		Status:       input.Status,
 		MissingItems: append([]string(nil), input.MissingItems...),
+		Explanation:  input.Explanation,
 	}
 	for _, item := range input.CompletedItems {
 		cloned := Item{Item: item.Item, Kind: item.Kind}
