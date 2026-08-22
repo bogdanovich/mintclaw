@@ -155,7 +155,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-immediate-result",
 				sessionKey: "session-immediate-result",
-				opts: processOptions{
+				opts: turnSpec{
 					SendResponse: true,
 					Dispatch:     DispatchRequest{SessionKey: "session-immediate-result"},
 				},
@@ -221,7 +221,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-immediate-journal-failure",
 		sessionKey: "session-immediate-journal-failure",
-		opts: processOptions{
+		opts: turnSpec{
 			SendResponse: true,
 			Dispatch:     DispatchRequest{SessionKey: "session-immediate-journal-failure"},
 		},
@@ -592,7 +592,7 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 	}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-write-audit", sessionKey: "session-write-audit",
-		opts: processOptions{NoHistory: true},
+		opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -635,7 +635,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 		agentID:    agent.ID,
 		turnID:     "tool-stage-turn",
 		sessionKey: "tool-stage-session",
-		opts: processOptions{
+		opts: turnSpec{
 			NoHistory: true,
 			Dispatch:  DispatchRequest{SessionKey: "tool-stage-session"},
 		},
@@ -708,7 +708,7 @@ func TestCodingTrustRejectsReplacementRegistry(t *testing.T) {
 	agent.Tools = admitted.Clone()
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "replacement-turn", sessionKey: "replacement-session",
-		opts: processOptions{NoHistory: true, Dispatch: DispatchRequest{SessionKey: "replacement-session"}},
+		opts: turnSpec{NoHistory: true, Dispatch: DispatchRequest{SessionKey: "replacement-session"}},
 	}
 	llm := newLLMIterationState(1)
 	runner := &toolLoopRunner{
@@ -740,7 +740,7 @@ func TestCodingTrustRejectsRegistryReplacementAfterApproval(t *testing.T) {
 	agent.admitTrustedToolRegistry()
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "stage-replacement-turn", sessionKey: "stage-replacement-session",
-		opts: processOptions{NoHistory: true, Dispatch: DispatchRequest{SessionKey: "stage-replacement-session"}},
+		opts: turnSpec{NoHistory: true, Dispatch: DispatchRequest{SessionKey: "stage-replacement-session"}},
 	}
 	llm := newLLMIterationState(1)
 	runner := &toolLoopRunner{
@@ -792,7 +792,7 @@ func TestPipelineToolResultJournalFailureLeavesDurableUnresolvedIntent(t *testin
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-journal-failure",
 		sessionKey: "session-journal-failure",
-		opts:       processOptions{Dispatch: DispatchRequest{SessionKey: "session-journal-failure"}},
+		opts:       turnSpec{Dispatch: DispatchRequest{SessionKey: "session-journal-failure"}},
 	}
 	toolCall := providers.ToolCall{ID: "call-side-effect", Name: tool.Name(), Arguments: map[string]any{}}
 	intent := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCall}}
@@ -862,7 +862,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-delivery-failure",
 				sessionKey: "session-delivery-failure",
-				opts: processOptions{
+				opts: turnSpec{
 					SendResponse: true,
 					Dispatch:     DispatchRequest{SessionKey: "session-delivery-failure"},
 				},
@@ -944,7 +944,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-browser-screenshot",
 		sessionKey: "session-browser-screenshot",
-		opts: processOptions{
+		opts: turnSpec{
 			SendResponse: true,
 			Dispatch:     DispatchRequest{SessionKey: "session-browser-screenshot"},
 		},
@@ -1016,7 +1016,7 @@ func TestPipelineProtectedImmediateArtifactVisionErrorDoesNotRetryWithoutCurrent
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-browser-screenshot",
 				sessionKey: "session-browser-screenshot",
-				opts: processOptions{
+				opts: turnSpec{
 					SuppressToolUserDelivery: true,
 					Dispatch:                 DispatchRequest{SessionKey: "session-browser-screenshot"},
 				},
@@ -1094,7 +1094,7 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-suppressed-media",
 				sessionKey: "session-suppressed-media",
-				opts: processOptions{
+				opts: turnSpec{
 					SuppressToolUserDelivery: true,
 					SendResponse:             true,
 					Dispatch:                 DispatchRequest{SessionKey: "session-suppressed-media"},
@@ -1150,7 +1150,7 @@ func TestPipelineToolCallIntentJournalFailurePreventsExecution(t *testing.T) {
 	tool := &countingTestTool{name: "must-not-run"}
 	registry.Register(tool)
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
-	ts := &turnState{agent: agent, opts: processOptions{Dispatch: DispatchRequest{SessionKey: "intent-fail"}}}
+	ts := &turnState{agent: agent, opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "intent-fail"}}}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-1", Name: tool.Name()}}
@@ -1178,7 +1178,7 @@ func TestPipelineAllowAllBypassesApprovalHook(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-allow-all",
 		sessionKey: "allow-all", workspace: t.TempDir(),
-		opts: processOptions{
+		opts: turnSpec{
 			NoHistory: true,
 			Dispatch:  DispatchRequest{SessionKey: "allow-all"},
 			ApprovalGrant: &ToolApprovalGrant{
@@ -1292,7 +1292,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-suspend", sessionKey: "session-suspend",
 		channel: inbound.Channel, chatID: inbound.ChatID,
-		opts: processOptions{
+		opts: turnSpec{
 			TaskID: "task-suspend", InteractionOriginContext: &originInbound,
 			Dispatch: DispatchRequest{
 				RouteSessionKey: "route-suspend", SessionKey: "session-suspend", InboundContext: &inbound,
@@ -1398,7 +1398,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		ts := &turnState{
 			agent: agent, agentID: agent.ID, turnID: "turn-domain", sessionKey: "session-domain",
 			channel: inbound.Channel, chatID: inbound.ChatID,
-			opts: processOptions{Dispatch: DispatchRequest{
+			opts: turnSpec{Dispatch: DispatchRequest{
 				SessionKey: "session-domain", InboundContext: &inbound,
 			}},
 		}
@@ -1449,7 +1449,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
 		ts := &turnState{
 			agent: agent, agentID: agent.ID, turnID: "turn-domain-fallback", sessionKey: "session-domain-fallback",
-			opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-domain-fallback"}},
+			opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "session-domain-fallback"}},
 		}
 		exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 		llm := newLLMIterationState(1)
@@ -1477,7 +1477,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		ts := &turnState{
 			agent: agent, agentID: agent.ID, turnID: "turn-domain-hook-drop",
 			sessionKey: "session-domain-hook-drop",
-			opts:       processOptions{Dispatch: DispatchRequest{SessionKey: "session-domain-hook-drop"}},
+			opts:       turnSpec{Dispatch: DispatchRequest{SessionKey: "session-domain-hook-drop"}},
 		}
 		exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 		llm := newLLMIterationState(1)
@@ -1552,7 +1552,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-bound-approval",
 		sessionKey: "session-bound-approval", workspace: workspace,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-bound-approval"}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "session-bound-approval"}},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -1593,7 +1593,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	resumeState := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-bound-approval-resume",
 		sessionKey: "session-bound-approval", workspace: workspace,
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{SessionKey: "session-bound-approval"},
 			ApprovalGrant: &ToolApprovalGrant{
 				InteractionID: "interaction-bound", Revision: 2,
@@ -1644,7 +1644,7 @@ func TestPipelineSuspensionFailureBecomesPairedToolError(t *testing.T) {
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-no-persist", sessionKey: "session-no-persist",
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-no-persist"}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "session-no-persist"}},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -1687,7 +1687,7 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-steer-suspend", sessionKey: "session-steer-suspend",
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-steer-suspend"}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "session-steer-suspend"}},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -1849,7 +1849,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 	}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-loop-guard",
-		sessionKey: "session-loop-guard", opts: processOptions{NoHistory: true},
+		sessionKey: "session-loop-guard", opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -1945,7 +1945,7 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 	}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-protected-loop",
-		sessionKey: "session-protected-loop", opts: processOptions{NoHistory: true},
+		sessionKey: "session-protected-loop", opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2068,8 +2068,8 @@ func TestTurnExecutionsHaveIsolatedLoopGuardState(t *testing.T) {
 	config := loopguard.DefaultConfig()
 	config.ExactFailureWarn = 1
 	agent := &AgentInstance{ToolLoopDetection: config}
-	first := newTurnExecution(agent, processOptions{}, nil, "", nil)
-	second := newTurnExecution(agent, processOptions{}, nil, "", nil)
+	first := newTurnExecution(agent, turnSpec{}, nil, "", nil)
+	second := newTurnExecution(agent, turnSpec{}, nil, "", nil)
 	observation := loopguard.Observation{
 		Tool: "read_file", Args: map[string]any{"path": "x"}, Failed: true,
 	}
@@ -2098,7 +2098,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 	}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-emergency-loop-guard",
-		sessionKey: "session-emergency-loop-guard", opts: processOptions{NoHistory: true},
+		sessionKey: "session-emergency-loop-guard", opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2168,7 +2168,7 @@ func TestPipelineEmergencyHaltPreservesReasonForResponseHandledTool(t *testing.T
 	agent.ToolLoopDetection = loopguard.DefaultConfig()
 	agent.ToolLoopDetection.IdenticalCallHalt = haltThreshold
 
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-emergency-handled-loop",
 			UserMessage: "run the handled tool",
@@ -2208,7 +2208,7 @@ func TestPipelineLoopGuardUsesHookModifiedArgumentsAndResults(t *testing.T) {
 		agentID:    "main",
 		turnID:     "turn-hook-loop",
 		sessionKey: "hook-loop",
-		opts:       processOptions{NoHistory: true},
+		opts:       turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2256,7 +2256,7 @@ func TestPipelineLoopGuardDoesNotCountPolicyDenials(t *testing.T) {
 		agentID:    "main",
 		turnID:     "turn-denial-loop",
 		sessionKey: "denial-loop",
-		opts:       processOptions{NoHistory: true},
+		opts:       turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2331,7 +2331,7 @@ func TestPipelineLoopGuardBlocksBeforeApprovalAuthority(t *testing.T) {
 			ts := &turnState{
 				agent: agent, agentID: "main", turnID: "turn-approval-loop",
 				sessionKey: "approval-loop", workspace: t.TempDir(),
-				opts: processOptions{
+				opts: turnSpec{
 					NoHistory:     true,
 					ApprovalGrant: test.grant,
 					Dispatch: DispatchRequest{
@@ -2594,7 +2594,7 @@ func TestPipelineSteeringPreservesEntireEmittedToolBatch(t *testing.T) {
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-steering-safety",
-		sessionKey: "session-steering-safety", opts: processOptions{NoHistory: true},
+		sessionKey: "session-steering-safety", opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2652,7 +2652,7 @@ func TestPipelineSteeringArrivingDuringBatchPreservesRemainingCalls(t *testing.T
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-delayed-steering",
-		sessionKey: "session-delayed-steering", opts: processOptions{NoHistory: true},
+		sessionKey: "session-delayed-steering", opts: turnSpec{NoHistory: true},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -2784,39 +2784,39 @@ func TestRunAgentLoop_AbortsRepeatedFatalToolTransportErrors(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	response, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-fatal-tool-loop",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run research",
+	response, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-fatal-tool-loop",
+			UserMessage: "run research",
+			InboundContext: &bus.InboundContext{
+				Channel:  "cli",
+				ChatID:   "direct",
+				ChatType: "direct",
+				SenderID: "tester",
+			},
+			RouteResult: &routing.ResolvedRoute{
+				AgentID:   "main",
+				Channel:   "cli",
+				AccountID: routing.DefaultAccountID,
+				SessionPolicy: routing.SessionPolicy{
+					Dimensions: []string{"sender"},
+				},
+				MatchedBy: "default",
+			},
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersion,
+				AgentID:    "main",
+				Channel:    "cli",
+				Account:    routing.DefaultAccountID,
+				Dimensions: []string{"sender"},
+				Values: map[string]string{
+					"sender": "tester",
+				},
+			},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
-		InboundContext: &bus.InboundContext{
-			Channel:  "cli",
-			ChatID:   "direct",
-			ChatType: "direct",
-			SenderID: "tester",
-		},
-		RouteResult: &routing.ResolvedRoute{
-			AgentID:   "main",
-			Channel:   "cli",
-			AccountID: routing.DefaultAccountID,
-			SessionPolicy: routing.SessionPolicy{
-				Dimensions: []string{"sender"},
-			},
-			MatchedBy: "default",
-		},
-		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersion,
-			AgentID:    "main",
-			Channel:    "cli",
-			Account:    routing.DefaultAccountID,
-			Dimensions: []string{"sender"},
-			Values: map[string]string{
-				"sender": "tester",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop() error = %v", err)
@@ -2875,39 +2875,39 @@ func TestRunAgentLoop_AbortsFatalMCPServerTransportErrorImmediately(t *testing.T
 		t.Fatal("expected default agent")
 	}
 
-	response, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-fatal-mcp-server",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run research",
+	response, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-fatal-mcp-server",
+			UserMessage: "run research",
+			InboundContext: &bus.InboundContext{
+				Channel:  "cli",
+				ChatID:   "direct",
+				ChatType: "direct",
+				SenderID: "tester",
+			},
+			RouteResult: &routing.ResolvedRoute{
+				AgentID:   "main",
+				Channel:   "cli",
+				AccountID: routing.DefaultAccountID,
+				SessionPolicy: routing.SessionPolicy{
+					Dimensions: []string{"sender"},
+				},
+				MatchedBy: "default",
+			},
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersion,
+				AgentID:    "main",
+				Channel:    "cli",
+				Account:    routing.DefaultAccountID,
+				Dimensions: []string{"sender"},
+				Values: map[string]string{
+					"sender": "tester",
+				},
+			},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
-		InboundContext: &bus.InboundContext{
-			Channel:  "cli",
-			ChatID:   "direct",
-			ChatType: "direct",
-			SenderID: "tester",
-		},
-		RouteResult: &routing.ResolvedRoute{
-			AgentID:   "main",
-			Channel:   "cli",
-			AccountID: routing.DefaultAccountID,
-			SessionPolicy: routing.SessionPolicy{
-				Dimensions: []string{"sender"},
-			},
-			MatchedBy: "default",
-		},
-		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersion,
-			AgentID:    "main",
-			Channel:    "cli",
-			Account:    routing.DefaultAccountID,
-			Dimensions: []string{"sender"},
-			Values: map[string]string{
-				"sender": "tester",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop() error = %v", err)

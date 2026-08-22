@@ -279,39 +279,39 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(t, al, 16, expectedKinds...)
 	defer closeRuntimeEvents()
 
-	response, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	response, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-1",
+			UserMessage: "run tool",
+			InboundContext: &bus.InboundContext{
+				Channel:  "cli",
+				ChatID:   "direct",
+				ChatType: "direct",
+				SenderID: "tester",
+			},
+			RouteResult: &routing.ResolvedRoute{
+				AgentID:   "main",
+				Channel:   "cli",
+				AccountID: routing.DefaultAccountID,
+				SessionPolicy: routing.SessionPolicy{
+					Dimensions: []string{"sender"},
+				},
+				MatchedBy: "default",
+			},
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersion,
+				AgentID:    "main",
+				Channel:    "cli",
+				Account:    routing.DefaultAccountID,
+				Dimensions: []string{"sender"},
+				Values: map[string]string{
+					"sender": "tester",
+				},
+			},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
-		InboundContext: &bus.InboundContext{
-			Channel:  "cli",
-			ChatID:   "direct",
-			ChatType: "direct",
-			SenderID: "tester",
-		},
-		RouteResult: &routing.ResolvedRoute{
-			AgentID:   "main",
-			Channel:   "cli",
-			AccountID: routing.DefaultAccountID,
-			SessionPolicy: routing.SessionPolicy{
-				Dimensions: []string{"sender"},
-			},
-			MatchedBy: "default",
-		},
-		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersion,
-			AgentID:    "main",
-			Channel:    "cli",
-			Account:    routing.DefaultAccountID,
-			Dimensions: []string{"sender"},
-			Values: map[string]string{
-				"sender": "tester",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop failed: %v", err)
@@ -626,11 +626,12 @@ func TestAgentLoop_DoesNotEmitContextCompressEventForNoOpRetry(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "Trigger message",
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "Trigger message",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -718,11 +719,12 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run async tool",
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "run async tool",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1016,11 +1018,12 @@ func TestAgentLoop_AsyncToolUserOnly_DoesNotEmitFollowUpQueued(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run async tool",
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "run async tool",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1098,11 +1101,12 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run async tool",
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "run async tool",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1268,7 +1272,7 @@ func TestAgentLoop_AsyncUserOnlyAckSuppressesDefaultFinalResponse(t *testing.T) 
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
 			UserMessage: "send video",
@@ -1343,7 +1347,7 @@ func TestAgentLoop_AsyncParentOnlyQueuesFollowUpWithoutUserDelivery(t *testing.T
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
 			UserMessage: "run delegate",
@@ -1424,7 +1428,7 @@ func TestAgentLoop_AsyncUserAndParentPublishesUserAndQueuesFollowUp(t *testing.T
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+	resp, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
 			UserMessage: "run spawn",

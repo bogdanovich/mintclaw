@@ -29,8 +29,8 @@ func newSessionGoalPromptLoop(t *testing.T) (*AgentLoop, *AgentInstance, *turnPr
 	return al, agent, provider
 }
 
-func sessionGoalPromptOptions(routeSessionKey, sessionKey string) processOptions {
-	return processOptions{
+func sessionGoalPromptOptions(routeSessionKey, sessionKey string) turnSpec {
+	return turnSpec{
 		Dispatch: DispatchRequest{
 			RouteSessionKey: routeSessionKey,
 			SessionKey:      sessionKey,
@@ -156,8 +156,8 @@ func TestActiveGoalPromptCountsTowardPromptReserve(t *testing.T) {
 	withGoal := withoutGoal
 	al.applyActiveGoalPrompt(&withGoal)
 
-	withoutGoalTokens := estimateNonHistoryPromptReserveForProcessOptions(al.GetConfig(), agent, withoutGoal, "")
-	withGoalTokens := estimateNonHistoryPromptReserveForProcessOptions(al.GetConfig(), agent, withGoal, "")
+	withoutGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withoutGoal, "")
+	withGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withGoal, "")
 	if withGoalTokens <= withoutGoalTokens {
 		t.Fatalf("goal prompt reserve = %d, want > %d", withGoalTokens, withoutGoalTokens)
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
@@ -44,11 +45,12 @@ func TestAgentLoop_MountProcessHook_LLMAndObserver(t *testing.T) {
 		t.Fatalf("MountProcessHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "hello",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -84,11 +86,12 @@ func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
 		t.Fatalf("MountProcessHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "run tool",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -155,11 +158,12 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run blocked tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-1",
+			UserMessage:    "run blocked tool",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -256,11 +260,12 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 		t.Fatalf("MountProcessHook failed with relative dir/command under isolation: %v", mountErr)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-relative",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-relative",
+			UserMessage:    "hello",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,

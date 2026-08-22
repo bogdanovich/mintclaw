@@ -20,7 +20,7 @@ type inboundDispatchTarget struct {
 type inboundMessageTurn struct {
 	Message      bus.InboundMessage
 	Agent        *AgentInstance
-	Options      processOptions
+	Options      turnSpec
 	ScopeKey     string
 	SessionKey   string
 	ModelBinding effectiveModelBinding
@@ -103,7 +103,7 @@ func (al *AgentLoop) buildInboundMessageTurnForTarget(
 	sessionKey := target.SessionKey
 	modelBinding := al.bindEffectiveModel(allocation.RouteScopeKey, target.Agent)
 
-	opts := processOptions{
+	opts := turnSpec{
 		Dispatch: DispatchRequest{
 			RouteSessionKey: allocation.RouteScopeKey,
 			BaseSessionKey:  allocation.SessionKey,
@@ -115,7 +115,6 @@ func (al *AgentLoop) buildInboundMessageTurnForTarget(
 			Media:           append([]string(nil), msg.Media...),
 		},
 		ModelBinding:                modelBinding,
-		SenderID:                    msg.SenderID,
 		SenderDisplayName:           msg.Sender.DisplayName,
 		DefaultResponse:             defaultResponse,
 		EnableSummary:               true,

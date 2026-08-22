@@ -617,7 +617,7 @@ func TestImplicitImmediateMediaUsesDurableCommitBoundary(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace,
 		channel: "telegram", chatID: "chat-1", sessionKey: sessionKey,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	identity := outbox.Identity{
 		SourceID: sourceID, Ordinal: 0, Kind: outbox.KindMedia,

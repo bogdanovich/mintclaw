@@ -7,7 +7,7 @@ import (
 )
 
 // TurnContext carries normalized turn-scoped facts that can be shared across
-// events, hooks, and other runtime observers without re-parsing legacy fields.
+// events, hooks, and other runtime observers without re-parsing copied fields.
 type TurnContext struct {
 	Inbound *bus.InboundContext    `json:"inbound,omitempty"`
 	Route   *routing.ResolvedRoute `json:"route,omitempty"`

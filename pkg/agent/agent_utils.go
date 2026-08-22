@@ -520,7 +520,7 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	return utils.Truncate(sb.String(), maxLLMRequestLogChars)
 }
 
-func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
+func activeSkillNames(agent *AgentInstance, opts turnSpec) []string {
 	if agent == nil {
 		return nil
 	}

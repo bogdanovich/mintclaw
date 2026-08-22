@@ -196,7 +196,7 @@ func contextManagerConfigName(cfg *config.Config) string {
 func (al *AgentLoop) askSideQuestion(
 	ctx context.Context,
 	agent *AgentInstance,
-	opts *processOptions,
+	opts *turnSpec,
 	question string,
 ) (string, error) {
 	if agent == nil {
@@ -209,7 +209,7 @@ func (al *AgentLoop) askSideQuestion(
 	}
 
 	if opts != nil {
-		normalizeProcessOptionsInPlace(opts)
+		normalizeTurnSpecInPlace(opts)
 		resolved, err := resolveTurnProfileOptions(al.GetConfig(), *opts)
 		if err != nil {
 			return "", err
@@ -220,10 +220,10 @@ func (al *AgentLoop) askSideQuestion(
 	var media []string
 	var channel, chatID, senderID, senderDisplayName string
 	if opts != nil {
-		media = opts.Media
-		channel = opts.Channel
-		chatID = opts.ChatID
-		senderID = opts.SenderID
+		media = opts.Dispatch.Media
+		channel = opts.Dispatch.Channel()
+		chatID = opts.Dispatch.ChatID()
+		senderID = opts.Dispatch.SenderID()
 		senderDisplayName = opts.SenderDisplayName
 	}
 
@@ -232,8 +232,8 @@ func (al *AgentLoop) askSideQuestion(
 	var summary string
 	if opts != nil && !opts.NoHistory {
 		sideQuestionOpts := *opts
-		sideQuestionOpts.UserMessage = question
-		reserveTokens := estimateNonHistoryPromptReserveForProcessOptions(
+		sideQuestionOpts.Dispatch.UserMessage = question
+		reserveTokens := estimateNonHistoryPromptReserveForTurnSpec(
 			al.GetConfig(),
 			agent,
 			sideQuestionOpts,
@@ -241,7 +241,7 @@ func (al *AgentLoop) askSideQuestion(
 		)
 		resp, err := al.contextManager.Assemble(ctx, &AssembleRequest{
 			Agent:         agent,
-			SessionKey:    opts.SessionKey,
+			SessionKey:    opts.Dispatch.SessionKey,
 			Budget:        agent.ContextWindow,
 			MaxTokens:     agent.MaxTokens,
 			ReserveTokens: reserveTokens,
@@ -268,7 +268,7 @@ func (al *AgentLoop) askSideQuestion(
 			SenderDisplayName: senderDisplayName,
 		}
 	} else {
-		promptReq = promptBuildRequestForProcessOptions(
+		promptReq = promptBuildRequestForTurnSpec(
 			al.GetConfig(),
 			agent,
 			*opts,

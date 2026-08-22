@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -94,7 +95,7 @@ func TestBuildMessagesFromPrompt_IncludesSystemPromptOverlay(t *testing.T) {
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		CurrentMessage: "do child task",
-		Overlays: promptOverlaysForOptions(processOptions{
+		Overlays: promptOverlaysForOptions(turnSpec{
 			SystemPromptOverride: "Use child-only system instructions.",
 		}),
 	})
@@ -270,41 +271,47 @@ func TestAllowAdjacentMediaFollowupForChatType_OnlyDirect(t *testing.T) {
 	}
 }
 
-func TestPromptBuildRequestForProcessOptions_AllowsLegacyDirectAdjacentMedia(t *testing.T) {
-	opts := normalizeProcessOptions(processOptions{
-		SessionKey:  "session-1",
-		Channel:     "telegram",
-		ChatID:      "chat-1",
-		SenderID:    "user-1",
-		UserMessage: "[media only]",
-		Media:       []string{"media://image-1"},
+func TestPromptBuildRequestForTurnSpec_AllowsDirectAdjacentMedia(t *testing.T) {
+	opts := normalizeTurnSpec(turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-1",
+			UserMessage: "[media only]",
+			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			},
+		},
 	})
 
-	req := promptBuildRequestForProcessOptions(nil, nil, opts, nil, "", opts.UserMessage, opts.Media)
+	req := promptBuildRequestForTurnSpec(
+		nil, nil, opts, nil, "", opts.Dispatch.UserMessage, opts.Dispatch.Media,
+	)
 	if !req.AllowAdjacentMediaFollowup {
-		t.Fatal("AllowAdjacentMediaFollowup = false, want true for legacy direct processOptions")
+		t.Fatal("AllowAdjacentMediaFollowup = false, want true for direct turnSpec")
 	}
 }
 
-func TestPromptBuildRequestForProcessOptions_CarriesCurrentMessageRelation(t *testing.T) {
+func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.T) {
 	ts := time.Now().Add(-time.Minute)
-	opts := normalizeProcessOptions(processOptions{
-		SessionKey:  "session-1",
-		Channel:     "telegram",
-		ChatID:      "chat-1",
-		SenderID:    "user-1",
-		UserMessage: "[media only]",
-		Media:       []string{"media://image-1"},
+	opts := normalizeTurnSpec(turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-1",
+			UserMessage: "[media only]",
+			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			},
+		},
 	})
 
-	req := promptBuildRequestForProcessOptions(
+	req := promptBuildRequestForTurnSpec(
 		nil,
 		nil,
 		opts,
 		[]providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &ts}},
 		"",
-		opts.UserMessage,
-		opts.Media,
+		opts.Dispatch.UserMessage,
+		opts.Dispatch.Media,
 	)
 
 	if req.CurrentMessageRelation.Kind != InboundRelationAdjacentFollowupMedia {
@@ -319,24 +326,28 @@ func TestPromptBuildRequestForProcessOptions_CarriesCurrentMessageRelation(t *te
 	}
 }
 
-func TestPromptBuildRequestForProcessOptions_DisablesAdjacentMediaForGroupScope(t *testing.T) {
-	opts := normalizeProcessOptions(processOptions{
-		SessionKey: "session-1",
-		Channel:    "telegram",
-		ChatID:     "chat-1",
-		SenderID:   "user-1",
-		SessionScope: &session.SessionScope{
-			Values: map[string]string{
-				"chat": "group:chat-1",
+func TestPromptBuildRequestForTurnSpec_DisablesAdjacentMediaForGroupScope(t *testing.T) {
+	opts := normalizeTurnSpec(turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey: "session-1",
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "group", SenderID: "user-1",
 			},
+			SessionScope: &session.SessionScope{
+				Values: map[string]string{
+					"chat": "group:chat-1",
+				},
+			},
+			UserMessage: "[media only]",
+			Media:       []string{"media://image-1"},
 		},
-		UserMessage: "[media only]",
-		Media:       []string{"media://image-1"},
 	})
 
-	req := promptBuildRequestForProcessOptions(nil, nil, opts, nil, "", opts.UserMessage, opts.Media)
+	req := promptBuildRequestForTurnSpec(
+		nil, nil, opts, nil, "", opts.Dispatch.UserMessage, opts.Dispatch.Media,
+	)
 	if req.AllowAdjacentMediaFollowup {
-		t.Fatal("AllowAdjacentMediaFollowup = true, want false for group-scoped processOptions")
+		t.Fatal("AllowAdjacentMediaFollowup = true, want false for group-scoped turnSpec")
 	}
 }
 

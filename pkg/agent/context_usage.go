@@ -97,10 +97,10 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	}
 }
 
-func estimateNonHistoryPromptReserveForProcessOptions(
+func estimateNonHistoryPromptReserveForTurnSpec(
 	cfg *config.Config,
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 	summary string,
 ) int {
 	if agent == nil {
@@ -120,7 +120,7 @@ func estimateNonHistoryPromptReserveForProcessOptions(
 		contextualSkills = agent.ContextBuilder.ResolveActiveSkillsForContext(contextualSkills)
 	}
 
-	req := promptBuildRequestForProcessOptions(cfg, agent, opts, nil, summary, "", nil)
+	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, summary, "", nil)
 	req.ActiveSkills = append([]string(nil), contextualSkills...)
 	messages := agent.ContextBuilder.BuildMessagesFromPrompt(req)
 
@@ -136,7 +136,7 @@ func computeAssembledContextUsage(
 	cfg *config.Config,
 	agent *AgentInstance,
 	cm ContextManager,
-	opts processOptions,
+	opts turnSpec,
 	sessionKey string,
 ) (*bus.ContextUsage, int, bool) {
 	if agent == nil || cm == nil {
@@ -148,7 +148,7 @@ func computeAssembledContextUsage(
 	}
 
 	if opts.NoHistory {
-		usedTokens := estimateNonHistoryPromptReserveForProcessOptions(cfg, agent, opts, "")
+		usedTokens := estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, "")
 		effectiveWindow := contextWindow - agent.MaxTokens
 		if effectiveWindow < 0 {
 			effectiveWindow = contextWindow
@@ -183,7 +183,7 @@ func computeAssembledContextUsage(
 		SessionKey:    sessionKey,
 		Budget:        contextWindow,
 		MaxTokens:     agent.MaxTokens,
-		ReserveTokens: estimateNonHistoryPromptReserveForProcessOptions(cfg, agent, opts, ""),
+		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, ""),
 	})
 	if err != nil || resp == nil {
 		return nil, 0, false
@@ -194,7 +194,7 @@ func computeAssembledContextUsage(
 		historyTokens += EstimateMessageTokens(m)
 	}
 
-	usedTokens := historyTokens + estimateNonHistoryPromptReserveForProcessOptions(cfg, agent, opts, resp.Summary)
+	usedTokens := historyTokens + estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, resp.Summary)
 
 	effectiveWindow := contextWindow - agent.MaxTokens
 	if effectiveWindow < 0 {

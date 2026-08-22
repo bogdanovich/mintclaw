@@ -738,7 +738,7 @@ func TestShouldPublishToolFeedback_SubTurnUsesRouteSessionOverride(t *testing.T)
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "subturn-1",
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				RouteSessionKey: "route-session-1",
 				SessionKey:      "subturn-1",
@@ -804,7 +804,7 @@ func TestDeliverFinalTurnResult_AttachesResponseFooterMetadata(t *testing.T) {
 		context.Background(),
 		traceScope,
 		defaultAgent,
-		processOptions{
+		turnSpec{
 			SendResponse: true,
 			Dispatch: DispatchRequest{
 				SessionKey: "session-1",
@@ -881,7 +881,7 @@ func TestDeliverFinalTurnResult_DirectTelegramDeliveryIncludesResponseFooter(t *
 		context.Background(),
 		runtimeevents.NewTraceScope(defaultAgent.Workspace, "turn-1"),
 		defaultAgent,
-		processOptions{
+		turnSpec{
 			SendResponse: true,
 			Dispatch: DispatchRequest{
 				SessionKey: "session-1",
@@ -1163,11 +1163,12 @@ func TestProcessMessage_SuppressesReasoningWhenThinkingOff(t *testing.T) {
 	response, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:main:mintclaw:chat-1",
-			Channel:         "mintclaw",
-			ChatID:          "chat-1",
-			UserMessage:     "hello",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:     "agent:main:mintclaw:chat-1",
+				UserMessage:    "hello",
+				InboundContext: &bus.InboundContext{Channel: "mintclaw", ChatID: "chat-1"},
+			},
 			SendResponse:    false,
 			DefaultResponse: defaultResponse,
 			NoHistory:       true,
@@ -1350,7 +1351,7 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 	}
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("rewrite-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("rewrite-session"), turnEventScope{
 		turnID:  "turn-rewrite-provider",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1588,7 +1589,7 @@ func TestPipeline_CallLLM_BeforeLLMRewriteDoesNotMutateStickyAutoFallbackSelecti
 	pipeline := newTestPipeline(al)
 	ts := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("rewrite-session")),
+		normalizeTurnSpec(makeTestTurnSpec("rewrite-session")),
 		turnEventScope{
 			turnID:  "turn-rewrite-sticky-selection",
 			context: newTurnContext(nil, nil, nil),
@@ -2107,8 +2108,7 @@ func TestAskSideQuestion_UsesEffectiveModelBindingExecutionState(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	opts := processOptions{
-		SessionKey: "session-1",
+	opts := turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:      "session-1",
 			RouteSessionKey: "route-session-1",
@@ -2165,7 +2165,7 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	opts := processOptions{}
+	opts := turnSpec{}
 	reply, handled := al.handleCommand(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: "telegram:123",
@@ -2270,7 +2270,7 @@ func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	opts := &processOptions{SessionKey: "agent:main:test"}
+	opts := &turnSpec{Dispatch: DispatchRequest{SessionKey: "agent:main:test"}}
 	matched, handled, reply := al.applyExplicitSkillCommand("/use finance-news", agent, opts)
 	if !matched {
 		t.Fatal("expected /use command to match")
@@ -2282,7 +2282,7 @@ func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
 
-	pending := al.takePendingSkills(newRuntimeSessionScope(agent.Workspace, opts.SessionKey))
+	pending := al.takePendingSkills(newRuntimeSessionScope(agent.Workspace, opts.Dispatch.SessionKey))
 	if len(pending) != 1 || pending[0] != "finance-news" {
 		t.Fatalf("pending skills = %#v, want [finance-news]", pending)
 	}
@@ -2308,11 +2308,13 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	opts := &processOptions{
-		SessionKey:  "agent:main:test",
-		UserMessage: "/use finance-news dammi le ultime news",
+	opts := &turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "agent:main:test",
+			UserMessage: "/use finance-news dammi le ultime news",
+		},
 	}
-	matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
+	matched, handled, reply := al.applyExplicitSkillCommand(opts.Dispatch.UserMessage, agent, opts)
 	if !matched {
 		t.Fatal("expected /use command to match")
 	}
@@ -2322,8 +2324,8 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	if reply != "" {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
-	if opts.UserMessage != "dammi le ultime news" {
-		t.Fatalf("opts.UserMessage = %q, want %q", opts.UserMessage, "dammi le ultime news")
+	if opts.Dispatch.UserMessage != "dammi le ultime news" {
+		t.Fatalf("opts.Dispatch.UserMessage = %q, want %q", opts.Dispatch.UserMessage, "dammi le ultime news")
 	}
 	if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
 		t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
@@ -2969,7 +2971,7 @@ func TestDeliverFinalTurnResult_SendsDeliverableArtifactsWithFinalTextCaption(t 
 		context.Background(),
 		runtimeevents.NewTraceScope(agent.Workspace, "turn-final-media"),
 		agent,
-		processOptions{
+		turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "final-media-session",
 				UserMessage: "save the reel and translate the recipe",
@@ -3032,7 +3034,7 @@ func TestDeliverFinalTurnTextQueuesFallbackAfterTurnCancellation(t *testing.T) {
 		turnCtx,
 		traceScope,
 		agent,
-		processOptions{Dispatch: DispatchRequest{SessionKey: "fallback-session"}},
+		turnSpec{Dispatch: DispatchRequest{SessionKey: "fallback-session"}},
 		bus.InboundContext{Channel: "telegram", ChatID: "chat1", SenderID: "user1"},
 		agent.ID,
 		"fallback-session",
@@ -3156,7 +3158,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-1",
 		channel: "cli", chatID: "chat-1", sessionKey: "session-1",
-		opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 			Channel: "cli", ChatID: "chat-1", SenderID: "user-1",
 		}}},
 	}
@@ -3257,7 +3259,7 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-handled",
 		channel: "mintclaw", chatID: "mintclaw:live", sessionKey: "session-handled",
-		opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
 		}}},
 	}
@@ -3330,7 +3332,7 @@ func TestDeliverFinalTurnToolTextCarriesTraceSettlement(t *testing.T) {
 				agent: agent, agentID: agent.ID,
 				workspace: agent.Workspace, turnID: traceScope.TurnID,
 				channel: "cli", chatID: "chat1", sessionKey: "session-final-text",
-				opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+				opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 					Channel: "cli", ChatID: "chat1", SenderID: "user1",
 				}}},
 			}
@@ -3436,7 +3438,7 @@ func TestRunAgentLoop_ResponseHandledToolPublishesForUserWhenSendResponseDisable
 		t.Fatal("expected default agent")
 	}
 
-	response, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+	response, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
 			UserMessage: "take a screenshot of the screen and send it to me",
@@ -9194,7 +9196,7 @@ func TestRunAgentLoop_FinalResponseAfterMessageToolUsesNewReply(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
+	response, err := al.runAgentLoop(context.Background(), agent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "message-tool-final-test",
 			UserMessage: "send media then final answer",
@@ -9280,7 +9282,7 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	go func() {
 		defer close(done)
 		runCtx := withOutboundTransaction(context.Background(), "message-tool-media-final-test")
-		response, runErr = al.runAgentLoop(runCtx, agent, processOptions{
+		response, runErr = al.runAgentLoop(runCtx, agent, turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "message-tool-media-final-test",
 				UserMessage: "send media then final answer",
@@ -9379,7 +9381,7 @@ func TestRunAgentLoop_MessageToolMediaDefaultsToTerminalDelivery(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
+	response, err := al.runAgentLoop(context.Background(), agent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "message-tool-media-terminal-test",
 			UserMessage: "send media",
@@ -9445,7 +9447,7 @@ func TestRunAgentLoop_ImmediateMediaDeliveryContinuesToFinalResponse(t *testing.
 	agent.Tools.Register(&immediateMediaTool{store: store, path: imagePath})
 
 	runCtx := withOutboundTransaction(context.Background(), "immediate-media-final-test")
-	response, err := al.runAgentLoop(runCtx, agent, processOptions{
+	response, err := al.runAgentLoop(runCtx, agent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "immediate-media-final-test",
 			UserMessage: "send an image then final answer",
@@ -9650,11 +9652,12 @@ func TestRunAgentLoop_MintClawSkipsInterimPublishWhenNotAllowed(t *testing.T) {
 	}
 	agent.Tools.Register(&toolLimitTestTool{})
 
-	response, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:                  "agent:main:mintclaw:session-1",
-		Channel:                     "mintclaw",
-		ChatID:                      "session-1",
-		UserMessage:                 "run with tools",
+	response, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "agent:main:mintclaw:session-1",
+			UserMessage:    "run with tools",
+			InboundContext: &bus.InboundContext{Channel: "mintclaw", ChatID: "session-1"},
+		},
 		DefaultResponse:             defaultResponse,
 		EnableSummary:               false,
 		SendResponse:                false,

@@ -119,7 +119,7 @@ func (al *AgentLoop) recoverUnansweredSession(
 	modelBinding := al.bindEffectiveModel(routeScopeKey, agent)
 	defer modelBinding.Cleanup()
 
-	_, err := al.runAgentLoop(ctx, agent, processOptions{
+	_, err := al.runAgentLoop(ctx, agent, turnSpec{
 		ModelBinding: modelBinding,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: routeScopeKey,

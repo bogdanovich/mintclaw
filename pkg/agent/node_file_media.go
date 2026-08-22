@@ -55,7 +55,7 @@ func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 		topicID = originTopicID(inbound)
 	}
 	if actorID == "" {
-		actorID = strings.TrimSpace(ts.opts.SenderID)
+		actorID = strings.TrimSpace(ts.opts.Dispatch.SenderID())
 	}
 	if actorID == "" {
 		actorID = ts.agent.ID

@@ -82,10 +82,10 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	if len(turn.Options.Dispatch.Media) != 1 || turn.Options.Dispatch.Media[0] != "media://one" {
 		t.Fatalf("Dispatch.Media = %v, want [media://one]", turn.Options.Dispatch.Media)
 	}
-	if turn.Options.SenderID != "telegram:42" || turn.Options.SenderDisplayName != "Anton" {
+	if turn.Options.Dispatch.SenderID() != "telegram:42" || turn.Options.SenderDisplayName != "Anton" {
 		t.Fatalf(
 			"sender fields = (%q,%q), want (telegram:42,Anton)",
-			turn.Options.SenderID,
+			turn.Options.Dispatch.SenderID(),
 			turn.Options.SenderDisplayName,
 		)
 	}

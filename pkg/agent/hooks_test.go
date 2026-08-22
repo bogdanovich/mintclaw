@@ -665,39 +665,39 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey: "session-1",
+			InboundContext: &bus.InboundContext{
+				Channel:  "cli",
+				ChatID:   "direct",
+				ChatType: "direct",
+				SenderID: "hook-user",
+			},
+			RouteResult: &routing.ResolvedRoute{
+				AgentID:   "main",
+				Channel:   "cli",
+				AccountID: routing.DefaultAccountID,
+				SessionPolicy: routing.SessionPolicy{
+					Dimensions: []string{"sender"},
+				},
+				MatchedBy: "default",
+			},
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersion,
+				AgentID:    "main",
+				Channel:    "cli",
+				Account:    routing.DefaultAccountID,
+				Dimensions: []string{"sender"},
+				Values: map[string]string{
+					"sender": "hook-user",
+				},
+			},
+			UserMessage: "hello",
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
-		InboundContext: &bus.InboundContext{
-			Channel:  "cli",
-			ChatID:   "direct",
-			ChatType: "direct",
-			SenderID: "hook-user",
-		},
-		RouteResult: &routing.ResolvedRoute{
-			AgentID:   "main",
-			Channel:   "cli",
-			AccountID: routing.DefaultAccountID,
-			SessionPolicy: routing.SessionPolicy{
-				Dimensions: []string{"sender"},
-			},
-			MatchedBy: "default",
-		},
-		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersion,
-			AgentID:    "main",
-			Channel:    "cli",
-			Account:    routing.DefaultAccountID,
-			Dimensions: []string{"sender"},
-			Values: map[string]string{
-				"sender": "hook-user",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop failed: %v", err)
@@ -751,22 +751,22 @@ func TestAgentLoop_Hooks_RuntimeObserverReceivesEvents(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-1",
+			UserMessage: "hello",
+			InboundContext: &bus.InboundContext{
+				Channel:   "cli",
+				Account:   "default",
+				ChatID:    "direct",
+				ChatType:  "direct",
+				SenderID:  "hook-user",
+				MessageID: "msg-1",
+			},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
-		InboundContext: &bus.InboundContext{
-			Channel:   "cli",
-			Account:   "default",
-			ChatID:    "direct",
-			ChatType:  "direct",
-			SenderID:  "hook-user",
-			MessageID: "msg-1",
-		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop failed: %v", err)
@@ -813,7 +813,7 @@ func TestAgentLoop_BtwCommand_UsesLLMHooks(t *testing.T) {
 	}, effectiveModelBinding{
 		WorkspaceAgent: agent,
 		Execution:      effectiveExecutionStateForAgent(agent),
-	}, &processOptions{
+	}, &turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey: "session-1",
 			InboundContext: &bus.InboundContext{
@@ -843,10 +843,6 @@ func TestAgentLoop_BtwCommand_UsesLLMHooks(t *testing.T) {
 			},
 			UserMessage: "/btw hello",
 		},
-		SessionKey:        "session-1",
-		Channel:           "cli",
-		ChatID:            "direct",
-		SenderID:          "hook-user",
 		SenderDisplayName: "Hook User",
 	})
 	if !handled {
@@ -991,11 +987,8 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-1", "cli", "direct", "run tool"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1047,11 +1040,8 @@ func TestAgentLoop_Hooks_ToolFeedbackUsesRewrittenToolName(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-1", "cli", "direct", "run tool"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1162,11 +1152,8 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-1", "cli", "direct", "run tool"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1242,11 +1229,8 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-1", "cli", "direct", "run tool"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1313,11 +1297,8 @@ func TestAgentLoop_Hooks_ToolDenyAction(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-1",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "run tool",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-1", "cli", "direct", "run tool"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1570,11 +1551,8 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-media-err",
-		Channel:         "discord",
-		ChatID:          "chat1",
-		UserMessage:     "send media",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-media-err", "discord", "chat1", "send media"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1630,11 +1608,8 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "session-bus-fallback",
-		Channel:         "cli",
-		ChatID:          "chat1",
-		UserMessage:     "send media",
+	resp, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        testDispatchRequest("session-bus-fallback", "cli", "chat1", "send media"),
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1686,7 +1661,7 @@ func TestAgentLoop_HookRespond_ResponseHandledMediaPreservesOutboundContext(t *t
 	al.channelManager = newStartedTestChannelManager(t,
 		al.bus.(*bus.MessageBus), al.mediaStore, "telegram", telegramChannel)
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey: "session-topic-media",
 			SessionScope: &session.SessionScope{

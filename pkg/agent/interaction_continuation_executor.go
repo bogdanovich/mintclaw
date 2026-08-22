@@ -24,7 +24,7 @@ type interactionContinuationExecutor struct {
 	abortOnce    sync.Once
 }
 
-func (e *interactionContinuationExecutor) configure(opts *processOptions) {
+func (e *interactionContinuationExecutor) configure(opts *turnSpec) {
 	if e == nil || e.approvedTool == nil || opts == nil {
 		return
 	}

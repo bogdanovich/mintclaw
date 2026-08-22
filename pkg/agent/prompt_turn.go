@@ -86,10 +86,10 @@ func turnProfileNativeSearchCallable(
 	return providers.Capabilities(agent.Provider).NativeSearch
 }
 
-func promptBuildRequestForProcessOptions(
+func promptBuildRequestForTurnSpec(
 	cfg *config.Config,
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 	history []providers.Message,
 	summary string,
 	currentMessage string,
@@ -103,16 +103,16 @@ func promptBuildRequestForProcessOptions(
 		Summary:                    summary,
 		CurrentMessage:             currentMessage,
 		Media:                      append([]string(nil), media...),
-		Channel:                    opts.Channel,
-		ChatID:                     opts.ChatID,
-		SenderID:                   opts.SenderID,
+		Channel:                    opts.Dispatch.Channel(),
+		ChatID:                     opts.Dispatch.ChatID(),
+		SenderID:                   opts.Dispatch.SenderID(),
 		SenderDisplayName:          opts.SenderDisplayName,
-		ReplyToMessageID:           opts.ReplyToMessageID,
+		ReplyToMessageID:           opts.Dispatch.ReplyToMessageID(),
 		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
 		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
 			currentMessage,
 			media,
-			opts.ReplyToMessageID,
+			opts.Dispatch.ReplyToMessageID(),
 			allowAdjacentMediaFollowup,
 			history,
 			time.Now(),
@@ -178,7 +178,7 @@ func normalizePromptBuildRequestRelations(
 	return req
 }
 
-func promptOverlaysForOptions(opts processOptions) []PromptPart {
+func promptOverlaysForOptions(opts turnSpec) []PromptPart {
 	var overlays []PromptPart
 	systemPrompt := strings.TrimSpace(opts.SystemPromptOverride)
 	if systemPrompt != "" {

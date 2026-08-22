@@ -115,7 +115,7 @@ func (al *AgentLoop) processCodingDirect(
 			SessionKey: wantSessionKey,
 		},
 		Agent: agent,
-		Options: processOptions{
+		Options: turnSpec{
 			Dispatch: DispatchRequest{
 				RouteSessionKey: wantSessionKey,
 				BaseSessionKey:  wantSessionKey,
@@ -238,7 +238,7 @@ func (al *AgentLoop) processScheduledMessage(
 		}
 	}
 
-	response, err := al.runAgentLoop(ctx, agent, processOptions{
+	response, err := al.runAgentLoop(ctx, agent, turnSpec{
 		Dispatch: DispatchRequest{
 			RouteSessionKey: allocation.RouteScopeKey,
 			BaseSessionKey:  allocation.SessionKey,
@@ -251,7 +251,6 @@ func (al *AgentLoop) processScheduledMessage(
 		},
 		ModelBinding:              modelBinding,
 		ExcludeInheritedNodeFiles: true,
-		SenderID:                  msg.SenderID,
 		SenderDisplayName:         msg.Sender.DisplayName,
 		DefaultResponse:           defaultResponse,
 		EnableSummary:             false,
@@ -290,7 +289,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 			SenderID: "heartbeat",
 		}
 	}
-	return al.runAgentLoop(ctx, agent, processOptions{
+	return al.runAgentLoop(ctx, agent, turnSpec{
 		Dispatch:                  dispatch,
 		ExcludeInheritedNodeFiles: true,
 		DefaultResponse:           defaultResponse,
@@ -594,7 +593,7 @@ func (al *AgentLoop) processSystemMessage(
 		dispatch.InboundContext = &origin
 	}
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	return al.runAgentLoop(ctx, agent, turnSpec{
 		Dispatch:        dispatch,
 		DefaultResponse: "Background task completed.",
 		EnableSummary:   false,
@@ -708,7 +707,7 @@ func (al *AgentLoop) processAsyncCompletionWithDelivery(
 	runCtx, cancel := context.WithTimeout(ctx, asyncCompletionSynthesisTimeout)
 	defer cancel()
 
-	return al.runAgentLoop(runCtx, agent, processOptions{
+	return al.runAgentLoop(runCtx, agent, turnSpec{
 		Dispatch:             dispatch,
 		DefaultResponse:      "",
 		EnableSummary:        false,

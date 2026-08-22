@@ -432,7 +432,7 @@ func TestConfiguredStreamingUsesChatInsideDurableOutboundTransaction(t *testing.
 	_, err := al.runAgentLoop(
 		withOutboundTransaction(t.Context(), "spool-streaming"),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions("mintclaw"),
+		configuredStreamingTurnSpec("mintclaw"),
 	)
 	if err != nil {
 		t.Fatalf("runAgentLoop() error = %v", err)
@@ -509,7 +509,7 @@ func TestConfiguredStreamingDisabledForInternalTurnWithoutUserVisibleOutput(t *t
 		chatResponse: &providers.LLMResponse{Content: "chat response"},
 	}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	opts := configuredStreamingProcessOptions("mintclaw")
+	opts := configuredStreamingTurnSpec("mintclaw")
 	opts.SendResponse = false
 	opts.AllowInterimMintClawPublish = false
 
@@ -795,7 +795,7 @@ func TestConfiguredStreamingFinalFlushFailureAfterVisibleOutputReturnsErrorWitho
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions("mintclaw"),
+		configuredStreamingTurnSpec("mintclaw"),
 	)
 	if err == nil {
 		t.Fatal("expected final flush failure after visible output to return an error")
@@ -857,7 +857,7 @@ func TestConfiguredStreamingFinalFlushFailureBeforeVisibleOutputKeepsNormalOutbo
 		}},
 	}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	opts := configuredStreamingProcessOptions("mintclaw")
+	opts := configuredStreamingTurnSpec("mintclaw")
 	opts.SendResponse = true
 
 	got, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), opts)
@@ -981,7 +981,7 @@ func TestConfiguredStreamingLaterUpdateFailureThenStreamSuccessReturnsVisibleErr
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions("mintclaw"),
+		configuredStreamingTurnSpec("mintclaw"),
 	)
 	if err == nil {
 		t.Fatal("expected post-visible update failure to return an error")
@@ -1108,7 +1108,7 @@ func TestConfiguredStreamingPostChunkFailureDoesNotFallBackToChat(t *testing.T) 
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions("mintclaw"),
+		configuredStreamingTurnSpec("mintclaw"),
 	)
 	if err == nil {
 		t.Fatal("expected post-chunk stream failure to return an error")
@@ -1148,7 +1148,7 @@ func TestConfiguredStreamingPostChunkEOFDoesNotRetryOrCancelVisibleOutput(t *tes
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions("mintclaw"),
+		configuredStreamingTurnSpec("mintclaw"),
 	)
 	if err == nil {
 		t.Fatal("expected post-chunk EOF to return an error")
@@ -1231,7 +1231,7 @@ func TestConfiguredStreamingAfterLLMAbortCancelsPublishedStream(t *testing.T) {
 			_, _ = al.runAgentLoop(
 				context.Background(),
 				al.GetRegistry().GetDefaultAgent(),
-				configuredStreamingProcessOptions("mintclaw"),
+				configuredStreamingTurnSpec("mintclaw"),
 			)
 
 			if streamer.canceled != 1 {
@@ -1378,7 +1378,7 @@ func TestConfiguredStreamingFinalTurnUsesAccumulatedTurnUsage(t *testing.T) {
 
 func TestPipelineFinalizeUsesAccumulatedTurnUsage(t *testing.T) {
 	ts := &turnState{
-		opts: processOptions{NoHistory: true},
+		opts: turnSpec{NoHistory: true},
 	}
 	ts.RecordLLMUsage(&providers.UsageInfo{
 		PromptTokens:     10000,
@@ -1509,12 +1509,14 @@ func newConfiguredStreamingMintClawChannel(t *testing.T, enabled bool) *config.C
 	}
 }
 
-func configuredStreamingProcessOptions(channel string) processOptions {
-	return processOptions{
-		SessionKey:                  "agent:main:" + channel + ":session-1",
-		Channel:                     channel,
-		ChatID:                      "session-1",
-		UserMessage:                 "hello",
+func configuredStreamingTurnSpec(channel string) turnSpec {
+	return turnSpec{
+		Dispatch: testDispatchRequest(
+			"agent:main:"+channel+":session-1",
+			channel,
+			"session-1",
+			"hello",
+		),
 		DefaultResponse:             defaultResponse,
 		EnableSummary:               false,
 		SendResponse:                false,
@@ -1528,7 +1530,7 @@ func runConfiguredStreamingTurn(t *testing.T, al *AgentLoop, channel string) str
 	got, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		configuredStreamingProcessOptions(channel),
+		configuredStreamingTurnSpec(channel),
 	)
 	if err != nil {
 		t.Fatalf("runAgentLoop() error = %v", err)

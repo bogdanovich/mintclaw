@@ -63,87 +63,22 @@ func (r DispatchRequest) SenderID() string {
 	return r.InboundContext.SenderID
 }
 
-func normalizeProcessOptionsInPlace(opts *processOptions) {
+func normalizeTurnSpecInPlace(opts *turnSpec) {
 	if opts == nil {
 		return
 	}
-	*opts = normalizeProcessOptions(*opts)
+	*opts = normalizeTurnSpec(*opts)
 }
 
-func normalizeProcessOptions(opts processOptions) processOptions {
+func normalizeTurnSpec(opts turnSpec) turnSpec {
 	opts.ModelBinding.RouteSessionKey = strings.TrimSpace(opts.ModelBinding.RouteSessionKey)
+	opts.Dispatch.RouteSessionKey = strings.TrimSpace(opts.Dispatch.RouteSessionKey)
+	opts.Dispatch.SessionKey = strings.TrimSpace(opts.Dispatch.SessionKey)
 	if opts.Dispatch.RouteSessionKey == "" {
-		if opts.ModelBinding.RouteSessionKey != "" {
-			opts.Dispatch.RouteSessionKey = opts.ModelBinding.RouteSessionKey
-		} else {
-			opts.Dispatch.RouteSessionKey = strings.TrimSpace(opts.SessionKey)
-		}
-	}
-	if opts.Dispatch.SessionKey == "" {
-		opts.Dispatch.SessionKey = strings.TrimSpace(opts.SessionKey)
+		opts.Dispatch.RouteSessionKey = opts.ModelBinding.RouteSessionKey
 	}
 	if opts.Dispatch.BaseSessionKey == "" {
 		opts.Dispatch.BaseSessionKey = opts.Dispatch.SessionKey
-	}
-	if opts.Dispatch.UserMessage == "" {
-		opts.Dispatch.UserMessage = opts.UserMessage
-	}
-	if len(opts.Dispatch.Media) == 0 && len(opts.Media) > 0 {
-		opts.Dispatch.Media = append([]string(nil), opts.Media...)
-	}
-	if opts.Dispatch.RouteResult == nil {
-		opts.Dispatch.RouteResult = cloneResolvedRoute(opts.RouteResult)
-	}
-	if opts.Dispatch.SessionScope == nil {
-		opts.Dispatch.SessionScope = session.CloneScope(opts.SessionScope)
-	}
-	if opts.Dispatch.InboundContext == nil {
-		if opts.InboundContext != nil {
-			opts.Dispatch.InboundContext = cloneInboundContext(opts.InboundContext)
-		} else if opts.Channel != "" || opts.ChatID != "" || opts.SenderID != "" ||
-			opts.MessageID != "" || opts.ReplyToMessageID != "" {
-			inbound := bus.InboundContext{
-				Channel:          strings.TrimSpace(opts.Channel),
-				ChatID:           strings.TrimSpace(opts.ChatID),
-				SenderID:         strings.TrimSpace(opts.SenderID),
-				MessageID:        strings.TrimSpace(opts.MessageID),
-				ReplyToMessageID: strings.TrimSpace(opts.ReplyToMessageID),
-			}
-			inbound.ChatType = inferChatTypeFromSessionScope(opts.Dispatch.SessionScope)
-			if inbound.ChatType == "" {
-				inbound.ChatType = "direct"
-			}
-			if inbound.Channel != "" || inbound.ChatID != "" || inbound.SenderID != "" ||
-				inbound.MessageID != "" || inbound.ReplyToMessageID != "" {
-				inbound = bus.NormalizeInboundMessage(bus.InboundMessage{Context: inbound}).Context
-				opts.Dispatch.InboundContext = &inbound
-			}
-		}
-	}
-
-	// Keep legacy mirrors populated while the rest of the runtime migrates.
-	opts.SessionKey = opts.Dispatch.SessionKey
-	opts.UserMessage = opts.Dispatch.UserMessage
-	opts.Media = append([]string(nil), opts.Dispatch.Media...)
-	opts.InboundContext = cloneInboundContext(opts.Dispatch.InboundContext)
-	opts.RouteResult = cloneResolvedRoute(opts.Dispatch.RouteResult)
-	opts.SessionScope = session.CloneScope(opts.Dispatch.SessionScope)
-	if opts.InboundContext != nil {
-		if opts.Channel == "" {
-			opts.Channel = opts.InboundContext.Channel
-		}
-		if opts.ChatID == "" {
-			opts.ChatID = opts.InboundContext.ChatID
-		}
-		if opts.MessageID == "" {
-			opts.MessageID = opts.InboundContext.MessageID
-		}
-		if opts.ReplyToMessageID == "" {
-			opts.ReplyToMessageID = opts.InboundContext.ReplyToMessageID
-		}
-		if opts.SenderID == "" {
-			opts.SenderID = opts.InboundContext.SenderID
-		}
 	}
 
 	return opts

@@ -28,7 +28,7 @@ func TestBuildCommandsRuntime_GoalCallbacksUseRouteSessionKey(t *testing.T) {
 		return al.buildCommandsRuntime(context.Background(), effectiveModelBinding{
 			RouteSessionKey: routeSessionKey,
 			WorkspaceAgent:  workspaceAgent,
-		}, &processOptions{Dispatch: DispatchRequest{RouteSessionKey: routeSessionKey}})
+		}, &turnSpec{Dispatch: DispatchRequest{RouteSessionKey: routeSessionKey}})
 	}
 
 	runtimeA := buildRuntime("route-a")
@@ -70,7 +70,7 @@ func TestGoalResetSemantics(t *testing.T) {
 	rt := al.buildCommandsRuntime(context.Background(), effectiveModelBinding{
 		RouteSessionKey: routeSessionKey,
 		WorkspaceAgent:  workspaceAgent,
-	}, &processOptions{Dispatch: DispatchRequest{RouteSessionKey: routeSessionKey}})
+	}, &turnSpec{Dispatch: DispatchRequest{RouteSessionKey: routeSessionKey}})
 	executor := commands.NewExecutor(commands.NewRegistry(commands.BuiltinDefinitions()), rt)
 	execute := func(command string) string {
 		var reply string
