@@ -688,6 +688,9 @@ Implementation sequence:
    `HardAbort(sessionKey)` directly.
 5. Delete unused exported source aliases for Seahorse ingestion and Google
    schema sanitization; tests and callers use the canonical method names.
+6. Delete ASR auto-discovery and the empty audio-channel default. Current
+   configurations select one named voice model, and current audio producers
+   supply their source channel explicitly.
 
 Exit criteria:
 
