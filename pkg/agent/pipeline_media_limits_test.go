@@ -6,29 +6,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-type testMediaLimitsProvider struct {
-	called bool
-	size   int
-}
-
-func (p *testMediaLimitsProvider) maxMediaSize() int {
-	p.called = true
-	return p.size
-}
-
-func TestPipelineMaxMediaSize_UsesInjectedProvider(t *testing.T) {
-	limits := &testMediaLimitsProvider{size: 1234}
-	pipeline := &Pipeline{Config: PipelineConfigServices{MediaLimits: limits}}
-
-	if got := pipeline.maxMediaSize(); got != 1234 {
-		t.Fatalf("maxMediaSize() = %d, want 1234", got)
-	}
-	if !limits.called {
-		t.Fatal("injected media limits provider was not called")
-	}
-}
-
-func TestPipelineMaxMediaSize_FallsBackToConfig(t *testing.T) {
+func TestPipelineMaxMediaSizeUsesConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.MaxMediaSize = 5678
 	pipeline := &Pipeline{Cfg: cfg}

@@ -321,7 +321,7 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if !ok {
 		t.Fatal("coding exec tool is missing")
 	}
-	if !newTestPipeline(loop).Config.TrustAllToolExecution {
+	if !newTestPipeline(loop).trustAllTools {
 		t.Fatal("coding pipeline did not select trusted tool execution")
 	}
 	if !cfg.Tools.Exec.EnableDenyPatterns || !cfg.Tools.Exec.AllowRemote ||

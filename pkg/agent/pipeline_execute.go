@@ -851,7 +851,7 @@ func (runner *toolLoopRunner) approveToolCall(
 	toolName := call.name
 	toolArgs := call.arguments
 	toolRegistry := ts.agent.Tools
-	if p.Config.TrustAllToolExecution && !ts.agent.isAdmittedTrustedToolRegistry(toolRegistry) {
+	if p.trustAllTools && !ts.agent.isAdmittedTrustedToolRegistry(toolRegistry) {
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		denyContent := hookDeniedToolContent(
 			"Tool execution denied because the trusted coding catalog was replaced",
@@ -873,7 +873,7 @@ func (runner *toolLoopRunner) approveToolCall(
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
-	if p.Config.TrustAllToolExecution {
+	if p.trustAllTools {
 		approvalBypass = true
 		trustedExecution = nil
 	}
@@ -1088,7 +1088,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 	execCtx := call.executionContext
 	trustedExecution := call.trustedExecution
 	toolRegistry := call.toolRegistry
-	if p.Config.TrustAllToolExecution &&
+	if p.trustAllTools &&
 		(!ts.agent.isAdmittedTrustedToolRegistry(toolRegistry) || ts.agent.Tools != toolRegistry) {
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		denyContent := hookDeniedToolContent(
@@ -1214,7 +1214,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if !ts.tryMarkToolExecutionStarted() {
 		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
 	}
-	if p.Config.DurableToolLifecycle && call.loopSemantics != loopguard.SemanticsReadOnlyIdempotent {
+	if p.durableToolLifecycle && call.loopSemantics != loopguard.SemanticsReadOnlyIdempotent {
 		if err := runner.journalToolExecutionStart(turnCtx, tc, toolName); err != nil {
 			runner.journalErr = fmt.Errorf("persist tool start marker: %w", err)
 			return stopToolBatch(ToolLoopOutcome{})

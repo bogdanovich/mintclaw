@@ -666,7 +666,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	for _, tc := range llm.response.ToolCalls {
 		llm.normalizedToolCalls = append(llm.normalizedToolCalls, providers.NormalizeToolCall(tc))
 	}
-	if p.Config.DurableToolLifecycle {
+	if p.durableToolLifecycle {
 		if err := validateDurableToolCallIDs(llm.normalizedToolCalls); err != nil {
 			return LLMCallOutcome{}, fmt.Errorf("invalid coding tool-call batch: %w", err)
 		}

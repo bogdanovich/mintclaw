@@ -49,24 +49,14 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 			ActiveRequests: al.activeRequests,
 			TurnControl:    &turnAbortController{events: events},
 		},
-		Config: PipelineConfigServices{
-			ChannelStreaming:      newConfigChannelStreamingProvider(cfg),
-			NativeSearch:          newConfigNativeSearchPolicy(cfg),
-			LLMRetry:              newConfigLLMRetryPolicy(cfg),
-			RetrySleeper:          contextRetrySleeper{},
-			MediaLimits:           newConfigMediaLimitsProvider(cfg),
-			FinalTurnRender:       newConfigFinalTurnRenderPolicy(cfg),
-			ModelResolution:       newConfigPipelineModelResolution(cfg),
-			PromptBuilder:         newConfigPipelinePromptBuilder(cfg),
-			ToolContentFilter:     newConfigToolContentFilter(cfg),
-			TrustAllToolExecution: al.hasCodingToolProfile(),
-			DurableToolLifecycle:  al.hasCodingToolProfile(),
-			HashToolArguments: func(workspace string, arguments map[string]any) (string, error) {
-				if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
-					return interactions.HashArgumentsAtPath(layout.StatePaths().InteractionKeyFile, arguments)
-				}
-				return interactions.HashArguments(workspace, arguments)
-			},
+		retrySleeper:         contextRetrySleeper{},
+		trustAllTools:        al.hasCodingToolProfile(),
+		durableToolLifecycle: al.hasCodingToolProfile(),
+		hashArguments: func(workspace string, arguments map[string]any) (string, error) {
+			if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+				return interactions.HashArgumentsAtPath(layout.StatePaths().InteractionKeyFile, arguments)
+			}
+			return interactions.HashArguments(workspace, arguments)
 		},
 		Context: PipelineContextServices{
 			Runtime:              al.contextManager,
