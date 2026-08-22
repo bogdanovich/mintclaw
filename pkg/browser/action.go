@@ -377,8 +377,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	if err != nil {
 		return Preparation{}, err
 	}
-	if actionRequiresApproval(prepared.Effect) && session.ProgressSignature == prepared.ProgressSignature &&
-		session.ProgressCount >= 2 {
+	if tracksBrowserProgress(prepared) && browserProgressCount(session, prepared.ProgressSignature) >= 2 {
 		return Preparation{}, ErrNoProgress
 	}
 	prepared.ID = preparedID
@@ -591,7 +590,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		},
 	)
 	progressSignature := ""
-	if invocation.State == InvocationSucceeded && actionRequiresApproval(prepared.Effect) {
+	if invocation.State == InvocationSucceeded && tracksBrowserProgress(prepared) {
 		progressSignature = prepared.ProgressSignature
 	}
 	postActionErr := broker.finalizeActionInvocationLocked(
@@ -745,7 +744,29 @@ func (broker *Broker) resolvePreparedActionLocked(
 			}
 			prepared.Effect = EffectLocalEdit
 		default:
-			prepared.Effect = classifyClickEffect(element)
+			navigationWorker, navigationSupported := worker.(GETNavigationWorker)
+			if !navigationSupported {
+				prepared.Effect = classifyClickEffect(element)
+				break
+			}
+			navigationURL, navigationErr := navigationWorker.ResolveGETNavigation(ctx, element.Target)
+			if navigationErr != nil {
+				return PreparedAction{}, navigationErr
+			}
+			if navigationURL == "" {
+				prepared.Effect = classifyClickEffect(element)
+				break
+			}
+			destination, destinationErr := originFromURL(navigationURL)
+			if destinationErr != nil || !broker.originAllowed(session, destination) {
+				return PreparedAction{}, ErrDenied
+			}
+			if !broker.originNetworkAllowed(ctx, session, destination) {
+				return PreparedAction{}, broker.quarantineNetworkDeniedLocked(ctx, session)
+			}
+			prepared.DestinationURL = navigationURL
+			prepared.DestinationOrigin = destination
+			prepared.Effect = EffectNavigation
 		}
 	case ActionDrag:
 		source, sourceOK := slot.refs[request.Action.SourceRef]
@@ -947,6 +968,19 @@ func (broker *Broker) revalidatePreparedLocked(
 		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
 		return ErrStale
 	}
+	if prepared.Action.Kind == ActionClick && prepared.DestinationURL != "" {
+		navigationWorker, ok := worker.(GETNavigationWorker)
+		if !ok {
+			return ErrDriverIncompatible
+		}
+		navigationURL, navigationErr := navigationWorker.ResolveGETNavigation(ctx, element.Target)
+		if navigationErr != nil {
+			return navigationErr
+		}
+		if navigationURL != prepared.DestinationURL {
+			return ErrStale
+		}
+	}
 	if prepared.Action.Kind == ActionFill {
 		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(ActionFill) {
 			return nil
@@ -1048,9 +1082,15 @@ func (broker *Broker) invalidateSnapshotLocked(
 	session.SnapshotOrigin = ""
 	session.PageStateHash = ""
 	if progressSignature != "" {
-		if session.ProgressSignature == progressSignature {
+		switch {
+		case session.ProgressSignature == progressSignature:
 			session.ProgressCount++
-		} else {
+		case session.PriorProgressSignature == progressSignature:
+			session.ProgressSignature, session.PriorProgressSignature = session.PriorProgressSignature, session.ProgressSignature
+			session.ProgressCount, session.PriorProgressCount = session.PriorProgressCount+1, session.ProgressCount
+		default:
+			session.PriorProgressSignature = session.ProgressSignature
+			session.PriorProgressCount = session.ProgressCount
 			session.ProgressSignature = progressSignature
 			session.ProgressCount = 1
 		}
@@ -1238,6 +1278,23 @@ func classifyClickEffect(element DriverElement) Effect {
 	}
 }
 
+func tracksBrowserProgress(prepared PreparedAction) bool {
+	return prepared.Effect == EffectNavigation || actionRequiresApproval(prepared.Effect)
+}
+
+func browserProgressCount(session Session, signature string) uint32 {
+	if signature == "" {
+		return 0
+	}
+	if session.ProgressSignature == signature {
+		return session.ProgressCount
+	}
+	if session.PriorProgressSignature == signature {
+		return session.PriorProgressCount
+	}
+	return 0
+}
+
 func classifyDialogEffect(decision string) Effect {
 	if decision == "dismiss" {
 		return EffectRead
@@ -1294,6 +1351,9 @@ func (broker *Broker) driverActionForPrepared(
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
+		}
+		if prepared.Action.Kind == ActionClick && prepared.Effect == EffectNavigation {
+			return DriverAction{Kind: DriverNavigate, URL: prepared.DestinationURL}, nil
 		}
 		kind := DriverClick
 		value := ""
@@ -1381,6 +1441,9 @@ func artifactInputAction(kind ActionKind) bool {
 }
 
 func workerActionForPrepared(prepared Action, driver DriverAction) (Action, error) {
+	if prepared.Kind == ActionClick && driver.Kind == DriverNavigate {
+		return Action{Kind: ActionNavigate, URL: driver.URL}, nil
+	}
 	action := Action{Kind: prepared.Kind}
 	switch prepared.Kind {
 	case ActionNavigate:

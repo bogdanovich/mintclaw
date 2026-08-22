@@ -27,6 +27,9 @@ type actionTestWorker struct {
 	resolveOrigin          string
 	resolveErr             error
 	resolveCalls           int
+	getNavigationURL       string
+	getNavigationErr       error
+	getNavigationCalls     int
 	actions                []DriverAction
 	onExecute              func(DriverAction)
 	navigationID           string
@@ -111,6 +114,11 @@ func (worker *actionTestWorker) Resolve(_ context.Context, target string) (Drive
 		return element, worker.resolveOrigin, nil
 	}
 	return worker.resolveElement, worker.resolveOrigin, nil
+}
+
+func (worker *actionTestWorker) ResolveGETNavigation(_ context.Context, _ string) (string, error) {
+	worker.getNavigationCalls++
+	return worker.getNavigationURL, worker.getNavigationErr
 }
 
 func (worker *actionTestWorker) Execute(_ context.Context, action DriverAction) error {
@@ -417,6 +425,103 @@ func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) 
 	})
 	if err != nil || !prepared.RequiresApproval {
 		t.Fatalf("changed-page preparation = %+v, %v", prepared, err)
+	}
+}
+
+func TestBrokerLowersProvenGETControlToNavigationWithoutApproval(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	owner := testOwner()
+	control := DriverElement{Target: "all", Role: "button", Name: "all postings"}
+	worker.observation = driverObservationFixture(control)
+	worker.resolveElement = control
+	worker.resolveOrigin = worker.observation.Origin
+	worker.getNavigationURL = "https://example.com/account/?show_tab=postings"
+
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_all_postings", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+	})
+	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation ||
+		prepared.Action.DestinationURL != worker.getNavigationURL {
+		t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded {
+		t.Fatalf("ExecuteAction() = %+v, %v", invocation, err)
+	}
+	if worker.getNavigationCalls != 2 || len(worker.actions) != 1 ||
+		worker.actions[0] != (DriverAction{Kind: DriverNavigate, URL: worker.getNavigationURL}) {
+		t.Fatalf("navigation proof calls = %d; actions = %+v", worker.getNavigationCalls, worker.actions)
+	}
+}
+
+func TestBrokerBlocksAlternatingApprovedActionCycleAcrossObservations(t *testing.T) {
+	store := NewMemoryStore()
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+
+	type page struct {
+		title   string
+		element DriverElement
+	}
+	pages := []page{
+		{title: "Active postings", element: DriverElement{Target: "all", Role: "button", Name: "all postings"}},
+		{title: "All postings", element: DriverElement{Target: "active", Role: "button", Name: "active"}},
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		current := pages[attempt%len(pages)]
+		worker.observation = driverObservationFixture(current.element)
+		worker.observation.Title = current.title
+		worker.resolveElement = current.element
+		worker.resolveOrigin = worker.observation.Origin
+		observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+			Owner: owner, RequestID: fmt.Sprintf("request_cycle_%d", attempt),
+			SessionID: session.ID, TabID: session.TabID,
+			SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+			Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		})
+		if err != nil || !prepared.RequiresApproval {
+			t.Fatalf("PrepareAction(attempt %d) = %+v, %v", attempt, prepared, err)
+		}
+		if _, err = broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, &prepared.Approval); err != nil {
+			t.Fatalf("ExecuteAction(attempt %d) error = %v", attempt, err)
+		}
+	}
+
+	worker.observation = driverObservationFixture(pages[0].element)
+	worker.observation.Title = pages[0].title
+	worker.resolveElement = pages[0].element
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_cycle_blocked", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+	})
+	if !errors.Is(err, ErrNoProgress) || len(worker.actions) != 4 {
+		t.Fatalf("alternating cycle error = %v; actions = %+v", err, worker.actions)
+	}
+	stored, getErr := store.GetSession(t.Context(), session.ID)
+	if getErr != nil || stored.ProgressCount != 2 || stored.PriorProgressCount != 2 {
+		t.Fatalf("stored alternating progress = %+v, %v", stored, getErr)
 	}
 }
 
@@ -2737,6 +2842,9 @@ func TestWorkerActionForPreparedUsesCanonicalAction(t *testing.T) {
 		{name: "navigate", prepared: Action{Kind: ActionNavigate}, driver: DriverAction{
 			Kind: DriverNavigate, URL: "https://example.com/",
 		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/"}},
+		{name: "proven GET click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
+			Kind: DriverNavigate, URL: "https://example.com/account?tab=all",
+		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/account?tab=all"}},
 		{name: "click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
 			Kind: DriverClick, Target: "host_ref_click",
 		}, want: Action{Kind: ActionClick, Ref: "host_ref_click"}},

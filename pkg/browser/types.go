@@ -349,31 +349,33 @@ func (owner Owner) Equal(other Owner) bool {
 }
 
 type Session struct {
-	ID                   string          `json:"id"`
-	Owner                Owner           `json:"owner"`
-	Target               string          `json:"target"`
-	Profile              string          `json:"profile"`
-	State                SessionState    `json:"state"`
-	DryRun               bool            `json:"dry_run"`
-	PolicyRevision       string          `json:"policy_revision"`
-	ControllerGeneration uint64          `json:"controller_generation"`
-	Controller           ControllerState `json:"controller"`
-	ControllerExpiresAt  int64           `json:"controller_expires_at,omitempty"`
-	TabID                string          `json:"tab_id"`
-	FrameID              string          `json:"frame_id,omitempty"`
-	ContextAuthority     *ContextCatalog `json:"context_catalog,omitempty"`
-	SnapshotID           string          `json:"snapshot_id,omitempty"`
-	SnapshotGeneration   uint64          `json:"snapshot_generation"`
-	SnapshotOrigin       string          `json:"snapshot_origin,omitempty"`
-	PageStateHash        string          `json:"page_state_hash,omitempty"`
-	ProgressSignature    string          `json:"progress_signature,omitempty"`
-	ProgressCount        uint32          `json:"progress_count,omitempty"`
-	Revision             uint64          `json:"revision"`
-	CreatedAt            int64           `json:"created_at"`
-	UpdatedAt            int64           `json:"updated_at"`
-	LastActivityAt       int64           `json:"last_activity_at"`
-	ExpiresAt            int64           `json:"expires_at"`
-	SafeFailure          string          `json:"safe_failure,omitempty"`
+	ID                     string          `json:"id"`
+	Owner                  Owner           `json:"owner"`
+	Target                 string          `json:"target"`
+	Profile                string          `json:"profile"`
+	State                  SessionState    `json:"state"`
+	DryRun                 bool            `json:"dry_run"`
+	PolicyRevision         string          `json:"policy_revision"`
+	ControllerGeneration   uint64          `json:"controller_generation"`
+	Controller             ControllerState `json:"controller"`
+	ControllerExpiresAt    int64           `json:"controller_expires_at,omitempty"`
+	TabID                  string          `json:"tab_id"`
+	FrameID                string          `json:"frame_id,omitempty"`
+	ContextAuthority       *ContextCatalog `json:"context_catalog,omitempty"`
+	SnapshotID             string          `json:"snapshot_id,omitempty"`
+	SnapshotGeneration     uint64          `json:"snapshot_generation"`
+	SnapshotOrigin         string          `json:"snapshot_origin,omitempty"`
+	PageStateHash          string          `json:"page_state_hash,omitempty"`
+	ProgressSignature      string          `json:"progress_signature,omitempty"`
+	ProgressCount          uint32          `json:"progress_count,omitempty"`
+	PriorProgressSignature string          `json:"prior_progress_signature,omitempty"`
+	PriorProgressCount     uint32          `json:"prior_progress_count,omitempty"`
+	Revision               uint64          `json:"revision"`
+	CreatedAt              int64           `json:"created_at"`
+	UpdatedAt              int64           `json:"updated_at"`
+	LastActivityAt         int64           `json:"last_activity_at"`
+	ExpiresAt              int64           `json:"expires_at"`
+	SafeFailure            string          `json:"safe_failure,omitempty"`
 }
 
 func (session Session) Validate() error {
@@ -402,6 +404,10 @@ func (session Session) Validate() error {
 		(session.PageStateHash != "" && (session.SnapshotID == "" || !validDigest(session.PageStateHash))) ||
 		(session.ProgressSignature == "") != (session.ProgressCount == 0) ||
 		(session.ProgressSignature != "" && !validDigest(session.ProgressSignature)) ||
+		(session.PriorProgressSignature == "") != (session.PriorProgressCount == 0) ||
+		(session.PriorProgressSignature != "" &&
+			(session.ProgressSignature == "" || !validDigest(session.PriorProgressSignature) ||
+				session.PriorProgressSignature == session.ProgressSignature)) ||
 		len(session.SnapshotOrigin) > MaxURLBytes {
 		return fmt.Errorf("%w: malformed session snapshot", ErrInvalid)
 	}
@@ -474,6 +480,7 @@ type PreparedAction struct {
 	SnapshotGeneration         uint64 `json:"snapshot_generation"`
 	CurrentOrigin              string `json:"current_origin"`
 	DestinationOrigin          string `json:"destination_origin,omitempty"`
+	DestinationURL             string `json:"destination_url,omitempty"`
 	Action                     Action `json:"action"`
 	InputDigest                string `json:"input_digest,omitempty"`
 	InputBytes                 int    `json:"input_bytes,omitempty"`
@@ -507,7 +514,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.ControllerGeneration == 0 || !validIdentifier(prepared.TabID) ||
 		!validIdentifier(prepared.SnapshotID) || prepared.SnapshotGeneration == 0 ||
 		prepared.CurrentOrigin == "" || len(prepared.CurrentOrigin) > MaxURLBytes ||
-		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.ElementRole) > 64 ||
+		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.DestinationURL) > MaxURLBytes ||
+		len(prepared.ElementRole) > 64 ||
 		len(prepared.ElementName) > MaxElementNameBytes || len(prepared.DestinationElementRole) > 64 ||
 		len(prepared.DestinationElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
@@ -522,6 +530,9 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "" ||
 			prepared.DestinationElementPosition != 0) {
 		return fmt.Errorf("%w: unexpected prepared drag destination binding", ErrInvalid)
+	}
+	if prepared.Action.Kind != ActionClick && prepared.DestinationURL != "" {
+		return fmt.Errorf("%w: unexpected prepared navigation destination", ErrInvalid)
 	}
 	if !validContextBinding(
 		prepared.FrameID,
@@ -553,7 +564,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		normalizedURL, normalizeErr := normalizeDriverNavigationURL(prepared.Action.URL)
 		destination, destinationErr := originFromURL(prepared.Action.URL)
 		if normalizeErr != nil || normalizedURL != prepared.Action.URL || destinationErr != nil ||
-			destination != prepared.DestinationOrigin || prepared.Effect != EffectNavigation ||
+			destination != prepared.DestinationOrigin || prepared.DestinationURL != "" ||
+			prepared.Effect != EffectNavigation ||
 			prepared.ElementRole != "" || prepared.ElementName != "" ||
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared navigation", ErrInvalid)
@@ -573,8 +585,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
 		}
 	case ActionClick:
-		if prepared.DestinationOrigin != "" || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
-			prepared.Effect != classifyClickEffect(DriverElement{Role: prepared.ElementRole}) ||
+		if !validPreparedClickNavigation(prepared) || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared click", ErrInvalid)
 		}
@@ -643,6 +654,17 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		return fmt.Errorf("%w: malformed prepared action binding", ErrInvalid)
 	}
 	return nil
+}
+
+func validPreparedClickNavigation(prepared PreparedAction) bool {
+	if prepared.DestinationURL == "" {
+		return prepared.DestinationOrigin == "" &&
+			prepared.Effect == classifyClickEffect(DriverElement{Role: prepared.ElementRole})
+	}
+	normalized, normalizeErr := normalizeDriverNavigationURL(prepared.DestinationURL)
+	destination, destinationErr := originFromURL(prepared.DestinationURL)
+	return normalizeErr == nil && normalized == prepared.DestinationURL && destinationErr == nil &&
+		destination == prepared.DestinationOrigin && prepared.Effect == EffectNavigation
 }
 
 func checkableElementRole(kind ActionKind, role string) bool {

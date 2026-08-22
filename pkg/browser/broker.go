@@ -50,6 +50,13 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// GETNavigationWorker can prove that activating an element is equivalent to a
+// same-tab HTTP GET. Workers without it remain fail-closed.
+type GETNavigationWorker interface {
+	ActionWorker
+	ResolveGETNavigation(context.Context, string) (string, error)
+}
+
 // ContextWorker is the private multi-document driver boundary. Implementations
 // retain every Playwright page, frame, and tab index behind opaque context IDs.
 // The broker must not advertise context support unless this complete interface

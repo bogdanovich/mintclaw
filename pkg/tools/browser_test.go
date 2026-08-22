@@ -1633,6 +1633,39 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserActGETNavigationHasNoApprovalOrExternalActionReceipt(t *testing.T) {
+	destination := "https://example.com/account/?show_tab=postings"
+	preparation := browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_navigation", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+		DestinationOrigin: "https://example.com", DestinationURL: destination,
+		Action: browser.Action{Kind: browser.ActionClick, Ref: "element_all_postings"},
+		Effect: browser.EffectNavigation,
+	}}
+	source := &fakeBrowserToolSource{
+		available: true, prepare: preparation,
+		execute: browser.Invocation{
+			ID: "invocation_navigation", SessionID: "browser_session_1",
+			Effect: browser.EffectNavigation, State: browser.InvocationSucceeded,
+		},
+		observe: browser.Observation{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotID: "snapshot_2",
+			SnapshotGeneration: 4, URL: destination, Origin: "https://example.com",
+			Snapshot: "- heading All postings",
+		},
+	}
+	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+		"action": map[string]any{"kind": "click", "ref": "element_all_postings"},
+	})
+	var view browserActionResult
+	decodeBrowserToolResult(t, result, &view)
+	if result.Control.Suspension != nil || len(result.WriteAudit) != 0 || source.executeApproval != nil ||
+		view.InvocationID != "invocation_navigation" {
+		t.Fatalf("GET navigation result = %#v; view = %#v; source = %#v", result, view, source)
+	}
+}
+
 func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
 	preparation := browser.Preparation{Action: browser.PreparedAction{
 		ID: "prepared_unknown", TabID: "tab_primary", CurrentOrigin: "https://example.com",
