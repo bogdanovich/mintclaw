@@ -731,33 +731,6 @@ func (al *AgentLoop) interruptGracefulTurn(ts *turnState, hint string) error {
 	return nil
 }
 
-// InterruptHard aborts an arbitrary active turn. In parallel mode this may
-// target the wrong session. Prefer HardAbort(sessionKey) instead.
-//
-// Deprecated: Use HardAbort(sessionKey) for session-safe aborts.
-func (al *AgentLoop) InterruptHard() error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	if strings.HasPrefix(ts.turnID, "pending-") {
-		return fmt.Errorf("turn is still initializing for session %s", ts.sessionKey)
-	}
-	if !ts.requestHardAbort() {
-		return fmt.Errorf("turn %s is already aborting", ts.turnID)
-	}
-
-	al.emitEvent(
-		runtimeevents.KindAgentInterruptReceived,
-		ts.eventMeta("InterruptHard", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind: InterruptKindHard,
-		},
-	)
-
-	return nil
-}
-
 // ====================== SubTurn Result Polling ======================
 
 // dequeuePendingSubTurnResults polls the SubTurn result channel for the given
@@ -843,41 +816,4 @@ func (al *AgentLoop) hardAbortScope(scope runtimeSessionScope) error {
 	}
 
 	return nil
-}
-
-// ====================== Follow-Up Injection ======================
-
-// InjectFollowUp enqueues a message to be automatically processed after the current
-// turn completes. Unlike Steer(), which interrupts the current execution, InjectFollowUp
-// waits for the current turn to finish naturally before processing the message.
-//
-// This is useful for:
-// - Automated workflows that need to chain multiple turns
-// - Background tasks that should run after the main task completes
-// - Scheduled follow-up actions
-//
-// The message will be processed via Continue() when the agent becomes idle.
-func (al *AgentLoop) InjectFollowUp(
-	workspace, sessionKey, agentID string,
-	msg providers.Message,
-) error {
-	// InjectFollowUp uses the same steering queue mechanism as Steer(),
-	// but the semantic difference is in when it's called:
-	// - Steer() is called during active execution to interrupt
-	// - InjectFollowUp() is called when planning future work
-	//
-	// Both end up in the same queue and are processed by Continue()
-	// when the agent is idle.
-	return al.Steer(workspace, sessionKey, agentID, msg)
-}
-
-// ====================== API Aliases for Design Document Compatibility ======================
-
-// InjectSteering is an alias for Steer() to match the design document naming.
-// It injects a steering message into the currently running agent loop.
-func (al *AgentLoop) InjectSteering(
-	workspace, sessionKey, agentID string,
-	msg providers.Message,
-) error {
-	return al.Steer(workspace, sessionKey, agentID, msg)
 }
