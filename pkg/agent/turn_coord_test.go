@@ -2089,6 +2089,78 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 	}
 }
 
+func TestRunTurn_DelegatedSuspensionRequeuesAcceptedInboundSteering(t *testing.T) {
+	tool := &fixedToolResultTool{name: "delegated_task", result: &toolshared.ToolResult{
+		ForLLM:  "descendant task owns a durable continuation",
+		ForUser: "must not escape the suspension boundary",
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}}
+	provider := &toolCallRespProvider{toolName: tool.Name(), response: "must not continue"}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(tool)
+
+	msgBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatalf("message bus = %T, want *bus.MessageBus", al.bus)
+	}
+	spool, err := bus.NewInboundSpool(filepath.Join(t.TempDir(), "spool"))
+	if err != nil {
+		t.Fatalf("NewInboundSpool() error = %v", err)
+	}
+	msgBus.SetInboundSpool(spool)
+	if err := msgBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "cli", ChatID: "test-chat"},
+		Content: "queued follow-up",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+	inbound := <-msgBus.InboundChan()
+	if inbound.SpoolID == "" {
+		t.Fatal("expected inbound spool ID")
+	}
+
+	opts := normalizeTurnSpec(makeTestTurnSpec("delegated-suspension-steering"))
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID:  "turn-delegated-suspension-steering",
+		context: newTurnContext(opts.Dispatch.InboundContext, nil, nil),
+	})
+	if err := al.enqueueSteeringMessageWithSender(
+		ts.runtimeSessionScope(),
+		agent.ID,
+		"",
+		providers.Message{Role: "user", Content: inbound.Content, InboundSpoolID: inbound.SpoolID},
+	); err != nil {
+		t.Fatalf("enqueueSteeringMessageWithSender() error = %v", err)
+	}
+	waitForSpoolEntries(t, spool.Dir(), "*.processing", 1)
+
+	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+	if err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+	if result.status != TurnEndStatusSuspended || provider.callCount != 1 || tool.executions != 1 {
+		t.Fatalf(
+			"result = %#v, provider calls = %d, tool executions = %d",
+			result,
+			provider.callCount,
+			tool.executions,
+		)
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 1 || accepted[0].InboundSpoolID != inbound.SpoolID {
+		t.Fatalf("accepted steering = %#v, want spool ID %q", accepted, inbound.SpoolID)
+	}
+	waitForSpoolEntries(t, spool.Dir(), "*.processing", 0)
+	waitForSpoolEntries(t, spool.Dir(), "*.json", 1)
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].SpoolID != inbound.SpoolID {
+		t.Fatalf("pending spool = %#v, want spool ID %q", pending, inbound.SpoolID)
+	}
+}
+
 func TestRunTurn_MaxIterations(t *testing.T) {
 	// Provider always returns tool calls, should hit max iterations
 	provider := &toolCallRespProvider{

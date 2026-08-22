@@ -1497,6 +1497,89 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 	}
 }
 
+func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		hookResult  bool
+		withSibling bool
+	}{
+		{name: "direct current result", hookResult: false, withSibling: false},
+		{name: "direct atomic sibling batch", hookResult: false, withSibling: true},
+		{name: "hook current result", hookResult: true, withSibling: false},
+		{name: "hook atomic sibling batch", hookResult: true, withSibling: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseStore := session.NewMemoryStore()
+			journalErr := errors.New("suspension transcript write failed")
+			store := &toolResultFailingJournal{SessionStore: baseStore, err: journalErr}
+			suspendedResult := &toolshared.ToolResult{
+				ForLLM:  "descendant task owns a durable continuation",
+				ForUser: "must not escape the suspension boundary",
+				Control: toolshared.ToolControl{TaskSuspended: true},
+			}
+			firstTool := &fixedToolResultTool{name: "delegated_task", result: suspendedResult}
+			deferredTool := &countingTestTool{name: "deferred_tool"}
+			registry := tools.NewToolRegistry()
+			registry.Register(firstTool)
+			registry.Register(deferredTool)
+			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-suspension-journal-failure",
+				sessionKey: "session-suspension-journal-failure",
+			}
+			calls := []providers.ToolCall{{ID: "call-suspended", Name: firstTool.Name()}}
+			if test.withSibling {
+				calls = append(calls, providers.ToolCall{ID: "call-deferred", Name: deferredTool.Name()})
+			}
+			intent := providers.Message{Role: "assistant", ToolCalls: calls}
+			if err := baseStore.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
+				t.Fatal(err)
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = calls
+			llm.assistantToolCallsPersisted = true
+			feedback := &immediateDeliveryFeedbackManager{}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{ToolFeedback: feedback}}
+			if test.hookResult {
+				pipeline.Interaction.Hooks = &toolResultRespondHook{result: suspendedResult}
+			}
+
+			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+			if outcome.Control != ToolControlSuspend || outcome.JournalErr != nil {
+				t.Fatalf("outcome = %#v, want suspension to dominate journal failure", outcome)
+			}
+			wantFirstExecutions := 1
+			if test.hookResult {
+				wantFirstExecutions = 0
+			}
+			if firstTool.executions != wantFirstExecutions || deferredTool.executions != 0 {
+				t.Fatalf(
+					"executions = first:%d deferred:%d, want %d/0",
+					firstTool.executions,
+					deferredTool.executions,
+					wantFirstExecutions,
+				)
+			}
+			if history := baseStore.GetHistory(ts.sessionKey); len(history) != 1 || history[0].Role != "assistant" {
+				t.Fatalf("failed atomic journal left a partial batch: %#v", history)
+			}
+			if !feedback.paused || feedback.dismissed || suspendedResult.ForUser != "" {
+				t.Fatalf(
+					"suspension state = paused:%v dismissed:%v result:%#v",
+					feedback.paused,
+					feedback.dismissed,
+					suspendedResult,
+				)
+			}
+			matchingToolResult(t, exec.messages, "call-suspended")
+			if test.withSibling {
+				matchingToolResult(t, exec.messages, "call-deferred")
+			}
+		})
+	}
+}
+
 func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 	newTool := func(called chan interactions.Outcome) *fixedToolResultTool {
 		return &fixedToolResultTool{name: "domain_suspension", result: &toolshared.ToolResult{

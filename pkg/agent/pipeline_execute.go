@@ -665,25 +665,29 @@ func (runner *toolLoopRunner) admitToolCall(
 						durableToolResultMsg.Media = nil
 						durableToolResultMsg.Deliverable = nil
 					}
-					aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
-					if err != nil {
-						return stopToolBatch(ToolLoopOutcome{})
-					}
-					if aborted {
-						return stopToolBatch(ToolLoopOutcome{
-							Control: ToolControlBreak, AbortCause: TurnAbortHard,
-						})
-					}
+					if hookResult.Control.TaskSuspended {
+						runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
+					} else {
+						aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
+						if err != nil {
+							return stopToolBatch(ToolLoopOutcome{})
+						}
+						if aborted {
+							return stopToolBatch(ToolLoopOutcome{
+								Control: ToolControlBreak, AbortCause: TurnAbortHard,
+							})
+						}
 
-					runner.bindImmediateDeliverySettlement(
-						toolResultMsg,
-						durableToolResultMsg,
-						hookResult,
-						protectedResult,
-					)
-					attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
-					hookResult = deliveredResult
-					runner.handledAttachments = append(runner.handledAttachments, attachments...)
+						runner.bindImmediateDeliverySettlement(
+							toolResultMsg,
+							durableToolResultMsg,
+							hookResult,
+							protectedResult,
+						)
+						attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
+						hookResult = deliveredResult
+						runner.handledAttachments = append(runner.handledAttachments, attachments...)
+					}
 				}
 				if !protectedResult && hookResult.Deliverable != nil {
 					recordDeliverable(exec, hookResult.Deliverable)
@@ -735,7 +739,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 				)
 				if hookResult.Control.TaskSuspended {
-					return runner.stopForDelegatedTaskSuspension(ctx, i)
+					return runner.stopForDelegatedTaskSuspension(ctx)
 				}
 				if terminalTurnErr != nil {
 					exec.messages = runner.messages
@@ -1443,25 +1447,29 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			durableToolResultMsg.Media = nil
 			durableToolResultMsg.Deliverable = nil
 		}
-		aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
-		if err != nil {
-			return stopToolBatch(ToolLoopOutcome{})
-		}
-		if aborted {
-			return stopToolBatch(ToolLoopOutcome{
-				Control: ToolControlBreak, AbortCause: TurnAbortHard,
-			})
-		}
+		if toolResult.Control.TaskSuspended {
+			runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
+		} else {
+			aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
+			if err != nil {
+				return stopToolBatch(ToolLoopOutcome{})
+			}
+			if aborted {
+				return stopToolBatch(ToolLoopOutcome{
+					Control: ToolControlBreak, AbortCause: TurnAbortHard,
+				})
+			}
 
-		runner.bindImmediateDeliverySettlement(
-			toolResultMsg,
-			durableToolResultMsg,
-			toolResult,
-			protectedResult,
-		)
-		attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
-		toolResult = deliveredResult
-		runner.handledAttachments = append(runner.handledAttachments, attachments...)
+			runner.bindImmediateDeliverySettlement(
+				toolResultMsg,
+				durableToolResultMsg,
+				toolResult,
+				protectedResult,
+			)
+			attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
+			toolResult = deliveredResult
+			runner.handledAttachments = append(runner.handledAttachments, attachments...)
+		}
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)
@@ -1517,7 +1525,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
 	if toolResult.Control.TaskSuspended {
-		return runner.stopForDelegatedTaskSuspension(ctx, i)
+		return runner.stopForDelegatedTaskSuspension(ctx)
 	}
 	if terminalTurnErr != nil {
 		exec.messages = runner.messages
@@ -1593,18 +1601,12 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
 	ctx context.Context,
-	callIndex int,
 ) toolCallStageResult {
 	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	runner.p.pauseToolFeedbackForTurn(pauseCtx, runner.ts)
 	pauseCancel()
 
-	runner.appendSkippedToolMessages(
-		callIndex+1,
-		"tool batch suspended by delegated task",
-		"Deferred because an earlier delegated task has a durable pending continuation. "+
-			"Reissue this tool if it is still needed after that continuation completes.",
-	)
+	runner.transferPendingSteeringOwnership()
 	runner.exec.messages = runner.messages
 	return stopToolBatch(ToolLoopOutcome{Control: ToolControlSuspend})
 }
@@ -2071,6 +2073,72 @@ func (r *toolLoopRunner) commitPendingToolBatch(
 		)
 	}
 	return r.ts.hardAbortRequested(), nil
+}
+
+func (r *toolLoopRunner) commitDelegatedTaskSuspensionBatch(
+	resultMsg providers.Message,
+	durableResultMsg providers.Message,
+	siblingStart int,
+) {
+	r.journalOwnershipTransferred = true
+	liveMessages := []providers.Message{resultMsg}
+	durableMessages := []providers.Message{durableResultMsg}
+	for i := siblingStart; i < len(r.toolCalls); i++ {
+		toolCall := r.toolCalls[i]
+		skipped := providers.Message{
+			Role: "tool",
+			Content: "Deferred because an earlier delegated task has a durable pending continuation. " +
+				"Reissue this tool if it is still needed after that continuation completes.",
+			ToolCallID: toolCall.ID,
+		}
+		liveMessages = append(liveMessages, skipped)
+		durableMessages = append(durableMessages, skipped)
+	}
+
+	ctx := r.turnCtx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	persisted := r.ts == nil || r.ts.opts.NoHistory
+	if r.ts != nil && !r.ts.opts.NoHistory {
+		_, err := r.ts.agent.Sessions.MutateTurnHistory(
+			ctx,
+			r.ts.sessionKey,
+			func(current []providers.Message) ([]providers.Message, bool, error) {
+				return append(current, durableMessages...), true, nil
+			},
+		)
+		if err != nil {
+			logger.WarnCF("agent", "Failed to persist delegated task suspension batch", map[string]any{
+				"agent_id":    r.ts.agent.ID,
+				"session_key": r.ts.sessionKey,
+				"error":       err.Error(),
+			})
+		} else {
+			persisted = true
+			r.ts.recordPersistedMessagePairs(liveMessages, durableMessages)
+		}
+	}
+	if persisted && r.p != nil && r.ts != nil && !r.ts.opts.NoHistory {
+		r.p.ingestMessage(ctx, r.ts, durableResultMsg, nil)
+	}
+
+	r.messages = append(r.messages, liveMessages...)
+	r.exec.messages = r.messages
+	for i := siblingStart; i < len(r.toolCalls); i++ {
+		toolCall := r.toolCalls[i]
+		r.p.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			r.ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{
+				ToolCallID: toolCall.ID,
+				Tool:       toolCall.Name,
+				Reason:     "tool batch suspended by delegated task",
+			},
+		)
+	}
 }
 
 func (r *toolLoopRunner) commitExecutedToolResult(
