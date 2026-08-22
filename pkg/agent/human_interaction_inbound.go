@@ -1534,6 +1534,9 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		continuationScope.AgentID = agent.ID
 		if strings.TrimSpace(record.Origin.TaskID) != "" {
 			continuationScope.ClientSessionID = ""
+			if err := clearSessionClientIDs(agent.Sessions, continuationSessionKey); err != nil {
+				return fmt.Errorf("clear durable task frontend mappings: %w", err)
+			}
 		}
 		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope)
 	}

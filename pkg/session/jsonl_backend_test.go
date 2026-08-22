@@ -403,6 +403,34 @@ func TestJSONLBackendRejectsRemovedScopeVersion(t *testing.T) {
 	}
 }
 
+func TestJSONLBackendClearsAccumulatedClientSessionIDs(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("durable-child")
+	scope := &session.SessionScope{
+		Version: session.ScopeVersion, AgentID: "child", ClientSessionID: "browser-parent",
+	}
+	backend := session.NewJSONLBackend(store)
+	backend.EnsureSessionMetadata(key, scope)
+
+	if err := backend.ClearSessionClientIDs(key); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.GetSessionMeta(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.ClientSessionIDs) != 0 {
+		t.Fatalf("ClientSessionIDs = %v, want none", meta.ClientSessionIDs)
+	}
+	if resolved := backend.GetSessionScope(key); resolved == nil || resolved.AgentID != scope.AgentID {
+		t.Fatalf("GetSessionScope() = %#v, want child scope preserved", resolved)
+	}
+}
+
 func TestJSONLBackend_MutateTurnHistoryDoesNotLoseConcurrentAppend(t *testing.T) {
 	b := newBackend(t)
 	const sessionKey = "atomic-mutation"

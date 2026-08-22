@@ -450,6 +450,28 @@ func (s *JSONLStore) UpsertSessionMeta(
 	return s.writeMeta(sessionKey, meta)
 }
 
+// ClearSessionClientIDs removes every frontend mapping from a session while
+// preserving its structured routing scope and history metadata.
+func (s *JSONLStore) ClearSessionClientIDs(ctx context.Context, sessionKey string) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+	if len(meta.ClientSessionIDs) == 0 {
+		return nil
+	}
+	meta.ClientSessionIDs = nil
+	meta.UpdatedAt = time.Now()
+	return s.writeMeta(sessionKey, meta)
+}
+
 // readMessages reads valid JSON lines from a .jsonl file, skipping
 // the first `skip` lines without unmarshaling them. This avoids the
 // cost of json.Unmarshal on logically truncated messages.

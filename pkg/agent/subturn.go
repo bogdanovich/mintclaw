@@ -666,6 +666,9 @@ func spawnSubTurn(
 		SessionScope:    childSessionScope,
 	}
 	if durableTask {
+		if err = clearSessionClientIDs(agent.Sessions, childSessionKey); err != nil {
+			return nil, fmt.Errorf("clear durable task frontend mappings: %w", err)
+		}
 		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
 	opts := processOptions{

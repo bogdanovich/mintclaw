@@ -177,6 +177,10 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if err = preCheckConfig(cfg); err != nil {
 		return fmt.Errorf("config pre-check failed: %w", err)
 	}
+	gatewayState, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		return fmt.Errorf("initialize gateway state: %w", err)
+	}
 	// Debug mode permanently overrides the config log level to DEBUG.
 	if debug {
 		fmt.Println("🔍 Debug mode enabled")
@@ -264,7 +268,15 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		return fmt.Errorf("agent loop startup failed: %w", startupErr)
 	}
 
-	runningServices, err := setupAndStartServices(ctx, cfg, agentLoop, msgBus, pidData.Token, listenResult)
+	runningServices, err := setupAndStartServices(
+		ctx,
+		cfg,
+		agentLoop,
+		msgBus,
+		gatewayState,
+		pidData.Token,
+		listenResult,
+	)
 	if err != nil {
 		return err
 	}
@@ -896,6 +908,7 @@ func setupAndStartServices(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	authToken string,
 	listenResult netbind.OpenResult,
 ) (*services, error) {
@@ -904,6 +917,7 @@ func setupAndStartServices(
 		cfg,
 		agentLoop,
 		msgBus,
+		stateManager,
 		authToken,
 		listenResult,
 		gatewayStartupHooks{},
@@ -915,10 +929,14 @@ func setupAndStartServicesWithHooks(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	authToken string,
 	listenResult netbind.OpenResult,
 	hooks gatewayStartupHooks,
 ) (runningServices *services, setupErr error) {
+	if stateManager == nil {
+		return nil, fmt.Errorf("gateway state manager is required")
+	}
 	runningServices = &services{}
 	generation := runningServices
 	cleanup := &gatewayStartupTransaction{
@@ -976,10 +994,11 @@ func setupAndStartServicesWithHooks(
 	}
 	fmt.Println("✓ Cron service started")
 
-	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
+	runningServices.HeartbeatService = heartbeat.NewHeartbeatServiceWithState(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
+		stateManager,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
@@ -1169,10 +1188,6 @@ func setupAndStartServicesWithHooks(
 		healthAddr,
 	)
 
-	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
-	if err != nil {
-		return nil, fmt.Errorf("initialize device state: %w", err)
-	}
 	runningServices.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,

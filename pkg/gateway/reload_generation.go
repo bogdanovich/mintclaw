@@ -76,12 +76,15 @@ func prepareReloadGeneration(
 			generation = nil
 		}
 	}()
+	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		return nil, fmt.Errorf("prepare gateway state: %w", err)
+	}
 	registerTool := al.RegisterTool
 	if prepared != nil {
 		registerTool = prepared.RegisterTool
 	}
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var err error
 	next.CronService, err = setupCronToolWithRegistrar(
 		al,
 		msgBus,
@@ -104,10 +107,11 @@ func prepareReloadGeneration(
 		return nil, err
 	}
 
-	next.HeartbeatService = heartbeat.NewHeartbeatService(
+	next.HeartbeatService = heartbeat.NewHeartbeatServiceWithState(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
+		stateManager,
 	)
 	next.HeartbeatService.SetBus(msgBus)
 	next.HeartbeatService.SetHandler(createHeartbeatHandler(al))
@@ -146,10 +150,6 @@ func prepareReloadGeneration(
 		return nil, err
 	}
 
-	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
-	if err != nil {
-		return nil, fmt.Errorf("prepare device state: %w", err)
-	}
 	next.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,

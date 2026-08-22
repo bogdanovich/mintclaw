@@ -61,6 +61,7 @@ type Store interface {
 	// GetSessionMeta and UpsertSessionMeta own current structured metadata.
 	GetSessionMeta(ctx context.Context, sessionKey string) (SessionMeta, error)
 	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage, clientSessionID string) error
+	ClearSessionClientIDs(ctx context.Context, sessionKey string) error
 }
 
 // HistoryRevision identifies the canonical visible history for a session.

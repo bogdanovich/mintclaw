@@ -24,6 +24,7 @@ const maxTurnHistoryPageMessages = 256
 type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
 	GetSessionScope(sessionKey string) *SessionScope
+	ClearSessionClientIDs(sessionKey string) error
 }
 
 // NewJSONLBackend wraps a memory.Store for use as a SessionStore.
@@ -71,6 +72,16 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 		return nil
 	}
 	return CloneScope(&scope)
+}
+
+// ClearSessionClientIDs removes accumulated frontend mappings without
+// disturbing the session routing scope or canonical history.
+func (b *JSONLBackend) ClearSessionClientIDs(sessionKey string) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if !IsOpaqueSessionKey(sessionKey) {
+		return fmt.Errorf("session: current opaque session key is required")
+	}
+	return b.store.ClearSessionClientIDs(context.Background(), sessionKey)
 }
 
 func (b *JSONLBackend) AddMessage(sessionKey, role, content string) {

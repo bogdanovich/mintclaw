@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 type trackedStartupProvider struct {
@@ -206,6 +207,7 @@ func TestServiceStartupRollbackReturnsChannelStopFailure(t *testing.T) {
 		cfg,
 		al,
 		msgBus,
+		state.NewManager(cfg.WorkspacePath()),
 		"test-token",
 		netbind.OpenResult{
 			Listeners: []net.Listener{listener},
@@ -276,6 +278,7 @@ func TestSetupAndStartServicesRollsBackEveryCompletedStage(t *testing.T) {
 				cfg,
 				al,
 				msgBus,
+				state.NewManager(cfg.WorkspacePath()),
 				"test-token",
 				netbind.OpenResult{
 					Listeners: []net.Listener{listener},

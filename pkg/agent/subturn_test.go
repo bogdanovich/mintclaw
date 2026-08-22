@@ -17,6 +17,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -627,6 +628,17 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	parent.ctx = t.Context()
 	parent.pendingResults = make(chan *toolshared.ToolResult, 4)
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+	continuationKey := durableTaskSessionKey(alpha.Workspace, taskID)
+	metaStore, ok := beta.Sessions.(session.MetadataAwareSessionStore)
+	if !ok {
+		t.Fatalf("beta session store %T does not expose metadata", beta.Sessions)
+	}
+	metaStore.EnsureSessionMetadata(continuationKey, parentScope)
+	persistentStore, err := memory.NewJSONLStore(filepath.Join(beta.Workspace, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = persistentStore.Close() })
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
 		TargetAgentID: beta.ID, Model: beta.Model, SystemPrompt: "run protected action",
@@ -643,21 +655,33 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	if !ok {
 		t.Fatalf("interaction for task %q was not persisted", taskID)
 	}
-	continuationKey := interactionContinuationSessionKey(record)
-	metaStore, ok := beta.Sessions.(session.MetadataAwareSessionStore)
-	if !ok {
-		t.Fatalf("beta session store %T does not expose metadata", beta.Sessions)
+	if got := interactionContinuationSessionKey(record); got != continuationKey {
+		t.Fatalf("interaction continuation key = %q, want %q", got, continuationKey)
 	}
 	persistedScope := metaStore.GetSessionScope(continuationKey)
 	if persistedScope == nil || persistedScope.AgentID != beta.ID || persistedScope.ClientSessionID != "" ||
 		persistedScope.RouteScopeKey != parentScope.RouteScopeKey {
 		t.Fatalf("persisted child scope = %#v", persistedScope)
 	}
+	persistedMeta, err := persistentStore.GetSessionMeta(t.Context(), continuationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persistedMeta.ClientSessionIDs) != 0 {
+		t.Fatalf("derived child ClientSessionIDs = %v, want none", persistedMeta.ClientSessionIDs)
+	}
 	staleScope := session.CloneScope(persistedScope)
 	staleScope.AgentID = alpha.ID
 	staleScope.RouteScopeKey = ""
 	staleScope.ClientSessionID = parentScope.ClientSessionID
 	metaStore.EnsureSessionMetadata(continuationKey, staleScope)
+	staleMeta, err := persistentStore.GetSessionMeta(t.Context(), continuationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(staleMeta.ClientSessionIDs, parentScope.ClientSessionID) {
+		t.Fatalf("stale child ClientSessionIDs = %v", staleMeta.ClientSessionIDs)
+	}
 
 	registry := al.interactionRegistryForWorkspace(alpha.Workspace)
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
@@ -715,6 +739,13 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	if repairedScope == nil || repairedScope.AgentID != beta.ID || repairedScope.ClientSessionID != "" ||
 		repairedScope.RouteScopeKey != parentScope.RouteScopeKey {
 		t.Fatalf("repaired child scope = %#v", repairedScope)
+	}
+	repairedMeta, err := persistentStore.GetSessionMeta(t.Context(), continuationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repairedMeta.ClientSessionIDs) != 0 {
+		t.Fatalf("repaired child ClientSessionIDs = %v, want none", repairedMeta.ClientSessionIDs)
 	}
 	task, _ = tasks.Get(taskID)
 	if task.Status != taskregistry.StatusSucceeded ||

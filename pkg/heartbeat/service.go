@@ -50,6 +50,22 @@ type HeartbeatService struct {
 
 // NewHeartbeatService creates a new heartbeat service
 func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *HeartbeatService {
+	return NewHeartbeatServiceWithState(
+		workspace,
+		intervalMinutes,
+		enabled,
+		state.NewManager(workspace),
+	)
+}
+
+// NewHeartbeatServiceWithState creates a heartbeat service that shares the
+// runtime-owned current state manager with other gateway services.
+func NewHeartbeatServiceWithState(
+	workspace string,
+	intervalMinutes int,
+	enabled bool,
+	stateManager *state.Manager,
+) *HeartbeatService {
 	// Apply minimum interval
 	if intervalMinutes < minIntervalMinutes && intervalMinutes != 0 {
 		intervalMinutes = minIntervalMinutes
@@ -58,12 +74,15 @@ func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *H
 	if intervalMinutes == 0 {
 		intervalMinutes = defaultIntervalMinutes
 	}
+	if stateManager == nil {
+		stateManager = state.NewManager(workspace)
+	}
 
 	return &HeartbeatService{
 		workspace: workspace,
 		interval:  time.Duration(intervalMinutes) * time.Minute,
 		enabled:   enabled,
-		state:     state.NewManager(workspace),
+		state:     stateManager,
 	}
 }
 

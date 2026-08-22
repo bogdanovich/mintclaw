@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 type gatewayReloadHarness struct {
@@ -49,6 +50,7 @@ func newGatewayReloadHarness(t *testing.T) *gatewayReloadHarness {
 		cfg,
 		loop,
 		msgBus,
+		state.NewManager(cfg.WorkspacePath()),
 		"reload-test-token",
 		netbind.OpenResult{
 			Listeners: []net.Listener{listener},
@@ -271,7 +273,7 @@ func TestPrepareReloadGenerationRejectsUnusableCurrentStateStore(t *testing.T) {
 	if err == nil || generation != nil {
 		t.Fatalf("prepareReloadGeneration() = (%T, %v), want current-state error", generation, err)
 	}
-	if !strings.Contains(err.Error(), "prepare device state") {
+	if !strings.Contains(err.Error(), "prepare gateway state") {
 		t.Fatalf("prepareReloadGeneration() error = %v", err)
 	}
 }

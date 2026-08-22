@@ -61,6 +61,28 @@ func TestRun_StartupFailuresReturnErrorAndEmitStructuredLog(t *testing.T) {
 			wantErr:    "config pre-check failed: invalid gateway port: 0",
 			wantLogSub: "config pre-check failed: invalid gateway port: 0",
 		},
+		{
+			name: "unusable current state returns before runtime startup",
+			prepare: func(t *testing.T, dir string) string {
+				t.Helper()
+				workspace := filepath.Join(dir, "global-workspace")
+				if err := os.MkdirAll(filepath.Join(workspace, "state", "state.json"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cfg := config.DefaultConfig()
+				cfg.Agents.Defaults.Workspace = workspace
+				cfg.Agents.List = []config.AgentConfig{{
+					ID: "main", Default: true, Workspace: filepath.Join(dir, "agent-workspace"),
+				}}
+				cfgPath := filepath.Join(dir, "state-config.json")
+				if err := config.SaveConfig(cfgPath, cfg); err != nil {
+					t.Fatalf("SaveConfig() error = %v", err)
+				}
+				return cfgPath
+			},
+			wantErr:    "initialize gateway state:",
+			wantLogSub: "initialize gateway state:",
+		},
 	}
 
 	for _, tt := range tests {

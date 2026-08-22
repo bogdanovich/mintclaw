@@ -710,6 +710,38 @@ func TestSessionMetaScopePersists(t *testing.T) {
 	}
 }
 
+func TestClearSessionClientIDsPreservesCurrentScope(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	scope := json.RawMessage(`{"version":2,"agent_id":"main"}`)
+	for _, clientID := range []string{"browser-1", "browser-2"} {
+		if err := store.UpsertSessionMeta(ctx, "canonical", scope, clientID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.ClearSessionClientIDs(ctx, "canonical"); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.GetSessionMeta(ctx, "canonical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.ClientSessionIDs) != 0 {
+		t.Fatalf("ClientSessionIDs = %v, want none", meta.ClientSessionIDs)
+	}
+	var gotScope, wantScope map[string]any
+	if err := json.Unmarshal(meta.Scope, &gotScope); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(scope, &wantScope); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotScope, wantScope) {
+		t.Fatalf("Scope = %#v, want %#v", gotScope, wantScope)
+	}
+}
+
 func TestTruncateHistory_KeepLast(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
@@ -207,28 +208,36 @@ func (r *AgentRegistry) workspaceForAgentIDLocked(agentID string) string {
 }
 
 func (r *AgentRegistry) defaultAgentIDLocked() string {
-	if _, ok := r.agents[routing.DefaultAgentID]; ok {
-		return routing.DefaultAgentID
-	}
-	if r.cfg != nil && len(r.cfg.Agents.List) > 0 {
-		for _, agentCfg := range r.cfg.Agents.List {
-			if !agentCfg.Default {
-				continue
-			}
-			id := routing.NormalizeAgentID(agentCfg.ID)
-			if _, ok := r.agents[id]; ok {
-				return id
-			}
-		}
-		id := routing.NormalizeAgentID(r.cfg.Agents.List[0].ID)
+	if configured := configuredDefaultAgent(r.cfg); configured != nil {
+		id := routing.NormalizeAgentID(configured.ID)
 		if _, ok := r.agents[id]; ok {
 			return id
 		}
+	}
+	if _, ok := r.agents[routing.DefaultAgentID]; ok {
+		return routing.DefaultAgentID
 	}
 	for id := range r.agents {
 		return id
 	}
 	return ""
+}
+
+func configuredDefaultAgent(cfg *config.Config) *config.AgentConfig {
+	if cfg == nil || len(cfg.Agents.List) == 0 {
+		return nil
+	}
+	for index := range cfg.Agents.List {
+		if routing.NormalizeAgentID(cfg.Agents.List[index].ID) == routing.DefaultAgentID {
+			return &cfg.Agents.List[index]
+		}
+	}
+	for index := range cfg.Agents.List {
+		if cfg.Agents.List[index].Default {
+			return &cfg.Agents.List[index]
+		}
+	}
+	return &cfg.Agents.List[0]
 }
 
 func cleanWorkspacePath(path string) string {
