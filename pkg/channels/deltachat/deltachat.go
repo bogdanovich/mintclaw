@@ -25,7 +25,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
-	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
@@ -521,20 +520,12 @@ func (c *DeltaChatChannel) canCrosspost(senderID string) bool {
 		return false
 	}
 	senderID = strings.TrimSpace(senderID)
-	localPart, _, _ := strings.Cut(senderID, "@")
-	sender := bus.SenderInfo{
-		Platform:    config.ChannelDeltaChat,
-		PlatformID:  senderID,
-		CanonicalID: identity.BuildCanonicalID(config.ChannelDeltaChat, senderID),
-		Username:    localPart,
-	}
 	for _, allowed := range c.bc.AllowFrom {
 		entry := strings.TrimSpace(allowed)
 		if entry == "*" {
 			return true
 		}
-		if entry != "" && senderID != "" &&
-			(identity.MatchAllowed(sender, entry) || strings.EqualFold(entry, senderID)) {
+		if entry != "" && senderID != "" && strings.EqualFold(entry, senderID) {
 			return true
 		}
 	}

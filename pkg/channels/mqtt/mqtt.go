@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -205,7 +206,12 @@ func (c *MQTTChannel) handleInbound(msg pahomqtt.Message) {
 		SenderID: clientID,
 	}
 
-	_ = c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx)
+	sender := bus.SenderInfo{
+		Platform:    "mqtt",
+		PlatformID:  clientID,
+		CanonicalID: identity.BuildCanonicalID("mqtt", clientID),
+	}
+	_ = c.HandleInboundContext(context.Background(), chatID, payload.Text, nil, inboundCtx, sender)
 }
 
 // Stop disconnects from the MQTT broker.

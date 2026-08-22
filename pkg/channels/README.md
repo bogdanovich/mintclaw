@@ -367,19 +367,16 @@ sender   := msg.Sender          // bus.SenderInfo struct
 scope    := msg.MediaScope       // Media lifecycle scope
 ```
 
-#### Step 5: Migrate allow-list checks
+#### Step 5: Use structured allow-list checks
 
 ```go
-// Old code
-if !c.isAllowed(senderID) { return }
-
-// New code: prefer structured check
+sender := bus.SenderInfo{Platform: "example", PlatformID: senderID}
 if !c.IsAllowedSender(sender) { return }
-// Or fall back to string check:
-if !c.IsAllowed(senderID) { return }
 ```
 
-`BaseChannel.HandleMessage` already handles this logic internally — no need to duplicate the check in your channel.
+`allow_from` entries are exact platform IDs. `"*"` is the only special value and explicitly allows every sender.
+`BaseChannel.HandleMessageWithContext` already performs the check, so channels only need an earlier check when they
+must reject a sender before downloading media.
 
 ### 2.2 If You Have Manager Modifications
 
@@ -954,8 +951,7 @@ BaseChannel is the shared abstraction layer for all channels, providing the foll
 | `SetRunning(bool)` | Atomically set running state |
 | `MaxMessageLength() int` | Message length limit (rune count), 0 = unlimited |
 | `ReasoningChannelID() string` | Reasoning chain routing target channel ID (empty = no routing) |
-| `IsAllowed(senderID string) bool` | Legacy allow-list check (supports `"id\|username"` and `"@username"` formats) |
-| `IsAllowedSender(sender SenderInfo) bool` | New allow-list check (delegates to `identity.MatchAllowed`) |
+| `IsAllowedSender(sender SenderInfo) bool` | Checks the sender's exact platform ID against `allow_from` |
 | `ShouldRespondInGroup(isMentioned, content) (bool, string)` | Unified group chat trigger filtering logic |
 | `ShouldRespondInGroupForTopic(isMentioned, content, topicID) (bool, string)` | Unified group chat trigger filtering with a topic-specific override |
 | `HandleMessage(...)` | Unified inbound message handling: permission check → build MediaScope → auto-trigger Typing/Reaction/Placeholder → publish to Bus |
@@ -1195,18 +1191,10 @@ func BuildCanonicalID(platform, platformID string) string
 
 // Parse canonical ID
 func ParseCanonicalID(canonical string) (platform, id string, ok bool)
-
-// Match against allow list (backward-compatible)
-func MatchAllowed(sender bus.SenderInfo, allowed string) bool
 ```
 
-`MatchAllowed` supported allow-list formats:
-| Format | Matching |
-|--------|----------|
-| `"123456"` | Matches `sender.PlatformID` |
-| `"@alice"` | Matches `sender.Username` |
-| `"123456\|alice"` | Matches PlatformID or Username (legacy format compatibility) |
-| `"telegram:123456"` | Exact match on `sender.CanonicalID` (new format) |
+Canonical IDs are runtime identities. Channel-specific `allow_from` values remain exact platform IDs and are checked
+by `BaseChannel.IsAllowedSender`.
 
 ### 4.10 Shared HTTP Server
 
@@ -1294,7 +1282,7 @@ make test                                       # Full test suite
 | `pkg/bus/bus.go` | MessageBus implementation |
 | `pkg/bus/types.go` | Peer, SenderInfo, InboundMessage, OutboundMessage, OutboundMediaMessage, MediaPart |
 | `pkg/media/store.go` | MediaStore interface, FileMediaStore implementation |
-| `pkg/identity/identity.go` | BuildCanonicalID, ParseCanonicalID, MatchAllowed |
+| `pkg/identity/identity.go` | BuildCanonicalID, ParseCanonicalID |
 
 ### A.2 Channel Sub-packages
 

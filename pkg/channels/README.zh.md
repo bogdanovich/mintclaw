@@ -367,19 +367,15 @@ sender   := msg.Sender          // bus.SenderInfo 结构体
 scope    := msg.MediaScope       // 媒体生命周期作用域
 ```
 
-#### 步骤 5：迁移允许列表检查
+#### 步骤 5：使用结构化允许列表检查
 
 ```go
-// 旧代码
-if !c.isAllowed(senderID) { return }
-
-// 新代码：优先使用结构化检查
+sender := bus.SenderInfo{Platform: "example", PlatformID: senderID}
 if !c.IsAllowedSender(sender) { return }
-// 或回退到字符串检查：
-if !c.IsAllowed(senderID) { return }
 ```
 
-`BaseChannel.HandleMessage` 方法内部已经处理了这个逻辑，无需在 channel 中重复检查。
+`allow_from` 中的条目必须是完全匹配的平台 ID。`"*"` 是唯一的特殊值，表示明确允许所有发送者。
+`BaseChannel.HandleMessageWithContext` 已经执行此检查；只有在下载媒体前必须拒绝发送者时，channel 才需要提前检查。
 
 ### 2.2 如果你有 Manager 的修改
 
@@ -952,8 +948,7 @@ BaseChannel 是所有 channel 的共享抽象层，提供以下能力：
 | `SetRunning(bool)` | 原子设置运行状态 |
 | `MaxMessageLength() int` | 消息长度限制（rune 计数），0 = 无限制 |
 | `ReasoningChannelID() string` | 思维链路由目标 channel ID（空 = 不路由） |
-| `IsAllowed(senderID string) bool` | 旧格式允许列表检查（支持 `"id\|username"` 和 `"@username"` 格式） |
-| `IsAllowedSender(sender SenderInfo) bool` | 新格式允许列表检查（委托给 `identity.MatchAllowed`） |
+| `IsAllowedSender(sender SenderInfo) bool` | 根据 `allow_from` 检查发送者的平台 ID 是否完全匹配 |
 | `ShouldRespondInGroup(isMentioned, content) (bool, string)` | 统一群聊触发过滤逻辑 |
 | `HandleMessage(...)` | 统一入站消息处理：权限检查 → 构建 MediaScope → 自动触发 Typing/Reaction/Placeholder → 发布到 Bus |
 | `SetMediaStore(s) / GetMediaStore()` | Manager 注入的媒体存储 |
@@ -1192,18 +1187,10 @@ func BuildCanonicalID(platform, platformID string) string
 
 // 解析规范 ID
 func ParseCanonicalID(canonical string) (platform, id string, ok bool)
-
-// 匹配允许列表（向后兼容）
-func MatchAllowed(sender bus.SenderInfo, allowed string) bool
 ```
 
-`MatchAllowed` 支持的允许列表格式：
-| 格式 | 匹配方式 |
-|------|----------|
-| `"123456"` | 匹配 `sender.PlatformID` |
-| `"@alice"` | 匹配 `sender.Username` |
-| `"123456\|alice"` | 匹配 PlatformID 或 Username（旧格式兼容） |
-| `"telegram:123456"` | 精确匹配 `sender.CanonicalID`（新格式） |
+规范 ID 用作运行时身份。每个 channel 的 `allow_from` 仍使用完全匹配的平台 ID，并由
+`BaseChannel.IsAllowedSender` 进行检查。
 
 ### 4.10 共享 HTTP 服务器
 
@@ -1291,7 +1278,7 @@ make test                                       # 全量测试
 | `pkg/bus/bus.go` | MessageBus 实现 |
 | `pkg/bus/types.go` | Peer、SenderInfo、InboundMessage、OutboundMessage、OutboundMediaMessage、MediaPart |
 | `pkg/media/store.go` | MediaStore 接口、FileMediaStore 实现 |
-| `pkg/identity/identity.go` | BuildCanonicalID、ParseCanonicalID、MatchAllowed |
+| `pkg/identity/identity.go` | BuildCanonicalID、ParseCanonicalID |
 
 ### A.2 Channel 子包
 

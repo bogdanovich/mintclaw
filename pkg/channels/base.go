@@ -13,7 +13,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
@@ -50,8 +49,6 @@ type Channel interface {
 	Stop(ctx context.Context) error
 	Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error)
 	IsRunning() bool
-	IsAllowed(senderID string) bool
-	IsAllowedSender(sender bus.SenderInfo) bool
 	ReasoningChannelID() string
 }
 
@@ -243,58 +240,15 @@ func (c *BaseChannel) IsRunning() bool {
 	return c.running.Load()
 }
 
-func (c *BaseChannel) IsAllowed(senderID string) bool {
-	if len(c.allowList) == 0 {
-		return false
-	}
-
-	// Extract parts from compound senderID like "123456|username"
-	idPart := senderID
-	userPart := ""
-	if idx := strings.Index(senderID, "|"); idx > 0 {
-		idPart = senderID[:idx]
-		userPart = senderID[idx+1:]
-	}
-
-	for _, allowed := range c.allowList {
-		if allowed == "*" {
-			return true
-		}
-		// Strip leading "@" from allowed value for username matching
-		trimmed := strings.TrimPrefix(allowed, "@")
-		allowedID := trimmed
-		allowedUser := ""
-		if idx := strings.Index(trimmed, "|"); idx > 0 {
-			allowedID = trimmed[:idx]
-			allowedUser = trimmed[idx+1:]
-		}
-
-		// Support either side using "id|username" compound form.
-		// This keeps backward compatibility with legacy Telegram allowlist entries.
-		if senderID == allowed ||
-			idPart == allowed ||
-			senderID == trimmed ||
-			idPart == trimmed ||
-			idPart == allowedID ||
-			(allowedUser != "" && senderID == allowedUser) ||
-			(userPart != "" && (userPart == allowed || userPart == trimmed || userPart == allowedUser)) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// IsAllowedSender checks whether a structured SenderInfo is permitted by the allow-list.
-// It delegates to identity.MatchAllowed for each entry, providing unified matching
-// across all legacy formats and the new canonical "platform:id" format.
+// IsAllowedSender checks whether a sender's platform ID is permitted by the allow-list.
 func (c *BaseChannel) IsAllowedSender(sender bus.SenderInfo) bool {
-	if len(c.allowList) == 0 {
+	senderID := strings.TrimSpace(sender.PlatformID)
+	if len(c.allowList) == 0 || senderID == "" {
 		return false
 	}
 
 	for _, allowed := range c.allowList {
-		if allowed == "*" || identity.MatchAllowed(sender, allowed) {
+		if allowed == "*" || allowed == senderID {
 			return true
 		}
 	}
@@ -307,32 +261,15 @@ func (c *BaseChannel) HandleMessageWithContext(
 	deliveryChatID, content string,
 	media []string,
 	inboundCtx bus.InboundContext,
-	senderOpts ...bus.SenderInfo,
+	sender bus.SenderInfo,
 ) error {
-	// Use SenderInfo-based allow check when available, else fall back to string
-	var sender bus.SenderInfo
-	if len(senderOpts) > 0 {
-		sender = senderOpts[0]
-	}
-	senderID := strings.TrimSpace(inboundCtx.SenderID)
-	if sender.CanonicalID != "" || sender.PlatformID != "" {
-		if !c.IsAllowedSender(sender) {
-			return nil
-		}
-	} else {
-		if !c.IsAllowed(senderID) {
-			return nil
-		}
+	if !c.IsAllowedSender(sender) {
+		return nil
 	}
 
-	// Set SenderID to canonical if available, otherwise keep the raw senderID
-	resolvedSenderID := senderID
+	resolvedSenderID := strings.TrimSpace(inboundCtx.SenderID)
 	if sender.CanonicalID != "" {
 		resolvedSenderID = sender.CanonicalID
-	}
-
-	if resolvedSenderID == "" {
-		resolvedSenderID = senderID
 	}
 
 	inboundCtx.Channel = c.name
@@ -403,29 +340,15 @@ func (c *BaseChannel) ObserveMessageWithContext(
 	media []string,
 	inboundCtx bus.InboundContext,
 	reason string,
-	senderOpts ...bus.SenderInfo,
+	sender bus.SenderInfo,
 ) {
-	var sender bus.SenderInfo
-	if len(senderOpts) > 0 {
-		sender = senderOpts[0]
-	}
-	senderID := strings.TrimSpace(inboundCtx.SenderID)
-	if sender.CanonicalID != "" || sender.PlatformID != "" {
-		if !c.IsAllowedSender(sender) {
-			return
-		}
-	} else {
-		if !c.IsAllowed(senderID) {
-			return
-		}
+	if !c.IsAllowedSender(sender) {
+		return
 	}
 
-	resolvedSenderID := senderID
+	resolvedSenderID := strings.TrimSpace(inboundCtx.SenderID)
 	if sender.CanonicalID != "" {
 		resolvedSenderID = sender.CanonicalID
-	}
-	if resolvedSenderID == "" {
-		resolvedSenderID = senderID
 	}
 
 	inboundCtx.Channel = c.name
@@ -462,9 +385,9 @@ func (c *BaseChannel) HandleInboundContext(
 	deliveryChatID, content string,
 	media []string,
 	inboundCtx bus.InboundContext,
-	senderOpts ...bus.SenderInfo,
+	sender bus.SenderInfo,
 ) error {
-	return c.HandleMessageWithContext(ctx, deliveryChatID, content, media, inboundCtx, senderOpts...)
+	return c.HandleMessageWithContext(ctx, deliveryChatID, content, media, inboundCtx, sender)
 }
 
 func (c *BaseChannel) SetRunning(running bool) {

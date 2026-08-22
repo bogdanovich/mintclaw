@@ -8,67 +8,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-func TestBaseChannelIsAllowed(t *testing.T) {
-	tests := []struct {
-		name      string
-		allowList []string
-		senderID  string
-		want      bool
-	}{
-		{
-			name:      "empty allowlist denies all",
-			allowList: nil,
-			senderID:  "anyone",
-			want:      false,
-		},
-		{
-			name:      "wildcard explicitly allows all",
-			allowList: []string{"*"},
-			senderID:  "anyone",
-			want:      true,
-		},
-		{
-			name:      "blank entries deny all",
-			allowList: []string{"", "  "},
-			senderID:  "anyone",
-			want:      false,
-		},
-		{
-			name:      "compound sender matches numeric allowlist",
-			allowList: []string{"123456"},
-			senderID:  "123456|alice",
-			want:      true,
-		},
-		{
-			name:      "compound sender matches username allowlist",
-			allowList: []string{"@alice"},
-			senderID:  "123456|alice",
-			want:      true,
-		},
-		{
-			name:      "numeric sender matches legacy compound allowlist",
-			allowList: []string{"123456|alice"},
-			senderID:  "123456",
-			want:      true,
-		},
-		{
-			name:      "non matching sender is denied",
-			allowList: []string{"123456"},
-			senderID:  "654321|bob",
-			want:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ch := NewBaseChannel("test", nil, nil, tt.allowList)
-			if got := ch.IsAllowed(tt.senderID); got != tt.want {
-				t.Fatalf("IsAllowed(%q) = %v, want %v", tt.senderID, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestShouldRespondInGroup(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -262,46 +201,28 @@ func TestIsAllowedSender(t *testing.T) {
 			want: true,
 		},
 		{
-			name:      "canonical format matches",
-			allowList: []string{"telegram:123456"},
-			sender: bus.SenderInfo{
-				Platform:    "telegram",
-				PlatformID:  "123456",
-				CanonicalID: "telegram:123456",
-			},
-			want: true,
+			name:      "empty platform ID is denied",
+			allowList: []string{"*"},
+			sender:    bus.SenderInfo{CanonicalID: "telegram:123456"},
+			want:      false,
 		},
 		{
-			name:      "canonical format wrong platform",
-			allowList: []string{"discord:123456"},
-			sender: bus.SenderInfo{
-				Platform:    "telegram",
-				PlatformID:  "123456",
-				CanonicalID: "telegram:123456",
-			},
-			want: false,
-		},
-		{
-			name:      "@username matches",
+			name:      "username entry is not an ID",
 			allowList: []string{"@alice"},
-			sender: bus.SenderInfo{
-				Platform:    "telegram",
-				PlatformID:  "123456",
-				CanonicalID: "telegram:123456",
-				Username:    "alice",
-			},
-			want: true,
+			sender:    bus.SenderInfo{PlatformID: "123456", Username: "alice"},
+			want:      false,
 		},
 		{
-			name:      "compound id|username matches by ID",
+			name:      "compound entry is not an ID",
 			allowList: []string{"123456|alice"},
-			sender: bus.SenderInfo{
-				Platform:    "telegram",
-				PlatformID:  "123456",
-				CanonicalID: "telegram:123456",
-				Username:    "alice",
-			},
-			want: true,
+			sender:    bus.SenderInfo{PlatformID: "123456", Username: "alice"},
+			want:      false,
+		},
+		{
+			name:      "canonical entry is not a platform ID",
+			allowList: []string{"telegram:123456"},
+			sender:    bus.SenderInfo{PlatformID: "123456", CanonicalID: "telegram:123456"},
+			want:      false,
 		},
 		{
 			name:      "non matching sender denied",
@@ -370,6 +291,7 @@ func TestHandleInboundContext_PublishesNormalizedContext(t *testing.T) {
 				"hello",
 				nil,
 				tt.inbound,
+				bus.SenderInfo{Platform: "test", PlatformID: tt.inbound.SenderID},
 			); err != nil {
 				t.Fatal(err)
 			}

@@ -875,11 +875,7 @@ func (channel *nodeVerticalSliceChannel) SendMedia(
 	return []string{"node-e2e-media"}, nil
 }
 
-func (channel *nodeVerticalSliceChannel) IsRunning() bool { return channel.running }
-func (*nodeVerticalSliceChannel) IsAllowed(string) bool   { return true }
-func (*nodeVerticalSliceChannel) IsAllowedSender(bus.SenderInfo) bool {
-	return true
-}
+func (channel *nodeVerticalSliceChannel) IsRunning() bool    { return channel.running }
 func (*nodeVerticalSliceChannel) ReasoningChannelID() string { return "" }
 
 func (channel *nodeVerticalSliceChannel) nextMessage(t *testing.T) bus.OutboundMessage {
