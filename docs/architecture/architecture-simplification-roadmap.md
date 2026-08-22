@@ -691,6 +691,9 @@ Implementation sequence:
 6. Delete ASR auto-discovery and the empty audio-channel default. Current
    configurations select one named voice model, and current audio producers
    supply their source channel explicitly.
+7. Delete unstructured and multi-format channel allowlist matching. Every
+   inbound producer supplies `SenderInfo`, and `allow_from` contains exact
+   platform IDs or the explicit `*` wildcard.
 
 Exit criteria:
 

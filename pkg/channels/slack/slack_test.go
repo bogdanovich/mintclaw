@@ -305,7 +305,7 @@ func TestSlackChannelIsAllowed(t *testing.T) {
 		cfg.BotToken = *config.NewSecureString("xoxb-test")
 		cfg.AppToken = *config.NewSecureString("xapp-test")
 		ch, _ := NewSlackChannel(bc, cfg, msgBus)
-		if ch.IsAllowed("U_ANYONE") {
+		if ch.IsAllowedSender(bus.SenderInfo{PlatformID: "U_ANYONE"}) {
 			t.Error("empty allowlist should deny all users")
 		}
 	})
@@ -316,7 +316,7 @@ func TestSlackChannelIsAllowed(t *testing.T) {
 		cfg.BotToken = *config.NewSecureString("xoxb-test")
 		cfg.AppToken = *config.NewSecureString("xapp-test")
 		ch, _ := NewSlackChannel(bc, cfg, msgBus)
-		if !ch.IsAllowed("U_ANYONE") {
+		if !ch.IsAllowedSender(bus.SenderInfo{PlatformID: "U_ANYONE"}) {
 			t.Error("wildcard allowlist should allow all users")
 		}
 	})
@@ -331,10 +331,10 @@ func TestSlackChannelIsAllowed(t *testing.T) {
 		cfg.BotToken = *config.NewSecureString("xoxb-test")
 		cfg.AppToken = *config.NewSecureString("xapp-test")
 		ch, _ := NewSlackChannel(bc, cfg, msgBus)
-		if !ch.IsAllowed("U_ALLOWED") {
+		if !ch.IsAllowedSender(bus.SenderInfo{PlatformID: "U_ALLOWED"}) {
 			t.Error("allowed user should pass allowlist check")
 		}
-		if ch.IsAllowed("U_BLOCKED") {
+		if ch.IsAllowedSender(bus.SenderInfo{PlatformID: "U_BLOCKED"}) {
 			t.Error("non-allowed user should be blocked")
 		}
 	})
