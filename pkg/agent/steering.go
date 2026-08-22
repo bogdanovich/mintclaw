@@ -82,6 +82,22 @@ func (sq *steeringQueue) pushScopeWithSender(
 	return nil
 }
 
+func (sq *steeringQueue) returnSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	messages []providers.Message,
+) {
+	if sq == nil || len(messages) == 0 {
+		return
+	}
+	returned := make([]steeringEntry, 0, len(messages))
+	for _, msg := range messages {
+		returned = append(returned, steeringEntry{msg: msg})
+	}
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	sq.queues[scope] = append(returned, sq.queues[scope]...)
+}
+
 // dequeueScope removes and returns pending steering messages for the provided
 // scope according to the configured mode.
 func (sq *steeringQueue) dequeueScope(scope runtimeSessionScope) []providers.Message {

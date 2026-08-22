@@ -418,6 +418,7 @@ type toolCallState struct {
 	mcpServerName    string
 	toolRegistry     *tools.ToolRegistry
 	protectedResult  bool
+	taskSuspended    bool
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -1249,6 +1250,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			asyncCallback,
 		)
 	}
+	call.taskSuspended = toolResult != nil && toolResult.Control.TaskSuspended
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
@@ -1307,6 +1309,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	if toolResult == nil {
 		toolResult = toolshared.ErrorResult("hook returned nil tool result")
+	}
+	if call.taskSuspended {
+		toolResult.Control.TaskSuspended = true
 	}
 	if toolResult.Control.Suspension != nil {
 		argumentHash, approvalAction, approvalErr := runner.prepareToolApprovalSuspension(
@@ -2006,14 +2011,20 @@ func (r *toolLoopRunner) transferPendingSteeringOwnership() {
 		return
 	}
 	remaining := r.exec.pendingMessages[:0]
+	returned := make([]providers.Message, 0, len(r.exec.pendingMessages))
 	for _, msg := range r.exec.pendingMessages {
 		if !r.exec.shouldTrackTurnOwnedSteering(msg) {
 			remaining = append(remaining, msg)
 			continue
 		}
+		if msg.InboundSpoolID == "" {
+			returned = append(returned, msg)
+			continue
+		}
 		r.ts.recordAcceptedSteeringMessage(msg)
 	}
 	r.exec.pendingMessages = remaining
+	r.p.returnSteeringMessagesForTurn(r.ts, returned)
 }
 
 func (r *toolLoopRunner) commitPendingToolBatch(

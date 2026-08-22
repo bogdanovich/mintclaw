@@ -83,6 +83,13 @@ func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []providers.Mes
 	)
 }
 
+func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []providers.Message) {
+	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
+		return
+	}
+	p.Context.Steering.returnSteeringMessagesForTurn(ts.runtimeSessionScope(), messages)
+}
+
 func (p *Pipeline) updateAutoFallbackSelection(
 	routeSessionKey string,
 	selectedCandidates []providers.FallbackCandidate,

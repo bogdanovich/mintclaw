@@ -465,6 +465,8 @@ type toolResultRespondHook struct {
 
 type dropToolSuspensionHook struct{}
 
+type replaceSuspendedToolResultHook struct{}
+
 func (*dropToolSuspensionHook) BeforeTool(
 	_ context.Context,
 	req *ToolCallHookRequest,
@@ -478,6 +480,22 @@ func (*dropToolSuspensionHook) AfterTool(
 ) (*ToolResultHookResponse, HookDecision, error) {
 	next := resp.Clone()
 	next.Result.Control.Suspension = nil
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (*replaceSuspendedToolResultHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	return req.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+func (*replaceSuspendedToolResultHook) AfterTool(
+	_ context.Context,
+	resp *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	next := resp.Clone()
+	next.Result = toolshared.NewToolResult("replacement omitted internal continuation state")
 	return next, HookDecision{Action: HookActionModify}, nil
 }
 
@@ -1512,10 +1530,25 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			baseStore := session.NewMemoryStore()
 			journalErr := errors.New("suspension transcript write failed")
 			store := &toolResultFailingJournal{SessionStore: baseStore, err: journalErr}
+			commitCalls := 0
+			confirmCalls := 0
 			suspendedResult := &toolshared.ToolResult{
 				ForLLM:  "descendant task owns a durable continuation",
 				ForUser: "must not escape the suspension boundary",
+				Media:   []string{"media://must-not-deliver"},
+				Deliverable: &taskresult.Deliverable{
+					Text: "must not deliver",
+				},
 				Control: toolshared.ToolControl{TaskSuspended: true},
+				Delivery: toolshared.ToolDelivery{
+					Intent:   toolshared.DeliveryFinalHandled,
+					Outbound: &toolshared.OutboundDelivery{Text: "must not deliver"},
+					Commit: func(context.Context) error {
+						commitCalls++
+						return nil
+					},
+					Confirm: func() { confirmCalls++ },
+				},
 			}
 			firstTool := &fixedToolResultTool{name: "delegated_task", result: suspendedResult}
 			deferredTool := &countingTestTool{name: "deferred_tool"}
@@ -1540,7 +1573,11 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			llm.normalizedToolCalls = calls
 			llm.assistantToolCallsPersisted = true
 			feedback := &immediateDeliveryFeedbackManager{}
-			pipeline := &Pipeline{Interaction: PipelineInteractionServices{ToolFeedback: feedback}}
+			delivery := &recordingToolResultDelivery{}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{
+				ToolFeedback:     feedback,
+				SyncToolDelivery: delivery,
+			}}
 			if test.hookResult {
 				pipeline.Interaction.Hooks = &toolResultRespondHook{result: suspendedResult}
 			}
@@ -1564,17 +1601,109 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			if history := baseStore.GetHistory(ts.sessionKey); len(history) != 1 || history[0].Role != "assistant" {
 				t.Fatalf("failed atomic journal left a partial batch: %#v", history)
 			}
-			if !feedback.paused || feedback.dismissed || suspendedResult.ForUser != "" {
+			if !feedback.paused || feedback.dismissed || suspendedResult.ForUser != "" ||
+				len(suspendedResult.Media) != 0 || suspendedResult.Deliverable != nil ||
+				suspendedResult.Delivery.Outbound != nil || suspendedResult.Delivery.Commit != nil ||
+				suspendedResult.Delivery.Confirm != nil || delivery.syncCalls != 0 ||
+				commitCalls != 0 || confirmCalls != 0 {
 				t.Fatalf(
-					"suspension state = paused:%v dismissed:%v result:%#v",
+					"suspension state = paused:%v dismissed:%v sync:%d commit:%d confirm:%d result:%#v",
 					feedback.paused,
 					feedback.dismissed,
+					delivery.syncCalls,
+					commitCalls,
+					confirmCalls,
 					suspendedResult,
 				)
 			}
 			matchingToolResult(t, exec.messages, "call-suspended")
 			if test.withSibling {
 				matchingToolResult(t, exec.messages, "call-deferred")
+			}
+		})
+	}
+}
+
+func TestPipelineDelegatedTaskSuspensionSurvivesAfterToolRewrite(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		hooks func(*testing.T) hookInterceptor
+	}{
+		{
+			name: "in-process replacement",
+			hooks: func(t *testing.T) hookInterceptor {
+				t.Helper()
+				manager := NewHookManager(nil)
+				t.Cleanup(manager.Close)
+				if err := manager.Mount(NamedHook("replace-result", &replaceSuspendedToolResultHook{})); err != nil {
+					t.Fatal(err)
+				}
+				return manager
+			},
+		},
+		{
+			name: "process hook round trip",
+			hooks: func(t *testing.T) hookInterceptor {
+				t.Helper()
+				hook, err := NewProcessHook(t.Context(), "suspension-round-trip", ProcessHookOptions{
+					Command:       processHookHelperCommand(),
+					Env:           processHookHelperEnv("rewrite", ""),
+					InterceptTool: true,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager := NewHookManager(nil)
+				t.Cleanup(manager.Close)
+				if err := manager.Mount(HookRegistration{
+					Name: "process-round-trip", Source: HookSourceProcess, Hook: hook,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return manager
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			suspendedTool := &fixedToolResultTool{name: "delegated_task", result: &toolshared.ToolResult{
+				ForLLM:  "descendant task owns a durable continuation",
+				ForUser: "must not escape the suspension boundary",
+				Control: toolshared.ToolControl{TaskSuspended: true},
+			}}
+			deferredTool := &countingTestTool{name: "deferred_tool"}
+			registry := tools.NewToolRegistry()
+			registry.Register(suspendedTool)
+			registry.Register(deferredTool)
+			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-suspension-hook-rewrite",
+				sessionKey: "session-suspension-hook-rewrite",
+			}
+			calls := []providers.ToolCall{
+				{ID: "call-suspended", Name: suspendedTool.Name()},
+				{ID: "call-deferred", Name: deferredTool.Name()},
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = calls
+			llm.assistantToolCallsPersisted = true
+			feedback := &immediateDeliveryFeedbackManager{}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{
+				Hooks: test.hooks(t), ToolFeedback: feedback,
+			}}
+
+			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+			if outcome.Control != ToolControlSuspend || deferredTool.executions != 0 || !feedback.paused {
+				t.Fatalf(
+					"outcome = %#v, deferred executions = %d, feedback paused = %v",
+					outcome,
+					deferredTool.executions,
+					feedback.paused,
+				)
+			}
+			result := matchingToolResult(t, exec.messages, "call-suspended")
+			if !strings.Contains(result.Content, "replacement") && !strings.Contains(result.Content, "ipc:") {
+				t.Fatalf("hook replacement was not retained: %#v", result)
 			}
 		})
 	}
@@ -2018,10 +2147,24 @@ func (s *delayedSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, st
 	return messages
 }
 
+func (s *delayedSteering) returnSteeringMessagesForTurn(
+	_ runtimeSessionScope,
+	messages []providers.Message,
+) {
+	s.messages = append(messages, s.messages...)
+}
+
 func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, string) []providers.Message {
 	messages := s.messages
 	s.messages = nil
 	return messages
+}
+
+func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(
+	_ runtimeSessionScope,
+	messages []providers.Message,
+) {
+	s.messages = append(messages, s.messages...)
 }
 
 func (e *captureRuntimeEmitter) emitEvent(kind runtimeevents.Kind, _ HookMeta, payload any) {
