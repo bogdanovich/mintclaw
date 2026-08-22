@@ -7,28 +7,16 @@ type VoiceCapabilities struct {
 	TTS bool
 }
 
-// VoiceCapabilityProvider is an optional interface for channels that want to
-// explicitly declare their ASR/TTS support.
+// VoiceCapabilityProvider declares a channel's ASR/TTS support. Channels must
+// implement this interface to advertise ASR; TTS can also be inferred from
+// MediaSender when no explicit declaration exists.
 type VoiceCapabilityProvider interface {
 	VoiceCapabilities() VoiceCapabilities
 }
 
-// Deprecated: Channels should implement VoiceCapabilityProvider instead.
-// To be removed once all existing capable channels conform to the interface.
-var asrCapableChannels = map[string]bool{
-	"discord":  true,
-	"telegram": true,
-	"matrix":   true,
-	"qq":       true,
-	"weixin":   true,
-	"line":     true,
-	"feishu":   true,
-	"onebot":   true,
-}
-
 // DetectVoiceCapabilities returns ASR/TTS availability for a channel, gated by
 // whether providers are configured.
-func DetectVoiceCapabilities(channelName string, ch Channel, asrAvailable bool, ttsAvailable bool) VoiceCapabilities {
+func DetectVoiceCapabilities(ch Channel, asrAvailable bool, ttsAvailable bool) VoiceCapabilities {
 	if ch == nil {
 		return VoiceCapabilities{}
 	}
@@ -45,9 +33,6 @@ func DetectVoiceCapabilities(channelName string, ch Channel, asrAvailable bool, 
 	}
 
 	caps := VoiceCapabilities{}
-	if asrAvailable {
-		caps.ASR = asrCapableChannels[channelName]
-	}
 	if ttsAvailable {
 		if _, ok := ch.(MediaSender); ok {
 			caps.TTS = true
