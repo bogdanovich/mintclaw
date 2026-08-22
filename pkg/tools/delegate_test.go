@@ -135,8 +135,8 @@ func TestDelegateTool_Execute_PreservesDurableChildSuspension(t *testing.T) {
 	tool.SetSpawner(spawner)
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"agent_id": "browser",
-		"task":     "publish after durable approval",
+		"agent_id": "specialist",
+		"task":     "commit the external action after durable approval",
 	})
 
 	if !result.Control.TaskSuspended || !result.Delivery.IsFinalHandled() || result.ForUser != "" {

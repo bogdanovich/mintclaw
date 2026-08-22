@@ -1368,6 +1368,86 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	}
 }
 
+func TestPipelineDelegatedTaskSuspensionTerminatesMixedToolBatch(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		suspendedCallIndex int
+		wantOrdinaryCalls  int
+	}{
+		{name: "suspension first skips sibling", suspendedCallIndex: 0, wantOrdinaryCalls: 0},
+		{name: "suspension after result still prevents model continuation", suspendedCallIndex: 1, wantOrdinaryCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			suspendedTool := &fixedToolResultTool{
+				name: "delegated_task",
+				result: &toolshared.ToolResult{
+					ForLLM:  "delegated task has a durable pending continuation",
+					ForUser: "must not be delivered while the delegated task is suspended",
+					Control: toolshared.ToolControl{TaskSuspended: true},
+				},
+			}
+			ordinaryTool := &fixedToolResultTool{
+				name:   "ordinary_tool",
+				result: toolshared.NewToolResult("ordinary result requires a model response"),
+			}
+			registry := tools.NewToolRegistry()
+			registry.Register(suspendedTool)
+			registry.Register(ordinaryTool)
+			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-delegated-suspend",
+				sessionKey: "session-delegated-suspend",
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			calls := []providers.ToolCall{
+				{ID: "call-suspended", Name: suspendedTool.Name()},
+				{ID: "call-ordinary", Name: ordinaryTool.Name()},
+			}
+			if test.suspendedCallIndex == 1 {
+				slices.Reverse(calls)
+			}
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = calls
+			llm.assistantToolCallsPersisted = true
+			feedback := &immediateDeliveryFeedbackManager{}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{ToolFeedback: feedback}}
+
+			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+			if outcome.Control != ToolControlSuspend || outcome.SuspendedInteractionID != "" {
+				t.Fatalf("outcome = %#v, want delegated suspension without parent interaction ID", outcome)
+			}
+			if suspendedTool.executions != 1 || ordinaryTool.executions != test.wantOrdinaryCalls {
+				t.Fatalf(
+					"executions = suspended:%d ordinary:%d, want 1/%d",
+					suspendedTool.executions,
+					ordinaryTool.executions,
+					test.wantOrdinaryCalls,
+				)
+			}
+			if suspendedTool.result.ForUser != "" || !suspendedTool.result.Delivery.IsFinalHandled() {
+				t.Fatalf("suspended result was not normalized for terminal runtime handling: %#v", suspendedTool.result)
+			}
+			if !feedback.paused || feedback.dismissed {
+				t.Fatalf(
+					"suspension feedback lifecycle = paused:%v dismissed:%v, want true/false",
+					feedback.paused,
+					feedback.dismissed,
+				)
+			}
+			if len(exec.messages) != 2 {
+				t.Fatalf("messages = %#v, want one result for each emitted tool call", exec.messages)
+			}
+			for _, call := range calls {
+				if !slices.ContainsFunc(exec.messages, func(message providers.Message) bool {
+					return message.ToolCallID == call.ID
+				}) {
+					t.Fatalf("messages = %#v, missing result for %s", exec.messages, call.ID)
+				}
+			}
+		})
+	}
+}
+
 func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 	newTool := func(called chan interactions.Outcome) *fixedToolResultTool {
 		return &fixedToolResultTool{name: "domain_suspension", result: &toolshared.ToolResult{

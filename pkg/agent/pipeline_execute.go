@@ -425,6 +425,7 @@ type toolCallState struct {
 // Returns an explicit outcome indicating what the coordinator should do next:
 //   - ToolControlContinue: all tool results handled, pendingMessages or steering exists, continue turn
 //   - ToolControlBreak: tool loop exited, proceed to coordinator's hardAbort/finalContent/finalize
+//   - ToolControlSuspend: durable continuation ownership moved outside this turn
 //   - ToolControlHalt: finalize exact runtime safety content without another model call
 func (p *Pipeline) ExecuteTools(
 	ctx context.Context,
@@ -1491,6 +1492,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			ForUserLen: len(toolResult.ForUser),
 			IsError:    toolResult.IsError,
 			Async:      toolResult.Control.Async,
+			Suspended:  toolResult.Control.TaskSuspended,
 			ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
@@ -1510,6 +1512,20 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		errorSummary,
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
+	if toolResult.Control.TaskSuspended {
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		p.pauseToolFeedbackForTurn(pauseCtx, ts)
+		pauseCancel()
+
+		runner.appendSkippedToolMessages(
+			i+1,
+			"tool batch suspended by delegated task",
+			"Deferred because an earlier delegated task has a durable pending continuation. "+
+				"Reissue this tool if it is still needed after that continuation completes.",
+		)
+		exec.messages = runner.messages
+		return stopToolBatch(ToolLoopOutcome{Control: ToolControlSuspend})
+	}
 	if terminalTurnErr != nil {
 		exec.messages = runner.messages
 		return stopToolBatch(ToolLoopOutcome{

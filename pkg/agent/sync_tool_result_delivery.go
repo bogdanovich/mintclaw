@@ -52,6 +52,10 @@ func normalizeToolResultForSyncDelivery(ts *turnState, result *toolshared.ToolRe
 	if result == nil {
 		return toolshared.ErrorResult("nil tool result")
 	}
+	if result.Control.TaskSuspended {
+		result.ForUser = ""
+		result.Delivery.Intent = toolshared.DeliveryFinalHandled
+	}
 	if ts != nil && ts.opts.SuppressToolUserDelivery {
 		result.Delivery.Intent = toolshared.DeliverySilent
 	}

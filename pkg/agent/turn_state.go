@@ -89,8 +89,8 @@ const (
 	// ToolControlFinalize tells the runner that all tool responses were
 	// handled and the turn should finalize without another LLM call.
 	ToolControlFinalize
-	// ToolControlSuspend exits without final rendering after durable ownership
-	// of a pending human interaction has transferred to the runtime.
+	// ToolControlSuspend exits without final rendering after durable continuation
+	// ownership has transferred to the runtime or a descendant task.
 	ToolControlSuspend
 	// ToolControlHalt terminates the turn with exact runtime safety content.
 	// The coordinator must not render another model response or continue queued

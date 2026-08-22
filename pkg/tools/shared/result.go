@@ -82,8 +82,8 @@ type ToolControl struct {
 	// TaskID links an asynchronous completion to its durable task record.
 	TaskID string `json:"task_id,omitempty"`
 
-	// TaskSuspended prevents a durable task owner from publishing completion
-	// while a pending human interaction owns the child turn.
+	// TaskSuspended prevents a caller from publishing completion while durable
+	// continuation ownership remains with a descendant task.
 	TaskSuspended bool `json:"-"`
 
 	// Suspension asks the runtime to durably pause this tool call for human
@@ -174,8 +174,8 @@ type WriteAuditEntry struct {
 }
 
 // ObjectiveSpec is a caller-declared objective that the runtime binds to a
-// stable checklist ID before a browser-capable child runs. It verifies the
-// declared contract; it does not infer omitted intent from free-form text.
+// stable checklist ID before a configured child runs. It verifies the declared
+// contract; it does not infer omitted intent from free-form text.
 type ObjectiveSpec struct {
 	Item string `json:"item"`
 	Kind string `json:"kind"`
