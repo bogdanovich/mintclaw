@@ -680,6 +680,9 @@ Implementation sequence:
 2. Delete the producerless synthetic async-completion system-message reader.
    Current producers pass typed `AsyncCompletionInput` directly to the
    delivery coordinator.
+3. Delete the channel-name ASR capability fallback. Voice-capable channels
+   advertise ASR through `VoiceCapabilityProvider`; TTS remains derivable from
+   the current `MediaSender` contract.
 
 Exit criteria:
 

@@ -114,7 +114,7 @@ func logChannelVoiceCapabilities(cm *channels.Manager, asrAvailable bool, ttsAva
 		if !ok {
 			continue
 		}
-		caps := channels.DetectVoiceCapabilities(name, ch, asrAvailable, ttsAvailable)
+		caps := channels.DetectVoiceCapabilities(ch, asrAvailable, ttsAvailable)
 		logger.InfoCF("voice", "Channel voice capabilities", map[string]any{
 			"channel": name,
 			"asr":     caps.ASR,
