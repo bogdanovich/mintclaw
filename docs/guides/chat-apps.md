@@ -8,7 +8,10 @@ Talk to your mintclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
-Every inbound channel uses `allow_from` as a sender policy. An omitted, empty, or blank-only list denies all senders. Configure trusted sender IDs, or use `["*"]` only when public access is intentional. Run `mintclaw doctor` after changing channel policy.
+Every inbound channel uses `allow_from` as a sender policy. Entries are exact platform IDs; the ID itself may contain
+characters such as `@` or `:` when the platform defines it that way. An omitted, empty, or blank-only list denies all
+senders. Configure trusted sender IDs, or use `["*"]` only when public access is intentional. Run `mintclaw doctor`
+after changing channel policy.
 
 ### Migrating Existing Configurations
 
