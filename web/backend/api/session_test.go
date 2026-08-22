@@ -663,36 +663,55 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	}
 	setMintClawTestSessionUpdatedAt(t, store, dir, emptyKey, time.Unix(3, 0).UTC())
 
-	dirtyKey := session.BuildOpaqueSessionKey("mintclaw|history=dirty-first-append")
-	if err := store.UpsertSessionMeta(t.Context(), dirtyKey, mintClawTestScope(t, clientID), clientID); err != nil {
-		t.Fatalf("UpsertSessionMeta(dirty) error = %v", err)
+	writeDirtyHistory := func(identity, content string, updatedAt time.Time, terminated bool) string {
+		key := session.BuildOpaqueSessionKey(identity)
+		if err := store.UpsertSessionMeta(t.Context(), key, mintClawTestScope(t, clientID), clientID); err != nil {
+			t.Fatalf("UpsertSessionMeta(dirty) error = %v", err)
+		}
+		line, err := json.Marshal(providers.Message{Role: "user", Content: content})
+		if err != nil {
+			t.Fatalf("Marshal(dirty message) error = %v", err)
+		}
+		if terminated {
+			line = append(line, '\n')
+		}
+		base := filepath.Join(dir, sanitizeSessionKey(key))
+		if err := os.WriteFile(base+".jsonl", line, 0o644); err != nil {
+			t.Fatalf("WriteFile(dirty jsonl) error = %v", err)
+		}
+		meta, err := store.GetSessionMeta(t.Context(), key)
+		if err != nil {
+			t.Fatalf("GetSessionMeta(dirty) error = %v", err)
+		}
+		meta.HistoryDirty = true
+		meta.Count = 0
+		meta.Skip = 0
+		meta.UpdatedAt = updatedAt
+		metaData, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatalf("Marshal(dirty meta) error = %v", err)
+		}
+		if err := os.WriteFile(base+".meta.json", metaData, 0o644); err != nil {
+			t.Fatalf("WriteFile(dirty meta) error = %v", err)
+		}
+		return key
 	}
+
 	// Model a gateway writer paused after its append became durable but before
 	// its final metadata commit. The web API is a separate reader and must not
 	// take ownership of journal recovery.
-	dirtyLine, err := json.Marshal(providers.Message{Role: "user", Content: "paused writer history"})
-	if err != nil {
-		t.Fatalf("Marshal(dirty message) error = %v", err)
-	}
-	dirtyBase := filepath.Join(dir, sanitizeSessionKey(dirtyKey))
-	if err := os.WriteFile(dirtyBase+".jsonl", append(dirtyLine, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(dirty jsonl) error = %v", err)
-	}
-	dirtyMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
-	if err != nil {
-		t.Fatalf("GetSessionMeta(dirty) error = %v", err)
-	}
-	dirtyMeta.HistoryDirty = true
-	dirtyMeta.Count = 0
-	dirtyMeta.Skip = 0
-	dirtyMeta.UpdatedAt = time.Unix(4, 0).UTC()
-	dirtyMetaData, err := json.Marshal(dirtyMeta)
-	if err != nil {
-		t.Fatalf("Marshal(dirty meta) error = %v", err)
-	}
-	if err := os.WriteFile(dirtyBase+".meta.json", dirtyMetaData, 0o644); err != nil {
-		t.Fatalf("WriteFile(dirty meta) error = %v", err)
-	}
+	dirtyKey := writeDirtyHistory(
+		"mintclaw|history=dirty-first-append",
+		"paused writer history",
+		time.Unix(4, 0).UTC(),
+		true,
+	)
+	unterminatedKey := writeDirtyHistory(
+		"mintclaw|history=unterminated-first-append",
+		"unterminated writer history",
+		time.Unix(5, 0).UTC(),
+		false,
+	)
 
 	h := NewHandler(configPath)
 	mux := http.NewServeMux()
@@ -710,12 +729,14 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "paused writer history" {
 		t.Fatalf("items = %#v, want one newest usable history", items)
 	}
-	observedMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
-	if err != nil {
-		t.Fatalf("GetSessionMeta(paused writer) error = %v", err)
-	}
-	if !observedMeta.HistoryDirty || observedMeta.Count != 0 {
-		t.Fatalf("paused writer metadata was mutated by discovery: %#v", observedMeta)
+	for _, key := range []string{dirtyKey, unterminatedKey} {
+		observedMeta, err := store.GetSessionMeta(t.Context(), key)
+		if err != nil {
+			t.Fatalf("GetSessionMeta(paused writer) error = %v", err)
+		}
+		if !observedMeta.HistoryDirty || observedMeta.Count != 0 {
+			t.Fatalf("paused writer metadata was mutated by discovery: %#v", observedMeta)
+		}
 	}
 
 	detailRec := httptest.NewRecorder()
@@ -738,7 +759,7 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(dirtyKey)+".meta.json")); !os.IsNotExist(err) {
 		t.Fatalf("paused-writer active metadata still exists: %v", err)
 	}
-	for _, key := range []string{oldKey, newKey, emptyKey} {
+	for _, key := range []string{oldKey, newKey, emptyKey, unterminatedKey} {
 		if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(key)+".meta.json")); err != nil {
 			t.Fatalf("non-active metadata %q missing: %v", key, err)
 		}

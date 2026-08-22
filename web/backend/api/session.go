@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -105,6 +106,16 @@ func (h *Handler) readSessionMeta(path, sessionKey string) (memory.SessionMeta, 
 	return meta, nil
 }
 
+func splitCommittedJSONLLine(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), nil, nil
+	}
+	return 0, nil, nil
+}
+
 func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -115,6 +126,7 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 	msgs := make([]providers.Message, 0)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxSessionJSONLLineSize)
+	scanner.Split(splitCommittedJSONLLine)
 
 	seen := 0
 	for scanner.Scan() {
