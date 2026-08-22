@@ -139,16 +139,15 @@ If you are unsure which one to pick, choose Groq Whisper or ElevenLabs first.
 
 ## How MintClaw Chooses a Transcriber
 
-`DetectTranscriber` resolves ASR in this order:
+`DetectTranscriber` resolves the model named by `voice.model_name`:
 
-1. **Preferred path**: resolve `voice.model_name` against `model_list`.
-2. If that resolved model is:
+1. Resolve `voice.model_name` against `model_list`.
+2. If the resolved model is:
    - an `elevenlabs` provider model, MintClaw uses the ElevenLabs transcriber.
    - an OpenAI-compatible Whisper model, MintClaw uses the Whisper transcriber.
    - an audio-capable chat model, MintClaw uses `AudioModelTranscriber`.
-3. **Fallback path**: if `voice.model_name` is not set, MintClaw performs a compatibility scan through `model_list` for legacy auto-detected ASR entries.
 
-Fallback scanning exists for backward compatibility. New configurations should set `voice.model_name` explicitly.
+If `voice.model_name` is unset or does not resolve to a supported ASR model, transcription is disabled.
 
 ## Common Mistakes
 

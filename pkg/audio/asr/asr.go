@@ -145,21 +145,6 @@ func transcriberFromModelConfig(modelCfg *config.ModelConfig) Transcriber {
 	return nil
 }
 
-func fallbackTranscriberFromModelConfig(modelCfg *config.ModelConfig) Transcriber {
-	if modelCfg == nil {
-		return nil
-	}
-
-	if isElevenLabsTranscriptionModel(modelCfg) {
-		_, modelID := providers.ExtractProtocol(modelCfg)
-		return NewElevenLabsTranscriber(modelCfg.APIKey(), modelCfg.APIBase, modelID)
-	}
-	if modelID := whisperModelID(modelCfg); modelID != "" {
-		return NewWhisperTranscriber(modelCfg)
-	}
-	return nil
-}
-
 // DetectTranscriber inspects cfg and returns the appropriate Transcriber, or
 // nil if no supported transcription provider is configured.
 func DetectTranscriber(cfg *config.Config) Transcriber {
@@ -167,20 +152,13 @@ func DetectTranscriber(cfg *config.Config) Transcriber {
 		return nil
 	}
 
-	if modelName := strings.TrimSpace(cfg.Voice.ModelName); modelName != "" {
-		modelCfg, err := cfg.GetModelConfig(modelName)
-		if err == nil {
-			if tr := transcriberFromModelConfig(modelCfg); tr != nil {
-				return tr
-			}
-		}
+	modelName := strings.TrimSpace(cfg.Voice.ModelName)
+	if modelName == "" {
+		return nil
 	}
-
-	// Fall back to compatibility scanning for legacy auto-detected ASR providers.
-	for _, mc := range cfg.ModelList {
-		if tr := fallbackTranscriberFromModelConfig(mc); tr != nil {
-			return tr
-		}
+	modelCfg, err := cfg.GetModelConfig(modelName)
+	if err != nil {
+		return nil
 	}
-	return nil
+	return transcriberFromModelConfig(modelCfg)
 }

@@ -238,11 +238,6 @@ func (a *Agent) processUtterance(ctx context.Context, acc *speechAccumulator) {
 
 	logger.InfoCF("voice-agent", "Transcription result", map[string]any{"text": res.Text, "duration": res.Duration})
 
-	channelType := acc.channel
-	if channelType == "" {
-		channelType = "discord" // fallback for legacy chunks
-	}
-
 	text := strings.ToLower(strings.TrimSpace(res.Text))
 	if strings.Contains(text, "leave the voice channel") || strings.Contains(text, "leave voice") ||
 		strings.Contains(text, "disconnect voice") || strings.Contains(text, "leave the channel") ||
@@ -256,7 +251,7 @@ func (a *Agent) processUtterance(ctx context.Context, acc *speechAccumulator) {
 			logger.ErrorCF("voice-agent", "Failed to publish leave control", map[string]any{"error": err})
 		}
 		if err := a.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channelType, acc.chatID, ""),
+			Context: bus.NewOutboundContext(acc.channel, acc.chatID, ""),
 			Content: "Goodbye! Leaving the voice channel.",
 		}); err != nil {
 			logger.ErrorCF("voice-agent", "Failed to publish goodbye message", map[string]any{"error": err})
@@ -268,7 +263,7 @@ func (a *Agent) processUtterance(ctx context.Context, acc *speechAccumulator) {
 
 	if err := a.bus.PublishInbound(ctx, bus.InboundMessage{
 		Context: bus.InboundContext{
-			Channel:  channelType,
+			Channel:  acc.channel,
 			ChatID:   acc.chatID,
 			ChatType: "channel",
 			SenderID: acc.speakerID,

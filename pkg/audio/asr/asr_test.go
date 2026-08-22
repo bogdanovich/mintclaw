@@ -90,20 +90,6 @@ func TestDetectTranscriber(t *testing.T) {
 			wantName: "whisper",
 		},
 		{
-			name: "whisper via model list fallback",
-			cfg: &config.Config{
-				ModelList: []*config.ModelConfig{
-					{ModelName: "openai", Model: "openai/gpt-4o", APIKeys: config.SimpleSecureStrings("sk-openai")},
-					{
-						ModelName: "groq",
-						Model:     "groq/whisper-large-v3-turbo",
-						APIKeys:   config.SimpleSecureStrings("sk-groq-model"),
-					},
-				},
-			},
-			wantName: "whisper",
-		},
-		{
 			name: "voice model name alias selects non-gemini audio model transcriber",
 			cfg: &config.Config{
 				Voice: config.VoiceConfig{ModelName: "my-asr-model"},
@@ -146,16 +132,7 @@ func TestDetectTranscriber(t *testing.T) {
 			wantNil: true,
 		},
 		{
-			name: "groq model list entry without key is skipped",
-			cfg: &config.Config{
-				ModelList: []*config.ModelConfig{
-					{Model: "groq/whisper-large-v3"},
-				},
-			},
-			wantNil: true,
-		},
-		{
-			name: "provider key takes priority over model list",
+			name: "ASR model without voice selection is not auto-detected",
 			cfg: &config.Config{
 				ModelList: []*config.ModelConfig{
 					{
@@ -165,7 +142,7 @@ func TestDetectTranscriber(t *testing.T) {
 					},
 				},
 			},
-			wantName: "whisper",
+			wantNil: true,
 		},
 		{
 			name: "missing voice model name config returns nil",
@@ -182,30 +159,7 @@ func TestDetectTranscriber(t *testing.T) {
 			wantNil: true,
 		},
 		{
-			name: "elevenlabs voice config key",
-			cfg: &config.Config{
-				ModelList: []*config.ModelConfig{
-					{Model: "elevenlabs/scribe_v1", APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test")},
-				},
-			},
-			wantName: "elevenlabs",
-		},
-		{
-			name: "elevenlabs takes priority over groq model list",
-			cfg: &config.Config{
-				ModelList: []*config.ModelConfig{
-					{Model: "elevenlabs/scribe_v1", APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test")},
-					{
-						ModelName: "groq",
-						Model:     "groq/llama-3.3-70b",
-						APIKeys:   config.SimpleSecureStrings("sk-groq-model"),
-					},
-				},
-			},
-			wantName: "elevenlabs",
-		},
-		{
-			name: "voice model name takes priority over elevenlabs",
+			name: "voice model name selects only the named entry",
 			cfg: &config.Config{
 				Voice: config.VoiceConfig{
 					ModelName: "voice-gemini",

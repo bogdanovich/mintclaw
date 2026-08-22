@@ -139,16 +139,15 @@ MintClaw 目前主要支持三种 ASR 路径：
 
 ## MintClaw 如何选择转录器
 
-`DetectTranscriber` 会按下面顺序选择 ASR：
+`DetectTranscriber` 会根据 `voice.model_name` 选择模型：
 
-1. **首选路径**：根据 `voice.model_name` 在 `model_list` 中找到对应模型。
+1. 根据 `voice.model_name` 在 `model_list` 中找到对应模型。
 2. 如果找到的模型属于以下类型：
    - `provider=elevenlabs` 的模型，则使用 ElevenLabs transcriber。
    - OpenAI 兼容的 Whisper 模型，则使用 Whisper transcriber。
    - 支持音频输入的聊天模型，则使用 `AudioModelTranscriber`。
-3. **回退路径**：如果没有设置 `voice.model_name`，MintClaw 会为了兼容旧配置，扫描 `model_list` 中可自动识别的 ASR 条目。
 
-回退扫描只是为了兼容旧行为。新配置建议始终显式设置 `voice.model_name`。
+如果未设置 `voice.model_name`，或它没有指向支持的 ASR 模型，语音转录将被禁用。
 
 ## 常见错误
 

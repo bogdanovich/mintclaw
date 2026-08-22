@@ -453,11 +453,11 @@ model_list:
 
 Detection behavior that matters:
 
-- `voice.model_name` is the preferred and recommended path
+- `voice.model_name` selects the ASR model
 - if it resolves to an ElevenLabs model, MintClaw uses the ElevenLabs transcriber
 - if it resolves to a Whisper-compatible model, MintClaw uses the Whisper transcription path
 - if it resolves to an audio-capable multimodal model, MintClaw can use audio-model transcription
-- if `voice.model_name` is omitted, MintClaw still performs compatibility scanning across `model_list` for legacy auto-detected ASR entries
+- if `voice.model_name` is omitted or invalid, voice transcription is disabled
 
 ### TTS (Text -> Voice)
 
