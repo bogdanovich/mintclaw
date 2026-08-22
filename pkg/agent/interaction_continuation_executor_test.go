@@ -115,10 +115,13 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 		opts: processOptions{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
 	}
 
-	restore := overrideApprovedToolExecutionIdentity(ts, origin)
-	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), origin)
-	restore()
+	executionCtx := withApprovedToolExecutionIdentity(context.Background(), origin)
+	assertToolIdentity(t, toolExecutionContextForTurn(executionCtx, ts), origin)
 	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), resumeInbound)
+	if ts.channel != resumeInbound.Channel || ts.chatID != resumeInbound.ChatID ||
+		ts.opts.Dispatch.InboundContext != resumeInbound {
+		t.Fatalf("registered turn identity mutated: %#v", ts)
+	}
 }
 
 func assertToolIdentity(t *testing.T, ctx context.Context, want *bus.InboundContext) {

@@ -181,37 +181,27 @@ func (p *Pipeline) executeJournaledToolCall(
 	toolCall providers.ToolCall,
 	origin *bus.InboundContext,
 ) (ToolLoopOutcome, *LLMIterationState) {
-	restoreIdentity := overrideApprovedToolExecutionIdentity(ts, origin)
-	defer restoreIdentity()
-
 	llm := newLLMIterationState(1)
 	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall}}
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.toolResponseDisposition = toolResponseHandled
 	llm.assistantToolCallsPersisted = true
-	outcome := p.ExecuteTools(turnCtx, turnCtx, ts, exec, llm)
+	executionCtx := withApprovedToolExecutionIdentity(turnCtx, origin)
+	outcome := p.ExecuteTools(executionCtx, executionCtx, ts, exec, llm)
 	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 3*time.Second)
 	p.pauseToolFeedbackForTurn(pauseCtx, ts)
 	pauseCancel()
 	return outcome, llm
 }
 
-func overrideApprovedToolExecutionIdentity(
-	ts *turnState,
+type approvedToolExecutionIdentityKey struct{}
+
+func withApprovedToolExecutionIdentity(
+	ctx context.Context,
 	origin *bus.InboundContext,
-) func() {
-	if ts == nil || origin == nil {
-		return func() {}
+) context.Context {
+	if origin == nil {
+		return ctx
 	}
-	previousChannel := ts.channel
-	previousChatID := ts.chatID
-	previousInbound := ts.opts.Dispatch.InboundContext
-	ts.channel = origin.Channel
-	ts.chatID = origin.ChatID
-	ts.opts.Dispatch.InboundContext = cloneInboundContext(origin)
-	return func() {
-		ts.channel = previousChannel
-		ts.chatID = previousChatID
-		ts.opts.Dispatch.InboundContext = previousInbound
-	}
+	return context.WithValue(ctx, approvedToolExecutionIdentityKey{}, cloneInboundContext(origin))
 }
