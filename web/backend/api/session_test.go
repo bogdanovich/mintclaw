@@ -61,6 +61,29 @@ func newMintClawTestSession(t *testing.T, store *memory.JSONLStore, sessionID st
 	return key
 }
 
+func setMintClawTestSessionUpdatedAt(
+	t *testing.T,
+	store *memory.JSONLStore,
+	dir string,
+	sessionKey string,
+	updatedAt time.Time,
+) {
+	t.Helper()
+	meta, err := store.GetSessionMeta(t.Context(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetSessionMeta() error = %v", err)
+	}
+	meta.UpdatedAt = updatedAt
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("Marshal(meta) error = %v", err)
+	}
+	path := filepath.Join(dir, sanitizeSessionKey(sessionKey)+".meta.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(meta) error = %v", err)
+	}
+}
+
 func assertVisibleToolCallMessage(
 	t *testing.T,
 	msg sessionChatMessage,
@@ -602,6 +625,84 @@ func TestHandleSessions_SharedHistoryResolvesAllCurrentClientIDs(t *testing.T) {
 				http.StatusOK,
 				detailRec.Body.String(),
 			)
+		}
+	}
+}
+
+func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, storeErr := memory.NewJSONLStore(dir)
+	if storeErr != nil {
+		t.Fatalf("NewJSONLStore() error = %v", storeErr)
+	}
+	const clientID = "reused-browser"
+	writeHistory := func(identity, content string, updatedAt time.Time) string {
+		key := session.BuildOpaqueSessionKey(identity)
+		if err := store.UpsertSessionMeta(t.Context(), key, mintClawTestScope(t, clientID), clientID); err != nil {
+			t.Fatalf("UpsertSessionMeta() error = %v", err)
+		}
+		if err := store.AddFullMessage(
+			t.Context(),
+			key,
+			providers.Message{Role: "user", Content: content},
+		); err != nil {
+			t.Fatalf("AddFullMessage() error = %v", err)
+		}
+		setMintClawTestSessionUpdatedAt(t, store, dir, key, updatedAt)
+		return key
+	}
+
+	oldKey := writeHistory("mintclaw|history=old", "old history", time.Unix(1, 0).UTC())
+	newKey := writeHistory("mintclaw|history=new", "new history", time.Unix(2, 0).UTC())
+	emptyKey := session.BuildOpaqueSessionKey("mintclaw|history=metadata-only")
+	if err := store.UpsertSessionMeta(t.Context(), emptyKey, mintClawTestScope(t, clientID), clientID); err != nil {
+		t.Fatalf("UpsertSessionMeta(metadata-only) error = %v", err)
+	}
+	setMintClawTestSessionUpdatedAt(t, store, dir, emptyKey, time.Unix(3, 0).UTC())
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var items []sessionListItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal(list) error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "new history" {
+		t.Fatalf("items = %#v, want one newest usable history", items)
+	}
+
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(
+		detailRec,
+		httptest.NewRequest(http.MethodGet, "/api/sessions/"+clientID, nil),
+	)
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "new history") {
+		t.Fatalf("detail status = %d, body=%s", detailRec.Code, detailRec.Body.String())
+	}
+
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(
+		deleteRec,
+		httptest.NewRequest(http.MethodDelete, "/api/sessions/"+clientID, nil),
+	)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(newKey)+".meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("new active metadata still exists: %v", err)
+	}
+	for _, key := range []string{oldKey, emptyKey} {
+		if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(key)+".meta.json")); err != nil {
+			t.Fatalf("non-active metadata %q missing: %v", key, err)
 		}
 	}
 }

@@ -32,11 +32,9 @@ func TestIsExplicitSessionKey(t *testing.T) {
 
 func TestBuildMainSessionKey(t *testing.T) {
 	got := BuildMainSessionKey("Main")
-	if !IsOpaqueSessionKey(got) {
-		t.Fatalf("BuildMainSessionKey() = %q, want opaque key", got)
-	}
-	if got != BuildOpaqueSessionKey("main|agent=main") {
-		t.Fatalf("BuildMainSessionKey() = %q, want stable main-key hash", got)
+	const want = "sk_v1_6d9217fe77c7f11d9cc992aabe81a2d09604e9c48babbda8fdad3791f9c19f3b"
+	if got != want {
+		t.Fatalf("BuildMainSessionKey() = %q, want %q", got, want)
 	}
 }
 

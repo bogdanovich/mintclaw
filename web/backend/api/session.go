@@ -181,8 +181,9 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 }
 
 type mintclawJSONLSessionRef struct {
-	ID  string
-	Key string
+	ID        string
+	Key       string
+	UpdatedAt time.Time
 }
 
 func extractMintClawSessionIDs(meta memory.SessionMeta, scope session.SessionScope) []string {
@@ -219,9 +220,21 @@ func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	ids := extractMintClawSessionIDs(meta, scope)
 	refs := make([]mintclawJSONLSessionRef, 0, len(ids))
 	for i := len(ids) - 1; i >= 0; i-- {
-		refs = append(refs, mintclawJSONLSessionRef{ID: ids[i], Key: meta.Key})
+		refs = append(refs, mintclawJSONLSessionRef{
+			ID:        ids[i],
+			Key:       meta.Key,
+			UpdatedAt: meta.UpdatedAt,
+		})
 	}
 	return refs
+}
+
+func usableMintClawJSONLSession(dir string, meta memory.SessionMeta) bool {
+	if meta.Count <= meta.Skip && strings.TrimSpace(meta.Summary) == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(meta.Key)+".jsonl"))
+	return err == nil && !info.IsDir()
 }
 
 func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionRef, error) {
@@ -230,8 +243,7 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 		return nil, err
 	}
 
-	refs := make([]mintclawJSONLSessionRef, 0)
-	seen := make(map[string]struct{})
+	selected := make(map[string]mintclawJSONLSessionRef)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
 			continue
@@ -242,17 +254,28 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 		if err != nil {
 			continue
 		}
-		for _, ref := range sessionRefsFromMeta(meta) {
+		refs := sessionRefsFromMeta(meta)
+		if len(refs) == 0 || !usableMintClawJSONLSession(dir, meta) {
+			continue
+		}
+		for _, ref := range refs {
 			if ref.Key == "" || ref.ID == "" {
 				continue
 			}
-			if _, exists := seen[ref.ID]; exists {
-				continue
+			current, exists := selected[ref.ID]
+			if !exists || ref.UpdatedAt.After(current.UpdatedAt) ||
+				(ref.UpdatedAt.Equal(current.UpdatedAt) && ref.Key > current.Key) {
+				selected[ref.ID] = ref
 			}
-			seen[ref.ID] = struct{}{}
-			refs = append(refs, ref)
 		}
 	}
+	refs := make([]mintclawJSONLSessionRef, 0, len(selected))
+	for _, ref := range selected {
+		refs = append(refs, ref)
+	}
+	slices.SortFunc(refs, func(a, b mintclawJSONLSessionRef) int {
+		return cmp.Or(cmp.Compare(a.ID, b.ID), cmp.Compare(a.Key, b.Key))
+	})
 	return refs, nil
 }
 

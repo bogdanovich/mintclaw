@@ -61,7 +61,7 @@ func ResolveAgentID(store any, sessionKey string) string {
 // BuildMainSessionKey returns the canonical opaque main-session key for an
 // agent.
 func BuildMainSessionKey(agentID string) string {
-	return BuildOpaqueSessionKey("main|agent=" + routing.NormalizeAgentID(agentID))
+	return BuildOpaqueSessionKey("agent:" + routing.NormalizeAgentID(agentID) + ":main")
 }
 
 // CanonicalSessionIdentityID collapses an identity using identity_links when
