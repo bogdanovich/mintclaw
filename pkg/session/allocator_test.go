@@ -108,6 +108,37 @@ func TestAllocateRouteSession_TelegramForumTopicsRemainIsolatedByDefault(t *test
 	}
 }
 
+func TestAllocateRouteSessionPreservesMintClawClientSessionOutsideDimensions(t *testing.T) {
+	allocate := func(chatID string) Allocation {
+		return AllocateRouteSession(AllocationInput{
+			AgentID: "main",
+			Context: bus.InboundContext{
+				Channel:  "mintclaw",
+				ChatID:   "mintclaw:" + chatID,
+				ChatType: "direct",
+				SenderID: "mintclaw-user",
+			},
+			SessionPolicy: routing.SessionPolicy{Dimensions: []string{"sender"}},
+		})
+	}
+
+	first := allocate("browser-1")
+	second := allocate("browser-2")
+	if first.Scope.ClientSessionID != "browser-1" || second.Scope.ClientSessionID != "browser-2" {
+		t.Fatalf(
+			"ClientSessionID = (%q, %q), want (browser-1, browser-2)",
+			first.Scope.ClientSessionID,
+			second.Scope.ClientSessionID,
+		)
+	}
+	if _, exists := first.Scope.Values["chat"]; exists {
+		t.Fatalf("scope values unexpectedly include unconfigured chat dimension: %v", first.Scope.Values)
+	}
+	if first.SessionKey != second.SessionKey {
+		t.Fatalf("client provenance changed sender-scoped identity: %q != %q", first.SessionKey, second.SessionKey)
+	}
+}
+
 func TestBuildOpaqueSessionKey_IsStable(t *testing.T) {
 	first := BuildOpaqueSessionKey("route|agent=main|sender=user123")
 	second := BuildOpaqueSessionKey("route|agent=main|sender=user123")

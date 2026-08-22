@@ -42,8 +42,9 @@ func mintClawTestScope(t *testing.T, sessionID string) json.RawMessage {
 		Account:    "default",
 		Dimensions: []string{"sender"},
 		Values: map[string]string{
-			"sender": "mintclaw:" + sessionID,
+			"sender": "mintclaw-user",
 		},
+		ClientSessionID: sessionID,
 	})
 	if err != nil {
 		t.Fatalf("Marshal(session scope) error = %v", err)
@@ -484,8 +485,9 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 		Account:    "default",
 		Dimensions: []string{"sender"},
 		Values: map[string]string{
-			"sender": "mintclaw:scope-jsonl",
+			"sender": "mintclaw-user",
 		},
+		ClientSessionID: "scope-jsonl",
 	})
 	if err != nil {
 		t.Fatalf("Marshal(scope) error = %v", err)

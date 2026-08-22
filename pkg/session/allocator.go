@@ -41,10 +41,11 @@ func buildSessionScope(input AllocationInput) SessionScope {
 	inbound := input.Context
 	includeTopicInChatDimension := shouldPreserveTelegramForumIsolation(input)
 	scope := SessionScope{
-		Version: ScopeVersionV2,
-		AgentID: routing.NormalizeAgentID(input.AgentID),
-		Channel: strings.ToLower(strings.TrimSpace(inbound.Channel)),
-		Account: routing.NormalizeAccountID(inbound.Account),
+		Version:         ScopeVersionV2,
+		AgentID:         routing.NormalizeAgentID(input.AgentID),
+		Channel:         strings.ToLower(strings.TrimSpace(inbound.Channel)),
+		Account:         routing.NormalizeAccountID(inbound.Account),
+		ClientSessionID: mintClawClientSessionID(inbound),
 	}
 	if scope.Channel == "" {
 		scope.Channel = "unknown"
@@ -105,6 +106,18 @@ func buildSessionScope(input AllocationInput) SessionScope {
 	}
 
 	return scope
+}
+
+func mintClawClientSessionID(inbound bus.InboundContext) string {
+	if !strings.EqualFold(strings.TrimSpace(inbound.Channel), "mintclaw") {
+		return ""
+	}
+	const chatPrefix = "mintclaw:"
+	chatID := strings.TrimSpace(inbound.ChatID)
+	if !strings.HasPrefix(chatID, chatPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(chatID, chatPrefix))
 }
 
 func shouldPreserveTelegramForumIsolation(input AllocationInput) bool {

@@ -189,23 +189,11 @@ func extractMintClawSessionIDFromScope(scope session.SessionScope) (string, bool
 	if !strings.EqualFold(strings.TrimSpace(scope.Channel), "mintclaw") {
 		return "", false
 	}
-
-	candidates := []string{
-		strings.TrimSpace(scope.Values["sender"]),
-		strings.TrimSpace(scope.Values["chat"]),
+	sessionID := strings.TrimSpace(scope.ClientSessionID)
+	if sessionID == "" {
+		return "", false
 	}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if idx := strings.Index(candidate, "mintclaw:"); idx >= 0 {
-			sessionID := strings.TrimSpace(candidate[idx+len("mintclaw:"):])
-			if sessionID != "" {
-				return sessionID, true
-			}
-		}
-	}
-	return "", false
+	return sessionID, true
 }
 
 func sessionRefFromMeta(meta memory.SessionMeta) (mintclawJSONLSessionRef, bool) {
