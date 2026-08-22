@@ -874,13 +874,11 @@ func waitForToolCallProviderCalls(t *testing.T, provider *toolCallProvider, time
 	}
 }
 
-func assertNoSyntheticAsyncCompletionInbound(t *testing.T, msgBus *bus.MessageBus) {
+func assertNoAsyncCompletionInbound(t *testing.T, msgBus *bus.MessageBus) {
 	t.Helper()
 	select {
 	case inbound := <-msgBus.InboundChan():
-		if isAsyncCompletionSystemMessage(inbound) {
-			t.Fatalf("unexpected synthetic async completion inbound: %+v", inbound)
-		}
+		t.Fatalf("unexpected async completion inbound: %+v", inbound)
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -1373,7 +1371,7 @@ func TestAgentLoop_AsyncParentOnlyQueuesFollowUpWithoutUserDelivery(t *testing.T
 		t.Fatal("timeout waiting for async completion")
 	}
 	waitForToolCallProviderCalls(t, provider, 2*time.Second, 3)
-	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+	assertNoAsyncCompletionInbound(t, msgBus)
 	assertTaskDeliveryStatusForTest(t, al, tmpDir, parentTaskID, taskregistry.DeliverySessionQueued)
 	select {
 	case outbound := <-msgBus.OutboundChan():
@@ -1460,7 +1458,7 @@ func TestAgentLoop_AsyncUserAndParentPublishesUserAndQueuesFollowUp(t *testing.T
 		t.Fatalf("outbound topic_id = %q, want topic-1", outbound.Context.TopicID)
 	}
 	waitForToolCallProviderCalls(t, provider, 2*time.Second, 3)
-	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+	assertNoAsyncCompletionInbound(t, msgBus)
 	assertTaskDeliveryStatusForTest(t, al, tmpDir, userAndParentTaskID, taskregistry.DeliveryDelivered)
 }
 
@@ -1486,7 +1484,7 @@ func (p *captureMessagesProvider) GetDefaultModel() string {
 	return "capture-messages"
 }
 
-func TestProcessAsyncCompletionMessageUsesNoHistory(t *testing.T) {
+func TestProcessAsyncCompletionUsesNoHistory(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1507,29 +1505,19 @@ func TestProcessAsyncCompletionMessageUsesNoHistory(t *testing.T) {
 
 	sessionKey := session.BuildMainSessionKey(defaultAgent.ID)
 	defaultAgent.Sessions.AddMessage(sessionKey, "user", "old user message")
-	defaultAgent.Sessions.AddMessage(sessionKey, "assistant", "[System: async:spawn] old background result")
+	defaultAgent.Sessions.AddMessage(sessionKey, "assistant", "old background result")
 
-	msg := bus.InboundMessage{
-		Channel:  "system",
-		ChatID:   "telegram:chat-1",
-		SenderID: "async:spawn",
-		Context: bus.InboundContext{
-			Channel:  "system",
-			ChatID:   "telegram:chat-1",
-			ChatType: "direct",
-			SenderID: "async:spawn",
-			Raw: systemFollowUpAsyncCompletionRaw(&bus.InboundContext{
-				Channel:  "telegram",
-				ChatID:   "chat-1",
-				ChatType: "direct",
-			}, "telegram", "chat-1", "completion-1"),
+	got, err := al.processAsyncCompletion(context.Background(), AsyncCompletionInput{
+		SourceTool:   "spawn",
+		CompletionID: "completion-1",
+		Content:      asyncCompletionPrompt("spawn", "fresh background result"),
+		Origin: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
 		},
-		Content: asyncCompletionPrompt("spawn", "fresh background result"),
-	}
-
-	got, err := al.processSystemMessage(context.Background(), msg)
+		SenderID: "async:spawn",
+	})
 	if err != nil {
-		t.Fatalf("processSystemMessage failed: %v", err)
+		t.Fatalf("processAsyncCompletion failed: %v", err)
 	}
 	if got != "completion summary" {
 		t.Fatalf("response = %q, want completion summary", got)
@@ -1554,7 +1542,7 @@ func TestProcessAsyncCompletionMessageUsesNoHistory(t *testing.T) {
 	}
 }
 
-func TestProcessAsyncCompletionMessageSkipsDuplicateCompletionID(t *testing.T) {
+func TestProcessAsyncCompletionSkipsDuplicateCompletionID(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1569,36 +1557,28 @@ func TestProcessAsyncCompletionMessageSkipsDuplicateCompletionID(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
 
-	msg := bus.InboundMessage{
-		Channel:  "system",
-		ChatID:   "telegram:chat-1",
-		SenderID: "async:spawn",
-		Context: bus.InboundContext{
-			Channel:  "system",
-			ChatID:   "telegram:chat-1",
-			ChatType: "direct",
-			SenderID: "async:spawn",
-			Raw: systemFollowUpAsyncCompletionRaw(&bus.InboundContext{
-				Channel:  "telegram",
-				ChatID:   "chat-1",
-				ChatType: "direct",
-			}, "telegram", "chat-1", "same-completion"),
+	input := AsyncCompletionInput{
+		SourceTool:   "spawn",
+		CompletionID: "same-completion",
+		Content:      asyncCompletionPrompt("spawn", "fresh background result"),
+		Origin: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
 		},
-		Content: asyncCompletionPrompt("spawn", "fresh background result"),
+		SenderID: "async:spawn",
 	}
 
-	if _, err := al.processSystemMessage(context.Background(), msg); err != nil {
-		t.Fatalf("first processSystemMessage failed: %v", err)
+	if _, err := al.processAsyncCompletion(context.Background(), input); err != nil {
+		t.Fatalf("first processAsyncCompletion failed: %v", err)
 	}
-	if _, err := al.processSystemMessage(context.Background(), msg); err != nil {
-		t.Fatalf("second processSystemMessage failed: %v", err)
+	if _, err := al.processAsyncCompletion(context.Background(), input); err != nil {
+		t.Fatalf("second processAsyncCompletion failed: %v", err)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
 }
 
-func TestProcessAsyncCompletionTypedPathDoesNotPublishSystemInbound(t *testing.T) {
+func TestProcessAsyncCompletionDoesNotPublishInbound(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1634,10 +1614,10 @@ func TestProcessAsyncCompletionTypedPathDoesNotPublishSystemInbound(t *testing.T
 	if provider.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
-	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+	assertNoAsyncCompletionInbound(t, msgBus)
 }
 
-func TestProcessAsyncCompletionMessageDoesNotSendDefaultFallback(t *testing.T) {
+func TestProcessAsyncCompletionDoesNotSendDefaultFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1652,27 +1632,17 @@ func TestProcessAsyncCompletionMessageDoesNotSendDefaultFallback(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
 
-	msg := bus.InboundMessage{
-		Channel:  "system",
-		ChatID:   "telegram:chat-1",
-		SenderID: "async:spawn",
-		Context: bus.InboundContext{
-			Channel:  "system",
-			ChatID:   "telegram:chat-1",
-			ChatType: "direct",
-			SenderID: "async:spawn",
-			Raw: systemFollowUpAsyncCompletionRaw(&bus.InboundContext{
-				Channel:  "telegram",
-				ChatID:   "chat-1",
-				ChatType: "direct",
-			}, "telegram", "chat-1", "completion-empty"),
+	got, err := al.processAsyncCompletion(context.Background(), AsyncCompletionInput{
+		SourceTool:   "spawn",
+		CompletionID: "completion-empty",
+		Content:      asyncCompletionPrompt("spawn", "fresh background result"),
+		Origin: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
 		},
-		Content: asyncCompletionPrompt("spawn", "fresh background result"),
-	}
-
-	got, err := al.processSystemMessage(context.Background(), msg)
+		SenderID: "async:spawn",
+	})
 	if err != nil {
-		t.Fatalf("processSystemMessage failed: %v", err)
+		t.Fatalf("processAsyncCompletion failed: %v", err)
 	}
 	if got != "" {
 		t.Fatalf("response = %q, want empty", got)

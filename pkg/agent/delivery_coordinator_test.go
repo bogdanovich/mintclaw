@@ -285,7 +285,7 @@ func TestDeliverAsyncToolCompletion_ParentOnlyUpdatesSessionQueued(t *testing.T)
 		return msg.Content == "parent synthesized"
 	})
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliverySessionQueued)
-	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+	assertNoAsyncCompletionInbound(t, msgBus)
 }
 
 func TestDeliverAsyncToolCompletion_ParentPublishFailureUpdatesFailed(t *testing.T) {
@@ -370,7 +370,7 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 		return msg.Content == "parent synthesized"
 	})
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliveryDelivered)
-	assertNoSyntheticAsyncCompletionInbound(t, msgBus)
+	assertNoAsyncCompletionInbound(t, msgBus)
 
 	reloaded, reloadedBus, reloadedTS, _ := newDeliveryCoordinatorTestRuntimeWithWorkspace(
 		t,

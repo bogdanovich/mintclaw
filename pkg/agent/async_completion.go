@@ -11,10 +11,8 @@ import (
 const asyncCompletionSynthesisTimeout = 120 * time.Second
 
 // AsyncCompletionInput is the typed internal form of an async tool completion
-// that needs parent-agent synthesis. Legacy system inbound messages are still
-// adapted into this shape for compatibility, but new runtime code should call
-// processAsyncCompletion directly instead of publishing a synthetic chat
-// message.
+// that needs parent-agent synthesis. Runtime code passes this value directly
+// instead of publishing a synthetic chat message.
 type AsyncCompletionInput struct {
 	SourceTool   string
 	CompletionID string
