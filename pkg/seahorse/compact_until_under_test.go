@@ -19,7 +19,7 @@ func TestCompactUntilUnderIterationCap(t *testing.T) {
 
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 	s := &Store{db: db}
 

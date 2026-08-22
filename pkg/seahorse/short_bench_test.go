@@ -19,7 +19,7 @@ func newBenchStore(b *testing.B) (*Store, func()) {
 	}
 	if err := runSchema(db); err != nil {
 		_ = db.Close()
-		b.Fatalf("migration: %v", err)
+		b.Fatalf("schema: %v", err)
 	}
 	return &Store{db: db}, func() { _ = db.Close() }
 }

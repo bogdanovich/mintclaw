@@ -21,38 +21,27 @@ func (s *Store) AddMessageWithReasoning(
 	tokenCount int,
 	createdAt time.Time,
 ) (*Message, error) {
-	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
-	if storedCreatedAt.IsZero() {
-		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
-	}
-	result, err := s.db.ExecContext(
-		ctx,
-		"INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		convID,
-		role,
-		content,
-		modelName,
-		reasoningContent,
-		tokenCount,
-		formatSQLiteTime(storedCreatedAt),
-	)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("add message: %w", err)
+		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id: %w", err)
-	}
-	return &Message{
-		ID:               id,
-		ConversationID:   convID,
+	defer func() { _ = tx.Rollback() }()
+
+	added, err := addMessageTx(ctx, tx, convID, Message{
 		Role:             role,
 		Content:          content,
 		ModelName:        modelName,
 		ReasoningContent: reasoningContent,
 		TokenCount:       tokenCount,
-		CreatedAt:        storedCreatedAt,
-	}, nil
+		CreatedAt:        createdAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return added, nil
 }
 
 // partsToReadableContent derives a readable text summary from message parts.
@@ -109,75 +98,154 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
+	added, err := addMessageTx(ctx, tx, convID, Message{
+		Role:             role,
+		Parts:            parts,
+		ModelName:        modelName,
+		ReasoningContent: reasoningContent,
+		TokenCount:       tokenCount,
+		CreatedAt:        createdAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return added, nil
+}
+
+// appendMessages writes messages, parts, and context entries in one transaction.
+func (s *Store) appendMessages(ctx context.Context, convID int64, messages []Message) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := s.appendMessagesTx(ctx, tx, convID, messages); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// replaceConversationMessages atomically replaces all derived conversation state.
+func (s *Store) replaceConversationMessages(ctx context.Context, convID int64, messages []Message) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := clearConversationTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	if err := s.appendMessagesTx(ctx, tx, convID, messages); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) appendMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, messages []Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	maxOrdinal, err := s.GetMaxOrdinalTx(ctx, tx, convID)
+	if err != nil {
+		return err
+	}
+	ordinal := maxOrdinal + OrdinalStep
+	for i := range messages {
+		added, err := addMessageTx(ctx, tx, convID, messages[i])
+		if err != nil {
+			return fmt.Errorf("add message %d: %w", i, err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO context_items (
+				conversation_id, ordinal, item_type, message_id, token_count
+			) VALUES (?, ?, 'message', ?, ?)`,
+			convID,
+			ordinal,
+			added.ID,
+			added.TokenCount,
+		); err != nil {
+			return fmt.Errorf("append message context %d: %w", i, err)
+		}
+		ordinal += OrdinalStep
+	}
+	return nil
+}
+
+func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message) (*Message, error) {
+	storedCreatedAt := normalizeMessageCreatedAt(message.CreatedAt)
 	if storedCreatedAt.IsZero() {
 		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
 	}
-
-	// Derive readable content from Parts for FTS5 indexing and summary formatting
-	readableContent := partsToReadableContent(parts)
+	content := message.Content
+	if len(message.Parts) > 0 {
+		content = partsToReadableContent(message.Parts)
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
-		"INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		`INSERT INTO messages (
+			conversation_id, role, content, model_name, reasoning_content, token_count, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		convID,
-		role,
-		readableContent,
-		modelName,
-		reasoningContent,
-		tokenCount,
+		message.Role,
+		content,
+		message.ModelName,
+		message.ReasoningContent,
+		message.TokenCount,
 		formatSQLiteTime(storedCreatedAt),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("add message: %w", err)
+		return nil, fmt.Errorf("insert message: %w", err)
 	}
-	msgID, err := result.LastInsertId()
+	messageID, err := result.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("get last insert id: %w", err)
 	}
 
-	for i, p := range parts {
-		_, err = tx.ExecContext(
+	parts := make([]MessagePart, len(message.Parts))
+	for i, part := range message.Parts {
+		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO message_parts (
 				message_id, type, text, name, arguments, tool_call_id,
 				tool_result_status, media_uri, mime_type, ordinal
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			msgID,
-			p.Type,
-			p.Text,
-			p.Name,
-			p.Arguments,
-			p.ToolCallID,
-			p.ToolResultStatus,
-			p.MediaURI,
-			p.MimeType,
+			messageID,
+			part.Type,
+			part.Text,
+			part.Name,
+			part.Arguments,
+			part.ToolCallID,
+			part.ToolResultStatus,
+			part.MediaURI,
+			part.MimeType,
 			i,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, fmt.Errorf("add message part %d: %w", i, err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit: %w", err)
+		part.MessageID = messageID
+		parts[i] = part
 	}
 
-	// Return message with parts
-	msg := &Message{
-		ID:               msgID,
-		ConversationID:   convID,
-		Role:             role,
-		ModelName:        modelName,
-		ReasoningContent: reasoningContent,
-		TokenCount:       tokenCount,
-		CreatedAt:        storedCreatedAt,
-		Parts:            make([]MessagePart, len(parts)),
-	}
-	for i, p := range parts {
-		p.MessageID = msgID
-		msg.Parts[i] = p
-	}
-	return msg, nil
+	message.ID = messageID
+	message.ConversationID = convID
+	message.Content = content
+	message.CreatedAt = storedCreatedAt
+	message.Parts = parts
+	return &message, nil
 }
 
 // GetMessages retrieves messages for a conversation.
@@ -305,75 +373,6 @@ func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, 
 	msg.CreatedAt = parseSQLiteTime(createdAt)
 	msg.Parts, _ = s.loadMessageParts(ctx, msg.ID)
 	return &msg, nil
-}
-
-// UpdateMessageReasoningContent updates reasoning_content for an existing message.
-func (s *Store) UpdateMessageReasoningContent(ctx context.Context, messageID int64, reasoningContent string) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET reasoning_content = ? WHERE message_id = ?",
-		reasoningContent,
-		messageID,
-	)
-	if err != nil {
-		return fmt.Errorf("update message reasoning_content: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update message reasoning_content rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("message %d not found", messageID)
-	}
-	return nil
-}
-
-func (s *Store) UpdateMessageModelName(ctx context.Context, messageID int64, modelName string) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET model_name = ? WHERE message_id = ?",
-		modelName,
-		messageID,
-	)
-	if err != nil {
-		return fmt.Errorf("update message model_name: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update message model_name rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("message %d not found", messageID)
-	}
-	return nil
-}
-
-func (s *Store) UpdateMessageCreatedAt(ctx context.Context, messageID int64, createdAt time.Time) error {
-	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
-	if storedCreatedAt.IsZero() {
-		return fmt.Errorf("message %d created_at cannot be zero", messageID)
-	}
-
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET created_at = ? WHERE message_id = ?",
-		formatSQLiteTime(storedCreatedAt),
-		messageID,
-	)
-	if err != nil {
-		return fmt.Errorf("update message created_at: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update message created_at rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("message %d not found", messageID)
-	}
-	return nil
 }
 
 func (s *Store) loadMessageParts(ctx context.Context, msgID int64) ([]MessagePart, error) {

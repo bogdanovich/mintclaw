@@ -11,7 +11,7 @@ func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 	return &Store{db: db}
 }
@@ -410,31 +410,6 @@ func TestStoreGetMessageByID(t *testing.T) {
 	_, err = s.GetMessageByID(ctx, 99999)
 	if err == nil {
 		t.Error("expected error for nonexistent message")
-	}
-}
-
-func TestStoreUpdateMessageReasoningContent(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	conv, _ := s.GetOrCreateConversation(ctx, "agent:update-reasoning")
-
-	msg, err := s.AddMessage(ctx, conv.ConversationID, "assistant", "answer", 3)
-	if err != nil {
-		t.Fatalf("AddMessage: %v", err)
-	}
-
-	err = s.UpdateMessageReasoningContent(ctx, msg.ID, "thinking")
-	if err != nil {
-		t.Fatalf("UpdateMessageReasoningContent: %v", err)
-	}
-
-	found, err := s.GetMessageByID(ctx, msg.ID)
-	if err != nil {
-		t.Fatalf("GetMessageByID: %v", err)
-	}
-	if found.ReasoningContent != "thinking" {
-		t.Errorf("ReasoningContent = %q, want %q", found.ReasoningContent, "thinking")
 	}
 }
 
