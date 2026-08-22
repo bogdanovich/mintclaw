@@ -686,6 +686,8 @@ Implementation sequence:
 4. Delete the redundant `InjectSteering` and `InjectFollowUp` names plus the
    unsafe session-ambiguous `InterruptHard`; callers use `Steer` and
    `HardAbort(sessionKey)` directly.
+5. Delete unused exported source aliases for Seahorse ingestion and Google
+   schema sanitization; tests and callers use the canonical method names.
 
 Exit criteria:
 

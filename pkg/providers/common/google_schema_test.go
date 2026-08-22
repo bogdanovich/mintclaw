@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSanitizeSchemaForGemini_DereferencesRefsAndFlattensUnions(t *testing.T) {
+func TestSanitizeSchemaForGoogle_DereferencesRefsAndFlattensUnions(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -67,7 +67,7 @@ func TestSanitizeSchemaForGemini_DereferencesRefsAndFlattensUnions(t *testing.T)
 		},
 	}
 
-	got := SanitizeSchemaForGemini(schema)
+	got := SanitizeSchemaForGoogle(schema)
 	assertSchemaKeyAbsent(t, got, "$defs")
 	assertSchemaKeyAbsent(t, got, "$ref")
 	assertSchemaKeyAbsent(t, got, "anyOf")
@@ -143,7 +143,7 @@ func TestSanitizeSchemaForGemini_DereferencesRefsAndFlattensUnions(t *testing.T)
 	}
 }
 
-func TestSanitizeSchemaForGemini_MergesAllOfAndFiltersRequired(t *testing.T) {
+func TestSanitizeSchemaForGoogle_MergesAllOfAndFiltersRequired(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -175,7 +175,7 @@ func TestSanitizeSchemaForGemini_MergesAllOfAndFiltersRequired(t *testing.T) {
 		},
 	}
 
-	got := SanitizeSchemaForGemini(schema)
+	got := SanitizeSchemaForGoogle(schema)
 	props := got["properties"].(map[string]any)
 	payload := props["payload"].(map[string]any)
 
@@ -204,7 +204,7 @@ func TestSanitizeSchemaForGemini_MergesAllOfAndFiltersRequired(t *testing.T) {
 	assertSchemaKeyAbsent(t, payload, "minimum")
 }
 
-func TestSanitizeSchemaForGemini_HandlesRecursiveRefs(t *testing.T) {
+func TestSanitizeSchemaForGoogle_HandlesRecursiveRefs(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -227,7 +227,7 @@ func TestSanitizeSchemaForGemini_HandlesRecursiveRefs(t *testing.T) {
 		},
 	}
 
-	got := SanitizeSchemaForGemini(schema)
+	got := SanitizeSchemaForGoogle(schema)
 	props := got["properties"].(map[string]any)
 	tree := props["tree"].(map[string]any)
 	if tree["type"] != "object" {
@@ -236,7 +236,7 @@ func TestSanitizeSchemaForGemini_HandlesRecursiveRefs(t *testing.T) {
 	assertSchemaKeyAbsent(t, tree, "$ref")
 }
 
-func TestSanitizeSchemaForGemini_PreservesCommonUnionDiscriminatorValues(t *testing.T) {
+func TestSanitizeSchemaForGoogle_PreservesCommonUnionDiscriminatorValues(t *testing.T) {
 	schema := map[string]any{
 		"oneOf": []any{
 			map[string]any{
@@ -258,7 +258,7 @@ func TestSanitizeSchemaForGemini_PreservesCommonUnionDiscriminatorValues(t *test
 		},
 	}
 
-	got := SanitizeSchemaForGemini(schema)
+	got := SanitizeSchemaForGoogle(schema)
 	properties := got["properties"].(map[string]any)
 	kind := properties["kind"].(map[string]any)
 	want := []any{"navigate", "scroll"}
@@ -285,13 +285,13 @@ func TestSanitizeSchemaForGemini_PreservesCommonUnionDiscriminatorValues(t *test
 			},
 		},
 	}
-	unconstrainedKind := SanitizeSchemaForGemini(unconstrained)["properties"].(map[string]any)["kind"].(map[string]any)
+	unconstrainedKind := SanitizeSchemaForGoogle(unconstrained)["properties"].(map[string]any)["kind"].(map[string]any)
 	if _, ok := unconstrainedKind["enum"]; ok {
 		t.Fatalf("partially unconstrained kind was narrowed: %#v", unconstrainedKind)
 	}
 }
 
-func TestSanitizeSchemaForGemini_DoesNotSynthesizeNonStringUnionEnums(t *testing.T) {
+func TestSanitizeSchemaForGoogle_DoesNotSynthesizeNonStringUnionEnums(t *testing.T) {
 	tests := []struct {
 		name   string
 		typeOf string
@@ -320,7 +320,7 @@ func TestSanitizeSchemaForGemini_DoesNotSynthesizeNonStringUnionEnums(t *testing
 				},
 			}
 
-			got := SanitizeSchemaForGemini(schema)
+			got := SanitizeSchemaForGoogle(schema)
 			value := got["properties"].(map[string]any)["value"].(map[string]any)
 			if _, ok := value["enum"]; ok {
 				t.Fatalf("%s union synthesized unsupported enum: %#v", test.typeOf, value)

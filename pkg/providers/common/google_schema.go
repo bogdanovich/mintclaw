@@ -39,12 +39,6 @@ func SanitizeSchemaForGoogle(schema map[string]any) map[string]any {
 	return result
 }
 
-// SanitizeSchemaForGemini is kept as a compatibility alias for the original
-// Google/Gemini sanitizer name.
-func SanitizeSchemaForGemini(schema map[string]any) map[string]any {
-	return SanitizeSchemaForGoogle(schema)
-}
-
 type geminiSchemaSanitizer struct {
 	root map[string]any
 }
