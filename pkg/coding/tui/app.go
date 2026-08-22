@@ -83,14 +83,10 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		defer cancelClose()
 		resultErr = errors.Join(resultErr, controller.Close(closeCtx))
 	}()
-	watchCtx, cancelWatch := context.WithCancel(ctx)
-	defer cancelWatch()
+	frontendCtx, cancelFrontend := context.WithCancel(ctx)
+	defer cancelFrontend()
 
-	snapshot, err := controller.Snapshot(ctx)
-	if err != nil {
-		return fmt.Errorf("coding TUI initial snapshot: %w", err)
-	}
-	model, err := NewModelWithContext(watchCtx, controller, snapshot)
+	model, err := NewModelWithContext(frontendCtx, controller)
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}

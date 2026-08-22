@@ -71,7 +71,7 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 9 || snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
+	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
 		t.Fatalf("terminal state = %+v", snapshot)
 	}
 	if len(snapshot.Entries) != 2 || snapshot.Entries[1].Text != "done" {
@@ -144,14 +144,6 @@ func TestAdapterProjectsBoundedToolOwnedCommandObservation(t *testing.T) {
 	if len(tool.Command.Stdout) > 64 || len(tool.Command.Stderr) > 64 || len(tool.Output) > 64 ||
 		strings.Contains(tool.Output, "result available") {
 		t.Fatalf("unbounded or prose-derived command output = %+v", tool)
-	}
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 3 || deltas[0].Kind != frontend.DeltaToolStarted ||
-		deltas[1].Kind != frontend.DeltaToolOutput || deltas[2].Kind != frontend.DeltaToolCompleted {
-		t.Fatalf("command lifecycle deltas = %+v", deltas)
 	}
 }
 
@@ -263,15 +255,9 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
 		t.Fatalf("background compaction reopened completed turn: %+v", snapshot)
 	}
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaCompactionStarted ||
-		deltas[2].Kind != frontend.DeltaCompactionComplete || deltas[1].Activity != frontend.ActivityIdle ||
-		deltas[2].Activity != frontend.ActivityIdle || snapshot.LastCompaction == nil ||
+	if snapshot.LastCompaction == nil ||
 		snapshot.LastCompaction.Status != frontend.CompactionCompleted || !snapshot.LastCompaction.Background {
-		t.Fatalf("background compaction deltas = %+v", deltas)
+		t.Fatalf("background compaction view = %+v", snapshot)
 	}
 }
 
@@ -308,14 +294,6 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 		},
 	} {
 		wrapped.PublishNonBlocking(event)
-	}
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 3 || deltas[1].TurnID != "turn-1" || deltas[2].TurnID != "turn-1" ||
-		deltas[1].Kind != frontend.DeltaCompactionStarted || deltas[2].Kind != frontend.DeltaCompactionFailed {
-		t.Fatalf("compaction deltas = %+v", deltas)
 	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
@@ -401,7 +379,7 @@ func TestAdapterProjectsWorkspaceSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 1 || snapshot.Workspace == nil ||
+	if snapshot.Workspace == nil ||
 		snapshot.Workspace.ChangedPaths[0].Path != "changed.go" {
 		t.Fatalf("projected workspace = %+v", snapshot.Workspace)
 	}
@@ -432,25 +410,6 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 	publish(runtimeevents.KindAgentInterruptReceived, agent.InterruptReceivedPayload{})
 	publish(runtimeevents.KindAgentTurnEnd, agent.TurnEndPayload{Status: agent.TurnEndStatusAborted})
 
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantKinds := []frontend.DeltaKind{
-		frontend.DeltaTurnStarted,
-		frontend.DeltaToolStarted,
-		frontend.DeltaToolCompleted,
-		frontend.DeltaInterruptRequested,
-		frontend.DeltaTurnInterrupted,
-	}
-	if len(deltas) != len(wantKinds) {
-		t.Fatalf("deltas = %+v, want %d events", deltas, len(wantKinds))
-	}
-	for i, want := range wantKinds {
-		if deltas[i].Kind != want || deltas[i].Revision != frontend.Revision(i+1) {
-			t.Fatalf("delta %d = %+v, want kind %q at revision %d", i, deltas[i], want, i+1)
-		}
-	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -464,14 +423,6 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 
 func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reducer, err := frontend.NewReducer(initial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,19 +445,6 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	} {
 		wrapped.PublishNonBlocking(event)
 	}
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 2 || !deltas[1].RequiresSnapshot {
-		t.Fatalf("interruption deltas = %+v", deltas)
-	}
-	if err = reducer.Apply(deltas[0]); err != nil {
-		t.Fatal(err)
-	}
-	if err = reducer.ApplyOrResync(t.Context(), projector, deltas[1]); err != nil {
-		t.Fatal(err)
-	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -514,21 +452,10 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted {
 		t.Fatalf("interrupted tools = %+v", snapshot.Tools)
 	}
-	if got := reducer.State(); len(got.Tools) != 1 || got.Tools[0].Status != frontend.ToolInterrupted {
-		t.Fatalf("resynchronized interrupted tools = %+v", got.Tools)
-	}
 }
 
 func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reducer, err := frontend.NewReducer(initial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,20 +484,6 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 	} {
 		wrapped.PublishNonBlocking(event)
 	}
-	deltas, err := projector.ChangesSince(t.Context(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 3 || deltas[1].Kind != frontend.DeltaToolSuspended ||
-		deltas[2].Kind != frontend.DeltaTurnSuspended || deltas[2].TurnID != "turn-1" ||
-		deltas[2].EntityID != "turn-1" {
-		t.Fatalf("suspension deltas = %+v", deltas)
-	}
-	for _, delta := range deltas {
-		if err = reducer.Apply(delta); err != nil {
-			t.Fatal(err)
-		}
-	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -579,13 +492,10 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 		snapshot.Activity != frontend.ActivityWaitingInput || snapshot.Status != "waiting for input" {
 		t.Fatalf("suspended snapshot = %+v", snapshot)
 	}
-	if got := reducer.State(); !reflect.DeepEqual(got, snapshot) {
-		t.Fatalf("reduced state = %+v, want %+v", got, snapshot)
-	}
 }
 
 func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *testing.T) {
-	project := func(t *testing.T, streaming bool) (frontend.ThreadSnapshot, []frontend.Delta) {
+	project := func(t *testing.T, streaming bool) frontend.ThreadSnapshot {
 		t.Helper()
 		projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 		if err != nil {
@@ -631,29 +541,17 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		deltas, err := projector.ChangesSince(t.Context(), 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return snapshot, deltas
+		return snapshot
 	}
 
-	streamed, streamedDeltas := project(t, true)
-	nonStreamed, _ := project(t, false)
-	streamed.Revision = 0
-	nonStreamed.Revision = 0
+	streamed := project(t, true)
+	nonStreamed := project(t, false)
 	if !reflect.DeepEqual(streamed, nonStreamed) {
 		t.Fatalf("streamed state = %+v, want non-streamed %+v", streamed, nonStreamed)
 	}
-	assistantDeltas := 0
-	for _, delta := range streamedDeltas {
-		if delta.Kind == frontend.DeltaAssistant {
-			assistantDeltas++
-		}
-	}
-	if assistantDeltas != 2 || len(streamed.Entries) != 2 || streamed.Entries[1].Text != "hello" ||
+	if len(streamed.Entries) != 2 || streamed.Entries[1].Text != "hello" ||
 		!streamed.Entries[1].Complete {
-		t.Fatalf("stream finalization deltas = %+v, snapshot = %+v", streamedDeltas, streamed)
+		t.Fatalf("stream finalization view = %+v", streamed)
 	}
 }
 
@@ -761,8 +659,8 @@ func TestWrappedBusProjectionRemainsLosslessWhenOrdinarySubscriberDrops(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 20 || len(snapshot.Entries) != 20 {
-		t.Fatalf("lossless projection = revision %d entries %d", snapshot.Revision, len(snapshot.Entries))
+	if len(snapshot.Entries) != 20 {
+		t.Fatalf("lossless projection entries = %d", len(snapshot.Entries))
 	}
 	if dropped := eventBus.Stats().Dropped; dropped == 0 {
 		t.Fatal("test did not force ordinary event subscriber loss")

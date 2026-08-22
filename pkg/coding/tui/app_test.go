@@ -23,7 +23,7 @@ func (p fakeProgram) Run() (tea.Model, error) {
 }
 
 func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T) {
-	controller, snapshot := newController(t)
+	controller := newController(t)
 	controller.AssistantAccumulated("turn-1", strings.Repeat("x", finalAnswerBytes+100), true)
 	output := &bytes.Buffer{}
 
@@ -45,13 +45,13 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	if controller.submits.Load() != 1 || controller.closes.Load() != 1 {
 		t.Fatalf("submits=%d closes=%d", controller.submits.Load(), controller.closes.Load())
 	}
-	if !strings.Contains(output.String(), snapshot.ThreadID) || len(output.String()) > finalAnswerBytes+200 {
+	if !strings.Contains(output.String(), "thread-1") || len(output.String()) > finalAnswerBytes+200 {
 		t.Fatalf("final summary is missing or unbounded: bytes=%d", output.Len())
 	}
 }
 
 func TestRunClosesControllerAfterProgramFailure(t *testing.T) {
-	controller, _ := newController(t)
+	controller := newController(t)
 	injected := errors.New("induced terminal program failure")
 
 	err := Run(t.Context(), controller, Options{

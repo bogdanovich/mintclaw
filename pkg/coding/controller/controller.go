@@ -64,8 +64,8 @@ type operationResult struct {
 	err  error
 }
 
-// Controller is a transport-neutral frontend controller. Exactly one actor
-// owns admission state, even when Snapshot and Watch have multiple readers.
+// Controller serializes coding commands while exposing the current in-process
+// presentation view. Exactly one actor owns admission state.
 type Controller struct {
 	projector *frontend.Projector
 	runtime   Runtime
@@ -100,12 +100,10 @@ func (c *Controller) Snapshot(ctx context.Context) (frontend.ThreadSnapshot, err
 	return c.projector.Snapshot(ctx)
 }
 
-func (c *Controller) ChangesSince(ctx context.Context, revision frontend.Revision) ([]frontend.Delta, error) {
-	return c.projector.ChangesSince(ctx, revision)
-}
-
-func (c *Controller) Watch(ctx context.Context, revision frontend.Revision) (<-chan frontend.Delta, error) {
-	return c.projector.Watch(ctx, revision)
+func (c *Controller) Subscribe(
+	ctx context.Context,
+) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
+	return c.projector.Subscribe(ctx)
 }
 
 // TranscriptPage delegates optional bounded history hydration to the runtime.

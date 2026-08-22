@@ -13,7 +13,7 @@ import (
 )
 
 func (m *Model) statusLine() string {
-	state := m.reducer.State()
+	state := m.snapshot
 	activity := "activity " + activityStatus(state)
 	segments := make([]string, 0, 7)
 	switch {

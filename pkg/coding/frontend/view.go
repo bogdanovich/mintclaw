@@ -1,6 +1,6 @@
-// Package frontend defines the transport-neutral projection consumed by coding
-// frontends. It is deliberately separate from both the agent runtime and any
-// terminal framework.
+// Package frontend defines the bounded in-process presentation state consumed
+// by coding frontends. It is deliberately separate from both the agent runtime
+// and any terminal framework.
 package frontend
 
 import (
@@ -11,18 +11,11 @@ import (
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
-const ProtocolVersion = "mintclaw.coding.frontend.v1"
-
 var (
-	ErrRevisionGap                 = errors.New("coding frontend revision gap")
-	ErrRevisionUnavailable         = errors.New("coding frontend revision is no longer available")
-	ErrThreadMismatch              = errors.New("coding frontend thread mismatch")
 	ErrTranscriptPagingUnsupported = errors.New("coding transcript paging is unsupported")
 	ErrTranscriptHistoryChanged    = errors.New("coding transcript history changed after opening")
 	ErrWorkspaceRefreshUnsupported = errors.New("coding workspace refresh is unsupported")
 )
-
-type Revision uint64
 
 type Activity string
 
@@ -44,8 +37,8 @@ const (
 	TurnOutcomeInterrupted TurnOutcome = "interrupted"
 )
 
-// LastTurnOutcome is the bounded typed terminal state retained across delta
-// expiry and authoritative snapshot recovery.
+// LastTurnOutcome is the bounded typed terminal state retained in the current
+// presentation view.
 type LastTurnOutcome struct {
 	TurnID  string      `json:"turn_id"`
 	Outcome TurnOutcome `json:"outcome"`
@@ -172,12 +165,11 @@ type CompactionState struct {
 	Background  bool             `json:"background,omitempty"`
 }
 
-// ThreadSnapshot is the authoritative, bounded frontend projection. It is not
-// the canonical coding transcript and may omit old entries and large output.
+// ThreadSnapshot is the authoritative, bounded in-process presentation view.
+// It is not the canonical coding transcript and may omit old entries and large
+// output.
 type ThreadSnapshot struct {
-	ProtocolVersion string                    `json:"protocol_version"`
 	ThreadID        string                    `json:"thread_id"`
-	Revision        Revision                  `json:"revision"`
 	Metadata        ThreadMetadata            `json:"metadata,omitempty"`
 	Activity        Activity                  `json:"activity"`
 	LastTurn        *LastTurnOutcome          `json:"last_turn,omitempty"`
@@ -191,64 +183,13 @@ type ThreadSnapshot struct {
 	HasOlderEntries bool                      `json:"has_older_entries,omitempty"`
 }
 
-type DeltaKind string
-
-const (
-	DeltaThreadOpened       DeltaKind = "thread_opened"
-	DeltaThreadResumed      DeltaKind = "thread_resumed"
-	DeltaThreadMetadata     DeltaKind = "thread_metadata_updated"
-	DeltaTurnStarted        DeltaKind = "turn_started"
-	DeltaAssistant          DeltaKind = "assistant_delta"
-	DeltaReasoning          DeltaKind = "reasoning_delta"
-	DeltaStreamDiscarded    DeltaKind = "stream_discarded"
-	DeltaNotice             DeltaKind = "notice_updated"
-	DeltaToolStarted        DeltaKind = "tool_started"
-	DeltaToolOutput         DeltaKind = "tool_output"
-	DeltaToolSuspended      DeltaKind = "tool_suspended"
-	DeltaToolCompleted      DeltaKind = "tool_completed"
-	DeltaFilesChanged       DeltaKind = "files_changed"
-	DeltaContextUsage       DeltaKind = "context_usage_updated"
-	DeltaWorkspaceUpdated   DeltaKind = "workspace_updated"
-	DeltaCompactionStarted  DeltaKind = "compaction_started"
-	DeltaCompactionComplete DeltaKind = "compaction_completed"
-	DeltaCompactionFailed   DeltaKind = "compaction_failed"
-	DeltaTurnCompleted      DeltaKind = "turn_completed"
-	DeltaTurnSuspended      DeltaKind = "turn_suspended"
-	DeltaTurnFailed         DeltaKind = "turn_failed"
-	DeltaInterruptRequested DeltaKind = "interrupt_requested"
-	DeltaTurnInterrupted    DeltaKind = "turn_interrupted"
-)
-
-// Delta contains a complete bounded replacement for the entity it changes.
-// PreviousRevision makes missing or reordered progress detectable.
-type Delta struct {
-	ProtocolVersion  string                    `json:"protocol_version"`
-	ThreadID         string                    `json:"thread_id"`
-	PreviousRevision Revision                  `json:"previous_revision"`
-	Revision         Revision                  `json:"revision"`
-	Kind             DeltaKind                 `json:"kind"`
-	TurnID           string                    `json:"turn_id,omitempty"`
-	EntityID         string                    `json:"entity_id,omitempty"`
-	Metadata         *ThreadMetadata           `json:"metadata,omitempty"`
-	LastTurn         *LastTurnOutcome          `json:"last_turn,omitempty"`
-	Entry            *TranscriptEntry          `json:"entry,omitempty"`
-	Tool             *ToolState                `json:"tool,omitempty"`
-	ChangedFiles     []ChangedFile             `json:"changed_files,omitempty"`
-	ContextUsage     *ContextUsage             `json:"context_usage,omitempty"`
-	Compaction       *CompactionState          `json:"compaction,omitempty"`
-	Workspace        *codingworkspace.Snapshot `json:"workspace,omitempty"`
-	Activity         Activity                  `json:"activity,omitempty"`
-	Status           string                    `json:"status,omitempty"`
-	RequiresSnapshot bool                      `json:"requires_snapshot,omitempty"`
-}
-
-// SnapshotSource is the read side of the frontend controller boundary.
-// ChangesSince returns ErrRevisionUnavailable when its bounded delta window no
-// longer covers the requested revision; callers must then request Snapshot.
-type SnapshotSource interface {
+// ViewSource is the in-process read side of the frontend controller boundary.
+// Subscribe atomically returns the current view and a bounded stream of later
+// views. A slow subscriber receives the newest view instead of replaying every
+// intermediate mutation.
+type ViewSource interface {
 	Snapshot(context.Context) (ThreadSnapshot, error)
-	ChangesSince(context.Context, Revision) ([]Delta, error)
-	Watch(context.Context, Revision) (<-chan Delta, error)
+	Subscribe(context.Context) (ThreadSnapshot, <-chan ThreadSnapshot, error)
 }
 
 // CommandSink is the write side of the frontend controller boundary. Runtime
@@ -265,7 +206,7 @@ type CommandSink interface {
 }
 
 type Controller interface {
-	SnapshotSource
+	ViewSource
 	CommandSink
 }
 
@@ -276,8 +217,8 @@ type TranscriptPageRequest struct {
 	Limit  int
 }
 
-// TranscriptPage is optional historical state. Live ThreadSnapshot and Delta
-// values remain authoritative for activity after the controller opens.
+// TranscriptPage is optional historical state. The live ThreadSnapshot remains
+// authoritative for activity after the controller opens.
 type TranscriptPage struct {
 	Entries  []TranscriptEntry
 	Start    int
