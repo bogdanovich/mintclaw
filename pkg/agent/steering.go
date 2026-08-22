@@ -536,17 +536,11 @@ func (al *AgentLoop) continueWithSteeringMessages(
 			SenderID: strings.TrimSpace(senderID),
 		}
 	}
-	return al.runAgentLoop(ctx, agent, turnSpec{
-		ModelBinding:             modelBinding,
-		Dispatch:                 dispatch,
-		DefaultResponse:          defaultResponse,
-		EnableSummary:            true,
-		SendResponse:             false,
-		ExpectFinalDelivery:      observation != nil,
-		FinalDeliveryObservation: observation,
-		InitialSteeringMessages:  steeringMsgs,
-		SkipInitialSteeringPoll:  true,
-	})
+	opts := newTurnSpec(turnModeSteering, dispatch, modelBinding)
+	opts.ExpectFinalDelivery = observation != nil
+	opts.FinalDeliveryObservation = observation
+	opts.InitialSteeringMessages = steeringMsgs
+	return al.runAgentLoop(ctx, agent, opts)
 }
 
 func (al *AgentLoop) agentForRuntimeScope(

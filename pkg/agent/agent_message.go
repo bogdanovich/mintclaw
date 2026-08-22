@@ -108,35 +108,30 @@ func (al *AgentLoop) processCodingDirect(
 		Model:            resolvedCandidateModelName(execution.Candidates, execution.Model),
 		Provider:         resolvedCandidateProvider(execution.Candidates, providerFallback),
 	}
+	dispatch := DispatchRequest{
+		RouteSessionKey: wantSessionKey,
+		BaseSessionKey:  wantSessionKey,
+		SessionKey:      wantSessionKey,
+		InboundContext:  inboundContext,
+		RouteResult:     route,
+		UserMessage:     content,
+	}
+	opts := newTurnSpec(turnModeCoding, dispatch, modelBinding)
+	opts.CodingContext = codingContext
+	opts.EnableSummary = !directOpts.Stateless
+	opts.SuppressBackgroundCompaction = directOpts.SuppressBackgroundCompaction
+	opts.AllowInterimMintClawPublish = directOpts.EnableStreaming
+	opts.DirectStreaming = directOpts.EnableStreaming
+	opts.OnTurnReady = directOpts.OnTurnReady
+	opts.NoHistory = directOpts.Stateless
 	turn := inboundMessageTurn{
 		Message: bus.InboundMessage{
 			Context:    *inboundContext,
 			Content:    content,
 			SessionKey: wantSessionKey,
 		},
-		Agent: agent,
-		Options: turnSpec{
-			Dispatch: DispatchRequest{
-				RouteSessionKey: wantSessionKey,
-				BaseSessionKey:  wantSessionKey,
-				SessionKey:      wantSessionKey,
-				InboundContext:  inboundContext,
-				RouteResult:     route,
-				UserMessage:     content,
-			},
-			ModelBinding:                 modelBinding,
-			CodingContext:                codingContext,
-			DefaultResponse:              defaultResponse,
-			EnableSummary:                !directOpts.Stateless,
-			SuppressBackgroundCompaction: directOpts.SuppressBackgroundCompaction,
-			TreatInputAsPrompt:           true,
-			SendResponse:                 false,
-			AllowInterimMintClawPublish:  directOpts.EnableStreaming,
-			DirectStreaming:              directOpts.EnableStreaming,
-			OnTurnReady:                  directOpts.OnTurnReady,
-			ExpectFinalDelivery:          true,
-			NoHistory:                    directOpts.Stateless,
-		},
+		Agent:        agent,
+		Options:      opts,
 		ScopeKey:     wantSessionKey,
 		SessionKey:   wantSessionKey,
 		ModelBinding: modelBinding,
@@ -238,26 +233,19 @@ func (al *AgentLoop) processScheduledMessage(
 		}
 	}
 
-	response, err := al.runAgentLoop(ctx, agent, turnSpec{
-		Dispatch: DispatchRequest{
-			RouteSessionKey: allocation.RouteScopeKey,
-			BaseSessionKey:  allocation.SessionKey,
-			SessionKey:      sessionKey,
-			InboundContext:  cloneInboundContext(&msg.Context),
-			RouteResult:     cloneResolvedRoute(&route),
-			SessionScope:    session.CloneScope(&allocation.Scope),
-			UserMessage:     msg.Content,
-			Media:           append([]string(nil), msg.Media...),
-		},
-		ModelBinding:              modelBinding,
-		ExcludeInheritedNodeFiles: true,
-		SenderDisplayName:         msg.Sender.DisplayName,
-		DefaultResponse:           defaultResponse,
-		EnableSummary:             false,
-		SendResponse:              false,
-		SuppressToolFeedback:      true,
-		NoHistory:                 true,
-	})
+	dispatch := DispatchRequest{
+		RouteSessionKey: allocation.RouteScopeKey,
+		BaseSessionKey:  allocation.SessionKey,
+		SessionKey:      sessionKey,
+		InboundContext:  cloneInboundContext(&msg.Context),
+		RouteResult:     cloneResolvedRoute(&route),
+		SessionScope:    session.CloneScope(&allocation.Scope),
+		UserMessage:     msg.Content,
+		Media:           append([]string(nil), msg.Media...),
+	}
+	opts := newTurnSpec(turnModeScheduled, dispatch, modelBinding)
+	opts.SenderDisplayName = msg.Sender.DisplayName
+	response, err := al.runAgentLoop(ctx, agent, opts)
 	return response, agent.ID, err
 }
 
@@ -289,15 +277,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 			SenderID: "heartbeat",
 		}
 	}
-	return al.runAgentLoop(ctx, agent, turnSpec{
-		Dispatch:                  dispatch,
-		ExcludeInheritedNodeFiles: true,
-		DefaultResponse:           defaultResponse,
-		EnableSummary:             false,
-		SendResponse:              false,
-		SuppressToolFeedback:      true,
-		NoHistory:                 true, // Don't load session history for heartbeat
-	})
+	return al.runAgentLoop(ctx, agent, newTurnSpec(turnModeHeartbeat, dispatch, effectiveModelBinding{}))
 }
 
 func (al *AgentLoop) prepareInboundMessageForAgent(
@@ -593,12 +573,7 @@ func (al *AgentLoop) processSystemMessage(
 		dispatch.InboundContext = &origin
 	}
 
-	return al.runAgentLoop(ctx, agent, turnSpec{
-		Dispatch:        dispatch,
-		DefaultResponse: "Background task completed.",
-		EnableSummary:   false,
-		SendResponse:    false,
-	})
+	return al.runAgentLoop(ctx, agent, newTurnSpec(turnModeSystem, dispatch, effectiveModelBinding{}))
 }
 
 func systemMessageOrigin(msg bus.InboundMessage) bus.InboundContext {
@@ -707,12 +682,7 @@ func (al *AgentLoop) processAsyncCompletionWithDelivery(
 	runCtx, cancel := context.WithTimeout(ctx, asyncCompletionSynthesisTimeout)
 	defer cancel()
 
-	return al.runAgentLoop(runCtx, agent, turnSpec{
-		Dispatch:             dispatch,
-		DefaultResponse:      "",
-		EnableSummary:        false,
-		SendResponse:         sendResponse,
-		SuppressToolFeedback: true,
-		NoHistory:            true,
-	})
+	opts := newTurnSpec(turnModeAsyncCompletion, dispatch, effectiveModelBinding{})
+	opts.SendResponse = sendResponse
+	return al.runAgentLoop(runCtx, agent, opts)
 }

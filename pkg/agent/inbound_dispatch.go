@@ -103,25 +103,18 @@ func (al *AgentLoop) buildInboundMessageTurnForTarget(
 	sessionKey := target.SessionKey
 	modelBinding := al.bindEffectiveModel(allocation.RouteScopeKey, target.Agent)
 
-	opts := turnSpec{
-		Dispatch: DispatchRequest{
-			RouteSessionKey: allocation.RouteScopeKey,
-			BaseSessionKey:  allocation.SessionKey,
-			SessionKey:      sessionKey,
-			InboundContext:  cloneInboundContext(&msg.Context),
-			RouteResult:     cloneResolvedRoute(&target.Route),
-			SessionScope:    session.CloneScope(&allocation.Scope),
-			UserMessage:     msg.Content,
-			Media:           append([]string(nil), msg.Media...),
-		},
-		ModelBinding:                modelBinding,
-		SenderDisplayName:           msg.Sender.DisplayName,
-		DefaultResponse:             defaultResponse,
-		EnableSummary:               true,
-		SendResponse:                false,
-		ExpectFinalDelivery:         true,
-		AllowInterimMintClawPublish: true,
+	dispatch := DispatchRequest{
+		RouteSessionKey: allocation.RouteScopeKey,
+		BaseSessionKey:  allocation.SessionKey,
+		SessionKey:      sessionKey,
+		InboundContext:  cloneInboundContext(&msg.Context),
+		RouteResult:     cloneResolvedRoute(&target.Route),
+		SessionScope:    session.CloneScope(&allocation.Scope),
+		UserMessage:     msg.Content,
+		Media:           append([]string(nil), msg.Media...),
 	}
+	opts := newTurnSpec(turnModeInbound, dispatch, modelBinding)
+	opts.SenderDisplayName = msg.Sender.DisplayName
 
 	return inboundMessageTurn{
 		Message:      msg,
