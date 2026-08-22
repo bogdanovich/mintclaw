@@ -1643,33 +1643,26 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		deliveryObservation = &finalDeliveryObservation{}
 	}
 	var resumedTurn turnResult
-	continuationOpts := turnSpec{
-		ModelBinding:               modelBinding,
-		TaskID:                     record.Origin.TaskID,
-		InteractionWorkspace:       interactionWorkspace,
-		InteractionSessionKey:      record.Route.SessionKey,
-		InteractionRouteKey:        routeSessionKey,
-		InteractionOriginExecution: record.Origin.ExecutionID,
-		InteractionOriginContext:   cloneInboundContext(record.Origin.ExecutionContext),
-		ObjectiveChecklist:         runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
-		TurnStatus:                 &turnStatus,
-		TurnResult:                 &resumedTurn,
-		Dispatch: DispatchRequest{
-			RouteSessionKey: routeSessionKey,
-			BaseSessionKey:  continuationSessionKey,
-			SessionKey:      continuationSessionKey,
-			InboundContext:  cloneInboundContext(&inbound),
-			SessionScope:    session.CloneScope(continuationScope),
-		},
-		DefaultResponse:             defaultResponse,
-		EnableSummary:               true,
-		SendResponse:                false,
-		ExpectFinalDelivery:         expectFinalDelivery,
-		FinalDeliveryObservation:    deliveryObservation,
-		AllowInterimMintClawPublish: true,
-		InitialSteeringMessages:     supersedingSteering,
-		SkipInitialSteeringPoll:     true,
+	dispatch := DispatchRequest{
+		RouteSessionKey: routeSessionKey,
+		BaseSessionKey:  continuationSessionKey,
+		SessionKey:      continuationSessionKey,
+		InboundContext:  cloneInboundContext(&inbound),
+		SessionScope:    session.CloneScope(continuationScope),
 	}
+	continuationOpts := newTurnSpec(turnModeInteractionContinuation, dispatch, modelBinding)
+	continuationOpts.TaskID = record.Origin.TaskID
+	continuationOpts.InteractionWorkspace = interactionWorkspace
+	continuationOpts.InteractionSessionKey = record.Route.SessionKey
+	continuationOpts.InteractionRouteKey = routeSessionKey
+	continuationOpts.InteractionOriginExecution = record.Origin.ExecutionID
+	continuationOpts.InteractionOriginContext = cloneInboundContext(record.Origin.ExecutionContext)
+	continuationOpts.ObjectiveChecklist = runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist)
+	continuationOpts.TurnStatus = &turnStatus
+	continuationOpts.TurnResult = &resumedTurn
+	continuationOpts.ExpectFinalDelivery = deliveryObservation != nil
+	continuationOpts.FinalDeliveryObservation = deliveryObservation
+	continuationOpts.InitialSteeringMessages = supersedingSteering
 	continuationExecutor.configure(&continuationOpts)
 	finalContent, runErr := al.runAgentLoopWithExecution(
 		ctx, agent, continuationOpts, continuationExecutor.execute,

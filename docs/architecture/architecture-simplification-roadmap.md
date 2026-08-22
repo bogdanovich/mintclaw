@@ -544,9 +544,13 @@ Implementation sequence:
    make `DispatchRequest` the only owner of routing, session, inbound-message,
    and media facts. Rename the normalized runtime shape to `turnSpec` so it is
    not mistaken for an entrypoint API.
-2. Give each admitted entrypoint its own request type and normalize those
-   requests into `turnSpec`, then split or group the remaining execution modes
-   until invalid boolean combinations cannot be constructed.
+2. Make each admitted entrypoint select one explicit `turnMode` and construct
+   its `turnSpec` from the mode's canonical behavior. An architecture checkpoint
+   rejected separate request wrappers because they added more production
+   scaffolding than they removed.
+3. Delete remaining behavior fields when the mode constructor makes them
+   redundant; retain fields only when their value genuinely varies within one
+   mode, without storing speculative mode state on each turn.
 
 ### C1 — Collapse the in-process coding frontend protocol
 

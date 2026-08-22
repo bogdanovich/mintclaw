@@ -119,22 +119,16 @@ func (al *AgentLoop) recoverUnansweredSession(
 	modelBinding := al.bindEffectiveModel(routeScopeKey, agent)
 	defer modelBinding.Cleanup()
 
-	_, err := al.runAgentLoop(ctx, agent, turnSpec{
-		ModelBinding: modelBinding,
-		Dispatch: DispatchRequest{
-			RouteSessionKey: routeScopeKey,
-			BaseSessionKey:  sessionKey,
-			SessionKey:      sessionKey,
-			InboundContext:  &inbound,
-			SessionScope:    session.CloneScope(scope),
-			// Leave UserMessage empty. The unanswered user message is already
-			// durable session history; adding it again would duplicate history.
-		},
-		DefaultResponse:             defaultResponse,
-		EnableSummary:               true,
-		SendResponse:                true,
-		AllowInterimMintClawPublish: true,
-	})
+	dispatch := DispatchRequest{
+		RouteSessionKey: routeScopeKey,
+		BaseSessionKey:  sessionKey,
+		SessionKey:      sessionKey,
+		InboundContext:  &inbound,
+		SessionScope:    session.CloneScope(scope),
+		// Leave UserMessage empty. The unanswered user message is already
+		// durable session history; adding it again would duplicate history.
+	}
+	_, err := al.runAgentLoop(ctx, agent, newTurnSpec(turnModeRecovery, dispatch, modelBinding))
 	return err
 }
 

@@ -671,28 +671,22 @@ func spawnSubTurn(
 		}
 		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
-	opts := turnSpec{
-		TaskID:                  strings.TrimSpace(cfg.TaskID),
-		ObjectiveChecklist:      objectiveChecklist,
-		InteractionWorkspace:    parentTS.workspace,
-		InteractionSessionKey:   parentTS.sessionKey,
-		InteractionRouteKey:     parentTS.opts.Dispatch.RouteSessionKey,
-		ModelBinding:            modelBinding,
-		Dispatch:                dispatch,
-		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		TurnProfile:             parentTS.profile,
-		SystemPromptOverride:    cfg.ActualSystemPrompt,
-		InitialSteeringMessages: cfg.InitialMessages,
-		DefaultResponse:         "",
-		EnableSummary:           false,
-		SendResponse: !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
-			(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent),
-		SuppressToolUserDelivery: requireObjectiveOutcome ||
-			(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly),
-		SuppressToolFeedback:    parentTS.opts.SuppressToolFeedback,
-		NoHistory:               !durableTask,
-		SkipInitialSteeringPoll: true,
-	}
+	opts := newTurnSpec(turnModeChild, dispatch, modelBinding)
+	opts.TaskID = strings.TrimSpace(cfg.TaskID)
+	opts.ObjectiveChecklist = objectiveChecklist
+	opts.InteractionWorkspace = parentTS.workspace
+	opts.InteractionSessionKey = parentTS.sessionKey
+	opts.InteractionRouteKey = parentTS.opts.Dispatch.RouteSessionKey
+	opts.SenderDisplayName = parentTS.opts.SenderDisplayName
+	opts.TurnProfile = parentTS.profile
+	opts.SystemPromptOverride = cfg.ActualSystemPrompt
+	opts.InitialSteeringMessages = cfg.InitialMessages
+	opts.SendResponse = !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
+		(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent)
+	opts.SuppressToolUserDelivery = requireObjectiveOutcome ||
+		(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly)
+	opts.SuppressToolFeedback = parentTS.opts.SuppressToolFeedback
+	opts.NoHistory = !durableTask
 	if !opts.TurnProfile.Enabled {
 		opts.TurnProfile = parentTS.opts.TurnProfile
 	}
