@@ -15,7 +15,6 @@ import (
 
 // SetupTurn extracts the one-time initialization phase, returning a
 // turnExecution populated with history, messages, and candidate selection.
-// It replaces lines 56-145 of the original runTurn.
 func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution, error) {
 	maxMediaSize := p.maxMediaSize()
 

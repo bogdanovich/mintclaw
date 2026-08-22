@@ -1349,7 +1349,7 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("rewrite-session"), turnEventScope{
 		turnID:  "turn-rewrite-provider",
 		context: newTurnContext(nil, nil, nil),
@@ -1585,7 +1585,7 @@ func TestPipeline_CallLLM_BeforeLLMRewriteDoesNotMutateStickyAutoFallbackSelecti
 		t.Fatalf("setAutoModelSelection failed: %v", err)
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(
 		agent,
 		normalizeProcessOptions(makeTestProcessOpts("rewrite-session")),
@@ -2769,7 +2769,7 @@ func TestProcessMessage_HandledMediaDismissesToolFeedbackWithoutFinalText(t *tes
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	channelManager := &recordingChannelManager{}
-	al.channelManager = channelManager
+	al.SetChannelManager(channelManager)
 
 	imagePath := filepath.Join(tmpDir, "screen.png")
 	if err := os.WriteFile(imagePath, []byte("fake screenshot"), 0o644); err != nil {
@@ -8085,9 +8085,9 @@ func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	al.contextManager = &staticContextManager{response: &AssembleResponse{
+	setTestContextManager(al, &staticContextManager{response: &AssembleResponse{
 		History: []providers.Message{assembled},
-	}}
+	}})
 
 	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{
@@ -10609,10 +10609,10 @@ func TestProcessMessage_ContextOverflowRecoveryPreservesMediaBoundary(t *testing
 		Content:    "[image]",
 		Media:      []string{currentRef},
 	})
-	al.contextManager = &staticContextManager{response: &AssembleResponse{History: []providers.Message{
+	setTestContextManager(al, &staticContextManager{response: &AssembleResponse{History: []providers.Message{
 		{Role: "user", Content: "[image]", Media: []string{historicalRef}},
 		{Role: "assistant", Content: "historical answer"},
-	}}}
+	}}})
 
 	response, err := al.processMessage(t.Context(), message)
 	if err != nil {

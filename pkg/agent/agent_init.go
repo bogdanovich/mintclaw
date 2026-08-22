@@ -128,6 +128,7 @@ func newAgentLoopWithRegistry(
 			}
 		}
 	}
+	al.turnRunner = newTurnRunner(al, cfg)
 
 	return al
 }

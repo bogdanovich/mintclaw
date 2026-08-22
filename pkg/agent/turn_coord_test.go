@@ -532,7 +532,7 @@ func TestPipeline_SetupTurn_BasicInitialization(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -594,7 +594,7 @@ func TestPipeline_SetupTurn_DoesNotAttachHistoricalImages(t *testing.T) {
 		context: newTurnContext(nil, nil, nil),
 	})
 
-	exec, err := NewPipeline(al).SetupTurn(t.Context(), ts)
+	exec, err := newTestPipeline(al).SetupTurn(t.Context(), ts)
 	if err != nil {
 		t.Fatalf("SetupTurn() error = %v", err)
 	}
@@ -627,7 +627,7 @@ func TestPipeline_SetupTurn_PropagatesContextAssemblyFailure(t *testing.T) {
 	al.contextManager = &blockingCompactContextManager{
 		assembleErr: errors.New("mandatory recent context exceeds budget"),
 	}
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("assembly-failure"), turnEventScope{
 		turnID:  "turn-assembly-failure",
 		context: newTurnContext(nil, nil, nil),
@@ -661,7 +661,7 @@ func TestPipeline_SetupTurn_ProactiveCompactionDoesNotBlockResponsePath(t *testi
 	al.contextManager = cm
 	defer close(cm.releaseCompact)
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := normalizeProcessOptions(makeTestProcessOpts("test-session-pressure"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-pressure",
@@ -726,7 +726,7 @@ func TestPipeline_SetupTurn_SchedulesAbsoluteBudgetCompaction(t *testing.T) {
 	)
 	defer closeEvents()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, normalizeProcessOptions(makeTestProcessOpts("absolute-pressure")), turnEventScope{
 		turnID:  "turn-absolute-pressure",
 		context: newTurnContext(nil, nil, nil),
@@ -774,7 +774,7 @@ func TestPipelineSetupTurnSuppressesBackgroundCompactionForShortLivedCaller(t *t
 		turnID:  "turn-short-lived-pressure",
 		context: newTurnContext(nil, nil, nil),
 	})
-	if _, err := NewPipeline(al).SetupTurn(t.Context(), ts); err != nil {
+	if _, err := newTestPipeline(al).SetupTurn(t.Context(), ts); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -820,7 +820,7 @@ func TestPipeline_SetupTurn_ReportsDegradedTailWithoutCompaction(t *testing.T) {
 	)
 	defer closeEvents()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, normalizeProcessOptions(makeTestProcessOpts("degraded-tail")), turnEventScope{
 		turnID:  "turn-degraded-tail",
 		context: newTurnContext(nil, nil, nil),
@@ -852,7 +852,7 @@ func TestPipeline_CallLLM_SimpleResponse(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -892,7 +892,7 @@ func TestPipeline_SetupTurn_ModelNameDoesNotUseFallbackAliasBeforeFallback(t *te
 		{Provider: "anthropic", Model: "claude-sonnet", IdentityKey: "model_name:fallback-model"},
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -928,7 +928,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	}
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -978,7 +978,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackDisplayNameWithoutAlias(t *testi
 	}
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -1029,7 +1029,7 @@ func TestPipeline_SetupTurn_UsesLightCandidateDisplayName(t *testing.T) {
 	}
 	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-model", Threshold: 1})
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session")
 	opts.UserMessage = ""
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -1189,7 +1189,7 @@ func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -1228,7 +1228,7 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 	al.cfg.Tools.Web.Enabled = true
 	al.cfg.Tools.Web.PreferNative = true
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -1256,7 +1256,7 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, errorPrv)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -1334,7 +1334,7 @@ func TestPipeline_CallLLM_HTTP5xxRetry(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
@@ -1369,7 +1369,7 @@ func TestPipeline_CallLLM_NetworkErrorRetry(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, errorPrv)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
@@ -1440,7 +1440,7 @@ func TestPipeline_CallLLM_RetryConfigRespected(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
@@ -1471,7 +1471,7 @@ func TestPipeline_CallLLM_RetrySleepCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, errorPrv)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := &recordingRetrySleeper{}
 	pipeline.Config.RetrySleeper = sleeper
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
@@ -1504,7 +1504,7 @@ func TestPipeline_CallLLM_StickyAutoFallbackAcrossTurns(t *testing.T) {
 	al, agent, cleanup := newTurnCoordFallbackTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 
 	firstTS := newTurnState(
 		agent,
@@ -1590,7 +1590,7 @@ func TestPipeline_SetupTurn_ClearsStaleAutoFallbackSelectionOnModelMismatch(t *t
 		t.Fatalf("setAutoModelSelection failed: %v", err)
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(
 		agent,
 		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
@@ -1617,7 +1617,7 @@ func TestPipeline_CallLLM_LightTurnPreservesPrimaryStickySelection(t *testing.T)
 	al, agent, cleanup := newTurnCoordFallbackTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 
 	firstTS := newTurnState(
 		agent,
@@ -1736,7 +1736,7 @@ func TestPipeline_CallLLM_RetryCountLimit(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
@@ -1796,7 +1796,7 @@ func TestPipeline_ExecuteTools_NoTools(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -1828,7 +1828,7 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session-simple")
 
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -1836,7 +1836,7 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 		context: newTurnContext(nil, nil, nil),
 	})
 
-	result, err := al.runTurn(context.Background(), ts, pipeline)
+	result, err := runTestTurn(al, context.Background(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
@@ -1854,12 +1854,12 @@ func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
 	defer cleanup()
 	cleanupTool := &turnCleanupTestTool{countingTestTool: &countingTestTool{name: "turn-cleanup"}}
 	agent.Tools.Register(cleanupTool)
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := normalizeProcessOptions(makeTestProcessOpts("terminal-cleanup"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID: "turn-terminal-cleanup", context: newTurnContext(nil, nil, nil),
 	})
-	result, err := al.runTurn(t.Context(), ts, pipeline)
+	result, err := runTestTurn(al, t.Context(), ts, pipeline)
 	if err != nil || result.status != TurnEndStatusCompleted {
 		t.Fatalf("runTurn() = %#v, %v", result, err)
 	}
@@ -1880,7 +1880,7 @@ func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	agent.Tools.Register(tool)
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	pipeline.Interaction.Hooks = afterToolHardAbortHook{}
 	opts := normalizeProcessOptions(makeTestProcessOpts("post-tool-hard-abort"))
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -1888,7 +1888,7 @@ func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {
 		context: newTurnContext(nil, nil, nil),
 	})
 
-	result, err := al.runTurn(t.Context(), ts, pipeline)
+	result, err := runTestTurn(al, t.Context(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn() error = %v", err)
 	}
@@ -1952,7 +1952,7 @@ func TestHardAbortRestoresCanonicalHistoryWhenPromptAssemblyIsEmpty(t *testing.T
 		turnID:  "turn-empty-assembly-abort",
 		context: newTurnContext(nil, nil, nil),
 	})
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	pipeline.Context.Runtime = &noneContextManager{}
 	if _, err := pipeline.SetupTurn(t.Context(), ts); err != nil {
 		t.Fatal(err)
@@ -1992,7 +1992,7 @@ func TestCallLLMMintClawToolInterimRequiresDurableIntent(t *testing.T) {
 				}
 			}
 			recorder := &recordingReasoningPublisher{}
-			pipeline := NewPipeline(al)
+			pipeline := newTestPipeline(al)
 			pipeline.Interaction.Reasoning = recorder
 			opts := normalizeProcessOptions(makeTestProcessOpts("mintclaw-interim-" + tc.name))
 			opts.NoHistory = tc.noHistory
@@ -2045,7 +2045,7 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 	manager := &fakeToolSuspensionManager{
 		disposition: ToolSuspensionDisposition{InteractionID: "interaction-turn", Durable: true},
 	}
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	pipeline.Interaction.Suspension = manager
 	opts := normalizeProcessOptions(processOptions{
 		ModelBinding: effectiveModelBinding{RouteSessionKey: "route-suspend"},
@@ -2069,7 +2069,7 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 		),
 	})
 
-	result, err := al.runTurn(t.Context(), ts, pipeline)
+	result, err := runTestTurn(al, t.Context(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn() error = %v", err)
 	}
@@ -2112,7 +2112,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 	// Override max iterations to 2
 	agent.MaxIterations = 2
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session-maxiter")
 
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -2120,7 +2120,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 		context: newTurnContext(nil, nil, nil),
 	})
 
-	result, err := al.runTurn(context.Background(), ts, pipeline)
+	result, err := runTestTurn(al, context.Background(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
@@ -2136,7 +2136,7 @@ func TestRunTurn_HardAbort(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, slowProvider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session-abort")
 
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -2148,7 +2148,7 @@ func TestRunTurn_HardAbort(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		if _, err := al.runTurn(context.Background(), ts, pipeline); err != nil {
+		if _, err := runTestTurn(al, context.Background(), ts, pipeline); err != nil {
 			t.Errorf("runTurn() error = %v", err)
 		}
 		close(done)
@@ -2173,7 +2173,7 @@ func TestRunTurn_SteeringMessageInjection(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session-steering")
 	opts.Dispatch.SessionKey = "test-session-steering"
 
@@ -2191,7 +2191,7 @@ func TestRunTurn_SteeringMessageInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := al.runTurn(context.Background(), ts, pipeline)
+	result, err := runTestTurn(al, context.Background(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
@@ -2233,7 +2233,7 @@ func TestRunTurn_SteeringToolMediaUsesPipelineMediaLimit(t *testing.T) {
 	}
 	al.SetMediaStore(store)
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	pipeline.Config.MediaLimits = &testMediaLimitsProvider{size: 1}
 	opts := makeTestProcessOpts("test-session-steering-media")
 	opts.Dispatch.SessionKey = "test-session-steering-media"
@@ -2251,7 +2251,7 @@ func TestRunTurn_SteeringToolMediaUsesPipelineMediaLimit(t *testing.T) {
 		t.Fatalf("Steer failed: %v", steerErr)
 	}
 
-	result, err := al.runTurn(context.Background(), ts, pipeline)
+	result, err := runTestTurn(al, context.Background(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
@@ -2285,7 +2285,7 @@ func TestRunTurn_GracefulInterrupt(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	opts := makeTestProcessOpts("test-session-graceful")
 
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -2298,7 +2298,7 @@ func TestRunTurn_GracefulInterrupt(t *testing.T) {
 	var result turnResult
 
 	go func() {
-		result, _ = al.runTurn(context.Background(), ts, pipeline)
+		result, _ = runTestTurn(al, context.Background(), ts, pipeline)
 		close(done)
 	}()
 

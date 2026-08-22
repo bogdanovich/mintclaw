@@ -109,7 +109,7 @@ type ToolLoopOutcome struct {
 }
 
 // =============================================================================
-// turnResult - returned from runTurn
+// turnResult is returned by turnRunner after a turn reaches a terminal state.
 // =============================================================================
 
 type turnResult struct {

@@ -635,7 +635,7 @@ func installInteractionChannelManager(
 	if !ok {
 		t.Fatalf("interaction test bus = %T, want *bus.MessageBus", al.bus)
 	}
-	al.channelManager = manager
+	al.SetChannelManager(manager)
 	return attachInteractionOutbox(t, al, messageBus, manager)
 }
 

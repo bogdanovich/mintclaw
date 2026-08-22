@@ -9,10 +9,11 @@ delegated to `Pipeline`.
 
 | Layer | Owns | Should Not Own |
 | --- | --- | --- |
-| `AgentLoop` | runtime lifecycle, service wiring, registry/config access, public APIs, active-turn registry, channel/bus integration | LLM/tool iteration mechanics |
+| `AgentLoop` | process lifecycle, service wiring, registry/config access, public APIs, active-turn registry, channel/bus integration | turn lifecycle or LLM/tool iteration mechanics |
 | `inboundTurnCoordinator` | inbound scheduling, same-session serialization, busy-session steering enqueue, worker goroutine lifecycle, ack/release decisions | route normalization or LLM/tool execution |
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
+| `turnRunner` | one runtime generation's turn lifecycle and immutable pipeline service snapshot | process reload policy or LLM/tool iteration mechanics |
 | `turnRuntimeHost` | narrow host callbacks needed by in-turn execution: runtime events, abort, steering ack/release, sensitive-data filtering, final reply rendering | LLM/tool iteration mechanics, active-turn registration, or pipeline phase policy |
 | `Pipeline` | context assembly, LLM calls, tool loops, steering injection during a turn, finalization | inbound bus scheduling or session claiming |
 
@@ -48,8 +49,8 @@ al.runAgentLoop(ctx, turn.Agent, opts)
 ```
 
 `runAgentLoop` remains the boundary for one logical agent turn. `AgentLoop`
-then wraps the turn with runtime lifecycle concerns in `runTurn` and delegates
-turn progression to:
+selects the current `turnRunner`; that runner wraps the turn with lifecycle
+concerns and delegates turn progression to:
 
 ```go
 pipeline.runTurnLoop(ctx, turnCtx, ts, host)
@@ -58,10 +59,12 @@ pipeline.runTurnLoop(ctx, turnCtx, ts, host)
 Code below that boundary should be considered turn execution and belongs in
 `Pipeline` or pipeline-owned helpers.
 
-Inside `runTurn`, host-owned callbacks are exposed to the turn loop through
-`turnRuntimeHost`. This keeps PR-sized refactors honest: `AgentLoop` still owns
-runtime lifecycle and observability, while the loop can move toward
-pipeline-owned code without carrying a full `AgentLoop` dependency with it.
+Host-owned callbacks are exposed to the turn loop through `turnRuntimeHost`.
+`AgentLoop` constructs one runner and pipeline snapshot during initialization,
+then atomically replaces the runner when config or injected runtime wiring
+changes. Admitted turns retain their original runner; new turns use the new
+generation. This avoids rebuilding dependency bags for every user and child
+turn without allowing a reload to mutate an in-flight pipeline.
 
 ## Session Claiming
 

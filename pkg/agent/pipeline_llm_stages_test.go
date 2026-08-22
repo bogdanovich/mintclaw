@@ -72,7 +72,7 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("llm-stage-session"), turnEventScope{
 		turnID:  "llm-stage-turn",
 		context: newTurnContext(nil, nil, nil),
@@ -160,7 +160,7 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	defer cleanup()
 	agent.Tools.Register(durableProjectionTestTool{})
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	contextCapture := &trackingContextManager{}
 	pipeline.Context.Runtime = contextCapture
 	ts := newTurnState(agent, makeTestProcessOpts("projection-session"), turnEventScope{
@@ -220,7 +220,7 @@ func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *test
 	defer cleanup()
 	agent.Tools.Register(durableProjectionTestTool{})
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("protected-batch-session"), turnEventScope{
 		turnID: "protected-batch-turn", context: newTurnContext(nil, nil, nil),
 	})
@@ -259,7 +259,7 @@ func TestLLMNormalizationAllowsResultOnlyProtectedCallsInBatch(t *testing.T) {
 	defer cleanup()
 	agent.Tools.Register(resultOnlyDurabilityTestTool{})
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("result-only-batch-session"), turnEventScope{
 		turnID: "result-only-batch-turn", context: newTurnContext(nil, nil, nil),
 	})
@@ -313,7 +313,7 @@ func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersisten
 		}
 	}()
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 	contextCapture := &trackingContextManager{}
 	pipeline.Context.Runtime = contextCapture
 	ts := newTurnState(agent, makeTestProcessOpts("conflicting-browser-session"), turnEventScope{
