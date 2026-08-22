@@ -89,7 +89,7 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	return task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":["..."]}],"missing_items":["objective_2"]}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"]}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
@@ -97,6 +97,8 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
 		"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
 		"Do not infer click effect from the element role or HTTP method. " +
+		"For result items, omit receipt_ids or use an empty array; read, navigation, and local_edit invocation IDs " +
+		"are not external-action receipts. " +
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 		"without its runtime receipt. The runtime removes this block before showing your prose."
@@ -211,8 +213,19 @@ func validateObjectiveOutcome(
 		}
 		partitioned[id] = struct{}{}
 		item := taskresult.Item{Item: spec.Item, Kind: spec.Kind}
-		if item.Kind == "result" && len(reportedItem.ReceiptIDs) > 0 {
-			appendMissing(item.Item + " (read-only result unexpectedly included an external-action receipt)")
+		if item.Kind == "result" {
+			unexpectedExternalAction := false
+			for _, receiptID := range reportedItem.ReceiptIDs {
+				_, unexpectedExternalAction = receipts[strings.TrimSpace(receiptID)]
+				if unexpectedExternalAction {
+					break
+				}
+			}
+			if unexpectedExternalAction {
+				appendMissing(item.Item + " (read-only result included a verified external-action receipt)")
+				continue
+			}
+			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
 		valid := true
@@ -243,6 +256,12 @@ func validateObjectiveOutcome(
 			continue
 		}
 		outcome.CompletedItems = append(outcome.CompletedItems, item)
+	}
+	for receiptID := range receipts {
+		if _, consumed := consumedReceipts[receiptID]; !consumed {
+			appendMissing("an external browser action was not associated with an external_action objective")
+			break
+		}
 	}
 	for _, item := range checklist {
 		if _, found := partitioned[item.ID]; !found {
