@@ -40,9 +40,10 @@ path, but it is lazy for active sessions and background work for inactive ones.
    append fails, Seahorse ingests that message without advancing its watermark;
    the next successful reconciliation restores JSONL authority.
 
-Full reconciliation compares canonical and derived messages and repairs or
-rebuilds SQLite as before. Message parts are loaded in bounded SQL batches, so
-that recovery path does not issue a query per message.
+Full reconciliation compares canonical and derived messages and appends only a
+proven canonical delta. Any other difference atomically replaces all derived
+messages, summaries, and context from JSONL. Message parts are loaded in bounded
+SQL batches, so that recovery path does not issue a query per message.
 
 Operational logs emit one `reconciled canonical history` event with session,
 message count, and duration for each full reconciliation. Clean revision checks

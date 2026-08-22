@@ -29,7 +29,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestRunMigrations(t *testing.T) {
+func TestRunSchema(t *testing.T) {
 	db := openTestDB(t)
 
 	if err := runSchema(db); err != nil {
@@ -66,24 +66,24 @@ func TestRunMigrations(t *testing.T) {
 	}
 }
 
-func TestRunMigrationsIdempotent(t *testing.T) {
+func TestRunSchemaIdempotent(t *testing.T) {
 	db := openTestDB(t)
 
-	// Run migrations twice — should succeed both times
+	// Re-applying the current schema should be safe.
 	if err := runSchema(db); err != nil {
-		t.Fatalf("first migration: %v", err)
+		t.Fatalf("first schema run: %v", err)
 	}
 	if err := runSchema(db); err != nil {
-		t.Fatalf("second migration (idempotent): %v", err)
+		t.Fatalf("second schema run: %v", err)
 	}
 
-	// Verify we can still insert data after double migration
+	// Verify we can still insert data after applying the schema twice.
 	res, err := db.Exec(
 		"INSERT INTO conversations (session_key, created_at, updated_at) VALUES (?, datetime('now'), datetime('now'))",
 		"test-session",
 	)
 	if err != nil {
-		t.Fatalf("insert after double migration: %v", err)
+		t.Fatalf("insert after second schema run: %v", err)
 	}
 	id, _ := res.LastInsertId()
 	if id == 0 {
@@ -91,145 +91,38 @@ func TestRunMigrationsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRunSchemaAddsToolResultStatusColumn(t *testing.T) {
+func TestRunSchemaCreatesCurrentColumns(t *testing.T) {
 	db := openTestDB(t)
-	_, err := db.Exec(`CREATE TABLE message_parts (
-		part_id INTEGER PRIMARY KEY AUTOINCREMENT,
-		message_id INTEGER NOT NULL,
-		type TEXT NOT NULL,
-		text TEXT,
-		name TEXT,
-		arguments TEXT,
-		tool_call_id TEXT,
-		media_uri TEXT,
-		mime_type TEXT,
-		ordinal INTEGER NOT NULL DEFAULT 0
-	)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrationErr := runSchema(db); migrationErr != nil {
-		t.Fatal(migrationErr)
-	}
-	hasColumn, err := tableHasColumn(db, "message_parts", "tool_result_status")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasColumn {
-		t.Fatal("tool_result_status column was not added")
-	}
-}
-
-func TestRunSchemaAddsConversationProvenanceColumns(t *testing.T) {
-	db := openTestDB(t)
-	_, err := db.Exec(`CREATE TABLE conversations (
-		conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_key TEXT NOT NULL UNIQUE,
-		created_at TEXT NOT NULL DEFAULT (datetime('now')),
-		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-	)`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := runSchema(db); err != nil {
 		t.Fatalf("runSchema: %v", err)
 	}
-	for _, column := range []string{"route_scope_key", "agent_id"} {
-		var count int
-		if err := db.QueryRow(
-			`SELECT count(*) FROM pragma_table_info('conversations') WHERE name = ?`,
-			column,
-		).Scan(&count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 1 {
-			t.Errorf("conversation provenance column %q count = %d, want 1", column, count)
+
+	required := map[string][]string{
+		"conversations": {"route_scope_key", "agent_id"},
+		"messages":      {"model_name", "reasoning_content", "created_at"},
+		"message_parts": {"tool_result_status"},
+	}
+	for table, columns := range required {
+		for _, column := range columns {
+			var count int
+			if err := db.QueryRow(
+				"SELECT count(*) FROM pragma_table_info(?) WHERE name = ?",
+				table,
+				column,
+			).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Errorf("%s.%s count = %d, want 1", table, column, count)
+			}
 		}
 	}
 }
 
-func TestRunSchemaAddsMessagesReasoningContentColumn(t *testing.T) {
-	db := openTestDB(t)
-
-	_, err := db.Exec(`CREATE TABLE messages (
-		message_id INTEGER PRIMARY KEY AUTOINCREMENT,
-		conversation_id INTEGER NOT NULL,
-		role TEXT NOT NULL,
-		content TEXT NOT NULL DEFAULT '',
-		token_count INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT NOT NULL DEFAULT (datetime('now'))
-	)`)
-	if err != nil {
-		t.Fatalf("create legacy messages table: %v", err)
-	}
-
-	err = runSchema(db)
-	if err != nil {
-		t.Fatalf("runSchema: %v", err)
-	}
-
-	var count int
-	err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'reasoning_content'`).
-		Scan(&count)
-	if err != nil {
-		t.Fatalf("query pragma_table_info: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("reasoning_content column count = %d, want 1", count)
-	}
-
-	_, err = db.Exec(
-		`INSERT INTO conversations (session_key, created_at, updated_at) VALUES (?, datetime('now'), datetime('now'))`,
-		"reasoning-column-test",
-	)
-	if err != nil {
-		t.Fatalf("insert conversation: %v", err)
-	}
-
-	_, err = db.Exec(
-		`INSERT INTO messages (conversation_id, role, content, reasoning_content, token_count)
-		 VALUES (1, 'assistant', 'answer', 'thinking', 1)`,
-	)
-	if err != nil {
-		t.Fatalf("insert message with reasoning_content: %v", err)
-	}
-}
-
-func TestRunSchemaAddsMessagesModelNameColumn(t *testing.T) {
-	db := openTestDB(t)
-
-	_, err := db.Exec(`CREATE TABLE messages (
-		message_id INTEGER PRIMARY KEY AUTOINCREMENT,
-		conversation_id INTEGER NOT NULL,
-		role TEXT NOT NULL,
-		content TEXT NOT NULL DEFAULT '',
-		reasoning_content TEXT NOT NULL DEFAULT '',
-		token_count INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT NOT NULL DEFAULT (datetime('now'))
-	)`)
-	if err != nil {
-		t.Fatalf("create legacy messages table: %v", err)
-	}
-
-	err = runSchema(db)
-	if err != nil {
-		t.Fatalf("runSchema: %v", err)
-	}
-
-	var count int
-	err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'model_name'`).Scan(&count)
-	if err != nil {
-		t.Fatalf("query pragma_table_info: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("model_name column count = %d, want 1", count)
-	}
-}
-
-func TestMigrationConversationUnique(t *testing.T) {
+func TestSchemaConversationUnique(t *testing.T) {
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 
 	// Insert first
@@ -251,10 +144,10 @@ func TestMigrationConversationUnique(t *testing.T) {
 	}
 }
 
-func TestMigrationSummaryFTSInsert(t *testing.T) {
+func TestSchemaSummaryFTSInsert(t *testing.T) {
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 
 	// Insert a conversation first
@@ -298,10 +191,10 @@ func TestMigrationSummaryFTSInsert(t *testing.T) {
 	}
 }
 
-func TestMigrationSummaryParentsPK(t *testing.T) {
+func TestSchemaSummaryParentsPK(t *testing.T) {
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 
 	// Insert two summaries
@@ -326,84 +219,6 @@ func TestMigrationSummaryParentsPK(t *testing.T) {
 		"INSERT INTO summary_parents (summary_id, parent_summary_id) VALUES ('sum_a', 'sum_b')")
 	if err == nil {
 		t.Error("expected unique constraint violation for duplicate summary_parents link")
-	}
-}
-
-func TestTriggerMigration(t *testing.T) {
-	db := openTestDB(t)
-
-	// Run schema once to create tables and (correct) triggers
-	if err := runSchema(db); err != nil {
-		t.Fatalf("runSchema: %v", err)
-	}
-
-	// Drop correct triggers and recreate them with the old buggy body.
-	// The old trigger used INSERT INTO fts VALUES('delete', ...) which is wrong
-	// for non-external-content FTS5 tables.
-	oldSummariesDelete := `CREATE TRIGGER summaries_ad AFTER DELETE ON summaries BEGIN
-		INSERT INTO summaries_fts (summaries_fts, summary_id, content) VALUES('delete', old.summary_id, old.content);
-	END`
-	oldMessagesDelete := `CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-		INSERT INTO messages_fts (messages_fts, message_id, content) VALUES('delete', old.message_id, old.content);
-	END`
-
-	for _, sql := range []string{
-		`DROP TRIGGER IF EXISTS summaries_ad`,
-		`DROP TRIGGER IF EXISTS messages_ad`,
-		oldSummariesDelete,
-		oldMessagesDelete,
-	} {
-		if _, err := db.Exec(sql); err != nil {
-			t.Fatalf("setup old trigger: %v", err)
-		}
-	}
-
-	// Insert a conversation and summary so we have something to delete
-	_, err := db.Exec(`INSERT INTO conversations (session_key) VALUES ('old-db-test')`)
-	if err != nil {
-		t.Fatalf("insert conversation: %v", err)
-	}
-	_, err = db.Exec(`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
-		VALUES ('old-sum', 1, 'leaf', 0, 'old content', 5)`)
-	if err != nil {
-		t.Fatalf("insert summary: %v", err)
-	}
-
-	// The old trigger body is wrong for normal FTS5 — DELETE should fail.
-	_, err = db.Exec(`DELETE FROM summaries WHERE summary_id = 'old-sum'`)
-	if err == nil {
-		t.Error("expected error from old buggy trigger, but DELETE succeeded")
-	} else {
-		t.Logf("old trigger correctly causes error: %v", err)
-	}
-
-	// Now runSchema again — this drops and recreates the triggers with correct bodies.
-	err = runSchema(db)
-	if err != nil {
-		t.Fatalf("runSchema migration: %v", err)
-	}
-
-	// Insert again so we have data to delete
-	_, err = db.Exec(`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
-		VALUES ('migrated-sum', 1, 'leaf', 0, 'new content', 5)`)
-	if err != nil {
-		t.Fatalf("insert after migration: %v", err)
-	}
-
-	// DELETE should now work with the corrected trigger body.
-	_, err = db.Exec(`DELETE FROM summaries WHERE summary_id = 'migrated-sum'`)
-	if err != nil {
-		t.Fatalf("DELETE after migration failed (trigger not corrected): %v", err)
-	}
-
-	// Verify the summary is gone
-	var count int
-	err = db.QueryRow(`SELECT count(*) FROM summaries WHERE summary_id = 'migrated-sum'`).Scan(&count)
-	if err != nil {
-		t.Fatalf("query after delete: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("summary should be gone after DELETE, got count=%d", count)
 	}
 }
 

@@ -34,7 +34,7 @@ func newTestCompactionEngine(t *testing.T) (*CompactionEngine, *Store, int64) {
 	t.Helper()
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 	s := &Store{db: db}
 	ctx := context.Background()
