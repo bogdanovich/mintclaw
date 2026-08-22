@@ -321,7 +321,7 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if !ok {
 		t.Fatal("coding exec tool is missing")
 	}
-	if !NewPipeline(loop).Config.TrustAllToolExecution {
+	if !newTestPipeline(loop).Config.TrustAllToolExecution {
 		t.Fatal("coding pipeline did not select trusted tool execution")
 	}
 	if !cfg.Tools.Exec.EnableDenyPatterns || !cfg.Tools.Exec.AllowRemote ||
@@ -1937,7 +1937,7 @@ func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
 	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
 		turnID: "turn-light", context: newTurnContext(nil, nil, nil),
 	})
-	pipeline := NewPipeline(loop)
+	pipeline := newTestPipeline(loop)
 	exec, err := pipeline.SetupTurn(t.Context(), ts)
 	if err != nil {
 		t.Fatalf("SetupTurn() error = %v", err)
@@ -1976,7 +1976,7 @@ func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
 	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
 		turnID: "turn-fallback", context: newTurnContext(nil, nil, nil),
 	})
-	pipeline := NewPipeline(loop)
+	pipeline := newTestPipeline(loop)
 	exec, err := pipeline.SetupTurn(t.Context(), ts)
 	if err != nil {
 		t.Fatalf("SetupTurn() error = %v", err)

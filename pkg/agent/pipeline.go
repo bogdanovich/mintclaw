@@ -15,19 +15,9 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-// Pipeline holds the runtime dependencies used by Pipeline methods.
-// It is constructed by runTurn via NewPipeline and passed to sub-methods
-// so that the coordinator can delegate phase execution.
+// Pipeline holds the immutable runtime-generation snapshot used by turn
+// execution. The owning turnRunner is replaced when runtime wiring changes.
 type Pipeline struct {
-	Cfg         *config.Config
-	Runtime     PipelineRuntimeServices
-	Config      PipelineConfigServices
-	Context     PipelineContextServices
-	Interaction PipelineInteractionServices
-}
-
-// PipelineDependencies is the explicit dependency set required by Pipeline.
-type PipelineDependencies struct {
 	Cfg         *config.Config
 	Runtime     PipelineRuntimeServices
 	Config      PipelineConfigServices
@@ -333,17 +323,6 @@ func executeFallbackWithObserver(
 
 type mediaResolver interface {
 	ResolveWithMeta(ref string) (localPath string, meta media.MediaMeta, err error)
-}
-
-// NewPipelineFromDependencies creates a Pipeline from explicit dependencies.
-func NewPipelineFromDependencies(deps PipelineDependencies) *Pipeline {
-	return &Pipeline{
-		Cfg:         deps.Cfg,
-		Runtime:     deps.Runtime,
-		Config:      deps.Config,
-		Context:     deps.Context,
-		Interaction: deps.Interaction,
-	}
 }
 
 func (p *Pipeline) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {

@@ -494,11 +494,11 @@ func TestPipelineChannelStreamingConfig_FallsBackToConfig(t *testing.T) {
 	}
 }
 
-func TestNewPipeline_UsesSingleConfigSnapshotForConfigBackedDependencies(t *testing.T) {
+func TestTurnRunnerPipelineUsesSingleConfigSnapshotForConfigBackedDependencies(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &configuredStreamingChatOnlyProvider{})
 
-	pipeline := NewPipeline(al)
+	pipeline := newTestPipeline(al)
 
 	channelStreaming, ok := pipeline.Config.ChannelStreaming.(configChannelStreamingProvider)
 	if !ok {

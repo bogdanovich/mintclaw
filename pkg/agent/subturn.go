@@ -451,7 +451,7 @@ func spawnSubTurn(
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
 	// Blocks if parent already has maxConcurrentSubTurns running, with a timeout to prevent indefinite blocking.
 	// Also respects context cancellation so we don't block forever if parent is aborted.
-	// NOTE: The semaphore is released immediately after runTurn completes (not in a defer) to
+	// NOTE: The semaphore is released immediately after the child turn completes (not in a defer) to
 	// ensure it is freed before the cleanup phase (async result delivery), which may block on
 	// a full pendingResults channel. Holding the semaphore through cleanup would allow the
 	// parent's goroutine to be blocked waiting for a semaphore slot while child turns are
@@ -728,7 +728,7 @@ func spawnSubTurn(
 		childTS.tokenBudget = budget
 	}
 
-	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
+	// IMPORTANT: Put childTS into childCtx so that code inside the turn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
 
@@ -802,8 +802,7 @@ func spawnSubTurn(
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
-	pipeline := NewPipeline(al)
-	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
+	turnRes, turnErr := al.currentTurnRunner().run(childCtx, childTS, nil)
 	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
 		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(
@@ -814,7 +813,7 @@ func spawnSubTurn(
 		)
 	}
 
-	// Release the concurrency semaphore immediately after runTurn completes,
+	// Release the concurrency semaphore immediately after the child turn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
 	// - All semaphore slots are held by sub-turns in their cleanup phase
 	// - Cleanup blocks on a full pendingResults channel

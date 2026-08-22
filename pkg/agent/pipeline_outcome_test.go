@@ -58,7 +58,7 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
 
-			pipeline := NewPipeline(al)
+			pipeline := newTestPipeline(al)
 			pipeline.Interaction.Hooks = abortingPipelineHook{action: test.action}
 			ts := newTurnState(agent, makeTestProcessOpts("outcome-abort"), turnEventScope{
 				turnID:  "turn-outcome-abort",

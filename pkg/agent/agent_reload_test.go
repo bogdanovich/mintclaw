@@ -29,6 +29,10 @@ func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
 	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
 	t.Cleanup(loop.Close)
 	originalRegistry := loop.GetRegistry()
+	originalRunner := loop.currentTurnRunner()
+	if originalRunner == nil || originalRunner != loop.currentTurnRunner() {
+		t.Fatal("turn runner is not owned for the active runtime generation")
+	}
 
 	next := *cfg
 	next.Agents.Defaults.ModelName = "prepared-model"
@@ -37,12 +41,14 @@ func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareConfigReload() error = %v", err)
 	}
-	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg {
+	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg ||
+		loop.currentTurnRunner() != originalRunner {
 		t.Fatal("prepare published the new registry or config")
 	}
 
 	prepared.Abort()
-	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg {
+	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != cfg ||
+		loop.currentTurnRunner() != originalRunner {
 		t.Fatal("abort changed the active registry or config")
 	}
 	if got := provider.closed.Load(); got != 1 {
@@ -61,6 +67,7 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
 	t.Cleanup(loop.Close)
 	originalRegistry := loop.GetRegistry()
+	originalRunner := loop.currentTurnRunner()
 
 	next := *cfg
 	next.Agents.Defaults.ModelName = "committed-model"
@@ -76,6 +83,11 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 
 	if loop.GetRegistry() == originalRegistry || loop.GetConfig() != &next {
 		t.Fatal("commit did not publish the prepared registry and config")
+	}
+	committedRunner := loop.currentTurnRunner()
+	if committedRunner == nil || committedRunner == originalRunner ||
+		committedRunner.pipeline.Cfg != &next || originalRunner.pipeline.Cfg != cfg {
+		t.Fatal("commit did not replace the turn runner generation atomically")
 	}
 	if got := provider.closed.Load(); got != 0 {
 		t.Fatalf("committed provider close count = %d, want 0", got)

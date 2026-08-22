@@ -14,20 +14,13 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func (al *AgentLoop) runTurn(
+func (r *turnRunner) run(
 	ctx context.Context,
 	ts *turnState,
-	pipeline *Pipeline,
-) (result turnResult, err error) {
-	return al.runTurnLifecycle(ctx, ts, pipeline, nil)
-}
-
-func (al *AgentLoop) runTurnLifecycle(
-	ctx context.Context,
-	ts *turnState,
-	pipeline *Pipeline,
 	execute pipelineTurnExecutionFunc,
 ) (result turnResult, err error) {
+	al := r.host
+	pipeline := r.pipeline
 	ctx, releaseAdmission, err := al.acquireAgentTurn(ctx, ts.agentID)
 	if err != nil {
 		return turnResult{}, err

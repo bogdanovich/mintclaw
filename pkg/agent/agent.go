@@ -108,6 +108,7 @@ type AgentLoop struct {
 	reloadFunc func() error
 
 	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
+	turnRunner      *turnRunner
 }
 
 // processOptions configures how a message is processed
@@ -432,7 +433,7 @@ var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
 // Each heartbeat is independent and doesn't accumulate context.
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
-// any post-turn work. runTurn owns the full turn lifecycle.
+// any post-turn work. turnRunner owns the full turn lifecycle.
 func (al *AgentLoop) runAgentLoop(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -529,13 +530,8 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 			runtimeevents.NewTraceScope(turnScope.workspace, turnScope.turnID),
 		)
 	}
-	pipeline := NewPipeline(al)
 	var result turnResult
-	if execute == nil {
-		result, err = al.runTurn(ctx, ts, pipeline)
-	} else {
-		result, err = al.runTurnLifecycle(ctx, ts, pipeline, execute)
-	}
+	result, err = al.currentTurnRunner().run(ctx, ts, execute)
 	if err != nil {
 		return "", err
 	}

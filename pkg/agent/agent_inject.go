@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
-	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -416,8 +416,13 @@ func agentWithoutInheritedNodeFileTools(agent *AgentInstance) *AgentInstance {
 	return &cloned
 }
 
-func (al *AgentLoop) SetChannelManager(cm *channels.Manager) {
+func (al *AgentLoop) SetChannelManager(cm interfaces.ChannelManager) {
+	al.mu.Lock()
+	defer al.mu.Unlock()
 	al.channelManager = cm
+	if al.turnRunner != nil {
+		al.replaceTurnRunnerLocked(al.cfg)
+	}
 }
 
 func (al *AgentLoop) GetRegistry() *AgentRegistry {
@@ -433,7 +438,12 @@ func (al *AgentLoop) GetConfig() *config.Config {
 }
 
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
+	al.mu.Lock()
 	al.mediaStore = s
+	if al.turnRunner != nil {
+		al.replaceTurnRunnerLocked(al.cfg)
+	}
+	al.mu.Unlock()
 
 	// Propagate store to all registered tools that can emit media.
 	registry := al.GetRegistry()

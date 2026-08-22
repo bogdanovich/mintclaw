@@ -95,7 +95,7 @@ func TestTerminalTaskContextDoesNotMutateOrSplitRepairedToolHistory(t *testing.T
 		}},
 		{Role: "tool", ToolCallID: "spawn-call", Content: "accepted"},
 	}
-	messages := NewPipeline(al).buildTurnMessages(ts, history, "", "run it again", nil, nil)
+	messages := newTestPipeline(al).buildTurnMessages(ts, history, "", "run it again", nil, nil)
 	var prompt strings.Builder
 	toolBatchStart := -1
 	for i, message := range messages {
@@ -195,7 +195,7 @@ func TestTerminalTaskContextDoesNotChangeAdjacentMediaClassification(t *testing.
 	}
 	createdAt := time.Now().Add(-time.Minute)
 	history := []providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &createdAt}}
-	messages := NewPipeline(al).buildTurnMessages(
+	messages := newTestPipeline(al).buildTurnMessages(
 		ts, history, "", "[media only]", []string{"media://image-1"}, nil,
 	)
 	last := messages[len(messages)-1]
