@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -1225,8 +1226,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 			execCtx,
 			trustedExecution,
 			toolArgs,
-			ts.channel,
-			ts.chatID,
+			toolshared.ToolChannel(execCtx),
+			toolshared.ToolChatID(execCtx),
 			asyncCallback,
 		)
 	} else {
@@ -1234,8 +1235,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 			execCtx,
 			toolName,
 			toolArgs,
-			ts.channel,
-			ts.chatID,
+			toolshared.ToolChannel(execCtx),
+			toolshared.ToolChatID(execCtx),
 			asyncCallback,
 		)
 	}
@@ -2466,12 +2467,22 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	if ts == nil {
 		return ctx
 	}
+	channel := ts.channel
+	chatID := ts.chatID
+	messageID := ts.opts.Dispatch.MessageID()
+	replyToMessageID := ts.opts.Dispatch.ReplyToMessageID()
+	if origin, ok := ctx.Value(approvedToolExecutionIdentityKey{}).(*bus.InboundContext); ok && origin != nil {
+		channel = origin.Channel
+		chatID = origin.ChatID
+		messageID = origin.MessageID
+		replyToMessageID = origin.ReplyToMessageID
+	}
 	ctx = toolshared.WithToolInboundContext(
 		ctx,
-		ts.channel,
-		ts.chatID,
-		ts.opts.Dispatch.MessageID(),
-		ts.opts.Dispatch.ReplyToMessageID(),
+		channel,
+		chatID,
+		messageID,
+		replyToMessageID,
 	)
 	toolInbound := ts.opts.Dispatch.InboundContext
 	if ts.opts.InteractionOriginContext != nil {

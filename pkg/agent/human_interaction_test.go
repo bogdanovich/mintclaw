@@ -444,10 +444,12 @@ func TestToolExecutionIdentityDoesNotRepeatAcrossAgentLoops(t *testing.T) {
 }
 
 type approvalContextTool struct {
-	executions int
-	inbound    bus.InboundContext
-	bypass     bool
-	continued  bool
+	executions   int
+	inbound      bus.InboundContext
+	routeChannel string
+	routeChatID  string
+	bypass       bool
+	continued    bool
 }
 
 func (*approvalContextTool) Name() string { return "approval_context" }
@@ -461,6 +463,8 @@ func (*approvalContextTool) Parameters() map[string]any {
 func (t *approvalContextTool) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
 	t.executions++
 	t.inbound = toolshared.ToolInboundContext(ctx)
+	t.routeChannel = toolshared.ToolChannel(ctx)
+	t.routeChatID = toolshared.ToolChatID(ctx)
 	t.bypass = toolshared.ToolApprovalBypass(ctx)
 	t.continued = toolshared.ToolApprovalContinuation(ctx)
 	return toolshared.NewToolResult("protected context captured")
@@ -3473,10 +3477,15 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 		wantConsumed   bool
 		revokePolicy   bool
 		mutateArgs     bool
+		noContext      bool
 	}{
 		{
 			name: "allow once", answer: "allow_once", outcome: interactions.OutcomeAllowed,
 			wantExecutions: 1, wantConsumed: true,
+		},
+		{
+			name: "allow once without context history", answer: "allow_once", outcome: interactions.OutcomeAllowed,
+			wantExecutions: 1, wantConsumed: true, noContext: true,
 		},
 		{name: "deny", answer: "deny", outcome: interactions.OutcomeDenied},
 		{name: "policy revoked", answer: "allow_once", outcome: interactions.OutcomeAllowed, revokePolicy: true},
@@ -3495,6 +3504,9 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			}}
 			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 			defer cleanup()
+			if test.noContext {
+				al.contextManager = &noneContextManager{}
+			}
 			manager := newInteractionChannelManager()
 			installInteractionChannelManager(t, al, manager)
 			tool := &approvalCountingTool{}
@@ -3591,6 +3603,29 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				(resolved.ApprovalConsumedAt != 0) != test.wantConsumed ||
 				tool.executions != test.wantExecutions {
 				t.Fatalf("resolved approval = %#v, executions=%d", resolved, tool.executions)
+			}
+			if test.wantExecutions > 0 {
+				provider.mu.Lock()
+				requests := append([][]providers.Message(nil), provider.requests...)
+				provider.mu.Unlock()
+				if len(requests) != 2 {
+					t.Fatalf("provider requests = %d, want initial and continuation", len(requests))
+				}
+				callCount, resultCount := 0, 0
+				for _, message := range requests[1] {
+					if messageContainsToolCall(message, "call-protected") {
+						callCount++
+					}
+					if message.Role == "tool" && message.ToolCallID == "call-protected" {
+						resultCount++
+						if message.ToolResultStatus == providers.ToolResultStatusUnresolved {
+							t.Fatalf("continuation request retained unresolved result: %#v", requests[1])
+						}
+					}
+				}
+				if callCount != 1 || resultCount != 1 {
+					t.Fatalf("continuation tool pair = call:%d result:%d", callCount, resultCount)
+				}
 			}
 			select {
 			case final := <-manager.sent:
@@ -4321,10 +4356,10 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	answerContext := bus.InboundContext{
-		Channel: "telegram", Account: "bot-1", ChatID: "chat-1", ChatType: "group",
+		Channel: "discord", Account: "bot-2", ChatID: "approval-chat", ChatType: "direct",
 		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace",
 		SenderID: "user-1", MessageID: "answer-message", ReplyToMessageID: "answer-reply",
-		ReplyHandles: map[string]string{"telegram": "answer-handle"},
+		ReplyHandles: map[string]string{"discord": "answer-handle"},
 		Raw:          map[string]string{"thread_ts": "answer-thread"},
 	}
 	if err = al.resumeClaimedInteraction(
@@ -4334,6 +4369,15 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	}
 	if tool.executions != 1 {
 		t.Fatalf("protected tool executions = %d, want 1", tool.executions)
+	}
+	if tool.routeChannel != original.Channel || tool.routeChatID != original.ChatID {
+		t.Fatalf(
+			"protected tool registry route = %q/%q, want %q/%q",
+			tool.routeChannel,
+			tool.routeChatID,
+			original.Channel,
+			original.ChatID,
+		)
 	}
 	if tool.inbound.MessageID != "origin-message" ||
 		tool.inbound.ReplyToMessageID != "origin-reply" ||

@@ -438,6 +438,23 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	return al.runAgentLoopWithExecution(ctx, agent, opts, nil)
+}
+
+type pipelineTurnExecutionFunc func(
+	ctx context.Context,
+	turnCtx context.Context,
+	ts *turnState,
+	host turnRuntimeHost,
+	pipeline *Pipeline,
+) (turnResult, TurnEndStatus, error)
+
+func (al *AgentLoop) runAgentLoopWithExecution(
+	ctx context.Context,
+	agent *AgentInstance,
+	opts processOptions,
+	execute pipelineTurnExecutionFunc,
+) (string, error) {
 	if agent == nil {
 		return "", fmt.Errorf("agent is unavailable")
 	}
@@ -513,7 +530,12 @@ func (al *AgentLoop) runAgentLoop(
 		)
 	}
 	pipeline := NewPipeline(al)
-	result, err := al.runTurn(ctx, ts, pipeline)
+	var result turnResult
+	if execute == nil {
+		result, err = al.runTurn(ctx, ts, pipeline)
+	} else {
+		result, err = al.runTurnLifecycle(ctx, ts, pipeline, execute)
+	}
 	if err != nil {
 		return "", err
 	}
