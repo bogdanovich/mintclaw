@@ -1931,10 +1931,10 @@ func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
-	opts := makeTestProcessOpts("coding:thread-light")
-	opts.UserMessage = ""
+	opts := makeTestTurnSpec("coding:thread-light")
+	opts.Dispatch.UserMessage = ""
 	opts.CodingContext = codingPromptTestContext(agent, "thread-light")
-	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
 		turnID: "turn-light", context: newTurnContext(nil, nil, nil),
 	})
 	pipeline := newTestPipeline(loop)
@@ -1971,9 +1971,9 @@ func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
 	configureCodingPromptTestAgent(agent, "thread-fallback")
 	loop.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
-	opts := makeTestProcessOpts("coding:thread-fallback")
+	opts := makeTestTurnSpec("coding:thread-fallback")
 	opts.CodingContext = codingPromptTestContext(agent, "thread-fallback")
-	ts := newTurnState(agent, normalizeProcessOptions(opts), turnEventScope{
+	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
 		turnID: "turn-fallback", context: newTurnContext(nil, nil, nil),
 	})
 	pipeline := newTestPipeline(loop)

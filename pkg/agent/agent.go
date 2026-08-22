@@ -29,7 +29,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
-	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
@@ -111,11 +110,11 @@ type AgentLoop struct {
 	turnRunner      *turnRunner
 }
 
-// processOptions configures how a message is processed
-type processOptions struct {
-	Dispatch                     DispatchRequest // Normalized routed request boundary for this turn
+// turnSpec is the canonical runtime representation of one admitted turn.
+// Entrypoint-specific requests are normalized into this shape before execution.
+type turnSpec struct {
+	Dispatch                     DispatchRequest
 	ModelBinding                 effectiveModelBinding
-	SessionKey                   string // Session identifier for history/context
 	TaskID                       string // Durable task owning this turn, when one exists
 	ObjectiveChecklist           []runtimeObjectiveItem
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
@@ -126,18 +125,11 @@ type processOptions struct {
 	TurnStatus                   *TurnEndStatus
 	TurnResult                   *turnResult         // Optional caller-owned terminal snapshot
 	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
-	Channel                      string              // Target channel for tool execution
-	ChatID                       string              // Target chat ID for tool execution
-	MessageID                    string              // Current inbound platform message ID
-	ReplyToMessageID             string              // Current inbound reply target message ID
-	SenderID                     string              // Current sender ID for dynamic context
 	SenderDisplayName            string              // Current sender display name for dynamic context
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
-	UserMessage                  string              // User message content (may include prefix)
 	ForcedSkills                 []string            // Skills explicitly requested for this message
 	TurnProfile                  config.EffectiveTurnProfile
 	SystemPromptOverride         string                    // Override the default system prompt (Used by SubTurns)
-	Media                        []string                  // media:// refs from inbound message
 	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
 	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
 	DefaultResponse              string                    // Response when LLM returns empty
@@ -155,9 +147,6 @@ type processOptions struct {
 	NoHistory                    bool                      // If true, don't load session history (for heartbeat)
 	ExcludeInheritedNodeFiles    bool                      // Remove inherited node file tools from this internal turn
 	SkipInitialSteeringPoll      bool                      // If true, skip the steering poll at loop start (used by Continue)
-	InboundContext               *bus.InboundContext       // Normalized inbound facts for events/hooks
-	RouteResult                  *routing.ResolvedRoute    // Route decision snapshot for events/hooks
-	SessionScope                 *session.SessionScope     // Session scope snapshot for events/hooks
 }
 
 type continuationTarget struct {
@@ -460,7 +449,7 @@ var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
 func (al *AgentLoop) runAgentLoop(
 	ctx context.Context,
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 ) (string, error) {
 	return al.runAgentLoopWithExecution(ctx, agent, opts, nil)
 }
@@ -476,7 +465,7 @@ type pipelineTurnExecutionFunc func(
 func (al *AgentLoop) runAgentLoopWithExecution(
 	ctx context.Context,
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 	execute pipelineTurnExecutionFunc,
 ) (string, error) {
 	if agent == nil {
@@ -503,7 +492,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		opts.ModelBinding = binding
 	}
 
-	opts = normalizeProcessOptions(opts)
+	opts = normalizeTurnSpec(opts)
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return "", err
@@ -612,7 +601,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 func (al *AgentLoop) compactAfterFinalDelivery(
 	ctx context.Context,
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 	result turnResult,
 ) {
 	if !result.compactAfterDelivery || al.contextManager == nil || agent == nil {

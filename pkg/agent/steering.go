@@ -536,7 +536,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 			SenderID: strings.TrimSpace(senderID),
 		}
 	}
-	return al.runAgentLoop(ctx, agent, processOptions{
+	return al.runAgentLoop(ctx, agent, turnSpec{
 		ModelBinding:             modelBinding,
 		Dispatch:                 dispatch,
 		DefaultResponse:          defaultResponse,

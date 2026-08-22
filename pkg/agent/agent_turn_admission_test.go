@@ -269,7 +269,7 @@ func TestTurnWaitingBehindReloadUsesCurrentAgentGeneration(t *testing.T) {
 	}
 	turnDone := make(chan error, 1)
 	go func() {
-		_, turnErr := loop.runAgentLoop(context.Background(), oldAgent, processOptions{
+		_, turnErr := loop.runAgentLoop(context.Background(), oldAgent, turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "generation-waiter",
 				UserMessage: "use the current generation",

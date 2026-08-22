@@ -9,7 +9,7 @@ import (
 
 const maxActiveGoalObjectiveRunes = 480
 
-func (al *AgentLoop) applyActiveGoalPrompt(opts *processOptions) {
+func (al *AgentLoop) applyActiveGoalPrompt(opts *turnSpec) {
 	if opts == nil {
 		return
 	}

@@ -14,7 +14,7 @@ func TestCodingToolObservationIsCodingOnlyAndCloned(t *testing.T) {
 	if got := codingToolObservation(&turnState{}, observation); got != nil {
 		t.Fatalf("personal turn observation = %#v", got)
 	}
-	ts := &turnState{opts: processOptions{CodingContext: CodingPromptContext{SessionKey: "thread-1"}}}
+	ts := &turnState{opts: turnSpec{CodingContext: CodingPromptContext{SessionKey: "thread-1"}}}
 	got := codingToolObservation(ts, observation)
 	if got == nil || got.Command == nil || got.Command.Output != "bounded" || got.Command.ExitCode == nil ||
 		*got.Command.ExitCode != 7 {

@@ -142,7 +142,7 @@ func TestBuildSubagentChildBinding_ReusesTargetRuntimeWhenPlanMatches(t *testing
 		Fallbacks: []string{"deepseek"},
 	}
 	parent := &turnState{
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				RouteSessionKey: "route-parent",
 			},

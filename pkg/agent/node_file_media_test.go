@@ -29,7 +29,7 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 		workspace: "/workspace/main",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: "telegram:chat-1:topic-1",
 			SessionKey:      "session-1",
 			InboundContext: &bus.InboundContext{
@@ -72,7 +72,7 @@ func TestBindNodeFileMediaOwnerDoesNothingWithoutUploadAuthority(t *testing.T) {
 		workspace: "/workspace/main",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: "telegram:chat-1",
 			SessionKey:      "session-1",
 			InboundContext: &bus.InboundContext{

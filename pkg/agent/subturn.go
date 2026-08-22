@@ -641,7 +641,7 @@ func spawnSubTurn(
 		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
 	}
 
-	// Create processOptions for the child turn
+	// Create turnSpec for the child turn
 	childSessionKey := childID
 	if durableTask {
 		childSessionKey = durableTaskSessionKey(parentTS.workspace, cfg.TaskID)
@@ -671,7 +671,7 @@ func spawnSubTurn(
 		}
 		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
-	opts := processOptions{
+	opts := turnSpec{
 		TaskID:                  strings.TrimSpace(cfg.TaskID),
 		ObjectiveChecklist:      objectiveChecklist,
 		InteractionWorkspace:    parentTS.workspace,
@@ -679,7 +679,6 @@ func spawnSubTurn(
 		InteractionRouteKey:     parentTS.opts.Dispatch.RouteSessionKey,
 		ModelBinding:            modelBinding,
 		Dispatch:                dispatch,
-		SenderID:                parentTS.opts.Dispatch.SenderID(),
 		SenderDisplayName:       parentTS.opts.SenderDisplayName,
 		TurnProfile:             parentTS.profile,
 		SystemPromptOverride:    cfg.ActualSystemPrompt,

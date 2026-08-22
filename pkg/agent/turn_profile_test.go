@@ -117,9 +117,8 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 		Summary: "old summary",
 	}})
 
-	got, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      sessionKey,
-		UserMessage:     "new user",
+	got, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: sessionKey, UserMessage: "new user"},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 	})
@@ -167,9 +166,8 @@ func TestTurnProfile_HistoryOffSuppressesHistoryAndPersistence(t *testing.T) {
 	agent.Sessions.SetHistory(sessionKey, initialHistory)
 	agent.Sessions.SetSummary(sessionKey, "old summary")
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      sessionKey,
-		UserMessage:     "new user",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: sessionKey, UserMessage: "new user"},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   true,
 	})
@@ -306,8 +304,7 @@ func TestTurnProfile_ContextCommandUsesEnabledTurnProfile(t *testing.T) {
 	sessionKey := "context-profile"
 	agent.Sessions.AddMessage(sessionKey, "user", "old history")
 
-	opts := processOptions{
-		SessionKey: sessionKey,
+	opts := turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:      sessionKey,
 			RouteSessionKey: sessionKey,
@@ -376,8 +373,7 @@ func TestTurnProfile_ContextCommandUsesEffectiveBindingProvider(t *testing.T) {
 	}
 
 	sessionKey := "context-binding-provider"
-	opts := processOptions{
-		SessionKey: sessionKey,
+	opts := turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:      sessionKey,
 			RouteSessionKey: sessionKey,
@@ -438,8 +434,7 @@ func TestTurnProfile_ContextCommandAllowsNilToolsWithProfile(t *testing.T) {
 
 	agent.Tools = nil
 	sessionKey := "context-profile-nil-tools"
-	opts := processOptions{
-		SessionKey: sessionKey,
+	opts := turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:      sessionKey,
 			RouteSessionKey: sessionKey,
@@ -597,7 +592,7 @@ func TestTurnProfile_SubTurnInheritsParentToolProfile(t *testing.T) {
 	if !ok {
 		t.Fatal("ResolveTurnProfile() did not return enabled profile")
 	}
-	parentOpts := processOptions{
+	parentOpts := turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "agent:default:test-parent",
 			UserMessage: "parent",
@@ -642,9 +637,8 @@ func TestTurnProfile_SystemPromptOffUsesExternalPromptOnly(t *testing.T) {
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:           "agent:default:test-external-prompt",
-		UserMessage:          "hello",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:             DispatchRequest{SessionKey: "agent:default:test-external-prompt", UserMessage: "hello"},
 		DefaultResponse:      defaultResponse,
 		SystemPromptOverride: "External prompt only.",
 	})
@@ -676,9 +670,8 @@ func TestTurnProfile_SystemPromptOffBlankTurnStillSendsMessage(t *testing.T) {
 	provider := &turnProfileCaptureProvider{}
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 
-	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
-		SessionKey:      "agent:default:test-blank-system-off",
-		UserMessage:     "",
+	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: "agent:default:test-blank-system-off", UserMessage: ""},
 		DefaultResponse: defaultResponse,
 	})
 	if err != nil {
@@ -718,9 +711,8 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackWhenToolsVisible(t *testing.
 	al.RegisterTool(&echoTextTool{})
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "agent:default:test-tool-fallback",
-		UserMessage:     "hello",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: "agent:default:test-tool-fallback", UserMessage: "hello"},
 		DefaultResponse: defaultResponse,
 	})
 	if err != nil {
@@ -751,9 +743,11 @@ func TestTurnProfile_SystemPromptOffKeepsToolFallbackWithBackgroundTaskSafety(t 
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	al.RegisterTool(&echoTextTool{})
 
-	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
-		SessionKey:      "agent:default:test-tool-fallback-with-background-task-safety",
-		UserMessage:     "hello",
+	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "agent:default:test-tool-fallback-with-background-task-safety",
+			UserMessage: "hello",
+		},
 		DefaultResponse: defaultResponse,
 	})
 	if err != nil {
@@ -801,9 +795,8 @@ func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "agent:default:test-skills-off",
-		UserMessage:     "hello",
+	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: "agent:default:test-skills-off", UserMessage: "hello"},
 		DefaultResponse: defaultResponse,
 		ForcedSkills:    []string{"shell"},
 	})
@@ -824,9 +817,8 @@ func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.
 	al = newTurnProfileAgentLoop(t, cfg, provider)
 	agent = al.GetRegistry().GetDefaultAgent()
 
-	_, err = al.runAgentLoop(context.Background(), agent, processOptions{
-		SessionKey:      "agent:default:test-skills-custom",
-		UserMessage:     "hello",
+	_, err = al.runAgentLoop(context.Background(), agent, turnSpec{
+		Dispatch:        DispatchRequest{SessionKey: "agent:default:test-skills-custom", UserMessage: "hello"},
 		DefaultResponse: defaultResponse,
 		ForcedSkills:    []string{"shell", "paint"},
 	})
@@ -960,9 +952,8 @@ func TestTurnProfile_ToolsCustomFiltersProviderToolsAndHookAdditions(t *testing.
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tools-filter",
-			UserMessage:     "hello",
+		turnSpec{
+			Dispatch:        DispatchRequest{SessionKey: "agent:default:test-tools-filter", UserMessage: "hello"},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1005,9 +996,8 @@ func TestTurnProfile_ToolsOffDisablesProviderAndNativeSearchTools(t *testing.T) 
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tools-off",
-			UserMessage:     "hello",
+		turnSpec{
+			Dispatch:        DispatchRequest{SessionKey: "agent:default:test-tools-off", UserMessage: "hello"},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1038,9 +1028,8 @@ func TestTurnProfile_ToolsOffSuppressesToolUsePromptRule(t *testing.T) {
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tools-off-prompt",
-			UserMessage:     "hello",
+		turnSpec{
+			Dispatch:        DispatchRequest{SessionKey: "agent:default:test-tools-off-prompt", UserMessage: "hello"},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1081,9 +1070,11 @@ func TestTurnProfile_ToolsCustomMissingToolSuppressesToolUsePromptRule(t *testin
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tools-custom-missing-prompt",
-			UserMessage:     "hello",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-tools-custom-missing-prompt",
+				UserMessage: "hello",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1133,9 +1124,11 @@ func TestTurnProfile_ToolsCustomAllowsNativeWebSearch(t *testing.T) {
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-native-web-allowed",
-			UserMessage:     "search",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-native-web-allowed",
+				UserMessage: "search",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1180,9 +1173,11 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackForNativeWebSearch(t *testin
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-native-web-fallback",
-			UserMessage:     "search",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-native-web-fallback",
+				UserMessage: "search",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1197,7 +1192,7 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackForNativeWebSearch(t *testin
 	}
 }
 
-func TestPromptBuildRequestForProcessOptions_SystemPromptOffAddsToolFallbackForNativeWebSearch(t *testing.T) {
+func TestPromptBuildRequestForTurnSpec_SystemPromptOffAddsToolFallbackForNativeWebSearch(t *testing.T) {
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Web: config.WebToolsConfig{
@@ -1223,12 +1218,12 @@ func TestPromptBuildRequestForProcessOptions_SystemPromptOffAddsToolFallbackForN
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &nativeSearchProvider{supported: true})
 	agent := al.GetRegistry().GetDefaultAgent()
-	opts, err := resolveTurnProfileOptions(cfg, processOptions{})
+	opts, err := resolveTurnProfileOptions(cfg, turnSpec{})
 	if err != nil {
 		t.Fatalf("resolveTurnProfileOptions() error = %v", err)
 	}
 
-	req := promptBuildRequestForProcessOptions(cfg, agent, opts, nil, "", "", nil)
+	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, "", "", nil)
 	if !req.SuppressDefaultSystemPrompt {
 		t.Fatal("expected default system prompt to be suppressed")
 	}
@@ -1236,7 +1231,7 @@ func TestPromptBuildRequestForProcessOptions_SystemPromptOffAddsToolFallbackForN
 		t.Fatal("expected skill context to be suppressed")
 	}
 	if !req.ToolUseFallback {
-		t.Fatal("expected native-search-only process options prompt to enable tool fallback")
+		t.Fatal("expected native-search-only turn specification prompt to enable tool fallback")
 	}
 	if req.SuppressToolUseRule {
 		t.Fatal("expected tool use rule to remain enabled when native web search is callable")
@@ -1274,9 +1269,11 @@ func TestTurnProfile_BeforeLLMHookCannotReenableNativeSearchWhenToolsOff(t *test
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-native-web-hook-denied",
-			UserMessage:     "search",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-native-web-hook-denied",
+				UserMessage: "search",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1324,9 +1321,11 @@ func TestTurnProfile_BeforeLLMHookCannotReenableNativeSearchWhenCustomToolsResol
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-native-web-hook-custom-empty",
-			UserMessage:     "search",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-native-web-hook-custom-empty",
+				UserMessage: "search",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1364,9 +1363,8 @@ func TestTurnProfile_ToolExecutionRejectsDisallowedToolCalls(t *testing.T) {
 	response, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tool-exec-deny",
-			UserMessage:     "run tool",
+		turnSpec{
+			Dispatch:        DispatchRequest{SessionKey: "agent:default:test-tool-exec-deny", UserMessage: "run tool"},
 			DefaultResponse: defaultResponse,
 		},
 	)
@@ -1418,9 +1416,11 @@ func TestTurnProfile_BeforeToolRespondCannotBypassDisallowedTool(t *testing.T) {
 	_, err := al.runAgentLoop(
 		context.Background(),
 		al.GetRegistry().GetDefaultAgent(),
-		processOptions{
-			SessionKey:      "agent:default:test-tool-hook-respond-denied",
-			UserMessage:     "run tool",
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:  "agent:default:test-tool-hook-respond-denied",
+				UserMessage: "run tool",
+			},
 			DefaultResponse: defaultResponse,
 		},
 	)

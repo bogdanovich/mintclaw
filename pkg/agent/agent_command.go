@@ -24,9 +24,9 @@ func (al *AgentLoop) handleCommand(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	modelBinding effectiveModelBinding,
-	opts *processOptions,
+	opts *turnSpec,
 ) (string, bool) {
-	normalizeProcessOptionsInPlace(opts)
+	normalizeTurnSpecInPlace(opts)
 
 	if !commands.HasCommandPrefix(msg.Content) {
 		return "", false
@@ -76,9 +76,9 @@ func (al *AgentLoop) handleCommand(
 func (al *AgentLoop) applyExplicitSkillCommand(
 	raw string,
 	agent *AgentInstance,
-	opts *processOptions,
+	opts *turnSpec,
 ) (matched bool, handled bool, reply string) {
-	normalizeProcessOptionsInPlace(opts)
+	normalizeTurnSpecInPlace(opts)
 
 	cmdName, ok := commands.CommandName(raw)
 	if !ok || cmdName != "use" {
@@ -128,7 +128,6 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	if opts != nil {
 		opts.ForcedSkills = append(opts.ForcedSkills, skillName)
 		opts.Dispatch.UserMessage = message
-		opts.UserMessage = message
 	}
 
 	return true, false, ""
@@ -137,9 +136,9 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 func (al *AgentLoop) buildCommandsRuntime(
 	ctx context.Context,
 	modelBinding effectiveModelBinding,
-	opts *processOptions,
+	opts *turnSpec,
 ) *commands.Runtime {
-	normalizeProcessOptionsInPlace(opts)
+	normalizeTurnSpecInPlace(opts)
 
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
@@ -288,7 +287,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 	}
 	rt.StopActiveTurn = func() (commands.StopResult, error) {
 		if opts == nil {
-			return commands.StopResult{}, fmt.Errorf("process options not available")
+			return commands.StopResult{}, fmt.Errorf("turn specification not available")
 		}
 		if workspaceAgent == nil {
 			return commands.StopResult{}, fmt.Errorf("workspace agent not available")
@@ -469,7 +468,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 
 		rt.ClearHistory = func() error {
 			if opts == nil {
-				return fmt.Errorf("process options not available")
+				return fmt.Errorf("turn specification not available")
 			}
 			// /clear can arrive before any turn has persisted session scope
 			// metadata (runAgentLoop records it per turn), so record it here to
@@ -479,12 +478,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionKey,
 				opts.Dispatch.SessionScope,
 			)
-			return al.contextManager.Clear(ctx, agent, opts.SessionKey)
+			return al.contextManager.Clear(ctx, agent, opts.Dispatch.SessionKey)
 		}
 
 		rt.ResetSession = func(clearOverride bool) (string, error) {
 			if opts == nil {
-				return "", fmt.Errorf("process options not available")
+				return "", fmt.Errorf("turn specification not available")
 			}
 			routeSessionKey := strings.TrimSpace(opts.Dispatch.RouteSessionKey)
 			if routeSessionKey == "" {
@@ -595,11 +594,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			al.applyActiveGoalPrompt(&resolvedOpts)
 
-			storedUsage := computeContextUsage(agent, resolvedOpts.SessionKey)
+			sessionKey := resolvedOpts.Dispatch.SessionKey
+			storedUsage := computeContextUsage(agent, sessionKey)
 			if storedUsage == nil {
 				return nil
 			}
-			storedHistory := agent.Sessions.GetHistory(resolvedOpts.SessionKey)
+			storedHistory := agent.Sessions.GetHistory(sessionKey)
 			statsAgent := contextStatsAgentForBinding(agent, modelBinding)
 			var assembledUsage *bus.ContextUsage
 			assembledMessageCount := len(storedHistory)
@@ -610,7 +610,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				statsAgent,
 				al.contextManager,
 				resolvedOpts,
-				resolvedOpts.SessionKey,
+				sessionKey,
 			); usage != nil {
 				assembledUsage = usage
 				assembledMessageCount = count

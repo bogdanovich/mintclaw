@@ -147,7 +147,7 @@ func TestTerminalTaskContextIsVisibleToSameSessionRepeatRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.Sessions.AddMessage(sessionKey, "assistant", "Spawned task earlier; acceptance only")
-	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{Dispatch: DispatchRequest{
+	if _, err := al.runAgentLoop(t.Context(), agent, turnSpec{Dispatch: DispatchRequest{
 		SessionKey: sessionKey, UserMessage: "Run the Craigslist check again.", InboundContext: &bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
 		},

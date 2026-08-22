@@ -1173,11 +1173,12 @@ func TestSeahorseRealLoopNoDuplicateMessages(t *testing.T) {
 	sessionKey := "test-real-loop-dup"
 
 	// Run a turn: user message -> LLM response
-	_, err := al.runAgentLoop(ctx, defaultAgent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	_, err := al.runAgentLoop(ctx, defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     sessionKey,
+			UserMessage:    "hello",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1528,11 +1529,12 @@ func TestSeahorseSteeringMessageIngested(t *testing.T) {
 	sessionKey := "test-steering-ingest"
 
 	// First turn: establish conversation
-	_, err := al.runAgentLoop(ctx, defaultAgent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "hello",
+	_, err := al.runAgentLoop(ctx, defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     sessionKey,
+			UserMessage:    "hello",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1552,11 +1554,12 @@ func TestSeahorseSteeringMessageIngested(t *testing.T) {
 	}
 
 	// Second turn: should process steering message
-	_, err = al.runAgentLoop(ctx, defaultAgent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "continue",
+	_, err = al.runAgentLoop(ctx, defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     sessionKey,
+			UserMessage:    "continue",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -1693,11 +1696,12 @@ func TestSeahorseSummarizeSkipsCondensedWhenBelowThreshold(t *testing.T) {
 	t.Logf("Tokens before: %d, threshold: %d", tokensBefore, threshold)
 
 	// Trigger Summarize
-	_, err = al.runAgentLoop(ctx, defaultAgent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "trigger",
+	_, err = al.runAgentLoop(ctx, defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     sessionKey,
+			UserMessage:    "trigger",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   true,
 		SendResponse:    false,

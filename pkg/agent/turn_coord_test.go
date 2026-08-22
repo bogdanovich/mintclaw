@@ -373,15 +373,12 @@ func newTurnCoordTestLoop(
 	}
 }
 
-func makeTestProcessOpts(sessionKey string) processOptions {
-	return processOptions{
+func makeTestTurnSpec(sessionKey string) turnSpec {
+	return turnSpec{
 		ModelBinding: effectiveModelBinding{
 			RouteSessionKey: sessionKey,
 		},
-		SessionKey:      sessionKey,
-		Channel:         "cli",
-		ChatID:          "test-chat",
-		UserMessage:     "test message",
+		Dispatch:        testDispatchRequest(sessionKey, "cli", "test-chat", "test message"),
 		DefaultResponse: "I couldn't process your request.",
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -533,7 +530,7 @@ func TestPipeline_SetupTurn_BasicInitialization(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -585,10 +582,10 @@ func TestPipeline_SetupTurn_DoesNotAttachHistoricalImages(t *testing.T) {
 		{Role: "assistant", Content: "historical answer"},
 	}}
 
-	opts := makeTestProcessOpts("setup-turn-media-boundary")
-	opts.UserMessage = "[image]"
-	opts.Media = []string{currentRef}
-	opts = normalizeProcessOptions(opts)
+	opts := makeTestTurnSpec("setup-turn-media-boundary")
+	opts.Dispatch.UserMessage = "[image]"
+	opts.Dispatch.Media = []string{currentRef}
+	opts = normalizeTurnSpec(opts)
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-media-boundary",
 		context: newTurnContext(nil, nil, nil),
@@ -628,7 +625,7 @@ func TestPipeline_SetupTurn_PropagatesContextAssemblyFailure(t *testing.T) {
 		assembleErr: errors.New("mandatory recent context exceeds budget"),
 	}
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("assembly-failure"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("assembly-failure"), turnEventScope{
 		turnID:  "turn-assembly-failure",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -662,7 +659,7 @@ func TestPipeline_SetupTurn_ProactiveCompactionDoesNotBlockResponsePath(t *testi
 	defer close(cm.releaseCompact)
 
 	pipeline := newTestPipeline(al)
-	opts := normalizeProcessOptions(makeTestProcessOpts("test-session-pressure"))
+	opts := normalizeTurnSpec(makeTestTurnSpec("test-session-pressure"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-pressure",
 		context: newTurnContext(nil, nil, nil),
@@ -727,7 +724,7 @@ func TestPipeline_SetupTurn_SchedulesAbsoluteBudgetCompaction(t *testing.T) {
 	defer closeEvents()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, normalizeProcessOptions(makeTestProcessOpts("absolute-pressure")), turnEventScope{
+	ts := newTurnState(agent, normalizeTurnSpec(makeTestTurnSpec("absolute-pressure")), turnEventScope{
 		turnID:  "turn-absolute-pressure",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -768,7 +765,7 @@ func TestPipelineSetupTurnSuppressesBackgroundCompactionForShortLivedCaller(t *t
 	}
 	al.contextManager = cm
 	defer close(cm.releaseCompact)
-	opts := normalizeProcessOptions(makeTestProcessOpts("short-lived-pressure"))
+	opts := normalizeTurnSpec(makeTestTurnSpec("short-lived-pressure"))
 	opts.SuppressBackgroundCompaction = true
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-short-lived-pressure",
@@ -821,7 +818,7 @@ func TestPipeline_SetupTurn_ReportsDegradedTailWithoutCompaction(t *testing.T) {
 	defer closeEvents()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, normalizeProcessOptions(makeTestProcessOpts("degraded-tail")), turnEventScope{
+	ts := newTurnState(agent, normalizeTurnSpec(makeTestTurnSpec("degraded-tail")), turnEventScope{
 		turnID:  "turn-degraded-tail",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -853,7 +850,7 @@ func TestPipeline_CallLLM_SimpleResponse(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -893,7 +890,7 @@ func TestPipeline_SetupTurn_ModelNameDoesNotUseFallbackAliasBeforeFallback(t *te
 	}
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -929,7 +926,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -979,7 +976,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackDisplayNameWithoutAlias(t *testi
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1030,8 +1027,8 @@ func TestPipeline_SetupTurn_UsesLightCandidateDisplayName(t *testing.T) {
 	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-model", Threshold: 1})
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session")
-	opts.UserMessage = ""
+	opts := makeTestTurnSpec("test-session")
+	opts.Dispatch.UserMessage = ""
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -1190,7 +1187,7 @@ func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1229,7 +1226,7 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 	al.cfg.Tools.Web.PreferNative = true
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1265,7 +1262,7 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 		runtimeevents.KindAgentLLMRetry,
 	)
 	defer closeRuntimeEvents()
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1336,7 +1333,7 @@ func TestPipeline_CallLLM_HTTP5xxRetry(t *testing.T) {
 
 	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1371,7 +1368,7 @@ func TestPipeline_CallLLM_NetworkErrorRetry(t *testing.T) {
 
 	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1442,7 +1439,7 @@ func TestPipeline_CallLLM_RetryConfigRespected(t *testing.T) {
 
 	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1474,7 +1471,7 @@ func TestPipeline_CallLLM_RetrySleepCancellation(t *testing.T) {
 	pipeline := newTestPipeline(al)
 	sleeper := &recordingRetrySleeper{}
 	pipeline.retrySleeper = sleeper
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1508,7 +1505,7 @@ func TestPipeline_CallLLM_StickyAutoFallbackAcrossTurns(t *testing.T) {
 
 	firstTS := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
+		normalizeTurnSpec(makeTestTurnSpec("sticky-session")),
 		turnEventScope{
 			turnID:  "turn-1",
 			context: newTurnContext(nil, nil, nil),
@@ -1534,7 +1531,7 @@ func TestPipeline_CallLLM_StickyAutoFallbackAcrossTurns(t *testing.T) {
 
 	secondTS := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
+		normalizeTurnSpec(makeTestTurnSpec("sticky-session")),
 		turnEventScope{
 			turnID:  "turn-2",
 			context: newTurnContext(nil, nil, nil),
@@ -1593,7 +1590,7 @@ func TestPipeline_SetupTurn_ClearsStaleAutoFallbackSelectionOnModelMismatch(t *t
 	pipeline := newTestPipeline(al)
 	ts := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
+		normalizeTurnSpec(makeTestTurnSpec("sticky-session")),
 		turnEventScope{
 			turnID:  "turn-stale-selection",
 			context: newTurnContext(nil, nil, nil),
@@ -1621,7 +1618,7 @@ func TestPipeline_CallLLM_LightTurnPreservesPrimaryStickySelection(t *testing.T)
 
 	firstTS := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
+		normalizeTurnSpec(makeTestTurnSpec("sticky-session")),
 		turnEventScope{
 			turnID:  "turn-heavy-1",
 			context: newTurnContext(nil, nil, nil),
@@ -1651,8 +1648,8 @@ func TestPipeline_CallLLM_LightTurnPreservesPrimaryStickySelection(t *testing.T)
 	}
 	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-model", Threshold: 1})
 
-	lightOpts := normalizeProcessOptions(makeTestProcessOpts("sticky-session"))
-	lightOpts.UserMessage = ""
+	lightOpts := normalizeTurnSpec(makeTestTurnSpec("sticky-session"))
+	lightOpts.Dispatch.UserMessage = ""
 	lightTS := newTurnState(agent, lightOpts, turnEventScope{
 		turnID:  "turn-light",
 		context: newTurnContext(nil, nil, nil),
@@ -1679,7 +1676,7 @@ func TestPipeline_CallLLM_LightTurnPreservesPrimaryStickySelection(t *testing.T)
 
 	thirdTS := newTurnState(
 		agent,
-		normalizeProcessOptions(makeTestProcessOpts("sticky-session")),
+		normalizeTurnSpec(makeTestTurnSpec("sticky-session")),
 		turnEventScope{
 			turnID:  "turn-heavy-2",
 			context: newTurnContext(nil, nil, nil),
@@ -1738,7 +1735,7 @@ func TestPipeline_CallLLM_RetryCountLimit(t *testing.T) {
 
 	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1797,7 +1794,7 @@ func TestPipeline_ExecuteTools_NoTools(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -1829,7 +1826,7 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session-simple")
+	opts := makeTestTurnSpec("test-session-simple")
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-simple",
@@ -1855,7 +1852,7 @@ func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
 	cleanupTool := &turnCleanupTestTool{countingTestTool: &countingTestTool{name: "turn-cleanup"}}
 	agent.Tools.Register(cleanupTool)
 	pipeline := newTestPipeline(al)
-	opts := normalizeProcessOptions(makeTestProcessOpts("terminal-cleanup"))
+	opts := normalizeTurnSpec(makeTestTurnSpec("terminal-cleanup"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID: "turn-terminal-cleanup", context: newTurnContext(nil, nil, nil),
 	})
@@ -1882,7 +1879,7 @@ func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {
 	agent.Tools.Register(tool)
 	pipeline := newTestPipeline(al)
 	pipeline.Interaction.Hooks = afterToolHardAbortHook{}
-	opts := normalizeProcessOptions(makeTestProcessOpts("post-tool-hard-abort"))
+	opts := normalizeTurnSpec(makeTestTurnSpec("post-tool-hard-abort"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-post-tool-hard-abort",
 		context: newTurnContext(nil, nil, nil),
@@ -1907,7 +1904,7 @@ func TestHardAbortSnapshotFailureIsNotReportedAsSuccessfulRollback(t *testing.T)
 	defer cleanup()
 	injectedErr := errors.New("restore snapshot")
 	agent.Sessions = &restoreFailingSessionStore{SessionStore: agent.Sessions, err: injectedErr}
-	opts := normalizeProcessOptions(makeTestProcessOpts("failed-abort-restore"))
+	opts := normalizeTurnSpec(makeTestTurnSpec("failed-abort-restore"))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-failed-abort-restore",
 		context: newTurnContext(nil, nil, nil),
@@ -1947,7 +1944,7 @@ func TestHardAbortRestoresCanonicalHistoryWhenPromptAssemblyIsEmpty(t *testing.T
 	}
 	wantHistory = agent.Sessions.GetHistory(sessionKey)
 
-	opts := normalizeProcessOptions(makeTestProcessOpts(sessionKey))
+	opts := normalizeTurnSpec(makeTestTurnSpec(sessionKey))
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-empty-assembly-abort",
 		context: newTurnContext(nil, nil, nil),
@@ -1994,7 +1991,7 @@ func TestCallLLMMintClawToolInterimRequiresDurableIntent(t *testing.T) {
 			recorder := &recordingReasoningPublisher{}
 			pipeline := newTestPipeline(al)
 			pipeline.Interaction.Reasoning = recorder
-			opts := normalizeProcessOptions(makeTestProcessOpts("mintclaw-interim-" + tc.name))
+			opts := normalizeTurnSpec(makeTestTurnSpec("mintclaw-interim-" + tc.name))
 			opts.NoHistory = tc.noHistory
 			opts.Dispatch.InboundContext = &bus.InboundContext{
 				Channel: "mintclaw",
@@ -2047,7 +2044,7 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 	}
 	pipeline := newTestPipeline(al)
 	pipeline.Interaction.Suspension = manager
-	opts := normalizeProcessOptions(processOptions{
+	opts := normalizeTurnSpec(turnSpec{
 		ModelBinding: effectiveModelBinding{RouteSessionKey: "route-suspend"},
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-suspend",
@@ -2113,7 +2110,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 	agent.MaxIterations = 2
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session-maxiter")
+	opts := makeTestTurnSpec("test-session-maxiter")
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-maxiter",
@@ -2137,7 +2134,7 @@ func TestRunTurn_HardAbort(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session-abort")
+	opts := makeTestTurnSpec("test-session-abort")
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-abort",
@@ -2174,7 +2171,7 @@ func TestRunTurn_SteeringMessageInjection(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session-steering")
+	opts := makeTestTurnSpec("test-session-steering")
 	opts.Dispatch.SessionKey = "test-session-steering"
 
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -2237,7 +2234,7 @@ func TestRunTurn_SteeringToolMediaUsesPipelineMediaLimit(t *testing.T) {
 	pipelineConfig := *pipeline.Cfg
 	pipelineConfig.Agents.Defaults.MaxMediaSize = 1
 	pipeline.Cfg = &pipelineConfig
-	opts := makeTestProcessOpts("test-session-steering-media")
+	opts := makeTestTurnSpec("test-session-steering-media")
 	opts.Dispatch.SessionKey = "test-session-steering-media"
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-steering-media",
@@ -2288,7 +2285,7 @@ func TestRunTurn_GracefulInterrupt(t *testing.T) {
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	opts := makeTestProcessOpts("test-session-graceful")
+	opts := makeTestTurnSpec("test-session-graceful")
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-graceful",

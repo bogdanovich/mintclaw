@@ -7,7 +7,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func resolveTurnProfileOptions(cfg *config.Config, opts processOptions) (processOptions, error) {
+func resolveTurnProfileOptions(cfg *config.Config, opts turnSpec) (turnSpec, error) {
 	if cfg == nil {
 		return opts, nil
 	}

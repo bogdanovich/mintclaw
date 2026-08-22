@@ -1643,7 +1643,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		deliveryObservation = &finalDeliveryObservation{}
 	}
 	var resumedTurn turnResult
-	continuationOpts := processOptions{
+	continuationOpts := turnSpec{
 		ModelBinding:               modelBinding,
 		TaskID:                     record.Origin.TaskID,
 		InteractionWorkspace:       interactionWorkspace,
@@ -2124,7 +2124,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		agent: agent, agentID: record.Route.AgentID,
 		workspace: workspace, channel: record.Route.Channel, chatID: record.Route.ChatID,
 		sessionKey: record.Route.SessionKey,
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: record.Route.RouteSessionKey,
 			SessionKey:      record.Route.SessionKey,
 			InboundContext:  cloneInboundContext(&inbound),

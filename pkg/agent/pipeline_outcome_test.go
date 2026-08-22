@@ -60,7 +60,7 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 
 			pipeline := newTestPipeline(al)
 			pipeline.Interaction.Hooks = abortingPipelineHook{action: test.action}
-			ts := newTurnState(agent, makeTestProcessOpts("outcome-abort"), turnEventScope{
+			ts := newTurnState(agent, makeTestTurnSpec("outcome-abort"), turnEventScope{
 				turnID:  "turn-outcome-abort",
 				context: newTurnContext(nil, nil, nil),
 			})
@@ -81,7 +81,7 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 				t.Fatalf("LLM outcome = %#v, want break with abort cause %v", llmOutcome, test.want)
 			}
 
-			toolTS := newTurnState(agent, makeTestProcessOpts("outcome-tool-abort"), turnEventScope{
+			toolTS := newTurnState(agent, makeTestTurnSpec("outcome-tool-abort"), turnEventScope{
 				turnID:  "turn-outcome-tool-abort",
 				context: newTurnContext(nil, nil, nil),
 			})

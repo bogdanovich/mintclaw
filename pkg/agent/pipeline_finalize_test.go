@@ -11,7 +11,7 @@ import (
 
 func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	ts := &turnState{
-		opts: processOptions{
+		opts: turnSpec{
 			SendResponse:                false,
 			AllowInterimMintClawPublish: true,
 			EnableSummary:               true,
@@ -99,7 +99,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 
 func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T) {
 	ts := &turnState{
-		opts: processOptions{EnableSummary: true},
+		opts: turnSpec{EnableSummary: true},
 	}
 	exec := &turnExecution{
 		model: turnExecutionModel{
@@ -162,7 +162,7 @@ func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
 }
 
 func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) {
-	ts := &turnState{opts: processOptions{
+	ts := &turnState{opts: turnSpec{
 		EnableSummary:                true,
 		SuppressBackgroundCompaction: true,
 	}}

@@ -246,7 +246,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	inbound := &bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
-	parentOpts := processOptions{Dispatch: DispatchRequest{
+	parentOpts := turnSpec{Dispatch: DispatchRequest{
 		RouteSessionKey: "route-owner", SessionKey: "owner-session",
 		InboundContext: inbound,
 	}}
@@ -409,7 +409,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	inbound := &bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-approval", SenderID: "user-approval",
 	}
-	parentOpts := processOptions{Dispatch: DispatchRequest{
+	parentOpts := turnSpec{Dispatch: DispatchRequest{
 		RouteSessionKey: "route-task-approval", SessionKey: "owner-task-approval",
 		InboundContext: inbound,
 	}}
@@ -481,7 +481,7 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	defer cleanup()
 	agent.Tools.Register(&outcomeBrowserApprovalTool{})
 	inbound := &bus.InboundContext{Channel: "telegram", ChatID: "chat-user-only", SenderID: "user"}
-	parent := newTurnState(agent, processOptions{Dispatch: DispatchRequest{
+	parent := newTurnState(agent, turnSpec{Dispatch: DispatchRequest{
 		RouteSessionKey: "route-user-only", SessionKey: "parent-user-only", InboundContext: inbound,
 	}}, al.newTurnEventScope(
 		agent.ID, agent.Workspace, "parent-user-only", newTurnContext(inbound, nil, nil),
@@ -619,7 +619,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		Dimensions: []string{"chat"}, Values: map[string]string{"chat": "chat-cross-agent"},
 		RouteScopeKey: "telegram:chat-cross-agent", ClientSessionID: "frontend-cross-agent",
 	}
-	parent := newTurnState(alpha, processOptions{Dispatch: DispatchRequest{
+	parent := newTurnState(alpha, turnSpec{Dispatch: DispatchRequest{
 		RouteSessionKey: "route-cross-agent", SessionKey: "owner-cross-agent",
 		InboundContext: inbound, SessionScope: parentScope,
 	}}, al.newTurnEventScope(
@@ -2559,7 +2559,7 @@ func TestSpawnSubTurn_DefaultSyncDeliveryRemovesUserDeliveryTools(t *testing.T) 
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey: "parent-default-sync-delivery",
 			},
@@ -2602,7 +2602,7 @@ func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
+		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", SystemPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
@@ -2637,7 +2637,7 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts:           processOptions{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
+		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
 	}
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", SystemPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
@@ -2677,7 +2677,7 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			SessionKey: "parent-browser-objective-bridge",
 		}},
 	}
@@ -2755,7 +2755,7 @@ func TestSpawnSubTurn_TargetAgentIDRemovesNodeFileTools(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch:  DispatchRequest{SessionKey: "parent-cross-agent-file-tools"},
 			NoHistory: true,
 		},
@@ -2824,7 +2824,7 @@ func TestSpawnSubTurn_InheritsSuppressToolFeedback(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          parentAgent,
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-suppress-tool-feedback",
 				UserMessage: "scheduled parent",
@@ -2904,7 +2904,7 @@ func TestSpawnSubTurn_DurableTaskDismissesPublishedToolFeedbackSession(t *testin
 		session:        &ephemeralSessionStore{},
 		agent:          parentAgent,
 		workspace:      parentAgent.Workspace,
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-durable-tool-feedback",
 				UserMessage: "spawn durable child",
@@ -2980,7 +2980,7 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 		session:        newEphemeralSession(nil),
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-completion",
 				UserMessage: "parent",
@@ -4008,7 +4008,7 @@ func TestDurableSyncDelegateUserOnlyPublishesExactlyOnce(t *testing.T) {
 	alpha.Subagents = &config.SubagentsConfig{AllowAgents: []string{"beta"}}
 	ctx := withOutboundTransaction(t.Context(), "spool-delegate-user-only")
 
-	response, err := al.runAgentLoop(ctx, alpha, processOptions{
+	response, err := al.runAgentLoop(ctx, alpha, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "delegate-parent-session",
 			UserMessage: "delegate this",
@@ -4099,7 +4099,7 @@ func TestDurableSyncDelegateFailureRejectsRecoveredParentFinal(t *testing.T) {
 	alpha.Subagents = &config.SubagentsConfig{AllowAgents: []string{"beta"}}
 	ctx := withOutboundTransaction(t.Context(), "spool-delegate-rejected")
 
-	response, err := al.runAgentLoop(ctx, alpha, processOptions{
+	response, err := al.runAgentLoop(ctx, alpha, turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "delegate-rejected-session",
 			UserMessage: "delegate this",

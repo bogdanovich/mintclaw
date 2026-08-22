@@ -73,7 +73,7 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	defer cleanup()
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("llm-stage-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("llm-stage-session"), turnEventScope{
 		turnID:  "llm-stage-turn",
 		context: newTurnContext(nil, nil, nil),
 	})
@@ -163,7 +163,7 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	pipeline := newTestPipeline(al)
 	contextCapture := &trackingContextManager{}
 	pipeline.Context.Runtime = contextCapture
-	ts := newTurnState(agent, makeTestProcessOpts("projection-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("projection-session"), turnEventScope{
 		turnID: "projection-turn", context: newTurnContext(nil, nil, nil),
 	})
 	exec, err := pipeline.SetupTurn(t.Context(), ts)
@@ -221,7 +221,9 @@ func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *test
 	agent.Tools.Register(durableProjectionTestTool{})
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("protected-batch-session"), turnEventScope{
+	opts := makeTestTurnSpec("protected-batch-session")
+	opts.Dispatch.UserMessage = ""
+	ts := newTurnState(agent, opts, turnEventScope{
 		turnID: "protected-batch-turn", context: newTurnContext(nil, nil, nil),
 	})
 	exec, err := pipeline.SetupTurn(t.Context(), ts)
@@ -260,7 +262,7 @@ func TestLLMNormalizationAllowsResultOnlyProtectedCallsInBatch(t *testing.T) {
 	agent.Tools.Register(resultOnlyDurabilityTestTool{})
 
 	pipeline := newTestPipeline(al)
-	ts := newTurnState(agent, makeTestProcessOpts("result-only-batch-session"), turnEventScope{
+	ts := newTurnState(agent, makeTestTurnSpec("result-only-batch-session"), turnEventScope{
 		turnID: "result-only-batch-turn", context: newTurnContext(nil, nil, nil),
 	})
 	exec, err := pipeline.SetupTurn(t.Context(), ts)
@@ -316,7 +318,9 @@ func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersisten
 	pipeline := newTestPipeline(al)
 	contextCapture := &trackingContextManager{}
 	pipeline.Context.Runtime = contextCapture
-	ts := newTurnState(agent, makeTestProcessOpts("conflicting-browser-session"), turnEventScope{
+	opts := makeTestTurnSpec("conflicting-browser-session")
+	opts.Dispatch.UserMessage = ""
+	ts := newTurnState(agent, opts, turnEventScope{
 		turnID: "conflicting-browser-turn", context: newTurnContext(nil, nil, nil),
 	})
 	exec, err := pipeline.SetupTurn(t.Context(), ts)

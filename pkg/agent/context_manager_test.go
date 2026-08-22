@@ -428,11 +428,12 @@ func TestIngestCalledDuringTurn(t *testing.T) {
 	}
 
 	// Run a turn — ingestMessage is called for user message and final assistant message
-	_, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
-		SessionKey:      "session-ingest-turn",
-		Channel:         "cli",
-		ChatID:          "direct",
-		UserMessage:     "test ingest",
+	_, err := al.runAgentLoop(context.Background(), defaultAgent, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:     "session-ingest-turn",
+			UserMessage:    "test ingest",
+			InboundContext: &bus.InboundContext{Channel: "cli", ChatID: "direct"},
+		},
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
@@ -703,14 +704,14 @@ func TestComputeAssembledContextUsage_UsesAssembledHistoryAndSummaryReserve(t *t
 		cfg,
 		agent,
 		al.contextManager,
-		processOptions{},
+		turnSpec{},
 		"ctx-session",
 	)
 	resp, err := al.contextManager.Assemble(context.Background(), &AssembleRequest{
 		SessionKey:    "ctx-session",
 		Budget:        agent.ContextWindow,
 		MaxTokens:     agent.MaxTokens,
-		ReserveTokens: estimateNonHistoryPromptReserveForProcessOptions(cfg, agent, processOptions{}, ""),
+		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, ""),
 	})
 	if err != nil || resp == nil {
 		t.Fatalf("assemble failed: %v", err)
@@ -720,7 +721,7 @@ func TestComputeAssembledContextUsage_UsesAssembledHistoryAndSummaryReserve(t *t
 		expectedHistoryTokens += EstimateMessageTokens(msg)
 	}
 	expectedUsed := expectedHistoryTokens +
-		estimateNonHistoryPromptReserveForProcessOptions(cfg, agent, processOptions{}, resp.Summary)
+		estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, resp.Summary)
 	if got == nil {
 		t.Fatal("expected assembled usage result")
 	}
@@ -755,7 +756,7 @@ func TestComputeAssembledContextUsage_ReportsOverBudgetPrompt(t *testing.T) {
 		cfg,
 		agent,
 		al.contextManager,
-		processOptions{},
+		turnSpec{},
 		"ctx-tight",
 	)
 	if got == nil {
@@ -789,7 +790,7 @@ func TestComputeAssembledContextUsage_NoHistorySkipsSessionAssembly(t *testing.T
 		cfg,
 		agent,
 		al.contextManager,
-		processOptions{NoHistory: true},
+		turnSpec{NoHistory: true},
 		"ctx-nohistory",
 	)
 	if got == nil {
@@ -832,7 +833,7 @@ func TestComputeAssembledContextUsage_AllowsNilTools(t *testing.T) {
 		cfg,
 		agent,
 		al.contextManager,
-		processOptions{},
+		turnSpec{},
 		"ctx-nil-tools",
 	)
 	if got == nil {
@@ -852,7 +853,7 @@ func TestComputeAssembledContextUsage_AllowsNilTools(t *testing.T) {
 	}
 }
 
-func TestEstimateNonHistoryPromptReserveForProcessOptions_PreservesSystemWhenToolsNil(t *testing.T) {
+func TestEstimateNonHistoryPromptReserveForTurnSpec_PreservesSystemWhenToolsNil(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 	agent := al.registry.GetDefaultAgent()
@@ -860,10 +861,10 @@ func TestEstimateNonHistoryPromptReserveForProcessOptions_PreservesSystemWhenToo
 		t.Fatal("expected default agent")
 	}
 
-	withTools := estimateNonHistoryPromptReserveForProcessOptions(
+	withTools := estimateNonHistoryPromptReserveForTurnSpec(
 		cfg,
 		agent,
-		processOptions{},
+		turnSpec{},
 		"summary text",
 	)
 	if withTools <= 0 {
@@ -871,10 +872,10 @@ func TestEstimateNonHistoryPromptReserveForProcessOptions_PreservesSystemWhenToo
 	}
 
 	agent.Tools = nil
-	withoutTools := estimateNonHistoryPromptReserveForProcessOptions(
+	withoutTools := estimateNonHistoryPromptReserveForTurnSpec(
 		cfg,
 		agent,
-		processOptions{},
+		turnSpec{},
 		"summary text",
 	)
 	if withoutTools <= 0 {

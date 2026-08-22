@@ -575,7 +575,7 @@ func newDeliveryCoordinatorTestRuntimeWithWorkspace(
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "session-1",
-		opts: processOptions{
+		opts: turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:     "session-1",
 				InboundContext: inbound,

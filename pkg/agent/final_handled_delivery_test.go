@@ -204,7 +204,7 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 						turnID:     "turn-final-handled",
 						sessionKey: sessionKey,
 						session:    store,
-						opts: processOptions{
+						opts: turnSpec{
 							SendResponse: true,
 							Dispatch:     DispatchRequest{SessionKey: sessionKey},
 						},
@@ -320,7 +320,7 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-pending-receipt",
 		sessionKey: sessionKey, session: store,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{ID: "call-send-file", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{
@@ -409,7 +409,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-ambiguous-receipt",
 		sessionKey: sessionKey, session: store,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{
 		ID: "call-ambiguous-message", Name: tool.Name(), Arguments: map[string]any{},
@@ -451,7 +451,7 @@ func TestReceiptlessFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "receiptless-text",
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
 		}},
 	}
@@ -537,7 +537,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-hard-abort",
 		sessionKey: sessionKey, session: store,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{
@@ -612,7 +612,7 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-reservation-failure",
 		sessionKey: sessionKey, session: store,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	priorCall := providers.ToolCall{ID: "call-prior", Name: prior.Name(), Arguments: map[string]any{}}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
@@ -704,7 +704,7 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-finalization-failure",
 		sessionKey: sessionKey, session: store,
-		opts: processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
 	}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{
@@ -826,7 +826,7 @@ func TestRunAgentLoopFinalHandledPreflightFailureReachesNextProviderAndHistory(t
 	response, err := al.runAgentLoop(
 		withOutboundTransaction(t.Context(), "trace-turn-096307c49f75e730ec5540b5"),
 		agent,
-		processOptions{
+		turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  sessionKey,
 				UserMessage: "send the video",
@@ -905,7 +905,7 @@ func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistor
 		response, runErr := al.runAgentLoop(
 			withOutboundTransaction(t.Context(), "confirmed-settlement"),
 			agent,
-			processOptions{
+			turnSpec{
 				Dispatch: DispatchRequest{
 					SessionKey:  sessionKey,
 					UserMessage: "send the message and continue",

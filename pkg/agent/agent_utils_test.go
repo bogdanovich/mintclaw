@@ -13,7 +13,7 @@ func TestOutboundMessageForTurnCarriesTraceScopeWithoutSettlement(t *testing.T) 
 		turnID:    "turn-1",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: processOptions{Dispatch: DispatchRequest{
+		opts: turnSpec{Dispatch: DispatchRequest{
 			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
 		}},
 	}

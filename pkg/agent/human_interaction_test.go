@@ -427,7 +427,7 @@ func TestToolExecutionIdentityDoesNotRepeatAcrossAgentLoops(t *testing.T) {
 		scope := loop.newTurnEventScope(agent.ID, agent.Workspace, "session-1", nil)
 		state := newTurnState(
 			agent,
-			processOptions{Dispatch: DispatchRequest{SessionKey: "session-1"}},
+			turnSpec{Dispatch: DispatchRequest{SessionKey: "session-1"}},
 			scope,
 		)
 		executionIDs = append(executionIDs, state.executionID)
@@ -3538,7 +3538,7 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "origin-message",
 			}
 			turnStatus := TurnEndStatusCompleted
-			response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+			response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 				TurnStatus:            &turnStatus,
 				InteractionSessionKey: "owner-session",
 				Dispatch: DispatchRequest{
@@ -3698,7 +3698,7 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		SenderID: "user-1", MessageID: "approval-origin",
 	}
 	turnStatus := TurnEndStatusCompleted
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus:            &turnStatus,
 		InteractionSessionKey: "owner-approval-stop",
 		Dispatch: DispatchRequest{
@@ -3813,7 +3813,7 @@ func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *tes
 		SenderID: "user-1", MessageID: "approval-origin",
 	}
 	turnStatus := TurnEndStatusCompleted
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus:            &turnStatus,
 		InteractionSessionKey: "owner-approval-post-execute-stop",
 		Dispatch: DispatchRequest{
@@ -3949,7 +3949,7 @@ func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
 	turnStatus := TurnEndStatusCompleted
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-prepared", SessionKey: "session-prepared",
@@ -4040,7 +4040,7 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 		Channel: "telegram", ChatID: "chat-browser-owner", SenderID: "user-browser-owner",
 	}
 	turnStatus := TurnEndStatusCompleted
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-browser-owner", SessionKey: "session-browser-owner",
@@ -4111,7 +4111,7 @@ func TestDurableHumanApprovalDoesNotPrepareAfterPolicyRevocation(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
 	turnStatus := TurnEndStatusCompleted
-	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	if _, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-revoked", SessionKey: "session-revoked",
@@ -4176,7 +4176,7 @@ func TestHumanApprovalNeverRendersGenericArguments(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 	}
 	turnStatus := TurnEndStatusCompleted
-	response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-opaque", SessionKey: "session-opaque",
@@ -4344,7 +4344,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		Raw:          map[string]string{"thread_ts": "original-thread", "transport": "original"},
 	}
 	turnStatus := TurnEndStatusCompleted
-	if response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	if response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-context", SessionKey: "session-context",
@@ -4441,7 +4441,7 @@ func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 		MessageID: "hard-abort-origin",
 	}
 	turnStatus := TurnEndStatusCompleted
-	if response, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	if response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-hard-abort", SessionKey: "session-hard-abort",
@@ -4513,7 +4513,7 @@ func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
 		MessageID: "hard-abort-journal-origin",
 	}
 	turnStatus := TurnEndStatusCompleted
-	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	if _, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-hard-abort-journal", SessionKey: "session-hard-abort-journal",
@@ -4607,7 +4607,7 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 		Channel: "telegram", ChatID: "chat-journal-receipt", SenderID: "user",
 	}
 	turnStatus := TurnEndStatusCompleted
-	if _, err := al.runAgentLoop(t.Context(), agent, processOptions{
+	if _, err := al.runAgentLoop(t.Context(), agent, turnSpec{
 		TurnStatus: &turnStatus,
 		Dispatch: DispatchRequest{
 			RouteSessionKey: "route-journal-receipt", SessionKey: "session-journal-receipt",

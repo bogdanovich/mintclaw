@@ -166,7 +166,7 @@ func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *t
 }
 
 func TestNewTurnState_NilAgent(t *testing.T) {
-	ts := newTurnState(nil, makeTestProcessOpts("nil-agent"), turnEventScope{
+	ts := newTurnState(nil, makeTestTurnSpec("nil-agent"), turnEventScope{
 		turnID:  "turn-nil-agent",
 		context: newTurnContext(nil, nil, nil),
 	})

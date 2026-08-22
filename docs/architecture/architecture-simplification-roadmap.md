@@ -538,6 +538,16 @@ Exit criteria:
 - callers select a request type instead of constructing a boolean bag; and
 - `processOptions` is removed.
 
+Implementation sequence:
+
+1. Remove the compatibility-shaped field mirrors from `processOptions` and
+   make `DispatchRequest` the only owner of routing, session, inbound-message,
+   and media facts. Rename the normalized runtime shape to `turnSpec` so it is
+   not mistaken for an entrypoint API.
+2. Give each admitted entrypoint its own request type and normalize those
+   requests into `turnSpec`, then split or group the remaining execution modes
+   until invalid boolean combinations cannot be constructed.
+
 ### C1 — Collapse the in-process coding frontend protocol
 
 Depends on: A1

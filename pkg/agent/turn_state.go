@@ -254,7 +254,7 @@ func (e *turnExecution) markSteeringObserved() {
 // newTurnExecution creates a turnExecution initialized from turnState and options.
 func newTurnExecution(
 	agent *AgentInstance,
-	opts processOptions,
+	opts turnSpec,
 	history []providers.Message,
 	summary string,
 	messages []providers.Message,
@@ -306,7 +306,7 @@ type turnState struct {
 	mu sync.RWMutex
 
 	agent   *AgentInstance
-	opts    processOptions
+	opts    turnSpec
 	model   effectiveModelBinding
 	profile config.EffectiveTurnProfile
 	scope   turnEventScope
@@ -389,7 +389,7 @@ type turnState struct {
 // turnState constructors and active turn management
 // =============================================================================
 
-func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
+func newTurnState(agent *AgentInstance, opts turnSpec, scope turnEventScope) *turnState {
 	binding := opts.ModelBinding
 	if binding.WorkspaceAgent == nil {
 		binding.WorkspaceAgent = agent

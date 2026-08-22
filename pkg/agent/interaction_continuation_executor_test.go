@@ -112,7 +112,7 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 	ts := &turnState{
 		agent: &AgentInstance{ID: "main"}, channel: resumeInbound.Channel, chatID: resumeInbound.ChatID,
 		workspace: "workspace", sessionKey: "session",
-		opts: processOptions{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
+		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
 	}
 
 	executionCtx := withApprovedToolExecutionIdentity(context.Background(), origin)
@@ -153,7 +153,7 @@ func TestInteractionContinuationConfigureKeepsResumeInboundContext(t *testing.T)
 		approvedTool: &providers.ToolCall{ID: "call-approved"},
 		approval:     approval,
 	}
-	opts := processOptions{Dispatch: DispatchRequest{InboundContext: resumeInbound}}
+	opts := turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}}
 
 	executor.configure(&opts)
 

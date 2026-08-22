@@ -73,7 +73,13 @@ func TestPipelineInterimMessageDeliveryDoesNotDismissToolFeedback(t *testing.T) 
 
 	_, got := pipeline.applySyncToolResultDelivery(
 		context.Background(),
-		&turnState{channel: "telegram", chatID: "chat-1", opts: processOptions{InboundContext: &bus.InboundContext{}}},
+		&turnState{
+			channel: "telegram",
+			chatID:  "chat-1",
+			opts: turnSpec{Dispatch: DispatchRequest{
+				InboundContext: &bus.InboundContext{},
+			}},
+		},
 		result,
 		"message",
 	)
