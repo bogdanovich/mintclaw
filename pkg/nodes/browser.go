@@ -499,13 +499,30 @@ func BrowserApprovalDigestMatches(input BrowserActInput) bool {
 	return err == nil && subtle.ConstantTimeCompare([]byte(expected), []byte(input.ApprovalDigest)) == 1
 }
 
-// BrowserClickEffect returns the conservative trusted effect for semantic
-// click revalidation on both sides of the companion boundary.
+// BrowserClickEffect returns the legacy conservative effect for callers that
+// do not declare a click's workflow effect.
 func BrowserClickEffect(role string) string {
 	if role == "button" {
 		return "external_commit"
 	}
 	return "unknown"
+}
+
+// BrowserClickEffectValid reports whether effect is part of the declared
+// click workflow contract shared by the gateway, companion, and browser host.
+func BrowserClickEffectValid(effect string) bool {
+	switch effect {
+	case "read", "navigation", "local_edit", "external_commit", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+// BrowserClickRequiresApproval reports whether a declared click effect must
+// carry durable approval authority across the node boundary.
+func BrowserClickRequiresApproval(effect string) bool {
+	return effect == "external_commit" || effect == "unknown"
 }
 
 func BrowserCheckRoleAllowed(kind, role string) bool {
@@ -1073,8 +1090,9 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 	case browseraction.ActionScroll:
 		valid = input.Effect == "read" && input.ApprovalDigest == ""
 	case browseraction.ActionClick:
-		valid = input.ExpectedRole != "" && input.Effect == BrowserClickEffect(input.ExpectedRole) &&
-			BrowserApprovalDigestMatches(input)
+		valid = input.ExpectedRole != "" && BrowserClickEffectValid(input.Effect) &&
+			((BrowserClickRequiresApproval(input.Effect) && BrowserApprovalDigestMatches(input)) ||
+				(!BrowserClickRequiresApproval(input.Effect) && input.ApprovalDigest == ""))
 	case browseraction.ActionFill:
 		valid = input.Effect == "local_edit" && BrowserFillFieldAllowed(input.ExpectedRole, input.ExpectedName) &&
 			validBrowserProtectedInput(input, false) && input.ApprovalDigest == ""
