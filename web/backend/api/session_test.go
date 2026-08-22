@@ -663,6 +663,34 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	}
 	setMintClawTestSessionUpdatedAt(t, store, dir, emptyKey, time.Unix(3, 0).UTC())
 
+	dirtyKey := session.BuildOpaqueSessionKey("mintclaw|history=dirty-first-append")
+	if err := store.UpsertSessionMeta(t.Context(), dirtyKey, mintClawTestScope(t, clientID), clientID); err != nil {
+		t.Fatalf("UpsertSessionMeta(dirty) error = %v", err)
+	}
+	dirtyLine, err := json.Marshal(providers.Message{Role: "user", Content: "recovered dirty history"})
+	if err != nil {
+		t.Fatalf("Marshal(dirty message) error = %v", err)
+	}
+	dirtyBase := filepath.Join(dir, sanitizeSessionKey(dirtyKey))
+	if err := os.WriteFile(dirtyBase+".jsonl", append(dirtyLine, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(dirty jsonl) error = %v", err)
+	}
+	dirtyMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
+	if err != nil {
+		t.Fatalf("GetSessionMeta(dirty) error = %v", err)
+	}
+	dirtyMeta.HistoryDirty = true
+	dirtyMeta.Count = 0
+	dirtyMeta.Skip = 0
+	dirtyMeta.UpdatedAt = time.Unix(4, 0).UTC()
+	dirtyMetaData, err := json.Marshal(dirtyMeta)
+	if err != nil {
+		t.Fatalf("Marshal(dirty meta) error = %v", err)
+	}
+	if err := os.WriteFile(dirtyBase+".meta.json", dirtyMetaData, 0o644); err != nil {
+		t.Fatalf("WriteFile(dirty meta) error = %v", err)
+	}
+
 	h := NewHandler(configPath)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -676,8 +704,15 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("Unmarshal(list) error = %v", err)
 	}
-	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "new history" {
+	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "recovered dirty history" {
 		t.Fatalf("items = %#v, want one newest usable history", items)
+	}
+	recoveredMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
+	if err != nil {
+		t.Fatalf("GetSessionMeta(recovered dirty) error = %v", err)
+	}
+	if recoveredMeta.HistoryDirty || recoveredMeta.Count != 1 {
+		t.Fatalf("recovered dirty metadata = %#v, want clean count 1", recoveredMeta)
 	}
 
 	detailRec := httptest.NewRecorder()
@@ -685,7 +720,7 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 		detailRec,
 		httptest.NewRequest(http.MethodGet, "/api/sessions/"+clientID, nil),
 	)
-	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "new history") {
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "recovered dirty history") {
 		t.Fatalf("detail status = %d, body=%s", detailRec.Code, detailRec.Body.String())
 	}
 
@@ -697,10 +732,10 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if deleteRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(newKey)+".meta.json")); !os.IsNotExist(err) {
-		t.Fatalf("new active metadata still exists: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(dirtyKey)+".meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("recovered active metadata still exists: %v", err)
 	}
-	for _, key := range []string{oldKey, emptyKey} {
+	for _, key := range []string{oldKey, newKey, emptyKey} {
 		if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(key)+".meta.json")); err != nil {
 			t.Fatalf("non-active metadata %q missing: %v", key, err)
 		}

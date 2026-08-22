@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -229,7 +230,19 @@ func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	return refs
 }
 
-func usableMintClawJSONLSession(dir string, meta memory.SessionMeta) bool {
+func usableMintClawJSONLSession(
+	store *memory.JSONLStore,
+	dir string,
+	meta memory.SessionMeta,
+) bool {
+	if meta.HistoryDirty {
+		revision, err := store.GetHistoryRevision(context.Background(), meta.Key)
+		if err != nil {
+			return false
+		}
+		meta.Count = revision.Count
+		meta.Skip = revision.Skip
+	}
 	if meta.Count <= meta.Skip && strings.TrimSpace(meta.Summary) == "" {
 		return false
 	}
@@ -239,6 +252,10 @@ func usableMintClawJSONLSession(dir string, meta memory.SessionMeta) bool {
 
 func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionRef, error) {
 	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	store, err := memory.NewJSONLStore(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +272,7 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 			continue
 		}
 		refs := sessionRefsFromMeta(meta)
-		if len(refs) == 0 || !usableMintClawJSONLSession(dir, meta) {
+		if len(refs) == 0 || !usableMintClawJSONLSession(store, dir, meta) {
 			continue
 		}
 		for _, ref := range refs {
