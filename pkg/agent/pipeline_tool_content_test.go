@@ -6,7 +6,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-func TestPipelineFilterToolContentForLLM_FallsBackToConfig(t *testing.T) {
+func TestPipelineFilterToolContentForLLMUsesConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.FilterSensitiveData = true
 	cfg.Tools.FilterMinLength = 8
@@ -20,7 +20,7 @@ func TestPipelineFilterToolContentForLLM_FallsBackToConfig(t *testing.T) {
 
 	got := pipeline.filterToolContentForLLM("token sk-long-key-12345 should be hidden")
 	if got != "token [FILTERED] should be hidden" {
-		t.Fatal("expected config fallback to redact sensitive tool content")
+		t.Fatal("expected config to redact sensitive tool content")
 	}
 }
 
@@ -39,22 +39,5 @@ func TestPipelineFilterPendingResultForLLM_UsesConfigPath(t *testing.T) {
 	got := pipeline.filterPendingResultForLLM("pending sk-long-key-12345 result")
 	if got != "pending [FILTERED] result" {
 		t.Fatal("expected pending result filter to use config redaction path")
-	}
-}
-
-type testToolContentFilter struct{}
-
-func (testToolContentFilter) filterToolContentForLLM(string) string {
-	return "filtered by dependency"
-}
-
-func TestPipelineFilterPendingResultForLLM_UsesInjectedFilter(t *testing.T) {
-	pipeline := &Pipeline{
-		Config: PipelineConfigServices{ToolContentFilter: testToolContentFilter{}},
-	}
-
-	got := pipeline.filterPendingResultForLLM("pending content")
-	if got != "filtered by dependency" {
-		t.Fatalf("got %q, want injected filter result", got)
 	}
 }

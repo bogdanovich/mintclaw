@@ -161,19 +161,6 @@ func (d configuredStreamingDelegate) GetStreamer(
 	return d.streamer, true
 }
 
-type testChannelStreamingProvider struct {
-	called  bool
-	config  config.StreamingConfig
-	present bool
-}
-
-func (p *testChannelStreamingProvider) channelStreamingConfig(
-	string,
-) (config.StreamingConfig, bool) {
-	p.called = true
-	return p.config, p.present
-}
-
 type recordingStreamer struct {
 	updates            []string
 	finalized          []string
@@ -458,29 +445,7 @@ func TestConfiguredStreamingUsesChatInsideDurableOutboundTransaction(t *testing.
 	}
 }
 
-func TestPipelineChannelStreamingConfig_UsesInjectedProvider(t *testing.T) {
-	provider := &testChannelStreamingProvider{
-		config:  config.StreamingConfig{Enabled: true},
-		present: true,
-	}
-	pipeline := &Pipeline{
-		Cfg:    newConfiguredStreamingTestConfig(t, false, true, nil),
-		Config: PipelineConfigServices{ChannelStreaming: provider},
-	}
-
-	got, ok := pipeline.channelStreamingConfig("mintclaw")
-	if !ok {
-		t.Fatal("channelStreamingConfig() ok = false, want true")
-	}
-	if !got.Enabled {
-		t.Fatal("channelStreamingConfig().Enabled = false, want true")
-	}
-	if !provider.called {
-		t.Fatal("injected channel streaming provider was not called")
-	}
-}
-
-func TestPipelineChannelStreamingConfig_FallsBackToConfig(t *testing.T) {
+func TestPipelineChannelStreamingConfigUsesConfig(t *testing.T) {
 	pipeline := &Pipeline{
 		Cfg: newConfiguredStreamingTestConfig(t, true, true, nil),
 	}
@@ -491,92 +456,6 @@ func TestPipelineChannelStreamingConfig_FallsBackToConfig(t *testing.T) {
 	}
 	if !got.Enabled {
 		t.Fatal("channelStreamingConfig().Enabled = false, want true")
-	}
-}
-
-func TestTurnRunnerPipelineUsesSingleConfigSnapshotForConfigBackedDependencies(t *testing.T) {
-	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &configuredStreamingChatOnlyProvider{})
-
-	pipeline := newTestPipeline(al)
-
-	channelStreaming, ok := pipeline.Config.ChannelStreaming.(configChannelStreamingProvider)
-	if !ok {
-		t.Fatalf(
-			"ChannelStreaming = %T, want configChannelStreamingProvider",
-			pipeline.Config.ChannelStreaming,
-		)
-	}
-	if channelStreaming.cfg != pipeline.Cfg {
-		t.Fatal("ChannelStreaming config does not match pipeline config snapshot")
-	}
-
-	toolFilter, ok := pipeline.Config.ToolContentFilter.(configToolContentFilter)
-	if !ok {
-		t.Fatalf(
-			"ToolContentFilter = %T, want configToolContentFilter",
-			pipeline.Config.ToolContentFilter,
-		)
-	}
-	if toolFilter.cfg != pipeline.Cfg {
-		t.Fatal("ToolContentFilter config does not match pipeline config snapshot")
-	}
-
-	nativeSearch, ok := pipeline.Config.NativeSearch.(configNativeSearchPolicy)
-	if !ok {
-		t.Fatalf("NativeSearch = %T, want configNativeSearchPolicy", pipeline.Config.NativeSearch)
-	}
-	if nativeSearch.cfg != pipeline.Cfg {
-		t.Fatal("NativeSearch config does not match pipeline config snapshot")
-	}
-
-	llmRetry, ok := pipeline.Config.LLMRetry.(configLLMRetryPolicy)
-	if !ok {
-		t.Fatalf("LLMRetry = %T, want configLLMRetryPolicy", pipeline.Config.LLMRetry)
-	}
-	if llmRetry.cfg != pipeline.Cfg {
-		t.Fatal("LLMRetry config does not match pipeline config snapshot")
-	}
-
-	mediaLimits, ok := pipeline.Config.MediaLimits.(configMediaLimitsProvider)
-	if !ok {
-		t.Fatalf("MediaLimits = %T, want configMediaLimitsProvider", pipeline.Config.MediaLimits)
-	}
-	if mediaLimits.cfg != pipeline.Cfg {
-		t.Fatal("MediaLimits config does not match pipeline config snapshot")
-	}
-
-	finalTurnRender, ok := pipeline.Config.FinalTurnRender.(configFinalTurnRenderPolicy)
-	if !ok {
-		t.Fatalf(
-			"FinalTurnRender = %T, want configFinalTurnRenderPolicy",
-			pipeline.Config.FinalTurnRender,
-		)
-	}
-	if finalTurnRender.cfg != pipeline.Cfg {
-		t.Fatal("FinalTurnRender config does not match pipeline config snapshot")
-	}
-
-	modelResolution, ok := pipeline.Config.ModelResolution.(configPipelineModelResolution)
-	if !ok {
-		t.Fatalf(
-			"ModelResolution = %T, want configPipelineModelResolution",
-			pipeline.Config.ModelResolution,
-		)
-	}
-	if modelResolution.cfg != pipeline.Cfg {
-		t.Fatal("ModelResolution config does not match pipeline config snapshot")
-	}
-
-	promptBuilder, ok := pipeline.Config.PromptBuilder.(configPipelinePromptBuilder)
-	if !ok {
-		t.Fatalf(
-			"PromptBuilder = %T, want configPipelinePromptBuilder",
-			pipeline.Config.PromptBuilder,
-		)
-	}
-	if promptBuilder.cfg != pipeline.Cfg {
-		t.Fatal("PromptBuilder config does not match pipeline config snapshot")
 	}
 }
 

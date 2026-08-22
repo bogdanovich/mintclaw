@@ -354,13 +354,22 @@ func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecutio
 }
 
 func (p *Pipeline) channelStreamingConfig(channelName string) (config.StreamingConfig, bool) {
-	if p == nil {
+	if p == nil || p.Cfg == nil || p.Cfg.Channels == nil {
 		return config.StreamingConfig{}, false
 	}
-	if p.Config.ChannelStreaming != nil {
-		return p.Config.ChannelStreaming.channelStreamingConfig(channelName)
+	channel := p.Cfg.Channels[channelName]
+	if channel == nil {
+		return config.StreamingConfig{}, false
 	}
-	return newConfigChannelStreamingProvider(p.Cfg).channelStreamingConfig(channelName)
+	decoded, err := channel.GetDecoded()
+	if err != nil {
+		logger.WarnCF("agent", "channel streaming config decode failed", map[string]any{
+			"channel": channelName,
+			"error":   err.Error(),
+		})
+		return config.StreamingConfig{}, false
+	}
+	return streamingConfigFromDecodedSettings(decoded)
 }
 
 func streamingConfigFromDecodedSettings(decoded any) (config.StreamingConfig, bool) {

@@ -18,11 +18,14 @@ import (
 // Pipeline holds the immutable runtime-generation snapshot used by turn
 // execution. The owning turnRunner is replaced when runtime wiring changes.
 type Pipeline struct {
-	Cfg         *config.Config
-	Runtime     PipelineRuntimeServices
-	Config      PipelineConfigServices
-	Context     PipelineContextServices
-	Interaction PipelineInteractionServices
+	Cfg                  *config.Config
+	Runtime              PipelineRuntimeServices
+	Context              PipelineContextServices
+	Interaction          PipelineInteractionServices
+	retrySleeper         retrySleeper
+	trustAllTools        bool
+	durableToolLifecycle bool
+	hashArguments        func(string, map[string]any) (string, error)
 }
 
 type PipelineRuntimeServices struct {
@@ -32,24 +35,9 @@ type PipelineRuntimeServices struct {
 	TurnControl    turnController
 }
 
-type PipelineConfigServices struct {
-	ChannelStreaming      channelStreamingConfigProvider
-	NativeSearch          nativeSearchPolicy
-	LLMRetry              llmRetryPolicy
-	RetrySleeper          retrySleeper
-	MediaLimits           mediaLimitsProvider
-	FinalTurnRender       finalTurnRenderPolicy
-	ModelResolution       pipelineModelResolution
-	PromptBuilder         pipelinePromptBuilder
-	ToolContentFilter     toolContentFilter
-	TrustAllToolExecution bool
-	DurableToolLifecycle  bool
-	HashToolArguments     func(string, map[string]any) (string, error)
-}
-
 func (p *Pipeline) hashToolArguments(workspace string, arguments map[string]any) (string, error) {
-	if p != nil && p.Config.HashToolArguments != nil {
-		return p.Config.HashToolArguments(workspace, arguments)
+	if p != nil && p.hashArguments != nil {
+		return p.hashArguments(workspace, arguments)
 	}
 	return interactions.HashArguments(workspace, arguments)
 }
@@ -128,48 +116,8 @@ type pipelineBus interface {
 	) (bus.Streamer, bool)
 }
 
-type channelStreamingConfigProvider interface {
-	channelStreamingConfig(channelName string) (config.StreamingConfig, bool)
-}
-
-type nativeSearchPolicy interface {
-	useNativeSearch(profile config.EffectiveTurnProfile, provider providers.LLMProvider) bool
-}
-
-type llmRetryPolicy interface {
-	llmRetrySettings() (maxRetries int, backoffSecs int)
-}
-
 type retrySleeper interface {
 	Sleep(ctx context.Context, delay time.Duration) error
-}
-
-type mediaLimitsProvider interface {
-	maxMediaSize() int
-}
-
-type finalTurnRenderPolicy interface {
-	shouldFinalizeAfterToolLoop(exec *turnExecution, llm *LLMIterationState) bool
-}
-
-type pipelineModelResolution interface {
-	modelCandidates(primary string, fallbacks []string) []providers.FallbackCandidate
-	activeModelConfig(
-		workspace string,
-		candidates []providers.FallbackCandidate,
-		activeModel string,
-	) *config.ModelConfig
-}
-
-type pipelinePromptBuilder interface {
-	buildTurnMessages(
-		ts *turnState,
-		history []providers.Message,
-		summary string,
-		currentMessage string,
-		media []string,
-		activeSkills []string,
-	) []providers.Message
 }
 
 type pipelineContextRuntime interface {
@@ -270,10 +218,6 @@ type toolFeedbackManager interface {
 	dismissToolFeedbackForTurn(ctx context.Context, ts *turnState)
 	pauseToolFeedbackForTurn(ctx context.Context, ts *turnState)
 	shouldPublishToolFeedback(ts *turnState) bool
-}
-
-type toolContentFilter interface {
-	filterToolContentForLLM(content string) string
 }
 
 type turnController interface {

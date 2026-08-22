@@ -227,7 +227,7 @@ func (s *recordingRetrySleeper) Sleep(ctx context.Context, delay time.Duration) 
 
 func useRecordingRetrySleeper(pipeline *Pipeline) *recordingRetrySleeper {
 	sleeper := &recordingRetrySleeper{}
-	pipeline.Config.RetrySleeper = sleeper
+	pipeline.retrySleeper = sleeper
 	return sleeper
 }
 
@@ -1473,7 +1473,7 @@ func TestPipeline_CallLLM_RetrySleepCancellation(t *testing.T) {
 
 	pipeline := newTestPipeline(al)
 	sleeper := &recordingRetrySleeper{}
-	pipeline.Config.RetrySleeper = sleeper
+	pipeline.retrySleeper = sleeper
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -2234,7 +2234,9 @@ func TestRunTurn_SteeringToolMediaUsesPipelineMediaLimit(t *testing.T) {
 	al.SetMediaStore(store)
 
 	pipeline := newTestPipeline(al)
-	pipeline.Config.MediaLimits = &testMediaLimitsProvider{size: 1}
+	pipelineConfig := *pipeline.Cfg
+	pipelineConfig.Agents.Defaults.MaxMediaSize = 1
+	pipeline.Cfg = &pipelineConfig
 	opts := makeTestProcessOpts("test-session-steering-media")
 	opts.Dispatch.SessionKey = "test-session-steering-media"
 	ts := newTurnState(agent, opts, turnEventScope{

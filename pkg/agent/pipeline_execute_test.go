@@ -712,7 +712,7 @@ func TestCodingTrustRejectsReplacementRegistry(t *testing.T) {
 	}
 	llm := newLLMIterationState(1)
 	runner := &toolLoopRunner{
-		p:       &Pipeline{Config: PipelineConfigServices{TrustAllToolExecution: true}},
+		p:       &Pipeline{trustAllTools: true},
 		turnCtx: t.Context(),
 		ts:      ts,
 		exec:    newTurnExecution(agent, ts.opts, nil, "", nil),
@@ -744,7 +744,7 @@ func TestCodingTrustRejectsRegistryReplacementAfterApproval(t *testing.T) {
 	}
 	llm := newLLMIterationState(1)
 	runner := &toolLoopRunner{
-		p:       &Pipeline{Config: PipelineConfigServices{TrustAllToolExecution: true}},
+		p:       &Pipeline{trustAllTools: true},
 		turnCtx: t.Context(),
 		ts:      ts,
 		exec:    newTurnExecution(agent, ts.opts, nil, "", nil),

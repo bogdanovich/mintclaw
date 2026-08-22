@@ -6,31 +6,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-type testLLMRetryPolicy struct {
-	called      bool
-	maxRetries  int
-	backoffSecs int
-}
-
-func (p *testLLMRetryPolicy) llmRetrySettings() (int, int) {
-	p.called = true
-	return p.maxRetries, p.backoffSecs
-}
-
-func TestPipelineLLMRetrySettings_UsesInjectedPolicy(t *testing.T) {
-	policy := &testLLMRetryPolicy{maxRetries: 5, backoffSecs: 7}
-	pipeline := &Pipeline{Config: PipelineConfigServices{LLMRetry: policy}}
-
-	maxRetries, backoffSecs := pipeline.llmRetrySettings()
-	if maxRetries != 5 || backoffSecs != 7 {
-		t.Fatalf("llmRetrySettings() = (%d, %d), want (5, 7)", maxRetries, backoffSecs)
-	}
-	if !policy.called {
-		t.Fatal("injected LLM retry policy was not called")
-	}
-}
-
-func TestPipelineLLMRetrySettings_FallsBackToConfig(t *testing.T) {
+func TestPipelineLLMRetrySettingsUsesConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.MaxLLMRetries = 4
 	cfg.Agents.Defaults.LLMRetryBackoffSecs = 6

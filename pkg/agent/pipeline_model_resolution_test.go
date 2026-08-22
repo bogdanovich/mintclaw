@@ -4,65 +4,9 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-type testPipelineModelResolution struct {
-	candidatesCalled bool
-	activeCfgCalled  bool
-	candidates       []providers.FallbackCandidate
-	activeCfg        *config.ModelConfig
-}
-
-func (r *testPipelineModelResolution) modelCandidates(
-	string,
-	[]string,
-) []providers.FallbackCandidate {
-	r.candidatesCalled = true
-	return append([]providers.FallbackCandidate(nil), r.candidates...)
-}
-
-func (r *testPipelineModelResolution) activeModelConfig(
-	string,
-	[]providers.FallbackCandidate,
-	string,
-) *config.ModelConfig {
-	r.activeCfgCalled = true
-	return r.activeCfg
-}
-
-func TestPipelineModelCandidates_UsesInjectedResolver(t *testing.T) {
-	resolver := &testPipelineModelResolution{
-		candidates: []providers.FallbackCandidate{{
-			Provider: "openrouter",
-			Model:    "kimi",
-		}},
-	}
-	pipeline := &Pipeline{Config: PipelineConfigServices{ModelResolution: resolver}}
-
-	got := pipeline.modelCandidates("ignored", nil)
-	if len(got) != 1 || got[0].Provider != "openrouter" || got[0].Model != "kimi" {
-		t.Fatalf("modelCandidates() = %#v, want injected candidate", got)
-	}
-	if !resolver.candidatesCalled {
-		t.Fatal("injected model resolver was not called for candidates")
-	}
-}
-
-func TestPipelineActiveModelConfig_UsesInjectedResolver(t *testing.T) {
-	want := &config.ModelConfig{ModelName: "injected"}
-	resolver := &testPipelineModelResolution{activeCfg: want}
-	pipeline := &Pipeline{Config: PipelineConfigServices{ModelResolution: resolver}}
-
-	if got := pipeline.activeModelConfig("/workspace", nil, "ignored"); got != want {
-		t.Fatalf("activeModelConfig() = %#v, want injected config", got)
-	}
-	if !resolver.activeCfgCalled {
-		t.Fatal("injected model resolver was not called for active model config")
-	}
-}
-
-func TestPipelineModelResolution_FallsBackToConfig(t *testing.T) {
+func TestPipelineModelResolutionUsesConfig(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "openrouter"},
