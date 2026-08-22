@@ -714,6 +714,7 @@ func (runner *toolLoopRunner) admitToolCall(
 						ForUserLen: len(hookResult.ForUser),
 						IsError:    hookResult.IsError,
 						Async:      hookResult.Control.Async,
+						Suspended:  hookResult.Control.TaskSuspended,
 						ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
 						DiagnosticResult: diagnosticTextPreview(
 							p.Cfg, durableContent, diagnosticToolResultBytes,
@@ -733,6 +734,9 @@ func (runner *toolLoopRunner) admitToolCall(
 					errorSummary,
 					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 				)
+				if hookResult.Control.TaskSuspended {
+					return runner.stopForDelegatedTaskSuspension(ctx, i)
+				}
 				if terminalTurnErr != nil {
 					exec.messages = runner.messages
 					return stopToolBatch(ToolLoopOutcome{
@@ -1513,18 +1517,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
 	if toolResult.Control.TaskSuspended {
-		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		p.pauseToolFeedbackForTurn(pauseCtx, ts)
-		pauseCancel()
-
-		runner.appendSkippedToolMessages(
-			i+1,
-			"tool batch suspended by delegated task",
-			"Deferred because an earlier delegated task has a durable pending continuation. "+
-				"Reissue this tool if it is still needed after that continuation completes.",
-		)
-		exec.messages = runner.messages
-		return stopToolBatch(ToolLoopOutcome{Control: ToolControlSuspend})
+		return runner.stopForDelegatedTaskSuspension(ctx, i)
 	}
 	if terminalTurnErr != nil {
 		exec.messages = runner.messages
@@ -1596,6 +1589,24 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	runner.captureAfterToolSteering(false)
 	return toolCallStageResult{}
+}
+
+func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
+	ctx context.Context,
+	callIndex int,
+) toolCallStageResult {
+	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	runner.p.pauseToolFeedbackForTurn(pauseCtx, runner.ts)
+	pauseCancel()
+
+	runner.appendSkippedToolMessages(
+		callIndex+1,
+		"tool batch suspended by delegated task",
+		"Deferred because an earlier delegated task has a durable pending continuation. "+
+			"Reissue this tool if it is still needed after that continuation completes.",
+	)
+	runner.exec.messages = runner.messages
+	return stopToolBatch(ToolLoopOutcome{Control: ToolControlSuspend})
 }
 
 func codingToolObservation(ts *turnState, observation *toolshared.ToolObservation) *toolshared.ToolObservation {

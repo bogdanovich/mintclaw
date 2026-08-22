@@ -1448,6 +1448,55 @@ func TestPipelineDelegatedTaskSuspensionTerminatesMixedToolBatch(t *testing.T) {
 	}
 }
 
+func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
+	firstTool := &countingTestTool{name: "hooked_tool"}
+	deferredTool := &countingTestTool{name: "deferred_tool"}
+	registry := tools.NewToolRegistry()
+	registry.Register(firstTool)
+	registry.Register(deferredTool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-hook-delegated-suspend",
+		sessionKey: "session-hook-delegated-suspend",
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{
+		{ID: "call-hooked", Name: firstTool.Name()},
+		{ID: "call-deferred", Name: deferredTool.Name()},
+	}
+	llm.assistantToolCallsPersisted = true
+	hookResult := &toolshared.ToolResult{
+		ForLLM:  "hook reports a durable descendant continuation",
+		ForUser: "must not be delivered while the descendant is suspended",
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}
+	feedback := &immediateDeliveryFeedbackManager{}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{
+		Hooks:        &toolResultRespondHook{result: hookResult},
+		ToolFeedback: feedback,
+	}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if outcome.Control != ToolControlSuspend {
+		t.Fatalf("outcome = %#v, want suspend", outcome)
+	}
+	if firstTool.executions != 0 || deferredTool.executions != 0 {
+		t.Fatalf("hooked/deferred executions = %d/%d, want 0/0", firstTool.executions, deferredTool.executions)
+	}
+	if hookResult.ForUser != "" || !hookResult.Delivery.IsFinalHandled() {
+		t.Fatalf("hook suspension was not normalized for terminal runtime handling: %#v", hookResult)
+	}
+	if !feedback.paused || feedback.dismissed || len(exec.messages) != 2 {
+		t.Fatalf(
+			"feedback/messages = paused:%v dismissed:%v messages:%#v",
+			feedback.paused,
+			feedback.dismissed,
+			exec.messages,
+		)
+	}
+}
+
 func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 	newTool := func(called chan interactions.Outcome) *fixedToolResultTool {
 		return &fixedToolResultTool{name: "domain_suspension", result: &toolshared.ToolResult{
