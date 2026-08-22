@@ -650,7 +650,7 @@ func TestBrowserDescriptorAcceptsCurrentCapabilitySubset(t *testing.T) {
 	}
 }
 
-func TestBrowserActContractRequiresApprovalForDownloadsAndClicks(t *testing.T) {
+func TestBrowserActContractRequiresApprovalOnlyForApprovalBoundClicks(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
 	})
@@ -701,12 +701,22 @@ func TestBrowserActContractRequiresApprovalForDownloadsAndClicks(t *testing.T) {
 	input["expected_name"] = "Save"
 	input["effect"] = "unknown"
 	if err = validateDescriptorInvocationInput(act, input); err == nil {
-		t.Fatal("button click with lowered effect was accepted")
+		t.Fatal("unknown click without matching approval digest was accepted")
 	}
-	input["expected_role"] = "link"
 	bindBrowserApprovalDigest(t, input)
 	if err = validateDescriptorInvocationInput(act, input); err != nil {
-		t.Fatalf("unknown-effect link click rejected: %v", err)
+		t.Fatalf("approved unknown-effect button click rejected: %v", err)
+	}
+	for _, effect := range []string{"read", "navigation", "local_edit"} {
+		input["effect"] = effect
+		delete(input, "approval_digest")
+		if err = validateDescriptorInvocationInput(act, input); err != nil {
+			t.Fatalf("unapproved %s click rejected: %v", effect, err)
+		}
+		bindBrowserApprovalDigest(t, input)
+		if err = validateDescriptorInvocationInput(act, input); err == nil {
+			t.Fatalf("safe %s click accepted an approval digest", effect)
+		}
 	}
 }
 

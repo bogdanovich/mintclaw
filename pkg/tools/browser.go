@@ -1215,12 +1215,16 @@ func (tool *BrowserCaptureTool) result(
 
 func (*BrowserActTool) Name() string { return "browser_act" }
 func (*BrowserActTool) Description() string {
-	return "Prepare and execute exactly one fresh-reference browser action; risky effects suspend for durable human approval. " +
+	return "Prepare and execute exactly one fresh-reference browser action. For every click, declare its workflow effect: " +
+		"read, navigation, or local_edit executes without human approval; external_commit or unknown suspends for durable approval. " +
+		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
+		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
+		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
 		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
 		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
 		"context_generation, copy both together; missing or incomplete context authority fails closed. " +
-		"A third equivalent approval-bound action on unchanged page state is rejected before approval and requires replanning. " +
-		"Use navigate only for a known ordinary GET URL; POST, scripted, submit, or ambiguous interactions remain clicks and approval-bound."
+		"A third equivalent effect-tracked action in a repeated one-state or alternating two-state loop is rejected before " +
+		"another approval and requires replanning."
 }
 
 func (tool *BrowserActTool) Parameters() map[string]any {
@@ -1271,6 +1275,12 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"action": actionSchema,
+			"effect": map[string]any{
+				"type": "string",
+				"enum": []string{"read", "navigation", "local_edit", "external_commit", "unknown"},
+				"description": "Required for click and forbidden for other action kinds. Declare workflow impact: " +
+					"external_commit only immediately before an important external state change; unknown when genuinely unsure.",
+			},
 		},
 		"required": []string{
 			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "action",
@@ -1563,6 +1573,17 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	if err != nil {
 		return browser.Preparation{}, err
 	}
+	declaredEffect := browser.Effect("")
+	rawEffect, effectPresent := args["effect"]
+	if action.Kind == browser.ActionClick {
+		effect, ok := rawEffect.(string)
+		declaredEffect = browser.Effect(effect)
+		if !effectPresent || !ok || !declaredEffect.Valid() {
+			return browser.Preparation{}, browser.ErrInvalid
+		}
+	} else if effectPresent {
+		return browser.Preparation{}, browser.ErrInvalid
+	}
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
 	}
@@ -1592,6 +1613,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
 		FrameID: frameID, ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
+		DeclaredEffect: declaredEffect,
 	})
 }
 

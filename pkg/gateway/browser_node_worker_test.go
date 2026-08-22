@@ -627,12 +627,12 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 	preparation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
 		Owner: owner, RequestID: "request_click", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
-		Action: browser.Action{Kind: browser.ActionClick, Ref: visibleRef},
+		Action: browser.Action{Kind: browser.ActionClick, Ref: visibleRef}, DeclaredEffect: browser.EffectNavigation,
 	})
-	if err != nil || !preparation.RequiresApproval || preparation.Action.Effect != browser.EffectExternalCommit {
+	if err != nil || preparation.RequiresApproval || preparation.Action.Effect != browser.EffectNavigation {
 		t.Fatalf("click preparation = %#v, %v", preparation, err)
 	}
-	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, &preparation.Approval)
+	invocation, err := broker.ExecuteAction(t.Context(), owner, preparation.Action.ID, nil)
 	if err != nil || invocation.State != browser.InvocationSucceeded {
 		t.Fatalf("ExecuteAction(click) = %#v, %v", invocation, err)
 	}
@@ -645,7 +645,7 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 	handler.mu.Unlock()
 	if len(inputs) != 1 || inputs[0].Action.Kind != "click" || inputs[0].Action.Ref != "host_ref_1" ||
 		inputs[0].ExpectedRole != "button" || inputs[0].ExpectedName != "Save" ||
-		!nodes.BrowserApprovalDigestMatches(inputs[0]) {
+		inputs[0].Effect != "navigation" || inputs[0].ApprovalDigest != "" {
 		t.Fatalf("typed click inputs = %#v", inputs)
 	}
 }

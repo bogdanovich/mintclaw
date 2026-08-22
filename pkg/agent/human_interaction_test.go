@@ -1511,7 +1511,18 @@ func TestChainedInteractionKeepsContinuationToolFeedbackCarrier(t *testing.T) {
 	if len(manager.dismissedTargets) != 0 {
 		t.Fatalf("chained interaction dismissed carrier: %#v", manager.dismissedTargets)
 	}
+	record.ID = "interaction-chain-2"
+	al.observeInteractionEvent(t.TempDir(), interactions.EventObservation{
+		Record: record,
+		Event: interactions.Event{
+			Type: interactions.EventResolved, Code: "continued_with_next_interaction",
+		},
+	})
+	if len(manager.dismissedTargets) != 0 {
+		t.Fatalf("second chained interaction dismissed carrier: %#v", manager.dismissedTargets)
+	}
 
+	record.ID = "interaction-chain-3"
 	al.observeInteractionEvent(t.TempDir(), interactions.EventObservation{
 		Record: record,
 		Event:  interactions.Event{Type: interactions.EventResolved, Code: "completed"},

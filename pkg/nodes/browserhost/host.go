@@ -639,9 +639,11 @@ func (host *BrowserHost) click(
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" || request.Action.Key != "" ||
 		request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
-		request.Effect != nodes.BrowserClickEffect(request.ExpectedRole) ||
+		!nodes.BrowserClickEffectValid(request.Effect) ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		(nodes.BrowserClickRequiresApproval(request.Effect) &&
+			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) ||
+		(!nodes.BrowserClickRequiresApproval(request.Effect) && request.ApprovalDigest != "") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "click", browserworker.DriverAction{
@@ -1012,7 +1014,8 @@ func (host *BrowserHost) executeAction(
 		)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if (action == "click" || action == "drag" || action == "press" ||
+	if ((action == "click" && nodes.BrowserClickRequiresApproval(request.Effect)) ||
+		action == "drag" || action == "press" ||
 		(action == "dialog" && request.Action.Decision == "accept")) &&
 		(session.profile.DryRun || !session.profile.AllowApprovedActions ||
 			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
