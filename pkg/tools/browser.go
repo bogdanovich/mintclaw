@@ -1315,22 +1315,9 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 	if _, err := browseraction.DecodeModelAction(args["action"], limits.TextInputBytes); err != nil {
 		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
 	}
-	encoded, err := json.Marshal(args)
+	projected, err := tool.CanonicalArguments(args)
 	if err != nil {
 		return nil, err
-	}
-	var projected map[string]any
-	if err = json.Unmarshal(encoded, &projected); err != nil {
-		return nil, err
-	}
-	// Providers sometimes encode omitted optional context authority as JSON
-	// null. The live action path already treats those values as absent; make
-	// the durable projection canonical before schema validation so persistence
-	// does not reject an otherwise valid top-level page action.
-	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation"} {
-		if value, present := projected[field]; present && value == nil {
-			delete(projected, field)
-		}
 	}
 	action, ok := projected["action"].(map[string]any)
 	if !ok {
@@ -1351,6 +1338,25 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 		return nil, errors.New("browser protected value is unavailable")
 	}
 	action["value"] = browserProtectedInputRedaction
+	return projected, nil
+}
+
+// CanonicalArguments treats provider-emitted null optional context authority
+// exactly like omission while retaining a cloned execution map.
+func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
+	projected, err := cloneBrowserToolArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	// Providers sometimes encode omitted optional context authority as JSON
+	// null. The live action path already treats those values as absent; make
+	// the durable projection canonical before schema validation so persistence
+	// does not reject an otherwise valid top-level page action.
+	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation"} {
+		if value, present := projected[field]; present && value == nil {
+			delete(projected, field)
+		}
+	}
 	return projected, nil
 }
 
