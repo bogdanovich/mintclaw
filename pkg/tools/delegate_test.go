@@ -127,6 +127,33 @@ func TestDelegateTool_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestDelegateTool_Execute_PreservesDurableChildSuspension(t *testing.T) {
+	spawner := &delegateMockSpawner{result: &toolshared.ToolResult{
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}}
+	tool := NewDelegateTool()
+	tool.SetSpawner(spawner)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"agent_id": "browser",
+		"task":     "publish after durable approval",
+	})
+
+	if !result.Control.TaskSuspended || !result.Delivery.IsFinalHandled() || result.ForUser != "" {
+		t.Fatalf("suspended delegate result = %#v", result)
+	}
+	for _, required := range []string{
+		"already delivered the exact approval prompt",
+		"Do not ask another confirmation",
+		"invent missing credentials or human steps",
+		"start a replacement delegate",
+	} {
+		if !strings.Contains(result.ForLLM, required) {
+			t.Fatalf("suspension guidance omitted %q: %q", required, result.ForLLM)
+		}
+	}
+}
+
 func TestDelegateTool_Execute_PassesTimeoutSeconds(t *testing.T) {
 	spawner := &delegateMockSpawner{}
 	tool := NewDelegateTool()

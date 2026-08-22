@@ -15,7 +15,8 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 		}},
 		Metadata: map[string]string{"producer": "browser"},
 		ObjectiveOutcome: &Outcome{
-			Status: OutcomePartial,
+			Status:      OutcomePartial,
+			Explanation: "source photos were missing",
 			CompletedItems: []Item{{
 				Item: "Yakima published", Kind: "external_action",
 				Receipts: []Receipt{{
