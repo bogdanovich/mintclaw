@@ -119,7 +119,7 @@ func TestAgentLoopRecoverUnansweredSessions(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	sessionKey := "agent:main:telegram:group:-100123/42"
+	sessionKey := session.BuildOpaqueSessionKey("recovery|agent=main|channel=telegram|chat=-100123|topic=42")
 	metaStore, ok := agent.Sessions.(session.MetadataAwareSessionStore)
 	if !ok {
 		t.Fatal("expected metadata-aware session store")
@@ -132,7 +132,7 @@ func TestAgentLoopRecoverUnansweredSessions(t *testing.T) {
 		Values: map[string]string{
 			"chat": "group:-100123/42",
 		},
-	}, nil)
+	})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "please continue"})
 
 	if got := al.RecoverUnansweredSessions(context.Background()); got != 1 {
@@ -188,7 +188,7 @@ func TestAgentLoopRecoverUnansweredSessionsSkipsUnackedInboundSpool(t *testing.T
 		t.Fatal("expected default agent")
 	}
 
-	sessionKey := "agent:main:telegram:group:-100123/42"
+	sessionKey := session.BuildOpaqueSessionKey("recovery|agent=main|channel=telegram|chat=-100123|topic=42")
 	metaStore, ok := agent.Sessions.(session.MetadataAwareSessionStore)
 	if !ok {
 		t.Fatal("expected metadata-aware session store")
@@ -201,7 +201,7 @@ func TestAgentLoopRecoverUnansweredSessionsSkipsUnackedInboundSpool(t *testing.T
 		Values: map[string]string{
 			"chat": "group:-100123/42",
 		},
-	}, nil)
+	})
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "please continue"})
 
 	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{

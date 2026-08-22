@@ -54,7 +54,6 @@ func (al *AgentLoop) applySessionLifecycle(
 		}
 		allocation.Scope = session.ApplyEpoch(allocation.Scope, routeScopeKey, epoch)
 		allocation.SessionKey = session.BuildSessionKey(allocation.Scope)
-		allocation.SessionAliases = nil
 		return allocation, nil
 	}
 	if al == nil || al.state == nil {
@@ -73,9 +72,6 @@ func (al *AgentLoop) applySessionLifecycle(
 
 	allocation.Scope = session.ApplyEpoch(allocation.Scope, routeScopeKey, *epoch)
 	allocation.SessionKey = session.BuildSessionKey(allocation.Scope)
-	// Rotated epochs intentionally do not alias legacy route history. Old
-	// conversations remain available for explicit historical retrieval.
-	allocation.SessionAliases = nil
 	return allocation, nil
 }
 

@@ -328,10 +328,10 @@ func TestAgentForRuntimeScopeFailsClosedOnAmbiguousStoredOwners(t *testing.T) {
 	key := "shared-session"
 	firstStore.EnsureSessionMetadata(key, &session.SessionScope{
 		Version: session.ScopeVersionV1, AgentID: "first",
-	}, nil)
+	})
 	secondStore.EnsureSessionMetadata(key, &session.SessionScope{
 		Version: session.ScopeVersionV1, AgentID: "second",
-	}, nil)
+	})
 	al := &AgentLoop{registry: &AgentRegistry{agents: map[string]*AgentInstance{
 		"first": {
 			ID: "first", Workspace: "/workspace/shared", Sessions: firstStore,

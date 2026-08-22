@@ -10,13 +10,13 @@ import (
 )
 
 func buildResetSessionKey(agentID, routeScopeKey string) string {
-	alias := fmt.Sprintf(
-		"agent:%s:reset:%s:%d",
+	identity := fmt.Sprintf(
+		"reset|agent=%s|route=%s|nonce=%d",
 		strings.ToLower(strings.TrimSpace(agentID)),
 		strings.ToLower(strings.TrimSpace(routeScopeKey)),
 		time.Now().UnixNano(),
 	)
-	return session.BuildOpaqueSessionKey(alias)
+	return session.BuildOpaqueSessionKey(identity)
 }
 
 func (al *AgentLoop) getSessionOverride(routeSessionKey string) string {
@@ -104,18 +104,4 @@ func (al *AgentLoop) resolveEffectiveSessionKey(
 		return routeScopeKey
 	}
 	return baseSessionKey
-}
-
-func sessionAliasCandidates(
-	routeSessionKey, effectiveSessionKey string,
-	routeAliases []string,
-	msgSessionKey string,
-) []string {
-	if isExplicitSessionKey(msgSessionKey) {
-		return []string{msgSessionKey}
-	}
-	if strings.TrimSpace(routeSessionKey) == strings.TrimSpace(effectiveSessionKey) {
-		return routeAliases
-	}
-	return nil
 }

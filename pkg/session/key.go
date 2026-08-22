@@ -10,20 +10,13 @@ import (
 )
 
 const (
-	sessionKeyV1Prefix          = "sk_v1_"
-	legacyAgentSessionKeyPrefix = "agent:"
+	sessionKeyV1Prefix = "sk_v1_"
 )
 
-type ParsedLegacySessionKey struct {
-	AgentID string
-	Rest    string
-}
-
 // BuildOpaqueSessionKey returns a stable opaque session key derived from a
-// canonical alias string. The alias remains available through metadata for
-// compatibility and migration purposes.
-func BuildOpaqueSessionKey(alias string) string {
-	normalized := strings.TrimSpace(strings.ToLower(alias))
+// normalized current identity.
+func BuildOpaqueSessionKey(identity string) string {
+	normalized := strings.TrimSpace(strings.ToLower(identity))
 	if normalized == "" {
 		return ""
 	}
@@ -34,37 +27,24 @@ func BuildOpaqueSessionKey(alias string) string {
 // IsOpaqueSessionKey returns true when the key matches the current opaque
 // session-key format.
 func IsOpaqueSessionKey(key string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), sessionKeyV1Prefix)
-}
-
-func IsLegacyAgentSessionKey(key string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), legacyAgentSessionKeyPrefix)
+	key = strings.ToLower(strings.TrimSpace(key))
+	if !strings.HasPrefix(key, sessionKeyV1Prefix) {
+		return false
+	}
+	digest := strings.TrimPrefix(key, sessionKeyV1Prefix)
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
 }
 
 func IsExplicitSessionKey(key string) bool {
-	return IsOpaqueSessionKey(key) || IsLegacyAgentSessionKey(key)
-}
-
-func ParseLegacyAgentSessionKey(sessionKey string) *ParsedLegacySessionKey {
-	raw := strings.TrimSpace(sessionKey)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.SplitN(raw, ":", 3)
-	if len(parts) < 3 || parts[0] != "agent" {
-		return nil
-	}
-	agentID := strings.TrimSpace(parts[1])
-	rest := parts[2]
-	if agentID == "" || rest == "" {
-		return nil
-	}
-	return &ParsedLegacySessionKey{AgentID: agentID, Rest: rest}
+	return IsOpaqueSessionKey(key)
 }
 
 // ResolveAgentID returns the routed agent ID associated with a session. It
-// prefers structured session scope metadata when available and falls back to
-// legacy agent-scoped session keys for compatibility.
+// reads the current structured session scope metadata.
 func ResolveAgentID(store any, sessionKey string) string {
 	if scopeReader, ok := store.(interface {
 		GetSessionScope(sessionKey string) *SessionScope
@@ -75,51 +55,13 @@ func ResolveAgentID(store any, sessionKey string) string {
 		}
 	}
 
-	if parsed := ParseLegacyAgentSessionKey(sessionKey); parsed != nil {
-		return routing.NormalizeAgentID(parsed.AgentID)
-	}
-
 	return ""
 }
 
-func BuildLegacyMainAlias(agentID string) string {
-	return fmt.Sprintf("agent:%s:main", routing.NormalizeAgentID(agentID))
-}
-
 // BuildMainSessionKey returns the canonical opaque main-session key for an
-// agent. The corresponding legacy alias remains available via
-// BuildLegacyMainAlias for compatibility and migration logic.
+// agent.
 func BuildMainSessionKey(agentID string) string {
-	return BuildOpaqueSessionKey(BuildLegacyMainAlias(agentID))
-}
-
-func BuildLegacyDirectAliases(agentID, channel, account, peerID string) []string {
-	agentID = routing.NormalizeAgentID(agentID)
-	channel = normalizeLegacyChannel(channel)
-	account = routing.NormalizeAccountID(account)
-	peerID = strings.ToLower(strings.TrimSpace(peerID))
-	if peerID == "" {
-		return nil
-	}
-	return []string{
-		fmt.Sprintf("agent:%s:direct:%s", agentID, peerID),
-		fmt.Sprintf("agent:%s:%s:direct:%s", agentID, channel, peerID),
-		fmt.Sprintf("agent:%s:%s:%s:direct:%s", agentID, channel, account, peerID),
-	}
-}
-
-func BuildLegacyPeerAlias(agentID, channel, peerKind, peerID string) string {
-	agentID = routing.NormalizeAgentID(agentID)
-	channel = normalizeLegacyChannel(channel)
-	peerKind = strings.ToLower(strings.TrimSpace(peerKind))
-	if peerKind == "" {
-		peerKind = "unknown"
-	}
-	peerID = strings.ToLower(strings.TrimSpace(peerID))
-	if peerID == "" {
-		peerID = "unknown"
-	}
-	return fmt.Sprintf("agent:%s:%s:%s:%s", agentID, channel, peerKind, peerID)
+	return BuildOpaqueSessionKey("agent:" + routing.NormalizeAgentID(agentID) + ":main")
 }
 
 // CanonicalSessionIdentityID collapses an identity using identity_links when
@@ -133,14 +75,6 @@ func CanonicalSessionIdentityID(channel, rawID string, identityLinks map[string]
 		normalizedID = linked
 	}
 	return strings.ToLower(normalizedID)
-}
-
-func normalizeLegacyChannel(channel string) string {
-	channel = strings.ToLower(strings.TrimSpace(channel))
-	if channel == "" {
-		return "unknown"
-	}
-	return channel
 }
 
 func resolveLinkedPeerID(identityLinks map[string][]string, channel, peerID string) string {

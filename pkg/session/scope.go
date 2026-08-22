@@ -23,7 +23,9 @@ type SessionScope struct {
 	Dimensions    []string          `json:"dimensions"`
 	Values        map[string]string `json:"values"`
 	RouteScopeKey string            `json:"route_scope_key,omitempty"`
-	Epoch         *SessionEpoch     `json:"epoch,omitempty"`
+	// ClientSessionID is frontend provenance, not canonical identity.
+	ClientSessionID string        `json:"client_session_id,omitempty"`
+	Epoch           *SessionEpoch `json:"epoch,omitempty"`
 }
 
 // CloneScope returns a deep copy of scope.

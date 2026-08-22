@@ -8,24 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
-	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
-
-type resolveFailingStore struct {
-	*memory.JSONLStore
-	err error
-}
-
-func (s *resolveFailingStore) ResolveSessionKey(
-	context.Context,
-	string,
-) (string, bool, error) {
-	return "", false, s.err
-}
 
 type snapshotFailingStore struct {
 	memory.Store
@@ -107,32 +93,6 @@ func TestJSONLBackendClearSessionClearsHistoryAndSummary(t *testing.T) {
 	}
 	if summary := backend.GetSummary("turn"); summary != "" {
 		t.Fatalf("summary = %q", summary)
-	}
-}
-
-func TestJSONLBackendTurnJournalPropagatesCanonicalResolutionFailure(t *testing.T) {
-	store, err := memory.NewJSONLStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	injectedErr := errors.New("resolve metadata")
-	backend := session.NewJSONLBackend(&resolveFailingStore{JSONLStore: store, err: injectedErr})
-
-	err = backend.AppendTurnMessage(
-		t.Context(),
-		"legacy-alias",
-		providers.Message{Role: "user", Content: "must not be misdirected"},
-	)
-	if !errors.Is(err, injectedErr) {
-		t.Fatalf("AppendTurnMessage() error = %v, want %v", err, injectedErr)
-	}
-	history, readErr := store.GetHistory(t.Context(), "legacy-alias")
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if len(history) != 0 {
-		t.Fatalf("resolution failure wrote alias history: %+v", history)
 	}
 }
 
@@ -384,7 +344,7 @@ func TestJSONLBackend_SummarizeFlow(t *testing.T) {
 	}
 }
 
-func TestJSONLBackend_ResolveAliasAndPersistMetadata(t *testing.T) {
+func TestJSONLBackendPersistsScopeForExactSessionKey(t *testing.T) {
 	b := newBackend(t)
 
 	scope := &session.SessionScope{
@@ -397,113 +357,22 @@ func TestJSONLBackend_ResolveAliasAndPersistMetadata(t *testing.T) {
 			"chat": "group:c1",
 		},
 	}
-	b.EnsureSessionMetadata("canonical", scope, []string{"legacy"})
-
-	if got := b.ResolveSessionKey("legacy"); got != "canonical" {
-		t.Fatalf("ResolveSessionKey() = %q, want %q", got, "canonical")
-	}
-
-	b.AddMessage("legacy", "user", "hello through alias")
+	b.EnsureSessionMetadata("canonical", scope)
+	b.AddMessage("canonical", "user", "hello")
 	history := b.GetHistory("canonical")
 	if len(history) != 1 {
 		t.Fatalf("len(history) = %d, want 1", len(history))
 	}
-	if history[0].Content != "hello through alias" {
-		t.Fatalf("history[0].Content = %q, want %q", history[0].Content, "hello through alias")
+	if history[0].Content != "hello" {
+		t.Fatalf("history[0].Content = %q, want %q", history[0].Content, "hello")
 	}
 
-	resolvedScope := b.GetSessionScope("legacy")
+	resolvedScope := b.GetSessionScope("canonical")
 	if resolvedScope == nil {
 		t.Fatal("GetSessionScope() returned nil")
 	}
 	if resolvedScope.AgentID != scope.AgentID || resolvedScope.Values["chat"] != scope.Values["chat"] {
 		t.Fatalf("GetSessionScope() = %+v, want %+v", resolvedScope, scope)
-	}
-}
-
-func TestJSONLBackend_EnsureSessionMetadata_PromotesLegacyAliasHistory(t *testing.T) {
-	b := newBackend(t)
-
-	legacyKey := "agent:main:direct:legacy-user"
-	b.AddMessage(legacyKey, "user", "legacy history")
-	b.SetSummary(legacyKey, "legacy summary")
-
-	canonicalKey := session.BuildOpaqueSessionKey(legacyKey)
-	b.EnsureSessionMetadata(canonicalKey, &session.SessionScope{
-		Version: session.ScopeVersionV1,
-		AgentID: "main",
-	}, []string{legacyKey})
-
-	if got := b.ResolveSessionKey(legacyKey); got != canonicalKey {
-		t.Fatalf("ResolveSessionKey() = %q, want %q", got, canonicalKey)
-	}
-	history := b.GetHistory(canonicalKey)
-	if len(history) != 1 || history[0].Content != "legacy history" {
-		t.Fatalf("promoted history = %+v", history)
-	}
-	if summary := b.GetSummary(canonicalKey); summary != "legacy summary" {
-		t.Fatalf("promoted summary = %q, want %q", summary, "legacy summary")
-	}
-}
-
-func TestJSONLBackend_EnsureSessionMetadata_PromotesLegacyMintClawDirectAliasHistory(t *testing.T) {
-	b := newBackend(t)
-
-	legacyKey := "agent:main:mintclaw:direct:mintclaw:session-123"
-	b.AddMessage(legacyKey, "user", "legacy mintclaw history")
-
-	scope := &session.SessionScope{
-		Version:    session.ScopeVersionV1,
-		AgentID:    "main",
-		Channel:    "mintclaw",
-		Account:    "default",
-		Dimensions: []string{"sender"},
-		Values: map[string]string{
-			"sender": "mintclaw-user",
-		},
-	}
-	allocation := session.AllocateRouteSession(session.AllocationInput{
-		AgentID: "main",
-		Context: bus.InboundContext{
-			Channel:  "mintclaw",
-			Account:  "default",
-			ChatID:   "mintclaw:session-123",
-			ChatType: "direct",
-			SenderID: "mintclaw-user",
-		},
-		SessionPolicy: routing.SessionPolicy{
-			Dimensions: []string{"sender"},
-		},
-	})
-
-	b.EnsureSessionMetadata(allocation.SessionKey, scope, allocation.SessionAliases)
-
-	if got := b.ResolveSessionKey(legacyKey); got != allocation.SessionKey {
-		t.Fatalf("ResolveSessionKey() = %q, want %q", got, allocation.SessionKey)
-	}
-	history := b.GetHistory(allocation.SessionKey)
-	if len(history) != 1 || history[0].Content != "legacy mintclaw history" {
-		t.Fatalf("promoted history = %+v", history)
-	}
-}
-
-func TestJSONLBackend_EnsureSessionMetadata_DoesNotOverwriteNonEmptyCanonicalHistory(t *testing.T) {
-	b := newBackend(t)
-
-	canonicalKey := session.BuildOpaqueSessionKey("agent:main:direct:current-user")
-	legacyKey := "agent:main:direct:legacy-user"
-
-	b.AddMessage(canonicalKey, "user", "current canonical history")
-	b.AddMessage(legacyKey, "user", "legacy history")
-
-	b.EnsureSessionMetadata(canonicalKey, &session.SessionScope{
-		Version: session.ScopeVersionV1,
-		AgentID: "main",
-	}, []string{legacyKey})
-
-	history := b.GetHistory(canonicalKey)
-	if len(history) != 1 || history[0].Content != "current canonical history" {
-		t.Fatalf("canonical history overwritten: %+v", history)
 	}
 }
 

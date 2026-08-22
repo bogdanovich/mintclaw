@@ -478,7 +478,6 @@ func (al *AgentLoop) buildCommandsRuntime(
 				agent.Sessions,
 				opts.Dispatch.SessionKey,
 				opts.Dispatch.SessionScope,
-				opts.Dispatch.SessionAliases,
 			)
 			return al.contextManager.Clear(ctx, agent, opts.SessionKey)
 		}

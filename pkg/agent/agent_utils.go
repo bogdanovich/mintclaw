@@ -421,41 +421,17 @@ func isExplicitSessionKey(sessionKey string) bool {
 	return session.IsExplicitSessionKey(sessionKey)
 }
 
-func buildSessionAliases(canonicalKey string, keys ...string) []string {
-	if len(keys) == 0 {
-		return nil
-	}
-	aliases := make([]string, 0, len(keys))
-	seen := make(map[string]struct{}, len(keys))
-	canonicalKey = strings.TrimSpace(canonicalKey)
-	for _, key := range keys {
-		key = strings.TrimSpace(key)
-		if key == "" || key == canonicalKey {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		aliases = append(aliases, key)
-	}
-	if len(aliases) == 0 {
-		return nil
-	}
-	return aliases
-}
-
-func ensureSessionMetadata(store session.SessionStore, key string, scope *session.SessionScope, aliases []string) {
+func ensureSessionMetadata(store session.SessionStore, key string, scope *session.SessionScope) {
 	if key == "" || scope == nil {
 		return
 	}
 	metaStore, ok := store.(interface {
-		EnsureSessionMetadata(sessionKey string, scope *session.SessionScope, aliases []string)
+		EnsureSessionMetadata(sessionKey string, scope *session.SessionScope)
 	})
 	if !ok {
 		return
 	}
-	metaStore.EnsureSessionMetadata(key, scope, aliases)
+	metaStore.EnsureSessionMetadata(key, scope)
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
