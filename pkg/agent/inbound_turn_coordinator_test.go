@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -930,8 +931,10 @@ func TestInboundTurnCoordinatorReleasesRootJournalFailuresBeforeLLM(t *testing.T
 			provider := &countingAdmissionProvider{}
 			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 			defer cleanup()
-			events := al.SubscribeEvents(8)
-			defer al.UnsubscribeEvents(events.ID)
+			events, closeEvents := subscribeRuntimeEventsForTest(
+				t, al, 8, runtimeevents.KindAgentTurnEnd,
+			)
+			defer closeEvents()
 			journalErr := errors.New("injected " + stage + " failure")
 			agent.Sessions = &failingRootTurnJournal{
 				SessionStore: session.NewMemoryStore(),
@@ -953,20 +956,12 @@ func TestInboundTurnCoordinatorReleasesRootJournalFailuresBeforeLLM(t *testing.T
 			if provider.calls != 0 {
 				t.Fatalf("failure executed provider %d times", provider.calls)
 			}
-			for {
-				select {
-				case event := <-events.C:
-					if event.Kind != EventKindTurnEnd {
-						continue
-					}
-					payload, ok := event.Payload.(TurnEndPayload)
-					if !ok || payload.Status != TurnEndStatusError {
-						t.Fatalf("turn end = %#v, want error", event.Payload)
-					}
-					return
-				case <-time.After(time.Second):
-					t.Fatal("timed out waiting for error turn end")
-				}
+			event := waitForRuntimeEvent(t, events, time.Second, func(event runtimeevents.Event) bool {
+				return event.Kind == runtimeevents.KindAgentTurnEnd
+			})
+			payload, ok := event.Payload.(TurnEndPayload)
+			if !ok || payload.Status != TurnEndStatusError {
+				t.Fatalf("turn end = %#v, want error", event.Payload)
 			}
 		})
 	}
