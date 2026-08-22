@@ -1,7 +1,4 @@
-import {
-  parseToolCallsFromContent,
-  parseToolCallsValue,
-} from "@/features/chat/tool-calls"
+import { parseToolCallsValue } from "@/features/chat/tool-calls"
 import type { AssistantMessageKind, ChatMessage } from "@/store/chat"
 
 type AssistantToolCalls = ChatMessage["toolCalls"]
@@ -54,19 +51,15 @@ function hasExplicitAssistantKindPayload(
 
 function parseAssistantToolCalls(
   payload: Record<string, unknown>,
-  content: string,
 ): AssistantToolCalls {
-  return (
-    parseToolCallsValue(payload.tool_calls) ??
-    parseToolCallsFromContent(content)
-  )
+  return parseToolCallsValue(payload.tool_calls)
 }
 
 export function parseAssistantMessageCreateState(
   payload: Record<string, unknown>,
 ): AssistantMessageCreateState {
   const content = typeof payload.content === "string" ? payload.content : ""
-  const toolCalls = parseAssistantToolCalls(payload, content)
+  const toolCalls = parseAssistantToolCalls(payload)
 
   return {
     content,
@@ -80,7 +73,7 @@ export function parseAssistantMessageUpdateState(
   existing?: ExistingAssistantMessageState,
 ): AssistantMessageUpdateState {
   const content = typeof payload.content === "string" ? payload.content : ""
-  const toolCalls = parseAssistantToolCalls(payload, content)
+  const toolCalls = parseAssistantToolCalls(payload)
 
   if (hasExplicitAssistantKindPayload(payload)) {
     const kind = parseAssistantMessageKind(payload, toolCalls)

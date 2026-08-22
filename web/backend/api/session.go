@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,7 +55,6 @@ type sessionChatMessage struct {
 	Kind        string                  `json:"kind,omitempty"`
 	ModelName   string                  `json:"model_name,omitempty"`
 	CreatedAt   *time.Time              `json:"created_at,omitempty"`
-	Media       []string                `json:"media,omitempty"`
 	Attachments []sessionChatAttachment `json:"attachments,omitempty"`
 	ToolCalls   []utils.VisibleToolCall `json:"tool_calls,omitempty"`
 }
@@ -347,7 +347,6 @@ func truncateRunes(s string, maxLen int) string {
 
 func sessionChatMessageVisible(msg sessionChatMessage) bool {
 	return strings.TrimSpace(msg.Content) != "" ||
-		len(msg.Media) > 0 ||
 		len(msg.Attachments) > 0 ||
 		len(msg.ToolCalls) > 0
 }
@@ -358,12 +357,6 @@ func sessionChatMessagePreview(msg sessionChatMessage) string {
 	}
 	if len(msg.Attachments) > 0 {
 		if strings.EqualFold(strings.TrimSpace(msg.Attachments[0].Type), "image") {
-			return "[image]"
-		}
-		return "[attachment]"
-	}
-	if len(msg.Media) > 0 {
-		if strings.HasPrefix(strings.TrimSpace(msg.Media[0]), "data:image/") {
 			return "[image]"
 		}
 		return "[attachment]"
@@ -402,7 +395,6 @@ func sessionTranscriptMessages(
 				Content:     msg.Content,
 				ModelName:   msg.ModelName,
 				CreatedAt:   msg.CreatedAt,
-				Media:       append([]string(nil), msg.Media...),
 				Attachments: attachments,
 			}
 			if sessionChatMessageVisible(chatMsg) {
@@ -452,7 +444,6 @@ func sessionTranscriptMessages(
 				Content:     content,
 				ModelName:   msg.ModelName,
 				CreatedAt:   msg.CreatedAt,
-				Media:       append([]string(nil), msg.Media...),
 				Attachments: attachments,
 			}
 			if !sessionChatMessageVisible(chatMsg) {
@@ -490,16 +481,22 @@ func filterSessionChatMessages(messages []sessionChatMessage) []sessionChatMessa
 }
 
 func sessionAttachments(msg providers.Message) []sessionChatAttachment {
-	if len(msg.Attachments) == 0 {
+	if len(msg.Attachments) == 0 && len(msg.Media) == 0 {
 		return nil
 	}
 
-	attachments := make([]sessionChatAttachment, 0, len(msg.Attachments))
-	for _, attachment := range msg.Attachments {
+	attachments := make([]sessionChatAttachment, 0, len(msg.Attachments)+len(msg.Media))
+	seenURLs := make(map[string]struct{}, len(msg.Attachments)+len(msg.Media))
+	appendAttachment := func(attachment providers.Attachment) {
 		urlValue, ok := sessionAttachmentURL(attachment)
 		if !ok {
-			continue
+			return
 		}
+		if _, exists := seenURLs[urlValue]; exists {
+			return
+		}
+		seenURLs[urlValue] = struct{}{}
+
 		attachmentType := strings.TrimSpace(attachment.Type)
 		if attachmentType == "" {
 			attachmentType = sessionAttachmentType(attachment)
@@ -510,6 +507,13 @@ func sessionAttachments(msg providers.Message) []sessionChatAttachment {
 			Filename:    strings.TrimSpace(attachment.Filename),
 			ContentType: strings.TrimSpace(attachment.ContentType),
 		})
+	}
+
+	for _, attachment := range msg.Attachments {
+		appendAttachment(attachment)
+	}
+	for _, mediaRef := range msg.Media {
+		appendAttachment(providers.Attachment{Ref: mediaRef})
 	}
 
 	if len(attachments) == 0 {
@@ -527,11 +531,12 @@ func sessionAttachmentURL(attachment providers.Attachment) (string, bool) {
 	if ref == "" {
 		return "", false
 	}
-	if strings.HasPrefix(ref, "media://") {
-		// Persisted session history must only expose durable attachment locations.
-		// media:// refs depend on the live in-memory MediaStore and may stop
-		// resolving after a restart or cleanup, so omit them from reopened history.
-		return "", false
+	if refID, ok := strings.CutPrefix(ref, "media://"); ok {
+		refID = strings.TrimSpace(refID)
+		if refID == "" {
+			return "", false
+		}
+		return "/mintclaw/media/" + url.PathEscape(refID), true
 	}
 	return ref, true
 }

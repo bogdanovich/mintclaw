@@ -353,7 +353,7 @@ func TestHandleGetSession_JSONLStorage(t *testing.T) {
 	}
 }
 
-func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testing.T) {
+func TestHandleGetSession_ExposesHandledToolAttachmentsThroughMediaProxy(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -401,11 +401,21 @@ func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testin
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 
-	if len(resp.Messages) != 1 {
-		t.Fatalf("len(resp.Messages) = %d, want 1", len(resp.Messages))
+	if len(resp.Messages) != 2 {
+		t.Fatalf("len(resp.Messages) = %d, want 2", len(resp.Messages))
 	}
 	if resp.Messages[0].Role != "user" || resp.Messages[0].Content != "send me the report" {
-		t.Fatalf("message = %#v, want only user request", resp.Messages[0])
+		t.Fatalf("message = %#v, want user request", resp.Messages[0])
+	}
+	attachmentMessage := resp.Messages[1]
+	if attachmentMessage.Role != "assistant" || attachmentMessage.Content != "" ||
+		len(attachmentMessage.Attachments) != 1 {
+		t.Fatalf("attachment message = %#v, want assistant attachment", attachmentMessage)
+	}
+	attachment := attachmentMessage.Attachments[0]
+	if attachment.URL != "/mintclaw/media/attachment-1" || attachment.Filename != "report.txt" ||
+		attachment.ContentType != "text/plain" {
+		t.Fatalf("attachment = %#v, want media proxy URL and metadata", attachment)
 	}
 }
 
@@ -1379,7 +1389,7 @@ func TestHandleGetSession_PreservesDistinctAssistantToolCallContent(t *testing.T
 	assertVisibleToolCallMessage(t, resp.Messages[2], "read_file")
 }
 
-func TestHandleGetSession_PreservesMediaWhenAssistantToolCallContentDuplicatesSummary(t *testing.T) {
+func TestHandleGetSession_ExposesMediaAsAttachmentWhenAssistantToolCallContentDuplicatesSummary(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -1443,8 +1453,10 @@ func TestHandleGetSession_PreservesMediaWhenAssistantToolCallContentDuplicatesSu
 	if resp.Messages[1].Content != "" {
 		t.Fatalf("assistant content = %q, want duplicate content suppressed", resp.Messages[1].Content)
 	}
-	if len(resp.Messages[1].Media) != 1 || resp.Messages[1].Media[0] != "data:image/png;base64,abc123" {
-		t.Fatalf("assistant media = %#v, want preserved media", resp.Messages[1].Media)
+	if len(resp.Messages[1].Attachments) != 1 ||
+		resp.Messages[1].Attachments[0].URL != "data:image/png;base64,abc123" ||
+		resp.Messages[1].Attachments[0].Type != "image" {
+		t.Fatalf("assistant attachments = %#v, want image attachment", resp.Messages[1].Attachments)
 	}
 	assertVisibleToolCallMessage(t, resp.Messages[2], "view_image")
 }
@@ -1611,7 +1623,7 @@ func TestHandleGetSession_UsesConfiguredToolFeedbackMaxArgsLength(t *testing.T) 
 	}
 }
 
-func TestHandleGetSession_FallsBackToLegacyToolArgumentsWhenExplanationMissing(t *testing.T) {
+func TestHandleGetSession_UsesToolArgumentsWhenExplanationMissing(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -1632,7 +1644,7 @@ func TestHandleGetSession_FallsBackToLegacyToolArgumentsWhenExplanationMissing(t
 	}
 
 	argsJSON := `{"path":"README.md","start_line":1,"end_line":10,"extra":"abcdefghijklmnopqrstuvwxyz"}`
-	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-legacy-args")
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-args")
 	if err := store.AddFullMessage(
 		context.Background(),
 		sessionKey,
@@ -1659,7 +1671,7 @@ func TestHandleGetSession_FallsBackToLegacyToolArgumentsWhenExplanationMissing(t
 	h.RegisterRoutes(mux)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/sessions/detail-tool-summary-legacy-args", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/detail-tool-summary-args", nil)
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1681,11 +1693,11 @@ func TestHandleGetSession_FallsBackToLegacyToolArgumentsWhenExplanationMissing(t
 	}, 20)
 	toolCall := assertVisibleToolCallMessage(t, resp.Messages[1], "read_file")
 	if toolCall.Function == nil || toolCall.Function.Arguments != wantPreview {
-		t.Fatalf("tool call = %#v, want legacy args preview %q", toolCall, wantPreview)
+		t.Fatalf("tool call = %#v, want args preview %q", toolCall, wantPreview)
 	}
 }
 
-func TestHandleGetSession_IncludesMediaOnlyMessages(t *testing.T) {
+func TestHandleGetSession_ExposesMediaOnlyMessagesAsAttachments(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -1717,9 +1729,9 @@ func TestHandleGetSession_IncludesMediaOnlyMessages(t *testing.T) {
 
 	var resp struct {
 		Messages []struct {
-			Role    string   `json:"role"`
-			Content string   `json:"content"`
-			Media   []string `json:"media"`
+			Role        string                  `json:"role"`
+			Content     string                  `json:"content"`
+			Attachments []sessionChatAttachment `json:"attachments"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -1728,8 +1740,41 @@ func TestHandleGetSession_IncludesMediaOnlyMessages(t *testing.T) {
 	if len(resp.Messages) != 1 {
 		t.Fatalf("len(resp.Messages) = %d, want 1", len(resp.Messages))
 	}
-	if resp.Messages[0].Role != "user" || len(resp.Messages[0].Media) != 1 {
-		t.Fatalf("message = %#v, want user message with media", resp.Messages[0])
+	if resp.Messages[0].Role != "user" || len(resp.Messages[0].Attachments) != 1 ||
+		resp.Messages[0].Attachments[0].URL != "data:image/png;base64,abc123" ||
+		resp.Messages[0].Attachments[0].Type != "image" {
+		t.Fatalf("message = %#v, want user message with image attachment", resp.Messages[0])
+	}
+}
+
+func TestSessionAttachmentsConsolidatesMediaAndStructuredAttachments(t *testing.T) {
+	const reportURL = "https://example.com/report.txt"
+	attachments := sessionAttachments(providers.Message{
+		Media: []string{
+			reportURL,
+			"data:image/png;base64,abc123",
+			"media://persistent",
+		},
+		Attachments: []providers.Attachment{{
+			Type:        "file",
+			URL:         reportURL,
+			Filename:    "report.txt",
+			ContentType: "text/plain",
+		}},
+	})
+
+	if len(attachments) != 3 {
+		t.Fatalf("attachments = %#v, want three durable attachments", attachments)
+	}
+	if attachments[0].URL != reportURL || attachments[0].Filename != "report.txt" ||
+		attachments[0].ContentType != "text/plain" {
+		t.Fatalf("structured attachment = %#v, want metadata preserved", attachments[0])
+	}
+	if attachments[1].URL != "data:image/png;base64,abc123" || attachments[1].Type != "image" {
+		t.Fatalf("media attachment = %#v, want canonical image attachment", attachments[1])
+	}
+	if attachments[2].URL != "/mintclaw/media/persistent" {
+		t.Fatalf("media proxy attachment = %#v, want canonical proxy URL", attachments[2])
 	}
 }
 
