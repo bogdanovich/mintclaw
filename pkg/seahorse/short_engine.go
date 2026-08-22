@@ -168,7 +168,7 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 
 	if err := runSchema(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrations: %w", err)
+		return nil, fmt.Errorf("schema: %w", err)
 	}
 
 	store := &Store{db: db}
@@ -290,43 +290,11 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 	}
 
 	var totalTokens int
-	var msgIDs []int64
 	for _, msg := range messages {
-		var added *Message
-		var err error
-		if len(msg.Parts) > 0 {
-			added, err = e.store.AddMessageWithPartsAndReasoning(
-				ctx,
-				conv.ConversationID,
-				msg.Role,
-				msg.Parts,
-				msg.ModelName,
-				msg.ReasoningContent,
-				msg.TokenCount,
-				msg.CreatedAt,
-			)
-		} else {
-			added, err = e.store.AddMessageWithReasoning(
-				ctx,
-				conv.ConversationID,
-				msg.Role,
-				msg.Content,
-				msg.ModelName,
-				msg.ReasoningContent,
-				msg.TokenCount,
-				msg.CreatedAt,
-			)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("add message: %w", err)
-		}
 		totalTokens += msg.TokenCount
-		msgIDs = append(msgIDs, added.ID)
 	}
-
-	// Append to context_items using actual inserted IDs
-	if err := e.store.AppendContextMessages(ctx, conv.ConversationID, msgIDs); err != nil {
-		return nil, fmt.Errorf("append context: %w", err)
+	if err := e.store.appendMessages(ctx, conv.ConversationID, messages); err != nil {
+		return nil, fmt.Errorf("append messages: %w", err)
 	}
 
 	logger.InfoCF("seahorse", "ingest", map[string]any{
@@ -445,11 +413,9 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 	return e.store.ClearConversation(ctx, conv.ConversationID)
 }
 
-// Bootstrap reconciles a session's messages with the database.
-// Called once at startup for each known session.
-// Bootstrap reconciles JSONL history with SQLite by ingesting only the delta.
-// Simple approach: find longest matching prefix and append delta.
-// If any mismatch is detected, clear and rebuild.
+// Bootstrap reconciles a session's canonical JSONL history with the derived database.
+// A proven append ingests only its delta; every other difference clears all derived
+// messages, summaries, and context before rebuilding.
 func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Message) error {
 	if e.shouldIgnoreSession(sessionKey) {
 		return nil
@@ -458,6 +424,16 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 		return nil
 	}
 	if len(messages) == 0 {
+		conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+		if err != nil {
+			return fmt.Errorf("bootstrap: get empty conversation: %w", err)
+		}
+		if conv == nil {
+			return nil
+		}
+		if err := e.store.replaceConversationMessages(ctx, conv.ConversationID, nil); err != nil {
+			return fmt.Errorf("bootstrap: clear empty canonical history: %w", err)
+		}
 		return nil
 	}
 
@@ -466,313 +442,64 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 		return fmt.Errorf("bootstrap: get conversation: %w", err)
 	}
 
-	// Get messages already in DB
-	dbMsgs, err := e.store.GetMessages(ctx, conv.ConversationID, len(messages), 0)
+	// Load one extra row so a canonical history shorter than SQLite is detected.
+	dbMsgs, err := e.store.GetMessages(ctx, conv.ConversationID, len(messages)+1, 0)
 	if err != nil {
 		return fmt.Errorf("bootstrap: get messages: %w", err)
 	}
 
-	// Migration repair path: old SeaHorse rows may be missing reasoning_content
-	// even though the canonical JSONL history already has it. Backfill those
-	// rows in place so we do not treat this as edited history and leave stale
-	// summaries/context behind after a partial raw-message rebuild.
-	repairedReasoning, err := e.repairBootstrapReasoningContent(ctx, dbMsgs, messages)
-	if err != nil {
-		return fmt.Errorf("bootstrap: repair reasoning_content: %w", err)
-	}
-	repairedModelName, err := e.repairBootstrapModelName(ctx, dbMsgs, messages)
-	if err != nil {
-		return fmt.Errorf("bootstrap: repair model_name: %w", err)
-	}
-	repairedCreatedAt, err := e.repairBootstrapCreatedAt(ctx, dbMsgs, messages)
-	if err != nil {
-		return fmt.Errorf("bootstrap: repair created_at: %w", err)
-	}
-	if (repairedReasoning || repairedModelName || repairedCreatedAt) && len(dbMsgs) == len(messages) {
-		matched := true
-		for i := range messages {
-			if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{}) {
-				matched = false
-				break
-			}
+	prefixMatches := true
+	compareLen := min(len(dbMsgs), len(messages))
+	for i := range compareLen {
+		if messagesMatch(dbMsgs[i], messages[i]) {
+			continue
 		}
-		if matched {
+		prefixMatches = false
+		logger.InfoCF("seahorse", "bootstrap: mismatch detected", map[string]any{
+			"conv_id":        conv.ConversationID,
+			"index":          i,
+			"db_role":        dbMsgs[i].Role,
+			"db_content":     truncate(dbMsgs[i].Content, 50),
+			"db_parts":       len(dbMsgs[i].Parts),
+			"db_model_name":  dbMsgs[i].ModelName,
+			"msg_role":       messages[i].Role,
+			"msg_content":    truncate(messages[i].Content, 50),
+			"msg_parts":      len(messages[i].Parts),
+			"msg_model_name": messages[i].ModelName,
+		})
+		break
+	}
+
+	if prefixMatches && len(dbMsgs) <= len(messages) {
+		delta := messages[len(dbMsgs):]
+		if len(delta) == 0 {
 			return nil
 		}
-	}
-
-	// Fast path: DB has same count and exact match → no-op
-	if len(dbMsgs) == len(messages) {
-		matched := true
-		for i := range messages {
-			if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{}) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return nil // DB is up to date
-		}
-	}
-
-	// Find longest matching prefix from the start
-	anchor := -1
-	compareLen := min(len(dbMsgs), len(messages))
-
-	for i := range compareLen {
-		if messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{}) {
-			anchor = i
-		} else {
-			// Mismatch detected - log details and rebuild
-			logger.InfoCF("seahorse", "bootstrap: mismatch detected", map[string]any{
-				"conv_id":        conv.ConversationID,
-				"index":          i,
-				"db_role":        dbMsgs[i].Role,
-				"db_content":     truncate(dbMsgs[i].Content, 50),
-				"db_parts":       len(dbMsgs[i].Parts),
-				"db_model_name":  dbMsgs[i].ModelName,
-				"msg_role":       messages[i].Role,
-				"msg_content":    truncate(messages[i].Content, 50),
-				"msg_parts":      len(messages[i].Parts),
-				"msg_model_name": messages[i].ModelName,
-			})
-			break
-		}
-	}
-
-	// If we hit a mismatch before reaching the end of DB messages, delete delta and re-ingest
-	// Note: anchor can be -1 if first message didn't match (history completely changed)
-	if anchor >= 0 && anchor < len(dbMsgs)-1 && len(dbMsgs) > 0 {
-		anchorID := dbMsgs[anchor].ID
-		logger.InfoCF("seahorse", "bootstrap: history edit detected", map[string]any{
-			"conv_id":     conv.ConversationID,
-			"db_count":    len(dbMsgs),
-			"anchor":      anchor,
-			"anchor_id":   anchorID,
-			"msg_count":   len(messages),
-			"delta_start": anchor + 1,
-		})
-
-		// Delete messages after anchor (also clears context_items)
-		if err := e.store.DeleteMessagesAfterID(ctx, conv.ConversationID, anchorID); err != nil {
-			return fmt.Errorf("bootstrap: delete messages: %w", err)
-		}
-
-		// Re-ingest from anchor+1 to end
-		delta := messages[anchor+1:]
-		if len(delta) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, delta)
-			if err != nil {
-				return fmt.Errorf("bootstrap: re-ingest: %w", err)
-			}
+		if _, err := e.Ingest(ctx, sessionKey, delta); err != nil {
+			return fmt.Errorf("bootstrap: ingest delta: %w", err)
 		}
 		return nil
 	}
 
-	// Normal case: append delta after anchor
-	if anchor >= 0 && anchor < len(messages)-1 {
-		delta := messages[anchor+1:]
-		if len(delta) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, delta)
-			if err != nil {
-				return fmt.Errorf("bootstrap: ingest delta: %w", err)
-			}
-		}
-	} else if anchor == -1 && len(dbMsgs) > 0 {
-		// First message changed (history completely different) - rebuild from scratch
-		logger.InfoCF("seahorse", "bootstrap: history replaced, rebuilding", map[string]any{
-			"conv_id":   conv.ConversationID,
-			"db_count":  len(dbMsgs),
-			"msg_count": len(messages),
-		})
-		// Delete all existing messages
-		if err := e.store.DeleteMessagesAfterID(ctx, conv.ConversationID, 0); err != nil {
-			return fmt.Errorf("bootstrap: delete all messages: %w", err)
-		}
-		// Re-ingest everything
-		if len(messages) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, messages)
-			if err != nil {
-				return fmt.Errorf("bootstrap: re-ingest all: %w", err)
-			}
-		}
-	} else if anchor == -1 && len(dbMsgs) == 0 {
-		// DB is empty, ingest everything
-		_, err := e.Ingest(ctx, sessionKey, messages)
-		if err != nil {
-			return fmt.Errorf("bootstrap: ingest all: %w", err)
-		}
+	logger.InfoCF("seahorse", "bootstrap: canonical history diverged, rebuilding", map[string]any{
+		"conv_id":   conv.ConversationID,
+		"db_count":  len(dbMsgs),
+		"msg_count": len(messages),
+	})
+	if err := e.store.replaceConversationMessages(ctx, conv.ConversationID, messages); err != nil {
+		return fmt.Errorf("bootstrap: rebuild canonical history: %w", err)
 	}
+	totalTokens := 0
+	for _, message := range messages {
+		totalTokens += message.TokenCount
+	}
+	logger.InfoCF("seahorse", "ingest", map[string]any{
+		"conv_id":  conv.ConversationID,
+		"messages": len(messages),
+		"tokens":   totalTokens,
+	})
 
 	return nil
-}
-
-func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index            int
-		messageID        int64
-		reasoningContent string
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-		if dbMsgs[i].ReasoningContent == messages[i].ReasoningContent {
-			continue
-		}
-		if dbMsgs[i].ReasoningContent != "" || messages[i].ReasoningContent == "" {
-			return false, nil
-		}
-		updates = append(updates, struct {
-			index            int
-			messageID        int64
-			reasoningContent string
-		}{
-			index:            i,
-			messageID:        dbMsgs[i].ID,
-			reasoningContent: messages[i].ReasoningContent,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageReasoningContent(ctx, update.messageID, update.reasoningContent); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].ReasoningContent = update.reasoningContent
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired missing reasoning_content", map[string]any{
-		"messages": len(updates),
-	})
-	return true, nil
-}
-
-func (e *Engine) repairBootstrapModelName(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		modelName string
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-		if dbMsgs[i].ModelName == messages[i].ModelName {
-			continue
-		}
-		if messages[i].ModelName == "" {
-			return false, nil
-		}
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			modelName string
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			modelName: messages[i].ModelName,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageModelName(ctx, update.messageID, update.modelName); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].ModelName = update.modelName
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired missing model_name", map[string]any{
-		"messages": len(updates),
-	})
-	return true, nil
-}
-
-func (e *Engine) repairBootstrapCreatedAt(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		createdAt time.Time
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-
-		wantCreatedAt := normalizeMessageCreatedAt(messages[i].CreatedAt)
-		if wantCreatedAt.IsZero() {
-			return false, nil
-		}
-		if dbMsgs[i].CreatedAt.Equal(wantCreatedAt) {
-			continue
-		}
-
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			createdAt time.Time
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			createdAt: wantCreatedAt,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageCreatedAt(ctx, update.messageID, update.createdAt); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].CreatedAt = update.createdAt
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired message created_at", map[string]any{
-		"messages": len(updates),
-	})
-	return true, nil
 }
 
 // truncate shortens a string for logging.
@@ -783,26 +510,19 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-type messageMatchOptions struct {
-	IgnoreReasoningContent bool
-	IgnoreModelName        bool
-	IgnoreCreatedAt        bool
-}
-
-// messagesMatch compares two messages by role and payload, plus the optional
-// metadata fields used by bootstrap repair. TokenCount is intentionally ignored
-// because bootstrap may re-estimate it differently.
-func messagesMatch(a, b Message, opts messageMatchOptions) bool {
+// messagesMatch compares two messages by role, payload, and canonical metadata.
+// TokenCount is intentionally ignored because bootstrap may re-estimate it differently.
+func messagesMatch(a, b Message) bool {
 	if a.Role != b.Role {
 		return false
 	}
-	if !opts.IgnoreReasoningContent && a.ReasoningContent != b.ReasoningContent {
+	if a.ReasoningContent != b.ReasoningContent {
 		return false
 	}
-	if !opts.IgnoreModelName && a.ModelName != b.ModelName {
+	if a.ModelName != b.ModelName {
 		return false
 	}
-	if !opts.IgnoreCreatedAt && !messageCreatedAtMatches(a.CreatedAt, b.CreatedAt) {
+	if !messageCreatedAtMatches(a.CreatedAt, b.CreatedAt) {
 		return false
 	}
 	// If either message has Parts, compare Parts
@@ -813,16 +533,12 @@ func messagesMatch(a, b Message, opts messageMatchOptions) bool {
 	return a.Content == b.Content
 }
 
-// messageCreatedAtMatches treats missing timestamps as compatible so bootstrap
-// can preserve legacy histories while still enforcing exact equality once both
-// sides carry canonical created_at values.
+// messageCreatedAtMatches treats a missing timestamp as unspecified. Current
+// message inputs may omit CreatedAt; when both sides provide it, it must match.
 func messageCreatedAtMatches(a, b time.Time) bool {
 	na := normalizeMessageCreatedAt(a)
 	nb := normalizeMessageCreatedAt(b)
-	if na.IsZero() || nb.IsZero() {
-		return true
-	}
-	return na.Equal(nb)
+	return na.IsZero() || nb.IsZero() || na.Equal(nb)
 }
 
 // partsMatch compares two slices of MessagePart for equality.

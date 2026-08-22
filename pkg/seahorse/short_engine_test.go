@@ -16,7 +16,7 @@ func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	db := openTestDB(t)
 	if err := runSchema(db); err != nil {
-		t.Fatalf("migration: %v", err)
+		t.Fatalf("schema: %v", err)
 	}
 	store := &Store{db: db}
 	return &Engine{
@@ -25,7 +25,7 @@ func newTestEngine(t *testing.T) *Engine {
 	}
 }
 
-func prepareBootstrapRepairConversation(
+func prepareBootstrapConversation(
 	t *testing.T,
 	eng *Engine,
 	ctx context.Context,
@@ -418,11 +418,11 @@ func TestEngineIngestPreservesReasoningContent(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsMissingModelName(t *testing.T) {
+func TestBootstrapReconcilesMissingModelName(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-model-name"
-	conv, msgs := prepareBootstrapRepairConversation(t, eng, ctx, sessionKey)
+	sessionKey := "agent:reconcile-model-name"
+	conv, msgs := prepareBootstrapConversation(t, eng, ctx, sessionKey)
 	msgs[1].ModelName = "gpt-5.4"
 
 	err := eng.Bootstrap(ctx, sessionKey, msgs)
@@ -442,10 +442,10 @@ func TestBootstrapRepairsMissingModelName(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsReasoningContentAndModelNameTogether(t *testing.T) {
+func TestBootstrapReconcilesReasoningContentAndModelNameTogether(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-both-fields"
+	sessionKey := "agent:reconcile-both-fields"
 
 	conv, err := eng.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {
@@ -502,10 +502,10 @@ func TestBootstrapRepairsReasoningContentAndModelNameTogether(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsIncorrectNonEmptyModelName(t *testing.T) {
+func TestBootstrapReconcilesIncorrectNonEmptyModelName(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-wrong-model-name"
+	sessionKey := "agent:reconcile-wrong-model-name"
 
 	conv, err := eng.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {
@@ -556,11 +556,11 @@ func TestBootstrapRepairsIncorrectNonEmptyModelName(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsCreatedAt(t *testing.T) {
+func TestBootstrapReconcilesCreatedAt(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-created-at"
-	conv, msgs := prepareBootstrapRepairConversation(t, eng, ctx, sessionKey)
+	sessionKey := "agent:reconcile-created-at"
+	conv, msgs := prepareBootstrapConversation(t, eng, ctx, sessionKey)
 
 	wantCreatedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	msgs[1].CreatedAt = wantCreatedAt
@@ -838,6 +838,40 @@ func TestEngineBootstrapEmpty(t *testing.T) {
 	}
 }
 
+func TestBootstrapEmptyClearsExistingDerivedState(t *testing.T) {
+	eng := newTestEngine(t)
+	ctx := context.Background()
+	sessionKey := "agent:empty-existing"
+	if _, err := eng.Ingest(ctx, sessionKey, []Message{
+		{Role: "user", Content: "no longer canonical", TokenCount: 3},
+	}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	if err := eng.Bootstrap(ctx, sessionKey, nil); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	conv, err := eng.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetConversationBySessionKey: %v", err)
+	}
+	stored, err := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored messages = %d, want 0", len(stored))
+	}
+	items, err := eng.store.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("context items = %d, want 0", len(items))
+	}
+}
+
 func TestEngineBootstrapIdempotent(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
@@ -866,11 +900,11 @@ func TestEngineBootstrapIdempotent(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsMissingReasoningContent(t *testing.T) {
+func TestBootstrapReconcilesMissingReasoningContent(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-reasoning"
-	conv, msgs := prepareBootstrapRepairConversation(t, eng, ctx, sessionKey)
+	sessionKey := "agent:reconcile-reasoning"
+	conv, msgs := prepareBootstrapConversation(t, eng, ctx, sessionKey)
 	msgs[1].ReasoningContent = "let me think this through"
 
 	err := eng.Bootstrap(ctx, sessionKey, msgs)
@@ -894,111 +928,143 @@ func TestBootstrapRepairsMissingReasoningContent(t *testing.T) {
 	}
 }
 
-func TestBootstrapRepairsMissingReasoningContentWithoutDroppingSummaries(t *testing.T) {
+func TestBootstrapMetadataMismatchInvalidatesDerivedSummaries(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-reasoning-summary"
-
-	conv, err := eng.store.GetOrCreateConversation(ctx, sessionKey)
-	if err != nil {
-		t.Fatalf("GetOrCreateConversation: %v", err)
-	}
-
-	userMsg, err := eng.store.AddMessage(ctx, conv.ConversationID, "user", "hello", 3)
-	if err != nil {
-		t.Fatalf("AddMessage user: %v", err)
-	}
-	assistantMsg, err := eng.store.AddMessage(ctx, conv.ConversationID, "assistant", "world", 3)
-	if err != nil {
-		t.Fatalf("AddMessage assistant: %v", err)
-	}
-
-	err = eng.store.AppendContextMessages(
-		ctx,
-		conv.ConversationID,
-		[]int64{userMsg.ID, assistantMsg.ID},
-	)
-	if err != nil {
-		t.Fatalf("AppendContextMessages: %v", err)
-	}
-
-	summary, err := eng.store.CreateSummary(ctx, CreateSummaryInput{
-		ConversationID: conv.ConversationID,
-		Kind:           SummaryKindLeaf,
-		Depth:          0,
-		Content:        "summary before repair",
-		TokenCount:     10,
-	})
-	if err != nil {
-		t.Fatalf("CreateSummary: %v", err)
-	}
-
-	err = eng.store.AppendContextSummary(ctx, conv.ConversationID, summary.SummaryID)
-	if err != nil {
-		t.Fatalf("AppendContextSummary: %v", err)
-	}
-
-	err = eng.Bootstrap(ctx, sessionKey, []Message{
-		{
-			Role:       "user",
-			Content:    "hello",
-			TokenCount: 3,
-			CreatedAt:  time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
-		},
-		{
-			Role:             "assistant",
-			Content:          "world",
-			ReasoningContent: "let me think this through",
-			TokenCount:       3,
-			CreatedAt:        time.Date(2026, 3, 4, 5, 6, 8, 0, time.UTC),
-		},
-	})
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
+	sessionKey := "agent:rebuild-metadata-mismatch"
+	conv, canonical := prepareBootstrapConversation(t, eng, ctx, sessionKey)
 
 	stored, err := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
 	if err != nil {
 		t.Fatalf("GetMessages: %v", err)
 	}
-	if len(stored) != 2 {
-		t.Fatalf("stored messages = %d, want 2", len(stored))
+	summary, err := eng.store.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: conv.ConversationID,
+		Kind:           SummaryKindLeaf,
+		Content:        "compacted stale history",
+		TokenCount:     4,
+	})
+	if err != nil {
+		t.Fatalf("CreateSummary: %v", err)
 	}
-	if stored[1].ReasoningContent != "let me think this through" {
-		t.Errorf(
-			"stored[1].ReasoningContent = %q, want %q",
-			stored[1].ReasoningContent,
-			"let me think this through",
-		)
+	if err := eng.store.LinkSummaryToMessages(
+		ctx,
+		summary.SummaryID,
+		[]int64{stored[0].ID, stored[1].ID},
+	); err != nil {
+		t.Fatalf("LinkSummaryToMessages: %v", err)
+	}
+	if err := eng.store.UpsertContextItems(ctx, conv.ConversationID, []ContextItem{
+		{Ordinal: OrdinalStep, ItemType: "summary", SummaryID: summary.SummaryID, TokenCount: 4},
+	}); err != nil {
+		t.Fatalf("UpsertContextItems: %v", err)
+	}
+
+	canonical[1].ReasoningContent = "current canonical reasoning"
+	if err := eng.Bootstrap(ctx, sessionKey, canonical); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
 	}
 
 	summaries, err := eng.store.GetSummariesByConversation(ctx, conv.ConversationID)
 	if err != nil {
 		t.Fatalf("GetSummariesByConversation: %v", err)
 	}
-	if len(summaries) != 1 {
-		t.Fatalf("summaries = %d, want 1", len(summaries))
+	if len(summaries) != 0 {
+		t.Fatalf("summaries = %d, want 0 after canonical rebuild", len(summaries))
 	}
-	if summaries[0].SummaryID != summary.SummaryID {
-		t.Errorf("SummaryID = %q, want %q", summaries[0].SummaryID, summary.SummaryID)
-	}
-
 	items, err := eng.store.GetContextItems(ctx, conv.ConversationID)
 	if err != nil {
 		t.Fatalf("GetContextItems: %v", err)
 	}
-	if len(items) != 3 {
-		t.Fatalf("context items = %d, want 3", len(items))
+	if len(items) != len(canonical) {
+		t.Fatalf("context items = %d, want %d canonical messages", len(items), len(canonical))
 	}
-	if items[2].ItemType != "summary" || items[2].SummaryID != summary.SummaryID {
-		t.Errorf("summary context item = %+v, want summary %q", items[2], summary.SummaryID)
+	for i := range items {
+		if items[i].ItemType != "message" {
+			t.Errorf("context item %d type = %q, want message", i, items[i].ItemType)
+		}
+	}
+
+	rebuilt, err := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages after rebuild: %v", err)
+	}
+	if len(rebuilt) != len(canonical) {
+		t.Fatalf("rebuilt messages = %d, want %d", len(rebuilt), len(canonical))
+	}
+	if rebuilt[1].ReasoningContent != canonical[1].ReasoningContent {
+		t.Errorf(
+			"rebuilt reasoning = %q, want %q",
+			rebuilt[1].ReasoningContent,
+			canonical[1].ReasoningContent,
+		)
 	}
 }
 
-func TestBootstrapRepairsMissingReasoningContentOnPrefixBeforeAppendingDelta(t *testing.T) {
+func TestBootstrapMismatchRebuildIsAtomicOnInsertFailure(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
-	sessionKey := "agent:repair-reasoning-prefix"
+	sessionKey := "agent:atomic-rebuild"
+	conv, canonical := prepareBootstrapConversation(t, eng, ctx, sessionKey)
+	canonical[0].Content = "replacement first"
+	canonical[1].Content = "replacement second"
+	canonical = append(canonical, Message{Role: "user", Content: "replacement third", TokenCount: 3})
+
+	_, err := eng.store.db.Exec(`CREATE TRIGGER fail_rebuild_message
+		BEFORE INSERT ON messages
+		WHEN new.content = 'replacement second'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected rebuild failure');
+		END`)
+	if err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err = eng.Bootstrap(ctx, sessionKey, canonical)
+	if err == nil || !strings.Contains(err.Error(), "injected rebuild failure") {
+		t.Fatalf("Bootstrap error = %v, want injected rebuild failure", err)
+	}
+	stored, err := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages after failed rebuild: %v", err)
+	}
+	if len(stored) != 2 || stored[0].Content != "hello" || stored[1].Content != "world" {
+		t.Fatalf("failed rebuild changed stored canonical state: %+v", stored)
+	}
+	items, err := eng.store.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems after failed rebuild: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("context items after failed rebuild = %d, want 2", len(items))
+	}
+
+	if _, err := eng.store.db.Exec(`DROP TRIGGER fail_rebuild_message`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	if err := eng.Bootstrap(ctx, sessionKey, canonical); err != nil {
+		t.Fatalf("Bootstrap retry: %v", err)
+	}
+	stored, err = eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages after retry: %v", err)
+	}
+	if len(stored) != len(canonical) {
+		t.Fatalf("stored messages after retry = %d, want %d", len(stored), len(canonical))
+	}
+	items, err = eng.store.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems after retry: %v", err)
+	}
+	if len(items) != len(canonical) {
+		t.Fatalf("context items after retry = %d, want %d", len(items), len(canonical))
+	}
+}
+
+func TestBootstrapReconcilesReasoningContentBeforeAppendingDelta(t *testing.T) {
+	eng := newTestEngine(t)
+	ctx := context.Background()
+	sessionKey := "agent:reconcile-reasoning-prefix"
 
 	conv, err := eng.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {

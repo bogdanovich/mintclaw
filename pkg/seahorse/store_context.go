@@ -87,63 +87,6 @@ func (s *Store) ClearContextItems(ctx context.Context, convID int64) error {
 	return err
 }
 
-// DeleteMessagesAfterID deletes all messages with ID > afterID for a conversation.
-// Also clears related context_items, message_parts, summary_messages, and FTS entries.
-// Uses transaction to ensure atomicity of the delete cascade.
-func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Get message IDs to delete for cleaning up related tables
-	rows, err := tx.QueryContext(ctx,
-		"SELECT message_id FROM messages WHERE conversation_id = ? AND message_id > ?", convID, afterID)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var msgIDs []int64
-	for rows.Next() {
-		var id int64
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return scanErr
-		}
-		msgIDs = append(msgIDs, id)
-	}
-	if rows.Err() != nil {
-		return rows.Err()
-	}
-
-	// Delete context_items referencing these messages
-	for _, msgID := range msgIDs {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM context_items WHERE message_id = ?", msgID); err != nil {
-			return err
-		}
-	}
-
-	// Delete from message_parts and summary_messages
-	// Note: messages_fts is handled automatically by trigger, no manual delete needed
-	for _, msgID := range msgIDs {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM message_parts WHERE message_id = ?", msgID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM summary_messages WHERE message_id = ?", msgID); err != nil {
-			return err
-		}
-	}
-
-	// Delete messages
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM messages WHERE conversation_id = ? AND message_id > ?", convID, afterID); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
 // ClearConversation removes all data for a conversation from all tables.
 // Deletes context_items, summary_messages, summary_parents (via subquery), summaries,
 // message_parts, and messages. FTS entries are handled automatically by triggers.
@@ -154,7 +97,13 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := clearConversationTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+func clearConversationTx(ctx context.Context, tx *sql.Tx, convID int64) error {
 	// Delete in child→parent order. FTS tables (messages_fts, summaries_fts) are
 	// kept in sync by DELETE triggers, so we just delete from the parent tables.
 
@@ -192,7 +141,7 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 		return fmt.Errorf("messages: %w", err)
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // AppendContextMessage appends a single message to context_items at next ordinal.

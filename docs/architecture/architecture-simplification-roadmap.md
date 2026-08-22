@@ -694,6 +694,9 @@ Implementation sequence:
 7. Delete unstructured and multi-format channel allowlist matching. Every
    inbound producer supplies `SenderInfo`, and `allow_from` contains exact
    platform IDs or the explicit `*` wildcard.
+8. Delete Seahorse startup schema upgrades and metadata backfill. Active
+   databases have the current schema, and every conversation has a current
+   canonical-history reconciliation watermark.
 
 Exit criteria:
 
