@@ -21,15 +21,14 @@ import (
 
 const terminalHelperMode = "MINTCLAW_TUI_HELPER_MODE"
 
-type panicWatchController struct {
+type panicSubscribeController struct {
 	*fakeController
 }
 
-func (*panicWatchController) Watch(
+func (*panicSubscribeController) Subscribe(
 	context.Context,
-	frontend.Revision,
-) (<-chan frontend.Delta, error) {
-	panic("induced TUI watch panic")
+) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
+	panic("induced TUI subscription panic")
 }
 
 func TestTUIHelperProcess(t *testing.T) {
@@ -37,10 +36,10 @@ func TestTUIHelperProcess(t *testing.T) {
 	if mode == "" {
 		t.Skip("helper process")
 	}
-	controller, _ := newController(t)
+	controller := newController(t)
 	var active frontend.Controller = controller
 	if mode == "panic" {
-		active = &panicWatchController{fakeController: controller}
+		active = &panicSubscribeController{fakeController: controller}
 	}
 	err := Run(context.Background(), active, Options{
 		Input:           os.Stdin,

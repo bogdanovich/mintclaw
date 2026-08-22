@@ -184,8 +184,8 @@ Every implementation packet in this roadmap follows these rules.
 
 ## Bird's-Eye View Of Coding Frontend Complexity
 
-The current coding frontend is shaped like a small client/server system even
-when no process boundary exists:
+Before packet C1, the coding frontend was shaped like a small client/server
+system even though no process boundary existed:
 
 ```text
 AgentLoop runtime events
@@ -232,8 +232,7 @@ terminal UI subscription -> renderer
 
 The store preserves the valuable boundary: the TUI still consumes coding
 presentation state rather than `AgentLoop` internals. It publishes the latest
-view or a small set of ephemeral progress events in process. It does not retain
-a transport replay protocol.
+bounded view in process and does not retain a transport replay protocol.
 
 If an actual web or IPC client is later admitted, that work starts at the
 presentation-store boundary. It must justify and introduce a real transport,
@@ -543,12 +542,14 @@ Exit criteria:
 
 Depends on: A1
 
+Status: implemented
+
 Scope:
 
 - replace projector, retained revision deltas, gap recovery, and reducer
   replay with one in-process coding presentation store;
-- let the TUI subscribe to immutable current views plus bounded ephemeral
-  progress;
+- let the TUI subscribe to immutable current views through one bounded,
+  coalescing subscription;
 - retain thread persistence and runtime events as source systems, not as a
   speculative IPC protocol;
 - remove current protocol-version compatibility and `ChangesSince`; and
@@ -567,6 +568,17 @@ Exit criteria:
 - one current presentation state in process;
 - no retained delta log, gap recovery, or frontend protocol version; and
 - future remote clients have a clear boundary but no speculative runtime cost.
+
+Implemented shape:
+
+- `Projector` owns one bounded `ThreadSnapshot` and atomically returns that
+  view with a subscription to later views;
+- each subscriber has one coalescing slot, so a slow UI receives the newest
+  view without blocking the running turn;
+- the TUI replaces its presentation view directly instead of reconstructing
+  it through a reducer; and
+- protocol versions, revisions, delta variants, retained changes, and gap
+  recovery are absent from this in-process boundary.
 
 ### X1 — Require the current configuration only
 

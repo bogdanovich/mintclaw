@@ -32,11 +32,7 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	})
 	projector.ToolCompleted("turn-1", "interrupted", "exec", "", 1500*time.Millisecond, true, nil)
 	projector.ToolOutput("turn-1", "unknown", "orphan output")
-	snapshot, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +103,7 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
 		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
 	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,10 +142,6 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		DiffStat:          codingworkspace.DiffStat{Files: 1, Additions: 12, Deletions: 3},
 		DiffStatAvailable: true,
 	})
-	snapshot, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	controller := &fakeController{Projector: projector}
 	controller.refreshState = &codingworkspace.Snapshot{
 		ProjectRoot: "/work/mintclaw",
@@ -159,7 +151,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		},
 		DiffStatAvailable: true,
 	}
-	model, err := NewModel(controller, snapshot)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,11 +214,7 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 		},
 	})
 	projector.TurnStarted("turn-1", "work")
-	snapshot, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +228,7 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 }
 
 func renderedModelTranscript(model *Model, width int) string {
-	state := model.reducer.State()
+	state := model.snapshot
 	content, _ := renderTranscript(
 		buildTranscriptView(
 			model.transcript.entries(state.Entries),

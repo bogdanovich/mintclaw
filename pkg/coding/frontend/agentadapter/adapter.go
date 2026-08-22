@@ -1,5 +1,5 @@
 // Package agentadapter projects stable observations from the shared agent
-// runtime into the coding frontend protocol.
+// runtime into the coding presentation store.
 package agentadapter
 
 import (
@@ -20,8 +20,8 @@ type Adapter struct {
 	sessionKey string
 }
 
-// ProjectThreadMetadata maps the durable catalog descriptor into the
-// transport-neutral, bounded frontend projection.
+// ProjectThreadMetadata maps the durable catalog descriptor into the bounded
+// frontend presentation view.
 func ProjectThreadMetadata(projector *frontend.Projector, metadata thread.Metadata) error {
 	if projector == nil {
 		return fmt.Errorf("coding frontend projector is required")

@@ -57,9 +57,9 @@ The following decisions are part of the admitted scope:
 10. The first implementation should reuse MintClaw's providers, tool loop,
     runtime events, steering, session journal, and Seahorse. It should not port
     Codex's Rust crates, SQLite thread store, sandbox stack, or app server.
-11. The terminal frontend uses authoritative, revisioned thread snapshots plus
-    bounded progress deltas. Deltas improve latency but are never the only way
-    to reconstruct UI state after a dropped event, slow consumer, or reconnect.
+11. The terminal frontend subscribes to one authoritative, bounded current
+    presentation view. Updates coalesce so a slow consumer converges to the
+    newest view without blocking the running turn.
 12. Repository instruction files are declarative context, not permission to
     execute repository-provided plugins, extensions, hooks, or dynamic config
     during startup. Any future executable project resource needs a separate
@@ -480,7 +480,7 @@ Implementation PRs must preserve these system-level guarantees:
     canonical thread.
 11. An emergency compaction failure stops with an actionable error if a safe
     provider request still cannot be assembled.
-12. The TUI consumes a typed frontend event protocol and does not inspect
+12. The TUI consumes a typed coding presentation view and does not inspect
     `AgentLoop` mutable state or arbitrary runtime payload internals.
 13. Terminal exit, cancellation, panic, and signal paths restore the terminal.
 14. Trusted-local mode bypasses interactive approval but does not broaden the
@@ -490,8 +490,9 @@ Implementation PRs must preserve these system-level guarantees:
 16. A side-effecting tool has a durable started marker before execution and a
     terminal result afterward. Resume classifies a dangling marker as
     interrupted or unknown and never automatically repeats the side effect.
-17. Frontend progress events may be dropped or coalesced without changing the
-    canonical thread. A revision gap causes snapshot resynchronization.
+17. Frontend presentation updates may be coalesced without changing the
+    canonical thread. The subscriber always converges to the newest bounded
+    view.
 18. Discovering `AGENTS.md` or another declarative instruction file does not
     implicitly load executable repository extensions, hooks, or dynamic
     configuration.
@@ -688,44 +689,31 @@ styles. P0 includes a bounded framework spike to confirm:
 The TUI itself is mandatory even if the spike selects a different event-loop
 library.
 
-### Frontend protocol
+### Frontend presentation boundary
 
-The TUI should consume a coding-specific projection such as:
+The TUI consumes one bounded `ThreadSnapshot` containing coding-specific
+presentation state such as:
 
 ```text
-ThreadOpened
-ThreadResumed
-ThreadSnapshot
-TurnStarted
-AssistantDelta
-ReasoningDelta
-ToolStarted
-ToolOutput
-ToolCompleted
-FileChange
-DiffUpdated
-ContextUsageUpdated
-CompactionStarted
-CompactionCompleted
-CompactionFailed
-TurnCompleted
-TurnFailed
-TurnInterrupted
+activity and last turn outcome
+bounded transcript entries
+tool and command lifecycle
+verified changed files
+workspace and context usage
+compaction state
 ```
 
-Each authoritative `ThreadSnapshot` carries a monotonic revision. Progress
-events carry the revision or entity identity they extend. The frontend applies
-deltas only when their predecessor is known; a gap, bounded-buffer overflow, or
-reconnect requests a fresh snapshot. Snapshots remain compact enough for
-routine resynchronization, while old transcript pages and large tool output are
-hydrated lazily.
+The presentation store atomically returns its current view and a bounded stream
+of later views. Each subscriber has one coalescing slot: when the TUI is slow,
+an older pending view is replaced by the newest one. Snapshots remain compact,
+while old transcript pages and large tool output are hydrated lazily.
 
-These events are a UI protocol, not a second source of truth. The projector may
-consume runtime events, stream callbacks, tool audits, and thread metadata, but
-the TUI does not depend on their internal representations. The initial adapter
-is in-process, yet the protocol types should not assume shared pointers or
-direct access to runtime state. This preserves a clean path to a later local
-daemon without requiring one for the MVP.
+The view is not a second source of truth. The projector may consume runtime
+events, stream callbacks, tool audits, and thread metadata, but the TUI does not
+depend on their internal representations or direct runtime state. A future web,
+IPC, or reconnecting client requires a separately admitted transport contract;
+the in-process presentation store does not anticipate one with versions,
+revision logs, replay, or gap recovery.
 
 The controller side should expose typed commands such as submit, interrupt,
 hard-cancel, manual compact, rename thread, start new thread, and close. It
@@ -892,8 +880,8 @@ Scope:
   cancellation.
 - Compare alternate-screen and native-scrollback behavior, including long
   history, tmux/SSH, IME input, resize, and final transcript visibility.
-- Specify an authoritative revisioned snapshot plus bounded delta contract and
-  demonstrate recovery after intentionally dropping a delta.
+- Specify an authoritative bounded current-view subscription and demonstrate
+  convergence when a slow consumer misses intermediate views.
 - Record any missing engine event needed for P3; do not add speculative event
   types in the spike.
 
@@ -901,8 +889,8 @@ Done when:
 
 - The framework choice is recorded with evidence.
 - The screen/scrollback model and supported fallback are recorded with evidence.
-- A typed frontend protocol and controller boundary are admitted.
-- Snapshot resynchronization works without direct runtime-state access.
+- A typed frontend presentation and controller boundary are admitted.
+- Slow consumers converge without direct runtime-state access.
 - Missing core observations are listed as bounded follow-up work.
 - The spike is either converted into testable foundation code or removed.
 
@@ -914,7 +902,7 @@ P1 may start only when:
 - session and Seahorse locations are injected before construction;
 - coding tools can be isolated from personal tools;
 - existing personal-agent behavior remains green; and
-- the TUI framework and frontend protocol are decided.
+- the TUI framework and frontend presentation boundary are decided.
 
 ### P1 — Durable project thread catalogue
 
@@ -1201,9 +1189,9 @@ Dependencies: P0.5, P2.7
 Scope:
 
 - Translate runtime events, stream callbacks, write audits, and thread metadata
-  into the admitted frontend event protocol.
-- Emit an authoritative bounded thread snapshot with a monotonic revision, and
-  make progress deltas reference the revision or entity they extend.
+  into the admitted current presentation view.
+- Publish an authoritative bounded thread snapshot through one coalescing
+  in-process subscription.
 - Preserve ordering and thread/turn/tool correlation.
 - Bound arguments, output, errors, and diff previews.
 - Redact secrets using existing diagnostic/tool redaction boundaries.
@@ -1212,8 +1200,8 @@ Done when:
 
 - Projected event sequences are deterministic for success, tool error,
   provider retry, fallback, interruption, and compaction.
-- A consumer can discard arbitrary progress events, request a snapshot, and
-  converge to the same visible terminal state.
+- A slow consumer can miss intermediate views and converge to the newest
+  visible terminal state.
 - The TUI never needs `Payload any` type assertions.
 - Slow UI consumers cannot block the agent indefinitely.
 
@@ -1223,12 +1211,13 @@ Dependencies: P3.1
 
 Scope:
 
-- Adapt provider accumulated streams to answer and reasoning deltas.
+- Adapt provider accumulated streams to answer and reasoning presentation
+  updates.
 - Avoid duplicate final content when a stream is finalized.
-- Support providers without streaming through the same event sequence.
+- Support providers without streaming through the same final view.
 - Define backpressure and bounded buffering.
-- Detect revision gaps or dropped/coalesced deltas and request an authoritative
-  snapshot instead of guessing at missing state.
+- Coalesce pending views without blocking the provider or presenting partial
+  state assembled from unrelated updates.
 
 Done when:
 
@@ -1237,8 +1226,8 @@ Done when:
 - Fallback before visible output can retry; failure after visible output is
   represented without duplicating text.
 - Unicode chunk boundaries are safe.
-- Buffer overflow degrades to resynchronization rather than unbounded memory or
-  a permanently inconsistent transcript.
+- A slow subscriber receives the newest view rather than causing unbounded
+  memory or a permanently inconsistent transcript.
 
 #### P3.3 — Controller and interruption
 
@@ -1334,8 +1323,8 @@ Done when:
 - CJK, combining-mark, emoji, RTL-adjacent, and IME scenarios keep cursor and
   clipping behavior within terminal-cell bounds.
 - Streaming does not steal scroll position after manual scroll.
-- A snapshot resync preserves composer and scroll state where their referenced
-  entities still exist.
+- Replacing the current view preserves composer and scroll state where their
+  referenced entities still exist.
 - View-state tests use semantic assertions rather than fragile full-screen
   snapshots where possible.
 
@@ -1830,8 +1819,8 @@ Dependencies: P5.6
 Scope:
 
 - Measure cold start, warm start, catalogue listing, TUI first paint, first
-  token, compaction, reconciliation, snapshot resync, historical hydration, and
-  memory use.
+  token, compaction, reconciliation, presentation latency, historical
+  hydration, and memory use.
 - Defer coding MCP startup and expensive discovery where safe.
 - Bound transcript rendering and catalogue scans.
 
@@ -1943,7 +1932,7 @@ Every production packet should select relevant rows from this matrix:
 | Tools | Exact catalogue, cwd, cancellation, durable start/result, crash recovery, write audit, tool pairing, bounded results, harness quality fixtures |
 | Instructions | Precedence, nesting, lazy path-scoped attachment, cache invalidation, byte limits, symlinks, executable-resource isolation |
 | Git | Non-Git, dirty, worktree, detached, unborn branch, external mutation |
-| Frontend events | Authoritative snapshot revision, ordering, correlation, dropped-delta resync, backpressure, redaction, streaming equivalence |
+| Frontend presentation | Authoritative current view, ordering, correlation, slow-subscriber convergence, bounded memory, redaction, streaming equivalence |
 | TUI | Screen/scrollback contract, resize, IME, Unicode width, paste, scroll, interruption, restoration, tmux/SSH, no-color, non-TTY |
 | Compaction | Tiered tool-output projection, protected evidence, budgets, recent turns, tool pairs, multiple levels, failure, rebuild, resume |
 | Code intelligence | Optional-server startup, diagnostics, navigation, audited workspace edits, timeout/crash fallback |
@@ -1974,8 +1963,7 @@ Coding mode should expose privacy-safe measurements for:
 - compaction trigger, start, completion, no-progress, failure, tokens saved,
   summaries created, and duration;
 - derived-state reconciliation and rebuild duration;
-- frontend revision gaps, dropped/coalesced events, snapshot resync, and lazy
-  hydration; and
+- frontend update coalescing, presentation latency, and lazy hydration; and
 - terminal restoration failures.
 
 Raw prompts, source code, diffs, command output, user text, and summary content
@@ -2015,7 +2003,7 @@ must not be included in metrics by default.
 | Crash leaves a tool looking successful or causes replay | Durable tool-start/result markers and interrupted/unknown resume repair |
 | Summary hallucinates current repo state | Fresh deterministic workspace snapshot always wins |
 | Compaction loses an important decision | Versioned coding policy, canonical transcript, deterministic continuity evaluation |
-| TUI blocks the agent or loses events | Revisioned authoritative snapshots, bounded deltas, resync, backpressure policy, headless event tests |
+| TUI blocks the agent or sees stale state | Authoritative current views, bounded coalescing subscription, headless presentation tests |
 | TUI corrupts terminal history or Unicode input | Admit one screen model and test IME, width, resize, tmux, SSH, and restoration |
 | LSP adds slow or fragile startup | Optional lazy per-project lifecycle with timeouts and baseline-tool fallback |
 | Workspace rewind discards user changes | Keep it post-MVP until checkpoint ownership, preview, conflict, and inverse semantics are admitted |
@@ -2055,7 +2043,7 @@ This roadmap is complete when:
     performance, recovery, and migration requirements.
 13. A crash between side-effecting tool start and result persistence resumes as
     interrupted/unknown without automatic replay.
-14. Dropped frontend deltas recover from an authoritative revisioned snapshot
+14. A slow frontend subscriber converges to the authoritative current view
     without corrupting the transcript or composer.
 15. An allowed channel user can dispatch and manage a coding task on an allowed
     paired project, receive a deduplicated structured result, and later resume

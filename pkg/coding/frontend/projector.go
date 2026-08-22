@@ -15,14 +15,12 @@ import (
 const (
 	defaultEntryLimit = 256
 	defaultToolLimit  = 128
-	defaultDeltaLimit = 512
 	defaultTextBytes  = 64 << 10
 )
 
 type ProjectionLimits struct {
 	Entries   int
 	Tools     int
-	Deltas    int
 	TextBytes int
 }
 
@@ -32,9 +30,6 @@ func (l ProjectionLimits) normalized() ProjectionLimits {
 	}
 	if l.Tools <= 0 {
 		l.Tools = defaultToolLimit
-	}
-	if l.Deltas <= 0 {
-		l.Deltas = defaultDeltaLimit
 	}
 	if l.TextBytes <= 0 {
 		l.TextBytes = defaultTextBytes
@@ -48,14 +43,14 @@ type Projector struct {
 	mu                         sync.RWMutex
 	limits                     ProjectionLimits
 	state                      ThreadSnapshot
-	deltas                     []Delta
 	entryGenerations           map[string]uint64
 	nextEntryGeneration        uint64
+	nextNotice                 uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
 	foregroundCompactionActive bool
-	nextWatcher                uint64
-	watchers                   map[uint64]chan Delta
+	nextSubscriber             uint64
+	subscribers                map[uint64]chan ThreadSnapshot
 }
 
 func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) {
@@ -66,12 +61,11 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 	return &Projector{
 		limits: limits.normalized(),
 		state: ThreadSnapshot{
-			ProtocolVersion: ProtocolVersion,
-			ThreadID:        threadID,
-			Activity:        ActivityIdle,
+			ThreadID: threadID,
+			Activity: ActivityIdle,
 		},
 		entryGenerations: make(map[string]uint64),
-		watchers:         make(map[uint64]chan Delta),
+		subscribers:      make(map[uint64]chan ThreadSnapshot),
 	}, nil
 }
 
@@ -84,91 +78,51 @@ func (p *Projector) Snapshot(ctx context.Context) (ThreadSnapshot, error) {
 	return cloneSnapshot(p.state), nil
 }
 
-func (p *Projector) ChangesSince(ctx context.Context, revision Revision) ([]Delta, error) {
-	if err := contextError(ctx); err != nil {
-		return nil, err
-	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if revision == p.state.Revision {
-		return []Delta{}, nil
-	}
-	if revision > p.state.Revision || len(p.deltas) == 0 {
-		return nil, ErrRevisionUnavailable
-	}
-	start := -1
-	for i := range p.deltas {
-		if p.deltas[i].PreviousRevision == revision {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return nil, ErrRevisionUnavailable
-	}
-	result := make([]Delta, len(p.deltas)-start)
-	for i := range result {
-		result[i] = cloneDelta(p.deltas[start+i])
-	}
-	return result, nil
-}
-
-// Watch atomically queues retained changes after revision and then publishes
-// live deltas. Delivery is bounded and non-blocking: a slow consumer detects a
-// revision gap and resynchronizes from Snapshot instead of blocking a turn.
-func (p *Projector) Watch(ctx context.Context, revision Revision) (<-chan Delta, error) {
+// Subscribe atomically captures the current view and registers for later
+// views. Delivery is bounded and non-blocking: a slow subscriber receives the
+// newest view instead of blocking a turn or replaying intermediate mutations.
+func (p *Projector) Subscribe(
+	ctx context.Context,
+) (ThreadSnapshot, <-chan ThreadSnapshot, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return ThreadSnapshot{}, nil, err
 	}
 	p.mu.Lock()
-	if revision > p.state.Revision {
-		p.mu.Unlock()
-		return nil, ErrRevisionUnavailable
-	}
-	retained, ok := p.changesSinceLocked(revision)
-	if !ok {
-		p.mu.Unlock()
-		return nil, ErrRevisionUnavailable
-	}
-	p.nextWatcher++
-	id := p.nextWatcher
-	channel := make(chan Delta, p.limits.Deltas+1)
-	for i := range retained {
-		channel <- cloneDelta(retained[i])
-	}
-	p.watchers[id] = channel
+	p.nextSubscriber++
+	id := p.nextSubscriber
+	channel := make(chan ThreadSnapshot, 1)
+	p.subscribers[id] = channel
+	current := cloneSnapshot(p.state)
 	p.mu.Unlock()
 
 	go func() {
 		<-ctx.Done()
 		p.mu.Lock()
-		if current, exists := p.watchers[id]; exists {
-			delete(p.watchers, id)
+		if current, exists := p.subscribers[id]; exists {
+			delete(p.subscribers, id)
 			close(current)
 		}
 		p.mu.Unlock()
 	}()
-	return channel, nil
+	return current, channel, nil
 }
 
-func (p *Projector) Open(resumed bool) Delta {
-	kind := DeltaThreadOpened
+func (p *Projector) Open(resumed bool) {
 	status := "new coding thread"
 	if resumed {
-		kind = DeltaThreadResumed
 		status = "coding thread resumed"
 	}
-	return p.mutate(kind, func(state *ThreadSnapshot, _ *Delta) {
+	p.mutate(func(state *ThreadSnapshot) {
 		state.Activity = ActivityIdle
 		state.Status = status
 	})
 }
 
-func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) Delta {
-	return p.mutate(DeltaThreadMetadata, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) {
+	p.mutate(func(state *ThreadSnapshot) {
 		metadata.Title, _ = boundText(metadata.Title, p.limits.TextBytes)
 		metadata.Preview, _ = boundText(metadata.Preview, p.limits.TextBytes)
 		metadata.ProjectRoot, _ = boundText(metadata.ProjectRoot, p.limits.TextBytes)
@@ -176,16 +130,13 @@ func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) Delta {
 		metadata.Model, _ = boundText(metadata.Model, p.limits.TextBytes)
 		metadata.Provider, _ = boundText(metadata.Provider, p.limits.TextBytes)
 		state.Metadata = metadata
-		delta.Metadata = &metadata
-		delta.EntityID = state.ThreadID
 	})
 }
 
-func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
-	return p.mutate(DeltaTurnStarted, func(state *ThreadSnapshot, delta *Delta) {
-		delta.TurnID = normalizeTurnID(turnID)
-		p.activeTurnID = delta.TurnID
-		delta.EntityID = delta.TurnID
+func (p *Projector) TurnStarted(turnID, userMessage string) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = normalizeTurnID(turnID)
+		p.activeTurnID = turnID
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
@@ -198,20 +149,16 @@ func (p *Projector) TurnStarted(turnID, userMessage string) Delta {
 			Text:     userMessage,
 			Complete: true,
 		})
-		p.upsertEntry(state, delta, entry)
-		delta.Entry = &entry
-		delta.EntityID = entry.ID
+		p.upsertEntry(state, entry)
 	})
 }
 
-func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) Delta {
-	delta, _ := p.upsertStreamEntry(DeltaAssistant, turnID, EntryAssistant, content, complete)
-	return delta
+func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) {
+	p.upsertStreamEntry(turnID, EntryAssistant, content, complete)
 }
 
-func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) Delta {
-	delta, _ := p.upsertStreamEntry(DeltaReasoning, turnID, EntryReasoning, content, complete)
-	return delta
+func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) {
+	p.upsertStreamEntry(turnID, EntryReasoning, content, complete)
 }
 
 type streamOwnedEntry struct {
@@ -244,7 +191,7 @@ func (p *Projector) discardOwnedStream(
 	turnID string,
 	baseline streamBaseline,
 	owned streamOwnedEntries,
-) Delta {
+) {
 	turnID = normalizeTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -268,23 +215,19 @@ func (p *Projector) discardOwnedStream(
 		filtered = append(filtered, entry)
 	}
 	if !visibleChange {
-		return Delta{}
+		return
 	}
-	return p.mutateLocked(DeltaStreamDiscarded, func(state *ThreadSnapshot, delta *Delta) {
+	p.mutateLocked(func(state *ThreadSnapshot) {
 		state.Entries = filtered
-		delta.TurnID = turnID
-		delta.EntityID = turnID
-		delta.RequiresSnapshot = true
 	})
 }
 
 func (p *Projector) upsertStreamEntry(
-	kind DeltaKind,
 	turnID string,
 	entryKind EntryKind,
 	content string,
 	complete bool,
-) (Delta, streamOwnedEntry) {
+) streamOwnedEntry {
 	entry := p.boundedEntry(TranscriptEntry{
 		ID:       entryID(turnID, string(entryKind)),
 		TurnID:   normalizeTurnID(turnID),
@@ -299,57 +242,49 @@ func (p *Projector) upsertStreamEntry(
 	p.entryGenerations[entry.ID] = owned.generation
 	for i := range p.state.Entries {
 		if p.state.Entries[i].ID == entry.ID && p.state.Entries[i] == entry {
-			return Delta{}, owned
+			return owned
 		}
 	}
-	delta := p.mutateLocked(kind, func(state *ThreadSnapshot, delta *Delta) {
-		p.upsertEntry(state, delta, entry)
-		delta.Entry = &entry
-		delta.TurnID = entry.TurnID
-		delta.EntityID = entry.ID
+	p.mutateLocked(func(state *ThreadSnapshot) {
+		p.upsertEntry(state, entry)
 	})
-	return delta, owned
+	return owned
 }
 
-func (p *Projector) Warning(turnID, id, content string) Delta {
-	return p.notice(EntryWarning, turnID, id, content)
+func (p *Projector) Warning(turnID, id, content string) {
+	p.notice(EntryWarning, turnID, id, content)
 }
 
-func (p *Projector) Error(turnID, id, content string) Delta {
-	return p.notice(EntryError, turnID, id, content)
+func (p *Projector) Error(turnID, id, content string) {
+	p.notice(EntryError, turnID, id, content)
 }
 
-func (p *Projector) notice(kind EntryKind, turnID, id, content string) Delta {
-	return p.mutate(DeltaNotice, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		id = strings.TrimSpace(id)
 		if id == "" {
-			id = fmt.Sprintf("%s:%s:%d", turnID, kind, state.Revision+1)
+			p.nextNotice++
+			id = fmt.Sprintf("%s:%s:%d", turnID, kind, p.nextNotice)
 		}
 		entry := p.boundedEntry(TranscriptEntry{
 			ID: id, TurnID: turnID, Kind: kind, Text: content, Complete: true,
 		})
-		p.upsertEntry(state, delta, entry)
-		delta.Entry = &entry
-		delta.TurnID = turnID
-		delta.EntityID = id
+		p.upsertEntry(state, entry)
 	})
 }
 
-func (p *Projector) ToolStarted(turnID, callID, name, arguments string) Delta {
-	return p.mutate(DeltaToolStarted, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
+	p.mutate(func(state *ThreadSnapshot) {
 		tool := p.boundedTool(ToolState{
 			TurnID: normalizeTurnID(turnID), CallID: callID, Name: name, Arguments: arguments, Status: ToolRunning,
 		})
-		p.upsertTool(state, delta, tool)
-		delta.Tool = &tool
-		delta.TurnID = tool.TurnID
-		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+		p.upsertTool(state, tool)
 	})
 }
 
-func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
-	return p.mutate(DeltaToolOutput, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) ToolOutput(turnID, callID, output string) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
@@ -361,17 +296,14 @@ func (p *Projector) ToolOutput(turnID, callID, output string) Delta {
 		bounded, truncated := boundText(output, p.limits.TextBytes)
 		tool.Output = bounded
 		tool.OutputTruncated = truncated
-		p.upsertTool(state, delta, tool)
-		delta.Tool = &tool
-		delta.TurnID = tool.TurnID
-		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+		p.upsertTool(state, tool)
 	})
 }
 
 // ToolCommandOutput projects bounded process state owned by the command tool.
 // It never derives command output or lifecycle state from model-facing prose.
-func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) Delta {
-	return p.mutate(DeltaToolOutput, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
@@ -380,10 +312,7 @@ func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandStat
 		command = p.boundedCommand(command)
 		tool.Command = &command
 		tool.Output, tool.OutputTruncated = commandDisplayOutput(command, p.limits.TextBytes)
-		p.upsertTool(state, delta, tool)
-		delta.Tool = &tool
-		delta.TurnID = tool.TurnID
-		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+		p.upsertTool(state, tool)
 	})
 }
 
@@ -392,8 +321,8 @@ func (p *Projector) ToolCompleted(
 	duration time.Duration,
 	failed bool,
 	writeAudit []WriteAudit,
-) Delta {
-	return p.mutate(DeltaToolCompleted, func(state *ThreadSnapshot, delta *Delta) {
+) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
@@ -422,17 +351,14 @@ func (p *Projector) ToolCompleted(
 			tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
 		}
 		tool.WriteAudit = p.boundedWriteAudit(writeAudit)
-		p.upsertTool(state, delta, tool)
-		delta.Tool = &tool
-		delta.TurnID = tool.TurnID
-		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+		p.upsertTool(state, tool)
 	})
 }
 
 // FilesChanged promotes only successful, verified file write audits into the
 // bounded changed-file projection.
-func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) Delta {
-	return p.mutate(DeltaFilesChanged, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
 		for _, entry := range audit {
@@ -444,7 +370,6 @@ func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) Delt
 			}))
 			if overflow := len(changed) - p.limits.Tools; overflow > 0 {
 				changed = slices.Clone(changed[overflow:])
-				delta.RequiresSnapshot = true
 			}
 		}
 		for _, file := range changed {
@@ -452,19 +377,15 @@ func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) Delt
 		}
 		if overflow := len(state.ChangedFiles) - p.limits.Tools; overflow > 0 {
 			state.ChangedFiles = slices.Clone(state.ChangedFiles[overflow:])
-			delta.RequiresSnapshot = true
 		}
-		delta.ChangedFiles = changed
-		delta.TurnID = turnID
-		delta.EntityID = toolEntityID(turnID, callID)
 	})
 }
 
 // ToolSuspended records that durable continuation ownership moved outside the
 // running turn. The tool has not succeeded or failed and may be resumed after
 // the pending human interaction is resolved.
-func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Duration) Delta {
-	return p.mutate(DeltaToolSuspended, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Duration) {
+	p.mutate(func(state *ThreadSnapshot) {
 		turnID = normalizeTurnID(turnID)
 		tool := toolByID(state.Tools, turnID, callID)
 		if tool.CallID == "" {
@@ -475,38 +396,31 @@ func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Dur
 		}
 		tool.Status = ToolSuspended
 		tool.Duration = duration
-		p.upsertTool(state, delta, tool)
-		delta.Tool = &tool
-		delta.TurnID = tool.TurnID
-		delta.EntityID = toolEntityID(tool.TurnID, tool.CallID)
+		p.upsertTool(state, tool)
 	})
 }
 
-func (p *Projector) ContextUsage(used, limit int) Delta {
+func (p *Projector) ContextUsage(used, limit int) {
 	usage := ContextUsage{UsedTokens: max(0, used), LimitTokens: max(0, limit)}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.state.ContextUsage == usage {
-		return Delta{}
+		return
 	}
-	return p.mutateLocked(DeltaContextUsage, func(state *ThreadSnapshot, delta *Delta) {
+	p.mutateLocked(func(state *ThreadSnapshot) {
 		state.ContextUsage = usage
-		usage := state.ContextUsage
-		delta.ContextUsage = &usage
 	})
 }
 
-func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) Delta {
-	return p.mutate(DeltaWorkspaceUpdated, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
+	p.mutate(func(state *ThreadSnapshot) {
 		workspace := cloneWorkspaceSnapshot(snapshot)
 		state.Workspace = &workspace
-		delta.Workspace = &workspace
 	})
 }
 
-func (p *Projector) CompactionStarted(turnID, reason string, background bool) Delta {
-	return p.compaction(
-		DeltaCompactionStarted,
+func (p *Projector) CompactionStarted(turnID, reason string, background bool) {
+	p.compaction(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionRunning, Background: background,
 		},
@@ -517,13 +431,12 @@ func (p *Projector) CompactionCompleted(
 	turnID, reason string,
 	tokensSaved int,
 	noProgress, background bool,
-) Delta {
+) {
 	status := CompactionCompleted
 	if noProgress {
 		status = CompactionNoop
 	}
-	return p.compaction(
-		DeltaCompactionComplete,
+	p.compaction(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: status,
 			TokensSaved: max(0, tokensSaved), Background: background,
@@ -531,22 +444,18 @@ func (p *Projector) CompactionCompleted(
 	)
 }
 
-func (p *Projector) CompactionFailed(turnID, reason string, background bool) Delta {
-	return p.compaction(
-		DeltaCompactionFailed,
+func (p *Projector) CompactionFailed(turnID, reason string, background bool) {
+	p.compaction(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionFailed, Background: background,
 		},
 	)
 }
 
-func (p *Projector) compaction(kind DeltaKind, compaction CompactionState) Delta {
-	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+func (p *Projector) compaction(compaction CompactionState) {
+	p.mutate(func(state *ThreadSnapshot) {
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
 		state.LastCompaction = &compaction
-		delta.Compaction = &compaction
-		delta.TurnID = compaction.TurnID
-		delta.EntityID = compaction.TurnID
 		if compaction.Background {
 			return
 		}
@@ -604,13 +513,12 @@ func (p *Projector) releaseCompactionActivity(activity Activity, turnID string) 
 	return next, true
 }
 
-func (p *Projector) TurnCompleted(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnCompleted, TurnOutcomeCompleted, turnID, status, ActivityIdle, "")
+func (p *Projector) TurnCompleted(turnID, status string) {
+	p.finishTurn(TurnOutcomeCompleted, turnID, status, ActivityIdle, "")
 }
 
-func (p *Projector) TurnSuspended(turnID, status string) Delta {
-	return p.finishTurn(
-		DeltaTurnSuspended,
+func (p *Projector) TurnSuspended(turnID, status string) {
+	p.finishTurn(
 		TurnOutcomeSuspended,
 		turnID,
 		status,
@@ -619,25 +527,24 @@ func (p *Projector) TurnSuspended(turnID, status string) Delta {
 	)
 }
 
-func (p *Projector) TurnFailed(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnFailed, TurnOutcomeFailed, turnID, status, ActivityFailed, ToolFailed)
+func (p *Projector) TurnFailed(turnID, status string) {
+	p.finishTurn(TurnOutcomeFailed, turnID, status, ActivityFailed, ToolFailed)
 }
 
-func (p *Projector) TurnInterrupted(turnID, status string) Delta {
-	return p.finishTurn(DeltaTurnInterrupted, TurnOutcomeInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
+func (p *Projector) TurnInterrupted(turnID, status string) {
+	p.finishTurn(TurnOutcomeInterrupted, turnID, status, ActivityIdle, ToolInterrupted)
 }
 
 // finishTurn is the single transition for typed terminal turn outcomes. Only
 // abnormal outcomes pass a tool status, because they can bypass ToolExecEnd.
 func (p *Projector) finishTurn(
-	kind DeltaKind,
 	outcome TurnOutcome,
 	turnID, status string,
 	activity Activity,
 	toolStatus ToolStatus,
-) Delta {
+) {
 	turnID = normalizeTurnID(turnID)
-	return p.mutate(kind, func(state *ThreadSnapshot, delta *Delta) {
+	p.mutate(func(state *ThreadSnapshot) {
 		if p.activeTurnID == turnID {
 			p.activeTurnID = ""
 		}
@@ -647,87 +554,53 @@ func (p *Projector) finishTurn(
 		}
 		state.Activity = activity
 		state.Status, _ = boundText(status, p.limits.TextBytes)
-		delta.TurnID = turnID
-		delta.EntityID = turnID
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
-		delta.LastTurn = &lastTurn
 		if toolStatus == "" {
 			return
 		}
 		for i := range state.Tools {
 			if state.Tools[i].TurnID == turnID && state.Tools[i].Status == ToolRunning {
 				state.Tools[i].Status = toolStatus
-				delta.RequiresSnapshot = true
 			}
 		}
 	})
 }
 
-func (p *Projector) InterruptRequested() Delta {
-	return p.activity(DeltaInterruptRequested, ActivityInterrupting, "interrupt requested")
+func (p *Projector) InterruptRequested() {
+	p.activity(ActivityInterrupting, "interrupt requested")
 }
 
-func (p *Projector) activity(kind DeltaKind, activity Activity, status string) Delta {
-	return p.mutate(kind, func(state *ThreadSnapshot, _ *Delta) {
+func (p *Projector) activity(activity Activity, status string) {
+	p.mutate(func(state *ThreadSnapshot) {
 		state.Activity = activity
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 	})
 }
 
-func (p *Projector) mutate(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
+func (p *Projector) mutate(apply func(*ThreadSnapshot)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.mutateLocked(kind, apply)
+	p.mutateLocked(apply)
 }
 
-func (p *Projector) mutateLocked(kind DeltaKind, apply func(*ThreadSnapshot, *Delta)) Delta {
-	previous := p.state.Revision
-	delta := Delta{
-		ProtocolVersion:  ProtocolVersion,
-		ThreadID:         p.state.ThreadID,
-		PreviousRevision: previous,
-		Revision:         previous + 1,
-		Kind:             kind,
-	}
-	apply(&p.state, &delta)
-	p.state.Revision = delta.Revision
-	delta.Activity = p.state.Activity
-	delta.Status = p.state.Status
-	p.deltas = append(p.deltas, cloneDelta(delta))
-	if overflow := len(p.deltas) - p.limits.Deltas; overflow > 0 {
-		p.deltas = slices.Clone(p.deltas[overflow:])
-	}
-	for _, watcher := range p.watchers {
+func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
+	apply(&p.state)
+	current := cloneSnapshot(p.state)
+	for _, subscriber := range p.subscribers {
 		select {
-		case watcher <- cloneDelta(delta):
+		case subscriber <- cloneSnapshot(current):
 		default:
 			select {
-			case <-watcher:
+			case <-subscriber:
 			default:
 			}
 			select {
-			case watcher <- cloneDelta(delta):
+			case subscriber <- cloneSnapshot(current):
 			default:
 			}
 		}
 	}
-	return cloneDelta(delta)
-}
-
-func (p *Projector) changesSinceLocked(revision Revision) ([]Delta, bool) {
-	if revision == p.state.Revision {
-		return []Delta{}, true
-	}
-	if len(p.deltas) == 0 {
-		return nil, false
-	}
-	for i := range p.deltas {
-		if p.deltas[i].PreviousRevision == revision {
-			return p.deltas[i:], true
-		}
-	}
-	return nil, false
 }
 
 func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
@@ -814,7 +687,7 @@ func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
 	return output, command.Truncated || truncated
 }
 
-func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry TranscriptEntry) {
+func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) {
 	previousLength := len(state.Entries)
 	state.Entries = replaceEntry(state.Entries, entry)
 	if len(state.Entries) == previousLength {
@@ -826,11 +699,35 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, delta *Delta, entry Trans
 			delete(p.entryGenerations, removed.ID)
 		}
 		state.Entries = slices.Clone(state.Entries[overflow:])
-		delta.RequiresSnapshot = true
 	}
 }
 
-func (p *Projector) upsertTool(state *ThreadSnapshot, delta *Delta, tool ToolState) {
+func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []TranscriptEntry {
+	entries = slices.Clone(entries)
+	for i := range entries {
+		if entries[i].ID == replacement.ID {
+			entries[i] = replacement
+			return entries
+		}
+	}
+	insertAt := len(entries)
+	if replacement.Kind == EntryUser {
+		for i := range entries {
+			candidate := entries[i]
+			if candidate.TurnID == replacement.TurnID &&
+				(candidate.Kind == EntryAssistant || candidate.Kind == EntryReasoning) {
+				insertAt = i
+				break
+			}
+		}
+	}
+	entries = append(entries, TranscriptEntry{})
+	copy(entries[insertAt+1:], entries[insertAt:])
+	entries[insertAt] = replacement
+	return entries
+}
+
+func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) {
 	for i := range state.Tools {
 		if state.Tools[i].TurnID == tool.TurnID && state.Tools[i].CallID == tool.CallID {
 			state.Tools[i] = tool
@@ -840,7 +737,6 @@ func (p *Projector) upsertTool(state *ThreadSnapshot, delta *Delta, tool ToolSta
 	state.Tools = append(state.Tools, tool)
 	if overflow := len(state.Tools) - p.limits.Tools; overflow > 0 {
 		state.Tools = slices.Clone(state.Tools[overflow:])
-		delta.RequiresSnapshot = true
 	}
 }
 
@@ -866,10 +762,6 @@ func toolByID(tools []ToolState, turnID, callID string) ToolState {
 		}
 	}
 	return ToolState{}
-}
-
-func toolEntityID(turnID, callID string) string {
-	return normalizeTurnID(turnID) + ":tool:" + strings.TrimSpace(callID)
 }
 
 func boundText(value string, maximum int) (string, bool) {
@@ -922,37 +814,10 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	return snapshot
 }
 
-func cloneDelta(delta Delta) Delta {
-	if delta.Entry != nil {
-		entry := *delta.Entry
-		delta.Entry = &entry
-	}
-	if delta.Tool != nil {
-		tool := cloneTool(*delta.Tool)
-		delta.Tool = &tool
-	}
-	delta.ChangedFiles = slices.Clone(delta.ChangedFiles)
-	if delta.Metadata != nil {
-		metadata := *delta.Metadata
-		delta.Metadata = &metadata
-	}
-	if delta.LastTurn != nil {
-		lastTurn := *delta.LastTurn
-		delta.LastTurn = &lastTurn
-	}
-	if delta.Compaction != nil {
-		compaction := *delta.Compaction
-		delta.Compaction = &compaction
-	}
-	if delta.ContextUsage != nil {
-		usage := *delta.ContextUsage
-		delta.ContextUsage = &usage
-	}
-	if delta.Workspace != nil {
-		workspace := cloneWorkspaceSnapshot(*delta.Workspace)
-		delta.Workspace = &workspace
-	}
-	return delta
+// Clone returns an independent copy suitable for handing to another in-process
+// consumer.
+func (snapshot ThreadSnapshot) Clone() ThreadSnapshot {
+	return cloneSnapshot(snapshot)
 }
 
 func cloneTools(tools []ToolState) []ToolState {

@@ -11,7 +11,7 @@ import (
 
 // StreamDelegate projects the existing accumulated-content streaming seam.
 // It does not alter provider or turn behavior and can be installed on the
-// dedicated coding message bus by the future coding runtime.
+// dedicated coding message bus by the coding runtime.
 type StreamDelegate struct {
 	projector *Projector
 	threadID  string
@@ -62,15 +62,13 @@ var (
 
 func (s *projectedStream) Update(ctx context.Context, content string) error {
 	return s.project(ctx, func() streamOwnedEntry {
-		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, false)
-		return owned
+		return s.projector.upsertStreamEntry(s.turnID, EntryAssistant, content, false)
 	})
 }
 
 func (s *projectedStream) Finalize(ctx context.Context, content string) error {
 	return s.project(ctx, func() streamOwnedEntry {
-		_, owned := s.projector.upsertStreamEntry(DeltaAssistant, s.turnID, EntryAssistant, content, true)
-		return owned
+		return s.projector.upsertStreamEntry(s.turnID, EntryAssistant, content, true)
 	})
 }
 
@@ -90,15 +88,13 @@ func (s *projectedStream) FinalizeWithContext(
 
 func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) error {
 	return s.project(ctx, func() streamOwnedEntry {
-		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, false)
-		return owned
+		return s.projector.upsertStreamEntry(s.turnID, EntryReasoning, content, false)
 	})
 }
 
 func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string) error {
 	return s.project(ctx, func() streamOwnedEntry {
-		_, owned := s.projector.upsertStreamEntry(DeltaReasoning, s.turnID, EntryReasoning, content, true)
-		return owned
+		return s.projector.upsertStreamEntry(s.turnID, EntryReasoning, content, true)
 	})
 }
 

@@ -74,8 +74,8 @@ func (f *fakeController) Close(context.Context) error {
 }
 
 func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +94,8 @@ func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 }
 
 func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,9 +141,9 @@ func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
 }
 
 func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
-	controller, snapshot := newController(t)
+	controller := newController(t)
 	controller.submitErr = errors.New("admission rejected")
-	model, err := NewModel(controller, snapshot)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +166,8 @@ func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
 }
 
 func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,8 +214,8 @@ func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
 }
 
 func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,13 +232,13 @@ func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testin
 }
 
 func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
-	controller, _ := newController(t)
+	controller := newController(t)
 	controller.TurnStarted("turn-1", "fix it")
-	snapshot, _ := controller.Snapshot(t.Context())
-	model, err := NewModel(controller, snapshot)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
+	model = startModelSubscription(t, model)
 
 	updated, first := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = updated.(*Model)
@@ -253,9 +253,8 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 			controller.hardCancels.Load(),
 		)
 	}
-	model = updateModel(t, model, DeltaMsg{
-		Delta: controller.AssistantAccumulated("turn-1", "still streaming", false),
-	})
+	controller.AssistantAccumulated("turn-1", "still streaming", false)
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	_, second := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if second == nil {
 		t.Fatal("second Ctrl+C produced no hard-cancel command")
@@ -267,8 +266,8 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 }
 
 func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,12 +285,13 @@ func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
 	}
 }
 
-func TestModelInterruptsAdmittedInitialTurnBeforeFirstDelta(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+func TestModelInterruptsAdmittedInitialTurnBeforeFirstView(t *testing.T) {
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
+	model = startModelSubscription(t, model)
 	model.admitInitialTurn()
 
 	_, interrupt := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -302,35 +302,26 @@ func TestModelInterruptsAdmittedInitialTurnBeforeFirstDelta(t *testing.T) {
 	if controller.interrupts.Load() != 1 || controller.closes.Load() != 0 {
 		t.Fatalf("interrupts=%d closes=%d", controller.interrupts.Load(), controller.closes.Load())
 	}
-	delta := controller.TurnStarted("turn-1", "fix it")
-	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	controller.TurnStarted("turn-1", "fix it")
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	if model.initialTurnPending {
 		t.Fatal("authoritative turn lifecycle did not clear pending admission")
 	}
 }
 
-func TestModelRecoversDroppedDeltaThroughControllerSnapshot(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+func TestModelConsumesLatestCoalescedView(t *testing.T) {
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller.TurnStarted("turn-1", "fix it") // dropped
-	latest := controller.AssistantAccumulated("turn-1", "working", false)
-
-	updated, resync := model.Update(DeltaMsg{Delta: latest})
-	model = updated.(*Model)
-	if resync == nil {
-		t.Fatal("dropped delta did not request a snapshot")
-	}
-	message, ok := resync().(SnapshotMsg)
-	if !ok {
-		t.Fatalf("resync message = %T", message)
-	}
-	model = updateModel(t, model, message)
+	model = startModelSubscription(t, model)
+	controller.TurnStarted("turn-1", "fix it")
+	controller.AssistantAccumulated("turn-1", "working", false)
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	state := model.Snapshot()
-	if state.Revision != latest.Revision || len(state.Entries) != 2 || state.Entries[1].Text != "working" {
-		t.Fatalf("resynchronized model = %+v", state)
+	if len(state.Entries) != 2 || state.Entries[1].Text != "working" {
+		t.Fatalf("coalesced model view = %+v", state)
 	}
 }
 
@@ -344,32 +335,29 @@ func TestStreamingPreservesManualScrollAndFollowsBottom(t *testing.T) {
 		projector.TurnStarted(turnID, strings.Repeat(fmt.Sprintf("question-%d ", i), 3))
 		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 5), true)
 	}
-	snapshot, err := projector.Snapshot(t.Context())
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	model = startModelSubscription(t, model)
 	model.resize(24, 9)
 	model.viewport.SetYOffset(5)
 	anchor := model.layout.anchorAt(model.viewport.YOffset)
-	delta := projector.TurnStarted("streaming", "new question")
-	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	projector.TurnStarted("streaming", "new question")
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	if got := model.layout.anchorAt(model.viewport.YOffset); got.id != anchor.id || got.offset != anchor.offset {
 		t.Fatalf("manual scroll anchor moved from %+v to %+v", anchor, got)
 	}
 
 	model.viewport.GotoBottom()
-	delta = projector.AssistantAccumulated("streaming", strings.Repeat("streaming text ", 6), false)
-	model = updateModel(t, model, DeltaMsg{Delta: delta})
+	projector.AssistantAccumulated("streaming", strings.Repeat("streaming text ", 6), false)
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	if !model.viewport.AtBottom() {
 		t.Fatalf("streaming while following bottom left offset=%d", model.viewport.YOffset)
 	}
 }
 
-func TestSnapshotResyncPreservesComposerAndReferencedScrollAnchor(t *testing.T) {
+func TestSnapshotUpdatePreservesComposerAndReferencedScrollAnchor(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -379,11 +367,7 @@ func TestSnapshotResyncPreservesComposerAndReferencedScrollAnchor(t *testing.T) 
 		projector.TurnStarted(turnID, strings.Repeat("question ", 4))
 		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 4), true)
 	}
-	snapshot, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,12 +404,13 @@ func (p *pagedController) TranscriptPage(
 }
 
 func TestTranscriptHydrationPagesRemainBoundedAndPreserveLiveEntries(t *testing.T) {
-	controller, snapshot := newController(t)
+	controller := newController(t)
 	paged := &pagedController{fakeController: controller}
-	model, err := NewModel(paged, snapshot)
+	model, err := NewModel(paged)
 	if err != nil {
 		t.Fatal(err)
 	}
+	model = startModelSubscription(t, model)
 	latest := makeTranscriptEntries("latest", 200)
 	model = updateModel(t, model, TranscriptPageMsg{Page: frontend.TranscriptPage{
 		Entries: latest, Start: 100, End: 300, Total: 300, HasOlder: true,
@@ -441,8 +426,8 @@ func TestTranscriptHydrationPagesRemainBoundedAndPreserveLiveEntries(t *testing.
 		t.Fatalf("page flags older=%v newer=%v", model.transcript.hasOlder, model.transcript.hasNewer)
 	}
 
-	live := paged.TurnStarted("live-turn", "live prompt")
-	model = updateModel(t, model, DeltaMsg{Delta: live})
+	paged.TurnStarted("live-turn", "live prompt")
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	entries := model.TranscriptEntries()
 	if len(entries) != maxHydratedTranscriptEntries+1 || entries[len(entries)-1].Text != "live prompt" {
 		t.Fatalf("merged transcript len=%d last=%+v", len(entries), entries[len(entries)-1])
@@ -450,7 +435,7 @@ func TestTranscriptHydrationPagesRemainBoundedAndPreserveLiveEntries(t *testing.
 }
 
 func TestTranscriptPageCommandRequestsBoundedWindow(t *testing.T) {
-	controller, _ := newController(t)
+	controller := newController(t)
 	paged := &pagedController{
 		fakeController: controller,
 		pages: map[int]frontend.TranscriptPage{
@@ -493,7 +478,7 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := NewModel(&fakeController{Projector: projector}, snapshot)
+	model, err := NewModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,11 +493,12 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 }
 
 func TestModelUsesActualTinyTerminalDimensions(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
+	model = startModelSubscription(t, model)
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 1, Height: 1})
 	if width, height := model.Dimensions(); width != 1 || height != 1 {
 		t.Fatalf("dimensions = %dx%d, want 1x1", width, height)
@@ -522,22 +508,27 @@ func TestModelUsesActualTinyTerminalDimensions(t *testing.T) {
 	}
 }
 
-func TestNextDeltaCommandWatchesFromCurrentRevision(t *testing.T) {
-	controller, snapshot := newController(t)
-	delta := controller.TurnStarted("turn-1", "inspect")
-	message := nextDeltaCmd(t.Context(), controller, snapshot.Revision)()
-	update, ok := message.(DeltaMsg)
-	if !ok {
-		t.Fatalf("watch message = %T", message)
+func TestNextSnapshotCommandUsesExistingSubscription(t *testing.T) {
+	controller := newController(t)
+	model, err := NewModel(controller)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if update.Delta.Revision != delta.Revision {
-		t.Fatalf("revision = %d, want %d", update.Delta.Revision, delta.Revision)
+	model = startModelSubscription(t, model)
+	controller.TurnStarted("turn-1", "inspect")
+	message := nextSnapshotCmd(t.Context(), model.updates)()
+	update, ok := message.(SnapshotMsg)
+	if !ok {
+		t.Fatalf("subscription message = %T", message)
+	}
+	if len(update.Snapshot.Entries) != 1 || update.Snapshot.Entries[0].Text != "inspect" {
+		t.Fatalf("subscription view = %+v", update.Snapshot)
 	}
 }
 
 func TestModelTracksTerminalFocusWithoutChangingComposer(t *testing.T) {
-	controller, snapshot := newController(t)
-	model, err := NewModel(controller, snapshot)
+	controller := newController(t)
+	model, err := NewModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,17 +543,13 @@ func TestModelTracksTerminalFocusWithoutChangingComposer(t *testing.T) {
 	}
 }
 
-func newController(t *testing.T) (*fakeController, frontend.ThreadSnapshot) {
+func newController(t *testing.T) *fakeController {
 	t.Helper()
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := projector.Snapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &fakeController{Projector: projector}, snapshot
+	return &fakeController{Projector: projector}
 }
 
 func updateModel(t *testing.T, model *Model, message tea.Msg) *Model {
@@ -573,4 +560,13 @@ func updateModel(t *testing.T, model *Model, message tea.Msg) *Model {
 		t.Fatalf("updated model = %T", updated)
 	}
 	return result
+}
+
+func startModelSubscription(t *testing.T, model *Model) *Model {
+	t.Helper()
+	message, ok := subscribeCmd(t.Context(), model.controller)().(SubscriptionMsg)
+	if !ok {
+		t.Fatalf("subscription command returned unexpected message")
+	}
+	return updateModel(t, model, message)
 }

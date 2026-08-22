@@ -22,12 +22,15 @@ type SnapshotMsg struct {
 	Err      error
 }
 
-type DeltaMsg struct {
-	Delta frontend.Delta
+type SubscriptionMsg struct {
+	Snapshot frontend.ThreadSnapshot
+	Updates  <-chan frontend.ThreadSnapshot
+	Err      error
 }
 
-// WatchErrorMsg reports a frontend subscription failure to the update loop.
-type WatchErrorMsg struct {
+// SubscriptionErrorMsg reports a frontend subscription failure to the update
+// loop.
+type SubscriptionErrorMsg struct {
 	Err error
 }
 
@@ -60,7 +63,8 @@ type WorkspaceRefreshMsg struct {
 type Model struct {
 	controller          frontend.Controller
 	ctx                 context.Context
-	reducer             *frontend.Reducer
+	snapshot            frontend.ThreadSnapshot
+	updates             <-chan frontend.ThreadSnapshot
 	viewport            viewport.Model
 	composer            textarea.Model
 	transcript          transcriptWindow
@@ -69,9 +73,7 @@ type Model struct {
 	height              int
 	interruptPending    bool
 	initialTurnPending  bool
-	admittedRevision    frontend.Revision
 	admittedLastTurn    *frontend.LastTurnOutcome
-	resyncing           bool
 	focused             bool
 	err                 error
 	submitting          bool
@@ -86,8 +88,8 @@ type Model struct {
 
 var _ tea.Model = (*Model)(nil)
 
-func NewModel(controller frontend.Controller, snapshot frontend.ThreadSnapshot) (*Model, error) {
-	return NewModelWithContext(context.Background(), controller, snapshot)
+func NewModel(controller frontend.Controller) (*Model, error) {
+	return NewModelWithContext(context.Background(), controller)
 }
 
 // NewModelWithContext constructs a terminal model whose background frontend
@@ -95,14 +97,19 @@ func NewModel(controller frontend.Controller, snapshot frontend.ThreadSnapshot) 
 func NewModelWithContext(
 	ctx context.Context,
 	controller frontend.Controller,
-	snapshot frontend.ThreadSnapshot,
 ) (*Model, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	reducer, err := frontend.NewReducer(snapshot)
+	if controller == nil {
+		return nil, errors.New("coding frontend controller is required")
+	}
+	snapshot, err := controller.Snapshot(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(snapshot.ThreadID) == "" {
+		return nil, errors.New("coding frontend snapshot has no thread ID")
 	}
 	composer := textarea.New()
 	composer.ShowLineNumbers = false
@@ -116,7 +123,7 @@ func NewModelWithContext(
 	return &Model{
 		controller:   controller,
 		ctx:          ctx,
-		reducer:      reducer,
+		snapshot:     snapshot,
 		viewport:     viewport.New(80, 18),
 		composer:     composer,
 		width:        80,
@@ -129,7 +136,7 @@ func NewModelWithContext(
 func (m *Model) Init() tea.Cmd {
 	commands := []tea.Cmd{
 		textarea.Blink,
-		nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision),
+		subscribeCmd(m.ctx, m.controller),
 	}
 	if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 		m.transcript.loading = true
@@ -143,40 +150,39 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.resize(message.Width, message.Height)
 		return m, nil
+	case SubscriptionMsg:
+		m.err = message.Err
+		if message.Err != nil {
+			return m, nil
+		}
+		if message.Snapshot.ThreadID != m.snapshot.ThreadID {
+			m.err = errors.New("coding frontend subscription changed thread ID")
+			return m, nil
+		}
+		m.snapshot = message.Snapshot
+		m.updates = message.Updates
+		m.refreshViewport()
+		return m, nextSnapshotCmd(m.ctx, m.updates)
 	case SnapshotMsg:
-		m.resyncing = false
 		m.err = message.Err
 		if message.Err == nil {
-			m.err = m.reducer.ApplySnapshot(message.Snapshot)
+			if message.Snapshot.ThreadID != m.snapshot.ThreadID {
+				m.err = errors.New("coding frontend snapshot changed thread ID")
+				return m, nil
+			}
 			if m.initialTurnResolvedBy(message.Snapshot) {
 				m.initialTurnPending = false
 			}
-			if m.err == nil && !activeWork(m.reducer.State().Activity) {
+			m.snapshot = message.Snapshot
+			if !activeWork(m.snapshot.Activity) {
 				m.interruptPending = false
 			}
 			m.refreshViewport()
 		}
 		if message.Err == nil {
-			return m, nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision)
+			return m, nextSnapshotCmd(m.ctx, m.updates)
 		}
 		return m, nil
-	case DeltaMsg:
-		if err := m.reducer.Apply(message.Delta); err != nil {
-			if errors.Is(err, frontend.ErrRevisionGap) && m.controller != nil {
-				m.resyncing = true
-				return m, snapshotCmd(m.controller)
-			}
-			m.err = err
-			return m, nil
-		}
-		if !activeWork(m.reducer.State().Activity) {
-			m.interruptPending = false
-		}
-		if turnLifecycleDelta(message.Delta.Kind) {
-			m.initialTurnPending = false
-		}
-		m.refreshViewport()
-		return m, nextDeltaCmd(m.ctx, m.controller, m.reducer.State().Revision)
 	case TranscriptPageMsg:
 		m.transcript.loading = false
 		if message.Err != nil {
@@ -205,7 +211,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.workspaceNotice = "repository refreshed"
 		return m, nil
-	case WatchErrorMsg:
+	case SubscriptionErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
 		}
@@ -257,9 +263,6 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	status := m.statusLine()
-	if m.resyncing {
-		status = "resynchronizing frontend…"
-	}
 	if m.submitting {
 		status = "submitting prompt…"
 	}
@@ -285,7 +288,7 @@ func (m *Model) ComposerValue() string {
 // TranscriptEntries exposes semantic view state for deterministic frontend
 // tests without requiring full-screen golden snapshots.
 func (m *Model) TranscriptEntries() []frontend.TranscriptEntry {
-	return m.transcript.entries(m.reducer.State().Entries)
+	return m.transcript.entries(m.snapshot.Entries)
 }
 
 // ViewportOffset reports the semantic transcript scroll position.
@@ -294,7 +297,7 @@ func (m *Model) ViewportOffset() int {
 }
 
 func (m *Model) Snapshot() frontend.ThreadSnapshot {
-	return m.reducer.State()
+	return m.snapshot.Clone()
 }
 
 func (m *Model) Dimensions() (int, int) {
@@ -303,9 +306,7 @@ func (m *Model) Dimensions() (int, int) {
 
 func (m *Model) admitInitialTurn() {
 	m.initialTurnPending = true
-	state := m.reducer.State()
-	m.admittedRevision = state.Revision
-	m.admittedLastTurn = cloneLastTurn(state.LastTurn)
+	m.admittedLastTurn = cloneLastTurn(m.snapshot.LastTurn)
 }
 
 func (m *Model) initialTurnResolvedBy(snapshot frontend.ThreadSnapshot) bool {
@@ -314,9 +315,6 @@ func (m *Model) initialTurnResolvedBy(snapshot frontend.ThreadSnapshot) bool {
 	}
 	if activeWork(snapshot.Activity) {
 		return true
-	}
-	if snapshot.Revision <= m.admittedRevision {
-		return false
 	}
 	return !sameLastTurn(snapshot.LastTurn, m.admittedLastTurn)
 }
@@ -356,7 +354,7 @@ func clipLine(value string, width int) string {
 }
 
 func (m *Model) refreshViewport() {
-	state := m.reducer.State()
+	state := m.snapshot
 	m.normalizeToolSelection(state.Tools)
 	wasAtBottom := m.viewport.AtBottom()
 	anchor := m.layout.anchorAt(m.viewport.YOffset)
@@ -389,7 +387,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	}
 	switch message.String() {
 	case "ctrl+r":
-		if activeWork(m.reducer.State().Activity) || m.initialTurnPending {
+		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
 			m.workspaceNotice = "repository refresh is available when idle"
 			return true, nil
 		}
@@ -468,7 +466,7 @@ func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
 }
 
 func (m *Model) navigateTools(direction int) {
-	tools := m.reducer.State().Tools
+	tools := m.snapshot.Tools
 	if len(tools) == 0 {
 		m.workspaceNotice = "no tool cards"
 		return
@@ -489,7 +487,7 @@ func (m *Model) navigateTools(direction int) {
 }
 
 func (m *Model) toggleSelectedTool() {
-	tools := m.reducer.State().Tools
+	tools := m.snapshot.Tools
 	if len(tools) == 0 {
 		m.workspaceNotice = "no tool cards"
 		return
@@ -566,7 +564,7 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 	if m.controller == nil {
 		return m, tea.Quit
 	}
-	activity := m.reducer.State().Activity
+	activity := m.snapshot.Activity
 	if activeWork(activity) || m.initialTurnPending {
 		if m.interruptPending || activity == frontend.ActivityInterrupting {
 			return m, commandCmd("hard_cancel", m.controller.HardCancel)
@@ -582,54 +580,33 @@ func activeWork(activity frontend.Activity) bool {
 		activity == frontend.ActivityInterrupting
 }
 
-func turnLifecycleDelta(kind frontend.DeltaKind) bool {
-	switch kind {
-	case frontend.DeltaTurnStarted,
-		frontend.DeltaTurnCompleted,
-		frontend.DeltaTurnSuspended,
-		frontend.DeltaTurnFailed,
-		frontend.DeltaTurnInterrupted:
-		return true
-	default:
-		return false
-	}
-}
-
-func snapshotCmd(controller frontend.Controller) tea.Cmd {
-	return func() tea.Msg {
-		snapshot, err := controller.Snapshot(context.Background())
-		return SnapshotMsg{Snapshot: snapshot, Err: err}
-	}
-}
-
-func nextDeltaCmd(
+func nextSnapshotCmd(
 	ctx context.Context,
-	controller frontend.Controller,
-	revision frontend.Revision,
+	updates <-chan frontend.ThreadSnapshot,
 ) tea.Cmd {
+	if updates == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		select {
+		case snapshot, ok := <-updates:
+			if !ok {
+				return SubscriptionErrorMsg{Err: ctx.Err()}
+			}
+			return SnapshotMsg{Snapshot: snapshot}
+		case <-ctx.Done():
+			return SubscriptionErrorMsg{Err: ctx.Err()}
+		}
+	}
+}
+
+func subscribeCmd(ctx context.Context, controller frontend.Controller) tea.Cmd {
 	if controller == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		watchCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		updates, err := controller.Watch(watchCtx, revision)
-		if err != nil {
-			if errors.Is(err, frontend.ErrRevisionUnavailable) {
-				snapshot, snapshotErr := controller.Snapshot(ctx)
-				return SnapshotMsg{Snapshot: snapshot, Err: snapshotErr}
-			}
-			return WatchErrorMsg{Err: err}
-		}
-		select {
-		case delta, ok := <-updates:
-			if !ok {
-				return WatchErrorMsg{Err: watchCtx.Err()}
-			}
-			return DeltaMsg{Delta: delta}
-		case <-ctx.Done():
-			return WatchErrorMsg{Err: ctx.Err()}
-		}
+		snapshot, updates, err := controller.Subscribe(ctx)
+		return SubscriptionMsg{Snapshot: snapshot, Updates: updates, Err: err}
 	}
 }
 
