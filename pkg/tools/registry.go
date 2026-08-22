@@ -453,6 +453,10 @@ func (r *ToolRegistry) ApprovalArguments(
 	if !ok {
 		return nil, fmt.Errorf("tool %q not found", name)
 	}
+	args, err := canonicalRegisteredToolArguments(tool, args)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize arguments for tool %q: %w", name, err)
+	}
 	provider, ok := tool.(ApprovalArgumentsProvider)
 	if !ok {
 		return args, nil
@@ -474,7 +478,26 @@ func (r *ToolRegistry) ValidateArguments(name string, args map[string]any) error
 	if !ok {
 		return fmt.Errorf("tool %q not found", name)
 	}
-	return validateRegisteredToolArguments(tool, args)
+	canonical, err := canonicalRegisteredToolArguments(tool, args)
+	if err != nil {
+		return err
+	}
+	return validateRegisteredToolArguments(tool, canonical)
+}
+
+func canonicalRegisteredToolArguments(tool toolshared.Tool, args map[string]any) (map[string]any, error) {
+	canonicalizer, ok := tool.(toolshared.ArgumentsCanonicalizer)
+	if !ok {
+		return args, nil
+	}
+	canonical, err := canonicalizer.CanonicalArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	if canonical == nil {
+		return nil, errors.New("tool returned nil canonical arguments")
+	}
+	return canonical, nil
 }
 
 func validateRegisteredToolArguments(tool toolshared.Tool, args map[string]any) error {
@@ -547,6 +570,12 @@ func (r *ToolRegistry) executeToolWithContext(
 	channel, chatID string,
 	asyncCallback toolshared.AsyncCallback,
 ) *toolshared.ToolResult {
+	canonical, err := canonicalRegisteredToolArguments(tool, args)
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("invalid arguments for tool %q", name)).
+			WithError(fmt.Errorf("argument canonicalization failed: %w", err))
+	}
+	args = canonical
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
