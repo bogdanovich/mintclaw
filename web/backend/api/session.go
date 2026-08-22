@@ -185,30 +185,43 @@ type mintclawJSONLSessionRef struct {
 	Key string
 }
 
-func extractMintClawSessionIDFromScope(scope session.SessionScope) (string, bool) {
+func extractMintClawSessionIDs(meta memory.SessionMeta, scope session.SessionScope) []string {
 	if !strings.EqualFold(strings.TrimSpace(scope.Channel), "mintclaw") {
-		return "", false
+		return nil
 	}
-	sessionID := strings.TrimSpace(scope.ClientSessionID)
-	if sessionID == "" {
-		return "", false
+	if len(meta.ClientSessionIDs) > 0 {
+		return meta.ClientSessionIDs
 	}
-	return sessionID, true
+
+	// Drop this preceding-release V2 fallback at the next state cutover.
+	if scope.Version != session.ScopeVersionV2 || !slices.Contains(scope.Dimensions, "chat") {
+		return nil
+	}
+	chatType, chatID, ok := strings.Cut(strings.TrimSpace(scope.Values["chat"]), ":")
+	if !ok || !strings.EqualFold(strings.TrimSpace(chatType), "direct") {
+		return nil
+	}
+	sessionID, ok := strings.CutPrefix(strings.TrimSpace(chatID), "mintclaw:")
+	if !ok || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	return []string{strings.TrimSpace(sessionID)}
 }
 
-func sessionRefFromMeta(meta memory.SessionMeta) (mintclawJSONLSessionRef, bool) {
+func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	if len(meta.Scope) == 0 || !session.IsOpaqueSessionKey(meta.Key) {
-		return mintclawJSONLSessionRef{}, false
+		return nil
 	}
 	var scope session.SessionScope
 	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
-		return mintclawJSONLSessionRef{}, false
+		return nil
 	}
-	sessionID, ok := extractMintClawSessionIDFromScope(scope)
-	if !ok {
-		return mintclawJSONLSessionRef{}, false
+	ids := extractMintClawSessionIDs(meta, scope)
+	refs := make([]mintclawJSONLSessionRef, 0, len(ids))
+	for i := len(ids) - 1; i >= 0; i-- {
+		refs = append(refs, mintclawJSONLSessionRef{ID: ids[i], Key: meta.Key})
 	}
-	return mintclawJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
+	return refs
 }
 
 func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionRef, error) {
@@ -229,15 +242,16 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 		if err != nil {
 			continue
 		}
-		ref, ok := sessionRefFromMeta(meta)
-		if !ok || ref.Key == "" || ref.ID == "" {
-			continue
+		for _, ref := range sessionRefsFromMeta(meta) {
+			if ref.Key == "" || ref.ID == "" {
+				continue
+			}
+			if _, exists := seen[ref.ID]; exists {
+				continue
+			}
+			seen[ref.ID] = struct{}{}
+			refs = append(refs, ref)
 		}
-		if _, exists := seen[ref.ID]; exists {
-			continue
-		}
-		seen[ref.ID] = struct{}{}
-		refs = append(refs, ref)
 	}
 	return refs, nil
 }
@@ -674,12 +688,17 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := []sessionListItem{}
+	listedKeys := make(map[string]struct{})
 	if refs, findErr := h.findMintClawJSONLSessions(dir); findErr == nil {
 		for _, ref := range refs {
+			if _, listed := listedKeys[ref.Key]; listed {
+				continue
+			}
 			sess, loadErr := h.readJSONLSession(dir, ref.Key)
 			if loadErr != nil || isEmptySession(sess) {
 				continue
 			}
+			listedKeys[ref.Key] = struct{}{}
 			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
 	}

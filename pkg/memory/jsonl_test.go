@@ -689,7 +689,7 @@ func TestSessionMetaScopePersists(t *testing.T) {
 	ctx := context.Background()
 
 	scope := json.RawMessage(`{"version":1,"channel":"telegram","values":{"chat":"group:c1"}}`)
-	if err := store.UpsertSessionMeta(ctx, "canonical", scope); err != nil {
+	if err := store.UpsertSessionMeta(ctx, "canonical", scope, ""); err != nil {
 		t.Fatalf("UpsertSessionMeta() error = %v", err)
 	}
 

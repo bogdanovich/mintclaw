@@ -112,12 +112,7 @@ func mintClawClientSessionID(inbound bus.InboundContext) string {
 	if !strings.EqualFold(strings.TrimSpace(inbound.Channel), "mintclaw") {
 		return ""
 	}
-	const chatPrefix = "mintclaw:"
-	chatID := strings.TrimSpace(inbound.ChatID)
-	if !strings.HasPrefix(chatID, chatPrefix) {
-		return ""
-	}
-	return strings.TrimSpace(strings.TrimPrefix(chatID, chatPrefix))
+	return strings.TrimSpace(inbound.Raw["session_id"])
 }
 
 func shouldPreserveTelegramForumIsolation(input AllocationInput) bool {

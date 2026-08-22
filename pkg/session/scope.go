@@ -23,8 +23,7 @@ type SessionScope struct {
 	Dimensions    []string          `json:"dimensions"`
 	Values        map[string]string `json:"values"`
 	RouteScopeKey string            `json:"route_scope_key,omitempty"`
-	// ClientSessionID preserves first-party client provenance without changing
-	// the configured routing dimensions or canonical session identity.
+	// ClientSessionID is frontend provenance, not canonical identity.
 	ClientSessionID string        `json:"client_session_id,omitempty"`
 	Epoch           *SessionEpoch `json:"epoch,omitempty"`
 }

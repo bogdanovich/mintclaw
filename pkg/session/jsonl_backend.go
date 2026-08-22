@@ -20,7 +20,7 @@ type JSONLBackend struct {
 
 type metaAwareStore interface {
 	GetSessionMeta(ctx context.Context, sessionKey string) (memory.SessionMeta, error)
-	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage) error
+	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage, clientSessionID string) error
 }
 
 const maxTurnHistoryPageMessages = 256
@@ -48,6 +48,7 @@ func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionSc
 	}
 
 	var rawScope json.RawMessage
+	clientSessionID := ""
 	if scope != nil {
 		data, err := json.Marshal(scope)
 		if err != nil {
@@ -55,9 +56,10 @@ func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionSc
 			return
 		}
 		rawScope = data
+		clientSessionID = scope.ClientSessionID
 	}
 	ctx := context.Background()
-	if err := metaStore.UpsertSessionMeta(ctx, sessionKey, rawScope); err != nil {
+	if err := metaStore.UpsertSessionMeta(ctx, sessionKey, rawScope, clientSessionID); err != nil {
 		log.Printf("session: upsert session metadata: %v", err)
 	}
 }

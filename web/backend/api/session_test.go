@@ -55,7 +55,7 @@ func mintClawTestScope(t *testing.T, sessionID string) json.RawMessage {
 func newMintClawTestSession(t *testing.T, store *memory.JSONLStore, sessionID string) string {
 	t.Helper()
 	key := session.BuildOpaqueSessionKey("mintclaw|session=" + sessionID)
-	if err := store.UpsertSessionMeta(t.Context(), key, mintClawTestScope(t, sessionID)); err != nil {
+	if err := store.UpsertSessionMeta(t.Context(), key, mintClawTestScope(t, sessionID), sessionID); err != nil {
 		t.Fatalf("UpsertSessionMeta() error = %v", err)
 	}
 	return key
@@ -175,6 +175,9 @@ func TestHandleListSessions_TransientThoughtDoesNotInflateMessageCount(t *testin
 		CreatedAt: now,
 		UpdatedAt: now,
 		Scope:     mintClawTestScope(t, sessionID),
+		ClientSessionIDs: []string{
+			sessionID,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal(meta) error = %v", err)
@@ -479,20 +482,19 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	}
 
 	scopeData, err := json.Marshal(session.SessionScope{
-		Version:    session.ScopeVersionV1,
+		Version:    session.ScopeVersionV2,
 		AgentID:    "main",
 		Channel:    "mintclaw",
 		Account:    "default",
-		Dimensions: []string{"sender"},
+		Dimensions: []string{"chat"},
 		Values: map[string]string{
-			"sender": "mintclaw-user",
+			"chat": "direct:mintclaw:scope-jsonl",
 		},
-		ClientSessionID: "scope-jsonl",
 	})
 	if err != nil {
 		t.Fatalf("Marshal(scope) error = %v", err)
 	}
-	if err := store.UpsertSessionMeta(context.Background(), sessionKey, scopeData); err != nil {
+	if err := store.UpsertSessionMeta(context.Background(), sessionKey, scopeData, ""); err != nil {
 		t.Fatalf("UpsertSessionMeta() error = %v", err)
 	}
 
@@ -530,6 +532,77 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	mux.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+}
+
+func TestHandleSessions_SharedHistoryResolvesAllCurrentClientIDs(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, storeErr := memory.NewJSONLStore(dir)
+	if storeErr != nil {
+		t.Fatalf("NewJSONLStore() error = %v", storeErr)
+	}
+	backend := session.NewJSONLBackend(store)
+	sessionKey := session.BuildOpaqueSessionKey("mintclaw|sender=mintclaw-user")
+	baseScope := session.SessionScope{
+		Version:    session.ScopeVersionV2,
+		AgentID:    "main",
+		Channel:    "mintclaw",
+		Dimensions: []string{"sender"},
+		Values:     map[string]string{"sender": "mintclaw-user"},
+	}
+	for _, clientID := range []string{"browser-1", "browser-2"} {
+		scope := session.CloneScope(&baseScope)
+		scope.ClientSessionID = clientID
+		backend.EnsureSessionMetadata(sessionKey, scope)
+	}
+	meta, err := store.GetSessionMeta(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetSessionMeta() error = %v", err)
+	}
+	if len(meta.ClientSessionIDs) != 2 ||
+		meta.ClientSessionIDs[0] != "browser-1" || meta.ClientSessionIDs[1] != "browser-2" {
+		t.Fatalf("ClientSessionIDs = %v, want [browser-1 browser-2]", meta.ClientSessionIDs)
+	}
+	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
+		Role:    "user",
+		Content: "shared browser history",
+	}); err != nil {
+		t.Fatalf("AddFullMessage() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var items []sessionListItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal(list) error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want one shared history", len(items))
+	}
+
+	for _, clientID := range []string{"browser-1", "browser-2"} {
+		detailRec := httptest.NewRecorder()
+		detailReq := httptest.NewRequest(http.MethodGet, "/api/sessions/"+clientID, nil)
+		mux.ServeHTTP(detailRec, detailReq)
+		if detailRec.Code != http.StatusOK {
+			t.Fatalf(
+				"detail %s status = %d, want %d, body=%s",
+				clientID,
+				detailRec.Code,
+				http.StatusOK,
+				detailRec.Body.String(),
+			)
+		}
 	}
 }
 

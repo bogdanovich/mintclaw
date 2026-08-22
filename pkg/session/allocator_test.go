@@ -117,6 +117,7 @@ func TestAllocateRouteSessionPreservesMintClawClientSessionOutsideDimensions(t *
 				ChatID:   "mintclaw:" + chatID,
 				ChatType: "direct",
 				SenderID: "mintclaw-user",
+				Raw:      map[string]string{"session_id": chatID},
 			},
 			SessionPolicy: routing.SessionPolicy{Dimensions: []string{"sender"}},
 		})

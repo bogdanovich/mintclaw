@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -52,6 +53,8 @@ type SessionMeta struct {
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	Scope     json.RawMessage `json:"scope,omitempty"`
+	// ClientSessionIDs map current frontend sessions onto this history.
+	ClientSessionIDs []string `json:"client_session_ids,omitempty"`
 	// HistoryRevision changes whenever the visible canonical history changes.
 	// HistoryDirty remains set across crashes during multi-file mutations.
 	HistoryRevision      uint64 `json:"history_revision,omitempty"`
@@ -384,6 +387,7 @@ func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (Sessi
 		return SessionMeta{}, err
 	}
 	meta.Scope = cloneRawJSON(meta.Scope)
+	meta.ClientSessionIDs = append([]string(nil), meta.ClientSessionIDs...)
 	return meta, nil
 }
 
@@ -429,6 +433,7 @@ func (s *JSONLStore) UpsertSessionMeta(
 	_ context.Context,
 	sessionKey string,
 	scope json.RawMessage,
+	clientSessionID string,
 ) error {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -439,6 +444,10 @@ func (s *JSONLStore) UpsertSessionMeta(
 		return err
 	}
 	meta.Scope = cloneRawJSON(scope)
+	clientSessionID = strings.TrimSpace(clientSessionID)
+	if clientSessionID != "" && !slices.Contains(meta.ClientSessionIDs, clientSessionID) {
+		meta.ClientSessionIDs = append(meta.ClientSessionIDs, clientSessionID)
+	}
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
