@@ -143,8 +143,8 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 }
 
 // ValidateStorage checks that the current state file remains readable and its
-// directory can still support atomic replacement without replacing this live
-// manager or its in-memory snapshot.
+// directory can still complete the same atomic replacement used by state
+// mutations without replacing this live manager or its canonical state file.
 func (sm *Manager) ValidateStorage() error {
 	if sm == nil {
 		return fmt.Errorf("state manager is required")
@@ -170,6 +170,10 @@ func (sm *Manager) ValidateStorage() error {
 			return fmt.Errorf("decode state file: %w", decodeErr)
 		}
 	}
+	payload, err := json.MarshalIndent(sm.state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode state write probe: %w", err)
+	}
 
 	probe, err := os.CreateTemp(stateDir, ".mintclaw-state-check-*")
 	if err != nil {
@@ -177,9 +181,14 @@ func (sm *Manager) ValidateStorage() error {
 	}
 	probePath := probe.Name()
 	closeErr := probe.Close()
-	removeErr := os.Remove(probePath)
 	if closeErr != nil {
+		_ = os.Remove(probePath)
 		return fmt.Errorf("close state write probe: %w", closeErr)
+	}
+	writeErr := fileutil.WriteFileAtomic(probePath, payload, 0o600)
+	removeErr := os.Remove(probePath)
+	if writeErr != nil {
+		return fmt.Errorf("replace state write probe atomically: %w", writeErr)
 	}
 	if removeErr != nil {
 		return fmt.Errorf("remove state write probe: %w", removeErr)

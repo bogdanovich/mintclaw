@@ -112,8 +112,21 @@ func TestManagerValidateStorageRejectsUnavailableCurrentDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.SetLastChannel("telegram"); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.ValidateStorage(); err != nil {
 		t.Fatalf("ValidateStorage() error = %v", err)
+	}
+	if got := manager.GetLastChannel(); got != "telegram" {
+		t.Fatalf("GetLastChannel() = %q after validation, want telegram", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(workspace, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "state.json" {
+		t.Fatalf("state directory after validation = %v, want only state.json", entries)
 	}
 
 	stateDir := filepath.Join(workspace, "state")
