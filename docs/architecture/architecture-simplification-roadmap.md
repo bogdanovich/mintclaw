@@ -677,6 +677,9 @@ Implementation sequence:
 1. Delete the test-only in-agent event subscription adapter, legacy event
    envelope, and event-kind aliases. Tests subscribe to the canonical
    `pkg/events` bus directly.
+2. Delete the producerless synthetic async-completion system-message reader.
+   Current producers pass typed `AsyncCompletionInput` directly to the
+   delivery coordinator.
 
 Exit criteria:
 

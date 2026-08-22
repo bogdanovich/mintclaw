@@ -199,17 +199,14 @@ that it started a long time ago.
 for spawn, delegate, cron, and other task runtimes; no spawn-only projection is
 maintained.
 
-## Legacy System Messages
+## Typed Completion Boundary
 
-Older async completion paths used synthetic inbound messages with `channel=system` and `kind=async_completion`. That path is now an adapter only, so queued or stored legacy messages can still be processed.
+Async completion producers pass `AsyncCompletionInput` directly to the
+delivery coordinator. Synthetic inbound messages with `channel=system` and
+`kind=async_completion` are not a supported completion path.
 
-New producers must not enqueue async completions through `PublishInbound(system)`. They should use `AsyncCompletionInput` and the delivery coordinator instead.
-
-Current legacy boundary:
-
-- reading legacy synthetic async completion messages is still supported
-- producing new synthetic async completion messages is not allowed
-- extending legacy `completion` payloads with new semantics is not allowed
+Completion identity, origin routing, and delivery mode remain typed fields;
+they are never reconstructed from chat metadata.
 
 ## Runtime Smoke Checklist
 

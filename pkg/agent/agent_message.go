@@ -535,10 +535,6 @@ func (al *AgentLoop) processSystemMessage(
 
 	origin := systemMessageOrigin(msg)
 
-	if isAsyncCompletionSystemMessage(msg) {
-		return al.processAsyncCompletionMessage(ctx, msg, origin)
-	}
-
 	// Extract subagent result from message content
 	// Format: "Task 'label' completed.\n\nResult:\n<actual content>"
 	content := msg.Content
@@ -590,41 +586,7 @@ func systemMessageOrigin(msg bus.InboundMessage) bus.InboundContext {
 		origin.Channel = msg.ChatID[:idx]
 		origin.ChatID = msg.ChatID[idx+1:]
 	}
-	if raw := msg.Context.Raw; len(raw) > 0 {
-		if value := strings.TrimSpace(raw[systemFollowUpOriginChannelKey]); value != "" {
-			origin.Channel = value
-		}
-		if value := strings.TrimSpace(raw[systemFollowUpOriginChatIDKey]); value != "" {
-			origin.ChatID = value
-		}
-		if value := strings.TrimSpace(raw[systemFollowUpOriginChatTypeKey]); value != "" {
-			origin.ChatType = value
-		}
-		if value := strings.TrimSpace(raw[systemFollowUpOriginTopicIDKey]); value != "" {
-			origin.TopicID = value
-		}
-		if value := strings.TrimSpace(raw[systemFollowUpOriginMessageIDKey]); value != "" {
-			origin.MessageID = value
-		}
-		if value := strings.TrimSpace(raw[systemFollowUpOriginReplyToMessageIDKey]); value != "" {
-			origin.ReplyToMessageID = value
-		}
-	}
 	return origin
-}
-
-func (al *AgentLoop) processAsyncCompletionMessage(
-	ctx context.Context,
-	msg bus.InboundMessage,
-	origin bus.InboundContext,
-) (response string, err error) {
-	return al.processAsyncCompletionWithDelivery(ctx, AsyncCompletionInput{
-		SourceTool:   strings.TrimPrefix(strings.TrimSpace(msg.SenderID), "async:"),
-		CompletionID: strings.TrimSpace(msg.Context.Raw[systemFollowUpIDKey]),
-		Content:      msg.Content,
-		Origin:       origin,
-		SenderID:     msg.SenderID,
-	}, false)
 }
 
 func (al *AgentLoop) processAsyncCompletion(
