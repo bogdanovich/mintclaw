@@ -683,6 +683,9 @@ Implementation sequence:
 3. Delete the channel-name ASR capability fallback. Voice-capable channels
    advertise ASR through `VoiceCapabilityProvider`; TTS remains derivable from
    the current `MediaSender` contract.
+4. Delete the redundant `InjectSteering` and `InjectFollowUp` names plus the
+   unsafe session-ambiguous `InterruptHard`; callers use `Steer` and
+   `HardAbort(sessionKey)` directly.
 
 Exit criteria:
 
