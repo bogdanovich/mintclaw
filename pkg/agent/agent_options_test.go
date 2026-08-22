@@ -6,7 +6,22 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 )
+
+func TestWithStateManagerRetainsRuntimeOwner(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace: t.TempDir(), ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
+		ContextManager: "none",
+	}}}
+	manager := state.NewManager(t.TempDir())
+	loop := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithStateManager(manager))
+	t.Cleanup(loop.Close)
+
+	if loop.StateManager() != manager {
+		t.Fatal("agent loop replaced the injected state owner")
+	}
+}
 
 func TestWithIsolatedToolBootstrapSkipsSharedProductionStateAndTools(t *testing.T) {
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{

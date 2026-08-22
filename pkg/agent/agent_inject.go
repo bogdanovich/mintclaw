@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -465,6 +466,15 @@ func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {
 
 func (al *AgentLoop) SetReloadFunc(fn func() error) {
 	al.reloadFunc = fn
+}
+
+// StateManager returns the single current state owner injected or constructed
+// for this runtime.
+func (al *AgentLoop) StateManager() *state.Manager {
+	if al == nil {
+		return nil
+	}
+	return al.state
 }
 
 func (al *AgentLoop) RecordLastChannel(channel string) error {

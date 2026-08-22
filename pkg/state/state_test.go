@@ -106,6 +106,43 @@ func TestNewManagerRemainsUsableWhenDirectoryCreationFails(t *testing.T) {
 	}
 }
 
+func TestManagerValidateStorageRejectsUnavailableCurrentDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewManagerChecked(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err != nil {
+		t.Fatalf("ValidateStorage() error = %v", err)
+	}
+
+	stateDir := filepath.Join(workspace, "state")
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err == nil {
+		t.Fatal("ValidateStorage() error = nil, want unavailable-directory error")
+	}
+}
+
+func TestManagerValidateStorageRejectsCorruptCurrentFile(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewManagerChecked(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(workspace, "state", "state.json")
+	if err := os.WriteFile(stateFile, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateStorage(); err == nil {
+		t.Fatal("ValidateStorage() error = nil, want corrupt-state error")
+	}
+}
+
 func TestSetLastChatID(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "state-test-*")
 	if err != nil {

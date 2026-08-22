@@ -44,13 +44,17 @@ func newGatewayReloadHarness(t *testing.T) *gatewayReloadHarness {
 
 	msgBus := bus.NewMessageBus()
 	provider := providers.LLMProvider(&startupBlockedProvider{reason: "not used"})
-	loop := agent.NewAgentLoop(cfg, msgBus, provider)
+	runtimeState, err := state.NewManagerChecked(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatalf("NewManagerChecked() error = %v", err)
+	}
+	loop := agent.NewAgentLoop(cfg, msgBus, provider, agent.WithStateManager(runtimeState))
 	runningServices, err := setupAndStartServices(
 		context.Background(),
 		cfg,
 		loop,
 		msgBus,
-		state.NewManager(cfg.WorkspacePath()),
+		runtimeState,
 		"reload-test-token",
 		netbind.OpenResult{
 			Listeners: []net.Listener{listener},
@@ -228,6 +232,7 @@ func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
 		nil,
 		harness.services,
 		harness.bus,
+		harness.loop.StateManager(),
 		gatewayReloadHooks{},
 	)
 	if err != nil {
@@ -250,31 +255,38 @@ func TestPreparedReloadGenerationKeepsBackgroundDispatchInactive(t *testing.T) {
 	}
 }
 
-func TestPrepareReloadGenerationRejectsUnusableCurrentStateStore(t *testing.T) {
+func TestConfigReloadRejectsUnusableCurrentStateBeforeServiceDrain(t *testing.T) {
 	harness := newGatewayReloadHarness(t)
 	next := *harness.config
-	next.Agents.Defaults.Workspace = t.TempDir()
-	if err := os.MkdirAll(
-		filepath.Join(next.Agents.Defaults.Workspace, "state", "state.json"),
-		0o700,
-	); err != nil {
+	stateDir := filepath.Join(next.WorkspacePath(), "state")
+	if err := os.RemoveAll(stateDir); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldProvider := harness.provider
+	oldHeartbeat := harness.services.HeartbeatService
 
-	generation, err := prepareReloadGeneration(
+	err := handleConfigReload(
 		context.Background(),
-		&next,
 		harness.loop,
-		nil,
+		&next,
+		&harness.provider,
 		harness.services,
 		harness.bus,
-		gatewayReloadHooks{},
+		true,
+		false,
+		serviceShutdownTimeout,
 	)
-	if err == nil || generation != nil {
-		t.Fatalf("prepareReloadGeneration() = (%T, %v), want current-state error", generation, err)
+	if err == nil || !strings.Contains(err.Error(), "validate gateway state before reload") {
+		t.Fatalf("handleConfigReload() error = %v, want current-state validation error", err)
 	}
-	if !strings.Contains(err.Error(), "prepare gateway state") {
-		t.Fatalf("prepareReloadGeneration() error = %v", err)
+	if harness.provider != oldProvider || harness.loop.GetConfig() != harness.config {
+		t.Fatal("state preflight failure changed the active provider or config")
+	}
+	if harness.services.HeartbeatService != oldHeartbeat || !oldHeartbeat.IsRunning() {
+		t.Fatal("state preflight failure disrupted the active heartbeat service")
 	}
 }
 

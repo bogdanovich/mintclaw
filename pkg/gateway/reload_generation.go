@@ -58,6 +58,7 @@ func prepareReloadGeneration(
 	prepared *agent.PreparedConfigReload,
 	persistent *services,
 	msgBus *bus.MessageBus,
+	stateManager *state.Manager,
 	hooks gatewayReloadHooks,
 ) (generation *gatewayReloadGeneration, prepareErr error) {
 	next := &services{
@@ -76,10 +77,10 @@ func prepareReloadGeneration(
 			generation = nil
 		}
 	}()
-	stateManager, err := state.NewManagerChecked(cfg.WorkspacePath())
-	if err != nil {
-		return nil, fmt.Errorf("prepare gateway state: %w", err)
+	if stateManager == nil || al == nil || al.StateManager() != stateManager {
+		return nil, fmt.Errorf("reload generation requires the active gateway state manager")
 	}
+	var err error
 	registerTool := al.RegisterTool
 	if prepared != nil {
 		registerTool = prepared.RegisterTool

@@ -85,7 +85,7 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
-	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && al.state == nil {
 		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
 			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
 			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)

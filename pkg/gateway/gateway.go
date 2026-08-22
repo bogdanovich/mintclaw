@@ -236,7 +236,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if spoolErr := configureGatewayInboundSpool(cfg, msgBus); spoolErr != nil {
 		return fmt.Errorf("configure inbound spool: %w", spoolErr)
 	}
-	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider)
+	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider, agent.WithStateManager(gatewayState))
 	if err != nil {
 		return fmt.Errorf("initialize agent: %w", err)
 	}
@@ -937,6 +937,9 @@ func setupAndStartServicesWithHooks(
 	if stateManager == nil {
 		return nil, fmt.Errorf("gateway state manager is required")
 	}
+	if agentLoop == nil || agentLoop.StateManager() != stateManager {
+		return nil, fmt.Errorf("gateway services and agent loop must share one state manager")
+	}
 	runningServices = &services{}
 	generation := runningServices
 	cleanup := &gatewayStartupTransaction{
@@ -1431,6 +1434,13 @@ func handleConfigReloadWithHooks(
 	if err := preflightConfigReload(al, newCfg); err != nil {
 		return err
 	}
+	runtimeState := al.StateManager()
+	if runtimeState == nil {
+		return fmt.Errorf("gateway state manager is unavailable")
+	}
+	if err := runtimeState.ValidateStorage(); err != nil {
+		return fmt.Errorf("validate gateway state before reload: %w", err)
+	}
 	oldCfg := al.GetConfig()
 
 	newModel := newCfg.Agents.Defaults.ModelName
@@ -1532,6 +1542,7 @@ func handleConfigReloadWithHooks(
 		prepared,
 		runningServices,
 		msgBus,
+		runtimeState,
 		hooks,
 	)
 	if err != nil {
@@ -1658,6 +1669,7 @@ func rollbackReloadGeneration(
 		nil,
 		runningServices,
 		msgBus,
+		al.StateManager(),
 		gatewayReloadHooks{},
 	)
 	if err != nil {

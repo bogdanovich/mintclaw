@@ -142,6 +142,51 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 	return sm, nil
 }
 
+// ValidateStorage checks that the current state file remains readable and its
+// directory can still support atomic replacement without replacing this live
+// manager or its in-memory snapshot.
+func (sm *Manager) ValidateStorage() error {
+	if sm == nil {
+		return fmt.Errorf("state manager is required")
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	stateFile := strings.TrimSpace(sm.stateFile)
+	if stateFile == "" {
+		return fmt.Errorf("state file is required")
+	}
+	stateDir := filepath.Dir(stateFile)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("create state directory %q: %w", stateDir, err)
+	}
+	data, err := os.ReadFile(stateFile)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read state file: %w", err)
+	}
+	if err == nil {
+		var persisted State
+		if decodeErr := json.Unmarshal(data, &persisted); decodeErr != nil {
+			return fmt.Errorf("decode state file: %w", decodeErr)
+		}
+	}
+
+	probe, err := os.CreateTemp(stateDir, ".mintclaw-state-check-*")
+	if err != nil {
+		return fmt.Errorf("create state write probe: %w", err)
+	}
+	probePath := probe.Name()
+	closeErr := probe.Close()
+	removeErr := os.Remove(probePath)
+	if closeErr != nil {
+		return fmt.Errorf("close state write probe: %w", closeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove state write probe: %w", removeErr)
+	}
+	return nil
+}
+
 // SetLastChannel atomically updates the last channel and saves the state.
 // This method uses a temp file + rename pattern for atomic writes,
 // ensuring that the state file is never corrupted even if the process crashes.
