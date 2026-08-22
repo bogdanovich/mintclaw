@@ -65,12 +65,7 @@ type sessionChatAttachment struct {
 	ContentType string `json:"content_type,omitempty"`
 }
 
-// legacyMintClawSessionPrefix is the legacy key prefix used by older MintClaw JSON/JSONL
-// sessions before structured scope metadata existed.
 const (
-	legacyMintClawSessionPrefix = "agent:main:mintclaw:direct:mintclaw:"
-	mintclawSessionPrefix       = legacyMintClawSessionPrefix
-
 	// Keep the session API aligned with the shared JSONL store reader limit in
 	// pkg/memory/jsonl.go so oversized lines fail consistently everywhere.
 	maxSessionJSONLLineSize = 10 * 1024 * 1024
@@ -84,33 +79,11 @@ func defaultToolFeedbackMaxArgsLength() int {
 	return defaults.GetToolFeedbackMaxArgsLength()
 }
 
-// extractLegacyMintClawSessionID extracts the session UUID from an old MintClaw key.
-// Returns the UUID and true if the key matches the MintClaw session pattern.
-func extractLegacyMintClawSessionID(key string) (string, bool) {
-	if strings.HasPrefix(key, legacyMintClawSessionPrefix) {
-		return strings.TrimPrefix(key, legacyMintClawSessionPrefix), true
-	}
-	return "", false
-}
-
 func sanitizeSessionKey(key string) string {
 	key = strings.ReplaceAll(key, ":", "_")
 	key = strings.ReplaceAll(key, "/", "_")
 	key = strings.ReplaceAll(key, "\\", "_")
 	return key
-}
-
-func (h *Handler) readLegacySession(path string) (sessionFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return sessionFile{}, err
-	}
-
-	var sess sessionFile
-	if err := json.Unmarshal(data, &sess); err != nil {
-		return sessionFile{}, err
-	}
-	return sess, nil
 }
 
 func (h *Handler) readSessionMeta(path, sessionKey string) (memory.SessionMeta, error) {
@@ -212,11 +185,6 @@ type mintclawJSONLSessionRef struct {
 	Key string
 }
 
-type mintclawLegacySessionRef struct {
-	ID   string
-	Path string
-}
-
 func extractMintClawSessionIDFromScope(scope session.SessionScope) (string, bool) {
 	if !strings.EqualFold(strings.TrimSpace(scope.Channel), "mintclaw") {
 		return "", false
@@ -241,15 +209,7 @@ func extractMintClawSessionIDFromScope(scope session.SessionScope) (string, bool
 }
 
 func sessionRefFromMeta(meta memory.SessionMeta) (mintclawJSONLSessionRef, bool) {
-	if len(meta.Scope) == 0 {
-		if sessionID, ok := extractLegacyMintClawSessionID(meta.Key); ok {
-			return mintclawJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
-		}
-		for _, alias := range meta.Aliases {
-			if sessionID, ok := extractLegacyMintClawSessionID(alias); ok {
-				return mintclawJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
-			}
-		}
+	if len(meta.Scope) == 0 || !session.IsOpaqueSessionKey(meta.Key) {
 		return mintclawJSONLSessionRef{}, false
 	}
 	var scope session.SessionScope
@@ -258,14 +218,6 @@ func sessionRefFromMeta(meta memory.SessionMeta) (mintclawJSONLSessionRef, bool)
 	}
 	sessionID, ok := extractMintClawSessionIDFromScope(scope)
 	if !ok {
-		if legacySessionID, ok := extractLegacyMintClawSessionID(meta.Key); ok {
-			return mintclawJSONLSessionRef{ID: legacySessionID, Key: meta.Key}, true
-		}
-		for _, alias := range meta.Aliases {
-			if legacySessionID, ok := extractLegacyMintClawSessionID(alias); ok {
-				return mintclawJSONLSessionRef{ID: legacySessionID, Key: meta.Key}, true
-			}
-		}
 		return mintclawJSONLSessionRef{}, false
 	}
 	return mintclawJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
@@ -279,7 +231,6 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 
 	refs := make([]mintclawJSONLSessionRef, 0)
 	seen := make(map[string]struct{})
-	metaBackedBases := make(map[string]struct{})
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
 			continue
@@ -291,27 +242,6 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 			continue
 		}
 		ref, ok := sessionRefFromMeta(meta)
-		if !ok || ref.Key == "" || ref.ID == "" {
-			continue
-		}
-		metaBackedBases[strings.TrimSuffix(name, ".meta.json")] = struct{}{}
-		if _, exists := seen[ref.ID]; exists {
-			continue
-		}
-		seen[ref.ID] = struct{}{}
-		refs = append(refs, ref)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		name := entry.Name()
-		base := strings.TrimSuffix(name, ".jsonl")
-		if _, ok := metaBackedBases[base]; ok {
-			continue
-		}
-		ref, ok := jsonlSessionRefFromFilename(name)
 		if !ok || ref.Key == "" || ref.ID == "" {
 			continue
 		}
@@ -335,83 +265,6 @@ func (h *Handler) findMintClawJSONLSession(dir, sessionID string) (mintclawJSONL
 		}
 	}
 	return mintclawJSONLSessionRef{}, os.ErrNotExist
-}
-
-func (h *Handler) findLegacyMintClawSessions(dir string) ([]mintclawLegacySessionRef, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	refs := make([]mintclawLegacySessionRef, 0)
-	seen := make(map[string]struct{})
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || filepath.Ext(name) != ".json" || strings.HasSuffix(name, ".meta.json") {
-			continue
-		}
-
-		path := filepath.Join(dir, entry.Name())
-		sess, err := h.readLegacySession(path)
-		if err != nil || isEmptySession(sess) {
-			continue
-		}
-
-		sessionID, ok := extractLegacyMintClawSessionID(sess.Key)
-		if !ok || sessionID == "" {
-			continue
-		}
-		if _, exists := seen[sessionID]; exists {
-			continue
-		}
-		seen[sessionID] = struct{}{}
-		refs = append(refs, mintclawLegacySessionRef{ID: sessionID, Path: path})
-	}
-	return refs, nil
-}
-
-func jsonlSessionRefFromFilename(name string) (mintclawJSONLSessionRef, bool) {
-	if !strings.HasSuffix(name, ".jsonl") {
-		return mintclawJSONLSessionRef{}, false
-	}
-	base := strings.TrimSuffix(name, ".jsonl")
-	if base == "" {
-		return mintclawJSONLSessionRef{}, false
-	}
-
-	legacyPrefix := sanitizeSessionKey(legacyMintClawSessionPrefix)
-	if strings.HasPrefix(base, legacyPrefix) {
-		sessionID := strings.TrimPrefix(base, legacyPrefix)
-		if sessionID == "" {
-			return mintclawJSONLSessionRef{}, false
-		}
-		return mintclawJSONLSessionRef{
-			ID:  sessionID,
-			Key: legacyMintClawSessionPrefix + sessionID,
-		}, true
-	}
-
-	if session.IsOpaqueSessionKey(base) {
-		return mintclawJSONLSessionRef{
-			ID:  base,
-			Key: base,
-		}, true
-	}
-
-	return mintclawJSONLSessionRef{}, false
-}
-
-func (h *Handler) findLegacyMintClawSession(dir, sessionID string) (mintclawLegacySessionRef, error) {
-	refs, err := h.findLegacyMintClawSessions(dir)
-	if err != nil {
-		return mintclawLegacySessionRef{}, err
-	}
-	for _, ref := range refs {
-		if ref.ID == sessionID {
-			return ref, nil
-		}
-	}
-	return mintclawLegacySessionRef{}, os.ErrNotExist
 }
 
 func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArgsLength int) sessionListItem {
@@ -833,29 +686,12 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := []sessionListItem{}
-	seen := make(map[string]struct{})
-
 	if refs, findErr := h.findMintClawJSONLSessions(dir); findErr == nil {
 		for _, ref := range refs {
 			sess, loadErr := h.readJSONLSession(dir, ref.Key)
 			if loadErr != nil || isEmptySession(sess) {
 				continue
 			}
-			seen[ref.ID] = struct{}{}
-			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
-		}
-	}
-
-	if legacyRefs, findErr := h.findLegacyMintClawSessions(dir); findErr == nil {
-		for _, ref := range legacyRefs {
-			if _, exists := seen[ref.ID]; exists {
-				continue
-			}
-			sess, loadErr := h.readLegacySession(ref.Path)
-			if loadErr != nil || isEmptySession(sess) {
-				continue
-			}
-			seen[ref.ID] = struct{}{}
 			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
 	}
@@ -922,21 +758,11 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if legacyRef, legacyErr := h.findLegacyMintClawSession(dir, sessionID); legacyErr == nil {
-				sess, err = h.readLegacySession(legacyRef.Path)
-			}
-			if err == nil && isEmptySession(sess) {
-				err = os.ErrNotExist
-			}
+			http.Error(w, "session not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "failed to parse session", http.StatusInternalServerError)
 		}
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				http.Error(w, "session not found", http.StatusNotFound)
-			} else {
-				http.Error(w, "failed to parse session", http.StatusInternalServerError)
-			}
-			return
-		}
+		return
 	}
 
 	for i := range sess.Messages {
@@ -983,17 +809,6 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "failed to delete session", http.StatusInternalServerError)
 				return
 			}
-			removed = true
-		}
-	}
-
-	if legacyRef, err := h.findLegacyMintClawSession(dir, sessionID); err == nil {
-		if err := os.Remove(legacyRef.Path); err != nil {
-			if !os.IsNotExist(err) {
-				http.Error(w, "failed to delete session", http.StatusInternalServerError)
-				return
-			}
-		} else {
 			removed = true
 		}
 	}

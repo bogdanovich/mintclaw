@@ -20,20 +20,14 @@ type JSONLBackend struct {
 
 type metaAwareStore interface {
 	GetSessionMeta(ctx context.Context, sessionKey string) (memory.SessionMeta, error)
-	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage, aliases []string) error
-	ResolveSessionKey(ctx context.Context, sessionKey string) (string, bool, error)
-}
-
-type aliasPromotingStore interface {
-	PromoteAliasHistory(ctx context.Context, sessionKey string, scope json.RawMessage, aliases []string) (bool, error)
+	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage) error
 }
 
 const maxTurnHistoryPageMessages = 256
 
 // MetadataAwareSessionStore exposes structured session metadata operations.
 type MetadataAwareSessionStore interface {
-	EnsureSessionMetadata(sessionKey string, scope *SessionScope, aliases []string)
-	ResolveSessionKey(sessionKey string) string
+	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
 	GetSessionScope(sessionKey string) *SessionScope
 }
 
@@ -42,39 +36,8 @@ func NewJSONLBackend(store memory.Store) *JSONLBackend {
 	return &JSONLBackend{store: store}
 }
 
-func (b *JSONLBackend) resolveSessionKey(ctx context.Context, sessionKey string) string {
-	resolved, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		log.Printf("session: resolve session key: %v", err)
-		return sessionKey
-	}
-	return resolved
-}
-
-func (b *JSONLBackend) resolveSessionKeyWithError(ctx context.Context, sessionKey string) (string, error) {
-	metaStore, ok := b.store.(metaAwareStore)
-	if !ok {
-		return sessionKey, nil
-	}
-	resolved, found, err := metaStore.ResolveSessionKey(ctx, sessionKey)
-	if err != nil {
-		return "", fmt.Errorf("session: resolve session key: %w", err)
-	}
-	if found && resolved != "" {
-		return resolved, nil
-	}
-	return sessionKey, nil
-}
-
-// ResolveSessionKey maps aliases onto their canonical session key when the
-// underlying store supports structured metadata. Unknown aliases fall back to
-// the original input so existing callers remain compatible.
-func (b *JSONLBackend) ResolveSessionKey(sessionKey string) string {
-	return b.resolveSessionKey(context.Background(), sessionKey)
-}
-
-// EnsureSessionMetadata persists scope and alias metadata for a session.
-func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionScope, aliases []string) {
+// EnsureSessionMetadata persists structured scope metadata for a session.
+func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionScope) {
 	metaStore, ok := b.store.(metaAwareStore)
 	if !ok {
 		return
@@ -94,25 +57,17 @@ func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionSc
 		rawScope = data
 	}
 	ctx := context.Background()
-	if err := metaStore.UpsertSessionMeta(ctx, sessionKey, rawScope, aliases); err != nil {
+	if err := metaStore.UpsertSessionMeta(ctx, sessionKey, rawScope); err != nil {
 		log.Printf("session: upsert session metadata: %v", err)
-		return
-	}
-
-	if promotingStore, ok := b.store.(aliasPromotingStore); ok {
-		if _, err := promotingStore.PromoteAliasHistory(ctx, sessionKey, rawScope, aliases); err != nil {
-			log.Printf("session: promote alias history: %v", err)
-		}
 	}
 }
 
-// GetSessionScope reads structured scope metadata for a session key or alias.
+// GetSessionScope reads structured scope metadata for a session key.
 func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	metaStore, ok := b.store.(metaAwareStore)
 	if !ok {
 		return nil
 	}
-	sessionKey = b.resolveSessionKey(context.Background(), sessionKey)
 	meta, err := metaStore.GetSessionMeta(context.Background(), sessionKey)
 	if err != nil {
 		log.Printf("session: get session metadata: %v", err)
@@ -157,14 +112,10 @@ func (b *JSONLBackend) AppendTurnMessage(
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return err
-	}
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	return b.store.AddFullMessage(ctx, resolvedKey, msg)
+	return b.store.AddFullMessage(ctx, sessionKey, msg)
 }
 
 func (b *JSONLBackend) RestoreTurnSnapshot(
@@ -176,14 +127,10 @@ func (b *JSONLBackend) RestoreTurnSnapshot(
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return err
-	}
-	if err := b.store.SetHistory(ctx, resolvedKey, history); err != nil {
+	if err := b.store.SetHistory(ctx, sessionKey, history); err != nil {
 		return fmt.Errorf("restore history: %w", err)
 	}
-	if err := b.store.SetSummary(ctx, resolvedKey, summary); err != nil {
+	if err := b.store.SetSummary(ctx, sessionKey, summary); err != nil {
 		return fmt.Errorf("restore summary: %w", err)
 	}
 	return nil
@@ -197,14 +144,10 @@ func (b *JSONLBackend) ReplaceTurnHistory(
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return err
-	}
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	return b.store.SetHistory(ctx, resolvedKey, history)
+	return b.store.SetHistory(ctx, sessionKey, history)
 }
 
 func (b *JSONLBackend) MutateTurnHistory(
@@ -215,29 +158,21 @@ func (b *JSONLBackend) MutateTurnHistory(
 	if err := contextCause(ctx); err != nil {
 		return false, err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return false, err
-	}
 	store, ok := b.store.(memory.HistoryMutationStore)
 	if !ok {
 		return false, fmt.Errorf("session: atomic history mutation unsupported")
 	}
-	return store.MutateHistory(ctx, resolvedKey, mutate)
+	return store.MutateHistory(ctx, sessionKey, mutate)
 }
 
 func (b *JSONLBackend) ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error) {
 	if err := contextCause(ctx); err != nil {
 		return nil, err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return nil, err
-	}
 	if err := contextCause(ctx); err != nil {
 		return nil, err
 	}
-	return b.store.GetHistory(ctx, resolvedKey)
+	return b.store.GetHistory(ctx, sessionKey)
 }
 
 // ReadTurnHistoryPage reads a bounded canonical-history window when the
@@ -250,14 +185,10 @@ func (b *JSONLBackend) ReadTurnHistoryPage(
 	if err := contextCause(ctx); err != nil {
 		return memory.HistoryPage{}, err
 	}
-	resolvedKey, err := b.resolveSessionKeyWithError(ctx, sessionKey)
-	if err != nil {
-		return memory.HistoryPage{}, err
-	}
 	if paged, ok := b.store.(memory.HistoryPageStore); ok {
-		return paged.GetHistoryPage(ctx, resolvedKey, request)
+		return paged.GetHistoryPage(ctx, sessionKey, request)
 	}
-	history, err := b.store.GetHistory(ctx, resolvedKey)
+	history, err := b.store.GetHistory(ctx, sessionKey)
 	if err != nil {
 		return memory.HistoryPage{}, err
 	}
@@ -328,7 +259,6 @@ func (b *JSONLBackend) GetHistoryWithError(key string) ([]providers.Message, err
 }
 
 func (b *JSONLBackend) GetSummary(key string) string {
-	key = b.resolveSessionKey(context.Background(), key)
 	summary, err := b.store.GetSummary(context.Background(), key)
 	if err != nil {
 		log.Printf("session: get summary: %v", err)
@@ -338,21 +268,18 @@ func (b *JSONLBackend) GetSummary(key string) string {
 }
 
 func (b *JSONLBackend) SetSummary(key, summary string) {
-	key = b.resolveSessionKey(context.Background(), key)
 	if err := b.store.SetSummary(context.Background(), key, summary); err != nil {
 		log.Printf("session: set summary: %v", err)
 	}
 }
 
 func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
-	key = b.resolveSessionKey(context.Background(), key)
 	if err := b.store.SetHistory(context.Background(), key, history); err != nil {
 		log.Printf("session: set history: %v", err)
 	}
 }
 
 func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
-	key = b.resolveSessionKey(context.Background(), key)
 	if err := b.store.TruncateHistory(context.Background(), key, keepLast); err != nil {
 		log.Printf("session: truncate history: %v", err)
 	}
@@ -362,7 +289,6 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 // immediately, the data is already durable. Save runs compaction to reclaim
 // space from logically truncated messages (no-op when there are none).
 func (b *JSONLBackend) Save(key string) error {
-	key = b.resolveSessionKey(context.Background(), key)
 	return b.store.Compact(context.Background(), key)
 }
 
@@ -379,7 +305,6 @@ func (b *JSONLBackend) ListSessions() []string {
 // GetHistoryRevision returns the canonical history identity when supported by
 // the underlying store.
 func (b *JSONLBackend) GetHistoryRevision(sessionKey string) (memory.HistoryRevision, error) {
-	sessionKey = b.resolveSessionKey(context.Background(), sessionKey)
 	store, ok := b.store.(memory.HistoryRevisionStore)
 	if !ok {
 		return memory.HistoryRevision{}, fmt.Errorf("session: history revision unsupported")

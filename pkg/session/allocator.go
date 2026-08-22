@@ -8,16 +8,12 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
-// Allocation contains the concrete session keys selected for a routed turn.
-// The current implementation intentionally preserves the legacy session-key
-// layout while moving key construction out of the router.
+// Allocation contains the structured scope and current session key selected
+// for a routed turn.
 type Allocation struct {
-	Scope          SessionScope
-	RouteScopeKey  string
-	SessionKey     string
-	SessionAliases []string
-	MainSessionKey string
-	MainAliases    []string
+	Scope         SessionScope
+	RouteScopeKey string
+	SessionKey    string
 }
 
 // AllocationInput contains the routing result and peer context needed to
@@ -34,15 +30,10 @@ func AllocateRouteSession(input AllocationInput) Allocation {
 	scope := buildSessionScope(input)
 	routeScopeKey := BuildSessionKey(scope)
 	scope.RouteScopeKey = routeScopeKey
-	legacySessionAliases := buildLegacySessionAliases(input)
-	legacyMainSessionKey := strings.ToLower(BuildLegacyMainAlias(input.AgentID))
 	return Allocation{
-		Scope:          scope,
-		RouteScopeKey:  routeScopeKey,
-		SessionKey:     routeScopeKey,
-		SessionAliases: legacySessionAliases,
-		MainSessionKey: BuildOpaqueSessionKey(legacyMainSessionKey),
-		MainAliases:    []string{legacyMainSessionKey},
+		Scope:         scope,
+		RouteScopeKey: routeScopeKey,
+		SessionKey:    routeScopeKey,
 	}
 }
 
@@ -116,41 +107,6 @@ func buildSessionScope(input AllocationInput) SessionScope {
 	return scope
 }
 
-func buildLegacySessionAliases(input AllocationInput) []string {
-	aliases := []string{strings.ToLower(BuildLegacyMainAlias(input.AgentID))}
-	inbound := input.Context
-
-	if strings.EqualFold(strings.TrimSpace(inbound.ChatType), "direct") {
-		peerIDs := buildLegacyDirectPeerIDs(input)
-		if len(peerIDs) == 0 {
-			return uniqueAliases(aliases)
-		}
-		for _, peerID := range peerIDs {
-			aliases = append(
-				aliases,
-				BuildLegacyDirectAliases(input.AgentID, inbound.Channel, inbound.Account, peerID)...,
-			)
-		}
-		return uniqueAliases(aliases)
-	}
-
-	peerID := strings.TrimSpace(inbound.ChatID)
-	if peerID == "" {
-		return uniqueAliases(aliases)
-	}
-	if topicID := strings.TrimSpace(inbound.TopicID); topicID != "" {
-		peerID = peerID + "/" + topicID
-	}
-	aliases = append(aliases, BuildLegacyPeerAlias(
-		input.AgentID,
-		inbound.Channel,
-		strings.ToLower(strings.TrimSpace(inbound.ChatType)),
-		peerID,
-	))
-
-	return uniqueAliases(aliases)
-}
-
 func shouldPreserveTelegramForumIsolation(input AllocationInput) bool {
 	inbound := input.Context
 	if !strings.EqualFold(strings.TrimSpace(inbound.Channel), "telegram") {
@@ -165,53 +121,4 @@ func shouldPreserveTelegramForumIsolation(input AllocationInput) bool {
 		}
 	}
 	return true
-}
-
-func buildLegacyDirectPeerIDs(input AllocationInput) []string {
-	inbound := input.Context
-	peerIDs := make([]string, 0, 3)
-
-	rawSenderID := strings.TrimSpace(inbound.SenderID)
-	if rawSenderID != "" {
-		peerIDs = append(peerIDs, strings.ToLower(rawSenderID))
-	}
-
-	canonicalSenderID := CanonicalSessionIdentityID(
-		inbound.Channel,
-		inbound.SenderID,
-		input.SessionPolicy.IdentityLinks,
-	)
-	if canonicalSenderID != "" {
-		peerIDs = append(peerIDs, canonicalSenderID)
-	}
-
-	chatID := strings.TrimSpace(inbound.ChatID)
-	if chatID != "" {
-		peerIDs = append(peerIDs, strings.ToLower(chatID))
-	}
-
-	return uniqueAliases(peerIDs)
-}
-
-func uniqueAliases(aliases []string) []string {
-	if len(aliases) == 0 {
-		return nil
-	}
-	normalized := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(strings.ToLower(alias))
-		if alias == "" {
-			continue
-		}
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
 }

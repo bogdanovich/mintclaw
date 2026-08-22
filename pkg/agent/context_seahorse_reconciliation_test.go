@@ -98,7 +98,7 @@ func TestSeahorseContextManagerPersistsTrustedConversationProvenance(t *testing.
 		Version:       session.ScopeVersionV2,
 		AgentID:       "nutrition",
 		RouteScopeKey: "telegram:account:chat:topic",
-	}, nil)
+	})
 
 	if err := mgr.Ingest(ctx, &IngestRequest{
 		SessionKey: key,

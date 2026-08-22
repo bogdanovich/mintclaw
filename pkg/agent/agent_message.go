@@ -243,7 +243,6 @@ func (al *AgentLoop) processScheduledMessage(
 			RouteSessionKey: allocation.RouteScopeKey,
 			BaseSessionKey:  allocation.SessionKey,
 			SessionKey:      sessionKey,
-			SessionAliases:  buildSessionAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)...),
 			InboundContext:  cloneInboundContext(&msg.Context),
 			RouteResult:     cloneResolvedRoute(&route),
 			SessionScope:    session.CloneScope(&allocation.Scope),
@@ -461,14 +460,6 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 		agent.Sessions,
 		sessionKey,
 		session.CloneScope(&allocation.Scope),
-		buildSessionAliases(
-			sessionKey,
-			sessionAliasCandidates(
-				allocation.SessionKey,
-				sessionKey,
-				allocation.SessionAliases,
-				msg.SessionKey,
-			)...),
 	)
 
 	content := formatObservedMessageContent(msg)

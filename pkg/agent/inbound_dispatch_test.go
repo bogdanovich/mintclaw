@@ -101,16 +101,50 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	}
 }
 
-func TestBuildInboundMessageTurn_PreservesExplicitSessionKey(t *testing.T) {
+func TestBuildInboundMessageTurnIgnoresLegacySessionKey(t *testing.T) {
 	al, cleanup := newInboundDispatchTestLoop(t)
 	defer cleanup()
 
-	explicitSessionKey := "agent:main:manual-session"
+	legacySessionKey := "agent:main:manual-session"
 	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel:  "telegram",
 			ChatID:   "chat-1",
 			ChatType: "private",
+			SenderID: "telegram:42",
+		},
+		Content:    "hello",
+		SessionKey: legacySessionKey,
+	})
+
+	turn, err := al.buildInboundMessageTurn(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("buildInboundMessageTurn() error = %v", err)
+	}
+	defer turn.Cleanup()
+
+	if turn.SessionKey == legacySessionKey || !session.IsOpaqueSessionKey(turn.SessionKey) {
+		t.Fatalf("SessionKey = %q, want current opaque route key", turn.SessionKey)
+	}
+	if turn.Options.Dispatch.SessionKey != turn.Options.Dispatch.RouteSessionKey {
+		t.Fatalf(
+			"Dispatch.SessionKey = %q, route = %q",
+			turn.Options.Dispatch.SessionKey,
+			turn.Options.Dispatch.RouteSessionKey,
+		)
+	}
+}
+
+func TestBuildInboundMessageTurnPreservesCurrentExplicitSessionKey(t *testing.T) {
+	al, cleanup := newInboundDispatchTestLoop(t)
+	defer cleanup()
+
+	explicitSessionKey := session.BuildOpaqueSessionKey("explicit|session=manual")
+	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat-1",
+			ChatType: "direct",
 			SenderID: "telegram:42",
 		},
 		Content:    "hello",
@@ -131,9 +165,6 @@ func TestBuildInboundMessageTurn_PreservesExplicitSessionKey(t *testing.T) {
 	}
 	if turn.Options.Dispatch.RouteSessionKey == explicitSessionKey {
 		t.Fatalf("RouteSessionKey = explicit key %q, want routed session key", explicitSessionKey)
-	}
-	if len(turn.Options.Dispatch.SessionAliases) != 0 {
-		t.Fatalf("SessionAliases = %v, want none for explicit canonical session", turn.Options.Dispatch.SessionAliases)
 	}
 }
 
@@ -176,9 +207,6 @@ func TestBuildInboundMessageTurn_UsesSessionOverrideAsEffectiveSession(t *testin
 	}
 	if turn.SessionKey != overrideKey {
 		t.Fatalf("SessionKey = %q, want override %q", turn.SessionKey, overrideKey)
-	}
-	if len(turn.Options.Dispatch.SessionAliases) != 0 {
-		t.Fatalf("SessionAliases = %v, want none when session override is active", turn.Options.Dispatch.SessionAliases)
 	}
 }
 

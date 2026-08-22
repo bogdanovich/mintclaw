@@ -11,7 +11,6 @@ import (
 func TestNormalizeProcessOptions_PopulatesDispatchFromLegacyFields(t *testing.T) {
 	opts := normalizeProcessOptions(processOptions{
 		SessionKey:       "session-1",
-		SessionAliases:   []string{"legacy:one"},
 		Channel:          "telegram",
 		ChatID:           "chat-1",
 		MessageID:        "msg-1",
@@ -23,9 +22,6 @@ func TestNormalizeProcessOptions_PopulatesDispatchFromLegacyFields(t *testing.T)
 
 	if opts.Dispatch.SessionKey != "session-1" {
 		t.Fatalf("Dispatch.SessionKey = %q, want session-1", opts.Dispatch.SessionKey)
-	}
-	if len(opts.Dispatch.SessionAliases) != 1 || opts.Dispatch.SessionAliases[0] != "legacy:one" {
-		t.Fatalf("Dispatch.SessionAliases = %v, want [legacy:one]", opts.Dispatch.SessionAliases)
 	}
 	if opts.Dispatch.Channel() != "telegram" || opts.Dispatch.ChatID() != "chat-1" {
 		t.Fatalf(
@@ -83,7 +79,6 @@ func TestNormalizeProcessOptions_UsesDispatchAsSourceOfTruth(t *testing.T) {
 	opts := normalizeProcessOptions(processOptions{
 		Dispatch: DispatchRequest{
 			SessionKey:     "sk_v1_example",
-			SessionAliases: []string{"agent:support:slack:channel:c123"},
 			InboundContext: inbound,
 			RouteResult:    route,
 			SessionScope:   scope,

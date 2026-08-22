@@ -33,6 +33,33 @@ func sessionsTestDir(t *testing.T, configPath string) string {
 	return dir
 }
 
+func mintClawTestScope(t *testing.T, sessionID string) json.RawMessage {
+	t.Helper()
+	scope, err := json.Marshal(session.SessionScope{
+		Version:    session.ScopeVersionV2,
+		AgentID:    "main",
+		Channel:    "mintclaw",
+		Account:    "default",
+		Dimensions: []string{"sender"},
+		Values: map[string]string{
+			"sender": "mintclaw:" + sessionID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(session scope) error = %v", err)
+	}
+	return scope
+}
+
+func newMintClawTestSession(t *testing.T, store *memory.JSONLStore, sessionID string) string {
+	t.Helper()
+	key := session.BuildOpaqueSessionKey("mintclaw|session=" + sessionID)
+	if err := store.UpsertSessionMeta(t.Context(), key, mintClawTestScope(t, sessionID)); err != nil {
+		t.Fatalf("UpsertSessionMeta() error = %v", err)
+	}
+	return key
+}
+
 func assertVisibleToolCallMessage(
 	t *testing.T,
 	msg sessionChatMessage,
@@ -62,7 +89,7 @@ func TestHandleListSessions_JSONLStorage(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", storeErr)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "history-jsonl"
+	sessionKey := newMintClawTestSession(t, store, "history-jsonl")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "user",
 		Content: "Explain why the history API is empty after migration.",
@@ -127,7 +154,8 @@ func TestHandleListSessions_TransientThoughtDoesNotInflateMessageCount(t *testin
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	sessionKey := legacyMintClawSessionPrefix + "history-jsonl-transient"
+	const sessionID = "history-jsonl-transient"
+	sessionKey := session.BuildOpaqueSessionKey("mintclaw|session=" + sessionID)
 	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
 	now := time.Now().UTC()
 
@@ -145,6 +173,7 @@ func TestHandleListSessions_TransientThoughtDoesNotInflateMessageCount(t *testin
 		Skip:      0,
 		CreatedAt: now,
 		UpdatedAt: now,
+		Scope:     mintClawTestScope(t, sessionID),
 	})
 	if err != nil {
 		t.Fatalf("Marshal(meta) error = %v", err)
@@ -190,7 +219,7 @@ func TestHandleListSessions_TitleUsesFirstUserMessage(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", storeErr)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "summary-title"
+	sessionKey := newMintClawTestSession(t, store, "summary-title")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "user",
 		Content: "fallback preview",
@@ -243,7 +272,7 @@ func TestHandleGetSession_JSONLStorage(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "detail-jsonl"
+	sessionKey := newMintClawTestSession(t, store, "detail-jsonl")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "first"},
 		{Role: "assistant", Content: "second"},
@@ -307,7 +336,7 @@ func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testin
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "attachment-history"
+	sessionKey := newMintClawTestSession(t, store, "attachment-history")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "send me the report"},
 		{
@@ -363,7 +392,7 @@ func TestHandleGetSession_ExposesHandledToolAttachmentsWithDurableURL(t *testing
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "attachment-history-durable"
+	sessionKey := newMintClawTestSession(t, store, "attachment-history-durable")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "send me the report"},
 		{
@@ -437,7 +466,7 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", storeErr)
 	}
 
-	sessionKey := "sk_v1_scope_discovery"
+	sessionKey := session.BuildOpaqueSessionKey("mintclaw|session=scope-jsonl")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "user",
 		Content: "scope discovered session",
@@ -461,7 +490,7 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(scope) error = %v", err)
 	}
-	if err := store.UpsertSessionMeta(context.Background(), sessionKey, scopeData, nil); err != nil {
+	if err := store.UpsertSessionMeta(context.Background(), sessionKey, scopeData); err != nil {
 		t.Fatalf("UpsertSessionMeta() error = %v", err)
 	}
 
@@ -512,7 +541,7 @@ func TestHandleGetSession_SkipsTransientThoughtMessages(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-transient-thought"
+	sessionKey := newMintClawTestSession(t, store, "detail-transient-thought")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", ReasoningContent: "internal chain of thought"},
@@ -562,7 +591,7 @@ func TestHandleGetSession_ReconstructsThoughtFromAssistantReasoningContent(t *te
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-reasoning-content"
+	sessionKey := newMintClawTestSession(t, store, "detail-reasoning-content")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "final visible answer", ModelName: "gpt-5.4", ReasoningContent: "internal chain of thought"},
@@ -619,7 +648,7 @@ func TestHandleGetSession_ReconstructsRefreshMatrixForThoughtAndToolSummary(t *t
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-refresh-matrix"
+	sessionKey := newMintClawTestSession(t, store, "detail-refresh-matrix")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "turn1"},
 		{Role: "assistant", Content: "plain visible", ReasoningContent: "plain thought"},
@@ -728,7 +757,7 @@ func TestHandleGetSession_ReconstructsVisibleMessageToolOutputWithoutDuplicateSu
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-message-tool"
+	sessionKey := newMintClawTestSession(t, store, "detail-message-tool")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "test"},
 		{
@@ -800,7 +829,7 @@ func TestHandleGetSession_PreservesFinalAssistantReplyAfterMessageToolOutput(t *
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-message-tool-final-reply"
+	sessionKey := newMintClawTestSession(t, store, "detail-message-tool-final-reply")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "test"},
 		{
@@ -867,7 +896,7 @@ func TestHandleListSessions_MessageCountUsesVisibleTranscript(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "list-visible-count"
+	sessionKey := newMintClawTestSession(t, store, "list-visible-count")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "test"},
 		{
@@ -925,7 +954,7 @@ func TestHandleListSessions_DeduplicatesAssistantToolCallContentFromVisibleTrans
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "list-deduped-tool-content"
+	sessionKey := newMintClawTestSession(t, store, "list-deduped-tool-content")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "check file"},
 		{
@@ -986,7 +1015,7 @@ func TestHandleGetSession_DoesNotDuplicateAssistantToolCallContent(t *testing.T)
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-and-content"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-and-content")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "check file"},
 		{
@@ -1054,7 +1083,7 @@ func TestHandleGetSession_PreservesDistinctAssistantToolCallContent(t *testing.T
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-distinct-content"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-distinct-content")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "check file"},
 		{
@@ -1118,7 +1147,7 @@ func TestHandleGetSession_PreservesMediaWhenAssistantToolCallContentDuplicatesSu
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-duplicate-content-with-media"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-duplicate-content-with-media")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "check screenshot"},
 		{
@@ -1188,7 +1217,7 @@ func TestHandleGetSession_PreservesAttachmentsWhenAssistantToolCallContentDuplic
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-duplicate-content-with-attachments"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-duplicate-content-with-attachments")
 	for _, msg := range []providers.Message{
 		{Role: "user", Content: "check report"},
 		{
@@ -1282,7 +1311,7 @@ func TestHandleGetSession_UsesConfiguredToolFeedbackMaxArgsLength(t *testing.T) 
 
 	argsJSON := `{"path":"README.md","start_line":1,"end_line":10,"extra":"abcdefghijklmnopqrstuvwxyz"}`
 	explanation := "Read README.md first to confirm the current project structure before editing the config example."
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-max-args"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-max-args")
 	err = store.AddFullMessage(context.Background(), sessionKey, providers.Message{Role: "user", Content: "check file"})
 	if err != nil {
 		t.Fatalf("AddFullMessage(user) error = %v", err)
@@ -1361,7 +1390,7 @@ func TestHandleGetSession_FallsBackToLegacyToolArgumentsWhenExplanationMissing(t
 	}
 
 	argsJSON := `{"path":"README.md","start_line":1,"end_line":10,"extra":"abcdefghijklmnopqrstuvwxyz"}`
-	sessionKey := mintclawSessionPrefix + "detail-tool-summary-legacy-args"
+	sessionKey := newMintClawTestSession(t, store, "detail-tool-summary-legacy-args")
 	if err := store.AddFullMessage(
 		context.Background(),
 		sessionKey,
@@ -1424,7 +1453,7 @@ func TestHandleGetSession_IncludesMediaOnlyMessages(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-media-only"
+	sessionKey := newMintClawTestSession(t, store, "detail-media-only")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:  "user",
 		Media: []string{"data:image/png;base64,abc123"},
@@ -1472,7 +1501,7 @@ func TestHandleSessions_SupportsJSONLMessagesUpToStoreCap(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "detail-large-jsonl"
+	sessionKey := newMintClawTestSession(t, store, "detail-large-jsonl")
 	largeContent := strings.Repeat("x", 9*1024*1024)
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "user",
@@ -1544,7 +1573,7 @@ func TestHandleListSessions_UsesImagePreviewForMediaOnlyMessage(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := mintclawSessionPrefix + "preview-media-only"
+	sessionKey := newMintClawTestSession(t, store, "preview-media-only")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:  "user",
 		Media: []string{"data:image/png;base64,abc123"},
@@ -1589,7 +1618,7 @@ func TestHandleDeleteSession_JSONLStorage(t *testing.T) {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
 
-	sessionKey := legacyMintClawSessionPrefix + "delete-jsonl"
+	sessionKey := newMintClawTestSession(t, store, "delete-jsonl")
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "user",
 		Content: "delete me",
@@ -1620,13 +1649,13 @@ func TestHandleDeleteSession_JSONLStorage(t *testing.T) {
 	}
 }
 
-func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
+func TestHandleGetSessionRejectsLegacyJSON(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
 	manager := session.NewSessionManager(dir)
-	sessionKey := legacyMintClawSessionPrefix + "legacy-json"
+	sessionKey := "agent:main:mintclaw:direct:mintclaw:legacy-json"
 	manager.AddMessage(sessionKey, "user", "legacy user")
 	manager.AddMessage(sessionKey, "assistant", "legacy assistant")
 	if err := manager.Save(sessionKey); err != nil {
@@ -1641,8 +1670,8 @@ func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/legacy-json", nil)
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 
@@ -1651,7 +1680,7 @@ func TestHandleSessions_FiltersEmptyJSONLFiles(t *testing.T) {
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	base := filepath.Join(dir, sanitizeSessionKey(legacyMintClawSessionPrefix+"empty-jsonl"))
+	base := filepath.Join(dir, sanitizeSessionKey(session.BuildOpaqueSessionKey("mintclaw|session=empty-jsonl")))
 	if err := os.WriteFile(base+".jsonl", []byte{}, 0o644); err != nil {
 		t.Fatalf("WriteFile(jsonl) error = %v", err)
 	}
@@ -1685,12 +1714,12 @@ func TestHandleSessions_FiltersEmptyJSONLFiles(t *testing.T) {
 	}
 }
 
-func TestHandleSessions_ListsLegacyJSONLWithoutMeta(t *testing.T) {
+func TestHandleSessionsIgnoresJSONLWithoutCurrentMetadata(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	sessionKey := legacyMintClawSessionPrefix + "missing-meta"
+	sessionKey := session.BuildOpaqueSessionKey("mintclaw|session=missing-meta")
 	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
 	line, err := json.Marshal(providers.Message{Role: "user", Content: "recover me"})
 	if err != nil {
@@ -1716,19 +1745,21 @@ func TestHandleSessions_ListsLegacyJSONLWithoutMeta(t *testing.T) {
 	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("Unmarshal(list) error = %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("len(items) = %d, want 1", len(items))
-	}
-	if items[0].ID != "missing-meta" {
-		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, "missing-meta")
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
 	}
 
 	detailRec := httptest.NewRecorder()
 	detailReq := httptest.NewRequest(http.MethodGet, "/api/sessions/missing-meta", nil)
 	mux.ServeHTTP(detailRec, detailReq)
 
-	if detailRec.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, want %d, body=%s", detailRec.Code, http.StatusOK, detailRec.Body.String())
+	if detailRec.Code != http.StatusNotFound {
+		t.Fatalf(
+			"detail status = %d, want %d, body=%s",
+			detailRec.Code,
+			http.StatusNotFound,
+			detailRec.Body.String(),
+		)
 	}
 }
 
