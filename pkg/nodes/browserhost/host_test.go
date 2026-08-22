@@ -509,6 +509,21 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 		}
 	})
 
+	t.Run("declared safe click in dry run", func(t *testing.T) {
+		host, worker, request := newFixture(t, true)
+		request.Effect = "navigation"
+		request.ApprovalDigest = ""
+		result, err := host.Act(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 {
+			t.Fatalf("Click() = %#v, %v", result, err)
+		}
+		if len(worker.actions) != 1 || worker.actions[0] != (browserworker.DriverAction{
+			Kind: browserworker.DriverClick, Target: "driver_ref_1", Element: "Save",
+		}) {
+			t.Fatalf("driver actions = %#v", worker.actions)
+		}
+	})
+
 	t.Run("semantic drift", func(t *testing.T) {
 		host, worker, request := newFixture(t, false)
 		request.ExpectedName = "Delete"

@@ -587,7 +587,8 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			}
 		}
 	}
-	if action.Kind == "click" || action.Kind == "drag" || action.Kind == "press" ||
+	if action.Kind == "drag" || action.Kind == "press" ||
+		(action.Kind == "click" && nodes.BrowserClickRequiresApproval(input.Effect)) ||
 		(action.Kind == "dialog" && action.Decision == "accept") {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {

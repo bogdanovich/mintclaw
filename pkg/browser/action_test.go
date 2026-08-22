@@ -420,6 +420,159 @@ func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) 
 	}
 }
 
+func TestBrokerHonorsDeclaredClickNavigationWithoutApproval(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	owner := testOwner()
+	control := DriverElement{Target: "all", Role: "button", Name: "all postings"}
+	worker.observation = driverObservationFixture(control)
+	worker.resolveElement = control
+	worker.resolveOrigin = worker.observation.Origin
+
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_all_postings", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectNavigation,
+	})
+	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation {
+		t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded {
+		t.Fatalf("ExecuteAction() = %+v, %v", invocation, err)
+	}
+	if len(worker.actions) != 1 || worker.actions[0] != (DriverAction{
+		Kind: DriverClick, Target: "all", Element: "all postings",
+	}) {
+		t.Fatalf("actions = %+v", worker.actions)
+	}
+}
+
+func TestBrokerBindsModelDeclaredClickEffectsToApprovalPolicy(t *testing.T) {
+	tests := []struct {
+		effect           Effect
+		requiresApproval bool
+	}{
+		{effect: EffectRead},
+		{effect: EffectNavigation},
+		{effect: EffectLocalEdit},
+		{effect: EffectExternalCommit, requiresApproval: true},
+		{effect: EffectUnknown, requiresApproval: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.effect), func(t *testing.T) {
+			broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+			owner := testOwner()
+			control := DriverElement{Target: "control", Role: "button", Name: "Continue"}
+			worker.observation = driverObservationFixture(control)
+			worker.resolveElement = control
+			worker.resolveOrigin = worker.observation.Origin
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_declared_effect", SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+				DeclaredEffect: test.effect,
+			})
+			if err != nil || prepared.Action.Effect != test.effect ||
+				prepared.RequiresApproval != test.requiresApproval {
+				t.Fatalf("PrepareAction(%s) = %+v, %v", test.effect, prepared, err)
+			}
+		})
+	}
+}
+
+func TestBrowserActionProgressSignatureDistinguishesDeclaredEffect(t *testing.T) {
+	prepared := PreparedAction{
+		Action: Action{Kind: ActionClick}, ElementRole: "button", ElementName: "Continue",
+		ElementPosition: 1, Effect: EffectNavigation,
+	}
+	first, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Effect = EffectExternalCommit
+	second, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("progress signatures conflate declared effects: %q", first)
+	}
+}
+
+func TestBrokerBlocksAlternatingApprovedActionCycleAcrossObservations(t *testing.T) {
+	store := NewMemoryStore()
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+
+	type page struct {
+		title   string
+		element DriverElement
+	}
+	pages := []page{
+		{title: "Active postings", element: DriverElement{Target: "all", Role: "button", Name: "all postings"}},
+		{title: "All postings", element: DriverElement{Target: "active", Role: "button", Name: "active"}},
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		current := pages[attempt%len(pages)]
+		worker.observation = driverObservationFixture(current.element)
+		worker.observation.Title = current.title
+		worker.resolveElement = current.element
+		worker.resolveOrigin = worker.observation.Origin
+		observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+			Owner: owner, RequestID: fmt.Sprintf("request_cycle_%d", attempt),
+			SessionID: session.ID, TabID: session.TabID,
+			SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+			Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		})
+		if err != nil || !prepared.RequiresApproval {
+			t.Fatalf("PrepareAction(attempt %d) = %+v, %v", attempt, prepared, err)
+		}
+		if _, err = broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, &prepared.Approval); err != nil {
+			t.Fatalf("ExecuteAction(attempt %d) error = %v", attempt, err)
+		}
+	}
+
+	worker.observation = driverObservationFixture(pages[0].element)
+	worker.observation.Title = pages[0].title
+	worker.resolveElement = pages[0].element
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_cycle_blocked", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+	})
+	if !errors.Is(err, ErrNoProgress) || len(worker.actions) != 4 {
+		t.Fatalf("alternating cycle error = %v; actions = %+v", err, worker.actions)
+	}
+	stored, getErr := store.GetSession(t.Context(), session.ID)
+	if getErr != nil || stored.ProgressCount != 2 || stored.PriorProgressCount != 2 {
+		t.Fatalf("stored alternating progress = %+v, %v", stored, getErr)
+	}
+}
+
 func TestBrokerDistinguishesSameLabeledControlsByStructuralPosition(t *testing.T) {
 	store := NewMemoryStore()
 	root := admittedBrowserConfig()

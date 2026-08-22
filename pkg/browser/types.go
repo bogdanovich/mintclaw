@@ -349,31 +349,33 @@ func (owner Owner) Equal(other Owner) bool {
 }
 
 type Session struct {
-	ID                   string          `json:"id"`
-	Owner                Owner           `json:"owner"`
-	Target               string          `json:"target"`
-	Profile              string          `json:"profile"`
-	State                SessionState    `json:"state"`
-	DryRun               bool            `json:"dry_run"`
-	PolicyRevision       string          `json:"policy_revision"`
-	ControllerGeneration uint64          `json:"controller_generation"`
-	Controller           ControllerState `json:"controller"`
-	ControllerExpiresAt  int64           `json:"controller_expires_at,omitempty"`
-	TabID                string          `json:"tab_id"`
-	FrameID              string          `json:"frame_id,omitempty"`
-	ContextAuthority     *ContextCatalog `json:"context_catalog,omitempty"`
-	SnapshotID           string          `json:"snapshot_id,omitempty"`
-	SnapshotGeneration   uint64          `json:"snapshot_generation"`
-	SnapshotOrigin       string          `json:"snapshot_origin,omitempty"`
-	PageStateHash        string          `json:"page_state_hash,omitempty"`
-	ProgressSignature    string          `json:"progress_signature,omitempty"`
-	ProgressCount        uint32          `json:"progress_count,omitempty"`
-	Revision             uint64          `json:"revision"`
-	CreatedAt            int64           `json:"created_at"`
-	UpdatedAt            int64           `json:"updated_at"`
-	LastActivityAt       int64           `json:"last_activity_at"`
-	ExpiresAt            int64           `json:"expires_at"`
-	SafeFailure          string          `json:"safe_failure,omitempty"`
+	ID                     string          `json:"id"`
+	Owner                  Owner           `json:"owner"`
+	Target                 string          `json:"target"`
+	Profile                string          `json:"profile"`
+	State                  SessionState    `json:"state"`
+	DryRun                 bool            `json:"dry_run"`
+	PolicyRevision         string          `json:"policy_revision"`
+	ControllerGeneration   uint64          `json:"controller_generation"`
+	Controller             ControllerState `json:"controller"`
+	ControllerExpiresAt    int64           `json:"controller_expires_at,omitempty"`
+	TabID                  string          `json:"tab_id"`
+	FrameID                string          `json:"frame_id,omitempty"`
+	ContextAuthority       *ContextCatalog `json:"context_catalog,omitempty"`
+	SnapshotID             string          `json:"snapshot_id,omitempty"`
+	SnapshotGeneration     uint64          `json:"snapshot_generation"`
+	SnapshotOrigin         string          `json:"snapshot_origin,omitempty"`
+	PageStateHash          string          `json:"page_state_hash,omitempty"`
+	ProgressSignature      string          `json:"progress_signature,omitempty"`
+	ProgressCount          uint32          `json:"progress_count,omitempty"`
+	PriorProgressSignature string          `json:"prior_progress_signature,omitempty"`
+	PriorProgressCount     uint32          `json:"prior_progress_count,omitempty"`
+	Revision               uint64          `json:"revision"`
+	CreatedAt              int64           `json:"created_at"`
+	UpdatedAt              int64           `json:"updated_at"`
+	LastActivityAt         int64           `json:"last_activity_at"`
+	ExpiresAt              int64           `json:"expires_at"`
+	SafeFailure            string          `json:"safe_failure,omitempty"`
 }
 
 func (session Session) Validate() error {
@@ -402,6 +404,10 @@ func (session Session) Validate() error {
 		(session.PageStateHash != "" && (session.SnapshotID == "" || !validDigest(session.PageStateHash))) ||
 		(session.ProgressSignature == "") != (session.ProgressCount == 0) ||
 		(session.ProgressSignature != "" && !validDigest(session.ProgressSignature)) ||
+		(session.PriorProgressSignature == "") != (session.PriorProgressCount == 0) ||
+		(session.PriorProgressSignature != "" &&
+			(session.ProgressSignature == "" || !validDigest(session.PriorProgressSignature) ||
+				session.PriorProgressSignature == session.ProgressSignature)) ||
 		len(session.SnapshotOrigin) > MaxURLBytes {
 		return fmt.Errorf("%w: malformed session snapshot", ErrInvalid)
 	}
@@ -573,8 +579,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
 		}
 	case ActionClick:
-		if prepared.DestinationOrigin != "" || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
-			prepared.Effect != classifyClickEffect(DriverElement{Role: prepared.ElementRole}) ||
+		if prepared.DestinationOrigin != "" || !modelDeclaredClickEffect(prepared.Effect) ||
+			!elementRoleRegexp.MatchString(prepared.ElementRole) ||
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared click", ErrInvalid)
 		}

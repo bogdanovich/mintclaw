@@ -38,6 +38,25 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	}
 }
 
+func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *testing.T) {
+	instruction := browserObjectiveOutcomeInstruction("inspect and publish", normalizeObjectiveChecklist(
+		[]toolshared.ObjectiveSpec{
+			{Item: "inspect postings", Kind: "result"},
+			{Item: "publish selected posting", Kind: "external_action"},
+		},
+	))
+	for _, required := range []string{
+		"declare effect from this checklist and the requested workflow",
+		"read, navigation, or local_edit for non-committing UI steps",
+		"external_commit only immediately before an important external state change",
+		"Do not infer click effect from the element role or HTTP method",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("objective instruction omitted %q: %s", required, instruction)
+		}
+	}
+}
+
 func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-fake"]}],"missing_items":[]}` +

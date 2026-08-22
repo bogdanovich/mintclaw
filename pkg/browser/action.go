@@ -54,6 +54,7 @@ type PrepareActionRequest struct {
 	SnapshotID         string
 	SnapshotGeneration uint64
 	Action             Action
+	DeclaredEffect     Effect
 	Upload             *UploadBinding
 }
 
@@ -352,6 +353,8 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			existing.FrameID != request.FrameID || existing.ContextCatalogID != request.ContextCatalogID ||
 			existing.ContextGeneration != request.ContextGeneration ||
 			existing.SnapshotGeneration != request.SnapshotGeneration || existing.Action != boundAction ||
+			(request.Action.Kind == ActionClick &&
+				existing.Effect != requestedClickEffect(request.DeclaredEffect, existing.ElementRole)) ||
 			existing.InputDigest != inputDigest || existing.InputBytes != inputBytes {
 			return Preparation{}, ErrConflict
 		}
@@ -377,8 +380,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	if err != nil {
 		return Preparation{}, err
 	}
-	if actionRequiresApproval(prepared.Effect) && session.ProgressSignature == prepared.ProgressSignature &&
-		session.ProgressCount >= 2 {
+	if tracksBrowserProgress(prepared) && browserProgressCount(session, prepared.ProgressSignature) >= 2 {
 		return Preparation{}, ErrNoProgress
 	}
 	prepared.ID = preparedID
@@ -591,7 +593,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		},
 	)
 	progressSignature := ""
-	if invocation.State == InvocationSucceeded && actionRequiresApproval(prepared.Effect) {
+	if invocation.State == InvocationSucceeded && tracksBrowserProgress(prepared) {
 		progressSignature = prepared.ProgressSignature
 	}
 	postActionErr := broker.finalizeActionInvocationLocked(
@@ -745,7 +747,12 @@ func (broker *Broker) resolvePreparedActionLocked(
 			}
 			prepared.Effect = EffectLocalEdit
 		default:
-			prepared.Effect = classifyClickEffect(element)
+			if !modelDeclaredClickEffect(request.DeclaredEffect) {
+				if request.DeclaredEffect != "" {
+					return PreparedAction{}, ErrInvalid
+				}
+			}
+			prepared.Effect = requestedClickEffect(request.DeclaredEffect, element.Role)
 		}
 	case ActionDrag:
 		source, sourceOK := slot.refs[request.Action.SourceRef]
@@ -1048,9 +1055,15 @@ func (broker *Broker) invalidateSnapshotLocked(
 	session.SnapshotOrigin = ""
 	session.PageStateHash = ""
 	if progressSignature != "" {
-		if session.ProgressSignature == progressSignature {
+		switch {
+		case session.ProgressSignature == progressSignature:
 			session.ProgressCount++
-		} else {
+		case session.PriorProgressSignature == progressSignature:
+			session.ProgressSignature, session.PriorProgressSignature = session.PriorProgressSignature, session.ProgressSignature
+			session.ProgressCount, session.PriorProgressCount = session.PriorProgressCount+1, session.ProgressCount
+		default:
+			session.PriorProgressSignature = session.ProgressSignature
+			session.PriorProgressCount = session.ProgressCount
 			session.ProgressSignature = progressSignature
 			session.ProgressCount = 1
 		}
@@ -1236,6 +1249,39 @@ func classifyClickEffect(element DriverElement) Effect {
 		// destination with no submit or script semantics.
 		return EffectUnknown
 	}
+}
+
+func modelDeclaredClickEffect(effect Effect) bool {
+	switch effect {
+	case EffectRead, EffectNavigation, EffectLocalEdit, EffectExternalCommit, EffectUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func requestedClickEffect(declared Effect, role string) Effect {
+	if declared != "" {
+		return declared
+	}
+	return classifyClickEffect(DriverElement{Role: role})
+}
+
+func tracksBrowserProgress(prepared PreparedAction) bool {
+	return prepared.Effect == EffectNavigation || actionRequiresApproval(prepared.Effect)
+}
+
+func browserProgressCount(session Session, signature string) uint32 {
+	if signature == "" {
+		return 0
+	}
+	if session.ProgressSignature == signature {
+		return session.ProgressCount
+	}
+	if session.PriorProgressSignature == signature {
+		return session.PriorProgressCount
+	}
+	return 0
 }
 
 func classifyDialogEffect(decision string) Effect {
@@ -1668,6 +1714,7 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 	payload := struct {
 		PageStateHash       string
 		Action              Action
+		Effect              Effect
 		InputDigest         string
 		ArtifactSHA256      string
 		ElementRole         string
@@ -1678,7 +1725,7 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 		DestinationPosition uint32
 		DialogMessageDigest string
 	}{
-		PageStateHash: pageStateHash, Action: action, InputDigest: prepared.InputDigest,
+		PageStateHash: pageStateHash, Action: action, Effect: prepared.Effect, InputDigest: prepared.InputDigest,
 		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
 		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
 		DestinationRole:     prepared.DestinationElementRole,
