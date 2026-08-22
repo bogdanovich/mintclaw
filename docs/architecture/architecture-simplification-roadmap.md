@@ -672,6 +672,12 @@ Scope:
   no longer needed, retaining historical PR records in the archive when
   useful.
 
+Implementation sequence:
+
+1. Delete the test-only in-agent event subscription adapter, legacy event
+   envelope, and event-kind aliases. Tests subscribe to the canonical
+   `pkg/events` bus directly.
+
 Exit criteria:
 
 - the zero-legacy audit below passes;
