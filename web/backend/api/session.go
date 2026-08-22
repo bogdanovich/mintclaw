@@ -3,7 +3,6 @@ package api
 import (
 	"bufio"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -230,24 +229,23 @@ func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	return refs
 }
 
-func usableMintClawJSONLSession(
-	store *memory.JSONLStore,
-	dir string,
-	meta memory.SessionMeta,
-) bool {
-	if meta.HistoryDirty {
-		revision, err := store.GetHistoryRevision(context.Background(), meta.Key)
-		if err != nil {
-			return false
-		}
-		meta.Count = revision.Count
-		meta.Skip = revision.Skip
-	}
-	if meta.Count <= meta.Skip && strings.TrimSpace(meta.Summary) == "" {
+func (h *Handler) usableMintClawJSONLSession(dir string, meta memory.SessionMeta) bool {
+	jsonlPath := filepath.Join(dir, sanitizeSessionKey(meta.Key)+".jsonl")
+	info, err := os.Stat(jsonlPath)
+	if err != nil || info.IsDir() {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(meta.Key)+".jsonl"))
-	return err == nil && !info.IsDir()
+	if meta.Count > meta.Skip || strings.TrimSpace(meta.Summary) != "" {
+		return true
+	}
+	if !meta.HistoryDirty {
+		return false
+	}
+
+	// A different process may still own this journal mutation. Inspect the
+	// durable bytes without repairing metadata or the JSONL tail.
+	messages, err := h.readSessionMessages(jsonlPath, meta.Skip)
+	return err == nil && len(messages) > 0
 }
 
 func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionRef, error) {
@@ -255,11 +253,6 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 	if err != nil {
 		return nil, err
 	}
-	store, err := memory.NewJSONLStore(dir)
-	if err != nil {
-		return nil, err
-	}
-
 	selected := make(map[string]mintclawJSONLSessionRef)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
@@ -272,7 +265,7 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 			continue
 		}
 		refs := sessionRefsFromMeta(meta)
-		if len(refs) == 0 || !usableMintClawJSONLSession(store, dir, meta) {
+		if len(refs) == 0 || !h.usableMintClawJSONLSession(dir, meta) {
 			continue
 		}
 		for _, ref := range refs {

@@ -667,7 +667,10 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if err := store.UpsertSessionMeta(t.Context(), dirtyKey, mintClawTestScope(t, clientID), clientID); err != nil {
 		t.Fatalf("UpsertSessionMeta(dirty) error = %v", err)
 	}
-	dirtyLine, err := json.Marshal(providers.Message{Role: "user", Content: "recovered dirty history"})
+	// Model a gateway writer paused after its append became durable but before
+	// its final metadata commit. The web API is a separate reader and must not
+	// take ownership of journal recovery.
+	dirtyLine, err := json.Marshal(providers.Message{Role: "user", Content: "paused writer history"})
 	if err != nil {
 		t.Fatalf("Marshal(dirty message) error = %v", err)
 	}
@@ -704,15 +707,15 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("Unmarshal(list) error = %v", err)
 	}
-	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "recovered dirty history" {
+	if len(items) != 1 || items[0].ID != clientID || items[0].Preview != "paused writer history" {
 		t.Fatalf("items = %#v, want one newest usable history", items)
 	}
-	recoveredMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
+	observedMeta, err := store.GetSessionMeta(t.Context(), dirtyKey)
 	if err != nil {
-		t.Fatalf("GetSessionMeta(recovered dirty) error = %v", err)
+		t.Fatalf("GetSessionMeta(paused writer) error = %v", err)
 	}
-	if recoveredMeta.HistoryDirty || recoveredMeta.Count != 1 {
-		t.Fatalf("recovered dirty metadata = %#v, want clean count 1", recoveredMeta)
+	if !observedMeta.HistoryDirty || observedMeta.Count != 0 {
+		t.Fatalf("paused writer metadata was mutated by discovery: %#v", observedMeta)
 	}
 
 	detailRec := httptest.NewRecorder()
@@ -720,7 +723,7 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 		detailRec,
 		httptest.NewRequest(http.MethodGet, "/api/sessions/"+clientID, nil),
 	)
-	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "recovered dirty history") {
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "paused writer history") {
 		t.Fatalf("detail status = %d, body=%s", detailRec.Code, detailRec.Body.String())
 	}
 
@@ -733,7 +736,7 @@ func TestHandleSessions_RepeatedClientIDSelectsNewestUsableHistory(t *testing.T)
 		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(dirtyKey)+".meta.json")); !os.IsNotExist(err) {
-		t.Fatalf("recovered active metadata still exists: %v", err)
+		t.Fatalf("paused-writer active metadata still exists: %v", err)
 	}
 	for _, key := range []string{oldKey, newKey, emptyKey} {
 		if _, err := os.Stat(filepath.Join(dir, sanitizeSessionKey(key)+".meta.json")); err != nil {
