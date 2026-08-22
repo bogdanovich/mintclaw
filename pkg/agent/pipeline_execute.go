@@ -1226,8 +1226,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 			execCtx,
 			trustedExecution,
 			toolArgs,
-			ts.channel,
-			ts.chatID,
+			toolshared.ToolChannel(execCtx),
+			toolshared.ToolChatID(execCtx),
 			asyncCallback,
 		)
 	} else {
@@ -1235,8 +1235,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 			execCtx,
 			toolName,
 			toolArgs,
-			ts.channel,
-			ts.chatID,
+			toolshared.ToolChannel(execCtx),
+			toolshared.ToolChatID(execCtx),
 			asyncCallback,
 		)
 	}
