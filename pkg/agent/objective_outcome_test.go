@@ -108,6 +108,35 @@ func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.
 	}
 }
 
+func TestExtractObjectiveOutcomeIgnoresNavigationInvocationIDForReadResult(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-navigation"]}],"missing_items":[]}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded ||
+		len(outcome.CompletedItems) != 1 || len(outcome.MissingItems) != 0 {
+		t.Fatalf("navigation invocation downgraded read result: %#v", outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeRejectsUnclaimedExternalActionForReadResult(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-write", "effect": "external_commit"},
+	}}
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomePartial ||
+		len(outcome.CompletedItems) != 1 || len(outcome.MissingItems) != 1 ||
+		!strings.Contains(outcome.MissingItems[0], "external browser action") {
+		t.Fatalf("unclaimed external action did not downgrade read result: %#v", outcome)
+	}
+}
+
 func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
