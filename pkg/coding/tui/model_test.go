@@ -309,6 +309,37 @@ func TestModelInterruptsAdmittedInitialTurnBeforeFirstView(t *testing.T) {
 	}
 }
 
+func TestSubscriptionReconcilesInitialTurnCompletedBeforeInit(t *testing.T) {
+	controller := newController(t)
+	model, err := NewModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.admitInitialTurn()
+	controller.TurnStarted("turn-1", "fix it")
+	controller.TurnCompleted("turn-1", "completed")
+
+	model = startModelSubscription(t, model)
+	if model.initialTurnPending || model.Snapshot().LastTurn == nil ||
+		model.Snapshot().LastTurn.Outcome != frontend.TurnOutcomeCompleted {
+		t.Fatalf("completed-before-subscribe state = %+v pending=%v", model.Snapshot(), model.initialTurnPending)
+	}
+	_, quit := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if quit == nil {
+		t.Fatal("idle model did not quit after initial turn completed")
+	}
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Fatalf("idle Ctrl+C command returned unexpected message")
+	}
+	if controller.interrupts.Load() != 0 || controller.hardCancels.Load() != 0 {
+		t.Fatalf(
+			"completed turn was interrupted: interrupts=%d hard=%d",
+			controller.interrupts.Load(),
+			controller.hardCancels.Load(),
+		)
+	}
+}
+
 func TestModelConsumesLatestCoalescedView(t *testing.T) {
 	controller := newController(t)
 	model, err := NewModel(controller)
@@ -322,6 +353,22 @@ func TestModelConsumesLatestCoalescedView(t *testing.T) {
 	state := model.Snapshot()
 	if len(state.Entries) != 2 || state.Entries[1].Text != "working" {
 		t.Fatalf("coalesced model view = %+v", state)
+	}
+}
+
+func TestViewUpdateDoesNotClearCommandError(t *testing.T) {
+	controller := newController(t)
+	model, err := NewModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = startModelSubscription(t, model)
+	commandErr := errors.New("command failed")
+	model = updateModel(t, model, CommandErrorMsg{Operation: "compact", Err: commandErr})
+	controller.TurnStarted("turn-1", "fix it")
+	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
+	if !errors.Is(model.err, commandErr) {
+		t.Fatalf("view update replaced command error with %v", model.err)
 	}
 }
 

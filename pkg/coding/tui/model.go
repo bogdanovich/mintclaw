@@ -151,38 +151,26 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(message.Width, message.Height)
 		return m, nil
 	case SubscriptionMsg:
-		m.err = message.Err
 		if message.Err != nil {
+			m.err = message.Err
 			return m, nil
 		}
-		if message.Snapshot.ThreadID != m.snapshot.ThreadID {
-			m.err = errors.New("coding frontend subscription changed thread ID")
+		if err := m.installSnapshot(message.Snapshot); err != nil {
+			m.err = err
 			return m, nil
 		}
-		m.snapshot = message.Snapshot
 		m.updates = message.Updates
-		m.refreshViewport()
 		return m, nextSnapshotCmd(m.ctx, m.updates)
 	case SnapshotMsg:
-		m.err = message.Err
-		if message.Err == nil {
-			if message.Snapshot.ThreadID != m.snapshot.ThreadID {
-				m.err = errors.New("coding frontend snapshot changed thread ID")
-				return m, nil
-			}
-			if m.initialTurnResolvedBy(message.Snapshot) {
-				m.initialTurnPending = false
-			}
-			m.snapshot = message.Snapshot
-			if !activeWork(m.snapshot.Activity) {
-				m.interruptPending = false
-			}
-			m.refreshViewport()
+		if message.Err != nil {
+			m.err = message.Err
+			return m, nil
 		}
-		if message.Err == nil {
-			return m, nextSnapshotCmd(m.ctx, m.updates)
+		if err := m.installSnapshot(message.Snapshot); err != nil {
+			m.err = err
+			return m, nil
 		}
-		return m, nil
+		return m, nextSnapshotCmd(m.ctx, m.updates)
 	case TranscriptPageMsg:
 		m.transcript.loading = false
 		if message.Err != nil {
@@ -298,6 +286,21 @@ func (m *Model) ViewportOffset() int {
 
 func (m *Model) Snapshot() frontend.ThreadSnapshot {
 	return m.snapshot.Clone()
+}
+
+func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
+	if snapshot.ThreadID != m.snapshot.ThreadID {
+		return errors.New("coding frontend snapshot changed thread ID")
+	}
+	if m.initialTurnResolvedBy(snapshot) {
+		m.initialTurnPending = false
+	}
+	m.snapshot = snapshot
+	if !activeWork(snapshot.Activity) {
+		m.interruptPending = false
+	}
+	m.refreshViewport()
+	return nil
 }
 
 func (m *Model) Dimensions() (int, int) {
