@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -973,6 +974,12 @@ func TestBrowserActSchemaAdvertisesOrdinaryInteractions(t *testing.T) {
 			t.Fatalf("%s missing from browser_act schema: %#v", candidate, action)
 		}
 	}
+	effect := properties["effect"].(map[string]any)
+	if !reflect.DeepEqual(effect["enum"], []string{
+		"read", "navigation", "local_edit", "external_commit", "unknown",
+	}) || !strings.Contains(effect["description"].(string), "Required for click") {
+		t.Fatalf("declared click effect schema = %#v", effect)
+	}
 }
 
 func browserActionSchemaBranch(action map[string]any, kind browser.ActionKind) map[string]any {
@@ -1604,6 +1611,7 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
 		"action": map[string]any{"kind": "click", "ref": "element_1"},
+		"effect": "external_commit",
 	}
 	approval, err := tool.ApprovalArguments(browserToolTestContext(), args)
 	if err != nil || approval["prepared_action_id"] != "prepared_1" || approval["action_hash"] != binding.ActionHash ||
@@ -1631,13 +1639,14 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		toolResult.WriteAudit[0].Metadata["invocation_id"] != "invocation_1" {
 		t.Fatalf("browser action receipts = %#v", toolResult.WriteAudit)
 	}
+	if source.prepareRequest.DeclaredEffect != browser.EffectExternalCommit {
+		t.Fatalf("declared effect = %q", source.prepareRequest.DeclaredEffect)
+	}
 }
 
-func TestBrowserActGETNavigationHasNoApprovalOrExternalActionReceipt(t *testing.T) {
-	destination := "https://example.com/account/?show_tab=postings"
+func TestBrowserActDeclaredNavigationHasNoApprovalOrExternalActionReceipt(t *testing.T) {
 	preparation := browser.Preparation{Action: browser.PreparedAction{
 		ID: "prepared_navigation", TabID: "tab_primary", CurrentOrigin: "https://example.com",
-		DestinationOrigin: "https://example.com", DestinationURL: destination,
 		Action: browser.Action{Kind: browser.ActionClick, Ref: "element_all_postings"},
 		Effect: browser.EffectNavigation,
 	}}
@@ -1649,7 +1658,8 @@ func TestBrowserActGETNavigationHasNoApprovalOrExternalActionReceipt(t *testing.
 		},
 		observe: browser.Observation{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotID: "snapshot_2",
-			SnapshotGeneration: 4, URL: destination, Origin: "https://example.com",
+			SnapshotGeneration: 4, URL: "https://example.com/account/?show_tab=postings",
+			Origin:   "https://example.com",
 			Snapshot: "- heading All postings",
 		},
 	}
@@ -1657,12 +1667,36 @@ func TestBrowserActGETNavigationHasNoApprovalOrExternalActionReceipt(t *testing.
 		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
 		"action": map[string]any{"kind": "click", "ref": "element_all_postings"},
+		"effect": "navigation",
 	})
 	var view browserActionResult
 	decodeBrowserToolResult(t, result, &view)
 	if result.Control.Suspension != nil || len(result.WriteAudit) != 0 || source.executeApproval != nil ||
-		view.InvocationID != "invocation_navigation" {
+		view.InvocationID != "invocation_navigation" ||
+		source.prepareRequest.DeclaredEffect != browser.EffectNavigation {
 		t.Fatalf("GET navigation result = %#v; view = %#v; source = %#v", result, view, source)
+	}
+}
+
+func TestBrowserActRequiresDeclaredEffectOnlyForClicks(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	tool := NewBrowserActTool(browserToolTestConfig(), source)
+	base := map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+	}
+	missing := maps.Clone(base)
+	missing["action"] = map[string]any{"kind": "click", "ref": "control"}
+	if result := tool.Execute(browserToolTestContext(), missing); result == nil || !result.IsError ||
+		!strings.Contains(result.ForLLM, `"code":"invalid_request"`) {
+		t.Fatalf("missing click effect result = %#v", result)
+	}
+	extra := maps.Clone(base)
+	extra["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 1}
+	extra["effect"] = "read"
+	if result := tool.Execute(browserToolTestContext(), extra); result == nil || !result.IsError ||
+		!strings.Contains(result.ForLLM, `"code":"invalid_request"`) {
+		t.Fatalf("non-click effect result = %#v", result)
 	}
 }
 
@@ -1685,6 +1719,7 @@ func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
 		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
 		"action": map[string]any{"kind": "click", "ref": "element_1"},
+		"effect": "local_edit",
 	}
 	var result browserActionResult
 	decodeBrowserToolResult(t, NewBrowserActTool(browserToolTestConfig(), source).Execute(
@@ -1845,6 +1880,7 @@ func TestBrowserActPreservesCommittedReceiptOnPostActionStateFailure(t *testing.
 			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
 			"action": map[string]any{"kind": "click", "ref": "publish"},
+			"effect": "external_commit",
 		},
 	)
 	if !result.IsError || len(result.WriteAudit) != 1 ||
@@ -1874,6 +1910,7 @@ func TestBrowserActPreservesDryRunPolicyDenial(t *testing.T) {
 			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
 			"action": map[string]any{"kind": "click", "ref": "element_1"},
+			"effect": "external_commit",
 		},
 	)
 	if result == nil || !result.IsError ||

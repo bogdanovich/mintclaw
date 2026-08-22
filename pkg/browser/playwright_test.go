@@ -150,57 +150,6 @@ func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
 	}
 }
 
-func TestPlaywrightGETNavigationProofParsesOnlyNormalizedHTTPDestinations(t *testing.T) {
-	tests := []struct {
-		name    string
-		result  string
-		want    string
-		wantErr error
-	}{
-		{
-			name:   "get",
-			result: "### Result\n\"MINTCLAW_GET_NAV_V1|ok|https%3A%2F%2Fexample.com%2Faccount%3Ftab%3Dall\"",
-			want:   "https://example.com/account?tab=all",
-		},
-		{name: "not provable", result: "### Result\n\"MINTCLAW_GET_NAV_V1|none\""},
-		{name: "stale", result: "### Result\n\"MINTCLAW_GET_NAV_V1|stale\"", wantErr: ErrStale},
-		{
-			name: "relative", result: "### Result\n\"MINTCLAW_GET_NAV_V1|ok|%2Faccount\"",
-			wantErr: ErrDriverIncompatible,
-		},
-		{
-			name: "script", result: "### Result\n\"MINTCLAW_GET_NAV_V1|ok|javascript%3Aalert%281%29\"",
-			wantErr: ErrDriverIncompatible,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := parsePlaywrightGETNavigation(test.result)
-			if !errors.Is(err, test.wantErr) || got != test.want {
-				t.Fatalf("parsePlaywrightGETNavigation() = %q, %v; want %q, %v", got, err, test.want, test.wantErr)
-			}
-		})
-	}
-}
-
-func TestPlaywrightGETNavigationProofRejectsScriptedAndNonGETControls(t *testing.T) {
-	code := playwrightGETNavigationCode("e7")
-	for _, required := range []string{
-		`page.locator("aria-ref=" + "e7")`, `element instanceof HTMLAnchorElement`,
-		`element.hasAttribute("download")`, `target !== "_self"`, `method !== "get"`,
-		`form.querySelector('input[type="password"], input[type="file"]')`,
-		`new FormData(form, element)`, `parsed.protocol !== "http:"`, `encodeURIComponent(parsed.href)`,
-	} {
-		if !strings.Contains(code, required) {
-			t.Fatalf("GET navigation proof omitted %q: %s", required, code)
-		}
-	}
-	if strings.Contains(code, ".click(") || strings.Contains(code, ".submit(") ||
-		strings.Contains(code, ".requestSubmit(") {
-		t.Fatalf("GET navigation proof can activate page script: %s", code)
-	}
-}
-
 func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {

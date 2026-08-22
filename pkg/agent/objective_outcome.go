@@ -93,6 +93,10 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
+		"For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
+		"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
+		"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
+		"Do not infer click effect from the element role or HTTP method. " +
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 		"without its runtime receipt. The runtime removes this block before showing your prose."

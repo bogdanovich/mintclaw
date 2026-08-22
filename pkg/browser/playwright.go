@@ -64,8 +64,6 @@ const playwrightNavigationCheckedActionMarker = "MINTCLAW_NAV_ACT_V1"
 
 const playwrightCheckActionMarker = "MINTCLAW_CHECK_V1"
 
-const playwrightGETNavigationMarker = "MINTCLAW_GET_NAV_V1"
-
 const playwrightNavigationIdentityCode = `async (page) => {
   const trackerKey = Symbol.for("mintclaw.browser.navigation-tracker.v1");
   let state = page[trackerKey];
@@ -1339,119 +1337,6 @@ func (worker *playwrightWorker) resolveElementLocked(
 		}
 	}
 	return DriverElement{}, "", ErrStale
-}
-
-func (worker *playwrightWorker) ResolveGETNavigation(ctx context.Context, target string) (string, error) {
-	worker.mu.Lock()
-	defer worker.mu.Unlock()
-	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
-		!playwrightTargetPattern.MatchString(target) {
-		return "", ErrWorkerUnavailable
-	}
-	return worker.resolveGETNavigationLocked(ctx, target)
-}
-
-func (worker *playwrightWorker) resolveGETNavigationLocked(ctx context.Context, target string) (string, error) {
-	code := playwrightGETNavigationCode(target)
-	text, err := worker.callAndConsume(
-		ctx,
-		"browser_run_code_unsafe",
-		map[string]any{"code": code},
-		false,
-	)
-	if err != nil {
-		return "", err
-	}
-	return parsePlaywrightGETNavigation(text)
-}
-
-func playwrightGETNavigationCode(target string) string {
-	encodedTarget, _ := json.Marshal(target)
-	return `async (page) => {
-  const locator = page.locator("aria-ref=" + ` + string(encodedTarget) + `);
-  if (await locator.count() !== 1 || !await locator.isVisible()) {
-    return "MINTCLAW_GET_NAV_V1|stale";
-  }
-  const pageURL = page.url();
-  return await locator.evaluate((element, pageURL) => {
-    let destination = "";
-    if (element instanceof HTMLAnchorElement) {
-      const target = String(element.target || "").toLowerCase();
-      if (element.hasAttribute("download") || (target && target !== "_self")) {
-        return "MINTCLAW_GET_NAV_V1|none";
-      }
-      destination = String(element.href || "");
-    } else {
-      const isButton = element instanceof HTMLButtonElement;
-      const isInput = element instanceof HTMLInputElement;
-      const type = String(element.type || "").toLowerCase();
-      if ((!isButton && !isInput) || (type !== "submit" && type !== "")) {
-        return "MINTCLAW_GET_NAV_V1|none";
-      }
-      const form = element.form;
-      const target = String((element.formTarget || form && form.target) || "").toLowerCase();
-      const method = String((element.formMethod || form && form.method) || "get").toLowerCase();
-      const encoding = String((element.formEnctype || form && form.enctype) ||
-        "application/x-www-form-urlencoded").toLowerCase();
-      if (!form || method !== "get" || (target && target !== "_self") ||
-          encoding !== "application/x-www-form-urlencoded" ||
-          form.querySelector('input[type="password"], input[type="file"]')) {
-        return "MINTCLAW_GET_NAV_V1|none";
-      }
-      const url = new URL(String(element.formAction || form.action || pageURL), pageURL);
-      const parameters = new URLSearchParams();
-      for (const [name, value] of new FormData(form, element).entries()) {
-        if (typeof value !== "string") return "MINTCLAW_GET_NAV_V1|none";
-        parameters.append(name, value);
-      }
-      url.search = parameters.toString();
-      destination = url.href;
-    }
-    let parsed;
-    try {
-      parsed = new URL(destination, pageURL);
-    } catch (_) {
-      return "MINTCLAW_GET_NAV_V1|none";
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "MINTCLAW_GET_NAV_V1|none";
-    }
-    return "MINTCLAW_GET_NAV_V1|ok|" + encodeURIComponent(parsed.href);
-  }, pageURL);
-}`
-}
-
-func parsePlaywrightGETNavigation(text string) (string, error) {
-	const resultHeader = "### Result"
-	if strings.Count(text, resultHeader) != 1 {
-		return "", ErrDriverIncompatible
-	}
-	result := text[strings.Index(text, resultHeader)+len(resultHeader):]
-	result = strings.TrimLeft(result, "\r\n")
-	line := result
-	if end := strings.IndexByte(line, '\n'); end >= 0 {
-		line = line[:end]
-	}
-	line = strings.Trim(line, "\r\"' ")
-	fields := strings.Split(line, "|")
-	if len(fields) == 2 && fields[0] == playwrightGETNavigationMarker && fields[1] == "none" {
-		return "", nil
-	}
-	if len(fields) == 2 && fields[0] == playwrightGETNavigationMarker && fields[1] == "stale" {
-		return "", ErrStale
-	}
-	if len(fields) != 3 || fields[0] != playwrightGETNavigationMarker || fields[1] != "ok" {
-		return "", ErrDriverIncompatible
-	}
-	destination, err := url.QueryUnescape(fields[2])
-	if err != nil || len(destination) > MaxURLBytes {
-		return "", ErrDriverIncompatible
-	}
-	normalized, err := normalizeDriverNavigationURL(destination)
-	if err != nil || normalized != destination {
-		return "", ErrDriverIncompatible
-	}
-	return destination, nil
 }
 
 func (worker *playwrightWorker) CatalogRevision() string {

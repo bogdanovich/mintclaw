@@ -102,8 +102,13 @@ message ID.
   detecting no progress.
 - A third equivalent action on unchanged page state is rejected before another
   approval is created and returns a structured replanning instruction.
-- Standard, provable GET navigation may be classified as read/navigation;
-  POST, script-driven, or ambiguous submissions remain approval-bound.
+- Every click declares a workflow effect that is bound into its durable action
+  hash and progress identity. `read`, `navigation`, and `local_edit` continue
+  without approval; `external_commit` and genuinely `unknown` effects suspend.
+- The specialist derives that effect from the user request and runtime-owned
+  objective checklist. Element role, GET/POST, and DOM heuristics do not decide
+  whether approval is needed: any of them may either navigate or mutate.
+- Only successful `external_commit` actions produce external-action receipts.
 
 ### Browser perception and planning
 
@@ -149,7 +154,8 @@ message ID.
 4. `fix(browser): replan stalled collection searches`
    - add semantic no-progress detection across approval continuations;
    - expose page-progress signals;
-   - admit only provable GET navigation without approval;
+   - bind model-declared click effects to the runtime objective workflow and
+     approval policy;
    - update specialist planning guidance.
 5. `feat(browser): expose protected screenshots to the model`
    - attach retained screenshot media to the current tool-result turn;

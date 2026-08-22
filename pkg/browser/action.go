@@ -54,6 +54,7 @@ type PrepareActionRequest struct {
 	SnapshotID         string
 	SnapshotGeneration uint64
 	Action             Action
+	DeclaredEffect     Effect
 	Upload             *UploadBinding
 }
 
@@ -352,6 +353,8 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			existing.FrameID != request.FrameID || existing.ContextCatalogID != request.ContextCatalogID ||
 			existing.ContextGeneration != request.ContextGeneration ||
 			existing.SnapshotGeneration != request.SnapshotGeneration || existing.Action != boundAction ||
+			(request.Action.Kind == ActionClick &&
+				existing.Effect != requestedClickEffect(request.DeclaredEffect, existing.ElementRole)) ||
 			existing.InputDigest != inputDigest || existing.InputBytes != inputBytes {
 			return Preparation{}, ErrConflict
 		}
@@ -744,29 +747,12 @@ func (broker *Broker) resolvePreparedActionLocked(
 			}
 			prepared.Effect = EffectLocalEdit
 		default:
-			navigationWorker, navigationSupported := worker.(GETNavigationWorker)
-			if !navigationSupported {
-				prepared.Effect = classifyClickEffect(element)
-				break
+			if !modelDeclaredClickEffect(request.DeclaredEffect) {
+				if request.DeclaredEffect != "" {
+					return PreparedAction{}, ErrInvalid
+				}
 			}
-			navigationURL, navigationErr := navigationWorker.ResolveGETNavigation(ctx, element.Target)
-			if navigationErr != nil {
-				return PreparedAction{}, navigationErr
-			}
-			if navigationURL == "" {
-				prepared.Effect = classifyClickEffect(element)
-				break
-			}
-			destination, destinationErr := originFromURL(navigationURL)
-			if destinationErr != nil || !broker.originAllowed(session, destination) {
-				return PreparedAction{}, ErrDenied
-			}
-			if !broker.originNetworkAllowed(ctx, session, destination) {
-				return PreparedAction{}, broker.quarantineNetworkDeniedLocked(ctx, session)
-			}
-			prepared.DestinationURL = navigationURL
-			prepared.DestinationOrigin = destination
-			prepared.Effect = EffectNavigation
+			prepared.Effect = requestedClickEffect(request.DeclaredEffect, element.Role)
 		}
 	case ActionDrag:
 		source, sourceOK := slot.refs[request.Action.SourceRef]
@@ -967,19 +953,6 @@ func (broker *Broker) revalidatePreparedLocked(
 	if origin != prepared.CurrentOrigin || resolved != element ||
 		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
 		return ErrStale
-	}
-	if prepared.Action.Kind == ActionClick && prepared.DestinationURL != "" {
-		navigationWorker, ok := worker.(GETNavigationWorker)
-		if !ok {
-			return ErrDriverIncompatible
-		}
-		navigationURL, navigationErr := navigationWorker.ResolveGETNavigation(ctx, element.Target)
-		if navigationErr != nil {
-			return navigationErr
-		}
-		if navigationURL != prepared.DestinationURL {
-			return ErrStale
-		}
 	}
 	if prepared.Action.Kind == ActionFill {
 		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(ActionFill) {
@@ -1278,6 +1251,22 @@ func classifyClickEffect(element DriverElement) Effect {
 	}
 }
 
+func modelDeclaredClickEffect(effect Effect) bool {
+	switch effect {
+	case EffectRead, EffectNavigation, EffectLocalEdit, EffectExternalCommit, EffectUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func requestedClickEffect(declared Effect, role string) Effect {
+	if declared != "" {
+		return declared
+	}
+	return classifyClickEffect(DriverElement{Role: role})
+}
+
 func tracksBrowserProgress(prepared PreparedAction) bool {
 	return prepared.Effect == EffectNavigation || actionRequiresApproval(prepared.Effect)
 }
@@ -1351,9 +1340,6 @@ func (broker *Broker) driverActionForPrepared(
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
-		}
-		if prepared.Action.Kind == ActionClick && prepared.Effect == EffectNavigation {
-			return DriverAction{Kind: DriverNavigate, URL: prepared.DestinationURL}, nil
 		}
 		kind := DriverClick
 		value := ""
@@ -1441,9 +1427,6 @@ func artifactInputAction(kind ActionKind) bool {
 }
 
 func workerActionForPrepared(prepared Action, driver DriverAction) (Action, error) {
-	if prepared.Kind == ActionClick && driver.Kind == DriverNavigate {
-		return Action{Kind: ActionNavigate, URL: driver.URL}, nil
-	}
 	action := Action{Kind: prepared.Kind}
 	switch prepared.Kind {
 	case ActionNavigate:
@@ -1731,6 +1714,7 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 	payload := struct {
 		PageStateHash       string
 		Action              Action
+		Effect              Effect
 		InputDigest         string
 		ArtifactSHA256      string
 		ElementRole         string
@@ -1741,7 +1725,7 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 		DestinationPosition uint32
 		DialogMessageDigest string
 	}{
-		PageStateHash: pageStateHash, Action: action, InputDigest: prepared.InputDigest,
+		PageStateHash: pageStateHash, Action: action, Effect: prepared.Effect, InputDigest: prepared.InputDigest,
 		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
 		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
 		DestinationRole:     prepared.DestinationElementRole,

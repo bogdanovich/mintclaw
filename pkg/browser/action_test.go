@@ -27,9 +27,6 @@ type actionTestWorker struct {
 	resolveOrigin          string
 	resolveErr             error
 	resolveCalls           int
-	getNavigationURL       string
-	getNavigationErr       error
-	getNavigationCalls     int
 	actions                []DriverAction
 	onExecute              func(DriverAction)
 	navigationID           string
@@ -114,11 +111,6 @@ func (worker *actionTestWorker) Resolve(_ context.Context, target string) (Drive
 		return element, worker.resolveOrigin, nil
 	}
 	return worker.resolveElement, worker.resolveOrigin, nil
-}
-
-func (worker *actionTestWorker) ResolveGETNavigation(_ context.Context, _ string) (string, error) {
-	worker.getNavigationCalls++
-	return worker.getNavigationURL, worker.getNavigationErr
 }
 
 func (worker *actionTestWorker) Execute(_ context.Context, action DriverAction) error {
@@ -428,14 +420,13 @@ func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) 
 	}
 }
 
-func TestBrokerLowersProvenGETControlToNavigationWithoutApproval(t *testing.T) {
+func TestBrokerHonorsDeclaredClickNavigationWithoutApproval(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	owner := testOwner()
 	control := DriverElement{Target: "all", Role: "button", Name: "all postings"}
 	worker.observation = driverObservationFixture(control)
 	worker.resolveElement = control
 	worker.resolveOrigin = worker.observation.Origin
-	worker.getNavigationURL = "https://example.com/account/?show_tab=postings"
 
 	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
 	if err != nil {
@@ -444,19 +435,76 @@ func TestBrokerLowersProvenGETControlToNavigationWithoutApproval(t *testing.T) {
 	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
 		Owner: owner, RequestID: "request_all_postings", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
-		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectNavigation,
 	})
-	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation ||
-		prepared.Action.DestinationURL != worker.getNavigationURL {
+	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation {
 		t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
 	}
 	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
 	if err != nil || invocation.State != InvocationSucceeded {
 		t.Fatalf("ExecuteAction() = %+v, %v", invocation, err)
 	}
-	if worker.getNavigationCalls != 2 || len(worker.actions) != 1 ||
-		worker.actions[0] != (DriverAction{Kind: DriverNavigate, URL: worker.getNavigationURL}) {
-		t.Fatalf("navigation proof calls = %d; actions = %+v", worker.getNavigationCalls, worker.actions)
+	if len(worker.actions) != 1 || worker.actions[0] != (DriverAction{
+		Kind: DriverClick, Target: "all", Element: "all postings",
+	}) {
+		t.Fatalf("actions = %+v", worker.actions)
+	}
+}
+
+func TestBrokerBindsModelDeclaredClickEffectsToApprovalPolicy(t *testing.T) {
+	tests := []struct {
+		effect           Effect
+		requiresApproval bool
+	}{
+		{effect: EffectRead},
+		{effect: EffectNavigation},
+		{effect: EffectLocalEdit},
+		{effect: EffectExternalCommit, requiresApproval: true},
+		{effect: EffectUnknown, requiresApproval: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.effect), func(t *testing.T) {
+			broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+			owner := testOwner()
+			control := DriverElement{Target: "control", Role: "button", Name: "Continue"}
+			worker.observation = driverObservationFixture(control)
+			worker.resolveElement = control
+			worker.resolveOrigin = worker.observation.Origin
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_declared_effect", SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+				DeclaredEffect: test.effect,
+			})
+			if err != nil || prepared.Action.Effect != test.effect ||
+				prepared.RequiresApproval != test.requiresApproval {
+				t.Fatalf("PrepareAction(%s) = %+v, %v", test.effect, prepared, err)
+			}
+		})
+	}
+}
+
+func TestBrowserActionProgressSignatureDistinguishesDeclaredEffect(t *testing.T) {
+	prepared := PreparedAction{
+		Action: Action{Kind: ActionClick}, ElementRole: "button", ElementName: "Continue",
+		ElementPosition: 1, Effect: EffectNavigation,
+	}
+	first, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Effect = EffectExternalCommit
+	second, err := browserActionProgressSignature(strings.Repeat("a", 64), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("progress signatures conflate declared effects: %q", first)
 	}
 }
 
@@ -2842,9 +2890,6 @@ func TestWorkerActionForPreparedUsesCanonicalAction(t *testing.T) {
 		{name: "navigate", prepared: Action{Kind: ActionNavigate}, driver: DriverAction{
 			Kind: DriverNavigate, URL: "https://example.com/",
 		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/"}},
-		{name: "proven GET click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
-			Kind: DriverNavigate, URL: "https://example.com/account?tab=all",
-		}, want: Action{Kind: ActionNavigate, URL: "https://example.com/account?tab=all"}},
 		{name: "click", prepared: Action{Kind: ActionClick}, driver: DriverAction{
 			Kind: DriverClick, Target: "host_ref_click",
 		}, want: Action{Kind: ActionClick, Ref: "host_ref_click"}},

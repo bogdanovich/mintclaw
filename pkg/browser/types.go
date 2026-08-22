@@ -480,7 +480,6 @@ type PreparedAction struct {
 	SnapshotGeneration         uint64 `json:"snapshot_generation"`
 	CurrentOrigin              string `json:"current_origin"`
 	DestinationOrigin          string `json:"destination_origin,omitempty"`
-	DestinationURL             string `json:"destination_url,omitempty"`
 	Action                     Action `json:"action"`
 	InputDigest                string `json:"input_digest,omitempty"`
 	InputBytes                 int    `json:"input_bytes,omitempty"`
@@ -514,8 +513,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.ControllerGeneration == 0 || !validIdentifier(prepared.TabID) ||
 		!validIdentifier(prepared.SnapshotID) || prepared.SnapshotGeneration == 0 ||
 		prepared.CurrentOrigin == "" || len(prepared.CurrentOrigin) > MaxURLBytes ||
-		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.DestinationURL) > MaxURLBytes ||
-		len(prepared.ElementRole) > 64 ||
+		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.ElementRole) > 64 ||
 		len(prepared.ElementName) > MaxElementNameBytes || len(prepared.DestinationElementRole) > 64 ||
 		len(prepared.DestinationElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
@@ -530,9 +528,6 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "" ||
 			prepared.DestinationElementPosition != 0) {
 		return fmt.Errorf("%w: unexpected prepared drag destination binding", ErrInvalid)
-	}
-	if prepared.Action.Kind != ActionClick && prepared.DestinationURL != "" {
-		return fmt.Errorf("%w: unexpected prepared navigation destination", ErrInvalid)
 	}
 	if !validContextBinding(
 		prepared.FrameID,
@@ -564,8 +559,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		normalizedURL, normalizeErr := normalizeDriverNavigationURL(prepared.Action.URL)
 		destination, destinationErr := originFromURL(prepared.Action.URL)
 		if normalizeErr != nil || normalizedURL != prepared.Action.URL || destinationErr != nil ||
-			destination != prepared.DestinationOrigin || prepared.DestinationURL != "" ||
-			prepared.Effect != EffectNavigation ||
+			destination != prepared.DestinationOrigin || prepared.Effect != EffectNavigation ||
 			prepared.ElementRole != "" || prepared.ElementName != "" ||
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared navigation", ErrInvalid)
@@ -585,7 +579,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
 		}
 	case ActionClick:
-		if !validPreparedClickNavigation(prepared) || !elementRoleRegexp.MatchString(prepared.ElementRole) ||
+		if prepared.DestinationOrigin != "" || !modelDeclaredClickEffect(prepared.Effect) ||
+			!elementRoleRegexp.MatchString(prepared.ElementRole) ||
 			prepared.InputDigest != "" || prepared.InputBytes != 0 {
 			return fmt.Errorf("%w: malformed prepared click", ErrInvalid)
 		}
@@ -654,17 +649,6 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		return fmt.Errorf("%w: malformed prepared action binding", ErrInvalid)
 	}
 	return nil
-}
-
-func validPreparedClickNavigation(prepared PreparedAction) bool {
-	if prepared.DestinationURL == "" {
-		return prepared.DestinationOrigin == "" &&
-			prepared.Effect == classifyClickEffect(DriverElement{Role: prepared.ElementRole})
-	}
-	normalized, normalizeErr := normalizeDriverNavigationURL(prepared.DestinationURL)
-	destination, destinationErr := originFromURL(prepared.DestinationURL)
-	return normalizeErr == nil && normalized == prepared.DestinationURL && destinationErr == nil &&
-		destination == prepared.DestinationOrigin && prepared.Effect == EffectNavigation
 }
 
 func checkableElementRole(kind ActionKind, role string) bool {
