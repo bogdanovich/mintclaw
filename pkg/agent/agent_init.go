@@ -133,15 +133,18 @@ func newAgentLoopWithRegistry(
 	return al
 }
 
-// NewAgentLoopChecked constructs an AgentLoop and returns context-manager
-// initialization failures to startup callers.
+// NewAgentLoopChecked constructs an AgentLoop and returns startup failures.
 func NewAgentLoopChecked(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	al := NewAgentLoop(cfg, msgBus, provider, opts...)
+	registry, err := newAgentRegistry(cfg, provider)
+	if err != nil {
+		return nil, err
+	}
+	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
 	if al.contextManagerInitErr != nil {
 		al.Close()
 		return nil, al.contextManagerInitErr

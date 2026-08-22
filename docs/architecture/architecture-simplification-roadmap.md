@@ -602,6 +602,8 @@ Exit criteria:
 
 ### X2 — Require current session and state storage only
 
+Status: implemented
+
 Scope:
 
 - remove legacy `agent:...` session-key parsing and alias resolution;
@@ -623,10 +625,22 @@ Implementation sequence:
 
 Exit criteria:
 
-- one session-key format and one session store;
+- one session-key format and one persistent runtime store;
 - startup never searches for or rewrites old locations;
 - no `.migrated` lifecycle in runtime code; and
 - current state survives restart and compaction contract tests.
+
+Implemented shape:
+
+- opaque keys and the current structured scope version are the only runtime
+  session identities;
+- JSONL is the only persistent session store, and initialization failure stops
+  checked startup and reload construction;
+- the removed JSON snapshot backend has been replaced by an explicitly
+  non-persistent test and benchmark store;
+- startup ignores removed JSON snapshots and the old workspace-level
+  `state.json` location; and
+- frontend session lookup uses only current `ClientSessionIDs` metadata.
 
 ### X3 — Remove remaining internal compatibility surfaces
 

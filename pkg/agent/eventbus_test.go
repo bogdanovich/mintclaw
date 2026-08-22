@@ -303,7 +303,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 			MatchedBy: "default",
 		},
 		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersionV1,
+			Version:    session.ScopeVersion,
 			AgentID:    "main",
 			Channel:    "cli",
 			Account:    routing.DefaultAccountID,

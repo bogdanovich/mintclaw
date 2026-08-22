@@ -93,7 +93,6 @@ type SessionGoal struct {
 
 // Manager manages persistent state with atomic saves.
 type Manager struct {
-	workspace string
 	state     *State
 	mu        sync.RWMutex
 	stateFile string
@@ -101,55 +100,10 @@ type Manager struct {
 
 // NewManager creates a new state manager for the given workspace.
 func NewManager(workspace string) *Manager {
-	stateDir := filepath.Join(workspace, "state")
-	stateFile := filepath.Join(stateDir, "state.json")
-	oldStateFile := filepath.Join(workspace, "state.json")
-
-	// Create state directory if it doesn't exist
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		logger.WarnCF("state", "failed to create state directory", map[string]any{
-			"dir":   stateDir,
-			"error": err.Error(),
-		})
-	}
-
-	sm := &Manager{
-		workspace: workspace,
-		stateFile: stateFile,
-		state:     &State{},
-	}
-
-	// Try to load from new location first
-	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
-		// New file doesn't exist, try migrating from old location
-		if data, err := os.ReadFile(oldStateFile); err == nil {
-			if err := json.Unmarshal(data, sm.state); err == nil {
-				// Migrate to new location
-				if err := sm.saveAtomic(); err != nil {
-					logger.WarnCF("state", "failed to save state", map[string]any{
-						"error": err.Error(),
-					})
-				}
-				logger.InfoCF("state", "migrated state", map[string]any{
-					"from": oldStateFile,
-					"to":   stateFile,
-				})
-			}
-		}
-	} else {
-		// Load from new location
-		if err := sm.load(); err != nil {
-			logger.WarnCF("state", "failed to load state", map[string]any{
-				"error": err.Error(),
-			})
-		}
-	}
-
-	return sm
+	return NewManagerAt(filepath.Join(workspace, "state", "state.json"))
 }
 
-// NewManagerAt creates a manager for an exact runtime-owned state file. It
-// intentionally performs no legacy workspace migration.
+// NewManagerAt creates a manager for an exact runtime-owned state file.
 func NewManagerAt(stateFile string) *Manager {
 	sm, err := NewManagerAtChecked(stateFile)
 	if err != nil {
@@ -167,7 +121,6 @@ func NewManagerAtChecked(stateFile string) (*Manager, error) {
 		return nil, fmt.Errorf("create state directory %q: %w", stateDir, err)
 	}
 	sm := &Manager{
-		workspace: stateDir,
 		stateFile: stateFile,
 		state:     &State{},
 	}

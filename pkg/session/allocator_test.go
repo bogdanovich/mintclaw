@@ -25,8 +25,8 @@ func TestAllocateRouteSession_PerPeerDM(t *testing.T) {
 	if allocation.SessionKey == "" || !IsOpaqueSessionKey(allocation.SessionKey) {
 		t.Fatalf("SessionKey = %q, want opaque session key", allocation.SessionKey)
 	}
-	if allocation.Scope.Version != ScopeVersionV2 {
-		t.Fatalf("Scope.Version = %d, want %d", allocation.Scope.Version, ScopeVersionV2)
+	if allocation.Scope.Version != ScopeVersion {
+		t.Fatalf("Scope.Version = %d, want %d", allocation.Scope.Version, ScopeVersion)
 	}
 	if allocation.Scope.RouteScopeKey != allocation.RouteScopeKey {
 		t.Fatalf(

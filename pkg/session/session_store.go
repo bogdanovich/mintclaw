@@ -2,17 +2,17 @@ package session
 
 import (
 	"context"
+	"errors"
 
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-// SessionStore defines the persistence operations used by the agent loop.
-// Both SessionManager (legacy JSON backend) and JSONLBackend satisfy this
-// interface, allowing the storage layer to be swapped without touching the
-// agent loop code.
+// SessionStore defines the session operations used by the agent loop.
+// Persistent runtimes use JSONLBackend; MemoryStore is available for tests and
+// explicitly ephemeral callers.
 //
-// Compatibility writes (Add*, Set*, Truncate*) remain fire-and-forget for
+// Convenience writes (Add*, Set*, Truncate*) remain fire-and-forget for
 // passive and administrative callers. Turn-critical writes must use the
 // embedded TurnJournal contract.
 type SessionStore interface {
@@ -76,7 +76,7 @@ type TurnSnapshotStore interface {
 
 func contextCause(ctx context.Context) error {
 	if ctx == nil {
-		return nil
+		return errors.New("session: context is required")
 	}
 	return context.Cause(ctx)
 }

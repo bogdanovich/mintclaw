@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -20,6 +23,25 @@ func (m *mockRegistryProvider) Chat(
 	options map[string]any,
 ) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{Content: "mock", FinishReason: "stop"}, nil
+}
+
+func TestNewAgentLoopCheckedRejectsUnusableCanonicalSessionStore(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "sessions"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg(nil)
+	cfg.Agents.Defaults.Workspace = workspace
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+
+	loop, err := NewAgentLoopChecked(cfg, msgBus, &mockRegistryProvider{})
+	if err == nil || loop != nil {
+		t.Fatalf("NewAgentLoopChecked() = (%T, %v), want canonical-store startup error", loop, err)
+	}
+	if !strings.Contains(err.Error(), "initialize runtime session store") {
+		t.Fatalf("NewAgentLoopChecked() error = %v", err)
+	}
 }
 
 func (m *mockRegistryProvider) GetDefaultModel() string {

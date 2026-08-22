@@ -354,14 +354,14 @@ func TestJSONLStoreCanceledTurnJournalWaitDoesNotMutate(t *testing.T) {
 	}
 }
 
-func TestJSONLStoreLegacyNilContextStillAppends(t *testing.T) {
+func TestJSONLStoreRejectsNilContext(t *testing.T) {
 	store := newTestStore(t)
-	//nolint:staticcheck // intentional: proves the legacy nil-context contract still appends
-	if err := store.AddFullMessage(nil, "turn", providers.Message{Role: "user", Content: "legacy"}); err != nil {
-		t.Fatalf("AddFullMessage(nil) error = %v", err)
+	//nolint:staticcheck // The current contract must reject a nil context without mutating history.
+	if err := store.AddFullMessage(nil, "turn", providers.Message{Role: "user", Content: "rejected"}); err == nil {
+		t.Fatal("AddFullMessage(nil) error = nil")
 	}
 	history, err := store.GetHistory(t.Context(), "turn")
-	if err != nil || len(history) != 1 || history[0].Content != "legacy" {
+	if err != nil || len(history) != 0 {
 		t.Fatalf("GetHistory() = %+v, %v", history, err)
 	}
 }

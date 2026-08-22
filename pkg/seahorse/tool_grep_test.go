@@ -12,7 +12,7 @@ import (
 
 func retrievalTestScope(routeScopeKey, agentID string) *session.SessionScope {
 	return &session.SessionScope{
-		Version:       session.ScopeVersionV2,
+		Version:       session.ScopeVersion,
 		AgentID:       agentID,
 		RouteScopeKey: routeScopeKey,
 	}

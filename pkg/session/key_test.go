@@ -41,14 +41,25 @@ func TestBuildMainSessionKey(t *testing.T) {
 func TestResolveAgentID_PrefersSessionScope(t *testing.T) {
 	store := testScopeReader{
 		scope: &SessionScope{
-			Version: ScopeVersionV1,
+			Version: ScopeVersion,
 			AgentID: "Support",
 			Channel: "slack",
 		},
 	}
 
-	if got := ResolveAgentID(store, "sk_v1_anything"); got != "support" {
+	if got := ResolveAgentID(store, BuildOpaqueSessionKey("support-session")); got != "support" {
 		t.Fatalf("ResolveAgentID() = %q, want support", got)
+	}
+}
+
+func TestCurrentScopeContractRejectsRemovedVersion(t *testing.T) {
+	removed := SessionScope{Version: ScopeVersion - 1, AgentID: "main"}
+	if key := BuildSessionKey(removed); key != "" {
+		t.Fatalf("BuildSessionKey(removed scope) = %q, want empty", key)
+	}
+	store := testScopeReader{scope: &removed}
+	if agentID := ResolveAgentID(store, BuildOpaqueSessionKey("removed-scope")); agentID != "" {
+		t.Fatalf("ResolveAgentID(removed scope) = %q, want empty", agentID)
 	}
 }
 

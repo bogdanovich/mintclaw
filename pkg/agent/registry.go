@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 
@@ -37,6 +38,14 @@ func NewAgentRegistry(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentRegistry {
+	registry, _ := newAgentRegistry(cfg, provider)
+	return registry
+}
+
+func newAgentRegistry(
+	cfg *config.Config,
+	provider providers.LLMProvider,
+) (*AgentRegistry, error) {
 	registry := &AgentRegistry{
 		cfg:      cfg,
 		agents:   make(map[string]*AgentInstance),
@@ -49,14 +58,21 @@ func NewAgentRegistry(
 			ID:      "main",
 			Default: true,
 		}
-		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider)
+		instance, err := newAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("construct implicit main agent: %w", err)
+		}
 		registry.agents["main"] = instance
 		logger.InfoCF("agent", "Created implicit main agent (no agents.list configured)", nil)
 	} else {
 		for i := range agentConfigs {
 			ac := &agentConfigs[i]
 			id := routing.NormalizeAgentID(ac.ID)
-			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+			instance, err := newAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, nil, nil)
+			if err != nil {
+				registry.Close()
+				return nil, fmt.Errorf("construct agent %q: %w", id, err)
+			}
 			registry.agents[id] = instance
 			logger.InfoCF("agent", "Registered agent",
 				map[string]any{
@@ -75,7 +91,7 @@ func NewAgentRegistry(
 		}
 	}
 
-	return registry
+	return registry, nil
 }
 
 // newAgentRegistryWithRuntimeProfile resolves every configured owner before it

@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -884,8 +882,9 @@ func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.W
 }
 
 func durableTaskSessionKey(ownerWorkspace, taskID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(ownerWorkspace)))
-	return "task:" + hex.EncodeToString(sum[:8]) + ":" + strings.TrimSpace(taskID)
+	return session.BuildOpaqueSessionKey(
+		"task|workspace=" + strings.TrimSpace(ownerWorkspace) + "|task=" + strings.TrimSpace(taskID),
+	)
 }
 
 func mediaArtifactRefs(items []taskresult.Artifact) []string {

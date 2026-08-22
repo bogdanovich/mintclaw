@@ -614,7 +614,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		Channel: "telegram", ChatID: "chat-cross-agent", SenderID: "user-cross-agent",
 	}
 	parentScope := &session.SessionScope{
-		Version: session.ScopeVersionV2, AgentID: alpha.ID, Channel: "telegram",
+		Version: session.ScopeVersion, AgentID: alpha.ID, Channel: "telegram",
 		Dimensions: []string{"chat"}, Values: map[string]string{"chat": "chat-cross-agent"},
 		RouteScopeKey: "telegram:chat-cross-agent",
 	}
@@ -1051,8 +1051,7 @@ func TestSpawnSubTurnCancellationWhileQueuedReleasesAdmissions(t *testing.T) {
 func TestDurableTaskSessionKeyIncludesOwnerWorkspace(t *testing.T) {
 	first := durableTaskSessionKey("/workspace/one", "subagent-1")
 	second := durableTaskSessionKey("/workspace/two", "subagent-1")
-	if first == second || !strings.HasSuffix(first, ":subagent-1") ||
-		!strings.HasSuffix(second, ":subagent-1") {
+	if first == second || !session.IsOpaqueSessionKey(first) || !session.IsOpaqueSessionKey(second) {
 		t.Fatalf("durable task keys = %q, %q", first, second)
 	}
 }

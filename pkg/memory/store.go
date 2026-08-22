@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -42,6 +43,24 @@ type Store interface {
 
 	// Close releases any resources held by the store.
 	Close() error
+
+	// GetHistoryRevision returns a cheap durable identity for the visible history.
+	GetHistoryRevision(ctx context.Context, sessionKey string) (HistoryRevision, error)
+
+	// GetHistoryPage reads a bounded canonical-history window.
+	GetHistoryPage(ctx context.Context, sessionKey string, request HistoryPageRequest) (HistoryPage, error)
+
+	// MutateHistory atomically derives and persists a replacement from the
+	// latest canonical history.
+	MutateHistory(
+		ctx context.Context,
+		sessionKey string,
+		mutate func([]providers.Message) ([]providers.Message, bool, error),
+	) (bool, error)
+
+	// GetSessionMeta and UpsertSessionMeta own current structured metadata.
+	GetSessionMeta(ctx context.Context, sessionKey string) (SessionMeta, error)
+	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage, clientSessionID string) error
 }
 
 // HistoryRevision identifies the canonical visible history for a session.
@@ -54,12 +73,6 @@ type HistoryRevision struct {
 	Dirty     bool
 	FileSize  int64
 	ModTimeNS int64
-}
-
-// HistoryRevisionStore is implemented by stores that can expose a cheap,
-// durable identity for their canonical session history.
-type HistoryRevisionStore interface {
-	GetHistoryRevision(ctx context.Context, sessionKey string) (HistoryRevision, error)
 }
 
 // HistoryPageRequest selects a bounded canonical-history window. Before is an
@@ -87,21 +100,4 @@ type HistoryPage struct {
 	Total    int
 	HasOlder bool
 	HasNewer bool
-}
-
-// HistoryPageStore reads bounded history without retaining the full canonical
-// transcript in the caller.
-type HistoryPageStore interface {
-	GetHistoryPage(ctx context.Context, sessionKey string, request HistoryPageRequest) (HistoryPage, error)
-}
-
-// HistoryMutationStore atomically derives and persists a replacement from the
-// latest canonical history while excluding concurrent appends, truncation, and
-// compaction for the same session.
-type HistoryMutationStore interface {
-	MutateHistory(
-		ctx context.Context,
-		sessionKey string,
-		mutate func([]providers.Message) ([]providers.Message, bool, error),
-	) (bool, error)
 }

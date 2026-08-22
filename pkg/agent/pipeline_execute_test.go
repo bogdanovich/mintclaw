@@ -150,7 +150,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 			tool := &fixedToolResultTool{name: "generate_image", result: result}
 			registry := tools.NewToolRegistry()
 			registry.Register(tool)
-			store := session.NewSessionManager("")
+			store := session.NewMemoryStore()
 			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-immediate-result",
@@ -214,7 +214,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 	tool := &fixedToolResultTool{name: "generate_image", result: result}
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
-	baseStore := session.NewSessionManager("")
+	baseStore := session.NewMemoryStore()
 	journalErr := errors.New("settle immediate journal")
 	store := &mutateFailingSessionStore{SessionStore: baseStore, err: journalErr, failAt: 1}
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
@@ -587,7 +587,7 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
 	agent := &AgentInstance{
-		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""),
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(),
 		ToolLoopDetection: loopguard.DefaultConfig(),
 	}
 	ts := &turnState{
@@ -629,7 +629,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	registry := tools.NewToolRegistry()
 	tool := &fixedToolResultTool{name: "stage-tool", result: toolshared.NewToolResult("stage result")}
 	registry.Register(tool)
-	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent:      agent,
 		agentID:    agent.ID,
@@ -703,7 +703,7 @@ func TestCodingTrustRejectsReplacementRegistry(t *testing.T) {
 	tool := &fixedToolResultTool{name: "trusted-tool", result: toolshared.NewToolResult("unexpected")}
 	admitted.Register(tool)
 	admitted.Seal()
-	agent := &AgentInstance{ID: "main", Tools: admitted, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: admitted, Sessions: session.NewMemoryStore()}
 	agent.admitTrustedToolRegistry()
 	agent.Tools = admitted.Clone()
 	ts := &turnState{
@@ -736,7 +736,7 @@ func TestCodingTrustRejectsRegistryReplacementAfterApproval(t *testing.T) {
 	trustedTool := &fixedToolResultTool{name: "trusted-tool", result: toolshared.NewToolResult("trusted")}
 	admitted.Register(trustedTool)
 	admitted.Seal()
-	agent := &AgentInstance{ID: "main", Tools: admitted, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: admitted, Sessions: session.NewMemoryStore()}
 	agent.admitTrustedToolRegistry()
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "stage-replacement-turn", sessionKey: "stage-replacement-session",
@@ -785,7 +785,7 @@ func TestPipelineToolResultJournalFailureLeavesDurableUnresolvedIntent(t *testin
 	registry := tools.NewToolRegistry()
 	tool := &countingTestTool{name: "side-effect"}
 	registry.Register(tool)
-	baseStore := session.NewSessionManager("")
+	baseStore := session.NewMemoryStore()
 	journalErr := errors.New("tool result fsync failed")
 	store := &toolResultFailingJournal{SessionStore: baseStore, err: journalErr}
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
@@ -855,7 +855,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 			registry := tools.NewToolRegistry()
 			tool := &fixedToolResultTool{name: "delivery-test", result: tc.result()}
 			registry.Register(tool)
-			baseStore := session.NewSessionManager("")
+			baseStore := session.NewMemoryStore()
 			journalErr := errors.New("tool result journal failed")
 			store := &toolResultFailingJournal{SessionStore: baseStore, err: journalErr}
 			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
@@ -915,7 +915,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		mediaRef = "media://private-browser-screenshot"
 		hostPath = "/private/workspace/state/media/browser-screenshot.png"
 	)
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	commitCalls := 0
 	result := toolshared.NewToolResult(`{"artifact":{"ref":"transfer-artifact://opaque"}}`).
 		WithOutboundDelivery(toolshared.OutboundDelivery{
@@ -1002,7 +1002,7 @@ func TestPipelineProtectedImmediateArtifactVisionErrorDoesNotRetryWithoutCurrent
 	for _, hook := range []bool{false, true} {
 		t.Run(fmt.Sprintf("hook_%t", hook), func(t *testing.T) {
 			const mediaRef = "media://private-browser-screenshot"
-			store := session.NewSessionManager("")
+			store := session.NewMemoryStore()
 			result := (&toolshared.ToolResult{
 				ForLLM: `{"artifact":{"ref":"transfer-artifact://opaque"}}`,
 				Media:  []string{mediaRef},
@@ -1089,7 +1089,7 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 			registry := tools.NewToolRegistry()
 			tool := &fixedToolResultTool{name: "suppressed-media", result: result}
 			registry.Register(tool)
-			store := session.NewSessionManager("")
+			store := session.NewMemoryStore()
 			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 			ts := &turnState{
 				agent: agent, agentID: agent.ID, turnID: "turn-suppressed-media",
@@ -1149,7 +1149,7 @@ func TestPipelineToolCallIntentJournalFailurePreventsExecution(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	tool := &countingTestTool{name: "must-not-run"}
 	registry.Register(tool)
-	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{agent: agent, opts: processOptions{Dispatch: DispatchRequest{SessionKey: "intent-fail"}}}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
@@ -1173,7 +1173,7 @@ func TestPipelineAllowAllBypassesApprovalHook(t *testing.T) {
 	agent := &AgentInstance{
 		ID:       "main",
 		Tools:    registry,
-		Sessions: session.NewSessionManager(""),
+		Sessions: session.NewMemoryStore(),
 	}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-allow-all",
@@ -1277,7 +1277,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	deferredTool := &countingTestTool{name: "deferred-write"}
 	registry.Register(requestTool)
 	registry.Register(deferredTool)
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	inbound := bus.InboundContext{
 		Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "group",
@@ -1391,7 +1391,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		tool := newTool(called)
 		registry := tools.NewToolRegistry()
 		registry.Register(tool)
-		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewSessionManager("")}
+		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
 		inbound := bus.InboundContext{
 			Channel: "telegram", Account: "primary", ChatID: "chat-domain", SenderID: "user-domain",
 		}
@@ -1446,7 +1446,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		tool := newTool(called)
 		registry := tools.NewToolRegistry()
 		registry.Register(tool)
-		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewSessionManager("")}
+		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
 		ts := &turnState{
 			agent: agent, agentID: agent.ID, turnID: "turn-domain-fallback", sessionKey: "session-domain-fallback",
 			opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-domain-fallback"}},
@@ -1473,7 +1473,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 		tool := newTool(called)
 		registry := tools.NewToolRegistry()
 		registry.Register(tool)
-		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewSessionManager("")}
+		agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
 		ts := &turnState{
 			agent: agent, agentID: agent.ID, turnID: "turn-domain-hook-drop",
 			sessionKey: "session-domain-hook-drop",
@@ -1547,7 +1547,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	registry.Register(tool)
 	workspace := t.TempDir()
 	agent := &AgentInstance{
-		ID: "browser", Tools: registry, Sessions: session.NewSessionManager(""),
+		ID: "browser", Tools: registry, Sessions: session.NewMemoryStore(),
 	}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-bound-approval",
@@ -1640,7 +1640,7 @@ func TestPipelineSuspensionFailureBecomesPairedToolError(t *testing.T) {
 		t.Fatalf("NewRequestUserInputTool() error = %v", err)
 	}
 	registry.Register(requestTool)
-	store := session.NewSessionManager("")
+	store := session.NewMemoryStore()
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: store}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-no-persist", sessionKey: "session-no-persist",
@@ -1684,7 +1684,7 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 		t.Fatalf("NewRequestUserInputTool() error = %v", err)
 	}
 	registry.Register(requestTool)
-	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-steer-suspend", sessionKey: "session-steer-suspend",
 		opts: processOptions{Dispatch: DispatchRequest{SessionKey: "session-steer-suspend"}},
@@ -1844,7 +1844,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 	guardConfig.ExactFailureBlock = 2
 	guardConfig.SameToolFailureHalt = 99
 	agent := &AgentInstance{
-		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""),
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(),
 		ToolLoopDetection: guardConfig,
 	}
 	ts := &turnState{
@@ -1941,7 +1941,7 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 	guardConfig.ExactFailureBlock = 2
 	guardConfig.SameToolFailureHalt = 99
 	agent := &AgentInstance{
-		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""), ToolLoopDetection: guardConfig,
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(), ToolLoopDetection: guardConfig,
 	}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-protected-loop",
@@ -2001,7 +2001,7 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 	registry := tools.NewToolRegistry()
 	tool := &protectedResultProjectionTool{}
 	registry.Register(tool)
-	sessionStore := session.NewSessionManager("")
+	sessionStore := session.NewMemoryStore()
 	contextManager := &trackingContextManager{}
 	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: sessionStore}
 	ts := &turnState{
@@ -2093,7 +2093,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 	config := loopguard.DefaultConfig()
 	config.IdenticalCallHalt = 3
 	agent := &AgentInstance{
-		ID: "main", Tools: registry, Sessions: session.NewSessionManager(""),
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(),
 		ToolLoopDetection: config,
 	}
 	ts := &turnState{
@@ -2200,7 +2200,7 @@ func TestPipelineLoopGuardUsesHookModifiedArgumentsAndResults(t *testing.T) {
 	agent := &AgentInstance{
 		ID:                "main",
 		Tools:             registry,
-		Sessions:          session.NewSessionManager(""),
+		Sessions:          session.NewMemoryStore(),
 		ToolLoopDetection: config,
 	}
 	ts := &turnState{
@@ -2248,7 +2248,7 @@ func TestPipelineLoopGuardDoesNotCountPolicyDenials(t *testing.T) {
 	agent := &AgentInstance{
 		ID:                "main",
 		Tools:             registry,
-		Sessions:          session.NewSessionManager(""),
+		Sessions:          session.NewMemoryStore(),
 		ToolLoopDetection: config,
 	}
 	ts := &turnState{
@@ -2325,7 +2325,7 @@ func TestPipelineLoopGuardBlocksBeforeApprovalAuthority(t *testing.T) {
 			agent := &AgentInstance{
 				ID:                "main",
 				Tools:             registry,
-				Sessions:          session.NewSessionManager(""),
+				Sessions:          session.NewMemoryStore(),
 				ToolLoopDetection: config,
 			}
 			ts := &turnState{
@@ -2468,7 +2468,7 @@ func TestIsFatalMCPTransportErrorSummary(t *testing.T) {
 }
 
 func TestPipelineAppendToolMessage_PersistsWithoutIngest(t *testing.T) {
-	sessionStore := session.NewSessionManager("")
+	sessionStore := session.NewMemoryStore()
 	cm := &trackingContextManager{}
 	pipeline := &Pipeline{Context: PipelineContextServices{Runtime: cm}}
 	ts := &turnState{
@@ -2502,7 +2502,7 @@ func TestPipelineAppendToolMessage_PersistsWithoutIngest(t *testing.T) {
 }
 
 func TestPipelineAppendToolMessage_PersistsAndIngests(t *testing.T) {
-	sessionStore := session.NewSessionManager("")
+	sessionStore := session.NewMemoryStore()
 	cm := &trackingContextManager{}
 	pipeline := &Pipeline{Context: PipelineContextServices{Runtime: cm}}
 	ts := &turnState{
@@ -2539,7 +2539,7 @@ func TestPipelineAppendToolMessage_PersistsAndIngests(t *testing.T) {
 }
 
 func TestPipelineAppendSkippedToolMessages_PersistsRemainingWithoutIngest(t *testing.T) {
-	sessionStore := session.NewSessionManager("")
+	sessionStore := session.NewMemoryStore()
 	cm := &trackingContextManager{}
 	pipeline := &Pipeline{Context: PipelineContextServices{Runtime: cm}}
 	ts := &turnState{
@@ -2591,7 +2591,7 @@ func TestPipelineSteeringPreservesEntireEmittedToolBatch(t *testing.T) {
 	for _, tool := range []toolshared.Tool{read, write, commit, unknown} {
 		registry.Register(tool)
 	}
-	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-steering-safety",
 		sessionKey: "session-steering-safety", opts: processOptions{NoHistory: true},
@@ -2649,7 +2649,7 @@ func TestPipelineSteeringArrivingDuringBatchPreservesRemainingCalls(t *testing.T
 	second := &countingTestTool{name: "second-write"}
 	registry.Register(first)
 	registry.Register(second)
-	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-delayed-steering",
 		sessionKey: "session-delayed-steering", opts: processOptions{NoHistory: true},
@@ -2675,7 +2675,7 @@ func TestPipelineSteeringArrivingDuringBatchPreservesRemainingCalls(t *testing.T
 }
 
 func TestToolLoopRunnerAppendPendingSubTurnResult_PersistsAndIngests(t *testing.T) {
-	sessionStore := session.NewSessionManager("")
+	sessionStore := session.NewMemoryStore()
 	cm := &trackingContextManager{}
 	pipeline := &Pipeline{Context: PipelineContextServices{Runtime: cm}}
 	ts := &turnState{
@@ -2808,7 +2808,7 @@ func TestRunAgentLoop_AbortsRepeatedFatalToolTransportErrors(t *testing.T) {
 			MatchedBy: "default",
 		},
 		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersionV1,
+			Version:    session.ScopeVersion,
 			AgentID:    "main",
 			Channel:    "cli",
 			Account:    routing.DefaultAccountID,
@@ -2899,7 +2899,7 @@ func TestRunAgentLoop_AbortsFatalMCPServerTransportErrorImmediately(t *testing.T
 			MatchedBy: "default",
 		},
 		SessionScope: &session.SessionScope{
-			Version:    session.ScopeVersionV1,
+			Version:    session.ScopeVersion,
 			AgentID:    "main",
 			Channel:    "cli",
 			Account:    routing.DefaultAccountID,

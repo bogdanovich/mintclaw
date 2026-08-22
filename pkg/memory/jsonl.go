@@ -128,7 +128,7 @@ func IsIndeterminateAppendError(err error) bool {
 
 func contextCause(ctx context.Context) error {
 	if ctx == nil {
-		return nil
+		return errors.New("memory: context is required")
 	}
 	return context.Cause(ctx)
 }
@@ -179,7 +179,6 @@ func (s *JSONLStore) metaPath(key string) string {
 }
 
 // sanitizeKey converts a session key to a safe filename component.
-// Mirrors pkg/session.sanitizeFilename so that migration paths match.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_'
 // so composite IDs (e.g. Telegram forum "chatID/threadID", Slack "channel/thread_ts")
 // do not create subdirectories or break on Windows.
@@ -274,12 +273,6 @@ func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error 
 		targetReached = digest == meta.HistoryTargetDigest
 	}
 	if meta.HistoryHasPrevious && meta.HistoryTargetDigest != "" && !targetReached {
-		meta.Count = meta.HistoryPreviousCount
-		meta.Skip = meta.HistoryPreviousSkip
-	} else if meta.HistoryHasPrevious && meta.HistoryTargetDigest == "" && rawCount != meta.Count {
-		// Legacy dirty metadata did not record a replacement identity. Keep
-		// the historical count-based fallback for stores created before the
-		// digest field existed.
 		meta.Count = meta.HistoryPreviousCount
 		meta.Skip = meta.HistoryPreviousSkip
 	} else {

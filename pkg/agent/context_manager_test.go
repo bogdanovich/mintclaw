@@ -17,6 +17,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
+type clearErrorSessionStore struct {
+	session.SessionStore
+	err error
+}
+
+func (s *clearErrorSessionStore) ClearSession(context.Context, string) error {
+	return s.err
+}
+
 // ---------------------------------------------------------------------------
 // Factory registry tests
 // ---------------------------------------------------------------------------
@@ -286,16 +295,16 @@ func TestNoneContextManagerIsStatelessAndClearable(t *testing.T) {
 }
 
 func TestNoneContextManagerClearReportsPersistenceFailure(t *testing.T) {
-	manager := session.NewSessionManager(t.TempDir())
-	manager.GetOrCreate(".")
-	manager.SetHistory(".", []providers.Message{{Role: "user", Content: "retained"}})
-	agent := &AgentInstance{Sessions: manager}
+	base := session.NewMemoryStore()
+	base.SetHistory("session", []providers.Message{{Role: "user", Content: "retained"}})
+	store := &clearErrorSessionStore{SessionStore: base, err: os.ErrInvalid}
+	agent := &AgentInstance{Sessions: store}
 
-	err := (&noneContextManager{}).Clear(t.Context(), agent, ".")
+	err := (&noneContextManager{}).Clear(t.Context(), agent, "session")
 	if !errors.Is(err, os.ErrInvalid) {
 		t.Fatalf("Clear() error = %v, want %v", err, os.ErrInvalid)
 	}
-	history := manager.GetHistory(".")
+	history := base.GetHistory("session")
 	if len(history) != 1 || history[0].Content != "retained" {
 		t.Fatalf("failed clear mutated history: %+v", history)
 	}

@@ -46,8 +46,7 @@ func (d *historyCursorDigest) cursor() HistoryCursor {
 	return HistoryCursor{Total: d.total, Digest: hex.EncodeToString(d.hash.Sum(nil))}
 }
 
-// HistoryCursorForMessages derives the stable prefix cursor used by in-memory
-// and fallback session stores.
+// HistoryCursorForMessages derives a stable prefix cursor from a message slice.
 func HistoryCursorForMessages(messages []providers.Message, total int) (HistoryCursor, error) {
 	if total < 0 || total > len(messages) {
 		return HistoryCursor{}, fmt.Errorf("memory: history cursor total %d exceeds %d messages", total, len(messages))

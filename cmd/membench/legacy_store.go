@@ -5,19 +5,19 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
-// LegacyStore wraps session.SessionManager for legacy baseline.
+// LegacyStore holds the full-transcript baseline used for memory comparisons.
 type LegacyStore struct {
-	sm *session.SessionManager
+	sm *session.MemoryStore
 }
 
-// NewLegacyStore creates a new in-memory session manager.
+// NewLegacyStore creates a new full-transcript baseline.
 func NewLegacyStore() *LegacyStore {
 	return &LegacyStore{
-		sm: session.NewSessionManager(""),
+		sm: session.NewMemoryStore(),
 	}
 }
 
-// IngestSample loads all turns from a LOCOMO sample into the legacy session store.
+// IngestSample loads all turns from a LOCOMO sample into the baseline store.
 func (ls *LegacyStore) IngestSample(sample *LocomoSample) {
 	sessionKey := "locomo-" + sample.SampleID
 	turns := GetTurns(sample)

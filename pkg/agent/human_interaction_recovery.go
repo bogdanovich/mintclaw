@@ -800,7 +800,7 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	scope := sessionScopeForRecovery(agent.Sessions, interactionContinuationSessionKey(record))
 	if scope == nil {
 		scope = &session.SessionScope{
-			Version:       1,
+			Version:       session.ScopeVersion,
 			AgentID:       record.Route.AgentID,
 			Channel:       record.Route.Channel,
 			RouteScopeKey: record.Route.RouteSessionKey,

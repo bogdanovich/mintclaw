@@ -63,6 +63,22 @@ func TestNewManagerAtCheckedRejectsCorruptState(t *testing.T) {
 	}
 }
 
+func TestNewManagerIgnoresRemovedWorkspaceStateLocation(t *testing.T) {
+	workspace := t.TempDir()
+	legacyData, err := json.Marshal(State{LastChannel: "removed-location"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "state.json"), legacyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(workspace)
+	if got := manager.GetLastChannel(); got != "" {
+		t.Fatalf("GetLastChannel() = %q, want removed state location ignored", got)
+	}
+}
+
 func TestNewManagerAtCheckedPropagatesDirectoryCreationFailure(t *testing.T) {
 	root := t.TempDir()
 	blockedParent := filepath.Join(root, "blocked")

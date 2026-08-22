@@ -215,6 +215,15 @@ func TestJSONLHistoryRevisionRestoresMetadataAfterInterruptedCompact(t *testing.
 	interrupted.HistoryHasPrevious = true
 	interrupted.HistoryPreviousCount = previous.Count
 	interrupted.HistoryPreviousSkip = previous.Skip
+	active, err := readMessages(store.jsonlPath(key), previous.Skip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedActive, err := encodeJSONL(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted.HistoryTargetDigest = digestJSONL(encodedActive)
 	if err := store.writeMeta(key, interrupted); err != nil {
 		t.Fatal(err)
 	}

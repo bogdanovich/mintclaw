@@ -2728,7 +2728,7 @@ func TestRecoveryDoesNotFailActiveFinalDelivery(t *testing.T) {
 		resumeDone <- al.resumeClaimedInteraction(
 			t.Context(), registry, agent.Workspace, agent,
 			&session.SessionScope{
-				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 				RouteScopeKey: record.Route.RouteSessionKey,
 			},
 			inboundContextForInteraction(record.Route), record,
@@ -3890,7 +3890,7 @@ func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *tes
 
 func TestInteractionCancellationDoesNotReplaceConsumedApprovalResult(t *testing.T) {
 	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:consumed-approval-cancellation")
-	agent := &AgentInstance{Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{Sessions: session.NewMemoryStore()}
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role:      "assistant",
 		ToolCalls: []providers.ToolCall{{ID: "call-consumed", Name: "protected_mutation"}},
@@ -5036,7 +5036,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 		guidance            = "Открой All postings и найди микроволновку там"
 	)
 	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
-		Version: 1, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
+		Version: session.ScopeVersion, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
 	})
 	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "user", Content: "Find the expired microwave listing",
@@ -6816,7 +6816,7 @@ func TestStopCancellationWinsPrecomputedFinalizationBoundary(t *testing.T) {
 			agent.Workspace,
 			agent,
 			&session.SessionScope{
-				Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+				Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 				RouteScopeKey: record.Route.RouteSessionKey,
 			},
 			inboundContextForInteraction(record.Route),
@@ -7466,7 +7466,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	}
 	inbound := inboundContextForInteraction(record.Route)
 	scope := &session.SessionScope{
-		Version: 1, AgentID: agent.ID, Channel: record.Route.Channel,
+		Version: session.ScopeVersion, AgentID: agent.ID, Channel: record.Route.Channel,
 		RouteScopeKey: record.Route.RouteSessionKey,
 	}
 	if err := al.resumeClaimedInteraction(
@@ -7865,7 +7865,11 @@ func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *te
 	if closeErr := agent.Sessions.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	agent.Sessions = initSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	reloadedSessions, err := initRuntimeSessionStore(filepath.Join(agent.Workspace, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions = reloadedSessions
 	var foundCurrentRoot, foundReloadedSteering bool
 	for _, message := range agent.Sessions.GetHistory(sessionKey) {
 		switch message.Content {

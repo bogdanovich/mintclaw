@@ -869,8 +869,8 @@ func TestSeahorseContextManagerIsolatesAgentRuntimes(t *testing.T) {
 	}
 	mainAgent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, mainProvider)
 	supportAgent := NewAgentInstance(&cfg.Agents.List[1], &cfg.Agents.Defaults, cfg, supportProvider)
-	mainAgent.Sessions = session.NewSessionManager("")
-	supportAgent.Sessions = session.NewSessionManager("")
+	mainAgent.Sessions = session.NewMemoryStore()
+	supportAgent.Sessions = session.NewMemoryStore()
 	registry := &AgentRegistry{
 		cfg: cfg,
 		agents: map[string]*AgentInstance{
