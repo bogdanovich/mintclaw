@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/cron"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -30,6 +31,7 @@ type stubJobExecutor struct {
 	publishedChatID string
 	publishedKey    string
 	publishedAgent  string
+	messageSentKey  string
 }
 
 func (s *stubJobExecutor) ProcessDirectWithChannel(
@@ -52,6 +54,9 @@ func (s *stubJobExecutor) ProcessScheduledWithChannel(
 	s.lastKey = sessionKey
 	s.lastChan = channel
 	s.lastChatID = chatID
+	if s.alreadySent {
+		s.messageSentKey = sessionKey
+	}
 	return s.response, s.err
 }
 
@@ -67,7 +72,7 @@ func (s *stubJobExecutor) PublishResponseIfNeeded(
 	_ context.Context,
 	_, agentID, channel, chatID, sessionKey, response string,
 ) {
-	if s.alreadySent {
+	if s.alreadySent && s.messageSentKey == sessionKey {
 		return
 	}
 	s.publishedResp = response
@@ -1286,8 +1291,8 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
-	if !strings.HasPrefix(executor.lastKey, "agent:cron-job-1-") {
-		t.Fatalf("sessionKey = %q, want agent:cron-job-1-{uuid}", executor.lastKey)
+	if !session.IsOpaqueSessionKey(executor.lastKey) {
+		t.Fatalf("sessionKey = %q, want current opaque key", executor.lastKey)
 	}
 	if executor.lastChan != "telegram" || executor.lastChatID != "chat-1" {
 		t.Fatalf("executor target = %s/%s, want telegram/chat-1", executor.lastChan, executor.lastChatID)
@@ -1466,6 +1471,12 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 
 	if executor.publishedResp != "" {
 		t.Fatalf("expected no published response when message tool already sent, got: %q", executor.publishedResp)
+	}
+	if !session.IsOpaqueSessionKey(executor.messageSentKey) {
+		t.Fatalf("message tool sessionKey = %q, want current opaque key", executor.messageSentKey)
+	}
+	if executor.publishedKey != "" {
+		t.Fatalf("final response used a different session key: %q", executor.publishedKey)
 	}
 }
 

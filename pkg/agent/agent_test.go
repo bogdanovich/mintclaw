@@ -7933,7 +7933,7 @@ func TestAgentLoop_VisionUnsupportedErrorPreservesCurrentTurnMedia(t *testing.T)
 	provider := &visionUnsupportedMediaProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
-	sessionKey := "agent:main:telegram:direct:user1"
+	sessionKey := session.BuildOpaqueSessionKey("explicit|channel=telegram|user=user1")
 
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), responseTimeout)
 	defer cancel()
@@ -8015,7 +8015,7 @@ func TestAgentLoop_VisionRetryRequiresConfirmedHistoryReplacement(t *testing.T) 
 			provider := &visionUnsupportedMediaProvider{}
 			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 			t.Cleanup(func() { al.Close() })
-			const sessionKey = "agent:main:telegram:direct:user1"
+			sessionKey := session.BuildOpaqueSessionKey("explicit|channel=telegram|user=user1")
 			inbound := func(messageID, content string, mediaRefs []string) bus.InboundMessage {
 				return testInboundMessage(bus.InboundMessage{
 					Context: bus.InboundContext{
@@ -8071,7 +8071,7 @@ func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
 	provider := &visionUnsupportedMediaProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(func() { al.Close() })
-	const sessionKey = "agent:main:telegram:direct:user1"
+	sessionKey := session.BuildOpaqueSessionKey("explicit|channel=telegram|user=user1")
 	omitted := providers.Message{Role: "user", Content: "omitted canonical message"}
 	assembled := providers.Message{
 		Role: "assistant", Content: "assembled historical message",

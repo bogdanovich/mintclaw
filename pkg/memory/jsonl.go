@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -52,7 +53,8 @@ type SessionMeta struct {
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	Scope     json.RawMessage `json:"scope,omitempty"`
-	Aliases   []string        `json:"aliases,omitempty"`
+	// ClientSessionIDs map current frontend sessions onto this history.
+	ClientSessionIDs []string `json:"client_session_ids,omitempty"`
 	// HistoryRevision changes whenever the visible canonical history changes.
 	// HistoryDirty remains set across crashes during multi-file mutations.
 	HistoryRevision      uint64 `json:"history_revision,omitempty"`
@@ -374,43 +376,6 @@ func cloneRawJSON(data json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), data...)
 }
 
-func normalizeAliases(canonicalKey string, aliases []string) []string {
-	if len(aliases) == 0 {
-		return nil
-	}
-	normalized := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	canonicalKey = strings.TrimSpace(canonicalKey)
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || alias == canonicalKey {
-			continue
-		}
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
-}
-
-func (s *JSONLStore) sessionExists(key string) bool {
-	if key == "" {
-		return false
-	}
-	if _, err := os.Stat(s.jsonlPath(key)); err == nil {
-		return true
-	}
-	if _, err := os.Stat(s.metaPath(key)); err == nil {
-		return true
-	}
-	return false
-}
-
 // GetSessionMeta returns the current metadata snapshot for sessionKey.
 func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (SessionMeta, error) {
 	l := s.sessionLock(sessionKey)
@@ -422,9 +387,7 @@ func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (Sessi
 		return SessionMeta{}, err
 	}
 	meta.Scope = cloneRawJSON(meta.Scope)
-	if len(meta.Aliases) > 0 {
-		meta.Aliases = append([]string(nil), meta.Aliases...)
-	}
+	meta.ClientSessionIDs = append([]string(nil), meta.ClientSessionIDs...)
 	return meta, nil
 }
 
@@ -470,7 +433,7 @@ func (s *JSONLStore) UpsertSessionMeta(
 	_ context.Context,
 	sessionKey string,
 	scope json.RawMessage,
-	aliases []string,
+	clientSessionID string,
 ) error {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -481,7 +444,10 @@ func (s *JSONLStore) UpsertSessionMeta(
 		return err
 	}
 	meta.Scope = cloneRawJSON(scope)
-	meta.Aliases = normalizeAliases(sessionKey, aliases)
+	clientSessionID = strings.TrimSpace(clientSessionID)
+	if clientSessionID != "" && !slices.Contains(meta.ClientSessionIDs, clientSessionID) {
+		meta.ClientSessionIDs = append(meta.ClientSessionIDs, clientSessionID)
+	}
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
@@ -489,277 +455,6 @@ func (s *JSONLStore) UpsertSessionMeta(
 	meta.UpdatedAt = now
 
 	return s.writeMeta(sessionKey, meta)
-}
-
-// PromoteAliasHistory atomically promotes the first non-empty alias session
-// into the canonical session when the canonical session is still empty.
-//
-// Main-session aliases (e.g. "agent:main:main" or its opaque form) are
-// skipped during promotion.  The main session is a shared global fallback
-// and promoting its history into individual sessions would attach stale
-// messages to every new Web UI session (issue #2972).
-func (s *JSONLStore) PromoteAliasHistory(
-	_ context.Context,
-	sessionKey string,
-	scope json.RawMessage,
-	aliases []string,
-) (bool, error) {
-	sessionKey = strings.TrimSpace(sessionKey)
-	if sessionKey == "" {
-		return false, nil
-	}
-
-	aliases = normalizeAliases(sessionKey, aliases)
-	for _, alias := range aliases {
-		if isMainSessionAlias(alias) {
-			continue
-		}
-		unlock := s.lockSessionPair(sessionKey, alias)
-		promoted, err := s.promoteAliasHistoryLocked(sessionKey, alias, scope, aliases)
-		unlock()
-		if err != nil || promoted {
-			return promoted, err
-		}
-	}
-
-	return false, nil
-}
-
-// isMainSessionAlias reports whether alias is the legacy or opaque main-session
-// key.  The main session ("agent:<agent>:main") is a shared fallback and should
-// not have its history promoted into individual per-channel sessions.
-func isMainSessionAlias(alias string) bool {
-	if alias == "" {
-		return false
-	}
-	// Legacy form: "agent:main:main" (exactly 3 colon-separated parts)
-	// Must not match "agent:sales:direct:main" etc.
-	if strings.HasPrefix(alias, "agent:") && strings.HasSuffix(alias, ":main") {
-		parts := strings.SplitN(alias, ":", 4)
-		if len(parts) == 3 {
-			return true
-		}
-	}
-	// Opaque form: "sk_v1_" + SHA256("agent:main:main")
-	if strings.HasPrefix(alias, "sk_v1_") {
-		for _, agentID := range []string{"main", "Main", "MAIN"} {
-			legacy := "agent:" + agentID + ":main"
-			hash := sha256.Sum256([]byte(legacy))
-			if "sk_v1_"+hex.EncodeToString(hash[:]) == alias {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// ResolveSessionKey returns the canonical session key for a candidate key.
-// It short-circuits direct canonical keys when possible, then scans metadata
-// once to resolve aliases or canonical metadata keys.
-func (s *JSONLStore) ResolveSessionKey(_ context.Context, sessionKey string) (string, bool, error) {
-	sessionKey = strings.TrimSpace(sessionKey)
-	if sessionKey == "" {
-		return "", false, nil
-	}
-
-	hasDirectSession := s.sessionExists(sessionKey)
-	if hasDirectSession && shouldShortCircuitSessionResolve(sessionKey) {
-		return sessionKey, true, nil
-	}
-
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return "", false, fmt.Errorf("memory: read sessions dir: %w", err)
-	}
-
-	var directMetaMatch string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if readErr != nil {
-			log.Printf("memory: skipping unreadable meta %s: %v", entry.Name(), readErr)
-			continue
-		}
-
-		var meta SessionMeta
-		if err := json.Unmarshal(data, &meta); err != nil {
-			log.Printf("memory: skipping corrupt meta %s: %v", entry.Name(), err)
-			continue
-		}
-
-		if meta.Key == "" {
-			continue
-		}
-
-		if meta.Key == sessionKey {
-			directMetaMatch = meta.Key
-		}
-
-		for _, alias := range meta.Aliases {
-			if alias == sessionKey && meta.Key != sessionKey {
-				return meta.Key, true, nil
-			}
-		}
-	}
-
-	if directMetaMatch != "" {
-		return directMetaMatch, true, nil
-	}
-
-	if hasDirectSession {
-		return sessionKey, true, nil
-	}
-
-	return "", false, nil
-}
-
-func shouldShortCircuitSessionResolve(sessionKey string) bool {
-	sessionKey = strings.TrimSpace(strings.ToLower(sessionKey))
-	if sessionKey == "" {
-		return false
-	}
-	return !strings.ContainsAny(sessionKey, ":/\\")
-}
-
-func (s *JSONLStore) lockSessionPair(keyA, keyB string) func() {
-	lockA := s.sessionLock(keyA)
-	lockB := s.sessionLock(keyB)
-	if lockA == lockB {
-		lockA.Lock()
-		return func() { lockA.Unlock() }
-	}
-	if keyA <= keyB {
-		lockA.Lock()
-		lockB.Lock()
-		return func() {
-			lockB.Unlock()
-			lockA.Unlock()
-		}
-	}
-	lockB.Lock()
-	lockA.Lock()
-	return func() {
-		lockA.Unlock()
-		lockB.Unlock()
-	}
-}
-
-func (s *JSONLStore) promoteAliasHistoryLocked(
-	sessionKey string,
-	alias string,
-	scope json.RawMessage,
-	aliases []string,
-) (bool, error) {
-	canonicalMeta, err := s.readMeta(sessionKey)
-	if err != nil {
-		return false, err
-	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &canonicalMeta); recoveryErr != nil {
-		return false, recoveryErr
-	}
-	canonicalHasContent, err := s.sessionHasVisibleContentLocked(sessionKey, canonicalMeta)
-	if err != nil {
-		return false, err
-	}
-	if canonicalHasContent {
-		return false, nil
-	}
-
-	aliasMeta, err := s.readMeta(alias)
-	if err != nil {
-		return false, err
-	}
-	if recoveryErr := s.reconcileDirtyHistory(alias, &aliasMeta); recoveryErr != nil {
-		return false, recoveryErr
-	}
-	aliasHistory, err := readMessages(s.jsonlPath(alias), aliasMeta.Skip)
-	if err != nil {
-		return false, err
-	}
-	aliasSummary := strings.TrimSpace(aliasMeta.Summary)
-	if len(aliasHistory) == 0 && aliasSummary == "" {
-		return false, nil
-	}
-
-	previousJSONL, hadPreviousJSONL, err := s.readRawJSONL(sessionKey)
-	if err != nil {
-		return false, err
-	}
-
-	previousCount, previousSkip := canonicalMeta.Count, canonicalMeta.Skip
-	now := time.Now()
-	if canonicalMeta.CreatedAt.IsZero() {
-		canonicalMeta.CreatedAt = now
-	}
-	canonicalMeta.Scope = cloneRawJSON(scope)
-	canonicalMeta.Aliases = normalizeAliases(sessionKey, aliases)
-	canonicalMeta.Skip = 0
-	canonicalMeta.Count = len(aliasHistory)
-	canonicalMeta.UpdatedAt = now
-	if aliasSummary != "" {
-		canonicalMeta.Summary = aliasSummary
-	}
-	canonicalMeta.HistoryHasPrevious = true
-	canonicalMeta.HistoryPreviousCount = previousCount
-	canonicalMeta.HistoryPreviousSkip = previousSkip
-	encodedAliasHistory, encodeErr := encodeJSONL(aliasHistory)
-	if encodeErr != nil {
-		return false, encodeErr
-	}
-	canonicalMeta.HistoryTargetDigest = digestJSONL(encodedAliasHistory)
-
-	if err := s.beginHistoryMutation(sessionKey, &canonicalMeta, true); err != nil {
-		return false, err
-	}
-	if err := s.rewriteJSONLBytes(sessionKey, encodedAliasHistory); err != nil {
-		return false, err
-	}
-	if err := s.finishHistoryMutation(sessionKey, &canonicalMeta); err != nil {
-		if rollbackErr := s.restoreRawJSONL(sessionKey, previousJSONL, hadPreviousJSONL); rollbackErr != nil {
-			return false, fmt.Errorf("memory: write promoted meta: %w (rollback jsonl: %w)", err, rollbackErr)
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-func (s *JSONLStore) sessionHasVisibleContentLocked(sessionKey string, meta SessionMeta) (bool, error) {
-	if strings.TrimSpace(meta.Summary) != "" {
-		return true, nil
-	}
-	history, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
-	if err != nil {
-		return false, err
-	}
-	return len(history) > 0, nil
-}
-
-func (s *JSONLStore) readRawJSONL(sessionKey string) ([]byte, bool, error) {
-	data, err := os.ReadFile(s.jsonlPath(sessionKey))
-	if os.IsNotExist(err) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("memory: read jsonl: %w", err)
-	}
-	return data, true, nil
-}
-
-func (s *JSONLStore) restoreRawJSONL(sessionKey string, data []byte, existed bool) error {
-	path := s.jsonlPath(sessionKey)
-	if !existed {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("memory: remove jsonl rollback: %w", err)
-		}
-		return nil
-	}
-	if err := fileutil.WriteFileAtomic(path, data, 0o644); err != nil {
-		return fmt.Errorf("memory: restore jsonl rollback: %w", err)
-	}
-	return nil
 }
 
 // readMessages reads valid JSON lines from a .jsonl file, skipping

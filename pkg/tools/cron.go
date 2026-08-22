@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
 	"github.com/bogdanovich/mintclaw/pkg/cron"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
@@ -726,7 +727,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return "ok"
 	}
 
-	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
+	sessionKey := session.BuildOpaqueSessionKey(fmt.Sprintf("cron|job=%s|run=%s", job.ID, uuid.New().String()))
 
 	// Call agent with the job message. Scheduled agent turns should not emit
 	// interactive progress/tool-feedback messages; they should only publish a

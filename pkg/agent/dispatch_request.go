@@ -14,7 +14,6 @@ type DispatchRequest struct {
 	RouteSessionKey string
 	BaseSessionKey  string
 	SessionKey      string
-	SessionAliases  []string
 	InboundContext  *bus.InboundContext
 	RouteResult     *routing.ResolvedRoute
 	SessionScope    *session.SessionScope
@@ -86,9 +85,6 @@ func normalizeProcessOptions(opts processOptions) processOptions {
 	if opts.Dispatch.BaseSessionKey == "" {
 		opts.Dispatch.BaseSessionKey = opts.Dispatch.SessionKey
 	}
-	if len(opts.Dispatch.SessionAliases) == 0 && len(opts.SessionAliases) > 0 {
-		opts.Dispatch.SessionAliases = append([]string(nil), opts.SessionAliases...)
-	}
 	if opts.Dispatch.UserMessage == "" {
 		opts.Dispatch.UserMessage = opts.UserMessage
 	}
@@ -127,7 +123,6 @@ func normalizeProcessOptions(opts processOptions) processOptions {
 
 	// Keep legacy mirrors populated while the rest of the runtime migrates.
 	opts.SessionKey = opts.Dispatch.SessionKey
-	opts.SessionAliases = append([]string(nil), opts.Dispatch.SessionAliases...)
 	opts.UserMessage = opts.Dispatch.UserMessage
 	opts.Media = append([]string(nil), opts.Dispatch.Media...)
 	opts.InboundContext = cloneInboundContext(opts.Dispatch.InboundContext)

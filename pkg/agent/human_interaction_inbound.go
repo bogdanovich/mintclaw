@@ -1532,7 +1532,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		// Approval replies arrive on the parent route, but execution resumes in
 		// the agent that owns the durable continuation.
 		continuationScope.AgentID = agent.ID
-		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope, nil)
+		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope)
 	}
 	approvalAllowed := record.Kind == interactions.KindApproval &&
 		record.Outcome == interactions.OutcomeAllowed

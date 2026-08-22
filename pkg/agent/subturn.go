@@ -655,7 +655,6 @@ func spawnSubTurn(
 	dispatch := DispatchRequest{
 		RouteSessionKey: parentTS.opts.Dispatch.RouteSessionKey,
 		SessionKey:      childSessionKey,
-		SessionAliases:  append([]string(nil), parentTS.opts.Dispatch.SessionAliases...),
 		UserMessage:     childTask,
 		Media:           nil,
 		InboundContext:  cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
@@ -663,7 +662,7 @@ func spawnSubTurn(
 		SessionScope:    childSessionScope,
 	}
 	if durableTask {
-		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope, dispatch.SessionAliases)
+		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
 	opts := processOptions{
 		TaskID:                  strings.TrimSpace(cfg.TaskID),

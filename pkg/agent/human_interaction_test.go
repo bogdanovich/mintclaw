@@ -5037,7 +5037,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	)
 	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
 		Version: 1, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
-	}, nil)
+	})
 	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "user", Content: "Find the expired microwave listing",
 	})

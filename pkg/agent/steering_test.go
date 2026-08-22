@@ -2474,8 +2474,7 @@ func TestAgentLoop_AgentForRuntimeScope_UsesStoredScopeMetadata(t *testing.T) {
 		t.Fatal("support session store does not support metadata")
 	}
 
-	alias := "agent:support:slack:channel:c001"
-	key := session.BuildOpaqueSessionKey(alias)
+	key := session.BuildOpaqueSessionKey("route|agent=support|channel=slack|chat=channel:c001")
 	scope := &session.SessionScope{
 		Version:    session.ScopeVersionV1,
 		AgentID:    "support",
@@ -2486,7 +2485,7 @@ func TestAgentLoop_AgentForRuntimeScope_UsesStoredScopeMetadata(t *testing.T) {
 			"chat": "channel:c001",
 		},
 	}
-	metaStore.EnsureSessionMetadata(key, scope, []string{alias})
+	metaStore.EnsureSessionMetadata(key, scope)
 
 	got := al.agentForRuntimeScope(newRuntimeSessionScope(support.Workspace, key), "")
 	if got == nil {

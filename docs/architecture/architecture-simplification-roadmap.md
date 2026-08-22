@@ -611,6 +611,16 @@ Scope:
   store; and
 - convert or retire deployed legacy state during the coordinated cutover.
 
+Implementation sequence:
+
+1. Make the current opaque key and structured scope the only session identity:
+   delete textual-key parsing, generated aliases, metadata alias scans, and
+   history promotion transactions. Existing alias history is intentionally not
+   imported at runtime after this cutover.
+2. Make JSONL and the current state directory the only startup storage:
+   delete JSON-to-JSONL migration, the in-memory store fallback, old-location
+   discovery, and move-on-start behavior.
+
 Exit criteria:
 
 - one session-key format and one session store;
