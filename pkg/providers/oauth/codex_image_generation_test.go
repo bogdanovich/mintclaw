@@ -29,7 +29,7 @@ func (s *mockCodexImageStream) Current() responses.ResponseStreamEventUnion {
 
 func (s *mockCodexImageStream) Err() error { return s.err }
 
-func TestCodexProviderSupportsImageGeneration(t *testing.T) {
+func TestCodexProviderPublishesImageGenerationCapability(t *testing.T) {
 	provider := NewCodexProvider("test-token", "acct-123")
 	capabilities := provider.Capabilities()
 	if !capabilities.ImageGeneration.Supported {

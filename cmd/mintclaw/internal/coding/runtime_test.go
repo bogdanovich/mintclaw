@@ -52,6 +52,12 @@ func (p *blockingCodingProvider) ChatStreamEvents(
 
 func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test" }
 
+func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{
+		Streaming: providers.StreamingCapabilities{Supported: true, Events: true},
+	}
+}
+
 func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"

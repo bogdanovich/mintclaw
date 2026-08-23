@@ -21,12 +21,6 @@ type imageToolCaptureProvider struct {
 	request ImageGenerationRequest
 }
 
-func (p *imageToolCaptureProvider) SupportsImageGeneration() bool { return true }
-
-func (p *imageToolCaptureProvider) ImageGenerationProviderID() string { return "image-capture" }
-
-func (p *imageToolCaptureProvider) DefaultImageGenerationModel() string { return "image-default" }
-
 func (p *imageToolCaptureProvider) GenerateImage(
 	_ context.Context,
 	req ImageGenerationRequest,

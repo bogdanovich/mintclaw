@@ -123,6 +123,12 @@ func (p *configuredStreamingProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+func (p *configuredStreamingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{
+		Streaming: providers.StreamingCapabilities{Supported: true, Events: true},
+	}
+}
+
 type configuredStreamingChatOnlyProvider struct {
 	chatCalls int
 }
