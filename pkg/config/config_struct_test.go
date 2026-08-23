@@ -218,22 +218,28 @@ func TestSkillRegistryConfigJSONIgnoresShadowSecretFields(t *testing.T) {
 	yamlData, err := yaml.Marshal(registry)
 	assert.NoError(t, err)
 	assert.NotContains(t, string(yamlData), "_auth_token")
-	assert.Contains(t, string(yamlData), "proxy: http://127.0.0.1:7890")
+	assert.NotContains(t, string(yamlData), "proxy")
 }
 
-func TestSkillRegistryConfigYAMLIgnoresShadowSecretFields(t *testing.T) {
+func TestSkillRegistryConfigYAMLAcceptsOnlyScalarAuthToken(t *testing.T) {
+	for name, input := range map[string]string{
+		"enabled":      "enabled: true\n",
+		"base_url":     "base_url: https://github.com\n",
+		"proxy":        "proxy: http://127.0.0.1:7890\n",
+		"shadow_token": "_auth_token: shadow-secret\n",
+		"token_map":    "auth_token:\n  value: secret\n",
+		"token_bool":   "auth_token: true\n",
+		"duplicate":    "auth_token: one\nauth_token: two\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var registry SkillRegistryConfig
+			assert.Error(t, yaml.Unmarshal([]byte(input), &registry))
+		})
+	}
+
 	var registry SkillRegistryConfig
-	err := yaml.Unmarshal([]byte(`
-enabled: true
-base_url: https://github.com
-_auth_token: shadow-secret
-proxy: http://127.0.0.1:7890
-`), &registry)
-	assert.NoError(t, err)
-	assert.Equal(t, "https://github.com", registry.BaseURL)
-	assert.Equal(t, "http://127.0.0.1:7890", registry.Param["proxy"])
-	_, exists := registry.Param["_auth_token"]
-	assert.False(t, exists)
+	assert.NoError(t, yaml.Unmarshal([]byte("auth_token: secret\n"), &registry))
+	assert.Equal(t, "secret", registry.AuthToken.String())
 }
 
 func TestSkillRegistryConfigRejectsRemovedFields(t *testing.T) {
@@ -271,20 +277,12 @@ func TestSkillsRegistriesConfigMarshalYAMLIncludesRegistryToken(t *testing.T) {
 	assert.Equal(t, "registry-auth-token", github.AuthToken.String())
 }
 
-func TestSkillsRegistriesConfigUnmarshalYAMLBuildsEntriesFromEmptyMap(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalYAMLRejectsUnconfiguredRegistry(t *testing.T) {
 	var registries SkillsRegistriesConfig
 	err := yaml.Unmarshal([]byte(`github:
-  enabled: true
-  base_url: https://ghe.example.com/git
-  proxy: http://127.0.0.1:7890
+  auth_token: secret
 `), &registries)
-	assert.NoError(t, err)
-
-	github, ok := registries.Get("github")
-	assert.True(t, ok)
-	assert.True(t, github.Enabled)
-	assert.Equal(t, "https://ghe.example.com/git", github.BaseURL)
-	assert.Equal(t, "http://127.0.0.1:7890", github.Param["proxy"])
+	assert.Error(t, err)
 }
 
 func TestSkillsRegistriesConfigMarshalJSONPreservesObjectShape(t *testing.T) {
@@ -374,40 +372,28 @@ func TestSkillsRegistriesConfigUnmarshalYAMLRejectsNullRegistry(t *testing.T) {
 	assert.Error(t, yaml.Unmarshal([]byte("github: null\n"), &registries))
 }
 
-func TestSkillsRegistriesConfigUnmarshalYAMLAddsRegistryToExistingMap(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalYAMLRejectsUnknownRegistry(t *testing.T) {
 	registries := DefaultConfig().Tools.Skills.Registries
 
 	err := yaml.Unmarshal([]byte(`custom:
-  base_url: https://skills.example.com
-  auth_token: custom-token
+  auth_token: secret
 `), &registries)
-	assert.NoError(t, err)
-
-	custom, ok := registries.Get("custom")
-	assert.True(t, ok)
-	assert.Equal(t, "https://skills.example.com", custom.BaseURL)
-	assert.Equal(t, "custom-token", custom.AuthToken.String())
-
-	github, ok := registries.Get("github")
-	assert.True(t, ok)
-	assert.Equal(t, "https://github.com", github.BaseURL)
+	assert.Error(t, err)
 }
 
-func TestSkillsRegistriesConfigUnmarshalYAMLOverridesDefaultRegistryFields(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalYAMLOnlySetsAuthToken(t *testing.T) {
 	registries := DefaultConfig().Tools.Skills.Registries
 
 	err := yaml.Unmarshal([]byte(`github:
-  enabled: false
-  base_url: https://ghe.example.com/git
-  proxy: http://127.0.0.1:7890
+  auth_token: secret
 `), &registries)
 	assert.NoError(t, err)
 
 	github, ok := registries.Get("github")
 	assert.True(t, ok)
-	assert.False(t, github.Enabled)
-	assert.Equal(t, "https://ghe.example.com/git", github.BaseURL)
-	assert.Equal(t, "http://127.0.0.1:7890", github.Param["proxy"])
+	assert.True(t, github.Enabled)
+	assert.Equal(t, "https://github.com", github.BaseURL)
+	assert.Equal(t, "secret", github.AuthToken.String())
 }
 
 func TestSkillsRegistriesConfigUnmarshalYAMLRetainsDefaultsForOmittedFields(t *testing.T) {

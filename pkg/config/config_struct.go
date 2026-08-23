@@ -478,74 +478,34 @@ func (c SkillRegistryConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (c *SkillRegistryConfig) UnmarshalYAML(value *yaml.Node) error {
-	var raw map[string]any
-	if err := value.Decode(&raw); err != nil {
-		return err
-	}
-	if raw == nil {
+	if value == nil || value.Kind != yaml.MappingNode {
 		return fmt.Errorf("skill registry config must be a mapping")
 	}
-	params := cloneRegistryParams(c.Param)
-	if params == nil {
-		params = map[string]any{}
-	}
-	for key, v := range raw {
-		switch key {
-		case "name":
-			return fmt.Errorf("skill registry name must be the registries mapping key")
-		case "token":
-			return fmt.Errorf("skill registry credentials use auth_token")
-		case "enabled":
-			if b, ok := v.(bool); ok {
-				c.Enabled = b
-			}
-		case "base_url":
-			if s, ok := v.(string); ok {
-				c.BaseURL = s
-			}
-		case "auth_token":
-			data, err := yaml.Marshal(v)
-			if err != nil {
-				return err
-			}
-			if err := yaml.Unmarshal(data, &c.AuthToken); err != nil {
-				return err
-			}
-		case "_auth_token":
-			// UI/API shadow secret fields should hydrate SecureString only and must
-			// never be persisted as arbitrary registry params.
-			continue
-		case "param":
-			return fmt.Errorf("skill registry parameters are top-level fields")
-		default:
-			params[key] = v
+	foundAuthToken := false
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		keyNode := value.Content[i]
+		valueNode := value.Content[i+1]
+		if keyNode.Value != "auth_token" {
+			return fmt.Errorf("skill registry security config only accepts auth_token")
 		}
+		if foundAuthToken {
+			return fmt.Errorf("skill registry security config contains duplicate auth_token")
+		}
+		if valueNode.Kind != yaml.ScalarNode || valueNode.Tag != "!!str" {
+			return fmt.Errorf("skill registry auth_token must be a string")
+		}
+		if err := valueNode.Decode(&c.AuthToken); err != nil {
+			return err
+		}
+		foundAuthToken = true
 	}
-	c.Param = params
 	return nil
 }
 
 func (c SkillRegistryConfig) MarshalYAML() (any, error) {
-	m := map[string]any{
-		"enabled":  c.Enabled,
-		"base_url": c.BaseURL,
-	}
+	m := map[string]any{}
 	if c.AuthToken.String() != "" {
 		m["auth_token"] = c.AuthToken
-	}
-	keys := make([]string, 0, len(c.Param))
-	for key := range c.Param {
-		if key == "" || key == "param" || strings.HasPrefix(key, "_") {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if _, exists := m[key]; exists {
-			continue
-		}
-		m[key] = c.Param[key]
 	}
 	return m, nil
 }
@@ -572,7 +532,7 @@ func (v *SkillsRegistriesConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		registry := cloneRegistryConfig((*v)[name])
 		if registry == nil {
-			registry = &SkillRegistryConfig{}
+			return fmt.Errorf("skill registry %q is not configured", name)
 		}
 		if err := registryNode.Decode(registry); err != nil {
 			return err

@@ -631,9 +631,14 @@ skills:
 
 	t.Run("Removed security shapes are rejected", func(t *testing.T) {
 		for name, securityContent := range map[string]string{
-			"clawhub":  "skills:\n  clawhub:\n    auth_token: token\n",
-			"github":   "skills:\n  github:\n    token: token\n",
-			"channels": "channels:\n  telegram:\n    settings:\n      token: token\n",
+			"clawhub":      "skills:\n  clawhub:\n    auth_token: token\n",
+			"github":       "skills:\n  github:\n    token: token\n",
+			"channels":     "channels:\n  telegram:\n    settings:\n      token: token\n",
+			"enabled":      "skills:\n  registries:\n    github:\n      enabled: false\n",
+			"base_url":     "skills:\n  registries:\n    github:\n      base_url: https://attacker.example\n",
+			"proxy":        "skills:\n  registries:\n    github:\n      proxy: http://attacker.example\n",
+			"unknown":      "skills:\n  registries:\n    typo:\n      auth_token: token\n",
+			"token_object": "skills:\n  registries:\n    github:\n      auth_token:\n        value: token\n",
 		} {
 			t.Run(name, func(t *testing.T) {
 				tmpDir := t.TempDir()
