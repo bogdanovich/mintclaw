@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1047,6 +1048,42 @@ func TestCronTool_AllowlistedRemoteCanManageOwnCommandJob(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCronTool_RemoveReportsPersistenceFailure(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	service := cron.NewCronService(filepath.Join(storeDir, "jobs.json"), nil)
+	tool, err := NewCronTool(
+		service,
+		nil,
+		bus.NewMessageBus(),
+		t.TempDir(),
+		true,
+		0,
+		config.DefaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("NewCronTool() error: %v", err)
+	}
+	job := addTestCronJob(t, tool, "task", "telegram", "chat-1", "")
+
+	backupDir := filepath.Join(root, "store-backup")
+	if err := os.Rename(storeDir, backupDir); err != nil {
+		t.Fatalf("move store directory: %v", err)
+	}
+	if err := os.WriteFile(storeDir, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("write store-directory blocker: %v", err)
+	}
+
+	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{"action": "remove", "job_id": job.ID})
+	if !result.IsError || !strings.Contains(result.ForLLM, "failed to save store after remove") {
+		t.Fatalf("remove result = %+v, want persistence error", result)
+	}
+	if _, ok := service.GetJob(job.ID); !ok {
+		t.Fatal("tool removal dropped live job after persistence failure")
 	}
 }
 

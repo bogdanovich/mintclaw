@@ -63,8 +63,8 @@ func cronRemoveCmd(storePath, jobID string) error {
 	if err != nil {
 		return err
 	}
-	if !cs.RemoveJob(jobID) {
-		return fmt.Errorf("job %s not found", jobID)
+	if err := cs.RemoveJob(jobID); err != nil {
+		return err
 	}
 	fmt.Printf("✓ Removed job %s\n", jobID)
 	return nil

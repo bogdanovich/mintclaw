@@ -413,10 +413,10 @@ func (t *CronTool) removeJob(ctx context.Context, args map[string]any) *toolshar
 		return toolshared.ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
 	}
 
-	if t.cronService.RemoveJob(jobID) {
-		return toolshared.SilentResult(fmt.Sprintf("Cron job removed: %s", jobID))
+	if err := t.cronService.RemoveJob(jobID); err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("Error removing job: %v", err))
 	}
-	return toolshared.ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	return toolshared.SilentResult(fmt.Sprintf("Cron job removed: %s", jobID))
 }
 
 func requiredCronJobID(args map[string]any, action string) (string, *toolshared.ToolResult) {

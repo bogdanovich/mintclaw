@@ -142,9 +142,8 @@ func TestCronService_CRUD(t *testing.T) {
 	}
 
 	// Test RemoveJob
-	removed := cs.RemoveJob(job.ID)
-	if !removed || len(cs.store.Jobs) != 0 {
-		t.Error("RemoveJob failed")
+	if err := cs.RemoveJob(job.ID); err != nil || len(cs.store.Jobs) != 0 {
+		t.Errorf("RemoveJob failed: %v", err)
 	}
 }
 
@@ -714,6 +713,47 @@ func TestAddJob_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
 	}
 	if jobs := cs.ListJobs(false); len(jobs) != 0 {
 		t.Fatalf("live store still contains %d job(s) after failed persistence, want 0", len(jobs))
+	}
+}
+
+func TestRemoveJob_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	storePath := filepath.Join(storeDir, "jobs.json")
+	cs := NewCronService(storePath, nil)
+	job, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	original, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("read original store: %v", err)
+	}
+
+	backupDir := filepath.Join(root, "store-backup")
+	if err := os.Rename(storeDir, backupDir); err != nil {
+		t.Fatalf("move store directory: %v", err)
+	}
+	if err := os.WriteFile(storeDir, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("write store-directory blocker: %v", err)
+	}
+
+	if err := cs.RemoveJob(job.ID); err == nil {
+		t.Fatal("RemoveJob succeeded, want persistence failure")
+	}
+	if _, ok := cs.GetJob(job.ID); !ok {
+		t.Fatal("live store lost job after failed removal persistence")
+	}
+	persisted, err := os.ReadFile(filepath.Join(backupDir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("read durable store: %v", err)
+	}
+	if string(persisted) != string(original) {
+		t.Fatal("durable store changed after failed removal persistence")
 	}
 }
 
@@ -1507,7 +1547,7 @@ func TestLoadMissingFileBlocksMutationsDuringReload(t *testing.T) {
 	if err := cs.UpdateJob(job); err == nil {
 		t.Fatalf("UpdateJob succeeded while missing-store reload was pending")
 	}
-	if cs.RemoveJob(job.ID) {
+	if err := cs.RemoveJob(job.ID); err == nil {
 		t.Fatalf("RemoveJob succeeded while missing-store reload was pending")
 	}
 	if _, err := cs.EnableJob(job.ID, false); err == nil {

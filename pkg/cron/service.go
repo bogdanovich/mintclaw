@@ -371,6 +371,7 @@ func (cs *CronService) executeJobByID(jobID string) {
 	var nextRunStr string
 	if job.Schedule.Kind == ScheduleAt {
 		cs.removeJobUnsafe(job.ID)
+		cs.notify()
 		nextRunStr = "(deleted)"
 	} else {
 		nextRun := cs.computeNextRun(&job.Schedule, time.Now().UnixMilli())
@@ -778,15 +779,29 @@ func sameInt64(a, b *int64) bool {
 	return *a == *b
 }
 
-func (cs *CronService) RemoveJob(jobID string) bool {
+func (cs *CronService) RemoveJob(jobID string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
 	if cs.writesBlocked() {
-		return false
+		return cs.storeUnavailableErr()
 	}
 
-	return cs.removeJobUnsafe(jobID)
+	previousJobs := cs.store.Jobs
+	if !cs.removeJobUnsafe(jobID) {
+		return fmt.Errorf("job %s not found", jobID)
+	}
+	if err := cs.saveStoreUnsafe(); err != nil {
+		if fileutil.IsCommittedWriteError(err) {
+			cs.notify()
+			return fmt.Errorf("job %s removed but durability was not confirmed: %w", jobID, err)
+		}
+		cs.store.Jobs = previousJobs
+		return fmt.Errorf("failed to save store after remove: %w", err)
+	}
+
+	cs.notify()
+	return nil
 }
 
 func (cs *CronService) removeJobUnsafe(jobID string) bool {
@@ -798,19 +813,7 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 		}
 	}
 	cs.store.Jobs = jobs
-	removed := len(cs.store.Jobs) < before
-
-	if removed {
-		if !cs.writesBlocked() {
-			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after remove: %v", err)
-			}
-		}
-	}
-
-	cs.notify()
-
-	return removed
+	return len(cs.store.Jobs) < before
 }
 
 func (cs *CronService) EnableJob(jobID string, enabled bool) (*CronJob, error) {
