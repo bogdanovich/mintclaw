@@ -844,16 +844,7 @@ func spawnSubTurn(
 		}
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
 		if strings.TrimSpace(turnRes.finalContent) != "" || turnRes.deliverable != nil || objectiveOutcome != nil {
-			deliverable := taskresult.CloneDeliverable(turnRes.deliverable)
-			if deliverable == nil {
-				deliverable = &taskresult.Deliverable{}
-			}
-			if strings.TrimSpace(deliverable.Text) == "" {
-				deliverable.Text = parentContent
-			}
-			if objectiveOutcome != nil {
-				deliverable.ObjectiveOutcome = cloneObjectiveOutcome(objectiveOutcome)
-			}
+			deliverable := terminalTurnDeliverable(turnRes.deliverable, parentContent, objectiveOutcome)
 			result.WithDeliverable(deliverable)
 			result.Media = append(result.Media, mediaArtifactRefs(deliverable.Artifacts)...)
 		}

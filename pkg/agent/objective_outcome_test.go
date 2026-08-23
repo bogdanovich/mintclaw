@@ -107,6 +107,32 @@ func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	}
 }
 
+func TestTerminalTurnDeliverableMakesValidatedResultCanonical(t *testing.T) {
+	report := &taskresult.Report{ReportID: "publish-report"}
+	base := &taskresult.Deliverable{
+		Text:      "stale tool-owned result",
+		Artifacts: []taskresult.Artifact{{Ref: "file:/tmp/photo.jpg"}},
+		Metadata:  map[string]string{"producer": "browser"},
+		Report:    report,
+	}
+	outcome := &taskresult.Outcome{Status: taskresult.OutcomeSucceeded}
+	deliverable := terminalTurnDeliverable(
+		base,
+		"Published once: https://example.com/item/42; ID: 42",
+		outcome,
+	)
+	if deliverable == nil || deliverable.Text != "Published once: https://example.com/item/42; ID: 42" ||
+		len(deliverable.Artifacts) != 1 || deliverable.Artifacts[0].Ref != "file:/tmp/photo.jpg" ||
+		deliverable.Metadata["producer"] != "browser" || deliverable.Report == nil ||
+		deliverable.Report.ReportID != report.ReportID || deliverable.ObjectiveOutcome == nil ||
+		deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded {
+		t.Fatalf("terminal deliverable = %#v", deliverable)
+	}
+	if base.Text != "stale tool-owned result" || base.ObjectiveOutcome != nil {
+		t.Fatalf("base deliverable was mutated: %#v", base)
+	}
+}
+
 func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
