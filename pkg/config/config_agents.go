@@ -288,8 +288,6 @@ type AgentDefaults struct {
 	Provider                  string               `json:"provider"                         env:"MINTCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	ModelName                 string               `json:"model_name"                       env:"MINTCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	ModelFallbacks            []string             `json:"model_fallbacks,omitempty"`
-	ImageModel                string               `json:"image_model,omitempty"            env:"MINTCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string             `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                  `json:"max_tokens"                       env:"MINTCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	ContextWindow             int                  `json:"context_window,omitempty"         env:"MINTCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64             `json:"temperature,omitempty"            env:"MINTCLAW_AGENTS_DEFAULTS_TEMPERATURE"`

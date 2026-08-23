@@ -536,24 +536,41 @@ func TestValidateToolApprovalConfig(t *testing.T) {
 }
 
 func TestImageGenerateToolsConfig_EffectiveModel(t *testing.T) {
-	defaults := AgentDefaults{}
-
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(defaults); got != "gpt-image-2" {
+	if got := (ImageGenerateToolsConfig{}).EffectiveModel(); got != "gpt-image-2" {
 		t.Fatalf("default model = %q, want gpt-image-2", got)
 	}
 
 	cfg := ImageGenerateToolsConfig{Model: "openai-codex/gpt-image-2"}
-	if got := cfg.EffectiveModel(defaults); got != "openai-codex/gpt-image-2" {
+	if got := cfg.EffectiveModel(); got != "openai-codex/gpt-image-2" {
 		t.Fatalf("tool model = %q, want openai-codex/gpt-image-2", got)
 	}
+}
 
-	defaults.ImageModel = "legacy-image-model"
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(defaults); got != "legacy-image-model" {
-		t.Fatalf("legacy default model = %q, want legacy-image-model", got)
-	}
+func TestDecodeCurrentConfigRejectsRemovedAgentImageModelFields(t *testing.T) {
+	t.Parallel()
 
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(AgentDefaults{}); got != "gpt-image-2" {
-		t.Fatalf("default model = %q, want gpt-image-2", got)
+	for _, test := range []struct {
+		field string
+		value string
+	}{
+		{field: "image_model", value: `"removed"`},
+		{field: "image_model_fallbacks", value: `["removed"]`},
+	} {
+		t.Run(test.field, func(t *testing.T) {
+			t.Parallel()
+
+			raw := fmt.Sprintf(
+				`{"version":%d,"agents":{"defaults":{%q:%s}}}`,
+				CurrentVersion,
+				test.field,
+				test.value,
+			)
+			cfg := DefaultConfig()
+			err := DecodeCurrentConfig([]byte(raw), cfg)
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("DecodeCurrentConfig() error = %v, want removed field %q rejected", err, test.field)
+			}
+		})
 	}
 }
 

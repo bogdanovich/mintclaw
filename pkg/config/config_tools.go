@@ -61,12 +61,9 @@ type ImageGenerateToolsConfig struct {
 	OutputDir  string `yaml:"-"                                            json:"output_dir,omitempty" env:"MINTCLAW_TOOLS_IMAGE_GENERATE_OUTPUT_DIR"`
 }
 
-func (c ImageGenerateToolsConfig) EffectiveModel(defaults AgentDefaults) string {
+func (c ImageGenerateToolsConfig) EffectiveModel() string {
 	if model := strings.TrimSpace(c.Model); model != "" {
 		return model
-	}
-	if legacy := strings.TrimSpace(defaults.ImageModel); legacy != "" {
-		return legacy
 	}
 	return "gpt-image-2"
 }

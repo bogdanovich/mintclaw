@@ -370,7 +370,7 @@ func registerSharedTools(
 		if cfg.Tools.IsToolEnabled("image_generate") {
 			imageGenerateTool := tools.NewImageGenerateTool(
 				agent.Workspace,
-				cfg.Tools.ImageGenerate.EffectiveModel(cfg.Agents.Defaults),
+				cfg.Tools.ImageGenerate.EffectiveModel(),
 				nil,
 				tools.WithImageGenerationOutputDir(cfg.Tools.ImageGenerate.OutputDir),
 			)
