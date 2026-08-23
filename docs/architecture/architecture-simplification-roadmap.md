@@ -714,6 +714,9 @@ Implementation sequence:
 12. Delete the pre-`kind` thought boolean from MintClaw Protocol reads and
     writes. Current gateways, the web frontend, CLI, and client channel use the
     typed `kind: "thought"` discriminator as the single message contract.
+13. Delete arbitrary-turn `GetActiveTurn` and `InterruptGraceful` APIs. Command
+    runtimes bind active-turn inspection to their known workspace and session;
+    graceful interruption is session-scoped and fails closed on ambiguity.
 
 Exit criteria:
 

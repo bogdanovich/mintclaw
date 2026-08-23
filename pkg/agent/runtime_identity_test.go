@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -67,8 +68,9 @@ func testRuntimeSessionScope(al *AgentLoop, sessionKey string) runtimeSessionSco
 	return runtimeSessionScope{sessionKey: sessionKey}
 }
 
-func steerActiveForTest(al *AgentLoop, msg providers.Message) error {
-	active := al.GetActiveTurn()
+func steerActiveForTest(t *testing.T, al *AgentLoop, msg providers.Message) error {
+	t.Helper()
+	active := onlyActiveTurnForTest(t, al)
 	if active == nil {
 		return al.Steer("", "", "", msg)
 	}
@@ -78,6 +80,32 @@ func steerActiveForTest(al *AgentLoop, msg providers.Message) error {
 		workspace = agent.Workspace
 	}
 	return al.Steer(workspace, active.SessionKey, active.AgentID, msg)
+}
+
+func onlyActiveTurnForTest(t *testing.T, al *AgentLoop) *ActiveTurnInfo {
+	t.Helper()
+	if al == nil {
+		return nil
+	}
+	var active *ActiveTurnInfo
+	ambiguous := false
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		if active != nil {
+			ambiguous = true
+			return false
+		}
+		info := ts.snapshot()
+		active = &info
+		return true
+	})
+	if ambiguous {
+		t.Fatal("test expected at most one active turn")
+	}
+	return active
 }
 
 func (al *AgentLoop) agentByRuntimeIDForTest(agentID string) *AgentInstance {
@@ -112,6 +140,35 @@ func TestRuntimeSessionClaimsAreWorkspaceScoped(t *testing.T) {
 	}
 	if err := al.InterruptGracefulSession("shared-session", "stop"); err == nil {
 		t.Fatal("InterruptGracefulSession() admitted an ambiguous session")
+	}
+}
+
+func TestCommandRuntimeInspectsExactTurnScope(t *testing.T) {
+	firstAgent := &AgentInstance{ID: "first", Workspace: "/workspace/first"}
+	secondAgent := &AgentInstance{ID: "second", Workspace: "/workspace/second"}
+	al := &AgentLoop{
+		cfg: &config.Config{},
+		registry: &AgentRegistry{agents: map[string]*AgentInstance{
+			firstAgent.ID: firstAgent, secondAgent.ID: secondAgent,
+		}},
+		cmdRegistry: commands.NewRegistry(nil),
+	}
+	for _, turn := range []*turnState{
+		{turnID: "first-turn", workspace: firstAgent.Workspace, sessionKey: "shared-session"},
+		{turnID: "second-turn", workspace: secondAgent.Workspace, sessionKey: "shared-session"},
+	} {
+		al.registerActiveTurn(turn)
+		defer al.clearActiveTurn(turn)
+	}
+
+	runtime := al.buildCommandsRuntime(
+		context.Background(),
+		effectiveModelBinding{WorkspaceAgent: secondAgent},
+		&turnSpec{Dispatch: DispatchRequest{SessionKey: "shared-session"}},
+	)
+	active := runtime.GetCurrentTurn()
+	if active == nil || active.TurnID != "second-turn" {
+		t.Fatalf("active command turn = %#v, want second workspace turn", active)
 	}
 }
 

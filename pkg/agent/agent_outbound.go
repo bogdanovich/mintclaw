@@ -279,7 +279,9 @@ func (al *AgentLoop) publishResponseWithMetadataAndScopes(
 		msg.ContextUsage = computeContextUsage(agent, sessionKey)
 	}
 	metadata.ApplyToContext(&msg.Context)
-	markFinalOutbound(&msg)
+	if !metadata.IsInterim() {
+		markFinalOutbound(&msg)
+	}
 	if _, err := al.publishTransactionMessage(ctx, workspace, msg); err != nil {
 		return rejectedFinalResponseAdmission(err)
 	}

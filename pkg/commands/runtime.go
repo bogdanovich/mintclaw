@@ -103,7 +103,7 @@ type Runtime struct {
 	ListMCPServers     func(ctx context.Context) []MCPServerInfo
 	ListMCPTools       func(ctx context.Context, serverName string) ([]MCPToolInfo, error)
 	GetEnabledChannels func() []string
-	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
+	GetCurrentTurn     func() *TurnInfo
 	GetContextStats    func() *ContextStats
 	SetSessionModel    func(value string) error
 	ClearSessionModel  func() error

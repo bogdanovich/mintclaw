@@ -518,7 +518,7 @@ func TestAgentLoop_EmitsSteeringAfterCompletedToolBatch(t *testing.T) {
 		t.Fatal("timeout waiting for tool_one to start")
 	}
 
-	if err := steerActiveForTest(al, providers.Message{Role: "user", Content: "change course"}); err != nil {
+	if err := steerActiveForTest(t, al, providers.Message{Role: "user", Content: "change course"}); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
 

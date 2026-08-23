@@ -1796,8 +1796,8 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 		t.Fatal("timeout waiting for tool execution to start")
 	}
 
-	if err := al.InterruptGraceful("stop now"); err != nil {
-		t.Fatalf("InterruptGraceful failed: %v", err)
+	if err := al.InterruptGracefulSession(sessionKey, "stop now"); err != nil {
+		t.Fatalf("InterruptGracefulSession failed: %v", err)
 	}
 
 	select {
@@ -1891,7 +1891,7 @@ func TestAgentLoop_HookRespond_SteeringPreservesRemainingBatch(t *testing.T) {
 				continue
 			}
 			if err := steerActiveForTest(
-				al, providers.Message{Role: "user", Content: "change direction"},
+				t, al, providers.Message{Role: "user", Content: "change direction"},
 			); err != nil {
 				t.Fatal(err)
 			}
