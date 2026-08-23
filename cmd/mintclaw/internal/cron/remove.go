@@ -9,8 +9,7 @@ func newRemoveCommand(storePath func() string) *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		Example: `mintclaw cron remove 1`,
 		RunE: func(_ *cobra.Command, args []string) error {
-			cronRemoveCmd(storePath(), args[0])
-			return nil
+			return cronRemoveCmd(storePath(), args[0])
 		},
 	}
 

@@ -8,8 +8,7 @@ func newListCommand(storePath func() string) *cobra.Command {
 		Short: "List all scheduled jobs",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cronListCmd(storePath())
-			return nil
+			return cronListCmd(storePath())
 		},
 	}
 

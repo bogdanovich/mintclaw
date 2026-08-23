@@ -1,9 +1,12 @@
 package cron
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,5 +57,44 @@ func TestNewCronCommand(t *testing.T) {
 
 		assert.Nil(t, subcmd.PersistentPreRun)
 		assert.Nil(t, subcmd.PersistentPostRun)
+	}
+}
+
+func TestCronSubcommandsRejectUnsupportedAndMalformedStores(t *testing.T) {
+	stores := map[string]string{
+		"v1":           `{"version":1,"jobs":[]}`,
+		"malformed_v2": `{"version":2,"jobs":null}`,
+	}
+
+	for storeName, contents := range stores {
+		t.Run(storeName, func(t *testing.T) {
+			storePath := filepath.Join(t.TempDir(), "jobs.json")
+			require.NoError(t, os.WriteFile(storePath, []byte(contents), 0o600))
+			path := func() string { return storePath }
+
+			commands := map[string]struct {
+				command *cobra.Command
+				args    []string
+			}{
+				"list": {command: newListCommand(path)},
+				"add": {
+					command: newAddCommand(path),
+					args:    []string{"--name", "job", "--message", "run", "--every", "60"},
+				},
+				"remove":  {command: newRemoveCommand(path), args: []string{"job-1"}},
+				"enable":  {command: newEnableCommand(path), args: []string{"job-1"}},
+				"disable": {command: newDisableCommand(path), args: []string{"job-1"}},
+			}
+
+			for commandName, test := range commands {
+				t.Run(commandName, func(t *testing.T) {
+					test.command.SilenceUsage = true
+					test.command.SilenceErrors = true
+					test.command.SetArgs(test.args)
+					err := test.command.Execute()
+					require.ErrorContains(t, err, "load cron store")
+				})
+			}
+		})
 	}
 }

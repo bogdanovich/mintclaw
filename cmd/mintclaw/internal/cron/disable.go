@@ -9,8 +9,7 @@ func newDisableCommand(storePath func() string) *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		Example: `mintclaw cron disable 1`,
 		RunE: func(_ *cobra.Command, args []string) error {
-			cronSetJobEnabled(storePath(), args[0], false)
-			return nil
+			return cronSetJobEnabled(storePath(), args[0], false)
 		},
 	}
 }
