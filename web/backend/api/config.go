@@ -253,11 +253,28 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 	}
 	updated.Session.ApplyDmScope()
 	updated.Session.DeriveDmScope()
-	if err = updated.SecurityCopyFrom(configPath); err != nil {
+	if err = applyMergePatchSecurity(&updated, current, configPath); err != nil {
 		return nil, fmt.Errorf("apply security config: %w", err)
 	}
 	applyConfigSecretsFromMap(&updated, base)
 	return &updated, nil
+}
+
+func applyMergePatchSecurity(updated, current *config.Config, configPath string) error {
+	removedRegistries := make([]string, 0)
+	for _, name := range current.Tools.Skills.Registries.Names() {
+		if _, survives := updated.Tools.Skills.Registries.Get(name); survives {
+			continue
+		}
+		updated.Tools.Skills.Registries.Set(name, config.SkillRegistryConfig{})
+		removedRegistries = append(removedRegistries, name)
+	}
+
+	err := updated.SecurityCopyFrom(configPath)
+	for _, name := range removedRegistries {
+		delete(updated.Tools.Skills.Registries, name)
+	}
+	return err
 }
 
 // handleResetConfig resets the configuration to factory defaults.

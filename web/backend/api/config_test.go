@@ -1458,6 +1458,63 @@ func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing
 	}
 }
 
+func TestHandlePatchConfig_RemovesRegistryWithStoredAuthToken(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Update(func(cfg *config.Config) error {
+		cfg.Tools.Skills.Registries.Set("custom", config.SkillRegistryConfig{
+			Enabled:   true,
+			BaseURL:   "https://skills.example.com",
+			AuthToken: *config.NewSecureString("custom-token"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"tools": {
+			"skills": {
+				"registries": {
+					"custom": null
+				}
+			}
+		}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"PATCH /api/config status = %d, want %d, body=%s",
+			rec.Code,
+			http.StatusOK,
+			rec.Body.String(),
+		)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if _, exists := cfg.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("custom registry still exists after PATCH deletion")
+	}
+	securityData, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("removed registry still exists in .security.yml:\n%s", securityData)
+	}
+}
+
 func TestHandlePatchConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
 	tests := map[string]string{
 		"github sibling": `{"tools":{"skills":{"github":{"token":"old"}}}}`,
