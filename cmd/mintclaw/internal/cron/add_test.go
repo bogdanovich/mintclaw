@@ -23,6 +23,8 @@ func TestNewAddSubcommand(t *testing.T) {
 	assert.NotNil(t, cmd.Flags().Lookup("cron"))
 	assert.NotNil(t, cmd.Flags().Lookup("to"))
 	assert.NotNil(t, cmd.Flags().Lookup("channel"))
+	assert.Equal(t, "direct", cmd.Flags().Lookup("to").DefValue)
+	assert.Equal(t, "cli", cmd.Flags().Lookup("channel").DefValue)
 
 	nameFlag := cmd.Flags().Lookup("name")
 	require.NotNil(t, nameFlag)

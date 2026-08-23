@@ -23,8 +23,12 @@ Examples:
 
 ```bash
 mintclaw cron add --name "Daily summary" --message "Summarize today's logs" --cron "0 18 * * *"
-mintclaw cron add --name "Ping" --message "heartbeat" --every 300 --deliver
+mintclaw cron add --name "Ping" --message "heartbeat" --every 300
 ```
+
+CLI-created jobs use `payload.kind=agent_turn` and default to the `cli/direct`
+delivery target. Use `--channel` and `--to` to select a different explicit
+target.
 
 ## Agent Tool Actions
 
@@ -49,6 +53,10 @@ channels allowed by `tools.cron.command_allowed_remotes`.
 Example tool calls:
 
 ```json
+{"action":"add","message":"Send the daily summary","payload_kind":"agent_turn","cron_expr":"0 18 * * *"}
+```
+
+```json
 {"action":"get","job_id":"79095b2f5685a0f2"}
 ```
 
@@ -56,33 +64,37 @@ Example tool calls:
 {"action":"update","job_id":"79095b2f5685a0f2","cron_expr":"30 10 * * *"}
 ```
 
-`update` accepts `name`, `message`, `command`, and exactly one schedule field
-(`at_seconds`, `every_seconds`, or `cron_expr`).
+`add` requires `message`, `payload_kind`, and exactly one schedule field. The
+tool rejects multiple schedule fields, including zero-valued extras, instead of
+choosing one by priority.
+
+`update` accepts `name`, `message`, `payload_kind`, `command`, and exactly one
+schedule field (`at_seconds`, `every_seconds`, or `cron_expr`).
 Omit `command` to preserve it, set `command` to a non-empty string to replace
 it, or set `command` to `""` to clear it. Command updates require the same
 channel allowlist and confirmation gates as command creation.
 
 ## Execution Modes
 
-Jobs are stored with a message payload and can execute in three stable user-facing modes:
+Jobs are stored with one required `payload.kind` and execute in one of three
+modes:
 
-### `deliver: false`
+### `agent_turn`
 
-This is the default for the cron tool.
+When the job fires, MintClaw sends the saved message through the agent loop as
+a new agent turn. Use this for scheduled work that may need reasoning, tools,
+or a generated reply.
 
-When the job fires, MintClaw sends the saved message back through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply.
+### `deliver_text`
 
-### `deliver: true`
-
-When the job fires, MintClaw publishes the saved message directly to the target channel and recipient without agent processing.
-
-The CLI `mintclaw cron add --deliver` flag uses this mode.
+When the job fires, MintClaw publishes the saved message directly to the target
+channel and recipient without agent processing.
 
 ### `command`
 
-When a cron-tool job includes `command`, MintClaw runs that shell command through the `exec` tool and publishes the command output back to the channel.
-
-For command jobs, `deliver` is forced to `false` when the job is created. The saved `message` becomes descriptive text only; the scheduled action is the shell command.
+MintClaw runs the required `payload.command` through the `exec` tool and
+publishes the output back to the target. The saved `message` is required
+descriptive text. Other payload kinds reject a non-empty command.
 
 The current CLI `mintclaw cron add` command does not expose a `command` flag.
 
@@ -172,6 +184,20 @@ $MINTCLAW_HOME/workspace
 ```
 
 Both the gateway and `mintclaw cron` CLI subcommands use the same `cron/jobs.json` file.
+
+The runtime accepts one current store contract:
+
+- `version` is `2`.
+- `jobs` is a non-null array with unique, non-empty job ids.
+- schedule and payload kinds are explicit and internally consistent.
+- `payload.message`, `payload.channel`, and `payload.to` are non-empty.
+- unknown fields are rejected; `deleteAfterRun` is not part of the contract.
+
+One-time jobs are removed based on `schedule.kind=at`; there is no independent
+deletion flag. Older store versions are not migrated by the runtime. Before a
+coordinated fleet upgrade, convert every deployed store while services are
+stopped, then deploy and start the new binaries. See
+[Cron current-contract cutover](../operations/cron-current-contract-cutover.md).
 
 Notes:
 

@@ -58,21 +58,19 @@ type CronTool struct {
 // execTimeout: 0 means no timeout, >0 sets the timeout duration
 func NewCronTool(
 	cronService *cron.CronService, executor JobExecutor, msgBus *bus.MessageBus, workspace string, restrict bool,
-	execTimeout time.Duration, config *config.Config,
+	execTimeout time.Duration, cfg *config.Config,
 ) (*CronTool, error) {
-	allowCommand := true
-	execEnabled := true
-	var commandAllowedRemotes []string
-	if config != nil {
-		allowCommand = config.Tools.Cron.AllowCommand
-		execEnabled = config.Tools.Exec.Enabled
-		commandAllowedRemotes = config.Tools.Cron.CommandAllowedRemotes
+	if cfg == nil {
+		return nil, fmt.Errorf("cron tool config is required")
 	}
+	allowCommand := cfg.Tools.Cron.AllowCommand
+	execEnabled := cfg.Tools.Exec.Enabled
+	commandAllowedRemotes := cfg.Tools.Cron.CommandAllowedRemotes
 
 	var execTool *ExecTool
 	if execEnabled {
 		var err error
-		execTool, err = NewExecToolWithConfig(workspace, restrict, config)
+		execTool, err = NewExecToolWithConfig(workspace, restrict, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("unable to configure exec tool: %w", err)
 		}
@@ -114,7 +112,7 @@ Use 'every_seconds' ONLY for recurring tasks (e.g., 'every 2 hours' → every_se
 Use 'cron_expr' for complex recurring schedules. 
 Use 'payload_kind=deliver_text' for literal reminders/messages that should be sent later without LLM interpretation. 
 Use 'payload_kind=agent_turn' only for future agent workflows/prompts that should run through the agent when triggered. 
-Use 'command' to execute shell commands directly.`
+Use 'payload_kind=command' with 'command' to execute a shell command directly.`
 }
 
 // Parameters returns the tool parameters schema
@@ -129,7 +127,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"name": map[string]any{
 				"type":        "string",
-				"description": "Optional job display name for update or add.",
+				"description": "Optional replacement job display name for update.",
 			},
 			"message": map[string]any{
 				"type":        "string",
@@ -137,8 +135,8 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"payload_kind": map[string]any{
 				"type":        "string",
-				"enum":        []string{"agent_turn", "deliver_text"},
-				"description": "How to execute the scheduled payload. Use 'deliver_text' for direct reminders/messages to send later without agent reinterpretation. Use 'agent_turn' for future agent prompts/workflows. Default is 'agent_turn' for backward compatibility.",
+				"enum":        []string{"agent_turn", "deliver_text", "command"},
+				"description": "Required for add. Select exactly one execution mode: 'deliver_text' publishes the saved message, 'agent_turn' runs the saved prompt through the agent, and 'command' executes the required command field.",
 			},
 			"command": map[string]any{
 				"type":        "string",
@@ -207,55 +205,34 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 	}
 
 	message, ok := args["message"].(string)
-	if !ok || message == "" {
+	if !ok || strings.TrimSpace(message) == "" {
 		return toolshared.ErrorResult("message is required for add")
 	}
 
-	var schedule cron.CronSchedule
-
-	// Check for at_seconds (one-time), every_seconds (recurring), or cron_expr
-	atSeconds, hasAt := args["at_seconds"].(float64)
-	everySeconds, hasEvery := args["every_seconds"].(float64)
-	cronExpr, hasCron := args["cron_expr"].(string)
-
-	// Fix: type assertions return true for zero values, need additional validity checks
-	// This prevents LLMs that fill unused optional parameters with defaults (0) from triggering wrong type
-	hasAt = hasAt && atSeconds > 0
-	hasEvery = hasEvery && everySeconds > 0
-	hasCron = hasCron && cronExpr != ""
-
-	// Priority: at_seconds > every_seconds > cron_expr
-	if hasAt {
-		atMS := time.Now().UnixMilli() + int64(atSeconds)*1000
-		schedule = cron.CronSchedule{
-			Kind: "at",
-			AtMS: &atMS,
-		}
-	} else if hasEvery {
-		everyMS := int64(everySeconds) * 1000
-		schedule = cron.CronSchedule{
-			Kind:    "every",
-			EveryMS: &everyMS,
-		}
-	} else if hasCron {
-		schedule = cron.CronSchedule{
-			Kind: "cron",
-			Expr: cronExpr,
-		}
-	} else {
+	schedule, hasSchedule, errResult := schedulePatch(args)
+	if errResult != nil {
+		return errResult
+	}
+	if !hasSchedule {
 		return toolshared.ErrorResult("one of at_seconds, every_seconds, or cron_expr is required")
 	}
 
 	// GHSA-pv8c-p6jf-3fpp: command scheduling requires internal channel. When
 	// allow_command is disabled, explicit confirmation is required as an override.
 	// Non-command reminders remain open to all channels.
-	command, _ := args["command"].(string)
+	command, _, commandErr := optionalString(args, "command")
+	if commandErr != nil {
+		return commandErr
+	}
 	commandConfirm, _ := args["command_confirm"].(bool)
 	payloadKind, _, errResult := cronPayloadKind(args, false)
 	if errResult != nil {
 		return errResult
 	}
-	if command != "" {
+	if payloadKind == cron.PayloadCommand {
+		if strings.TrimSpace(command) == "" {
+			return toolshared.ErrorResult("command is required when payload_kind is command")
+		}
 		if !t.execEnabled {
 			return toolshared.ErrorResult("command execution is disabled")
 		}
@@ -267,12 +244,14 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 		if !t.allowCommand && !commandConfirm {
 			return toolshared.ErrorResult("command_confirm=true is required when allow_command is disabled")
 		}
+	} else if strings.TrimSpace(command) != "" {
+		return toolshared.ErrorResult("command requires payload_kind=command")
 	}
 
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
-	job, err := t.cronService.AddJobWithPayload(
+	job, err := t.cronService.AddJob(
 		messagePreview,
 		schedule,
 		cron.CronPayload{
@@ -309,11 +288,11 @@ func (t *CronTool) listJobs(ctx context.Context) *toolshared.ToolResult {
 	result.WriteString("Scheduled jobs:\n")
 	for _, j := range jobs {
 		var scheduleInfo string
-		if j.Schedule.Kind == "every" && j.Schedule.EveryMS != nil {
+		if j.Schedule.Kind == cron.ScheduleEvery && j.Schedule.EveryMS != nil {
 			scheduleInfo = fmt.Sprintf("every %ds", *j.Schedule.EveryMS/1000)
-		} else if j.Schedule.Kind == "cron" {
+		} else if j.Schedule.Kind == cron.ScheduleCron {
 			scheduleInfo = j.Schedule.Expr
-		} else if j.Schedule.Kind == "at" {
+		} else if j.Schedule.Kind == cron.ScheduleAt {
 			scheduleInfo = "one-time"
 		} else {
 			scheduleInfo = "unknown"
@@ -390,7 +369,6 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *toolshar
 	}
 	if hasSchedule {
 		job.Schedule = schedule
-		job.DeleteAfterRun = schedule.Kind == "at"
 		patches++
 	}
 
@@ -399,11 +377,14 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *toolshar
 		return errResult
 	}
 	if commandPresent {
+		job.Payload.Command = command
+		patches++
+	}
+	if (payloadKindPresent && payloadKind == cron.PayloadCommand) ||
+		(commandPresent && strings.TrimSpace(command) != "") {
 		if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
 			return errResult
 		}
-		job.Payload.Command = command
-		patches++
 	}
 
 	if patches == 0 {
@@ -473,23 +454,29 @@ func optionalString(args map[string]any, key string) (string, bool, *toolshared.
 	return text, true, nil
 }
 
-func cronPayloadKind(args map[string]any, optional bool) (string, bool, *toolshared.ToolResult) {
+func cronPayloadKind(args map[string]any, optional bool) (cron.PayloadKind, bool, *toolshared.ToolResult) {
 	value, present := args["payload_kind"]
 	if !present {
 		if optional {
 			return "", false, nil
 		}
-		return "agent_turn", false, nil
+		return "", false, toolshared.ErrorResult("payload_kind is required for add")
 	}
 	kind, ok := value.(string)
 	if !ok {
 		return "", false, toolshared.ErrorResult("payload_kind must be a string")
 	}
 	switch kind {
-	case "agent_turn", "deliver_text":
-		return kind, true, nil
+	case string(cron.PayloadAgentTurn):
+		return cron.PayloadAgentTurn, true, nil
+	case string(cron.PayloadDeliverText):
+		return cron.PayloadDeliverText, true, nil
+	case string(cron.PayloadCommand):
+		return cron.PayloadCommand, true, nil
 	default:
-		return "", false, toolshared.ErrorResult("payload_kind must be one of: agent_turn, deliver_text")
+		return "", false, toolshared.ErrorResult(
+			"payload_kind must be one of: agent_turn, deliver_text, command",
+		)
 	}
 }
 
@@ -503,7 +490,7 @@ func schedulePatch(args map[string]any) (cron.CronSchedule, bool, *toolshared.To
 			return cron.CronSchedule{}, false, errResult
 		}
 		atMS := time.Now().UnixMilli() + seconds*1000
-		schedule = cron.CronSchedule{Kind: "at", AtMS: &atMS}
+		schedule = cron.CronSchedule{Kind: cron.ScheduleAt, AtMS: &atMS}
 		patches++
 	}
 
@@ -513,7 +500,7 @@ func schedulePatch(args map[string]any) (cron.CronSchedule, bool, *toolshared.To
 			return cron.CronSchedule{}, false, errResult
 		}
 		everyMS := seconds * 1000
-		schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
+		schedule = cron.CronSchedule{Kind: cron.ScheduleEvery, EveryMS: &everyMS}
 		patches++
 	}
 
@@ -525,7 +512,7 @@ func schedulePatch(args map[string]any) (cron.CronSchedule, bool, *toolshared.To
 		if strings.TrimSpace(cronExpr) == "" {
 			return cron.CronSchedule{}, false, toolshared.ErrorResult("cron_expr cannot be empty")
 		}
-		schedule = cron.CronSchedule{Kind: "cron", Expr: cronExpr}
+		schedule = cron.CronSchedule{Kind: cron.ScheduleCron, Expr: cronExpr}
 		patches++
 	}
 
@@ -613,7 +600,7 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	if job.Payload.Channel != channel || job.Payload.To != chatID {
 		return false
 	}
-	if job.Payload.Command != "" {
+	if job.Payload.Kind == cron.PayloadCommand {
 		return isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes)
 	}
 	return true
@@ -655,21 +642,11 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 
 // ExecuteJob executes a cron job through the agent
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
-	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
-
-	// Default values if not set
-	if channel == "" {
-		channel = "cli"
-	}
-	if chatID == "" {
-		chatID = "direct"
-	}
 	taskID := t.startCronTaskRecord(job, channel, chatID)
 
-	// Execute command if present
-	if job.Payload.Command != "" {
+	if job.Payload.Kind == cron.PayloadCommand {
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -711,7 +688,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return "ok"
 	}
 
-	if job.Payload.Kind == "deliver_text" {
+	if job.Payload.Kind == cron.PayloadDeliverText {
 		output := job.Payload.Message
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
@@ -725,6 +702,11 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		}
 		t.finishCronTaskRecord(taskID, status, cronDeliveryStatusForPublish(err), output, err)
 		return "ok"
+	}
+	if job.Payload.Kind != cron.PayloadAgentTurn {
+		err := fmt.Errorf("unsupported cron payload kind %q", job.Payload.Kind)
+		t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, taskregistry.DeliveryNotApplicable, "", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
 	sessionKey := session.BuildOpaqueSessionKey(fmt.Sprintf("cron|job=%s|run=%s", job.ID, uuid.New().String()))
@@ -798,10 +780,10 @@ func (t *CronTool) startCronTaskRecord(job *cron.CronJob, channel, chatID string
 	}
 	taskID := fmt.Sprintf("cron-%s-%s", jobID, runID)
 	taskText := job.Payload.Message
-	if strings.TrimSpace(job.Payload.Command) != "" {
+	if job.Payload.Kind == cron.PayloadCommand {
 		taskText = job.Payload.Command
 	}
-	deliveryMode := cronTaskDeliveryMode(job)
+	deliveryMode := string(job.Payload.Kind)
 	_ = t.taskRegistry.Upsert(taskregistry.Record{
 		TaskID:         taskID,
 		Runtime:        taskregistry.RuntimeCron,
@@ -825,19 +807,6 @@ func (t *CronTool) startCronTaskRecord(job *cron.CronJob, channel, chatID string
 		"message_len":   fmt.Sprintf("%d", len(job.Payload.Message)),
 	})
 	return taskID
-}
-
-func cronTaskDeliveryMode(job *cron.CronJob) string {
-	if job == nil {
-		return "agent_turn"
-	}
-	if strings.TrimSpace(job.Payload.Command) != "" {
-		return "command"
-	}
-	if strings.TrimSpace(job.Payload.Kind) == "deliver_text" {
-		return "deliver_text"
-	}
-	return "agent_turn"
 }
 
 func (t *CronTool) finishCronTaskRecord(

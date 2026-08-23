@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,20 +19,38 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
+const CurrentStoreVersion = 2
+
+type ScheduleKind string
+
+const (
+	ScheduleAt    ScheduleKind = "at"
+	ScheduleEvery ScheduleKind = "every"
+	ScheduleCron  ScheduleKind = "cron"
+)
+
 type CronSchedule struct {
-	Kind    string `json:"kind"`
-	AtMS    *int64 `json:"atMs,omitempty"`
-	EveryMS *int64 `json:"everyMs,omitempty"`
-	Expr    string `json:"expr,omitempty"`
-	TZ      string `json:"tz,omitempty"`
+	Kind    ScheduleKind `json:"kind"`
+	AtMS    *int64       `json:"atMs,omitempty"`
+	EveryMS *int64       `json:"everyMs,omitempty"`
+	Expr    string       `json:"expr,omitempty"`
+	TZ      string       `json:"tz,omitempty"`
 }
 
+type PayloadKind string
+
+const (
+	PayloadAgentTurn   PayloadKind = "agent_turn"
+	PayloadDeliverText PayloadKind = "deliver_text"
+	PayloadCommand     PayloadKind = "command"
+)
+
 type CronPayload struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
-	Command string `json:"command,omitempty"`
-	Channel string `json:"channel,omitempty"`
-	To      string `json:"to,omitempty"`
+	Kind    PayloadKind `json:"kind"`
+	Message string      `json:"message"`
+	Command string      `json:"command,omitempty"`
+	Channel string      `json:"channel"`
+	To      string      `json:"to"`
 }
 
 type CronJobState struct {
@@ -41,15 +61,14 @@ type CronJobState struct {
 }
 
 type CronJob struct {
-	ID             string       `json:"id"`
-	Name           string       `json:"name"`
-	Enabled        bool         `json:"enabled"`
-	Schedule       CronSchedule `json:"schedule"`
-	Payload        CronPayload  `json:"payload"`
-	State          CronJobState `json:"state"`
-	CreatedAtMS    int64        `json:"createdAtMs"`
-	UpdatedAtMS    int64        `json:"updatedAtMs"`
-	DeleteAfterRun bool         `json:"deleteAfterRun"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Enabled     bool         `json:"enabled"`
+	Schedule    CronSchedule `json:"schedule"`
+	Payload     CronPayload  `json:"payload"`
+	State       CronJobState `json:"state"`
+	CreatedAtMS int64        `json:"createdAtMs"`
+	UpdatedAtMS int64        `json:"updatedAtMs"`
 }
 
 type CronStore struct {
@@ -70,7 +89,6 @@ type CronService struct {
 	running    bool
 	stopChan   chan struct{}
 	wakeChan   chan struct{}
-	gronx      *gronx.Gronx
 	activeJobs int
 }
 
@@ -78,7 +96,6 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
 		storePath: storePath,
 		onJob:     onJob,
-		gronx:     gronx.New(),
 		// Capacity-one coalescing wake channel: a notification sent while the
 		// loop is not yet in its select stays pending until consumed, so a
 		// recovery signal is never dropped.
@@ -352,15 +369,9 @@ func (cs *CronService) executeJobByID(jobID string) {
 
 	// Compute next run time
 	var nextRunStr string
-	if job.Schedule.Kind == "at" {
-		if job.DeleteAfterRun {
-			cs.removeJobUnsafe(job.ID)
-			nextRunStr = "(deleted)"
-		} else {
-			job.Enabled = false
-			job.State.NextRunAtMS = nil
-			nextRunStr = "(disabled)"
-		}
+	if job.Schedule.Kind == ScheduleAt {
+		cs.removeJobUnsafe(job.ID)
+		nextRunStr = "(deleted)"
 	} else {
 		nextRun := cs.computeNextRun(&job.Schedule, time.Now().UnixMilli())
 		job.State.NextRunAtMS = nextRun
@@ -384,18 +395,18 @@ func (cs *CronService) executeJobByID(jobID string) {
 
 func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int64 {
 	switch schedule.Kind {
-	case "at":
+	case ScheduleAt:
 		if schedule.AtMS != nil && *schedule.AtMS > nowMS {
 			return schedule.AtMS
 		}
 		return nil
-	case "every":
+	case ScheduleEvery:
 		if schedule.EveryMS == nil || *schedule.EveryMS <= 0 {
 			return nil
 		}
 		next := nowMS + *schedule.EveryMS
 		return &next
-	case "cron":
+	case ScheduleCron:
 		if schedule.Expr == "" {
 			return nil
 		}
@@ -403,7 +414,12 @@ func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int6
 		// Use the schedule timezone when provided so cron expressions are
 		// interpreted in the intended wall-clock timezone instead of the host's
 		// local timezone.
-		now := time.UnixMilli(nowMS).In(scheduleLocation(schedule))
+		location, err := scheduleLocation(schedule)
+		if err != nil {
+			log.Printf("[cron] invalid schedule timezone %q: %v", schedule.TZ, err)
+			return nil
+		}
+		now := time.UnixMilli(nowMS).In(location)
 		nextTime, err := gronx.NextTickAfter(schedule.Expr, now, false)
 		if err != nil {
 			log.Printf("[cron] failed to compute next run for expr '%s': %v", schedule.Expr, err)
@@ -418,16 +434,15 @@ func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int6
 	}
 }
 
-func scheduleLocation(schedule *CronSchedule) *time.Location {
+func scheduleLocation(schedule *CronSchedule) (*time.Location, error) {
 	if schedule == nil || schedule.TZ == "" {
-		return time.Local
+		return time.Local, nil
 	}
 	loc, err := time.LoadLocation(schedule.TZ)
 	if err != nil {
-		log.Printf("[cron] failed to load timezone '%s', falling back to local timezone: %v", schedule.TZ, err)
-		return time.Local
+		return nil, err
 	}
-	return loc
+	return loc, nil
 }
 
 // wake up the loop to re-evaluate next wake time immediately (e.g. after add/update/remove jobs)
@@ -512,10 +527,7 @@ func (cs *CronService) Load() error {
 	if store == nil {
 		// A missing authoritative file is an empty store: replace the live
 		// state so jobs deleted from disk cannot run or recreate the file.
-		cs.store = &CronStore{
-			Version: 1,
-			Jobs:    []CronJob{},
-		}
+		cs.store = newEmptyStore()
 	} else {
 		cs.store = store
 	}
@@ -559,10 +571,7 @@ func (cs *CronService) loadStore() error {
 	}
 	if store == nil {
 		// A missing authoritative file is an empty store.
-		cs.store = &CronStore{
-			Version: 1,
-			Jobs:    []CronJob{},
-		}
+		cs.store = newEmptyStore()
 		cs.loadErr = nil
 		return nil
 	}
@@ -582,26 +591,42 @@ func (cs *CronService) readStore() (*CronStore, error) {
 		return nil, err
 	}
 
-	store := &CronStore{
-		Version: 1,
-		Jobs:    []CronJob{},
+	var header struct {
+		Version int `json:"version"`
 	}
-	if err := json.Unmarshal(data, store); err != nil {
+	if err := json.Unmarshal(data, &header); err != nil {
 		return nil, err
 	}
-	return store, nil
+	if header.Version != CurrentStoreVersion {
+		return nil, fmt.Errorf(
+			"unsupported cron store version %d; current version is %d",
+			header.Version,
+			CurrentStoreVersion,
+		)
+	}
+
+	var store CronStore
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&store); err != nil {
+		return nil, err
+	}
+	if err := validateCronStore(&store); err != nil {
+		return nil, err
+	}
+	return &store, nil
 }
 
 func (cs *CronService) ensureStore() {
 	if cs.store == nil {
-		cs.store = &CronStore{
-			Version: 1,
-			Jobs:    []CronJob{},
-		}
+		cs.store = newEmptyStore()
 	}
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
+	if err := validateCronStore(cs.store); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
 		return err
@@ -611,26 +636,8 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
 }
 
+// AddJob persists one complete, validated job atomically.
 func (cs *CronService) AddJob(
-	name string,
-	schedule CronSchedule,
-	payloadKind string,
-	message string,
-	channel, to string,
-) (*CronJob, error) {
-	return cs.AddJobWithPayload(name, schedule, CronPayload{
-		Kind:    payloadKind,
-		Message: message,
-		Channel: channel,
-		To:      to,
-	})
-}
-
-// AddJobWithPayload persists a fully populated payload atomically. Callers
-// that set optional fields (e.g. command jobs) must use this so a failed
-// follow-up write cannot leave a partial job on disk that reappears after
-// restart.
-func (cs *CronService) AddJobWithPayload(
 	name string,
 	schedule CronSchedule,
 	payload CronPayload,
@@ -641,17 +648,18 @@ func (cs *CronService) AddJobWithPayload(
 	if cs.writesBlocked() {
 		return nil, cs.storeUnavailableErr()
 	}
+	if err := validateCronDefinition(name, schedule, payload); err != nil {
+		return nil, err
+	}
 
 	now := time.Now().UnixMilli()
-
-	// One-time tasks (at) should be deleted after execution
-	deleteAfterRun := (schedule.Kind == "at")
-	if payload.Kind == "" {
-		payload.Kind = "agent_turn"
+	jobID, err := generateID()
+	if err != nil {
+		return nil, err
 	}
 
 	job := CronJob{
-		ID:       generateID(),
+		ID:       jobID,
 		Name:     name,
 		Enabled:  true,
 		Schedule: schedule,
@@ -659,9 +667,8 @@ func (cs *CronService) AddJobWithPayload(
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
 		},
-		CreatedAtMS:    now,
-		UpdatedAtMS:    now,
-		DeleteAfterRun: deleteAfterRun,
+		CreatedAtMS: now,
+		UpdatedAtMS: now,
 	}
 
 	cs.store.Jobs = append(cs.store.Jobs, job)
@@ -699,6 +706,9 @@ func (cs *CronService) GetJob(jobID string) (*CronJob, bool) {
 }
 
 func (cs *CronService) UpdateJob(job *CronJob) error {
+	if job == nil {
+		return errors.New("cron job is nil")
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -710,6 +720,9 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 		if cs.store.Jobs[i].ID == job.ID {
 			previous := cs.store.Jobs[i]
 			updated := cloneCronJob(*job)
+			if err := validateCronDefinition(updated.Name, updated.Schedule, updated.Payload); err != nil {
+				return err
+			}
 			now := time.Now().UnixMilli()
 			updated.UpdatedAtMS = now
 			if updated.Enabled {
@@ -778,7 +791,7 @@ func (cs *CronService) RemoveJob(jobID string) bool {
 
 func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	before := len(cs.store.Jobs)
-	var jobs []CronJob
+	jobs := make([]CronJob, 0, len(cs.store.Jobs))
 	for _, job := range cs.store.Jobs {
 		if job.ID != jobID {
 			jobs = append(jobs, job)
@@ -849,13 +862,17 @@ func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 	defer cs.mu.RUnlock()
 
 	if includeDisabled {
-		return cs.store.Jobs
+		jobs := make([]CronJob, len(cs.store.Jobs))
+		for i := range cs.store.Jobs {
+			jobs[i] = cloneCronJob(cs.store.Jobs[i])
+		}
+		return jobs
 	}
 
 	var enabled []CronJob
 	for _, job := range cs.store.Jobs {
 		if job.Enabled {
-			enabled = append(enabled, job)
+			enabled = append(enabled, cloneCronJob(job))
 		}
 	}
 
@@ -865,13 +882,6 @@ func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 func (cs *CronService) Status() map[string]any {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
-
-	var enabledCount int
-	for _, job := range cs.store.Jobs {
-		if job.Enabled {
-			enabledCount++
-		}
-	}
 
 	return map[string]any{
 		"enabled":      cs.running,
@@ -904,12 +914,104 @@ func (cs *CronService) decrementActiveJobs() {
 	cs.mu.Unlock()
 }
 
-func generateID() string {
-	// Use crypto/rand for better uniqueness under concurrent access
+func generateID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to time-based if crypto/rand fails
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", fmt.Errorf("generate cron job id: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
+}
+
+func newEmptyStore() *CronStore {
+	return &CronStore{Version: CurrentStoreVersion, Jobs: []CronJob{}}
+}
+
+func validateCronStore(store *CronStore) error {
+	if store == nil {
+		return errors.New("cron store is nil")
+	}
+	if store.Version != CurrentStoreVersion {
+		return fmt.Errorf(
+			"unsupported cron store version %d; current version is %d",
+			store.Version,
+			CurrentStoreVersion,
+		)
+	}
+	if store.Jobs == nil {
+		return errors.New("cron store jobs must be an array")
+	}
+	ids := make(map[string]struct{}, len(store.Jobs))
+	for i := range store.Jobs {
+		job := &store.Jobs[i]
+		if strings.TrimSpace(job.ID) == "" {
+			return fmt.Errorf("cron job %d id is required", i)
+		}
+		if _, duplicate := ids[job.ID]; duplicate {
+			return fmt.Errorf("cron job %d duplicates id %q", i, job.ID)
+		}
+		ids[job.ID] = struct{}{}
+		if err := validateCronDefinition(job.Name, job.Schedule, job.Payload); err != nil {
+			return fmt.Errorf("cron job %q: %w", job.ID, err)
+		}
+	}
+	return nil
+}
+
+func validateCronDefinition(name string, schedule CronSchedule, payload CronPayload) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("cron job name is required")
+	}
+	if err := validateCronSchedule(schedule); err != nil {
+		return err
+	}
+	return validateCronPayload(payload)
+}
+
+func validateCronSchedule(schedule CronSchedule) error {
+	switch schedule.Kind {
+	case ScheduleAt:
+		if schedule.AtMS == nil || schedule.EveryMS != nil || schedule.Expr != "" || schedule.TZ != "" {
+			return errors.New("at schedule requires only atMs")
+		}
+	case ScheduleEvery:
+		if schedule.EveryMS == nil || *schedule.EveryMS <= 0 || schedule.AtMS != nil ||
+			schedule.Expr != "" || schedule.TZ != "" {
+			return errors.New("every schedule requires only a positive everyMs")
+		}
+	case ScheduleCron:
+		if strings.TrimSpace(schedule.Expr) == "" || schedule.AtMS != nil || schedule.EveryMS != nil {
+			return errors.New("cron schedule requires only expr and optional tz")
+		}
+		if !gronx.IsValid(schedule.Expr) {
+			return fmt.Errorf("invalid cron expression %q", schedule.Expr)
+		}
+		if _, err := scheduleLocation(&schedule); err != nil {
+			return fmt.Errorf("invalid cron timezone %q: %w", schedule.TZ, err)
+		}
+	default:
+		return fmt.Errorf("unsupported cron schedule kind %q", schedule.Kind)
+	}
+	return nil
+}
+
+func validateCronPayload(payload CronPayload) error {
+	if strings.TrimSpace(payload.Message) == "" {
+		return errors.New("cron payload message is required")
+	}
+	if strings.TrimSpace(payload.Channel) == "" || strings.TrimSpace(payload.To) == "" {
+		return errors.New("cron payload channel and recipient are required")
+	}
+	switch payload.Kind {
+	case PayloadAgentTurn, PayloadDeliverText:
+		if strings.TrimSpace(payload.Command) != "" {
+			return fmt.Errorf("cron payload kind %q cannot include command", payload.Kind)
+		}
+	case PayloadCommand:
+		if strings.TrimSpace(payload.Command) == "" {
+			return errors.New("command cron payload requires command")
+		}
+	default:
+		return fmt.Errorf("unsupported cron payload kind %q", payload.Kind)
+	}
+	return nil
 }
