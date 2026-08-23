@@ -32,7 +32,12 @@ func TestLoadConfig_SubagentsSessionModelOverrideMode(t *testing.T) {
 					"session_model_override_mode": "ignore"
 				}
 			}]
-		}
+		},
+		"model_list": [
+			{"model_name": "gpt-5.4", "model": "openai/gpt-5.4"},
+			{"model_name": "gemini-flash-lite", "model": "gemini/gemini-flash-lite"},
+			{"model_name": "deepseek", "model": "deepseek/deepseek-chat"}
+		]
 	}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

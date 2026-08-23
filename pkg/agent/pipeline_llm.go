@@ -852,13 +852,13 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 	ts *turnState,
 	exec *turnExecution,
 	llm *LLMIterationState,
-) {
+) error {
 	if p == nil || ts == nil || ts.agent == nil || exec == nil || llm == nil {
-		return
+		return nil
 	}
 	rawModel := strings.TrimSpace(llm.llmModel)
 	if rawModel == "" {
-		return
+		return nil
 	}
 
 	execution, cleanup, err := p.Context.ModelExecution.buildExecutionStateForModel(
@@ -867,28 +867,7 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 		nil,
 	)
 	if err != nil {
-		logger.WarnCF(
-			"agent",
-			"BeforeLLM model rewrite could not rebuild dedicated execution state; falling back to active provider",
-			map[string]any{
-				"agent_id": ts.agent.ID,
-				"model":    rawModel,
-				"error":    err.Error(),
-			},
-		)
-		candidates := p.modelCandidates(rawModel, nil)
-		exec.model.selectedCandidates = append([]providers.FallbackCandidate(nil), candidates...)
-		exec.model.activeCandidates = candidates
-		exec.model.activeModel = resolvedCandidateModel(candidates, rawModel)
-		llm.llmModel = exec.model.activeModel
-		exec.model.activeModelConfig = p.activeModelConfig(
-			ts.agent.Workspace,
-			candidates,
-			rawModel,
-		)
-		exec.model.llmModelName = resolvedCandidateModelName(candidates, rawModel)
-		exec.model.autoFallback = false
-		return
+		return fmt.Errorf("before_llm model rewrite %q: %w", rawModel, err)
 	}
 	exec.model.selectedCandidates = append(
 		[]providers.FallbackCandidate(nil),
@@ -910,6 +889,7 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 	exec.model.llmModelName = resolvedCandidateModelName(execution.Candidates, rawModel)
 	exec.model.usedLight = false
 	exec.model.autoFallback = false
+	return nil
 }
 
 func providerForFallbackCandidate(

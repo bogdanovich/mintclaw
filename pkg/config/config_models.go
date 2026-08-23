@@ -131,6 +131,9 @@ func (c *ModelConfig) Validate() error {
 	if c.ModelName == "" {
 		return fmt.Errorf("model_name is required")
 	}
+	if c.ModelName != strings.TrimSpace(c.ModelName) {
+		return fmt.Errorf("model_name must not have surrounding whitespace")
+	}
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}

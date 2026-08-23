@@ -418,6 +418,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	cfg.Agents.Defaults.ContextManager = "none"
 	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "configured-model"
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "configured-model",
+		Provider:  "test-provider",
+		Model:     "configured-model",
+	}}
 	cfg.Agents.Defaults.TurnProfile = config.TurnProfileConfig{
 		Enabled: true,
 		Skills:  config.TurnProfileBlock{Mode: config.TurnProfileModeOff},

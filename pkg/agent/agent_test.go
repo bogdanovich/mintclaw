@@ -1216,6 +1216,7 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1268,6 +1269,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 			{
 				ModelName: "plain-model",
 				Model:     "openai/plain-model",
+				Enabled:   true,
 			},
 		},
 	}
@@ -1275,6 +1277,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1360,7 +1363,9 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 
 	originalProvider := exec.model.activeProvider
 	llm := &LLMIterationState{llmModel: "hook-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1599,7 +1604,9 @@ func TestPipeline_CallLLM_BeforeLLMRewriteDoesNotMutateStickyAutoFallbackSelecti
 	}
 
 	llm := &LLMIterationState{llmModel: "fallback-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1634,16 +1641,19 @@ func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				ModelName:         "test-model",
-				ModelFallbacks:    []string{"openai/fallback-model"},
+				ModelFallbacks:    []string{"fallback-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
-			ThinkingLevel: "off",
-		}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName:     "test-model",
+				Model:         "openai/test-model",
+				ThinkingLevel: "off",
+			},
+			{ModelName: "fallback-model", Model: "openai/fallback-model"},
+		},
 	}
 
 	al := NewAgentLoop(
@@ -1831,6 +1841,10 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "test-model",
+			Model:     "openai/test-model",
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -2051,6 +2065,11 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "primary-model", Model: "openai/primary-model"},
+			{ModelName: "fallback-model", Model: "openai/fallback-model"},
+			{ModelName: "hook-model", Model: "openai/hook-model"},
 		},
 	}
 

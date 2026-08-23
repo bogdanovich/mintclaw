@@ -21,6 +21,10 @@ func newSessionGoalPromptLoop(t *testing.T) (*AgentLoop, *AgentInstance, *turnPr
 				MaxToolIterations: 4,
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "test-model",
+			Model:     "openai/test-model",
+		}},
 	}, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {

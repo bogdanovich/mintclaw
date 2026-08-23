@@ -555,58 +555,20 @@ func (al *AgentLoop) sideQuestionModelConfig(
 	if agent == nil {
 		return nil, fmt.Errorf("sideQuestionModelConfig: no agent available for /btw")
 	}
-
+	modelName := strings.TrimSpace(baseModelName)
+	var candidates []providers.FallbackCandidate
 	if name := modelAliasFromCandidateIdentityKey(candidate.IdentityKey); name != "" {
-		modelCfg, err := resolvedModelConfig(al.GetConfig(), name, agent.Workspace)
-		if err == nil {
-			return modelCfg, nil
-		}
-		// Fallback: create a minimal config if lookup fails
+		modelName = name
+		candidates = []providers.FallbackCandidate{candidate}
 	}
-
-	// Older identity keys used provider/model; keep resolving those by model.
-	if name := modelNameFromIdentityKey(candidate.IdentityKey); name != "" {
-		modelCfg, err := resolvedModelConfig(al.GetConfig(), name, agent.Workspace)
-		if err == nil {
-			return modelCfg, nil
-		}
-		// Fallback: create a minimal config if lookup fails
+	modelCfg := resolveActiveModelConfig(
+		al.GetConfig(),
+		agent.Workspace,
+		candidates,
+		modelName,
+	)
+	if modelCfg == nil {
+		return nil, fmt.Errorf("sideQuestionModelConfig: model %q is not configured", modelName)
 	}
-
-	if candidate.Provider != "" && candidate.Model != "" {
-		candidateRef := providers.NormalizeProvider(candidate.Provider) + "/" + candidate.Model
-		if modelCfg, err := resolvedModelConfig(al.GetConfig(), candidateRef, agent.Workspace); err == nil {
-			return modelCfg, nil
-		}
-		return &config.ModelConfig{
-			ModelName: candidateRef,
-			Model:     candidateRef,
-			Workspace: agent.Workspace,
-		}, nil
-	}
-
-	// Otherwise, clean up the base model name and use it
-	baseModelName = strings.TrimSpace(baseModelName)
-	modelCfg, err := resolvedModelConfig(al.GetConfig(), baseModelName, agent.Workspace)
-	if err != nil {
-		// Fallback: create a minimal config for test scenarios
-		model := strings.TrimSpace(baseModelName)
-		if candidate.Model != "" {
-			model = candidate.Model
-		}
-		if candidate.Provider != "" && candidate.Model != "" {
-			model = providers.NormalizeProvider(candidate.Provider) + "/" + candidate.Model
-		} else {
-			model = ensureProtocolModel(model)
-		}
-		return &config.ModelConfig{
-			ModelName: baseModelName,
-			Model:     model,
-			Workspace: agent.Workspace,
-		}, nil
-	}
-
-	// If candidate specifies a different provider/model, override
-	clone := *modelCfg
-	return &clone, nil
+	return modelCfg, nil
 }

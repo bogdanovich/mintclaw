@@ -99,7 +99,9 @@ func (p *Pipeline) prepareLLMRequest(
 					delete(llm.llmOpts, "native_search")
 				}
 				if strings.TrimSpace(llm.llmModel) != "" && llm.llmModel != previousModel {
-					p.applyBeforeLLMModelRewrite(ts, exec, llm)
+					if err := p.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+						return llmStageResult{}, err
+					}
 					applyTurnThinkingOptions(exec, llm, execution, exec.model.activeProvider, true)
 				}
 			}

@@ -382,6 +382,9 @@ func validateConfig(cfg *config.Config) []string {
 	if err := cfg.ValidateModelList(); err != nil {
 		errs = append(errs, err.Error())
 	}
+	if err := cfg.ValidateModelReferences(); err != nil {
+		errs = append(errs, err.Error())
+	}
 
 	if err := cfg.ValidateTurnProfile(); err != nil {
 		errs = append(errs, err.Error())

@@ -179,10 +179,8 @@ live personal deployment.
 | `skills.external_registry` | warning | External registries influence skill discovery/install inputs. | Enable only trusted registries and review installed skills. | Does not fetch registry metadata. |
 | `skills.workspace_global_shadowing` | info | Workspace skills may shadow or supplement global skills. | Keep trusted skill sources separated from untrusted workspaces. | Reports locally knowable workspace differences only. |
 | `skills.automatic_mutability` | info | Skill discovery can feed later installation workflows. | Keep `install_skill` disabled unless delegated installs are intentional. | Discovery itself is not treated as mutation. |
-| `models.fallback_missing` | fail | Missing model fallback references break deterministic failover. | Add the referenced model or remove the fallback. | Static model-list references only. |
 | `models.fallback_duplicate` | warning | Duplicate fallbacks reduce failover clarity. | Remove duplicate fallback names. | Does not judge provider equivalence. |
 | `models.fallback_cycle` | fail | Cyclic fallback chains can prevent predictable failover. | Remove an edge in the cycle. | Reports configured graph cycles only. |
-| `agents.fallback_missing` | fail | Missing agent/subagent model references can prevent startup or delegation. | Add the model or update the reference. | Static agent model references only. |
 | `tokens.context_inconsistent` | fail/warning | Inconsistent token/window/summarization settings can produce invalid requests or ineffective compaction. | Keep `max_tokens` below context and summarization thresholds sane. | Uses configured defaults, not provider runtime metadata. |
 | `state.unreadable` | error | Malformed or unreadable persisted state prevents a trustworthy operational audit. | Repair permissions/JSON or restore trusted state. | Contents and parse details are omitted to avoid leaking task data. |
 | `tasks.stale_active` | fail | Old queued/running tasks may have lost their runtime owner. | Inspect and reconcile or restart affected tasks. | Uses persisted heartbeat/start/create timestamps and a configurable threshold. |

@@ -43,9 +43,15 @@ func newHookTestLoop(
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "test-model", Model: "openai/test-model", Enabled: true},
+			{ModelName: "hook-model", Model: "openai/hook-model", Enabled: true},
+			{ModelName: "process-model", Model: "openai/process-model", Enabled: true},
+		},
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	useTestSideQuestionProvider(al, provider)
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected default agent")
