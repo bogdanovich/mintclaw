@@ -386,22 +386,22 @@ func (v *SkillsRegistriesConfig) UnmarshalJSON(data []byte) error {
 	if registriesByName == nil {
 		return fmt.Errorf("skills registries must be an object")
 	}
-	if *v == nil {
-		*v = make(SkillsRegistriesConfig, len(registriesByName))
-	}
+	existing := *v
+	decoded := make(SkillsRegistriesConfig, len(registriesByName))
 	for _, name := range sortedRegistryNamesFromJSON(registriesByName) {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name {
 			return fmt.Errorf("skill registry name is required")
 		}
-		registry := cloneRegistryConfig((*v)[name])
+		registry := cloneRegistryConfig(existing[name])
 		if registry == nil {
 			registry = &SkillRegistryConfig{}
 		}
 		if err := json.Unmarshal(registriesByName[name], registry); err != nil {
 			return err
 		}
-		(*v)[name] = registry
+		decoded[name] = registry
 	}
+	*v = decoded
 	return nil
 }
 
@@ -517,6 +517,7 @@ func (v *SkillsRegistriesConfig) UnmarshalYAML(value *yaml.Node) error {
 	if *v == nil {
 		*v = make(SkillsRegistriesConfig, len(value.Content)/2)
 	}
+	seen := make(map[string]struct{}, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		nameNode := value.Content[i]
 		registryNode := value.Content[i+1]
@@ -527,6 +528,10 @@ func (v *SkillsRegistriesConfig) UnmarshalYAML(value *yaml.Node) error {
 		if name == "" || name != nameNode.Value {
 			return fmt.Errorf("skill registry name is required")
 		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("skills registries contain duplicate registry %q", name)
+		}
+		seen[name] = struct{}{}
 		if registryNode.Tag == "!!null" {
 			return fmt.Errorf("skill registry %q config must be a mapping", name)
 		}

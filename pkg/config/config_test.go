@@ -3075,6 +3075,84 @@ func TestLoadConfig_AppliesGitHubRegistryEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DoesNotRestoreRemovedRegistriesWithoutEnvOverrides(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if names := cfg.Tools.Skills.Registries.Names(); len(names) != 0 {
+		t.Fatalf("registry names = %v, want none", names)
+	}
+}
+
+func TestLoadConfig_EnvOverrideCreatesRemovedRegistryFromCurrentDefaults(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	t.Setenv(envSkillsGitHubProxy, "http://127.0.0.1:7890")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("github registry missing")
+	}
+	if !github.Enabled || github.BaseURL != "https://github.com" {
+		t.Fatalf("github registry = %#v, want current defaults", github)
+	}
+	if got := github.Param["proxy"]; got != "http://127.0.0.1:7890" {
+		t.Fatalf("proxy = %v, want environment override", got)
+	}
+	if _, ok = cfg.Tools.Skills.Registries.Get("clawhub"); ok {
+		t.Fatal("clawhub registry restored without an override")
+	}
+}
+
+func unsetSkillsRegistryEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		envSkillsClawHubEnabled,
+		envSkillsClawHubBaseURL,
+		envSkillsClawHubAuthToken,
+		envSkillsClawHubSearchPath,
+		envSkillsClawHubSkillsPath,
+		envSkillsClawHubDownloadPath,
+		envSkillsClawHubTimeout,
+		envSkillsClawHubMaxZipSize,
+		envSkillsClawHubMaxResponseSize,
+		envSkillsGitHubEnabled,
+		envSkillsGitHubBaseURL,
+		envSkillsGitHubAuthToken,
+		envSkillsGitHubProxy,
+	} {
+		value, set := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("Unsetenv(%q): %v", name, err)
+		}
+		t.Cleanup(func() {
+			if set {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+}
+
 func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")

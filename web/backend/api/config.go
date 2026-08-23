@@ -97,9 +97,18 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
 	}
 
-	// Load existing config and copy security credentials before validation,
-	// so that security-managed fields (e.g. mintclaw token) are available.
-	err = cfg.SecurityCopyFrom(h.configPath)
+	// Copy security credentials from the same durable revision the client
+	// replaced, while allowing the replacement to remove registry entries.
+	current, err := h.configRepository().ReadDurable()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if current.Revision != expectedRevision {
+		writeConfigConflict(w, &config.ConflictError{Expected: expectedRevision, Actual: current.Revision})
+		return
+	}
+	err = cfg.SecurityCopyForReplacement(h.configPath, current.Config)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to apply security config: %v", err), http.StatusInternalServerError)
 		return
@@ -253,28 +262,11 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 	}
 	updated.Session.ApplyDmScope()
 	updated.Session.DeriveDmScope()
-	if err = applyMergePatchSecurity(&updated, current, configPath); err != nil {
+	if err = updated.SecurityCopyForReplacement(configPath, current); err != nil {
 		return nil, fmt.Errorf("apply security config: %w", err)
 	}
 	applyConfigSecretsFromMap(&updated, base)
 	return &updated, nil
-}
-
-func applyMergePatchSecurity(updated, current *config.Config, configPath string) error {
-	removedRegistries := make([]string, 0)
-	for _, name := range current.Tools.Skills.Registries.Names() {
-		if _, survives := updated.Tools.Skills.Registries.Get(name); survives {
-			continue
-		}
-		updated.Tools.Skills.Registries.Set(name, config.SkillRegistryConfig{})
-		removedRegistries = append(removedRegistries, name)
-	}
-
-	err := updated.SecurityCopyFrom(configPath)
-	for _, name := range removedRegistries {
-		delete(updated.Tools.Skills.Registries, name)
-	}
-	return err
 }
 
 // handleResetConfig resets the configuration to factory defaults.
@@ -289,8 +281,8 @@ func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
 		defaults := config.DefaultConfig()
 		defaults.Session.ApplyDmScope()
 		defaults.Session.DeriveDmScope()
-		if securityErr := defaults.SecurityCopyFrom(h.configPath); securityErr != nil {
-			logger.WarnF("could not preserve security config", map[string]any{"error": securityErr})
+		if securityErr := defaults.SecurityCopyForReplacement(h.configPath, cfg); securityErr != nil {
+			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
 		*cfg = *defaults
 		return nil

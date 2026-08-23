@@ -328,7 +328,7 @@ func TestSkillsRegistriesConfigMarshalJSONPreservesObjectShape(t *testing.T) {
 	assert.Equal(t, "https://clawhub.ai", clawhub.BaseURL)
 }
 
-func TestSkillsRegistriesConfigUnmarshalJSONPreservesDefaultRegistries(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalJSONUsesDefaultsOnlyForConfiguredRegistries(t *testing.T) {
 	registries := DefaultConfig().Tools.Skills.Registries
 
 	err := json.Unmarshal([]byte(`{
@@ -343,11 +343,8 @@ func TestSkillsRegistriesConfigUnmarshalJSONPreservesDefaultRegistries(t *testin
 	assert.True(t, clawhub.Enabled)
 	assert.Equal(t, "https://clawhub.example.com", clawhub.BaseURL)
 
-	github, ok := registries.Get("github")
-	assert.True(t, ok)
-	assert.True(t, github.Enabled)
-	assert.Equal(t, "https://github.com", github.BaseURL)
-	assert.Empty(t, github.Param)
+	_, ok = registries.Get("github")
+	assert.False(t, ok)
 }
 
 func TestSkillsRegistriesConfigUnmarshalJSONRejectsListShape(t *testing.T) {
@@ -379,6 +376,17 @@ func TestSkillsRegistriesConfigUnmarshalYAMLRejectsUnknownRegistry(t *testing.T)
   auth_token: secret
 `), &registries)
 	assert.Error(t, err)
+}
+
+func TestSkillsRegistriesConfigUnmarshalYAMLRejectsDuplicateRegistry(t *testing.T) {
+	registries := DefaultConfig().Tools.Skills.Registries
+
+	err := yaml.Unmarshal([]byte(`github:
+  auth_token: first
+github:
+  auth_token: second
+`), &registries)
+	assert.ErrorContains(t, err, `duplicate registry "github"`)
 }
 
 func TestSkillsRegistriesConfigUnmarshalYAMLOnlySetsAuthToken(t *testing.T) {

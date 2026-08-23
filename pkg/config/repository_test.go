@@ -753,6 +753,36 @@ func TestRepositoryResetToDefaultsBacksUpAndPreservesDefaultModelCredential(t *t
 	}
 }
 
+func TestRepositoryResetToDefaultsDropsCustomRegistryCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Tools.Skills.Registries.Set("custom", SkillRegistryConfig{
+		Enabled:   true,
+		BaseURL:   "https://skills.example.com",
+		AuthToken: *NewSecureString("custom-token"),
+	})
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	snapshot, err := repository.ResetToDefaults()
+	if err != nil {
+		t.Fatalf("ResetToDefaults() error = %v", err)
+	}
+	if _, exists := snapshot.Config.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("ResetToDefaults() retained custom registry")
+	}
+	securityData, err := os.ReadFile(securityPath(path))
+	if err != nil {
+		t.Fatalf("ReadFile(security) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("ResetToDefaults() retained custom registry security:\n%s", securityData)
+	}
+}
+
 func TestRepositoryResetSerializesConcurrentUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()

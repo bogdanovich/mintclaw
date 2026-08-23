@@ -624,9 +624,8 @@ skills:
 		assert.Equal(t, "https://skills.example.com", customRegistry.BaseURL)
 		assert.Equal(t, "custom-registry-token-from-file", customRegistry.AuthToken.String())
 
-		githubRegistry, ok := cfg.Tools.Skills.Registries.Get("github")
-		require.True(t, ok)
-		assert.Equal(t, "https://github.com", githubRegistry.BaseURL)
+		_, ok = cfg.Tools.Skills.Registries.Get("github")
+		assert.False(t, ok)
 	})
 
 	t.Run("Removed security shapes are rejected", func(t *testing.T) {
