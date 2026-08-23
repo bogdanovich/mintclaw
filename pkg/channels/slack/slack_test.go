@@ -453,7 +453,7 @@ func TestSlackChannelSend_ToolFeedbackUsesTransportSend(t *testing.T) {
 		}},
 	}
 
-	msgIDs, err := ch.Send(context.Background(), toolFeedback)
+	msgIDs, err := ch.sendText(context.Background(), toolFeedback)
 	if err != nil {
 		t.Fatalf("first Send() error = %v", err)
 	}
@@ -464,7 +464,7 @@ func TestSlackChannelSend_ToolFeedbackUsesTransportSend(t *testing.T) {
 		t.Fatalf("posted = %v, want 1 message", posted)
 	}
 	toolFeedback.Content = "Media working...\n• tool: `delegate`"
-	msgIDs, err = ch.Send(context.Background(), toolFeedback)
+	msgIDs, err = ch.sendText(context.Background(), toolFeedback)
 	if err != nil {
 		t.Fatalf("second Send() error = %v", err)
 	}
@@ -519,7 +519,7 @@ func TestSlackChannelSend_FormatsFinalMessageForSlack(t *testing.T) {
 		return "msg-1", nil
 	}
 
-	msgIDs, err := ch.Send(context.Background(), bus.OutboundMessage{
+	msgIDs, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "C123456",
 		Content: "## Main idea\n**Bold**\n- item\n[link](https://example.com)",
 	})

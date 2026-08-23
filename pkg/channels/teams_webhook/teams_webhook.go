@@ -130,7 +130,14 @@ func (c *TeamsWebhookChannel) Stop(ctx context.Context) error {
 
 // Send delivers a message to the specified Teams webhook target.
 // The target is selected by msg.ChatID which must match a key in the webhooks map.
-func (c *TeamsWebhookChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *TeamsWebhookChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *TeamsWebhookChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

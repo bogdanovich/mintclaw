@@ -36,7 +36,14 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 }
 
 // Send is a stub method to satisfy the Channel interface
-func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *FeishuChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendOutboundText)
+}
+
+func (c *FeishuChannel) sendOutboundText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	return nil, errUnsupported
 }
 

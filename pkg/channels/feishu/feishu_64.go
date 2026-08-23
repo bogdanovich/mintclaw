@@ -148,7 +148,14 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 
 // Send sends a message using Interactive Card format for markdown rendering.
 // Falls back to plain text message if card sending fails (e.g., table limit exceeded).
-func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *FeishuChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendOutboundText)
+}
+
+func (c *FeishuChannel) sendOutboundText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	messageIDs, _, err := c.sendMessage(ctx, msg)
 	return messageIDs, err
 }

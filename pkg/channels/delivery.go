@@ -82,9 +82,8 @@ func RejectedDelivery[T any](err error) DeliveryResult[T] {
 	}
 }
 
-// FailedDelivery maps a legacy channel result into the shared delivery
-// contract. Remaining may be supplied only when the adapter knows the payload
-// that has not completed.
+// FailedDelivery classifies a failed transport operation. Remaining may be
+// supplied only when the transport knows which payload has not completed.
 func FailedDelivery[T any](
 	messageIDs []string,
 	remaining []T,
@@ -112,6 +111,32 @@ func FailedDelivery[T any](
 		RetryAfter: retryAfter,
 		Err:        err,
 	}
+}
+
+// DeliverSequentially applies a single-payload transport operation to the
+// current pending queue while preserving confirmed IDs and retryable remainder.
+func DeliverSequentially[T any](
+	ctx context.Context,
+	pending []T,
+	deliver func(context.Context, T) ([]string, error),
+) DeliveryResult[T] {
+	if len(pending) == 0 {
+		return RejectedDelivery[T](errors.New("delivery payload is empty"))
+	}
+
+	messageIDs := make([]string, 0)
+	for index, payload := range pending {
+		ids, err := deliver(ctx, payload)
+		messageIDs = append(messageIDs, ids...)
+		if err != nil {
+			var remaining []T
+			if len(ids) == 0 {
+				remaining = pending[index:]
+			}
+			return FailedDelivery(messageIDs, remaining, 0, err)
+		}
+	}
+	return SuccessfulDelivery[T](messageIDs)
 }
 
 func cloneDeliveryPayload[T any](payload []T) []T {

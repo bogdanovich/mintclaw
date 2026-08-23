@@ -200,7 +200,7 @@ func TestSend_PropagatesContextCancellationToRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err = ch.Send(ctx, bus.OutboundMessage{
+	_, err = ch.sendText(ctx, bus.OutboundMessage{
 		ChatID:  "chat-1",
 		Content: "hello",
 	})
@@ -327,7 +327,7 @@ func TestSend_NonToolFeedbackStartsTTS(t *testing.T) {
 	}
 	ch.SetRunning(true)
 
-	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+	ids, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "chat-1",
 		Content: "final reply",
 		Context: bus.InboundContext{

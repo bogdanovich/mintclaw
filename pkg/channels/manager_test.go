@@ -21,7 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
-// mockChannel is a test double that delegates Send to a configurable function.
+// mockChannel is a test double that delegates text delivery to a configurable function.
 type mockChannel struct {
 	BaseChannel
 	sendFn            func(ctx context.Context, msg bus.OutboundMessage) error
@@ -64,7 +64,14 @@ func (l *countingListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
-func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (m *mockChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return DeliverSequentially(ctx, pending, m.sendText)
+}
+
+func (m *mockChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	m.sentMessages = append(m.sentMessages, msg)
 	if m.sendFn == nil {
 		return nil, nil
@@ -313,23 +320,6 @@ type toolFeedbackStreamingTestChannel struct {
 	streamer Streamer
 }
 
-type typedToolFeedbackTestChannel struct {
-	*toolFeedbackTestChannel
-	typedCalls int
-}
-
-func (c *typedToolFeedbackTestChannel) SendMessageResult(
-	ctx context.Context,
-	pending []bus.OutboundMessage,
-) DeliveryResult[bus.OutboundMessage] {
-	c.typedCalls++
-	messageIDs, err := c.Send(ctx, pending[0])
-	if err != nil {
-		return FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err)
-	}
-	return SuccessfulDelivery[bus.OutboundMessage](messageIDs)
-}
-
 type uneditableToolFeedbackTestChannel struct {
 	*toolFeedbackTestChannel
 }
@@ -338,7 +328,7 @@ func (c *uneditableToolFeedbackTestChannel) SendToolFeedbackMessage(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 ) ([]string, bool, error) {
-	messageIDs, err := c.Send(ctx, msg)
+	messageIDs, err := c.sendText(ctx, msg)
 	return messageIDs, false, err
 }
 
@@ -346,7 +336,14 @@ func (c *toolFeedbackStreamingTestChannel) BeginStream(context.Context, string) 
 	return c.streamer, nil
 }
 
-func (c *toolFeedbackTestChannel) Send(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *toolFeedbackTestChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *toolFeedbackTestChannel) sendText(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sendCalls++
@@ -3006,42 +3003,6 @@ func TestSendWithRetry_ToolFeedbackLifecycleOwnedByManager(t *testing.T) {
 	}
 	if len(ch.edited) != 1 || !strings.HasPrefix(ch.edited[0], "topic-42|msg-1|prepared:") {
 		t.Fatalf("edits = %v, want resolved/prepared feedback edit", ch.edited)
-	}
-}
-
-func TestSendWithRetry_TypedChannelKeepsToolFeedbackLifecycle(t *testing.T) {
-	m := newTestManager()
-	enableTestToolFeedbackCoordinator(t, m, false)
-	base := &toolFeedbackTestChannel{resolvedID: "topic-42", preparedTag: "prepared:"}
-	ch := &typedToolFeedbackTestChannel{toolFeedbackTestChannel: base}
-	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
-
-	feedback := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "chat-1",
-		Content: "Working...\n- tool: exec",
-		Context: bus.InboundContext{
-			Channel: "test",
-			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
-		},
-	})
-	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
-		t.Fatalf("initial feedback = (%v, %v)", sent, err)
-	}
-	feedback.Content = "Working...\n- tool: read_file"
-	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
-		t.Fatalf("feedback update = (%v, %v)", sent, err)
-	}
-
-	base.mu.Lock()
-	defer base.mu.Unlock()
-	if ch.typedCalls != 0 {
-		t.Fatalf("typed sends = %d, want coordinator-owned delivery", ch.typedCalls)
-	}
-	if len(base.operations) != 2 || !strings.HasPrefix(base.operations[0], "send:") ||
-		base.operations[1] != "edit:msg-1" {
-		t.Fatalf("operations = %v, want one send followed by one edit", base.operations)
 	}
 }
 

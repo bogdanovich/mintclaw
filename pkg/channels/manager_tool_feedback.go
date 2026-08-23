@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -203,7 +204,6 @@ func (m *Manager) deliverToolFeedback(
 	channelName string,
 	ch Channel,
 	msg bus.OutboundMessage,
-	send func(context.Context, bus.OutboundMessage) ([]string, error),
 ) ([]string, error) {
 	key, deliveryChatID := toolFeedbackTarget(
 		channelName,
@@ -229,8 +229,14 @@ func (m *Manager) deliverToolFeedback(
 				messageIDs, editable, err := sender.SendToolFeedbackMessage(sendCtx, sendMsg)
 				return toolFeedbackSendResult{messageIDs: messageIDs, editable: editable}, err
 			}
-			messageIDs, err := send(sendCtx, sendMsg)
-			return toolFeedbackSendResult{messageIDs: messageIDs, editable: operations.edit != nil}, err
+			result := ch.DeliverText(sendCtx, []bus.OutboundMessage{sendMsg})
+			if !result.Delivered() && result.Err == nil {
+				result.Err = errors.New("channel returned an incomplete delivery result")
+			}
+			return toolFeedbackSendResult{
+				messageIDs: result.MessageIDs,
+				editable:   operations.edit != nil,
+			}, result.Err
 		},
 	)
 }

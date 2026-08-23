@@ -317,7 +317,14 @@ func (c *DeltaChatChannel) Stop(ctx context.Context) error {
 
 // Send delivers an outbound message to a Delta Chat chat. ChatID can be the
 // numeric Delta Chat chat id, an email address, or a known contact/chat name.
-func (c *DeltaChatChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *DeltaChatChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *DeltaChatChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

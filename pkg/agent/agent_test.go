@@ -39,8 +39,11 @@ type fakeChannel struct{ id string }
 func (f *fakeChannel) Name() string                    { return "fake" }
 func (f *fakeChannel) Start(ctx context.Context) error { return nil }
 func (f *fakeChannel) Stop(ctx context.Context) error  { return nil }
-func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
-	return nil, nil
+func (f *fakeChannel) DeliverText(
+	context.Context,
+	[]bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 func (f *fakeChannel) IsRunning() bool            { return true }
 func (f *fakeChannel) ReasoningChannelID() string { return f.id }
@@ -52,11 +55,14 @@ type fakeMediaChannel struct {
 	sentMedia    []bus.OutboundMediaMessage
 }
 
-func (f *fakeMediaChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (f *fakeMediaChannel) DeliverText(
+	_ context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sentMessages = append(f.sentMessages, msg)
-	return nil, nil
+	f.sentMessages = append(f.sentMessages, pending...)
+	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 
 func (f *fakeMediaChannel) SendMedia(

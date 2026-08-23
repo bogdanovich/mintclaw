@@ -118,7 +118,7 @@ func TestSlackWebhookChannel_Send(t *testing.T) {
 	err = ch.Start(context.Background())
 	require.NoError(t, err)
 
-	_, err = ch.Send(context.Background(), bus.OutboundMessage{
+	_, err = ch.sendText(context.Background(), bus.OutboundMessage{
 		Content: "Hello **world**",
 		ChatID:  "default",
 	})
@@ -156,7 +156,7 @@ func TestSlackWebhookChannel_FallbackToDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send to unknown target - should fall back to default
-	_, err = ch.Send(context.Background(), bus.OutboundMessage{
+	_, err = ch.sendText(context.Background(), bus.OutboundMessage{
 		Content: "Test",
 		ChatID:  "unknown_target",
 	})
@@ -202,7 +202,7 @@ func TestSlackWebhookChannel_ErrorClassification(t *testing.T) {
 			err = ch.Start(context.Background())
 			require.NoError(t, err)
 
-			_, err = ch.Send(context.Background(), bus.OutboundMessage{Content: "Test"})
+			_, err = ch.sendText(context.Background(), bus.OutboundMessage{Content: "Test"})
 			require.Error(t, err)
 
 			if tt.expectTemp {

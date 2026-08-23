@@ -458,7 +458,14 @@ func (c *LINEChannel) resolveSource(source webhook.SourceInterface) (senderID, c
 
 // Send sends a message to LINE. It first tries the Reply API (free)
 // using a cached reply token, then falls back to the Push API.
-func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *LINEChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *LINEChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

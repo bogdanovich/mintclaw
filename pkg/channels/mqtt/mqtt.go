@@ -228,7 +228,14 @@ func (c *MQTTChannel) Stop(_ context.Context) error {
 }
 
 // Send publishes a response to the client via MQTT.
-func (c *MQTTChannel) Send(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *MQTTChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MQTTChannel) sendText(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

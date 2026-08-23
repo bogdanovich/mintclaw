@@ -23,12 +23,17 @@ type durableTextChannel struct {
 	send       func() ([]string, error)
 }
 
-func (c *durableTextChannel) Send(context.Context, bus.OutboundMessage) ([]string, error) {
-	c.sends++
-	if c.send != nil {
-		return c.send()
-	}
-	return append([]string(nil), c.messageIDs...), c.err
+func (c *durableTextChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return DeliverSequentially(ctx, pending, func(context.Context, bus.OutboundMessage) ([]string, error) {
+		c.sends++
+		if c.send != nil {
+			return c.send()
+		}
+		return append([]string(nil), c.messageIDs...), c.err
+	})
 }
 
 type durableMediaChannel struct {
@@ -38,11 +43,11 @@ type durableMediaChannel struct {
 	sends      int
 }
 
-type durableTypedTextChannel struct {
+type durableResultTextChannel struct {
 	durableTextChannel
-	result DeliveryResult[bus.OutboundMessage]
-	cancel context.CancelFunc
-	typed  int
+	result     DeliveryResult[bus.OutboundMessage]
+	cancel     context.CancelFunc
+	deliveries int
 }
 
 type durableTypedMediaChannel struct {
@@ -52,11 +57,11 @@ type durableTypedMediaChannel struct {
 	typed  int
 }
 
-func (c *durableTypedTextChannel) SendMessageResult(
+func (c *durableResultTextChannel) DeliverText(
 	context.Context,
 	[]bus.OutboundMessage,
 ) DeliveryResult[bus.OutboundMessage] {
-	c.typed++
+	c.deliveries++
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -277,15 +282,15 @@ func TestDurableQueuedMediaFailsClosedWithoutCoordinator(t *testing.T) {
 	}
 }
 
-func TestQueuedMessageWithoutDeliveryIDPreservesLegacySend(t *testing.T) {
-	channel := &durableTextChannel{messageIDs: []string{"platform-legacy-1"}}
+func TestQueuedMessageWithoutDeliveryIDUsesCurrentDelivery(t *testing.T) {
+	channel := &durableTextChannel{messageIDs: []string{"platform-current-1"}}
 	manager := newTestManager()
 	manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
 		ChatID:  "chat-1",
-		Content: "legacy",
+		Content: "current",
 	}))
 	if channel.sends != 1 {
 		t.Fatalf("adapter sends = %d, want 1", channel.sends)
@@ -342,11 +347,11 @@ func TestDurableOutcomeCarriesRetryAfter(t *testing.T) {
 	}
 }
 
-func TestDurableQueuedMessagePersistsTypedAdapterRetryAfter(t *testing.T) {
+func TestDurableQueuedMessagePersistsChannelRetryAfter(t *testing.T) {
 	coordinator := openDurableTestCoordinator(t)
 	msg := admitDurableTestMessage(t, coordinator, "source-typed-retry-after")
 	ctx, cancel := context.WithCancel(t.Context())
-	channel := &durableTypedTextChannel{
+	channel := &durableResultTextChannel{
 		result: DeliveryResult[bus.OutboundMessage]{
 			Status:     DeliveryFailed,
 			Acceptance: DeliveryRejected,
@@ -362,15 +367,15 @@ func TestDurableQueuedMessagePersistsTypedAdapterRetryAfter(t *testing.T) {
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 
-	if channel.typed != 1 || channel.sends != 0 {
-		t.Fatalf("typed sends = %d, legacy sends = %d; want 1 and 0", channel.typed, channel.sends)
+	if channel.deliveries != 1 || channel.sends != 0 {
+		t.Fatalf("deliveries = %d, primitive sends = %d; want 1 and 0", channel.deliveries, channel.sends)
 	}
 	intent, err := coordinator.Get(msg.DeliveryID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
 	if intent.Status != outbox.StatusDefinitelyFailed || intent.RetryAfter.Before(before) {
-		t.Fatalf("typed retry outcome = %+v", intent)
+		t.Fatalf("retry outcome = %+v", intent)
 	}
 }
 

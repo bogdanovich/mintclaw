@@ -44,11 +44,11 @@ func (channel *failingStopStartupChannel) Stop(context.Context) error {
 	return channel.stopErr
 }
 
-func (channel *failingStopStartupChannel) Send(
+func (channel *failingStopStartupChannel) DeliverText(
 	context.Context,
-	bus.OutboundMessage,
-) ([]string, error) {
-	return nil, nil
+	[]bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 
 func TestGatewayServiceCompositionRejectsSplitStateOwnership(t *testing.T) {
