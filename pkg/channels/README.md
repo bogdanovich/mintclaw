@@ -46,7 +46,7 @@ pkg/channels/
 ├── interfaces.go        # Optional capability interfaces (TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder)
 ├── README.md            # English documentation
 ├── README.zh.md         # Chinese documentation
-├── media.go             # MediaSender optional interface
+├── media.go             # Typed MediaSender optional interface
 ├── webhook.go           # WebhookHandler, HealthChecker optional interfaces
 ├── errors.go            # Sentinel errors (ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed)
 ├── errutil.go           # Error classification helpers
@@ -610,7 +610,14 @@ Depending on platform capabilities, your channel can optionally implement the fo
 
 ```go
 // If the platform supports sending images/files/audio/video
-func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverMedia(
+    ctx context.Context,
+    pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *MatrixChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
     }
@@ -1327,7 +1334,10 @@ type Channel interface {
 
 // ===== Optional =====
 type MediaSender interface {
-    SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error)
+    DeliverMedia(
+        ctx context.Context,
+        pending []bus.OutboundMediaMessage,
+    ) DeliveryResult[bus.OutboundMediaMessage]
 }
 
 type TypingCapable interface {

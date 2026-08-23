@@ -46,7 +46,7 @@ pkg/channels/
 ├── interfaces.go        # 可选能力接口（TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder）
 ├── README.md            # 英文文档
 ├── README.zh.md         # 中文文档
-├── media.go             # MediaSender 可选接口
+├── media.go             # 类型化 MediaSender 可选接口
 ├── webhook.go           # WebhookHandler, HealthChecker 可选接口
 ├── errors.go            # 错误哨兵值（ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed）
 ├── errutil.go           # 错误分类帮助函数
@@ -609,7 +609,14 @@ func (c *MatrixChannel) sendToMatrix(ctx context.Context, roomID, content string
 
 ```go
 // 如果平台支持发送图片/文件/音频/视频
-func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverMedia(
+    ctx context.Context,
+    pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *MatrixChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
     }
@@ -1323,7 +1330,10 @@ type Channel interface {
 
 // ===== 可选实现 =====
 type MediaSender interface {
-    SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error)
+    DeliverMedia(
+        ctx context.Context,
+        pending []bus.OutboundMediaMessage,
+    ) DeliveryResult[bus.OutboundMediaMessage]
 }
 
 type TypingCapable interface {

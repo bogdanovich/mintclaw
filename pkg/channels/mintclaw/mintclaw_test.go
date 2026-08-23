@@ -1242,7 +1242,7 @@ func TestSendMedia_ResolvesMediaBeforeDelivery(t *testing.T) {
 	closedConn.closed.Store(true)
 	ch.addConnForTest(closedConn)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "mintclaw:sess-1",
 		Parts: []bus.MediaPart{{
 			Ref:         ref,
@@ -1307,7 +1307,7 @@ func TestContextBearingBroadcastsPropagateCallerContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store() error = %v", err)
 	}
-	if _, err := ch.SendMedia(ctx, bus.OutboundMediaMessage{
+	if _, err := ch.sendMedia(ctx, bus.OutboundMediaMessage{
 		ChatID: "mintclaw:sess-1",
 		Parts: []bus.MediaPart{{
 			Ref:         ref,
@@ -1408,7 +1408,7 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 		t.Fatalf("Store() error = %v", err)
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "mintclaw:sess-1",
 		Parts: []bus.MediaPart{{
 			Ref:         ref,
@@ -1477,7 +1477,7 @@ func TestSendMedia_UsesCaptionFromFirstDeliveredAttachment(t *testing.T) {
 		t.Fatalf("Store() error = %v", err)
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "mintclaw:sess-1",
 		Parts: []bus.MediaPart{
 			{
@@ -1540,7 +1540,7 @@ func TestSendMedia_DoesNotPromoteCaptionFromSkippedAttachment(t *testing.T) {
 		t.Fatalf("Store() error = %v", err)
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "mintclaw:sess-1",
 		Parts: []bus.MediaPart{
 			{

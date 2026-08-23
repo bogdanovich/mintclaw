@@ -354,11 +354,19 @@ func (c *DeltaChatChannel) sendText(ctx context.Context, msg bus.OutboundMessage
 	return nil, nil
 }
 
-// SendMedia implements channels.MediaSender. Each part is resolved to a local
+// DeliverMedia implements channels.MediaSender.
+func (c *DeltaChatChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+// Each part is resolved to a local
 // file and delivered as its own Delta Chat message, with the part caption as the
 // message text. Delta Chat copies the file into its blob store and infers the
 // view type from the file itself.
-func (c *DeltaChatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *DeltaChatChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

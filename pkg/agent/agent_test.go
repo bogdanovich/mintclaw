@@ -65,14 +65,20 @@ func (f *fakeMediaChannel) DeliverText(
 	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 
-func (f *fakeMediaChannel) SendMedia(
+func (f *fakeMediaChannel) DeliverMedia(
 	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sentMedia = append(f.sentMedia, msg)
-	return nil, nil
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(_ context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.sentMedia = append(f.sentMedia, msg)
+			return nil, nil
+		},
+	)
 }
 
 func (f *fakeMediaChannel) messagesSnapshot() []bus.OutboundMessage {
@@ -89,21 +95,30 @@ type blockingMediaChannel struct {
 	once    sync.Once
 }
 
-func (f *blockingMediaChannel) SendMedia(
+func (f *blockingMediaChannel) DeliverMedia(
 	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	f.once.Do(func() { close(f.started) })
-	select {
-	case <-f.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	result := channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+			f.once.Do(func() { close(f.started) })
+			select {
+			case <-f.release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			f.mu.Lock()
+			f.sentMedia = append(f.sentMedia, msg)
+			f.mu.Unlock()
+			return []string{"media-1"}, nil
+		},
+	)
+	if result.Delivered() {
+		close(f.done)
 	}
-	f.mu.Lock()
-	f.sentMedia = append(f.sentMedia, msg)
-	f.mu.Unlock()
-	close(f.done)
-	return []string{"media-1"}, nil
+	return result
 }
 
 func newBlockingMediaChannel() *blockingMediaChannel {

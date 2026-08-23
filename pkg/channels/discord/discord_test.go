@@ -252,7 +252,7 @@ func TestSendMedia_PropagatesContextCancellationToRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err = ch.SendMedia(ctx, bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(ctx, bus.OutboundMediaMessage{
 		ChatID: "chat-1",
 		Parts: []bus.MediaPart{{
 			Type:        "image",

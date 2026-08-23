@@ -132,12 +132,17 @@ func sendMediaWithRetryTuple(
 	return result.MessageIDs, result.Err
 }
 
-func (m *mockMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
-	m.sentMediaMessages = append(m.sentMediaMessages, msg)
-	if m.sendMediaFn != nil {
-		return m.sendMediaFn(ctx, msg)
-	}
-	return nil, nil
+func (m *mockMediaChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) DeliveryResult[bus.OutboundMediaMessage] {
+	return DeliverSequentially(ctx, pending, func(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+		m.sentMediaMessages = append(m.sentMediaMessages, msg)
+		if m.sendMediaFn != nil {
+			return m.sendMediaFn(ctx, msg)
+		}
+		return nil, nil
+	})
 }
 
 type mockDeletingMediaChannel struct {
@@ -387,17 +392,20 @@ func (c *toolFeedbackTestChannel) MaxMessageLength() int {
 	return c.maxLen
 }
 
-func (c *toolFeedbackTestChannel) SendMedia(
-	_ context.Context, msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.operations = append(c.operations, "send-media:"+msg.Context.MessageID)
-	if c.sendErr != nil {
-		return nil, c.sendErr
-	}
-	c.nextID++
-	return []string{fmt.Sprintf("msg-%d", c.nextID)}, nil
+func (c *toolFeedbackTestChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) DeliveryResult[bus.OutboundMediaMessage] {
+	return DeliverSequentially(ctx, pending, func(_ context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.operations = append(c.operations, "send-media:"+msg.Context.MessageID)
+		if c.sendErr != nil {
+			return nil, c.sendErr
+		}
+		c.nextID++
+		return []string{fmt.Sprintf("msg-%d", c.nextID)}, nil
+	})
 }
 
 func (c *toolFeedbackTestChannel) EditMessage(

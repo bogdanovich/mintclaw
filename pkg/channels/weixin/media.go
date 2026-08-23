@@ -1103,8 +1103,15 @@ func (c *WeixinChannel) StartTyping(ctx context.Context, chatID string) (func(),
 	return stop, nil
 }
 
-// SendMedia implements channels.MediaSender.
-func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia implements channels.MediaSender.
+func (c *WeixinChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) basechannels.DeliveryResult[bus.OutboundMediaMessage] {
+	return basechannels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *WeixinChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, basechannels.ErrNotRunning
 	}

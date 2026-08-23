@@ -1520,8 +1520,11 @@ type errorMediaChannel struct {
 	sendErr error
 }
 
-func (f *errorMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
-	return nil, f.sendErr
+func (f *errorMediaChannel) DeliverMedia(
+	context.Context,
+	[]bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.FailedDelivery[bus.OutboundMediaMessage](nil, nil, 0, f.sendErr)
 }
 
 func TestAgentLoop_HookRespond_MediaError(t *testing.T) {

@@ -400,9 +400,16 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 	return undo, nil
 }
 
-// SendMedia implements channels.MediaSender.
+// DeliverMedia implements channels.MediaSender.
+func (c *FeishuChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
 // Uploads images/files via Feishu API then sends as messages.
-func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *FeishuChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
