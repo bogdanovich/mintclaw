@@ -1,17 +1,5 @@
 import { launcherFetch } from "@/api/http"
 
-export interface TaskCompletionMedia {
-  ref: string
-  type?: string
-  filename?: string
-  content_type?: string
-}
-
-export interface TaskCompletion {
-  text?: string
-  media?: TaskCompletionMedia[]
-}
-
 export interface TaskDeliverableItem {
   ref: string
   kind?: string
@@ -52,7 +40,6 @@ export interface TaskRecord {
   error?: string
   progress_summary?: string
   terminal_summary?: string
-  completion?: TaskCompletion
   deliverable?: TaskDeliverable
 }
 

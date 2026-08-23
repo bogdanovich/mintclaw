@@ -1,13 +1,13 @@
-import { useQuery } from "@tanstack/react-query"
 import {
   IconAlertTriangle,
   IconRefresh,
   IconSubtask,
 } from "@tabler/icons-react"
+import { useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { getTasks, type TaskRecord } from "@/api/tasks"
+import { type TaskRecord, getTasks } from "@/api/tasks"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -47,7 +47,9 @@ function truncate(text: string | undefined, max: number) {
   return `${value.slice(0, max)}...`
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+function statusVariant(
+  status: string,
+): "default" | "secondary" | "destructive" | "outline" {
   switch (status) {
     case "succeeded":
       return "default"
@@ -76,7 +78,6 @@ function TaskCard({ task }: { task: TaskRecord }) {
   const result = task.error || task.terminal_summary || task.progress_summary
   const deliverable = task.deliverable
   const artifactCount = deliverable?.artifacts?.length ?? 0
-  const legacyCompletion = task.completion
 
   return (
     <Card size="sm" className="border-border/70 bg-card/70">
@@ -99,7 +100,9 @@ function TaskCard({ task }: { task: TaskRecord }) {
       </CardHeader>
       <CardContent className="space-y-3">
         {task.task && (
-          <p className="text-foreground/90 text-sm">{truncate(task.task, 280)}</p>
+          <p className="text-foreground/90 text-sm">
+            {truncate(task.task, 280)}
+          </p>
         )}
         {result && (
           <div className="bg-muted/40 rounded-lg p-3 text-sm">
@@ -111,13 +114,12 @@ function TaskCard({ task }: { task: TaskRecord }) {
         )}
         <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
           <span>created {formatTaskTime(task.created_at)}</span>
-          {task.ended_at ? <span>ended {formatTaskTime(task.ended_at)}</span> : null}
+          {task.ended_at ? (
+            <span>ended {formatTaskTime(task.ended_at)}</span>
+          ) : null}
           <span>delivery {task.delivery_status}</span>
           {deliverable?.text ? <span>deliverable text</span> : null}
           {artifactCount > 0 ? <span>{artifactCount} artifacts</span> : null}
-          {!deliverable && legacyCompletion?.text ? (
-            <span>legacy completion text</span>
-          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -149,14 +151,16 @@ export function TasksPage() {
           onClick={() => void tasksQuery.refetch()}
           disabled={tasksQuery.isFetching}
         >
-          <IconRefresh className={cn("size-4", tasksQuery.isFetching && "animate-spin")} />
+          <IconRefresh
+            className={cn("size-4", tasksQuery.isFetching && "animate-spin")}
+          />
           Refresh
         </Button>
       </PageHeader>
 
       <div className="flex-1 overflow-auto px-6 py-6 pb-20">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
-          <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-card/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="border-border/70 bg-card/60 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2 text-sm font-medium">
                 <IconSubtask className="size-4" />
@@ -191,7 +195,7 @@ export function TasksPage() {
             {["running", "queued", "succeeded", "failed"].map((status) => (
               <Card key={status} size="sm" className="bg-card/60">
                 <CardContent>
-                  <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  <div className="text-muted-foreground text-xs tracking-wide uppercase">
                     {status}
                   </div>
                   <div className="mt-1 text-2xl font-semibold">

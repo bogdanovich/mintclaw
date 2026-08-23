@@ -697,6 +697,9 @@ Implementation sequence:
 8. Delete Seahorse startup schema upgrades and metadata backfill. Active
    databases have the current schema, and every conversation has a current
    canonical-history reconciliation watermark.
+9. Delete frontend readers for the superseded detail-visibility preference,
+   content-encoded tool calls, and task completion result. Consolidate session
+   history media into the current attachment response at the API boundary.
 
 Exit criteria:
 

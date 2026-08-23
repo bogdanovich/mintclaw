@@ -6,18 +6,14 @@ import {
 } from "@/features/chat/tool-calls"
 import type { ChatAttachment, ChatMessage } from "@/store/chat"
 
-function toChatAttachments({
-  media,
-  attachments,
-}: {
-  media?: string[]
+function toChatAttachments(
   attachments?: {
     type?: "image" | "audio" | "video" | "file"
     url: string
     filename?: string
     content_type?: string
-  }[]
-}): ChatAttachment[] | undefined {
+  }[],
+): ChatAttachment[] | undefined {
   const normalizedAttachments = attachments
     ?.filter((attachment) => attachment.url)
     .map(
@@ -30,13 +26,9 @@ function toChatAttachments({
         }) satisfies ChatAttachment,
     )
 
-  const legacyMediaAttachments = (media ?? [])
-    .filter((item) => item.startsWith("data:image/"))
-    .map((url) => ({ type: "image" as const, url }))
-
-  const merged = [...(normalizedAttachments ?? []), ...legacyMediaAttachments]
-
-  return merged.length > 0 ? merged : undefined
+  return normalizedAttachments && normalizedAttachments.length > 0
+    ? normalizedAttachments
+    : undefined
 }
 
 export async function loadSessionMessages(
@@ -53,10 +45,7 @@ export async function loadSessionMessages(
       message.role === "assistant"
         ? parseToolCallsValue(message.tool_calls)
         : undefined,
-    attachments: toChatAttachments({
-      media: message.media,
-      attachments: message.attachments,
-    }),
+    attachments: toChatAttachments(message.attachments),
     timestamp: message.created_at ?? detail.updated,
   }))
 }

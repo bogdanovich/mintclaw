@@ -1,41 +1,5 @@
 import type { ChatToolCall } from "@/store/chat"
 
-function parseLegacyToolFeedbackContent(
-  content: string,
-): ChatToolCall[] | undefined {
-  const trimmed = content.trim()
-  const match =
-    /^🔧\s+`([^`\n\r]*?)(?:\.{1,2})?`[^\n\r]*(?:\r?\n([\s\S]*))?$/.exec(trimmed)
-  if (!match) {
-    return undefined
-  }
-
-  const toolName = match[1]?.trim() ?? ""
-  const body = match[2]?.trim() ?? ""
-  const codeFence = /```(?:json)?\r?\n([\s\S]*?)\r?\n```/m.exec(body)
-  const argumentsText = codeFence?.[1]?.trim() ?? ""
-  const explanation = body
-    .replace(/```(?:json)?\r?\n[\s\S]*?\r?\n```/gm, "")
-    .trim()
-
-  return [
-    {
-      type: "function",
-      function: {
-        name: toolName,
-        ...(argumentsText ? { arguments: argumentsText } : {}),
-      },
-      ...(explanation
-        ? {
-            extraContent: {
-              toolFeedbackExplanation: explanation,
-            },
-          }
-        : {}),
-    },
-  ]
-}
-
 export function parseToolCallsValue(raw: unknown): ChatToolCall[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined
@@ -102,12 +66,6 @@ export function parseToolCallsValue(raw: unknown): ChatToolCall[] | undefined {
   }
 
   return toolCalls.length > 0 ? toolCalls : undefined
-}
-
-export function parseToolCallsFromContent(
-  content: string,
-): ChatToolCall[] | undefined {
-  return parseLegacyToolFeedbackContent(content)
 }
 
 export function toolCallsSignature(toolCalls?: ChatToolCall[]): string {

@@ -17,7 +17,6 @@ export interface SessionDetail {
     created_at?: string
     kind?: "normal" | "thought" | "tool_calls"
     model_name?: string
-    media?: string[]
     attachments?: {
       type?: "image" | "audio" | "video" | "file"
       url: string
