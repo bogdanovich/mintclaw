@@ -686,8 +686,8 @@ func (r *DeliveryRuntime) failPendingOutboundMedia(
 }
 
 // sendMediaWithRetry sends a media message through the channel with rate limiting and
-// retry logic. It returns the message IDs and nil on success, or nil and the last error
-// after retries, including when the channel does not support MediaSender.
+// retry logic. It returns the typed delivery result after retries, including
+// when the channel does not support MediaSender.
 func (r *DeliveryRuntime) sendMediaWithRetry(
 	ctx context.Context,
 	name string,
@@ -773,11 +773,7 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 			MaxBackoff:     maxBackoff,
 		},
 		func(ctx context.Context, pending []bus.OutboundMediaMessage) DeliveryResult[bus.OutboundMediaMessage] {
-			if sender, ok := w.ch.(MediaDeliverySender); ok {
-				return sender.SendMediaResult(ctx, pending)
-			}
-			msgIDs, err := ms.SendMedia(ctx, pending[0])
-			return FailedDelivery[bus.OutboundMediaMessage](msgIDs, nil, 0, err)
+			return ms.DeliverMedia(ctx, pending)
 		},
 		nil,
 	)

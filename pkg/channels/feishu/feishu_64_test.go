@@ -336,7 +336,7 @@ func TestSendMedia_SendsCaptionFallbackAfterMedia(t *testing.T) {
 		return "msg-1", nil
 	}
 
-	_, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err := ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "oc_123",
 		Parts: []bus.MediaPart{
 			{Type: "image", Caption: "shared caption"},

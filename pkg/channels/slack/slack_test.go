@@ -399,7 +399,7 @@ func TestSendMedia_SendsCaptionFallbackAfterUploads(t *testing.T) {
 		return nil
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "C123456/1234567890.123456",
 		Parts: []bus.MediaPart{{
 			Ref:         ref,

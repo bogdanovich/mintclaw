@@ -1101,7 +1101,7 @@ func TestSendMedia(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "99",
 		Parts: []bus.MediaPart{{
 			Type:     "image",
@@ -1156,7 +1156,7 @@ func TestSendMedia(t *testing.T) {
 func TestSendMediaNoStore(t *testing.T) {
 	ch := newTestChannel(t)
 	ch.SetRunning(true)
-	if _, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{ChatID: "1"}); err == nil {
+	if _, err := ch.sendMedia(context.Background(), bus.OutboundMediaMessage{ChatID: "1"}); err == nil {
 		t.Error("expected error when no media store is configured")
 	}
 }
@@ -1191,7 +1191,7 @@ func TestSendMediaVoice(t *testing.T) {
 	ch.accountID = 1
 	ch.SetRunning(true)
 
-	if _, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	if _, err := ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "5",
 		Parts:  []bus.MediaPart{{Type: "audio", Ref: ref, ContentType: "audio/ogg"}},
 	}); err != nil {

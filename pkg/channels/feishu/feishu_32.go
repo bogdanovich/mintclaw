@@ -62,7 +62,14 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 	return func() {}, errUnsupported
 }
 
-// SendMedia is a stub method to satisfy MediaSender
-func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia is a stub method to satisfy MediaSender.
+func (c *FeishuChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *FeishuChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	return nil, errUnsupported
 }

@@ -300,8 +300,15 @@ func (c *SlackChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([
 	return []string{ts}, nil
 }
 
-// SendMedia implements the channels.MediaSender interface.
-func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia implements the channels.MediaSender interface.
+func (c *SlackChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *SlackChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

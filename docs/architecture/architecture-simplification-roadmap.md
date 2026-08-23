@@ -746,6 +746,10 @@ Implementation sequence:
     tuple-returning channel method and optional typed sender; every channel
     returns confirmed IDs, retryable remainder, acceptance, and errors through
     `DeliveryResult`.
+21. Make typed media delivery the sole optional channel media contract. Delete
+    the tuple-returning media method and optional typed fallback; every
+    media-capable channel returns confirmed IDs, retryable remainder,
+    acceptance, and errors through `DeliveryResult`.
 
 Exit criteria:
 

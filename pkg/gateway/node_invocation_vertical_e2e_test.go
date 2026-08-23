@@ -873,12 +873,18 @@ func (channel *nodeVerticalSliceChannel) DeliverText(
 	)
 }
 
-func (channel *nodeVerticalSliceChannel) SendMedia(
-	_ context.Context,
-	message bus.OutboundMediaMessage,
-) ([]string, error) {
-	channel.media <- message
-	return []string{"node-e2e-media"}, nil
+func (channel *nodeVerticalSliceChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(_ context.Context, message bus.OutboundMediaMessage) ([]string, error) {
+			channel.media <- message
+			return []string{"node-e2e-media"}, nil
+		},
+	)
 }
 
 func (channel *nodeVerticalSliceChannel) IsRunning() bool    { return channel.running }

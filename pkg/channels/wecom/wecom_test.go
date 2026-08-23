@@ -408,7 +408,7 @@ func TestSendMedia_SendsActiveImage(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Parts: []bus.MediaPart{{
@@ -519,7 +519,7 @@ func TestSendMedia_UsesTurnImageAndFinishesStream(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Parts: []bus.MediaPart{{
@@ -615,7 +615,7 @@ func TestSendMedia_SendsActiveFile(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-2",
 		Parts: []bus.MediaPart{{

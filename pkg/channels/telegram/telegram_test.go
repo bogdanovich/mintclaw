@@ -35,6 +35,14 @@ func (c *TelegramChannel) deliverTextForTest(
 	return result.MessageIDs, result.Err
 }
 
+func (c *TelegramChannel) deliverMediaForTest(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) ([]string, error) {
+	result := c.DeliverMedia(ctx, []bus.OutboundMediaMessage{msg})
+	return result.MessageIDs, result.Err
+}
+
 func TestTelegramMessageDeleteAlreadyAbsent(t *testing.T) {
 	tests := []struct {
 		name string
@@ -383,7 +391,7 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -432,7 +440,7 @@ func TestSendMedia_LocalPartFailureIsNotReportedAsSuccess(t *testing.T) {
 			ch := newTestChannelWithConstructor(t, caller, &stubConstructor{})
 			ch.SetMediaStore(tc.store)
 
-			messageIDs, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+			messageIDs, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 				ChatID: "12345",
 				Parts:  []bus.MediaPart{{Type: "image", Ref: "media://missing"}},
 			})
@@ -461,7 +469,7 @@ func TestSendMedia_PreservesSentIDsWhenLaterPartCannotResolve(t *testing.T) {
 	ch := newTestChannelWithConstructor(t, caller, &multipartRecordingConstructor{})
 	ch.SetMediaStore(store)
 
-	messageIDs, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	messageIDs, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: "media://first"},
@@ -623,7 +631,7 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type: "image",
@@ -676,7 +684,7 @@ func TestSendMedia_ImageCaptionParseFallbackRewindsUpload(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -730,7 +738,7 @@ func TestSendMedia_MultipleImagesUseMediaGroup(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: "album caption"},
@@ -798,7 +806,7 @@ func TestSendMedia_MediaGroupCaptionParseFailureFallsBackToPlainText(t *testing.
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: "**Summary:** hello"},
@@ -884,7 +892,7 @@ func TestSendMedia_MoreThanTenImagesSplitIntoMediaGroups(t *testing.T) {
 		parts = append(parts, part)
 	}
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts:  parts,
 	})
@@ -899,7 +907,7 @@ func TestSendMedia_MoreThanTenImagesSplitIntoMediaGroups(t *testing.T) {
 	require.Len(t, constructor.calls, 2)
 }
 
-func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) {
+func TestDeliverMediaPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -931,7 +939,7 @@ func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) 
 		require.NoError(t, err)
 		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
 	}
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts:  parts,
 	}})
@@ -945,7 +953,7 @@ func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) 
 	}
 }
 
-func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.T) {
+func TestDeliverMediaPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -974,7 +982,7 @@ func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testi
 		require.NoError(t, err)
 		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
 	}
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts:  parts,
 	}})
@@ -987,7 +995,7 @@ func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testi
 	}
 }
 
-func TestSendMediaResultPreservesMediaAfterPartialLongCaptionRejection(t *testing.T) {
+func TestDeliverMediaPreservesMediaAfterPartialLongCaptionRejection(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -1019,7 +1027,7 @@ func TestSendMediaResultPreservesMediaAfterPartialLongCaptionRejection(t *testin
 	)
 	require.NoError(t, err)
 	longCaption := strings.Repeat("long caption segment ", 400)
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1073,7 +1081,7 @@ func TestSendMedia_SingleImageLongCaptionSendsTextFirst(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1123,7 +1131,7 @@ func TestSendMedia_LongCaptionUsesRichMessageWhenEnabled(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1185,7 +1193,7 @@ func TestSendMedia_MediaGroupLongCaptionSendsTextFirst(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: longCaption},
@@ -1226,7 +1234,7 @@ func TestSendMedia_VideoCaptionUsesHTMLParseMode(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "video",
@@ -1273,7 +1281,7 @@ func TestSendMedia_VideoHTMLCaptionParseFailureFallsBackToPlainText(t *testing.T
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "video",
@@ -1352,7 +1360,7 @@ func TestSendMedia_MultiGroupLongCaptionSendsTextBeforeGroups(t *testing.T) {
 		parts = append(parts, part)
 	}
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts:  parts,
 	})

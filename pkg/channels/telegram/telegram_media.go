@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,13 +53,29 @@ func (c *TelegramChannel) PreflightMedia(
 	return nil
 }
 
-// SendMedia implements the channels.MediaSender compatibility interface.
-func (c *TelegramChannel) SendMedia(
+// DeliverMedia implements channels.MediaSender while preserving Telegram's
+// exact unsent remainder for partial media groups and captions.
+func (c *TelegramChannel) DeliverMedia(
 	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	result := c.sendMediaAttempt(ctx, msg)
-	return result.MessageIDs, result.Err
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	if len(pending) == 0 {
+		return channels.RejectedDelivery[bus.OutboundMediaMessage](errors.New("telegram media payload is empty"))
+	}
+	var confirmedIDs []string
+	for index, msg := range pending {
+		result := c.sendMediaAttempt(ctx, msg)
+		confirmedIDs = append(confirmedIDs, result.MessageIDs...)
+		if result.Delivered() {
+			continue
+		}
+		result.MessageIDs = confirmedIDs
+		if result.Remaining != nil {
+			result.Remaining = append(result.Remaining, pending[index+1:]...)
+		}
+		return result
+	}
+	return channels.SuccessfulDelivery[bus.OutboundMediaMessage](confirmedIDs)
 }
 
 func (c *TelegramChannel) sendMediaAttempt(

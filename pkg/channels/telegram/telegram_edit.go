@@ -13,7 +13,6 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
-	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -205,28 +204,4 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 	}
 
 	return fmt.Sprintf("%d", pMsg.MessageID), nil
-}
-
-// SendMediaResult preserves typed progress for the manager's retry coordinator.
-func (c *TelegramChannel) SendMediaResult(
-	ctx context.Context,
-	pending []bus.OutboundMediaMessage,
-) channels.DeliveryResult[bus.OutboundMediaMessage] {
-	if len(pending) == 0 {
-		return channels.RejectedDelivery[bus.OutboundMediaMessage](errors.New("telegram media payload is empty"))
-	}
-	var confirmedIDs []string
-	for index, msg := range pending {
-		result := c.sendMediaAttempt(ctx, msg)
-		confirmedIDs = append(confirmedIDs, result.MessageIDs...)
-		if result.Delivered() {
-			continue
-		}
-		result.MessageIDs = confirmedIDs
-		if result.Remaining != nil {
-			result.Remaining = append(result.Remaining, pending[index+1:]...)
-		}
-		return result
-	}
-	return channels.SuccessfulDelivery[bus.OutboundMediaMessage](confirmedIDs)
 }
