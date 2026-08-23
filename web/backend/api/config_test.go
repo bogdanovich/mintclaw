@@ -572,6 +572,89 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 	}
 }
 
+func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
+	tests := []struct {
+		name               string
+		registries         string
+		wantPersistedField bool
+		wantRegistryCount  int
+	}{
+		{
+			name:              "omitted uses defaults",
+			wantRegistryCount: 2,
+		},
+		{
+			name:               "explicit empty disables defaults",
+			registries:         `"registries": {}`,
+			wantPersistedField: true,
+			wantRegistryCount:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			body := fmt.Sprintf(`{
+				"version": 3,
+				"agents": {
+					"defaults": {
+						"workspace": "~/.mintclaw/workspace"
+					}
+				},
+				"model_list": [
+					{
+						"model_name": "custom-default",
+						"model": "openai/gpt-4o",
+						"api_keys": ["sk-default"]
+					}
+				],
+				"tools": {
+					"skills": {%s}
+				}
+			}`, tt.registries)
+			req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			setConfigIfMatch(t, req, configPath)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			public, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			hasPersistedField := strings.Contains(string(public), `"registries"`)
+			if hasPersistedField != tt.wantPersistedField {
+				t.Fatalf(
+					"persisted registries field = %t, want %t:\n%s",
+					hasPersistedField,
+					tt.wantPersistedField,
+					public,
+				)
+			}
+
+			cfg, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got := len(cfg.Tools.Skills.Registries); got != tt.wantRegistryCount {
+				t.Fatalf("loaded registry count = %d, want %d", got, tt.wantRegistryCount)
+			}
+			if tt.wantPersistedField && cfg.Tools.Skills.Registries == nil {
+				t.Fatal("explicit empty registry map reloaded as nil")
+			}
+		})
+	}
+}
+
 func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
